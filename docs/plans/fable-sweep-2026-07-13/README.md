@@ -6,7 +6,7 @@ Raw artifacts of the experiment-runtime breakdown sweep run at HEAD `fb8428c`
 truth the hardening swarm should consume programmatically.
 
 - `verified-findings.json` — 57 canonical findings (55 CONFIRMED / 2 WEAK,
-  20 high / 26 medium / 9 low post-verification-and-rulings (see RULINGS.md)). Each record carries: the
+  13 high / 32 medium / 9 low after the Fable hard-kill panel (54 CONFIRMED / 3 WEAK; see RULINGS.md and each finding's `fable_panel` field)). Each record carries: the
   finder's failure scenario + fix sketch + evidence, the triage spot-check
   rationale, cross-lens merge/related annotations (compounding chains), and
   every adversarial skeptic vote with reasoning (2 independent votes per

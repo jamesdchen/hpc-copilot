@@ -5,18 +5,24 @@ is the execution plan for a hardening swarm. Produced by a 10-lens finder
 fan-out over the experiment-runtime failure surface, 4-agent triage
 (3 shards + cross-lens dedup), a 14-agent adversarial verification wave
 (2 independent refute-by-default votes per high, 1 per medium/low), a
-completeness critic, and a fable-pass adjudication of the two split verdicts.
-Line pins are as of `fb8428c` (code-identical to `d731b12`); re-validated
-empty `git diff fb8428c..HEAD -- src/ tests/` at banking time. Verify live
-before acting — this doc narrates a plan and is outside the pinned truth
-surfaces.
+completeness critic, and finally a **5-agent Fable hard-kill panel** that
+re-judged all 22 highs + WEAKs from a votes-stripped brief (guilty-until-
+proven, with empirical repros). The panel materially recalibrated the set —
+it downgraded 7 findings the Opus wave had over-rated and rescued 1 it had
+wrongly weakened (see the panel note under Verdict). Line pins are as of
+`fb8428c` (code-identical to `d731b12`); re-validated empty
+`git diff fb8428c..HEAD -- src/ tests/` at banking time. Verify live before
+acting — this doc narrates a plan and is outside the pinned truth surfaces.
 
 **Machine-readable source of truth:** [`fable-sweep-2026-07-13/`](fable-sweep-2026-07-13/)
 — `verified-findings.json` (all 57 findings: scenario, fix sketch, evidence,
-triage rationale, every skeptic vote, merge/compounding annotations,
+triage rationale, every skeptic vote, the `fable_panel` re-judgment with its
+fix-sketch concerns and new evidence, merge/compounding annotations,
 adjudications), `critic-gaps.json` (follow-up sweep worklist + live-cluster
 checks), `RULINGS.md`, `live-smoke-notes.md`. Swarm agents should consume the
-JSON, not re-parse this prose.
+JSON, not re-parse this prose — and read each finding's `fable_panel.fix_sketch_concerns`
+before implementing, as the panel found real soundness gaps in several fix
+sketches (F05/F07/F17/F23/F35/F37/F47/F53 in particular).
 
 **Scope guard:** every finding was mandatorily deduped against the fixed
 2026-07-11 bug sweep (and its refuted list — do not re-report those) and the
@@ -30,9 +36,10 @@ banked architecture review. Two ledger entries claimed fixed but never landed
 
 ## Verdict
 
-57 verified findings (55 CONFIRMED / 2 WEAK; 20 high / 26 medium / 9 low
-after rulings). The sweep's lens was narrow on purpose: *what breaks when
-this repo is actually used to run experiments*. Three generators dominate:
+57 verified findings (54 CONFIRMED / 3 WEAK; **13 high / 32 medium / 9 low**
+after the Fable panel — down from 20/26/9 at the Opus round). The sweep's lens
+was narrow on purpose: *what breaks when this repo is actually used to run
+experiments*. Three generators dominate:
 
 1. **Evidence monocultures.** The announce census consults no scheduler; the
    scheduler layer trusts an ack while discarding rc/stderr; the aggregate
@@ -53,13 +60,53 @@ this repo is actually used to run experiments*. Three generators dominate:
    transfer already landed (F53), re-executes commands already dispatched
    (F54/F55), and re-reads announce markers a resubmit never cleared (F23).
 
+**Fable panel recalibration (why the highs shrank from 20 to 13).** The Opus
+verification wave confirmed 55/55 with zero refutations — a pattern that flags
+possible deference (a verifier below the finders' tier tends to defer, not
+refute). The Fable hard-kill panel, working guilty-until-proven from a
+votes-stripped brief, changed 8 of 22 verdicts:
+
+- **7 downgraded** — the highs that were riding on overstatement:
+  **F06/F07** (high→med): the same evidence *is* disclosed loudly at the
+  harvest boundary — `needs_decision=True`, not silent wrong data; the residue
+  is a contradictory green on the standalone verify verb.
+  **F13** (high→med): the retracted-y launch is an approved-then-retracted
+  spec (visible in the brief), the stall self-heals on the next doctor tick,
+  and there's a *third* un-unified seat (`block_gate`) the fix must also cover.
+  **F29** (high→med): submit-flow runs the same uv probe inline and raises, so
+  the "doomed array" can't fire on the primary path — false-green-then-loud.
+  **F01** (high→med): the curated catalog (install default) excludes the three
+  escapee verbs; the wedge is the agent session's control surface (restart to
+  clear), not a lost campaign.
+  **F30** (high→WEAK/med) and **F48** (high→WEAK/med): both have real recovery
+  guards prior rounds missed — F30's reconcile raises loud with a mint command
+  + A5 sidecar reconstruction; F48's block-drive S2 parks loudly on dedup and
+  S3 refuses on a cluster-keyed canary. The silent-success path survives only
+  on the discouraged direct-submit surface.
+- **1 upgraded** — **F39** (WEAK/low→CONFIRMED/med): the panel *reproduced*
+  the PBS banner poisoning (5/5 dotted-number cases) and found the trigger is
+  framework-induced (the submit path's own `bash -lc` login shell), not
+  site-conditional as the downgrade assumed.
+- **F12 and F37 held at high**, independently reaching the same verdict as the
+  earlier inline rulings (F12 reproduced in-venv; F37's fix sketch hardened —
+  the `-M` value is the SLURM cluster name, not the config key).
+
+The 13 surviving highs (**F05 F11 F12 F17 F18 F23 F35 F36 F37 F47 F53 F54
+F55**) were held under the harshest scrutiny, several with fresh local repros
+(F53's rsync-interrupt, F35's rc-127 empty-queue, F18's AST version floor,
+F36's upstream OpenPBS/TORQUE source lookup). Treat these as the load-bearing
+set.
+
 ## Work packages, ranked
 
 Rank is value-to-risk for a multi-day campaign. WP-F and WP-G are quick wins
 that can land first chronologically. Each package lists its findings
-(severity after verification + rulings), the shared root cause, and the fix
-shape; per-finding fix sketches and mandatory regression tests live in
-`verified-findings.json`.
+(severity as re-judged by the Fable panel), the shared root cause, and the fix
+shape; per-finding fix sketches, the panel's fix-sketch concerns, and mandatory
+regression tests live in `verified-findings.json`. Package *order* is unchanged
+by the recalibration — WP-A/B/C still lead on the surviving highs — but several
+individual findings are now medium, so within-package priority should follow
+the current tags.
 
 ### WP-A — Trust the numbers: aggregation integrity (F05 F06 F07 F08 F09 F10)
 
@@ -68,9 +115,9 @@ The worst outcomes in the sweep: silently wrong science.
   delete-protected, so run B adopts run A's partials: the no-force refusal is
   journaled as "already combined" and both reducers merge foreign
   `grid_points` without a `run_id` check (the files carry one).
-- **F06 (high)** resubmit never invalidates `combined_waves`, so recovered
+- **F06 (med)** resubmit never invalidates `combined_waves`, so recovered
   tasks' results are permanently excluded from the aggregate.
-- **F07 (high)** `all_tasks_present` is a tautology — combiner echoes the full
+- **F07 (med)** `all_tasks_present` is a tautology — combiner echoes the full
   wave_map into `task_ids` while errored tasks live only in `errors`, which
   the invariant never reads.
 - **F08/F09 (med)** the incremental pull diffs waves by *filename only*: a
@@ -128,7 +175,7 @@ nowhere.
 - **F47 (high)** partial-submit retry re-qsubs all waves: the crash-safety
   pre-stamp is written but no submit path reads it (dead guard), and the
   job_ids stamp then *replaces* the pre-stamped ids — untracked ghost arrays.
-- **F48 (high)** `_dedup_existing` ignores cluster: a retarget to cluster B
+- **F48 (WEAK/med)** `_dedup_existing` ignores cluster: a retarget to cluster B
   silently "succeeds" as dedup against cluster A; the purpose-built REFUSE
   guard is unreachable on the primary path.
 - **F54 (high)** client-side TimeoutError is retried for the non-idempotent
@@ -172,7 +219,7 @@ checklist in `critic-gaps.json` — validate the domain assertions first.**
   non-default `slurm_cluster`, and `query_sacct` proves the flag is known.
 - **F38 (med)** TORQUE `C`-state rows count as alive/RUNNING for the
   keep_completed window — kill verification reports failure after success.
-- **F39 (weak/low)** PBS job-id regex lacks the line anchor its SLURM/SGE
+- **F39 (med)** PBS job-id regex lacks the line anchor its SLURM/SGE
   siblings deliberately have.
 
 Fix shape: per-family rc semantics with stderr capture in the ack; preserve
@@ -223,7 +270,7 @@ files again.
 
 ### WP-G — Preflight and config honesty (F29 F31 F32 F33 F34) — quick win
 
-- **F29 (high)** `hpc-agent preflight` exits 0/ok:true with every check
+- **F29 (med)** `hpc-agent preflight` exits 0/ok:true with every check
   failing (no CliShape exit mapping), so submit-s1 briefs show a green
   preflight over a broken environment. Reproduced twice in-venv.
 - **F31 (med)** `setup --cluster` exits 0 on a red probe and its "24h cache
@@ -248,7 +295,7 @@ None entry; manifest-stamped asset pruning.
 - **F12 (high, ruled)** a consent recorded after the driver parked is never
   consulted — the night is lost and the morning brief has no field that says
   why (`consumed_count: 0`, no reason).
-- **F13 (high)** driver and stop-guard disagree on "y then a later record":
+- **F13 (med)** driver and stop-guard disagree on "y then a later record":
   the driver scans past a retraction nudge and launches the retracted spec;
   the guard goes silent on any unrelated later record.
 - **F14 (med)** the pending marker is cleared before the resumed span runs —
@@ -267,7 +314,7 @@ spend meter at the sites that know the cost.
 
 ### WP-I — State, identity, and journal hygiene (F30 F41 F42 F43 F44 F45 F46)
 
-- **F30 (high)** renaming/moving the experiment dir (or NFS path aliasing)
+- **F30 (WEAK/med)** renaming/moving the experiment dir (or NFS path aliasing)
   silently forks the journal namespace — everything vanishes, no detection,
   no relink verb.
 - **F41 (med)** the canary TTL cache is keyed on parameter-only `cmd_sha` in
@@ -290,7 +337,7 @@ status-aware pruning; a non-creating journal probe for readers.
 
 ### WP-J — MCP/agent surface (F01 F02 F03 F04)
 
-- **F01 (high)** the blocking-verb fence omits monitor-flow / verify-canary /
+- **F01 (med)** the blocking-verb fence omits monitor-flow / verify-canary /
   submit-flow: one tool call wedges the single-threaded server for up to 24h,
   and the default in-process runner has no timeout at all.
 - **F02 (med)** the liveness heartbeat is swallowed by `redirect_stderr`

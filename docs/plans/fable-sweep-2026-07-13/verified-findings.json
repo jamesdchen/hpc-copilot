@@ -1,31 +1,5 @@
 [
  {
-  "title": "MCP blocking-verb fence omits monitor-flow / verify-canary / submit-flow: one tool call wedges the synchronous server for up to 24h, and the default in-process runner has no deadline at all",
-  "severity": "high",
-  "where": "src/hpc_agent/_kernel/extension/mcp_server.py:965-1028, src/hpc_agent/_kernel/extension/mcp_server.py:882-946, src/hpc_agent/ops/monitor_flow.py:1-31, src/hpc_agent/_wire/workflows/monitor_flow.py:40-49, src/hpc_agent/ops/verify_canary.py:89",
-  "category": "mcp-head-of-line-wedge",
-  "failure_scenario": "User runs `hpc-agent mcp-serve --allow-mutations` (full or tiered catalog \u2014 both expose every verb='workflow' primitive per _MUTATING_VERBS at mcp_server.py:135/1167, and tiered's run-primitive advertises 'any registered'). Agent calls monitor-flow {spec:{run_id:...}} to watch a live array mid-campaign. monitor-flow is a poll-to-terminal loop (default wall_clock_budget_seconds=86400) and is NOT in _DETACH_REQUIRED_VERBS (:965-975) or _BLOCKING_WAIT_VERBS (:988) \u2014 the exact proving-run-3 head-of-line class the seam was built for. Dispatch is single-threaded, so every later tool call (status reads, append-decision, doctor) queues behind it for up to 24h; an abandoned agent turn does not stop it. The 3600s cap (_SUBPROCESS_RUNNER_TIMEOUT_SEC, :834) only bounds the NON-default subprocess runner \u2014 the default _in_process_cli_runner (:882-946, chosen at :1308) has no timeout, so even the 1h backstop never fires. verify-canary (30-min default poll loop, wait-budget-sec raisable arbitrarily) and submit-flow's canary leg escape the same way. Worse: MonitorFlowSpec is extra='forbid' with no detach field, so there is no {detach:true} remedy \u2014 it is the wait-detached class (refuse outright) but is not refused.",
-  "fix_sketch": "Add monitor-flow, verify-canary, and submit-flow to the seam in _refuse_blocking_over_mcp: monitor-flow and verify-canary join _BLOCKING_WAIT_VERBS-style outright refusal (no detach field exists in their specs; name status-watch{detach:true}/poll-detached and the S2 detached canary as the sanctioned alternatives), or grow a detach field like aggregate-flow did. Independently, give _in_process_cli_runner a bounded-wait posture (or apply _SUBPROCESS_RUNNER_TIMEOUT_SEC uniformly) so the wedge class cannot recur through the default runner as the comment at :829-834 already claims it cannot.",
-  "evidence": "Read _DETACH_REQUIRED_VERBS/_BLOCKING_WAIT_VERBS/_refuse_blocking_over_mcp and both runners at d731b12; confirmed monitor-flow/verify-canary/submit-flow are verb='workflow' agent_facing in operations.json (reachable via allowed_primitives with allow_mutations); confirmed monitor_flow's sleep-and-repeat loop and the 86400s default; confirmed verify_canary's _DEFAULT_WAIT_BUDGET_SEC=1800 poll loop. tests/test_mcp_server.py:335-470 pins refusals only for submit-s2/s3/s4, status-watch, aggregate-run, aggregate-flow, campaign-run, wait-detached \u2014 using allow_mutations=True servers, proving the exposure path is exercised; no test covers monitor-flow/verify-canary/submit-flow. Not covered by docs/plans/architecture-review-2026-07-13.md (its MCP item is the _CURATED_EXTRA_VERBS hygiene note) nor the fixed 2026-07-11 sweep.",
-  "id": "F01",
-  "lens": "agent-surface",
-  "triage": "Verified mcp_server.py:965-988 \u2014 _DETACH_REQUIRED_VERBS and _BLOCKING_WAIT_VERBS exclude monitor-flow/verify-canary/submit-flow; head-of-line wedge class real, not in banked MCP hygiene item.",
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-agent-surface",
-    "verdict": "CONFIRMED",
-    "reasoning": "Reproduced in the venv: _refuse_blocking_over_mcp lets monitor-flow/verify-canary/submit-flow pass while refusing status-watch/aggregate-run/submit-s2; all three are verb='workflow' agent_facing and INVOCABLE under the default full and tiered catalogs with allow_mutations. monitor-flow is a poll loop defaulting to 86400s, verify-canary to 1800s; dispatch is single-threaded synchronous in-process and the default _in_process_cli_runner (mcp_server.py:1308) has no timeout, so the 3600s cap never applies. verify-canary is the documented direct step after the two-phase canary gate, making the wedge reachable in normal agent use."
-   },
-   {
-    "shard": "B1-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "Read the seam and both runners directly: monitor-flow (default 86400s poll loop, extra='forbid' spec with no detach field) and verify-canary (1800s poll loop) are verb='workflow' agent_facing primitives, so allowed_primitives exposes them under --allow-mutations, yet neither is in _DETACH_REQUIRED_VERBS nor _BLOCKING_WAIT_VERBS, and the default _in_process_cli_runner has no timeout (the 3600s cap is subprocess-only). A direct call to monitor-flow therefore wedges the single-threaded server for up to 24h with no {detach:true} remedy and no backstop \u2014 exactly the head-of-line class the seam was built to refuse, which status-watch (the detach-gated wrapper over this same poll) IS protected against."
-   }
-  ]
- },
- {
   "title": "A previous run's stale _combiner/wave_N.json is silently adopted as the current run's combined wave, and every reducer merges foreign wave partials without checking run_id",
   "severity": "high",
   "where": "src/hpc_agent/ops/aggregate/combine.py:156-161, src/hpc_agent/execution/mapreduce/combiner.py:443-450, src/hpc_agent/execution/mapreduce/combiner.py:276-290, src/hpc_agent/execution/mapreduce/reduce/metrics.py:241-254",
@@ -49,71 +23,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "Traced the full chain: remote_path defaults to scratch/run_name and is carried forward from latest_run, so re-submitting the same experiment (new run_id after a code edit) reuses the path; _combiner/ is in PROTECTED_OUTPUT_DIRS so run A's non-namespaced _combiner/wave_N.json survives run B's --delete; the combiner refuses no-force when the file exists (combiner.py:445) and combine.py:156 marks the wave combined via _ALREADY_COMBINED_RE without checking run_id; and both reduce_partials (metrics.py:242) and _final_reduce (combiner.py:276) merge every wave_*.json without filtering the top-level data['run_id'] the file actually carries. aggregate-flow's first _combine_missing attempt is force=False, so run B silently adopts run A's grid_points and feeds them to campaign optimizers."
    }
-  ]
- },
- {
-  "title": "Resubmitted (recovered) tasks' results never enter the aggregate: nothing invalidates combined_waves, so the stale partial wave file is served forever",
-  "severity": "high",
-  "where": "src/hpc_agent/ops/recover_flow.py:271-560, src/hpc_agent/ops/aggregate_flow.py:162-173, src/hpc_agent/ops/aggregate_flow.py:1549-1559, src/hpc_agent/ops/monitor_flow.py:400",
-  "category": "rerun-results-silently-excluded",
-  "failure_scenario": "Wave 2 of a 500-task run finishes with 40 failed tasks; monitor-flow auto-combines it (combiner exits 0, records the 40 misses in the partial's errors list, journal marks wave 2 combined). User runs the documented recover/resubmit flow (resubmit_flow reuses the SAME run_id and only extends job_ids); the 40 tasks now complete and write metrics.json. User re-runs aggregate-flow: _missing_waves skips every wave already in record.combined_waves, monitor-flow's auto-combine seeds state.last_combined_waves from the record (monitor_flow.py:400) so it also skips, and the cluster's wave_2.json is never recombined \u2014 the recovered tasks' metrics are permanently excluded from aggregated_metrics (and any partial metrics.json a task wrote before dying stays averaged in). The only signal is escalation_reason 'partial_waves:metrics_unreadable...' which is now factually wrong (the metrics are readable), steering the user away from the real remediation. verify-aggregation-complete cannot catch it either (see the vacuous all_tasks_present finding). grep shows no writer of combined_waves outside combine.py's _apply \u2014 resubmit_flow never touches it.",
-  "fix_sketch": "In resubmit_flow (and the auto-resume composite), after a successful cluster resubmit of failed_task_ids, map those task ids to waves via the sidecar wave_map and update_run_record to remove those waves from combined_waves (and reset monitor's combiner_attempts), so the next monitor/aggregate pass re-runs the combiner with force for exactly the affected waves. Pair with the incremental-pull invalidation fix so the refreshed partial actually reaches the local reduce.",
-  "evidence": "Read recover_flow.resubmit_flow end-to-end (reuses run_id, updates job_ids/pending_resubmit only; zero references to combined_waves/failed_waves), aggregate_flow._missing_waves + the ensure_all_combined block, monitor_flow's auto-combine seeding. Grep for combined_waves writers: only ops/aggregate/combine.py. No test exercises resubmit-then-aggregate; escalation text at aggregate_flow.py:1739-1743 confirms the stale disclosure wording.",
-  "id": "F06",
-  "lens": "aggregation-results",
-  "triage": "Resubmitted tasks never invalidate combined_waves; novel, no recorded fix; combined_waves only written by combine.py per finding. Real result-exclusion.",
-  "related": [
-   {
-    "id": "F07",
-    "note": "Compounding: F07 (verify-aggregation-complete's all_tasks_present is a tautology) is exactly why F06 (resubmitted/recovered tasks silently excluded from the aggregate) goes undetected; F06 explicitly cross-references F07. Distinct root causes (resubmit doesn't invalidate combined_waves vs combiner echoes full task_ids)."
-   }
   ],
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-aggregation",
-    "verdict": "CONFIRMED",
-    "reasoning": "recover_flow.resubmit_flow reuses run_id and never writes combined_waves; the only writers are combine.py._apply and reconcile.py (which derives from existing wave files, keeping the stale wave combined). _missing_waves and monitor auto-combine both skip a wave already in combined_waves, so the recovered tasks' metrics are permanently excluded. One nuance: the stale wave's residual errors list fires a misleading escalation_reason (so not literally silent), but the finding acknowledges this and the exclusion is real and unrecoverable via the documented recover->re-aggregate loop (even the manual --force fix is defeated by F08's local filename-pin)."
-   },
-   {
-    "shard": "B2-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "Grep confirms combined_waves is only added-to by combine.py:170 and re-derived by reconcile via file existence (ls _combiner/wave_*.json), which keeps a stale wave file as 'combined'; combine.py:133 refuses to re-run an already-combined wave without force; resubmit_flow reuses run_id and extends job_ids but never touches combined_waves. So recovered tasks' metrics are permanently excluded from the aggregate with a misleading escalation reason. Reachable via the documented recover-then-aggregate flow."
-   }
-  ]
- },
- {
-  "title": "verify-aggregation-complete's all_tasks_present is a tautology: the combiner echoes the full wave_map task list into task_ids even for tasks whose metrics were never read, so the integrity gate green-lights aggregates computed over a subset",
-  "severity": "high",
-  "where": "src/hpc_agent/execution/mapreduce/combiner.py:546-552, src/hpc_agent/ops/aggregate/invariants.py:340-354, src/hpc_agent/ops/aggregate_blocks.py:132-144",
-  "category": "vacuous-completeness-gate",
-  "failure_scenario": "A wave of 100 tasks combines while 40 tasks never wrote metrics.json (or NFS hadn't surfaced them): the cluster combiner appends 40 entries to the partial's `errors` list, aggregates only 60 tasks into grid_points \u2014 but writes `\"task_ids\": list(task_ids)` (the full wave_map slice, combiner.py:549). verify_aggregation_complete computes pulled_tasks from that task_ids field and never reads the partial's `errors`, so missing_tasks=[] and ok=True. The aggregate-check block's missing_tasks decision point ('some tasks never wrote metrics into any wave partial; the aggregate would be computed over a subset', aggregate_blocks.py:136-141) describes exactly this state yet can never fire for a production-written partial \u2014 it only fires for whole missing wave FILES. A user who runs the trust-the-numbers gate before a greenlight gets 'every task accounted for' on a mean computed over 60% of tasks; the only disclosure lives on a different surface (aggregate-flow's escalation_reason).",
-  "fix_sketch": "Make the invariant read the evidence the partial already carries: in verify_aggregation_complete, parse each pulled wave doc's `errors` list (entries are formatted 'task {tid}: ...'; or better, have the combiner additionally emit a `tasks_read` list) and subtract errored/unread task ids from pulled_tasks so they surface as missing_tasks. Add a test seeding a partial with full task_ids + non-empty errors asserting ok=False.",
-  "evidence": "Read combiner.py main() (task_ids from wave_map at line 400, errors appended at 493-494, output at 546-552) and invariants.py (pulled_tasks from doc['task_ids'] only; grep shows nothing in invariants.py reads doc['errors']). tests/ops/aggregate/test_invariants.py's fixture hard-codes errors:[] and only exercises missing_tasks via absent wave files or hand-truncated task_ids the production combiner never emits \u2014 the real-world arm is unpinned. Distinct from the fixed implicit-wave-0 bug (bug-sweep DISPUTED entry) which was about empty wave_maps, not errored tasks.",
-  "id": "F07",
-  "lens": "aggregation-results",
-  "triage": "Verified combiner.py:549 writes full list(task_ids) while errors are separate; invariants.py:346 computes pulled_tasks from task_ids only, never reads doc['errors'] \u2014 vacuous gate confirmed. Distinct from the fixed implicit-wave-0 DISPUTED entry.",
-  "related": [
-   {
-    "id": "F06",
-    "note": "Compounding: F07 (verify-aggregation-complete's all_tasks_present is a tautology) is exactly why F06 (resubmitted/recovered tasks silently excluded from the aggregate) goes undetected; F06 explicitly cross-references F07. Distinct root causes (resubmit doesn't invalidate combined_waves vs combiner echoes full task_ids)."
-   }
-  ],
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-aggregation",
-    "verdict": "CONFIRMED",
-    "reasoning": "Read combiner.py:549 (task_ids = full list(task_ids) from wave_map) with failed tasks appended only to errors (551), and invariants.py:340-354 which builds pulled_tasks from doc['task_ids'] alone and never reads doc['errors']; missing_tasks is therefore [] and all_tasks_present True for any production partial with errored tasks, so the aggregate_blocks.py:132 missing_tasks decision point can only fire for whole-missing wave FILES. Vacuous completeness gate confirmed; a sibling escalation_reason on aggregate-flow partially mitigates but the integrity gate itself always passes."
-   },
-   {
-    "shard": "B3-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "combiner.py:549 writes list(task_ids) = the full wave_map slice regardless of which tasks errored (errors go to a separate list, :464-494); invariants.py:346 derives pulled_tasks from doc['task_ids'] only and grep confirms it never reads doc['errors'], so missing_tasks is always empty for present waves and all_tasks_present is a tautology. The test fixture hard-codes errors:[] (test_invariants.py:52) and only exercises the whole-missing-file arm, leaving the production-errored-task case unpinned."
-   }
-  ]
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Every mechanism link re-verified independently: combiner.py:443-450 writes bare `_combiner/wave_<N>.json` with an existence-only no-force refusal (never reads the incumbent file's run_id); transport.py:107-118 protects `_combiner/` from every re-push clean, so run A's partials persist at the shared remote_path (load-context projects the newest sidecar's remote_path forward, confirming deploy-once reuse); combine.py:156-161's recovery regex journals run B's wave combined on any 'already exists' refusal with no run_id witness, and both monitor_flow:702 and aggregate_flow:303 pass force=False on attempt 1, so the force retry never fires (ok=True short-circuits it). reduce_partials (metrics.py:242-254) and _final_reduce (combiner.py:276-290) merge grid_points from every wave file with zero run_id filtering, and verify_aggregation_complete is only called from aggregate_blocks \u2014 never on the aggregate-flow/campaign path that feeds aggregated_metrics to the optimizer. Silent cross-run contamination on the normal two-runs-same-remote-path journey: high stands.",
+   "fix_sketch_concerns": "The minimal fixes are sound but: (b) verifying the remote file's run_id from combine.py requires a new remote-read transport helper (extra ssh leg); (c) reduce-side filtering must fail-open for legacy wave files lacking a run_id field or it breaks old pulled trees and test fixtures; full per-run namespacing (a) touches _incremental_include_patterns, the pull subdir, PROTECTED_OUTPUT_DIRS matching, _final_reduce, and many tests \u2014 larger than sketched.",
+   "new_evidence": "Worse than stated in one respect: run B's aggregate is simultaneously CONTAMINATED (run A's grid points, keyed by run A's params) and INCOMPLETE (run B's own wave-0 metrics never combined, so its wave-0 grid points are absent), so a campaign optimizer looking up its own trial params can read foreign values or nothing. The local pull's incremental filter is wave-NUMBER keyed, so even later filtered pulls fetch run A's content under run B's wave numbers. aggregate-check's unexpected_tasks arm can only fire when the two runs' task numbering differs \u2014 identical wave shapes (the common campaign refill case) are fully undetectable."
+  }
  },
  {
   "title": "Campaign overnight 'auto-advance' of an anomaly halt is a no-op that masks the halt: consuming stop_circuit_breaker/stop_resubmit_cap/stop_over_budget cannot make the campaign continue, yet reports watching_healthy ('self-chaining continues') all night",
@@ -139,7 +56,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "Verified every link: campaign-watch is a consumable boundary; consume_boundary_under_consent only writes an audit line (write_budget_ack is only called by the standalone campaign_acknowledge_budget atom, never on the watch path; nothing resets the breaker); the async ladder orders stop_* before _refill and the breaker resets only on a complete iteration, so the halt recomputes every tick while campaign_watch reports watching_healthy; _already_consumed keys on (block,cmd_sha) not the anomaly kind, masking a second distinct anomaly with line=None. Real overnight wedge."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Verified end-to-end: the consumed branch (blocks.py:442-459) returns watching_healthy with NO next_block and block_chain.py:237 maps watching_healthy to a chain END, so nothing actuates; the advance ladder (advance.py:406-409) orders stop_* before _refill so a tripped breaker/budget halt can never yield refill; consumption writes no budget ack (only the separate campaign-acknowledge-budget verb writes budget_ack.json) and nothing resets the breaker. Worse than stated: _drain_before_stop (advance.py:382-400) guarantees breaker/resubmit-cap anomalies surface only AFTER the pool fully drained (in_flight==0), so no in-flight success can ever reset the breaker post-anomaly \u2014 the wedge is unconditional. _already_consumed (overnight.py:834-839, 901-904) keys on (consumed_block, cmd_sha) so a second distinct anomaly the same night returns consumed=True with line=None \u2014 zero ledger disclosure \u2014 and no push fires for consumed anomalies (only HEAL_FAILED raises an alert). A campaign halted all night while the consent-holder is told 'self-chaining continues' is a masked campaign wedge: high per rubric.",
+   "fix_sketch_concerns": "Arm (a) auto-overriding breaker/resubmit-cap under a generic consent would let a systematically-failing campaign burn budget unattended \u2014 the finding's own parenthetical (park regardless) is the safer sub-arm; the budget-ack snapshot must bound to the consent's caps, not the manifest's. Arm (b) is sound but changes the pinned test test_campaign_anomaly_auto_advances_under_live_consent (deliberate). Re-keying _already_consumed on the anomaly decision must key on the decision KIND, not the reason string, or every tick re-ledgers the same recurring anomaly and floods the morning brief.",
+   "new_evidence": "Drain-before-stop makes the wedge strictly unconditional (no in-flight run remains that could reset the breaker when the anomaly first surfaces). The overnight self-heal (self_heal_campaign, overnight.py:1343+) only respawns the reconcile WATCHER, never resolves halts, so it cannot rescue this; its heal-attempt ledger lines share consumed_block='campaign-watch' but carry no cmd_sha, so they don't collide with the consumption idempotency key."
+  }
  },
  {
   "title": "A standing consent recorded AFTER the driver parked at the gated boundary is never consulted: run_tick's awaiting_decision path skips the overnight seam, so the consented S3 launch never happens and the night is silently lost",
@@ -154,10 +78,6 @@
   "triage": "Consent recorded after park never consulted on the awaiting_decision resume path (only _chain gated-successor site consults it); novel scoping hole. Real lost night.",
   "status": "CONFIRMED",
   "final_severity": "high",
-  "severity_disputed": [
-   "medium",
-   "high"
-  ],
   "votes": [
    {
     "shard": "A-campaign",
@@ -170,33 +90,14 @@
     "reasoning": "grep shows the overnight consent is consumed at exactly three sites; run_tick returns for action=='awaiting_decision' at block_drive.py:556-567 before ever reaching _chain (:651) where the only driver-side _consume_overnight lives (:799), and submit-s3's gate never runs because the driver never advances into it. A consent recorded after the run has already parked at the gate is therefore consulted by nothing and the night is lost \u2014 a natural operator flow (see 'awaiting decision', say 'run it overnight')."
    }
   ],
-  "adjudication": "RULED high (fable pass, 2026-07-13): both skeptics confirmed the mechanism and reachability ('a natural operator flow'); the split was impact-only. Decisive: the morning brief (overnight.py:1662-1683) renders the consent and consumed_count=0 with NO field explaining why nothing was consumed, so the lost night is silent and undiagnosable from the surface the human reads \u2014 the overnight mechanism's entire purpose is defeated silently on a recurring nightly basis until a human happens to commit y while awake. Rubric: silently wedges a campaign for the night; state stays fail-safe (no wrong action), which is why one skeptic read medium."
- },
- {
-  "title": "Driver and Stop guard disagree on 'y then a later record': the driver scans past a retraction nudge and consumes the retracted greenlight (launching the un-redrafted spec), while the guard goes silent on any unrelated later record (bedtime consent, sign-off), stalling a genuinely committed y",
-  "severity": "high",
-  "where": "src/hpc_agent/_kernel/lifecycle/block_drive.py:1101-1105, src/hpc_agent/_kernel/hooks/decision_rendezvous_stop_guard.py:149-156",
-  "category": "greenlight-rendezvous-drift",
-  "failure_scenario": "Direction (a), driver side: human answers the S3 brief 'y' (targets submit-s3, ts > awaiting_since), then seconds later nudges 'wait \u2014 raise the walltime first' and goes to bed expecting a redraft. The stop guard correctly stays silent (test_y_then_nudge_latest_wins_is_silent pins 'latest wins \u2192 still waiting'), but the 2am watch-terminal/doctor tick calls _boundary_scoped_committed_resolved, which scans NEWEST-FIRST and skips the nudge (response!='y') to return the retracted y \u2192 routes advance \u2192 submit-s3's gate also passes (latest greenlight names it) \u2192 the full main array launches with the pre-nudge spec. Direction (b), guard side: human commits the targeting y and the agent journals the overnight-consent record (or any other same-scope touchpoint) right after it in the same turn; find_committed_unadvanced tests ONLY decisions[-1], which is now the consent record \u2192 guard silent \u2192 turn ends with the y committed-but-unadvanced, the exact 2026-06-10 stall the guard exists for, until the doctor backstop. block_drive.py:1036-1039 claims the shared predicate makes the two surfaces unable to drift \u2014 but they apply it to different record sets.",
-  "fix_sketch": "Unify the semantics: in _boundary_scoped_committed_resolved, stop the newest-first scan at the first SAME-BOUNDARY record of either kind \u2014 a nudge that answers this parked boundary (ts >= awaiting_since) supersedes an earlier y (return None \u2192 awaiting_decision); in find_committed_unadvanced, scan newest-first with the same rule instead of testing only decisions[-1], so an unrelated later record (overnight-consent, sign-off, another block's touchpoint) neither silences the guard nor blocks the driver. Add paired tests: y-then-same-boundary-nudge \u2192 driver awaits; y-then-overnight-consent \u2192 guard forces continue.",
-  "evidence": "Read both call sites: the driver loops `for record in reversed(records)` returning the first targeting y (block_drive.py:1101-1105); the guard checks `decisions[-1]` only (stop_guard.py:151-155). tests/_kernel/hooks/test_decision_rendezvous_hooks.py:145 (test_y_then_nudge_latest_wins_is_silent) pins the guard's 'latest wins' semantic; no test in tests/_kernel/lifecycle/test_block_drive.py covers y-then-nudge at the same boundary (grep 'nudge' shows only field-edit routing tests), so the driver's consume-the-retracted-y behavior is unpinned. block_gate's superseded-consumption backstops (block_gate.py:109-120) do not cover this: the retracted y IS the latest greenlight naming the verb, and no terminal exists yet to replay.",
-  "id": "F13",
-  "lens": "campaign-overnight",
-  "triage": "Verified block_drive.py:1101 driver scans reversed(records) returning first targeting-y (skips trailing nudge) while stop_guard.py:151 checks decisions[-1] only \u2014 genuine asymmetry. Distinct from the boundary-scoping fix for #1/#23 (which is present); this is the same-boundary retraction / unrelated-later-record edge.",
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-campaign",
-    "verdict": "CONFIRMED",
-    "reasoning": "Verified the asymmetry directly: driver _boundary_scoped_committed_resolved (1101-1105) loops reversed(records) returning the first greenlight_targets_boundary match, skipping a trailing nudge and consuming the retracted y (ts>=awaiting_since passes); assert_greenlit_target (block_gate.py:123-127) passes it too, so submit-s3 launches the pre-nudge spec. The guard checks only decisions[-1] (stop_guard.py:151-156) and stays silent. Nudges are journaled decision records (test _commit_nudge), so y-then-nudge is realizable and unpinned in test_block_drive; the shared-predicate 'cannot drift' claim is applied to different record sets."
-   },
-   {
-    "shard": "B4-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "Read both call sites: the driver's _boundary_scoped_committed_resolved (block_drive.py:1101) loops `for record in reversed(records)` and returns the first record where greenlight_targets_boundary holds \u2014 a trailing nudge (response!='y') is skipped, so an earlier boundary-targeting 'y' is consumed and routed to advance; the Stop guard (stop_guard.py:151) tests only decisions[-1], so a trailing nudge/consent silences it (latest-wins). A bare nudge commit does not bump awaiting_since or re-park, so the 'y' stays valid (ts>=awaiting_since) and a later detached/cron tick advances it. The docstring at block_drive.py:1036 explicitly claims the two surfaces 'cannot drift'; the reversed-scan vs decisions[-1] asymmetry falsifies that and is unpinned by tests (only the guard's y-then-nudge case is pinned). Direction (a)'s severe outcome is reachable but conditional (nudge journaled, no re-park, automated tick); direction (b) is easily reachable but milder."
-   }
-  ]
+  "adjudication": "RULED high (fable pass, 2026-07-13): both skeptics confirmed the mechanism and reachability ('a natural operator flow'); the split was impact-only. Decisive: the morning brief (overnight.py:1662-1683) renders the consent and consumed_count=0 with NO field explaining why nothing was consumed, so the lost night is silent and undiagnosable from the surface the human reads \u2014 the overnight mechanism's entire purpose is defeated silently on a recurring nightly basis until a human happens to commit y while awake. Rubric: silently wedges a campaign for the night; state stays fail-safe (no wrong action), which is why one skeptic read medium.",
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Empirically reproduced in the project venv: with a real pending marker parked at submit-s2->submit-s3 and a live, consumable consent journaled after the park (a direct consume_boundary_under_consent probe returned consumed=True/reason='live' for the same state), run_tick returned action='awaiting_decision' with reason 'pending decision not yet committed' and appended nothing to the consumption ledger \u2014 the only run-scope consult sites are _chain's fresh-gate branch (block_drive.py:799) and submit-s3's own gate (block_gate.py:189), neither reachable from the parked state. The sanctioned wake makes it worse, not better: assert_wake_armed forces a detached status-watch whose terminal re-invokes the driver, and that tick lands in the same awaiting path, so the consent's own wake mechanism cannot consume it. The morning brief (overnight.py:1662-1683) renders consent + consumed_count with no field explaining a zero, so the lost night is silent and recurs until a human commits y while awake \u2014 the mechanism's purpose defeated silently, which meets the rubric's silent-wedge clause even though the parked state itself is fail-safe.",
+   "fix_sketch_concerns": "The marker does persist next_spec_hint (block_drive.py:932), so the resume-side materialization is available as sketched; but consulting the consent on every awaiting tick must first check for a post-park same-boundary NUDGE (response != 'y', ts >= awaiting_since) \u2014 otherwise a human's 'wait, change the walltime first' gets steamrolled by the standing consent and the un-redrafted spec launches, importing exactly the F13 hazard into the new path.",
+   "new_evidence": "Even a consent whose consumption was ALREADY ledgered for this identity (idempotent-consumed) does not advance the parked marker \u2014 my repro's pre-tick probe left a ledger line and the tick still returned awaiting_decision, so no amount of external consent-consuming activity unsticks the park; only a committed y targeting the boundary does."
+  }
  },
  {
   "title": "Kill-type task deaths never announce, and the announce-census path never falls back to the scheduler \u2014 monitor wedges at 'pending' until budget, auto-resume/auto-recover unreachable",
@@ -232,7 +133,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "The SIGTERM preemption handler (dispatch.py:292-352) marks the sidecar and sys.exit(_EXIT_PREEMPTED=130) with no _write_announcement call \u2014 announcements fire only in the main flow at dispatch.py:1328. Once any marker exists, monitor's census leg (monitor_flow.py:441) is taken every tick with no walk; a preempted/SIGKILL/node-crash task stays missing->pending, and classify_polling's FAILED arm needs pending==0 while the unknown-escalation arm needs unknown>0 (census hardcodes unknown=0) \u2014 so neither fires and the watch rides to TIMEOUT, leaving maybe_auto_resume (gated on FAILED) unreachable. Fully reachable on preemptable SLURM/SGE queues the dispatcher itself handles."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Every element checked out in my own reading: _write_announcement has exactly one call site (dispatch.py:1328, post child.wait in the main flow); the SIGTERM handler (dispatch.py:292-352) writes only the sidecar preempt field and sys.exit(130) with no marker, and SIGKILL/node-crash deaths write nothing. The census maps missing->pending with running=0 and unknown=0 (monitor_flow.py:219-238), classify_polling's FAILED arm requires pending==0 and the unknown-escalation arm requires unresolved_unknown (classify.py:192-211), so a never-announcing task pins the watch in-flight to the full wall-clock budget; the census leg runs unconditionally every tick once the announce dir exists (monitor_flow.py:438-446) with no scheduler consult and no walk fallback, and maybe_auto_resume fires only under terminal==FAILED (monitor_flow.py:794), so the preemption-recovery feature is unreachable on exactly the preemption events it exists for. tests/ops/monitor/test_flow_announce.py (test_partial_census_never_settles_and_no_walk) pins the ride-to-TIMEOUT behavior, confirming the wedge is the designed-but-unforeseen consequence. Severity high stands: it wedges a multi-day campaign for the full budget, and campaign_run's timeout arm then tells the human 'nothing failed \u2014 budget only; re-invoke to keep watching' (campaign_run.py:373-390), which is affirmatively wrong guidance.",
+   "fix_sketch_concerns": "Fix (a) writing state='failed' from the preempt handler collides with requeue-capable schedulers (SLURM PreemptMode=REQUEUE, node-fail requeue): the re-queued attempt re-runs while a .failed marker sits on disk \u2014 exactly the F23 stale-marker false-FAILED thrash; a distinct 'preempted' announce state plus census handling is needed, not a reuse of 'failed'. Fix (a) also cannot cover SIGKILL-only and node-crash deaths, so (b) is the load-bearing half \u2014 and (b)'s 'one cheap query_jobs call' leans on scheduler_query_ran, which per sibling finding F35 returns ran_ok=True on rc 1/126/127 with empty output, i.e. a failed query would read 'queue empty' and could flip the fallthrough into a wrong FAILED.",
+   "new_evidence": "The wedge class is broader than preemption: SLURM/PBS hard-walltime kills deliver SIGTERM first, so the same handler exits 130 with no marker \u2014 routine walltime overruns (not just preemptable queues) produce permanently-missing census entries. campaign_run.py:373-390 compounds the wedge with an explicitly wrong 'nothing failed \u2014 budget only' brief. Note also the sidecar preempt field IS written, so evidence exists on disk that the census pipeline simply never reads."
+  }
  },
  {
   "title": "Cluster-shipped 'stdlib-only, any python3' files require Python 3.10/3.9 features: combiner's zip(strict=True) crashes every wave combine and the final reduce; metrics_io.removeprefix breaks read_kw_env on <=3.8 envs",
@@ -258,7 +166,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "Confirmed zip(entries,weights,strict=True) at combiner.py:153 (3.10+ only) and k.removeprefix(_KW_PREFIX) at metrics_io.py:44 (3.9+ only) in files that are in the deploy list (transport.py:136/1676-1677/1707), invoked as bare `python3 .hpc/_hpc_combiner.py` with only an optional activation prefix, documented 'runs under any cluster python3'; pyproject requires-python>=3.10 so CI never runs shipped files under an older interpreter. On a common torch-1.x py3.9 conda env, zip(strict=True) raises TypeError on every wave combine and the final reduce, wedging the harvest."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "combiner.py:153 ships `zip(entries, weights, strict=True)` and transport.py:2042/2116 run it as bare `python3 .hpc/_hpc_combiner.py` under the run's remote_activation env; grep of ops/preflight/check.py shows zero python-version probing anywhere, so nothing guards the floor. My AST feature-scan of all three deployed files proves the trap is perfectly shaped: dispatch.py's only version-sensitive runtime construct is time.time_ns (3.7) and its list[bytes] annotations are unevaluated function-local ones, so on a 3.8/3.9 env (torch-1.x conda) or RHEL8's 3.6.8 login python the canary and the FULL array run clean, and the first failure is the post-campaign wave combine \u2014 every combine and the --final reduce die on the same uncaught TypeError, which monitor/aggregate retry into a wedged harvest. metrics_io.py has `from __future__ import annotations`, so removeprefix (3.9, PEP 616) is its only sub-floor construct and only fires for executors calling read_kw_env, where the 1-task canary catches it loudly \u2014 the combiner is the load-bearing half, exactly as claimed. Version floors (zip strict= added 3.10 per PEP 618) are settled CPython history; no pre-3.10 interpreter exists in this sandbox (3.10-3.13 only), so the crash itself is changelog-proven rather than executed \u2014 the only piece needing a live old-python cluster to demonstrate.",
+   "fix_sketch_concerns": "Dropping strict=True is semantically safe (weights is a comprehension over entries, equal length by construction) but will re-trip the ruff B905 lint that evidently introduced it \u2014 the fix needs `# noqa: B905` or an explicit length assert plus the proposed feature-floor gate, else the next modernization pass reintroduces the regression. The vermin suggestion adds a third-party dev dependency; a stdlib ast-based floor check in the existing test_cluster_runtime_self_contained contract fits the repo's boundary rules better.",
+   "new_evidence": "AST scan result: dispatch.py floor is exactly 3.7, combiner 3.10, metrics_io 3.9 \u2014 confirming zero early-failure guard before the combiner. The finding's provenance claim is imprecise: git log -S shows c8c7854 created the whole file at this path (mapreduce reorg \u2014 file is 'new' in that commit), so 'B905 added strict=True in c8c7854' can't be distinguished from the line arriving with the moved file; the HEAD-state facts are unaffected."
+  }
  },
  {
   "title": "Stale announce markers after a resubmit make the census classify a LIVE re-run as FAILED: auto-resume/auto-recover thrash duplicate arrays onto the cluster, then the run is marked terminal-FAILED while attempt 2 is still running",
@@ -290,71 +205,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "The census leg hardcodes running=0/pending=missing (monitor_flow.py:222-227) and classify_polling returns FAILED on running==0/pending==0/failed>0 (:194-200); recover_flow clears only $RESULT_DIR/.hpc_failed markers (:211-238) while dispatch flips the announce failed->complete marker only when the NEW attempt terminates, and grep confirms no resubmit path touches .hpc/announce/*. reconcile's fast path settles terminal from a full stale announcement before the alive-probe (:781-792). A resubmitted, live re-run is thus read FAILED on the next tick."
    }
-  ]
- },
- {
-  "title": "The submit-path preflight gate is inert: `hpc-agent preflight` exits 0 / ok:true even when every check fails, so submit-preflight reports overall='pass' and S1 briefs show a green preflight while the environment is broken",
-  "severity": "high",
-  "where": "src/hpc_agent/cli/_dispatch.py:418-425, src/hpc_agent/ops/preflight/check.py:314-315 (stale claim), src/hpc_agent/ops/submit_preflight.py:294-298,476, src/hpc_agent/ops/submit_blocks.py:467-469",
-  "category": "inert-guard-preflight",
-  "failure_scenario": "Mid-campaign the user's ssh-agent key expires (or they typo the cluster name, or clusters.yaml still has <your_user> placeholders). /submit-hpc runs submit-s1 -> submit_preflight -> subprocess `hpc-agent preflight --cluster X`. check_preflight() correctly computes all_ok=False with failing checks (ssh_auth_sock, cluster_known, cluster_config_customized, the #275 runtime_uv gate), but the generic dispatcher wraps ANY return in _ok() and returns EXIT_OK, so the subresult is ok=true, overall='pass', and the S1 brief the human greenlights says preflight passed. Every guard the preflight family exists for (placeholder catch, wrong-cluster-name catch, dead-agent catch, uv-on-uvless-cluster catch) cannot fire on the primary block-drive path; the failure resurfaces as a raw rsync/auth error deep in S2 staging or dooms the array. check.py's own docstring ('The CLI adapter maps all_ok=False to the cluster-error exit code') describes an adapter that no longer exists.",
-  "fix_sketch": "Give check-preflight a CliShape handler (or result_post + exit mapping) that emits the data but returns EXIT_CLUSTER_ERROR when all_ok is False \u2014 restoring the documented contract \u2014 OR make submit_preflight._run_subprocess fold `envelope.data.all_ok is False` into SubResult.ok for the check-preflight arm. Also stop truncating at submit_blocks.py:469: when overall != 'pass', include the failing checks' name+detail in brief['preflight'] so the human sees WHY, not just 'fail'.",
-  "evidence": "Read dispatch_primitive (_ok(data); return EXIT_OK \u2014 no all_ok branch), check_preflight's decorator (no handler/result_post), submit_preflight's ok derivation (`bool(envelope.get('ok'))`), submit_s1 folding only {'overall': ...}. Empirically ran in the repo venv: `hpc-agent preflight --cluster definitely-not-a-cluster` in a bare env -> EXIT 0, ok:true, all_ok:false with 4 failing checks; then real submit_preflight(cluster='definitely-not-a-cluster') -> overall:'pass' while check_preflight data.all_ok:false. Tests only pin the fiction: tests/ops/test_submit_preflight.py:190-205 mocks check-preflight failure as an ok:false ERROR envelope the real subprocess never emits; no test covers the all_ok:false/ok:true shape. Not in upstream-fixes-2026-07.md, bug-sweep refuted list, or the architecture review.",
-  "id": "F29",
-  "lens": "operator-error-ux",
-  "triage": "Confirmed _dispatch.py:424-425 returns EXIT_OK unconditionally after result_post; check-preflight has no exit mapping, so all_ok:false yields ok:true/exit 0. Finder reports in-venv repro. Not banked.",
-  "related": [
-   {
-    "id": "F31",
-    "note": "Same failure class (a preflight-bearing CLI returns exit 0/ok:true despite all_ok=False) via different handlers: F29 = generic dispatch_primitive _ok() wrapper for the `preflight` verb; F31 = setup.py's own _setup_handler for `setup` (plus an independent dead-preflight-marker defect). Fixing one does not fix the other."
-   }
   ],
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-operator",
-    "verdict": "CONFIRMED",
-    "reasoning": "Reproduced in-venv: `hpc-agent preflight --cluster definitely-not-a-cluster` returns EXIT 0 / ok:true with all_ok:false (5 failing checks). check-preflight's CliShape has no handler and no result_post, so dispatch_primitive (_dispatch.py:423-425) wraps the dict in _ok() and returns EXIT_OK unconditionally. Ran the real composite: submit_preflight(cluster='definitely-not-a-cluster') returns overall='pass' while check_preflight.envelope.data.all_ok is False, because ok is derived as bool(envelope.get('ok')) (submit_preflight.py:297) and overall fails only when a subcall's ok is False (line 476). submit_blocks.py:469 folds only {'overall': ...} into the S1 brief, so the human greenlights a green preflight over a broken env. The inert-guard chain is real and reachable on the primary submit path."
-   },
-   {
-    "shard": "B4-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "Reproduced in-venv: `hpc-agent preflight --cluster definitely-not-a-cluster` returns envelope ok:true / exit 0 with data.all_ok:false and 4+ failing checks. Confirmed dispatch_primitive (_dispatch.py:423-425) calls _ok(data) and returns EXIT_OK unconditionally on the no-handler Tier-1 path, contradicting check.py:314-315's docstring ('maps all_ok=False to the cluster-error exit code'). submit_preflight derives the check-preflight arm's ok from bool(envelope.get('ok')) (line 297) and overall from `any(not r['ok'])` (line 476), so an all_ok:false preflight contributes 'pass' \u2014 the #275 uv-gate and placeholder-config cases (caught only by check-preflight's internal checks) sail through as a green S1 brief. Inert guard confirmed."
-   }
-  ]
- },
- {
-  "title": "Renaming/moving the experiment directory mid-campaign silently forks the journal namespace: all run records, the decision journal, and the utterance log become invisible with no detection or remediation, wedging the campaign",
-  "severity": "high",
-  "where": "src/hpc_agent/state/run_record.py:397-424, src/hpc_agent/state/index.py:135-144, src/hpc_agent/state/utterances.py:177, src/hpc_agent/ops/attention_queue.py:1501-1524",
-  "category": "moved-experiment-dir",
-  "failure_scenario": "Day 3 of an array-batch campaign, the user renames ~/exp1 to ~/exp1-v2 (or reaches it via a different NFS automount path that resolve() doesn't canonicalize to the same string). repo_hash = sha256(resolved path)[:12], so every journal read (find_in_flight_runs, status-snapshot, block-drive resume cursor, read-decisions, the human-authorship utterance log, preflight markers) now targets a fresh empty ~/.claude/hpc/<newhash>/ \u2014 journal_dir() even scaffolds it with a new repo.json. Status reports nothing in flight while the array runs; block-drive has no parked marker; append-decision's authorship gate refuses against an empty utterance log with a remedy ('the human states the values') that never names the real cause; the detached watcher and the doctor cron (`hpc-agent-doctor-<old_hash>`, cwd = old path) keep writing to / failing against the old namespace. The old namespace's repo.json records the old experiment_dir, but no code path ever compares or relinks it \u2014 the fleet scan explicitly skips namespaces whose experiment_dir no longer exists 'silently' (attention_queue.py:1504). Recovery requires knowing the hash scheme and hand-moving dirs under ~/.claude/hpc.",
-  "fix_sketch": "Detect the fork at journal_dir(): before scaffolding a fresh namespace, check whether <experiment_dir>/.hpc/runs/*.json sidecars reference run_ids absent from the new namespace and whether another namespace's repo.json claims a now-missing dir with matching run_ids \u2014 then either warn loudly with a relink command, or add a `hpc-agent relink-journal` verb. Longer-term: key the namespace on a durable token stored in .hpc/ (minted at first journal write) instead of the path hash, falling back to the path hash for old namespaces.",
-  "evidence": "Read repo_hash/journal_dir (path-hash keyed, mkdir+repo.json on every call), index.py per-namespace lookups, utterances.py journal-side storage, and the attention-queue fleet scan's silent skip. Grepped all readers of repo.json: only the fleet scans read it, none compares it to a live dir or offers relink. The Windows path-form canonicalization (#296, run_record.py:352-394) shows the same-dir-different-string hazard is real and was only fixed for MINGW/WSL drive forms, not for renames or non-Windows aliasing. No test simulates a mid-campaign rename. Not covered by the three banked docs (checked for repo_hash/moved/rename).",
-  "id": "F30",
-  "lens": "operator-error-ux",
-  "triage": "repo_hash is path-hash keyed; rename/aliasing forks the journal namespace with no detection. Windows-form fix (#296) is narrower. Not in banked docs.",
-  "related": [
-   {
-    "id": "F46",
-    "note": "Both stem from journal_dir()/repo_hash design (run_record.py:408-424): F30 = namespace keyed on the mutable resolved path, so a rename forks the journal; F46 = journal_dir() mkdirs+writes repo.json on read, so the existence guards can't fire and reads scaffold ghost namespaces. Different mechanisms/fixes, same accessor."
-   }
-  ],
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-operator",
-    "verdict": "CONFIRMED",
-    "reasoning": "repo_hash = sha256(_canonicalize_for_hash(dir))[:12] and on non-Windows that is just str(Path(dir).resolve()) (run_record.py:373,405), so a rename or a genuinely different mount/automount path string yields a different hash. journal_dir (408-424) mkdirs and scaffolds a fresh repo.json on first access with no comparison to any existing namespace, and discover_fleet_experiments silently skips any repo.json whose experiment_dir no longer exists (attention_queue.py:1527-1528). I confirmed no code reads repo.json to relink or warn \u2014 only the fleet scans read it. The #296 Windows-form fix confirms the same-dir-different-string hazard was recognized but solved only for MINGW/WSL drive forms. Mechanism airtight; automount aliasing is a non-deliberate trigger, so 'high' holds despite being operator/environment-triggered."
-   },
-   {
-    "shard": "B4-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "repo_hash = sha256(_canonicalize_for_hash)[:12], and on non-Windows _canonicalize_for_hash is just str(Path.resolve()) (run_record.py:372-373), so a rename or NFS-automount alias yields a different hash. journal_dir (line 408-424) mkdirs a fresh namespace and writes a new repo.json without ever consulting .hpc sidecars; find_in_flight_runs keys on journal_dir and returns [] after the fork; discover_fleet_experiments (attention_queue.py:1527) silently skips the old namespace whose experiment_dir no longer exists. Grep confirms only fleet scans read repo.json and none relinks; the #296 fix covers only MINGW/WSL drive forms. Silent campaign wedge with no detection/remediation is real, though it is user-initiated (rename) or NFS-aliasing-triggered."
-   }
-  ]
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Read every cited site: dispatch.py:189-218 removes the opposite-state marker only when the NEW attempt itself reaches terminal, so a resubmitted task's `.failed` marker persists for the whole attempt-2 queue+run window; monitor_flow.py:438-458 runs the census EVERY tick (gated only on backend_requires_ssh and is_kill_confirmed, no scheduler input, running=0 hard-coded at :222), and classify_polling:194 settles FAILED on running==0/pending==0/failed>0 \u2014 so a full-but-stale census marks a live re-run FAILED on the next 10-60s tick. Grep confirms recover_flow.py and auto_resume_flow.py contain zero references to announce markers, and maybe_auto_resume's request_id folds auto_resume_count (auto_resume_flow.py:201) so consecutive thrash resubmits are deliberately NOT deduped \u2014 the cap burns in ~2 ticks and mark_terminal(FAILED) lands while duplicate arrays run unwatched, exactly as claimed; the comment at :195-199 ('just-resumed pending jobs cannot trigger a same-generation re-entry') is a walk-leg assumption Phase 2's census demonstrably broke. The suspected hidden guard in reconcile is absent: _settle_from_announcements (reconcile.py:303-376) uses its scheduler arg only for _gather_failure_features and settles FAILED from a full announcement WITHOUT the alive probe at :820. No hidden guard found on any path; both the opt-in thrash arm and the no-opt-in manual-resubmit arm hold.",
+   "fix_sketch_concerns": "Marker deletion on resubmit interacts with F17's no-announce-on-idempotency-skip: a deleted marker for a task whose attempt-2 skips (already-complete output) never re-announces, converting this bug into F17's permanent partial-census wedge \u2014 the epoch/generation variant or pairing with the F17(a) fix is safer than bare `rm`. The rm must also fail closed (a swallowed ssh failure on the delete recreates this bug exactly).",
+   "new_evidence": "reconcile's fast path is worse than the finding states in one respect: _settle_from_announcements fires harvest_on_terminal on the verdict transition, so the stale-census FAILED also triggers a premature harvest (partial results pulled and reduced) \u2014 not just a wrong lifecycle mark. Post-hoc self-healing exists only if someone re-runs reconcile after attempt-2 flips all markers; nothing schedules that once the run is terminal."
+  }
  },
  {
   "title": "scheduler_query_ran returns ran_ok=True for ANY rc on slurm/pbspro/torque \u2014 a down slurmctld or missing squeue/qstat binary (rc 1/126/127, stderr discarded) reads as 'queue empty', settling a healthy campaign as abandoned and false-confirming kills",
@@ -391,7 +249,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "_engine.py:821-822 returns ran_ok=True for explicit-id families (SLURM/PBS/TORQUE) regardless of the ack-carried rc; the ack echo fires after a `;` so a missing binary (rc 127) or down slurmctld (rc 1, stderr discarded by 2>/dev/null) yields ack-present + empty stdout -> empty alive-set. reconcile's settle (line 965: not alive + both probes ran cleanly + incomplete-not-failed) then marks a live running run ABANDONED, and kill.py:129 treats the empty set as 'confirmed gone'. The finder's added claim holds: rc 126/127 is cleanly distinguishable from a job leaving the queue (which exits 1) and is unhandled; the daemon-down rc-1 leg is genuinely rc-ambiguous (the deliberate #5 semantics) but its distinguishing stderr is thrown away and the harmful outcome is identical. Reachable during routine slurmctld maintenance restarts."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Empirically reproduced in-sandbox via the project venv: bash -c 'missing_binary 2>/dev/null; echo __HPC_SCHED_ACK__=$?' yields empty stdout + ack rc 127 with outer rc 0 (so the ssh rc-255 guard at reconcile.py:143 can't fire), and scheduler_query_ran on that input returns ran_ok=True with alive=set() for slurm/pbspro/torque while SGE correctly returns False \u2014 three of four families read a failed query as an empty queue. reconcile's settle path then only needs the filesystem reporter walk to succeed (independent of the scheduler daemon), so one tick during a slurmctld outage settles a live campaign run abandoned (or FAILED if any failed markers exist, arming resubmit thrash), and kill.py:127-137 journals every job confirmed-gone after a scancel whose result is entirely ignored (kill.py:64). The engine header (_engine.py:50-56) explicitly claims the ack mechanism kills the 'qstat missing, slurmctld down' class \u2014 verified false for the explicit-id families. The daemon-down rc=1 squeue behavior cannot be tested in this sandbox (no scheduler) and should be smoke-checked on a live cluster, but the repo's own _remote_base.py comments attest the missing-binary variant is real (submit needs bash -lc precisely because non-login shells can lack scheduler binaries; monitor queries run non-login bash -c per remote.py:241-244).",
+   "fix_sketch_concerns": "The rc-not-in-(126,127) arm is safe and does NOT re-break the 2026-07-11 bug #5 (finished-id rcs are 1/35/153, never 126/127; the pinned ack=35 PBS test needs no change, contrary to the finding's note) \u2014 but it covers only the missing-binary case, not the likelier daemon-down rc=1 case. The stderr-capture arm is where #5-regression risk lives: matching known-benign messages ('Invalid job id', 'Unknown Job Id') is scheduler-version/locale-fragile, and any unrecognized benign stderr flips finished runs back to permanent UNKNOWN \u2014 the exact G9 failure the #5 fix removed. A stderr-based rule must default to ran_ok=True on unrecognized messages (allowlist known-FATAL daemon-down strings, not known-benign ones) to stay on the right side of that fix.",
+   "new_evidence": "Repro output: slurm/pbspro/torque ran_ok=True alive=empty on ack=127 empty stdout; SGE refuses. Compounding gap the finding missed: kill._attempt_backend_cancel discards the cancel command's CompletedProcess entirely (kill.py:64) \u2014 even a loud scancel failure (rc 127/1) is invisible, so the only line of defense was exactly the alive-check this finding shows is blind. The claimed prior-sweep provenance checks out: commit e58b90d introduced explicit_id_liveness_query as the #5 fix; the rc-126/127 refinement its sketch mentioned was never implemented."
+  }
  },
  {
   "title": "PBS Pro/TORQUE array job ids lose their '[]' at capture (JOB_ID_REGEX group 1 = digits only), so every later qstat -t / qdel / qstat -x -f -t addresses a job id that does not exist \u2014 arrays read as gone, kills false-confirm, history queries return nothing",
@@ -427,7 +292,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "profile.py:322/333 job_id_regex captures group(1) as digits only (test pins '12346[].hpcnode0'->'12346'), and _engine.py builders + query.py:432-464 all address the bare sequence (test pins `qdel 12345 12346`); grep confirms nothing re-appends '[]'. PBS Pro/TORQUE address an array parent as `seq[]` and normalize a bare `seq` to a different, nonexistent job \u2014 the documented Unknown-Job-Id gotcha; combined with F35's rc-blind ran_ok the empty result reads as 'gone'. Even discounting the qstat-liveness leg, the qdel-false-confirm and empty qstat-x history legs independently hold."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Every repo-side link verified: job_id_regex for pbspro/torque puts the brackets in a non-capturing optional group (profile.py:322,333), submit_one returns match.group(1) (backends/__init__.py:570-573), qsub -J/-t array submission is pinned by test_pbs.py:45-68, and the alive/state/cancel builders plus query_pbs pass the stored bare seq verbatim (qstat -t <ids> 2>/dev/null, qdel <ids>, qstat -x -f -t <id> with rc!=0 silently skipped). I settled the load-bearing domain assertion against upstream scheduler source: OpenPBS find_job (src/server/job_func.c:1303) appends '.server' and does an exact pbs_idx_find \u2014 '12345.server' can never match the stored '12345[].server' \u2014 and TORQUE svr_find_job/find_job_by_array (src/server/job_container.c) is likewise an exact hash find in both alljobs and array_summary with bracket-stripping in neither, so bare-seq addressing of an array yields PBSE_UNKJOBID on both forks. Combined with scheduler_query_ran's explicit-id rule (ack present -> ran_ok=True regardless of rc, stderr discarded), a live 500-task array reads as gone on the first reconcile and qdel false-confirms \u2014 settled-terminal-while-burning-allocation plus false kill confirmation is squarely high.",
+   "fix_sketch_concerns": "Widening the capture makes PERSISTED job_ids bracketed, but parse_alive_output/parse_scheduler_states build their wanted-sets from those stored ids ({'12345[]'}) while normalizing the row side to bare seq ('12345') \u2014 the sketch's 'keep the existing split-bracket normalization for matching' is insufficient; the wanted side must be normalized too, and every other id comparison (reconcile record.job_ids, kill's alive-set complement, query_pbs dedup keys) must handle mixed old-bare/new-bracketed sidecars. The shlex.quote claim checks out (brackets are outside quote's safe charset, so ids arrive single-quoted and glob-safe), and query_pbs runs subprocess without a shell, so brackets survive there unquoted.",
+   "new_evidence": "Upstream-source confirmation (OpenPBS exact-index lookup, TORQUE exact hash find in both job containers) settles the assertion about as firmly as possible without a live cluster; residual live-cluster caveat is only legacy TORQUE 2.x, whose qsub printed non-bracketed array ids that the optional-bracket regex would round-trip correctly \u2014 i.e., the bug is confined to modern bracket-printing PBS Pro/OpenPBS/TORQUE, which is the norm."
+  }
  },
  {
   "title": "Federated SLURM: sbatch routes jobs with --clusters=<X> but squeue/scancel liveness, state, and cancel builders never emit -M <X> \u2014 jobs are invisible to every monitor query and un-killable, with verify_submitted's missing-doesn't-fail-gate making it silent",
@@ -448,10 +320,6 @@
   ],
   "status": "CONFIRMED",
   "final_severity": "high",
-  "severity_disputed": [
-   "medium",
-   "high"
-  ],
   "votes": [
    {
     "shard": "A-scheduler",
@@ -464,7 +332,14 @@
     "reasoning": "sbatch emits --clusters={self.cluster} (_engine.py:571-572) but build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are classmethods with no cluster kwarg (:687,743,763), so squeue/scancel run against the login node's default cluster with no -M; query_sacct threads --clusters (:158-159), proving the flag is required and only the liveness/kill half dropped it. For a slurm_cluster-configured (multi-cluster) run, squeue returns empty-with-ack so the run settles abandoned and scancel silently no-ops. Real but scoped to the federated/multi-cluster config."
    }
   ],
-  "adjudication": "RULED high (fable pass, 2026-07-13): the split was reachability-only. Decisive: the failure is DETERMINISTIC once slurm_cluster targets a non-default cluster \u2014 the user hits it on their first submit, every time, in SLURM multi-cluster mode (what --clusters actually implements): monitoring blind, run settled abandoned while burning allocation, scancel a no-op with false 'confirmed gone'. Config-gated is not probabilistic-rare; it is a supported knob that breaks 100% when used. Caveat kept: in a true federation squeue's default federated view may partially mask the liveness half \u2014 the live-cluster check for F37 stays mandatory before the fix is finalized."
+  "adjudication": "RULED high (fable pass, 2026-07-13): the split was reachability-only. Decisive: the failure is DETERMINISTIC once slurm_cluster targets a non-default cluster \u2014 the user hits it on their first submit, every time, in SLURM multi-cluster mode (what --clusters actually implements): monitoring blind, run settled abandoned while burning allocation, scancel a no-op with false 'confirmed gone'. Config-gated is not probabilistic-rare; it is a supported knob that breaks 100% when used. Caveat kept: in a true federation squeue's default federated view may partially mask the liveness half \u2014 the live-cluster check for F37 stays mandatory before the fix is finalized.",
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Verified the asymmetry directly: _build_slurm_command:571-572 appends --clusters={self.cluster} (threaded from user-facing slurm_cluster config via remote_factory.py:99), while build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd (:686-776) are classmethods whose signatures take only job_ids \u2014 no cluster parameter exists \u2014 and query_sacct DOES insert --clusters (query.py:158-159, _engine.py:987-993), proving the flag is known-required and only the liveness/kill half lost it. The silence chain holds end-to-end: SLURM's job_id_regex `Submitted batch job\\s+(\\d+)` (profile.py:278) is unanchored so the '...on cluster gpu' output still parses (submit succeeds silently), and scheduler_query_ran:818-823 returns ran_ok=True for the slurm explicit-id family regardless of rc, so wrong-cluster squeue's empty stdout+ack reads as 'all jobs gone'; kill.py:64 discards the scancel result entirely and :127-137's empty alive set journals every job confirmed-gone. One overstatement found: 'invisible to EVERY monitor query' is too strong \u2014 the announce-marker census (shared filesystem, scheduler-independent) keeps mid-run progress monitoring working once tasks announce; the blindness bites the pre-announce queued window, reconcile's alive probe, scheduler-state queries, and kill verification \u2014 still enough to settle healthy runs terminal and false-confirm kills.",
+   "fix_sketch_concerns": "The sketch conflates two names: getattr(record, 'cluster', None) at reconcile.py:812 is the hpc-agent clusters.yaml config KEY, not the SLURM -M cluster name \u2014 threading it verbatim would emit -M <config-key>. The fix must resolve the slurm_cluster field from the cluster config (or persist it in the run sidecar at submit time, the more robust option since config can change mid-run). kill's seam calls builder(job_ids) via getattr (kill.py:58-61), so the signature change must keep the one-arg form working or update that call site.",
+   "new_evidence": "Whether plain squeue on a true SLURM *federation* (vs. plain multi-cluster --clusters routing) shows sibling-cluster jobs can only be settled on a live federated installation \u2014 flagged; for the ordinary multi-cluster deployment the blindness is standard squeue behavior. The announce census partially mitigates mid-run monitoring, which prior verifiers did not note; conversely kill.py:64's total discard of the scancel result (stderr, rc both ignored) makes the un-killable half airtight."
+  }
  },
  {
   "title": "Retry after a crash or mid-plan wave failure re-qsubs already-landed arrays: the crash-safety pre-stamp is written but no submit path ever reads it, so the same run_id ends up running twice and the first arrays become untracked ghosts",
@@ -490,33 +365,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "Confirmed _dedup_existing (submit_flow.py:2217) consults only load_run (journal); the multi-wave partial-failure path (2536-2557) pre-stamps landed job_ids to the sidecar and re-raises without ever writing the journal record, so a natural re-run of the same spec misses dedup and re-qsubs ALL waves \u2014 waves 0-2 run twice under one run_id, clobbering shared result dirs. The post-qsub update_run_sidecar_job_ids (runs.py:1007) rewrites/replaces job_ids, orphaning the original arrays, and the only reconstruction guard (runner.py:508-517 A5) is gated on cmd_sha (default-off in submit-flow) AND explicitly skips the run's own pre-stamped sidecar. A documented recovery guard that structurally cannot fire on this path."
    }
-  ]
- },
- {
-  "title": "submit-flow's front-door dedup ignores cluster, so a retarget of an in-flight run_id to a different cluster silently 'succeeds' as deduped=True against the OLD cluster \u2014 the proving-run-5 cross-cluster REFUSE guard in runner._resolve_layer1 cannot fire on the primary workflow path",
-  "severity": "high",
-  "where": "src/hpc_agent/ops/submit_flow.py:2215-2234, src/hpc_agent/ops/submit/runner.py:229-236",
-  "category": "wedged-state",
-  "failure_scenario": "Cluster A degrades mid-campaign; the user rebuilds the same spec targeting cluster B (same swept params \u2192 same run_id, since run_id keys on parameters only, #207) and calls submit-flow / submit-flow-batch. _dedup_existing loads the journal record (status in_flight on A) and, being not resubmittable-terminal, returns SubmitFlowResult(deduped=True, job_ids=A's job ids) with NO cluster comparison \u2014 before any gate runs (deduped specs skip supersession/sidecar/prelude entirely, submit_flow.py:2864-2870). The retarget silently did not happen: nothing runs on B, the envelope reports success-shaped dedup, and the campaign keeps monitoring the degraded A run. runner._resolve_layer1's in_flight_cluster_mismatch REFUSE (229-236, built for exactly this after proving run #5) sits downstream in submit_and_record, which the flow only reaches for FRESH specs after qsub \u2014 so on the main agent-facing surface the guard is dead code for this scenario.",
-  "fix_sketch": "Mirror the layer-1 cluster check in _dedup_existing: when existing is non-terminal and both existing.cluster and spec.cluster are non-empty and differ, raise the same SpecInvalid the runner raises (runner.py:430-440) instead of returning a deduped result. Reuse _resolve_layer1 directly (it is pure) so the two seats cannot drift \u2014 the twin-predicate class the G11 generator in upstream-fixes names.",
-  "evidence": "Read _dedup_existing (no cluster field consulted) and _resolve_layer1/_REFUSE plus its raise site (runner.py:229-236, 429-440). tests/ops/submit/test_layer1_dedup.py:122 pins only the pure function's decision; no test drives a cross-cluster in_flight retarget through submit_flow/_dedup_existing. Not listed in the sweep's Refuted section or the architecture review (grepped 'retarget', '_dedup_existing').",
-  "id": "F48",
-  "lens": "submit-resume",
-  "triage": "Verified _dedup_existing has no cluster comparison; returns deduped for any non-resubmittable-terminal record. Cross-cluster retarget silently deduped against old cluster.",
-  "status": "CONFIRMED",
-  "final_severity": "high",
-  "votes": [
-   {
-    "shard": "A-submit",
-    "verdict": "CONFIRMED",
-    "reasoning": "_dedup_existing makes no cluster comparison and returns deduped=True for any non-resubmittable-terminal record; deduped specs short-circuit before submit_and_record (2864-2870), where the in_flight_cluster_mismatch REFUSE (runner 234-235/429-440) lives. Since run_id keys on parameters only (#207, corroborated across the code and by the REFUSE guard's own reason), a cluster-B retarget of an in_flight-on-A run silently dedups against A. The proving-run-#5 guard is dead on the primary submit-flow surface."
-   },
-   {
-    "shard": "B2-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "_dedup_existing (submit_flow.py:2215-2234), invoked up front for every spec at line 2864, returns deduped=True with the old record's job_ids for any non-resubmittable-terminal record and never reads spec.cluster; this short-circuits before submit_and_record/_resolve_layer1 where the in_flight_cluster_mismatch REFUSE (runner.py:234-235) lives. The runner comment itself states run_id is parameter-only and cross-cluster retarget is exactly the scenario that guard was built for, so the guard is dead on the primary submit-flow path \u2014 a retarget silently no-ops as success-shaped dedup."
-   }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Verified every link: _submit_one_spec pre-stamps landed wave ids to the sidecar and re-raises (submit_flow.py:2536-2557) with no journal record; on retry _dedup_existing consults ONLY load_run (2215-2234), and I checked all three pre-submit guards for a hidden catch \u2014 prune_orphan_sidecars cannot clear the stale stamp (non-empty job_ids -> _run_committed -> not orphan, runs.py:966-1004, plus same-batch run_ids are excluded at 2851), apply_supersession_gate matches only SIBLING run_ids with live journal records (supersession.py header: 'never trips on the very first submit'), and _ensure_run_sidecar never reads job_ids (971-1040). So the retry re-qsubs all waves, and update_run_sidecar_job_ids REPLACES job_ids ('Loads the sidecar in place, sets job_ids', runs.py:1014-1021), permanently untracking the first-attempt arrays from every kill/reconcile path. The A5 reconstruction is triply unreachable here: gated on cmd_sha (None by default, 2590-2592), explicitly skips the run's own sidecar (runner.py:508-517), and sits post-qsub anyway \u2014 so is_orphan_sidecar's documented 'submit_and_record will reconstruct' contract (runs.py:933-936) is dead on this path, a genuine repo-rule violation. No test drives the retry (only the exception-carries-accounting halves at test_multiwave_submit.py:273).",
+   "fix_sketch_concerns": "The reconstruct-and-return-deduped arm is unsound for the mid-plan partial case it targets: reconstructing a journal record from 3-of-6 landed waves and reporting deduped=True strands waves 3-5 unsubmitted forever \u2014 the run can never complete and monitoring rides to budget on the permanently-missing tasks. The refuse-with-typed-error arm is the sound one (and correctly excludes the S3 two-phase canary window, where the main sidecar is deliberately jobless, and resubmittable-terminal corpses, which have journal records); a full remedy needs wave-aware resume (submit only unlanded waves) or refuse->kill->fresh. The refuse also changes behavior for cmd_sha-less journal-wipe users who today get a (duplicate) resubmit \u2014 acceptable, but the error must name the reconcile/kill remedy.",
+   "new_evidence": "Checked and eliminated two guards prior rounds never mentioned: the batch-start orphan prune (structurally blind to committed pre-stamps) and the proving-run-4 supersession gate (sibling-run_id + journal-only, so it cannot see a journal-less same-run_id pre-stamp). Confirmed update_run_sidecar_job_ids is a replace-not-merge, so the ghost arrays lose their only on-disk trace at the exact moment the retry 'succeeds'. Mitigation-wise, the dispatcher's idempotency skip only helps for tasks already COMPLETE before the duplicate starts \u2014 concurrently-running duplicates still double-write result dirs."
+  }
  },
  {
   "title": "Deploy-cache manifest rides the SAME non-atomic transfer as the files it attests and lands FIRST on the wire, so an interrupted deploy_runtime + retry reports success while the cluster runs stale or torn framework code",
@@ -548,7 +404,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "Verified _DEPLOY_MANIFEST_REL='.hpc/.deploy_state.json' and that it byte-sorts before every shipped code file (. < _ < letters; .hpc before hpc_agent), so under rsync's sorted flist with --inplace (transport.py:1806) the manifest lands durably first; an interruption after it lands makes the retry read the new manifest, compute to_deploy=[] and manifest_changed=False, ship nothing and return success while stale/torn code runs. The tar fallback is a direct-overwrite tar x of the same bundled stream (:1143,1171) \u2014 same hazard \u2014 and the safety comment (:1983-1986) reasons only about local list order, not wire order. Couldn't run rsync in-sandbox but its flist sorting is standard and the ordering is arithmetically confirmed."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Empirically reproduced both load-bearing claims in this sandbox with rsync 3.2.7: (1) with the exact staged layout, `rsync -az --inplace -v` transfers `.hpc/.deploy_state.json` FIRST (before _hpc_combiner.py/_hpc_dispatch.py/templates/hpc_agent), confirming the C-locale sort claim; (2) SIGKILLing the transfer at 1.2s under --bwlimit left the NEW manifest fully landed while _hpc_combiner.py was torn mid-file (114,678 bytes, sha matching neither version \u2014 --inplace forgoes atomicity) and _hpc_dispatch.py still held the OLD version's bytes verbatim. The retry poisoning is confirmed by reading deploy_runtime:1956-2000: the prelude cat reads the landed manifest, pkg_version matches, `cached_files.get(it.dst_rel) != it.sha` compares LOCAL shas against the manifest's LOCAL shas (never remote reality), so to_deploy=[] and manifest_changed=False \u2014 no transfer, silent success over stale/torn cluster code. No hidden guard exists: grep shows no post-deploy remote sha verification anywhere in transport.py, and the in-code safety comment at :1983-1986 is empirically false on the wire. The window is effectively the entire transfer after the first ~KB, so any interrupted redeploy (SSH_TIMEOUT, flap, Ctrl-C) followed by the natural retry hits it.",
+   "fix_sketch_concerns": "The primary fix (separate small ssh leg writing the manifest after transfer success, mirroring _write_push_manifest) is sound and should fail open (a lost manifest just forces a full re-ship). The --delay-updates alternative is weaker than the sketch implies: it is mutually exclusive with --inplace (loses the delta-in-place economy the comment at :1789 defends), still renames in file-list order leaving a tiny manifest-first window, and an interrupt strands .~tmp~ dirs in the cluster tree.",
+   "new_evidence": "Empirical repro artifacts: manifest-first transfer order and the torn-combiner/stale-dispatch post-interrupt state, both demonstrated locally. The tar-fallback half of the claim ('extracts in readdir order \u2014 same hazard') remains untested and is weaker \u2014 tar archives in os.walk/readdir order, so manifest-first is possible but not guaranteed there; the rsync leg (the default whenever rsync is on PATH) is proven. Torn-vs-stale split confirmed: a torn dispatch.py dies loudly at next canary, but a byte-complete stale one (my repro's dispatch outcome) is fully silent version skew."
+  }
  },
  {
   "title": "_with_ssh_backoff retries client-side TimeoutError for non-idempotent submit commands while build_remote_command grants the first attempt's remote half timeout+60s to complete \u2014 a slow qmaster turns one submit_one into up to 3 duplicate qsub/sbatch array submissions, only the last of which is tracked",
@@ -580,7 +443,14 @@
     "verdict": "CONFIRMED",
     "reasoning": "Re-derived the deadline arithmetic: _remote_deadline_seconds returns int(timeout)+REMOTE_DEADLINE_MARGIN_SEC(=60), and build_remote_command wraps the remote qsub in `timeout -k 10 <client+60>s bash -c ...`, deliberately outliving the client (the orphan-bound design premise at remote.py:120-134). submit_one rides remote_factory.py:69's ssh_run with no timeout override -> SSH_TIMEOUT_SEC=60s client budget, and _ssh_backoff_policy (remote.py:322) lists TimeoutError as retryable. A qsub completing in the [60s,120s] window queues the array while the client already gave up and discards the job id, then the ladder resubmits \u2014 a duplicate untracked array double-writing results/<run_id>. No idempotence/duplicate guard on the submit leg (grep confirms none); verify_submitted only checks recorded ids. The race window is probabilistic but the code comments themselves document multi-second-to-22s login-node variance, so a 60s+ qsub is within reach on an overloaded qmaster."
    }
-  ]
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Every link re-verified: submit_one -> _execute_command -> the factory's `ssh(cmd)=ssh_run(cmd, ssh_target=...)` closure (remote_factory.py:68-69) with the default SSH_TIMEOUT_SEC=60; build_remote_command grants the remote half timeout+60s (`timeout -k 10 120s`, remote.py:134/188-198); _ssh_backoff_policy retries TimeoutError (retry_on at remote.py:322) \u2014 and the schedule is (2,4,8,16), i.e. up to 5 attempts, MORE than the finding's 3, truncated in practice by the breaker (TimeoutError counts as a connection failure per ssh_circuit.py's own docs, threshold opens mid-ladder). The decisive domain claim \u2014 a client-killed ssh leaves the remote half running \u2014 is the repo's OWN empirically documented incident (run-12 finding 20, the reason LAYER 1 exists), so a 60-120s qsub commits an array whose job id is discarded, and the retry submits a duplicate under the same run_id writing the same result dirs. No idempotence flag, no job_name-scoped duplicate probe anywhere in backends (grep confirms). Transient case is fully silent (1 phantom + 1 tracked array); sustained case is loud but leaves up to ~3 phantom arrays queued. Silent duplicate execution double-writing result dirs is the rubric's high.",
+   "fix_sketch_concerns": "The retry_on_timeout flag must ALSO gate the engine fallback seam (ssh_run's `except EngineUnavailable: pass` one-shot re-execution \u2014 the F55 path) or the fix closes only one of two re-execution doors. Job_name-scoped adopt-instead-of-resubmit is risky unless job names are attempt/wave-unique \u2014 a same-name array from a prior wave could be adopted wrongly. Surfacing submit timeouts immediately will make transiently-slow clusters fail loud where they previously (dangerously) self-healed; callers need the remediation text.",
+   "new_evidence": "Retry count is worse than claimed: max_attempts=1+len((2,4,8,16))=5, bounded to ~3-4 executions only by the circuit breaker. Whether >60s qsub is 'routine' is live-cluster-only, but the codebase's own Hoffman2 measurements (login-shell sourcing 1.2s typical, 22.8s outlier, inside the same 60s budget as the handshake and qsub) make the window credible under load. The cached-abs-path fast path (skipping bash -lc after the first submit) does not change the exposure."
+  }
  },
  {
   "title": "Engine seam silently RE-EXECUTES a command that was already dispatched to the remote: any mid-command engine failure (per-command asyncssh timeout, torn connection) raises EngineUnavailable, and ssh_run's 'except EngineUnavailable: pass' re-runs the same command one-shot \u2014 the un-landed half of the #8 fix",
@@ -617,7 +487,47 @@
     "reasoning": "ssh_engine._Engine.run dispatches at line 578 (_submit(_do_run(hc,cmd,...))) then its `except Exception` at 583-595 collapses per-command asyncssh timeouts AND torn-connection failures \u2014 genuinely post-dispatch, command still running remotely under the timeout wrapper \u2014 into the same EngineUnavailable as pre-dispatch channel-open refusals, with no dispatched/undispatched distinction. ssh_run (remote.py:735-736) catches EngineUnavailable with bare `pass` and falls through to the one-shot path, re-executing the full remote_cmd -> duplicate qsub / concurrent combiner double-writer, then F54's ladder can retry on top. This is exactly the 'distinguish already-dispatched failures' extra that #8's landed inflight-sweeper veto left un-implemented. Gated behind the opt-in HPC_SSH_ENGINE=asyncssh (not the default path), which the finding scopes honestly; impact-when-fired justifies high."
    }
   ],
-  "post_verification": "Smoke correction: skeptics rated this 'opt-in gated' (HPC_SSH_ENGINE=asyncssh), but the live MCP smoke showed mcp-serve defaults the engine ON (active_env_overrides in every envelope; commit cf4651d). For MCP-driven usage this is DEFAULT-ON. Severity already high; reachability is broader than the votes assumed."
+  "post_verification": "Smoke correction: skeptics rated this 'opt-in gated' (HPC_SSH_ENGINE=asyncssh), but the live MCP smoke showed mcp-serve defaults the engine ON (active_env_overrides in every envelope; commit cf4651d). For MCP-driven usage this is DEFAULT-ON. Severity already high; reachability is broader than the votes assumed.",
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "high",
+   "reasoning": "Verified in code: _Engine.run collapses every post-dispatch failure \u2014 per-command asyncssh timeout, torn connection, OSError \u2014 into the single EngineUnavailable type (ssh_engine.py:583-595, with the discard comment explicitly naming 'a per-command timeout... carrying partial output'), and remote.py:735-736 catches it with a bare 'pass' and falls through to the one-shot path, re-executing the identical remote command; grep confirms no 'dispatched' distinction or EngineCommandFailed subclass exists anywhere in ssh_engine.py. The re-executed one-shot is then wrapped in _with_ssh_backoff (remote.py:784) whose policy retries TimeoutError, so executions compound exactly as claimed. Reachability is STRONGER than the finding knew: cmd_mcp_serve calls _enable_ssh_engine_default() which os.environ.setdefault's HPC_SSH_ENGINE=asyncssh (cli/mcp.py:87) \u2014 the engine is ON BY DEFAULT for every MCP-served agent session, not an exotic opt-in, and build_remote_command's +60s server-side margin (REMOTE_DEADLINE_MARGIN_SEC) guarantees the first qsub can land after the engine gives up. A duplicate untracked array double-writing the same result dirs is the silent-corruption rubric; high stands.",
+   "fix_sketch_concerns": "Distinguishing pre- vs post-dispatch inside _do_run needs care (successful channel open = dispatched); re-raising dispatched failures instead of falling back changes behavior for idempotent read surfaces (status polls would now surface TimeoutError instead of silently degrading), which falsifies the documented 'engine can never be worse than off' contract in cli/mcp.py's docstring \u2014 the docs must be updated with the fix. The idempotence-flag variant duplicates the F54 fix's flag; the two should be one threaded seam, or they will drift.",
+   "new_evidence": "(1) Verified per the caller's instruction: mcp-serve defaults the engine ON via setdefault (cli/mcp.py:61-88), with only HPC_MCP_NO_SSH_ENGINE=1 suppressing the injection \u2014 so the primary agent surface is exposed by default. (2) The cli/mcp.py module docstring's safety argument ('ANY engine trouble... falls straight through to the one-shot path. Turning the engine on here can therefore never be worse') is the exact reasoning error: it treats fall-through as harmless without distinguishing already-dispatched commands. (3) doctor/net_triage/heal_taxonomy elsewhere treat a lingering HPC_SSH_ENGINE=asyncssh as a stray override to unset \u2014 the repo already half-distrusts this seam without guarding its duplicate-execution mode."
+  }
+ },
+ {
+  "title": "MCP blocking-verb fence omits monitor-flow / verify-canary / submit-flow: one tool call wedges the synchronous server for up to 24h, and the default in-process runner has no deadline at all",
+  "severity": "high",
+  "where": "src/hpc_agent/_kernel/extension/mcp_server.py:965-1028, src/hpc_agent/_kernel/extension/mcp_server.py:882-946, src/hpc_agent/ops/monitor_flow.py:1-31, src/hpc_agent/_wire/workflows/monitor_flow.py:40-49, src/hpc_agent/ops/verify_canary.py:89",
+  "category": "mcp-head-of-line-wedge",
+  "failure_scenario": "User runs `hpc-agent mcp-serve --allow-mutations` (full or tiered catalog \u2014 both expose every verb='workflow' primitive per _MUTATING_VERBS at mcp_server.py:135/1167, and tiered's run-primitive advertises 'any registered'). Agent calls monitor-flow {spec:{run_id:...}} to watch a live array mid-campaign. monitor-flow is a poll-to-terminal loop (default wall_clock_budget_seconds=86400) and is NOT in _DETACH_REQUIRED_VERBS (:965-975) or _BLOCKING_WAIT_VERBS (:988) \u2014 the exact proving-run-3 head-of-line class the seam was built for. Dispatch is single-threaded, so every later tool call (status reads, append-decision, doctor) queues behind it for up to 24h; an abandoned agent turn does not stop it. The 3600s cap (_SUBPROCESS_RUNNER_TIMEOUT_SEC, :834) only bounds the NON-default subprocess runner \u2014 the default _in_process_cli_runner (:882-946, chosen at :1308) has no timeout, so even the 1h backstop never fires. verify-canary (30-min default poll loop, wait-budget-sec raisable arbitrarily) and submit-flow's canary leg escape the same way. Worse: MonitorFlowSpec is extra='forbid' with no detach field, so there is no {detach:true} remedy \u2014 it is the wait-detached class (refuse outright) but is not refused.",
+  "fix_sketch": "Add monitor-flow, verify-canary, and submit-flow to the seam in _refuse_blocking_over_mcp: monitor-flow and verify-canary join _BLOCKING_WAIT_VERBS-style outright refusal (no detach field exists in their specs; name status-watch{detach:true}/poll-detached and the S2 detached canary as the sanctioned alternatives), or grow a detach field like aggregate-flow did. Independently, give _in_process_cli_runner a bounded-wait posture (or apply _SUBPROCESS_RUNNER_TIMEOUT_SEC uniformly) so the wedge class cannot recur through the default runner as the comment at :829-834 already claims it cannot.",
+  "evidence": "Read _DETACH_REQUIRED_VERBS/_BLOCKING_WAIT_VERBS/_refuse_blocking_over_mcp and both runners at d731b12; confirmed monitor-flow/verify-canary/submit-flow are verb='workflow' agent_facing in operations.json (reachable via allowed_primitives with allow_mutations); confirmed monitor_flow's sleep-and-repeat loop and the 86400s default; confirmed verify_canary's _DEFAULT_WAIT_BUDGET_SEC=1800 poll loop. tests/test_mcp_server.py:335-470 pins refusals only for submit-s2/s3/s4, status-watch, aggregate-run, aggregate-flow, campaign-run, wait-detached \u2014 using allow_mutations=True servers, proving the exposure path is exercised; no test covers monitor-flow/verify-canary/submit-flow. Not covered by docs/plans/architecture-review-2026-07-13.md (its MCP item is the _CURATED_EXTRA_VERBS hygiene note) nor the fixed 2026-07-11 sweep.",
+  "id": "F01",
+  "lens": "agent-surface",
+  "triage": "Verified mcp_server.py:965-988 \u2014 _DETACH_REQUIRED_VERBS and _BLOCKING_WAIT_VERBS exclude monitor-flow/verify-canary/submit-flow; head-of-line wedge class real, not in banked MCP hygiene item.",
+  "status": "CONFIRMED",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-agent-surface",
+    "verdict": "CONFIRMED",
+    "reasoning": "Reproduced in the venv: _refuse_blocking_over_mcp lets monitor-flow/verify-canary/submit-flow pass while refusing status-watch/aggregate-run/submit-s2; all three are verb='workflow' agent_facing and INVOCABLE under the default full and tiered catalogs with allow_mutations. monitor-flow is a poll loop defaulting to 86400s, verify-canary to 1800s; dispatch is single-threaded synchronous in-process and the default _in_process_cli_runner (mcp_server.py:1308) has no timeout, so the 3600s cap never applies. verify-canary is the documented direct step after the two-phase canary gate, making the wedge reachable in normal agent use."
+   },
+   {
+    "shard": "B1-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "Read the seam and both runners directly: monitor-flow (default 86400s poll loop, extra='forbid' spec with no detach field) and verify-canary (1800s poll loop) are verb='workflow' agent_facing primitives, so allowed_primitives exposes them under --allow-mutations, yet neither is in _DETACH_REQUIRED_VERBS nor _BLOCKING_WAIT_VERBS, and the default _in_process_cli_runner has no timeout (the 3600s cap is subprocess-only). A direct call to monitor-flow therefore wedges the single-threaded server for up to 24h with no {detach:true} remedy and no backstop \u2014 exactly the head-of-line class the seam was built to refuse, which status-watch (the detach-gated wrapper over this same poll) IS protected against."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "reasoning": "Mechanism verified line-by-line at HEAD: _DETACH_REQUIRED_VERBS (mcp_server.py:965-975) and _BLOCKING_WAIT_VERBS (:988) omit monitor-flow/verify-canary/submit-flow; all three are verb='workflow' agent_facing in operations.json so they are exposed (and typed-listed \u2014 test_mcp_server.py:117 pins submit-flow in the list) under full/tiered with --allow-mutations; MonitorFlowSpec is extra='forbid' with no detach field and wall_clock_budget_seconds default 86400; the default runner is _in_process_cli_runner (chosen at :1308) which calls cli_main directly with no deadline, so the 3600s cap genuinely never applies. However, severity is overstated against the rubric: the curated catalog (the install-commands default, and this session's own server) derives from next_block and excludes all three, campaign execution self-chains via detached workers rather than through the MCP server, and no state is corrupted or run lost \u2014 the wedge is the agent session's control surface, cleared by restarting the server, i.e. a hang with confusing remediation and wasted time, not a wedged campaign.",
+   "fix_sketch_concerns": "The 'bounded-wait posture for _in_process_cli_runner' leg is hand-waved: an in-process synchronous call cannot be killed on deadline without moving execution to an abandonable thread, which breaks the single-threaded-dispatch invariant the elicitation pump (D3, pending-slot<=1) relies on and can leak a still-running verb holding journal locks; 'apply _SUBPROCESS_RUNNER_TIMEOUT_SEC uniformly' effectively means re-defaulting to the subprocess runner, reintroducing the latency cost the in-process runner was built to remove. Refusing submit-flow outright also needs the refusal text to route to submit-s1/block-drive, since unlike S2/S3 it has no detach field to grow into.",
+   "new_evidence": "monitor-flow declares no next_block (grep of _wire/workflows/monitor_flow.py) so it never derives into the curated catalog \u2014 the exposure is strictly the full/tiered + --allow-mutations configuration; submit-s2's canary leg inside submit-flow blocks for the whole verify_canary poll (default 1800s) plus staging on every routine submit over that surface, making submit-flow the most-frequently-hit escapee, not monitor-flow."
+  }
  },
  {
   "title": "Mid-call liveness heartbeat is silently swallowed under the default in-process runner: redirect_stderr captures the daemon thread's '[mcp] still running' lines, resurrecting the exact 'is it hung?' blindness it was shipped to fix",
@@ -681,6 +591,84 @@
     "reasoning": "Reproduced: get_prompt('submit-hpc') returns the packaged slash .md body that instructs Skill(\"hpc-submit\", ...); monitor-hpc.md further references bash hpc-agent monitor-summary and CronCreate/CronDelete. get_prompt only returns the MCP-executable start_instruction when _read_command_md returns None, i.e. when the .md is absent \u2014 but it ships as package data so it is present in a normal install. An MCP-only client lacking Skill/shell/CronCreate dead-ends or improvises against raw verbs."
    }
   ]
+ },
+ {
+  "title": "Resubmitted (recovered) tasks' results never enter the aggregate: nothing invalidates combined_waves, so the stale partial wave file is served forever",
+  "severity": "high",
+  "where": "src/hpc_agent/ops/recover_flow.py:271-560, src/hpc_agent/ops/aggregate_flow.py:162-173, src/hpc_agent/ops/aggregate_flow.py:1549-1559, src/hpc_agent/ops/monitor_flow.py:400",
+  "category": "rerun-results-silently-excluded",
+  "failure_scenario": "Wave 2 of a 500-task run finishes with 40 failed tasks; monitor-flow auto-combines it (combiner exits 0, records the 40 misses in the partial's errors list, journal marks wave 2 combined). User runs the documented recover/resubmit flow (resubmit_flow reuses the SAME run_id and only extends job_ids); the 40 tasks now complete and write metrics.json. User re-runs aggregate-flow: _missing_waves skips every wave already in record.combined_waves, monitor-flow's auto-combine seeds state.last_combined_waves from the record (monitor_flow.py:400) so it also skips, and the cluster's wave_2.json is never recombined \u2014 the recovered tasks' metrics are permanently excluded from aggregated_metrics (and any partial metrics.json a task wrote before dying stays averaged in). The only signal is escalation_reason 'partial_waves:metrics_unreadable...' which is now factually wrong (the metrics are readable), steering the user away from the real remediation. verify-aggregation-complete cannot catch it either (see the vacuous all_tasks_present finding). grep shows no writer of combined_waves outside combine.py's _apply \u2014 resubmit_flow never touches it.",
+  "fix_sketch": "In resubmit_flow (and the auto-resume composite), after a successful cluster resubmit of failed_task_ids, map those task ids to waves via the sidecar wave_map and update_run_record to remove those waves from combined_waves (and reset monitor's combiner_attempts), so the next monitor/aggregate pass re-runs the combiner with force for exactly the affected waves. Pair with the incremental-pull invalidation fix so the refreshed partial actually reaches the local reduce.",
+  "evidence": "Read recover_flow.resubmit_flow end-to-end (reuses run_id, updates job_ids/pending_resubmit only; zero references to combined_waves/failed_waves), aggregate_flow._missing_waves + the ensure_all_combined block, monitor_flow's auto-combine seeding. Grep for combined_waves writers: only ops/aggregate/combine.py. No test exercises resubmit-then-aggregate; escalation text at aggregate_flow.py:1739-1743 confirms the stale disclosure wording.",
+  "id": "F06",
+  "lens": "aggregation-results",
+  "triage": "Resubmitted tasks never invalidate combined_waves; novel, no recorded fix; combined_waves only written by combine.py per finding. Real result-exclusion.",
+  "related": [
+   {
+    "id": "F07",
+    "note": "Compounding: F07 (verify-aggregation-complete's all_tasks_present is a tautology) is exactly why F06 (resubmitted/recovered tasks silently excluded from the aggregate) goes undetected; F06 explicitly cross-references F07. Distinct root causes (resubmit doesn't invalidate combined_waves vs combiner echoes full task_ids)."
+   }
+  ],
+  "status": "CONFIRMED",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-aggregation",
+    "verdict": "CONFIRMED",
+    "reasoning": "recover_flow.resubmit_flow reuses run_id and never writes combined_waves; the only writers are combine.py._apply and reconcile.py (which derives from existing wave files, keeping the stale wave combined). _missing_waves and monitor auto-combine both skip a wave already in combined_waves, so the recovered tasks' metrics are permanently excluded. One nuance: the stale wave's residual errors list fires a misleading escalation_reason (so not literally silent), but the finding acknowledges this and the exclusion is real and unrecoverable via the documented recover->re-aggregate loop (even the manual --force fix is defeated by F08's local filename-pin)."
+   },
+   {
+    "shard": "B2-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "Grep confirms combined_waves is only added-to by combine.py:170 and re-derived by reconcile via file existence (ls _combiner/wave_*.json), which keeps a stale wave file as 'combined'; combine.py:133 refuses to re-run an already-combined wave without force; resubmit_flow reuses run_id and extends job_ids but never touches combined_waves. So recovered tasks' metrics are permanently excluded from the aggregate with a misleading escalation reason. Reachable via the documented recover-then-aggregate flow."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "reasoning": "The core mechanism is real: resubmit_flow (recover_flow.py:271-560) touches only job_ids/pending_resubmit/retries, and the only writers of combined_waves are combine.py:_apply and reconcile.py:904 \u2014 which DERIVES combined from the cluster's stale wave_*.json files, so reconcile confirms rather than invalidates the stale state; aggregate_flow._missing_waves and combine_wave's no-force journal short-circuit (combine.py:133-142) then skip the wave forever. But the finding overstates two links: (1) monitor-flow CANNOT auto-combine a wave with 40 failed tasks \u2014 _newly_complete_waves (ops/monitor/waves.py:70) requires complete==total, so the poisoned combined_waves state only arises via aggregate-flow's ensure_all_combined / combine-wave CLI / a partial_ok harvest run BEFORE the recovery, a longer journey than claimed; (2) it is not silent in the dominant arm \u2014 collect_wave_errors surfaces the stale partial's errors as incomplete_waves, aggregate_blocks marks the brief 'harvest_partial' (aggregate_blocks.py:694-703) and campaign_run returns stage 'aggregate_failed' with needs_decision=True (campaign_run.py:416-431) rather than consuming the numbers. The recovered tasks' results stay excluded until the user discovers combine-wave --force, and the 'metrics_unreadable' wording actively misleads \u2014 loud failure with confusing remediation, i.e. medium, with a narrower genuinely-silent arm (failed tasks that wrote a metrics.json before dying leave no errors entry, so stale values are averaged in with no escalation at all).",
+   "fix_sketch_concerns": "The 'pair with the incremental-pull invalidation fix' clause is load-bearing, not optional: _incremental_include_patterns (aggregate_flow.py:183-212) computes needed = combined_waves - have_locally, so after a force recombine the stale LOCAL wave_N.json is never re-pulled and the local reduce still uses old data. Also 'reset monitor's combiner_attempts' is meaningless \u2014 that is per-invocation in-memory _LoopState, not persisted.",
+   "new_evidence": "(1) Hidden guard the finding missed: monitor's auto-combine gate (waves.py:70, complete==total) makes the claimed monitor-side trigger impossible \u2014 only aggregate-side combines of partial waves create the poisoned state. (2) Downstream is louder than claimed: campaign_run.py:416 gates on escalation_reason with needs_decision=True, contradicting the 'campaign optimizer steps on numbers with zero error' framing inherited from F05. (3) Worse variant confirmed: reconcile's _ssh_list_combined_waves re-derives combined_waves from the stale cluster artifacts, so even a reconcile cannot clear the wave."
+  }
+ },
+ {
+  "title": "verify-aggregation-complete's all_tasks_present is a tautology: the combiner echoes the full wave_map task list into task_ids even for tasks whose metrics were never read, so the integrity gate green-lights aggregates computed over a subset",
+  "severity": "high",
+  "where": "src/hpc_agent/execution/mapreduce/combiner.py:546-552, src/hpc_agent/ops/aggregate/invariants.py:340-354, src/hpc_agent/ops/aggregate_blocks.py:132-144",
+  "category": "vacuous-completeness-gate",
+  "failure_scenario": "A wave of 100 tasks combines while 40 tasks never wrote metrics.json (or NFS hadn't surfaced them): the cluster combiner appends 40 entries to the partial's `errors` list, aggregates only 60 tasks into grid_points \u2014 but writes `\"task_ids\": list(task_ids)` (the full wave_map slice, combiner.py:549). verify_aggregation_complete computes pulled_tasks from that task_ids field and never reads the partial's `errors`, so missing_tasks=[] and ok=True. The aggregate-check block's missing_tasks decision point ('some tasks never wrote metrics into any wave partial; the aggregate would be computed over a subset', aggregate_blocks.py:136-141) describes exactly this state yet can never fire for a production-written partial \u2014 it only fires for whole missing wave FILES. A user who runs the trust-the-numbers gate before a greenlight gets 'every task accounted for' on a mean computed over 60% of tasks; the only disclosure lives on a different surface (aggregate-flow's escalation_reason).",
+  "fix_sketch": "Make the invariant read the evidence the partial already carries: in verify_aggregation_complete, parse each pulled wave doc's `errors` list (entries are formatted 'task {tid}: ...'; or better, have the combiner additionally emit a `tasks_read` list) and subtract errored/unread task ids from pulled_tasks so they surface as missing_tasks. Add a test seeding a partial with full task_ids + non-empty errors asserting ok=False.",
+  "evidence": "Read combiner.py main() (task_ids from wave_map at line 400, errors appended at 493-494, output at 546-552) and invariants.py (pulled_tasks from doc['task_ids'] only; grep shows nothing in invariants.py reads doc['errors']). tests/ops/aggregate/test_invariants.py's fixture hard-codes errors:[] and only exercises missing_tasks via absent wave files or hand-truncated task_ids the production combiner never emits \u2014 the real-world arm is unpinned. Distinct from the fixed implicit-wave-0 bug (bug-sweep DISPUTED entry) which was about empty wave_maps, not errored tasks.",
+  "id": "F07",
+  "lens": "aggregation-results",
+  "triage": "Verified combiner.py:549 writes full list(task_ids) while errors are separate; invariants.py:346 computes pulled_tasks from task_ids only, never reads doc['errors'] \u2014 vacuous gate confirmed. Distinct from the fixed implicit-wave-0 DISPUTED entry.",
+  "related": [
+   {
+    "id": "F06",
+    "note": "Compounding: F07 (verify-aggregation-complete's all_tasks_present is a tautology) is exactly why F06 (resubmitted/recovered tasks silently excluded from the aggregate) goes undetected; F06 explicitly cross-references F07. Distinct root causes (resubmit doesn't invalidate combined_waves vs combiner echoes full task_ids)."
+   }
+  ],
+  "status": "CONFIRMED",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-aggregation",
+    "verdict": "CONFIRMED",
+    "reasoning": "Read combiner.py:549 (task_ids = full list(task_ids) from wave_map) with failed tasks appended only to errors (551), and invariants.py:340-354 which builds pulled_tasks from doc['task_ids'] alone and never reads doc['errors']; missing_tasks is therefore [] and all_tasks_present True for any production partial with errored tasks, so the aggregate_blocks.py:132 missing_tasks decision point can only fire for whole-missing wave FILES. Vacuous completeness gate confirmed; a sibling escalation_reason on aggregate-flow partially mitigates but the integrity gate itself always passes."
+   },
+   {
+    "shard": "B3-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "combiner.py:549 writes list(task_ids) = the full wave_map slice regardless of which tasks errored (errors go to a separate list, :464-494); invariants.py:346 derives pulled_tasks from doc['task_ids'] only and grep confirms it never reads doc['errors'], so missing_tasks is always empty for present waves and all_tasks_present is a tautology. The test fixture hard-codes errors:[] (test_invariants.py:52) and only exercises the whole-missing-file arm, leaving the production-errored-task case unpinned."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "reasoning": "Mechanism verified by direct reading: combiner.py:546-552 writes task_ids as the full wave_map slice even when 40/100 tasks land only in errors, and invariants.py:340-354 builds pulled_tasks solely from doc['task_ids'] \u2014 nothing in invariants.py reads doc['errors'], so all_tasks_present/missing_tasks structurally cannot fire for a production partial (test_invariants.py:52 pins errors:[] only). But the severity claim overstates: the SAME workflow chain reads the same evidence \u2014 aggregate_flow.py:776 (collect_wave_errors) escalates 'partial_waves:metrics_unreadable_for_some_tasks', aggregate-run returns stage harvest_partial with needs_decision=True (aggregate_blocks.py:694-706), and campaign_run.py:416 escalates on it \u2014 so the subset is loudly disclosed at the harvest boundary, not silent. The false 'ok' can only be produced AFTER a pull (pre-run aggregate-check reports integrity_checked=False, aggregate_blocks.py:377-388), i.e. after the partial disclosure already happened; the residue is a contradictory green on the standalone verify-aggregation-complete verb and post-harvest re-checks \u2014 misleading gate, not silent wrong data.",
+   "fix_sketch_concerns": "Parsing the partial's errors list is unsound as sketched: combiner.py:529-534 appends 'task {tid}: failed to read _runtime.json' for tasks whose metrics WERE successfully aggregated, so subtracting all errored tids fabricates missing_tasks for healthy tasks; the tasks_read-emission arm is sound but needs old-partial fallback (redeployed combiner vs already-pulled partials). Also, once missing_tasks can fire, aggregate-check's blocking filter (aggregate_blocks.py:425-427) exempts only missing_waves under allow_partial, so an already-accepted partial harvest would newly hard-block on re-check \u2014 allow_partial handling must be extended in the same change.",
+   "new_evidence": "(1) The errors list conflates optional-runtime-sidecar read failures with metrics misses \u2014 a direct hazard for the sketched fix. (2) aggregate_check's docstring claim 'aggregate-run verifies integrity itself after the pull' is false: grep shows verify_aggregation_complete is called only from aggregate_check and the standalone verb \u2014 the run block never runs it (doc drift worth fixing alongside). (3) campaign_run.py:416 consumes escalation_reason, so multi-run campaigns are NOT silently contaminated by this gate as the high rating implied."
+  }
  },
  {
   "title": "Incremental _combiner pull never refreshes a wave that was re-combined with --force on the cluster: the stale local partial is reduced and persisted as the durable aggregate",
@@ -756,6 +744,39 @@
     "reasoning": "Confirmed _aggregated appears in none of DEFAULT_RSYNC_EXCLUDES / MANDATORY / PROTECTED_OUTPUT_DIRS (results,_combiner,logs) / PROTECTED_RUNTIME; the local aggregate tree (out=experiment_dir/_aggregated/<run_id>, incl. _per_task_results at line 402 and _fingerprints at fingerprint_store.py:164) sits under experiment_dir, and _push_and_deploy pushes local_path=experiment_dir with delete=True default while _keep_generated_shippable only removes excludes. So every re-submit ships the pulled per-task/fingerprint tree up and --delete clobbers the cluster-side _aggregated written by the final reduce. Transfer-waste + remote-clobber both real; medium."
    }
   ]
+ },
+ {
+  "title": "Driver and Stop guard disagree on 'y then a later record': the driver scans past a retraction nudge and consumes the retracted greenlight (launching the un-redrafted spec), while the guard goes silent on any unrelated later record (bedtime consent, sign-off), stalling a genuinely committed y",
+  "severity": "high",
+  "where": "src/hpc_agent/_kernel/lifecycle/block_drive.py:1101-1105, src/hpc_agent/_kernel/hooks/decision_rendezvous_stop_guard.py:149-156",
+  "category": "greenlight-rendezvous-drift",
+  "failure_scenario": "Direction (a), driver side: human answers the S3 brief 'y' (targets submit-s3, ts > awaiting_since), then seconds later nudges 'wait \u2014 raise the walltime first' and goes to bed expecting a redraft. The stop guard correctly stays silent (test_y_then_nudge_latest_wins_is_silent pins 'latest wins \u2192 still waiting'), but the 2am watch-terminal/doctor tick calls _boundary_scoped_committed_resolved, which scans NEWEST-FIRST and skips the nudge (response!='y') to return the retracted y \u2192 routes advance \u2192 submit-s3's gate also passes (latest greenlight names it) \u2192 the full main array launches with the pre-nudge spec. Direction (b), guard side: human commits the targeting y and the agent journals the overnight-consent record (or any other same-scope touchpoint) right after it in the same turn; find_committed_unadvanced tests ONLY decisions[-1], which is now the consent record \u2192 guard silent \u2192 turn ends with the y committed-but-unadvanced, the exact 2026-06-10 stall the guard exists for, until the doctor backstop. block_drive.py:1036-1039 claims the shared predicate makes the two surfaces unable to drift \u2014 but they apply it to different record sets.",
+  "fix_sketch": "Unify the semantics: in _boundary_scoped_committed_resolved, stop the newest-first scan at the first SAME-BOUNDARY record of either kind \u2014 a nudge that answers this parked boundary (ts >= awaiting_since) supersedes an earlier y (return None \u2192 awaiting_decision); in find_committed_unadvanced, scan newest-first with the same rule instead of testing only decisions[-1], so an unrelated later record (overnight-consent, sign-off, another block's touchpoint) neither silences the guard nor blocks the driver. Add paired tests: y-then-same-boundary-nudge \u2192 driver awaits; y-then-overnight-consent \u2192 guard forces continue.",
+  "evidence": "Read both call sites: the driver loops `for record in reversed(records)` returning the first targeting y (block_drive.py:1101-1105); the guard checks `decisions[-1]` only (stop_guard.py:151-155). tests/_kernel/hooks/test_decision_rendezvous_hooks.py:145 (test_y_then_nudge_latest_wins_is_silent) pins the guard's 'latest wins' semantic; no test in tests/_kernel/lifecycle/test_block_drive.py covers y-then-nudge at the same boundary (grep 'nudge' shows only field-edit routing tests), so the driver's consume-the-retracted-y behavior is unpinned. block_gate's superseded-consumption backstops (block_gate.py:109-120) do not cover this: the retracted y IS the latest greenlight naming the verb, and no terminal exists yet to replay.",
+  "id": "F13",
+  "lens": "campaign-overnight",
+  "triage": "Verified block_drive.py:1101 driver scans reversed(records) returning first targeting-y (skips trailing nudge) while stop_guard.py:151 checks decisions[-1] only \u2014 genuine asymmetry. Distinct from the boundary-scoping fix for #1/#23 (which is present); this is the same-boundary retraction / unrelated-later-record edge.",
+  "status": "CONFIRMED",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-campaign",
+    "verdict": "CONFIRMED",
+    "reasoning": "Verified the asymmetry directly: driver _boundary_scoped_committed_resolved (1101-1105) loops reversed(records) returning the first greenlight_targets_boundary match, skipping a trailing nudge and consuming the retracted y (ts>=awaiting_since passes); assert_greenlit_target (block_gate.py:123-127) passes it too, so submit-s3 launches the pre-nudge spec. The guard checks only decisions[-1] (stop_guard.py:151-156) and stays silent. Nudges are journaled decision records (test _commit_nudge), so y-then-nudge is realizable and unpinned in test_block_drive; the shared-predicate 'cannot drift' claim is applied to different record sets."
+   },
+   {
+    "shard": "B4-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "Read both call sites: the driver's _boundary_scoped_committed_resolved (block_drive.py:1101) loops `for record in reversed(records)` and returns the first record where greenlight_targets_boundary holds \u2014 a trailing nudge (response!='y') is skipped, so an earlier boundary-targeting 'y' is consumed and routed to advance; the Stop guard (stop_guard.py:151) tests only decisions[-1], so a trailing nudge/consent silences it (latest-wins). A bare nudge commit does not bump awaiting_since or re-park, so the 'y' stays valid (ts>=awaiting_since) and a later detached/cron tick advances it. The docstring at block_drive.py:1036 explicitly claims the two surfaces 'cannot drift'; the reversed-scan vs decisions[-1] asymmetry falsifies that and is unpinned by tests (only the guard's y-then-nudge case is pinned). Direction (a)'s severe outcome is reachable but conditional (nudge journaled, no re-park, automated tick); direction (b) is easily reachable but milder."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "reasoning": "Both drift sites verified verbatim: the driver's _boundary_scoped_committed_resolved (block_drive.py:1101-1105) scans newest-first and returns the first record passing greenlight_targets_boundary \u2014 a trailing same-boundary nudge (response!='y') is skipped, so a retracted y (ts>=awaiting_since, names the verb) is consumed by any later mechanical tick (doctor cron / completer are documented tick sources); the guard tests only decisions[-1] (stop_guard.py:151-155) with the opposite 'latest wins' semantic pinned by test_y_then_nudge_latest_wins_is_silent. block_gate.assert_greenlit_target then passes the retracted y BY DESIGN (its docstring explicitly rules a later nudge non-blocking), so no downstream gate saves it, and the 'cannot drift' claim at block_drive.py:1031-1037 is factually wrong \u2014 the shared predicate is applied to different record sets. Severity honesty: direction (a) launches a spec the human once approved then retracted \u2014 wasted allocation and a kill/resubmit morning, visible in the morning brief, not silent wrong data; direction (b) is a bounded stall the doctor backstop self-heals (the driver skips a trailing consent record and still finds the y). It also requires the agent to journal the nudge but end its turn without redrafting/re-parking (a re-park restamps awaiting_since and closes the hole), so the chain is one step longer than claimed. Medium, not high.",
+   "fix_sketch_concerns": "Three seats, not two: the sketch unifies driver + guard but leaves block_gate.assert_greenlit_target passing the retracted y, so a direct verb invocation still launches. 'A nudge that answers this parked boundary' needs a principled predicate \u2014 nudge records carry no next_block target, so it must key on the record's block field + ts>=awaiting_since; a naive any-later-record-supersedes rule would reintroduce exactly the shared-journal wedge block_gate's docstring documents (unrelated touchpoints flipping records[-1]). block_gate's SUPERSEDED note says re-authorization-by-latest-greenlight is a designed replay pattern \u2014 a supersession rule must not break terminal replay.",
+   "new_evidence": "The guard's y-then-nudge silence is not an oversight but a pinned, documented semantic ('latest wins'), while block_gate documents the exact opposite semantic ('a later nudge cannot wedge an authorized sequence') \u2014 the repo contains BOTH rules asserted as intentional, which is the real root cause. Direction (b) is weaker than claimed: the driver's targeted scan skips an interleaved consent record, so the stall lasts only until the next doctor/mechanical tick, not indefinitely."
+  }
  },
  {
   "title": "Pending-decision marker is cleared before the resumed span runs and only re-parked on a clean non-zero exit \u2014 a crash/SIGKILL during the span or an exception from process spawn (fork exhaustion, OSError) permanently downgrades a human's rerun-nudge to a journal-derived advance that silently drops the edit",
@@ -953,6 +974,45 @@
   ]
  },
  {
+  "title": "The submit-path preflight gate is inert: `hpc-agent preflight` exits 0 / ok:true even when every check fails, so submit-preflight reports overall='pass' and S1 briefs show a green preflight while the environment is broken",
+  "severity": "high",
+  "where": "src/hpc_agent/cli/_dispatch.py:418-425, src/hpc_agent/ops/preflight/check.py:314-315 (stale claim), src/hpc_agent/ops/submit_preflight.py:294-298,476, src/hpc_agent/ops/submit_blocks.py:467-469",
+  "category": "inert-guard-preflight",
+  "failure_scenario": "Mid-campaign the user's ssh-agent key expires (or they typo the cluster name, or clusters.yaml still has <your_user> placeholders). /submit-hpc runs submit-s1 -> submit_preflight -> subprocess `hpc-agent preflight --cluster X`. check_preflight() correctly computes all_ok=False with failing checks (ssh_auth_sock, cluster_known, cluster_config_customized, the #275 runtime_uv gate), but the generic dispatcher wraps ANY return in _ok() and returns EXIT_OK, so the subresult is ok=true, overall='pass', and the S1 brief the human greenlights says preflight passed. Every guard the preflight family exists for (placeholder catch, wrong-cluster-name catch, dead-agent catch, uv-on-uvless-cluster catch) cannot fire on the primary block-drive path; the failure resurfaces as a raw rsync/auth error deep in S2 staging or dooms the array. check.py's own docstring ('The CLI adapter maps all_ok=False to the cluster-error exit code') describes an adapter that no longer exists.",
+  "fix_sketch": "Give check-preflight a CliShape handler (or result_post + exit mapping) that emits the data but returns EXIT_CLUSTER_ERROR when all_ok is False \u2014 restoring the documented contract \u2014 OR make submit_preflight._run_subprocess fold `envelope.data.all_ok is False` into SubResult.ok for the check-preflight arm. Also stop truncating at submit_blocks.py:469: when overall != 'pass', include the failing checks' name+detail in brief['preflight'] so the human sees WHY, not just 'fail'.",
+  "evidence": "Read dispatch_primitive (_ok(data); return EXIT_OK \u2014 no all_ok branch), check_preflight's decorator (no handler/result_post), submit_preflight's ok derivation (`bool(envelope.get('ok'))`), submit_s1 folding only {'overall': ...}. Empirically ran in the repo venv: `hpc-agent preflight --cluster definitely-not-a-cluster` in a bare env -> EXIT 0, ok:true, all_ok:false with 4 failing checks; then real submit_preflight(cluster='definitely-not-a-cluster') -> overall:'pass' while check_preflight data.all_ok:false. Tests only pin the fiction: tests/ops/test_submit_preflight.py:190-205 mocks check-preflight failure as an ok:false ERROR envelope the real subprocess never emits; no test covers the all_ok:false/ok:true shape. Not in upstream-fixes-2026-07.md, bug-sweep refuted list, or the architecture review.",
+  "id": "F29",
+  "lens": "operator-error-ux",
+  "triage": "Confirmed _dispatch.py:424-425 returns EXIT_OK unconditionally after result_post; check-preflight has no exit mapping, so all_ok:false yields ok:true/exit 0. Finder reports in-venv repro. Not banked.",
+  "related": [
+   {
+    "id": "F31",
+    "note": "Same failure class (a preflight-bearing CLI returns exit 0/ok:true despite all_ok=False) via different handlers: F29 = generic dispatch_primitive _ok() wrapper for the `preflight` verb; F31 = setup.py's own _setup_handler for `setup` (plus an independent dead-preflight-marker defect). Fixing one does not fix the other."
+   }
+  ],
+  "status": "CONFIRMED",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-operator",
+    "verdict": "CONFIRMED",
+    "reasoning": "Reproduced in-venv: `hpc-agent preflight --cluster definitely-not-a-cluster` returns EXIT 0 / ok:true with all_ok:false (5 failing checks). check-preflight's CliShape has no handler and no result_post, so dispatch_primitive (_dispatch.py:423-425) wraps the dict in _ok() and returns EXIT_OK unconditionally. Ran the real composite: submit_preflight(cluster='definitely-not-a-cluster') returns overall='pass' while check_preflight.envelope.data.all_ok is False, because ok is derived as bool(envelope.get('ok')) (submit_preflight.py:297) and overall fails only when a subcall's ok is False (line 476). submit_blocks.py:469 folds only {'overall': ...} into the S1 brief, so the human greenlights a green preflight over a broken env. The inert-guard chain is real and reachable on the primary submit path."
+   },
+   {
+    "shard": "B4-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "Reproduced in-venv: `hpc-agent preflight --cluster definitely-not-a-cluster` returns envelope ok:true / exit 0 with data.all_ok:false and 4+ failing checks. Confirmed dispatch_primitive (_dispatch.py:423-425) calls _ok(data) and returns EXIT_OK unconditionally on the no-handler Tier-1 path, contradicting check.py:314-315's docstring ('maps all_ok=False to the cluster-error exit code'). submit_preflight derives the check-preflight arm's ok from bool(envelope.get('ok')) (line 297) and overall from `any(not r['ok'])` (line 476), so an all_ok:false preflight contributes 'pass' \u2014 the #275 uv-gate and placeholder-config cases (caught only by check-preflight's internal checks) sail through as a green S1 brief. Inert guard confirmed."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "reasoning": "Empirically reproduced in this sandbox: `hpc-agent preflight --cluster definitely-not-a-cluster` with no agent -> envelope ok:true, data.all_ok:false with 4 failing checks, EXIT=0. Code confirms why: check_preflight's CliShape has no handler and no result_post, dispatch_primitive wraps any return in _ok/EXIT_OK (_dispatch.py:418-425), submit_preflight derives SubResult.ok from envelope.ok only (submit_preflight.py:297) so overall='pass', and submit_s1 folds only {'overall'} into the brief (submit_blocks.py:469); the docstring's 'CLI adapter maps all_ok=False to the cluster-error exit code' (check.py:314-315) describes nothing in the tree \u2014 grep shows the only all_ok consumers are cli/setup.py and the marker writer. Severity is overstated though: the finding's own worst cases have loud downstream guards \u2014 submit-flow runs the SAME runtime_uv probe inline on the main path (raises SpecInvalid, only operator-env skippable), ssh/auth death fails fast at S2 via BatchMode=yes, and placeholder/wrong-cluster configs die loudly at staging \u2014 so the class is false-green-then-loud-later with degraded remediation, not lost runs or silent wrong data. That is the rubric's medium.",
+   "fix_sketch_concerns": "Fixing the exit code alone does NOT fix the reported surface: submit_preflight reads envelope.ok off parsed stdout, never the exit code, so a handler must also emit an ok:false envelope (or submit_preflight must fold data.all_ok) or overall stays 'pass'. An ok:false envelope changes the MCP/agent-visible shape of check-preflight for degraded-but-inspectable environments and must still carry the checks list; tests/ops/test_submit_preflight.py's mocked ERROR-envelope fixture (currently a fiction) and any caller treating exit 0 as 'ran' need updating together.",
+   "new_evidence": "The uv-doom scenario in the finding cannot actually fire on the primary path: submit-flow's _run_uv_preflight_for_batch runs the identical probe inline and raises SpecInvalid, so the #275 gate exists twice and only the preflight copy is inert. Truncated git history (308 commits, earliest 44536fd) means the 'adapter that no longer exists' cannot be dated locally \u2014 the docstring may always have been aspirational rather than a regression."
+  }
+ },
+ {
   "title": "`hpc-agent setup --cluster <name>` exits 0 with ok:true on a red probe, and the '24h cache marker' it writes on green is dead \u2014 no code or skill ever reads preflight-<cluster>.json, contradicting README's 'Step 6b gate'",
   "severity": "medium",
   "where": "src/hpc_agent/cli/setup.py:87-116, src/hpc_agent/ops/preflight/check.py:590-618, src/hpc_agent/_kernel/contract/layout.py:183-198, README.md:5,17,24,95-96",
@@ -1026,6 +1086,40 @@
     "reasoning": "parse_alive_output (_engine.py:730-739) keys only on a digit-led col-0 id with no state-column inspection, so a TORQUE 'C' row counts as alive; classify_scheduler_state (874-883) and _alive_task_status (939-944) map 'C' to alive/RUNNING. query.py:422 docstring states TORQUE retains a 'C' record in live qstat for a keep_completed grace window, directly contradicting the _engine.py:876-878 comment. Result: kill verification reports 'still alive' after a successful qdel and reconcile can't settle until the window ages out. Config-gated on keep_completed and TORQUE-only, so medium is right."
    }
   ]
+ },
+ {
+  "title": "PBS job_id_regex has no phrase/line anchor \u2014 any decimal or version string in a qsub banner ('est. wait 1.5 hours', 'PBS Pro 2022.1') matches before the real id line, so the run is journaled under a phantom job id",
+  "severity": "medium",
+  "where": "src/hpc_agent/infra/backends/profile.py:322,333, src/hpc_agent/infra/backends/__init__.py:570-573",
+  "category": "submit-stdout-parse",
+  "failure_scenario": "Many PBS sites wrap qsub or configure submit filters that print informational lines to stdout before the job id. submit_one does JOB_ID_REGEX.search(stdout) over the whole buffer; the pbspro/torque pattern `(\\d+)(?:\\[\\d*\\])?\\.[A-Za-z0-9_.-]+` matches '1.5' in 'estimated start in 1.5 hours' (group(1)='1') or '2022.1' in a version banner before ever reaching '12345[].pbs01' on the last line. The run record then tracks job '1': liveness/state queries poll a nonexistent (or worse, someone else's ancient) id, kill issues `qdel 1`, and the real array runs untracked \u2014 an orphan the monitor can never see. SLURM/SGE profiles explicitly anchor on 'Submitted batch job'/'Your job' for exactly this banner class (their own comments, profile.py:276-278,301-303); the PBS profiles got only a shape anchor any dotted number satisfies.",
+  "fix_sketch": "Anchor the PBS patterns to a line that IS a job id: `(?m)^(\\d+)(?:\\[\\d*\\])?\\.[A-Za-z0-9_.-]+\\s*$` \u2014 qsub prints the id alone on its own line on both forks \u2014 optionally preferring the last such match. Pure profile-data change (job_id_regex string), no engine change; add a poisoned-banner case to tests/infra/backends/test_pbs.py alongside the existing happy-path asserts at lines 38-39.",
+  "evidence": "Read profile.py: SLURM (:276-278) and SGE (:301-303) comments document the banner-poisoning class and anchor on phrases; PBSPRO/TORQUE (:322,:333) use the bare dotted-number shape with a comment claiming the .server suffix is the anchor \u2014 but '1.5', '2022.1', '10.0.0.1' all satisfy `\\d+\\.[A-Za-z0-9_.-]+`. __init__.py:570-573 uses .search over full stdout and returns the FIRST match. tests/infra/backends/test_pbs.py:38-39 tests only clean single-token stdout; no banner case exists. Not in the fixed/refuted lists.",
+  "id": "F39",
+  "lens": "scheduler-backends",
+  "triage": "Confirmed PBS regex has no phrase/line anchor (SLURM:278/SGE:303 do); '1.5'/'2022.1' in a qsub banner match via .search before the real id line. Distinct from F36. Not in fixed/refuted.",
+  "related": [
+   {
+    "id": "F36",
+    "note": "Two distinct defects in the same PBS job_id_regex/capture (profile.py:322,333 + __init__.py:570-573): F36 drops the array '[]' marker; F39 lacks a line anchor so a qsub banner decimal is captured. Same code, different mechanisms \u2014 likely fixed together."
+   }
+  ],
+  "status": "CONFIRMED",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-scheduler",
+    "verdict": "WEAK",
+    "reasoning": "The regex mechanism is real: profile.py:322,333 use an unanchored (\\d+)(?:\\[\\d*\\])?\\.[A-Za-z0-9_.-]+, __init__.py:570-573 does .search over full stdout and returns the FIRST match, and '1.5'/'2022.1' do match with group(1)='1'/'2022' \u2014 while SLURM (:278) and SGE (:303) deliberately phrase-anchor. But standard PBS qsub writes only the job id to stdout; the concrete poisoning requires a non-standard leading dotted-number banner on stdout that the finding asserts ('many sites wrap qsub') without any repo or scheduler-doc evidence. Genuine defense-in-depth inconsistency, but the failing state is not clearly reachable in normal PBS usage."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "CONFIRMED",
+   "severity": "medium",
+   "reasoning": "The WEAK/low downgrade should fall \u2014 this rises back to CONFIRMED/medium. Empirically reproduced here: the pbspro/torque regex matched '1.5'->group(1)='1', '2022.1'->'2022', '10.0.0.1'->'10', '7.13'->'7' in banner-poisoned stdout (5/5 cases), and __init__.py:570-573 does .search over the whole buffer returning the FIRST match \u2014 so any dotted number before the id line journals a phantom job id. The PBS profile comment's claim that the `.server` suffix is the anchor is demonstrably false, and the SLURM/SGE profiles' own comments (profile.py:275-278, 301-303) document banner poisoning as a real observed class they deliberately phrase-anchor against \u2014 the PBS profiles simply missed the same guard. Consequence when fired (phantom-tracked run: liveness settles it gone, qdel targets a wrong id, the real array runs as an untracked orphan) is well above 'annoyance', but the trigger is site-conditional, so medium \u2014 not high \u2014 is the honest ceiling.",
+   "fix_sketch_concerns": "The anchored multiline regex verified correct against all five poisoned cases here, but a banner line consisting ONLY of a bare dotted-version token on its own line would still match the line-anchored form \u2014 the sketch's optional 'prefer the last such match' must be made mandatory, not optional. Otherwise a pure profile-data change with the existing `.split('[')[0]` normalization intact; low blast radius.",
+   "new_evidence": "Reachability is wider than the finding stated: the submit path itself wraps qsub in `bash -lc` (a LOGIN shell, _remote_base.py:255-259), so any cluster profile.d script that echoes unconditionally puts banner text on the parsed stdout of the first submit per backend instance \u2014 a framework-induced trigger independent of site qsub wrappers. The repo already routes its own `__HPC_SUBMIT_BIN__` marker to stderr explicitly 'never stdout, which the job-id regex parses', proving the stdout-contamination channel is known \u2014 it just was not defended for PBS."
+  }
  },
  {
   "title": "Canary TTL cache is keyed on parameter-only cmd_sha in a GLOBAL cross-experiment file, so a run with identical swept kwargs but different code/executor/repo silently skips its canary AND satisfies submit-s3's predecessor gate",
@@ -1411,6 +1505,78 @@
   ]
  },
  {
+  "title": "Renaming/moving the experiment directory mid-campaign silently forks the journal namespace: all run records, the decision journal, and the utterance log become invisible with no detection or remediation, wedging the campaign",
+  "severity": "high",
+  "where": "src/hpc_agent/state/run_record.py:397-424, src/hpc_agent/state/index.py:135-144, src/hpc_agent/state/utterances.py:177, src/hpc_agent/ops/attention_queue.py:1501-1524",
+  "category": "moved-experiment-dir",
+  "failure_scenario": "Day 3 of an array-batch campaign, the user renames ~/exp1 to ~/exp1-v2 (or reaches it via a different NFS automount path that resolve() doesn't canonicalize to the same string). repo_hash = sha256(resolved path)[:12], so every journal read (find_in_flight_runs, status-snapshot, block-drive resume cursor, read-decisions, the human-authorship utterance log, preflight markers) now targets a fresh empty ~/.claude/hpc/<newhash>/ \u2014 journal_dir() even scaffolds it with a new repo.json. Status reports nothing in flight while the array runs; block-drive has no parked marker; append-decision's authorship gate refuses against an empty utterance log with a remedy ('the human states the values') that never names the real cause; the detached watcher and the doctor cron (`hpc-agent-doctor-<old_hash>`, cwd = old path) keep writing to / failing against the old namespace. The old namespace's repo.json records the old experiment_dir, but no code path ever compares or relinks it \u2014 the fleet scan explicitly skips namespaces whose experiment_dir no longer exists 'silently' (attention_queue.py:1504). Recovery requires knowing the hash scheme and hand-moving dirs under ~/.claude/hpc.",
+  "fix_sketch": "Detect the fork at journal_dir(): before scaffolding a fresh namespace, check whether <experiment_dir>/.hpc/runs/*.json sidecars reference run_ids absent from the new namespace and whether another namespace's repo.json claims a now-missing dir with matching run_ids \u2014 then either warn loudly with a relink command, or add a `hpc-agent relink-journal` verb. Longer-term: key the namespace on a durable token stored in .hpc/ (minted at first journal write) instead of the path hash, falling back to the path hash for old namespaces.",
+  "evidence": "Read repo_hash/journal_dir (path-hash keyed, mkdir+repo.json on every call), index.py per-namespace lookups, utterances.py journal-side storage, and the attention-queue fleet scan's silent skip. Grepped all readers of repo.json: only the fleet scans read it, none compares it to a live dir or offers relink. The Windows path-form canonicalization (#296, run_record.py:352-394) shows the same-dir-different-string hazard is real and was only fixed for MINGW/WSL drive forms, not for renames or non-Windows aliasing. No test simulates a mid-campaign rename. Not covered by the three banked docs (checked for repo_hash/moved/rename).",
+  "id": "F30",
+  "lens": "operator-error-ux",
+  "triage": "repo_hash is path-hash keyed; rename/aliasing forks the journal namespace with no detection. Windows-form fix (#296) is narrower. Not in banked docs.",
+  "related": [
+   {
+    "id": "F46",
+    "note": "Both stem from journal_dir()/repo_hash design (run_record.py:408-424): F30 = namespace keyed on the mutable resolved path, so a rename forks the journal; F46 = journal_dir() mkdirs+writes repo.json on read, so the existence guards can't fire and reads scaffold ghost namespaces. Different mechanisms/fixes, same accessor."
+   }
+  ],
+  "status": "WEAK",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-operator",
+    "verdict": "CONFIRMED",
+    "reasoning": "repo_hash = sha256(_canonicalize_for_hash(dir))[:12] and on non-Windows that is just str(Path(dir).resolve()) (run_record.py:373,405), so a rename or a genuinely different mount/automount path string yields a different hash. journal_dir (408-424) mkdirs and scaffolds a fresh repo.json on first access with no comparison to any existing namespace, and discover_fleet_experiments silently skips any repo.json whose experiment_dir no longer exists (attention_queue.py:1527-1528). I confirmed no code reads repo.json to relink or warn \u2014 only the fleet scans read it. The #296 Windows-form fix confirms the same-dir-different-string hazard was recognized but solved only for MINGW/WSL drive forms. Mechanism airtight; automount aliasing is a non-deliberate trigger, so 'high' holds despite being operator/environment-triggered."
+   },
+   {
+    "shard": "B4-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "repo_hash = sha256(_canonicalize_for_hash)[:12], and on non-Windows _canonicalize_for_hash is just str(Path.resolve()) (run_record.py:372-373), so a rename or NFS-automount alias yields a different hash. journal_dir (line 408-424) mkdirs a fresh namespace and writes a new repo.json without ever consulting .hpc sidecars; find_in_flight_runs keys on journal_dir and returns [] after the fork; discover_fleet_experiments (attention_queue.py:1527) silently skips the old namespace whose experiment_dir no longer exists. Grep confirms only fleet scans read repo.json and none relinks; the #296 fix covers only MINGW/WSL drive forms. Silent campaign wedge with no detection/remediation is real, though it is user-initiated (rename) or NFS-aliasing-triggered."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "WEAK",
+   "severity": "medium",
+   "reasoning": "The namespace fork itself is real \u2014 repo_hash is sha256(resolved path) and journal_dir silently scaffolds a fresh namespace with a new repo.json (run_record.py:397-424) \u2014 but the finding's severity rests on 'no detection or remediation... recovery requires knowing the hash scheme', which my reading refutes. The moved-dir state (sidecars with job_ids in <exp>/.hpc travel with the rename; journal empty) is exactly the journal-wipe state the codebase has an explicit recovery contract for: reconcile on any run_id fails LOUD with a JournalCorrupt naming the stranded job_ids and the exact remediation ('mint the journal record with hpc-agent submit-spec --spec <file>', reconcile.py:659-689), and re-running the same submit spec triggers the A5 sidecar reconstruction (runner.py:508-600) which rebuilds the journal record from the sidecar rather than double-submitting. The fleet scan is also not fully silent \u2014 discover_fleet_experiments counts the old namespace in a returned skipped list with reason 'experiment_dir no longer exists' (attention_queue.py:1527-1529). What remains true: status-snapshot silently reports nothing in flight, decision journal/utterance log/campaign cursors are NOT covered by any reconstruction, and nothing names the rename as the cause \u2014 confusing, time-wasting, but loud on every run-scoped verb, and trivially reversible by renaming the directory back. That is the medium rubric (loud failure, confusing remediation), not a corrupting/wedging high.",
+   "fix_sketch_concerns": "Detection inside journal_dir() is a hot path called by virtually every verb \u2014 scanning <exp>/.hpc/runs sidecars plus every other namespace's repo.json per call is expensive and racy; a doctor/status-snapshot seam fits better. The 'durable token stored in .hpc/' alternative inverts the bug: .hpc travels with cp -r too, so two LIVE copies of an experiment dir would silently SHARE one namespace \u2014 arguably worse than a fork; the token approach needs a copied-dir tiebreak.",
+   "new_evidence": "Hidden guards prior verifiers missed: (1) reconcile.py's case-(b) branch raises loud with stranded job_ids and a concrete submit-spec mint command \u2014 a documented remediation path for precisely this on-disk state; (2) runner.py A5 reconstruction ('journal-wipe recovery contract', runs.py:933-936) rebuilds records from the traveled sidecars on a same-spec resubmit; (3) the fleet scan's skip is counted and returned, not silent (the finding's own citation says 'skipped silently' where the code says 'skipped silently and counted' and surfaces the reason string)."
+  }
+ },
+ {
+  "title": "submit-flow's front-door dedup ignores cluster, so a retarget of an in-flight run_id to a different cluster silently 'succeeds' as deduped=True against the OLD cluster \u2014 the proving-run-5 cross-cluster REFUSE guard in runner._resolve_layer1 cannot fire on the primary workflow path",
+  "severity": "high",
+  "where": "src/hpc_agent/ops/submit_flow.py:2215-2234, src/hpc_agent/ops/submit/runner.py:229-236",
+  "category": "wedged-state",
+  "failure_scenario": "Cluster A degrades mid-campaign; the user rebuilds the same spec targeting cluster B (same swept params \u2192 same run_id, since run_id keys on parameters only, #207) and calls submit-flow / submit-flow-batch. _dedup_existing loads the journal record (status in_flight on A) and, being not resubmittable-terminal, returns SubmitFlowResult(deduped=True, job_ids=A's job ids) with NO cluster comparison \u2014 before any gate runs (deduped specs skip supersession/sidecar/prelude entirely, submit_flow.py:2864-2870). The retarget silently did not happen: nothing runs on B, the envelope reports success-shaped dedup, and the campaign keeps monitoring the degraded A run. runner._resolve_layer1's in_flight_cluster_mismatch REFUSE (229-236, built for exactly this after proving run #5) sits downstream in submit_and_record, which the flow only reaches for FRESH specs after qsub \u2014 so on the main agent-facing surface the guard is dead code for this scenario.",
+  "fix_sketch": "Mirror the layer-1 cluster check in _dedup_existing: when existing is non-terminal and both existing.cluster and spec.cluster are non-empty and differ, raise the same SpecInvalid the runner raises (runner.py:430-440) instead of returning a deduped result. Reuse _resolve_layer1 directly (it is pure) so the two seats cannot drift \u2014 the twin-predicate class the G11 generator in upstream-fixes names.",
+  "evidence": "Read _dedup_existing (no cluster field consulted) and _resolve_layer1/_REFUSE plus its raise site (runner.py:229-236, 429-440). tests/ops/submit/test_layer1_dedup.py:122 pins only the pure function's decision; no test drives a cross-cluster in_flight retarget through submit_flow/_dedup_existing. Not listed in the sweep's Refuted section or the architecture review (grepped 'retarget', '_dedup_existing').",
+  "id": "F48",
+  "lens": "submit-resume",
+  "triage": "Verified _dedup_existing has no cluster comparison; returns deduped for any non-resubmittable-terminal record. Cross-cluster retarget silently deduped against old cluster.",
+  "status": "WEAK",
+  "final_severity": "medium",
+  "votes": [
+   {
+    "shard": "A-submit",
+    "verdict": "CONFIRMED",
+    "reasoning": "_dedup_existing makes no cluster comparison and returns deduped=True for any non-resubmittable-terminal record; deduped specs short-circuit before submit_and_record (2864-2870), where the in_flight_cluster_mismatch REFUSE (runner 234-235/429-440) lives. Since run_id keys on parameters only (#207, corroborated across the code and by the REFUSE guard's own reason), a cluster-B retarget of an in_flight-on-A run silently dedups against A. The proving-run-#5 guard is dead on the primary submit-flow surface."
+   },
+   {
+    "shard": "B2-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "_dedup_existing (submit_flow.py:2215-2234), invoked up front for every spec at line 2864, returns deduped=True with the old record's job_ids for any non-resubmittable-terminal record and never reads spec.cluster; this short-circuits before submit_and_record/_resolve_layer1 where the in_flight_cluster_mismatch REFUSE (runner.py:234-235) lives. The runner comment itself states run_id is parameter-only and cross-cluster retarget is exactly the scenario that guard was built for, so the guard is dead on the primary submit-flow path \u2014 a retarget silently no-ops as success-shaped dedup."
+   }
+  ],
+  "fable_panel": {
+   "verdict": "WEAK",
+   "severity": "medium",
+   "reasoning": "The cited mechanism is real \u2014 _dedup_existing (submit_flow.py:2215-2234) consults no cluster field and returns a success-shaped deduped result for any non-resubmittable-terminal record, and _resolve_layer1's in_flight_cluster_mismatch REFUSE is structurally unreachable via any submit_flow path because dedup short-circuits before submit_and_record \u2014 but the 'primary workflow path is unguarded/silent' claim is overstated. On the block-drive surface (the sanctioned path per the skills and MCP catalog), submit-s2 renders a deduped canary as its own anomaly terminator: stage_reached='deduped', needs_decision=True, 'the run already exists \u2014 no fresh canary fired; confirm resume-vs-fresh' (submit_blocks.py:693-701), and submit-s3 independently refuses without a validated-fresh canary keyed on (cmd_sha, version, CLUSTER) (submit_blocks.py:306-310), so a cross-cluster retarget cannot silently launch or attach there \u2014 the human is parked loudly, and retarget-run exists as the code-sequenced sanctioned retarget (new run_name -> distinct run_id, supersession, curated MCP tool). The silent success-shape survives only on direct submit-flow/submit-flow-batch/submit-and-verify/submit-pipeline invocations \u2014 a discouraged, secondary surface \u2014 which is a genuine twin-predicate gap worth the cheap mirror fix, but 'loud park with a brief that omits the old cluster' on the main path is medium (confusing remediation), not high (silent wrong state).",
+   "fix_sketch_concerns": "Reusing _resolve_layer1 in _dedup_existing correctly preserves complete-record cross-cluster dedup and terminal-proceed, but raising SpecInvalid there converts submit-s2's current deduped needs_decision park into a hard block FAILURE (nonzero exit, driver re-park/skip semantics) \u2014 an unacknowledged contract change to the S2 anomaly-terminator path \u2014 and in submit_flow_batch a single refusing spec raised as an exception aborts the whole batch instead of shaping a per-spec error; both need explicit handling.",
+   "new_evidence": "A worse adjacent latent bug the finding missed: S1's step-3 resume-vs-fresh fork (resolve_submit_inputs.py:412-427) is vacuous in production \u2014 find_prior_run reads status off the SIDECAR, no submit path ever writes a status field into sidecars, and I empirically showed fp['status'] is None for an in-flight main run, so 'fp[status] in {complete,in_flight}' can never hold outside mocked tests; the guard the proving-run-5 comment says makes 'a retarget meet the human at S1' only actually fires via the 3b canary-journal arm, and for a fully-submitted run the first real stop is S2's deduped park."
+  }
+ },
+ {
   "title": "Canary replay branch reuses a stale scheduler job id as the afterok gate: after a crash-then-later retry, the main array is submitted with --dependency=afterok:<purged job>, which SLURM rejects \u2014 and the forever-in_flight canary journal record makes every retry repeat it",
   "severity": "medium",
   "where": "src/hpc_agent/ops/submit_flow.py:2450-2463, src/hpc_agent/ops/submit_flow.py:2505-2511, src/hpc_agent/infra/backends/_engine.py:160-187",
@@ -1429,33 +1595,13 @@
     "verdict": "WEAK",
     "reasoning": "The code defect is real: the replay branch (2451-2463) reuses in_flight canary job_ids (in_flight is not resubmittable-terminal, journal 603), builds an afterok gate from them (_engine 179-187), and the in_flight canary is never reconciled so retries repeat. But the wedge requires ALL of: enable_afterok_dependency (defaults False, opt-in), a crash in the canary-record->main-land window, an unmonitored orphan, a MinJobAge purge, a naive re-submit, AND adverse scheduler behavior on a purged-job afterok (config/version dependent). That stacked, opt-in-gated, timing-specific chain is far harder to reach than presented. What survives: stale-in_flight-canary reuse into afterok with no visibility check or reconciliation."
    }
-  ]
- },
- {
-  "title": "PBS job_id_regex has no phrase/line anchor \u2014 any decimal or version string in a qsub banner ('est. wait 1.5 hours', 'PBS Pro 2022.1') matches before the real id line, so the run is journaled under a phantom job id",
-  "severity": "medium",
-  "where": "src/hpc_agent/infra/backends/profile.py:322,333, src/hpc_agent/infra/backends/__init__.py:570-573",
-  "category": "submit-stdout-parse",
-  "failure_scenario": "Many PBS sites wrap qsub or configure submit filters that print informational lines to stdout before the job id. submit_one does JOB_ID_REGEX.search(stdout) over the whole buffer; the pbspro/torque pattern `(\\d+)(?:\\[\\d*\\])?\\.[A-Za-z0-9_.-]+` matches '1.5' in 'estimated start in 1.5 hours' (group(1)='1') or '2022.1' in a version banner before ever reaching '12345[].pbs01' on the last line. The run record then tracks job '1': liveness/state queries poll a nonexistent (or worse, someone else's ancient) id, kill issues `qdel 1`, and the real array runs untracked \u2014 an orphan the monitor can never see. SLURM/SGE profiles explicitly anchor on 'Submitted batch job'/'Your job' for exactly this banner class (their own comments, profile.py:276-278,301-303); the PBS profiles got only a shape anchor any dotted number satisfies.",
-  "fix_sketch": "Anchor the PBS patterns to a line that IS a job id: `(?m)^(\\d+)(?:\\[\\d*\\])?\\.[A-Za-z0-9_.-]+\\s*$` \u2014 qsub prints the id alone on its own line on both forks \u2014 optionally preferring the last such match. Pure profile-data change (job_id_regex string), no engine change; add a poisoned-banner case to tests/infra/backends/test_pbs.py alongside the existing happy-path asserts at lines 38-39.",
-  "evidence": "Read profile.py: SLURM (:276-278) and SGE (:301-303) comments document the banner-poisoning class and anchor on phrases; PBSPRO/TORQUE (:322,:333) use the bare dotted-number shape with a comment claiming the .server suffix is the anchor \u2014 but '1.5', '2022.1', '10.0.0.1' all satisfy `\\d+\\.[A-Za-z0-9_.-]+`. __init__.py:570-573 uses .search over full stdout and returns the FIRST match. tests/infra/backends/test_pbs.py:38-39 tests only clean single-token stdout; no banner case exists. Not in the fixed/refuted lists.",
-  "id": "F39",
-  "lens": "scheduler-backends",
-  "triage": "Confirmed PBS regex has no phrase/line anchor (SLURM:278/SGE:303 do); '1.5'/'2022.1' in a qsub banner match via .search before the real id line. Distinct from F36. Not in fixed/refuted.",
-  "related": [
-   {
-    "id": "F36",
-    "note": "Two distinct defects in the same PBS job_id_regex/capture (profile.py:322,333 + __init__.py:570-573): F36 drops the array '[]' marker; F39 lacks a line anchor so a qsub banner decimal is captured. Same code, different mechanisms \u2014 likely fixed together."
-   }
   ],
-  "status": "WEAK",
-  "final_severity": "low",
-  "votes": [
-   {
-    "shard": "A-scheduler",
-    "verdict": "WEAK",
-    "reasoning": "The regex mechanism is real: profile.py:322,333 use an unanchored (\\d+)(?:\\[\\d*\\])?\\.[A-Za-z0-9_.-]+, __init__.py:570-573 does .search over full stdout and returns the FIRST match, and '1.5'/'2022.1' do match with group(1)='1'/'2022' \u2014 while SLURM (:278) and SGE (:303) deliberately phrase-anchor. But standard PBS qsub writes only the job id to stdout; the concrete poisoning requires a non-standard leading dotted-number banner on stdout that the finding asserts ('many sites wrap qsub') without any repo or scheduler-doc evidence. Genuine defense-in-depth inconsistency, but the failing state is not clearly reachable in normal PBS usage."
-   }
-  ]
+  "fable_panel": {
+   "verdict": "WEAK",
+   "severity": "medium",
+   "reasoning": "The downgrade STANDS. Code reading confirms the mechanism: the replay branch reuses existing_canary.job_ids for any non-resubmittable-terminal record (submit_flow.py:2450-2463) and gate_job_ids includes them (2505-2511) \u2014 and notably the comment at 2495-2501 says the gate applies 'Only when the canary actually fired this call', which the code contradicts, proving gate-on-replay is an unintended divergence, not a design choice. But the triggering chain is genuinely stacked: enable_afterok_dependency defaults to False and is documented 'Opt-in (default off)' (_wire/workflows/submit_flow.py:286-297); the primary hpc-submit skill drives the two-phase canary_only gate where the re-invoke passes canary=false and the afterok path never engages; the crash must land in the seconds-wide window between canary qsub and main qsub; and the retry must come after MinJobAge purge. The resulting failure is loud (sbatch 'Job dependency problem' -> RemoteCommandFailed) though persistently wedged for same-spec retries with no error text naming the cause \u2014 squarely the medium rubric. Not REFUTED because the wedge is real, unintended per the code's own comment, and harder to escape than even the downgraders likely knew.",
+   "fix_sketch_concerns": "Gating only on fresh-call canaries means a replayed in_flight canary whose job actually FAILED yields an un-gated main launch \u2014 losing canary protection exactly in the crash-recovery case, so option 1 alone weakens #250; the scheduler-visibility probe variant is better but rides the liveness queries that per F35/F36 can false-negative (empty output on a failed query reads 'purged'), though that fails toward the documented un-gated SGE posture, which is tolerable. The stale in_flight canary record should also be reconciled, or the confusing journal state persists.",
+   "new_evidence": "(1) Comment/code divergence at submit_flow.py:2495-2511 ('Only when the canary actually fired this call' vs. code that gates on replay ids too) \u2014 evidence the hazard is a drift bug, strengthening CONFIRMED-mechanism while leaving reachability weak. (2) The wedge survives reconcile: reconciling the orphan canary to COMPLETE still leaves it non-resubmittable-terminal, so the replay branch still reuses the purged ids \u2014 only a failed/abandoned/killed settle (or spec edits) escapes, making the remediation even more obscure than the finding stated. (3) The #276 corpse-exclusion guard is the only neighboring guard and it deliberately does not cover in_flight or complete records."
+  }
  }
 ]
