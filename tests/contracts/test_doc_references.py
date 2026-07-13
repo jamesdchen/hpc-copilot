@@ -82,7 +82,18 @@ CONSOLE_SCRIPT_ALLOWLIST: dict[str, str] = {
 # ref was dropped once d-rewrite landed — the rewrite now names the deleted
 # prompt only in the bare ``worker_prompts/submit.md`` form, which the
 # ``hpc_agent/``-anchored detector does not yield, so no allowlisting is needed.
-MODULE_PATH_ALLOWLIST: dict[tuple[str, str], str] = {}
+MODULE_PATH_ALLOWLIST: dict[tuple[str, str], str] = {
+    # bug-sweep-2026-07-11 is a HISTORICAL record: it cites
+    # relay_audit_stop.py:571 / :300 as they were on that date. The module was
+    # later split into the relay_audit_stop/ package, so the exact-line
+    # references no longer resolve — but rewriting a dated bug record with new
+    # package paths + guessed line numbers would falsify the archive. Allowlist
+    # the stale historical path rather than revise history.
+    (
+        "docs/internals/bug-sweep-2026-07-11.md",
+        "src/hpc_agent/_kernel/hooks/relay_audit_stop.py",
+    ): "historical: file split into the relay_audit_stop/ package after this sweep",
+}
 
 
 # ---------------------------------------------------------------------------

@@ -1745,6 +1745,12 @@ def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
         ("execution/mapreduce/reduce/status.py", "hpc_agent/execution/mapreduce/reduce/status.py"),
         # Eager intra-package deps of status (all stdlib-only):
         ("execution/mapreduce/reduce/rollup.py", "hpc_agent/execution/mapreduce/reduce/rollup.py"),
+        # status re-exports resolve/pin_scheduler_profile from this module at
+        # module scope, so the deployed reporter's import of status pulls it in.
+        (
+            "execution/mapreduce/reduce/scheduler_profile.py",
+            "hpc_agent/execution/mapreduce/reduce/scheduler_profile.py",
+        ),
         ("_kernel/contract/task_id.py", "hpc_agent/_kernel/contract/task_id.py"),
         ("_kernel/contract/vocabulary.py", "hpc_agent/_kernel/contract/vocabulary.py"),
         ("errors.py", "hpc_agent/errors.py"),
