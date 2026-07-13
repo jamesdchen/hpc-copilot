@@ -95,7 +95,9 @@ class TestEndToEnd:
         of_line = next(ln for ln in result["stdout_tail"].splitlines() if ln.startswith("OF="))
         used = of_line[len("OF=") :]
         assert used != "/tmp/smoke.csv"
-        assert "/hpc-smoke-" in used  # a private per-invocation dir
+        # A private per-invocation dir (OS-agnostic: the dir basename carries the
+        # prefix — the path separator differs on Windows, so don't match "/...").
+        assert os.path.basename(os.path.dirname(used)).startswith("hpc-smoke-")
         # This invocation's own scratch dir must be gone (race-free vs. sibling
         # workers — we check the exact dir we minted, not a shared glob).
         assert not os.path.exists(os.path.dirname(used))
