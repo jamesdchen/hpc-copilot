@@ -40,10 +40,15 @@ def read_kw_env() -> dict[str, str]:
     compute node without the full ``hpc_agent`` install — same
     deployment guarantee as :func:`write_metrics`.
     """
+    # ``k[len(_KW_PREFIX):]`` rather than ``str.removeprefix`` — this module is
+    # deployed standalone and imported by executors under any cluster
+    # ``python3`` (>=3.8; RHEL/Rocky 8, torch-1.x conda envs — see the
+    # deploy-floor lint and F18), where ``str.removeprefix`` (3.9+) raises
+    # ``AttributeError`` and fails every task that reads its kwargs. The keys
+    # here all pass the ``startswith(_KW_PREFIX)`` filter, so the slice is
+    # exactly the prefix strip.
     return {
-        k.removeprefix(_KW_PREFIX).lower(): v
-        for k, v in os.environ.items()
-        if k.startswith(_KW_PREFIX)
+        k[len(_KW_PREFIX) :].lower(): v for k, v in os.environ.items() if k.startswith(_KW_PREFIX)
     }
 
 

@@ -31,7 +31,17 @@ echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
 # CUDA memory optimization — splits large allocations into 128MB
 # blocks so PyTorch fragments less under heavy mixed-batch workloads.
-export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"
+# Honors the same HPC_<NAME> override convention as the determinism knobs
+# below AND never clobbers a PYTORCH_CUDA_ALLOC_CONF the user already set
+# via the spec's job_env (F21): an explicit HPC_PYTORCH_CUDA_ALLOC_CONF
+# wins; an already-exported PYTORCH_CUDA_ALLOC_CONF (e.g. the common
+# expandable_segments:True fragmentation fix) survives; an unset var falls
+# back to the framework default; HPC_PYTORCH_CUDA_ALLOC_CONF="" disables it.
+_hpc_default_alloc_conf="max_split_size_mb:128"
+if [ "${HPC_PYTORCH_CUDA_ALLOC_CONF-$_hpc_default_alloc_conf}" != "" ]; then
+    export PYTORCH_CUDA_ALLOC_CONF="${HPC_PYTORCH_CUDA_ALLOC_CONF:-${PYTORCH_CUDA_ALLOC_CONF:-$_hpc_default_alloc_conf}}"
+fi
+unset _hpc_default_alloc_conf
 
 # --- GPU determinism env (fidelity vs. serial) ---
 # CUBLAS_WORKSPACE_CONFIG=:4096:8 is the value cuBLAS requires for

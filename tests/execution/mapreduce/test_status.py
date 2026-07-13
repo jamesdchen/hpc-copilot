@@ -278,6 +278,40 @@ class TestHeaderOnlyCsv:
 
         assert 0 not in results
 
+    def test_zero_byte_non_csv_incomplete_per_task_subdir(self, tmp_path):
+        """F22 fire path (strategy 1): a 0-byte NON-CSV result is incomplete.
+
+        The 0-byte guard used to live only inside the CSV branch, so a
+        crash-truncated ``out.json`` under ``file_glob='*.json'`` (or ``'*'``)
+        read ``complete`` — disagreeing with ``check_results_from_tasks`` and
+        the dispatcher's 0-byte-is-incomplete idempotency skip (sweep bug #62).
+        """
+        result_dir = tmp_path / "results"
+        task_dir = result_dir / "task_0"
+        task_dir.mkdir(parents=True)
+        (task_dir / "out.json").write_text("")  # 0-byte, crash-truncated
+
+        # The per-task-subdir scan (strategy 1) must skip the 0-byte non-CSV
+        # result rather than marking the task complete.
+        assert 0 not in check_results(result_dir, total_tasks=1, file_glob="*.json")
+
+        # A non-empty JSON in the same task is still complete (guard is 0-byte
+        # only, not "reject all non-CSV").
+        (task_dir / "out.json").write_text("{}")
+        assert check_results(result_dir, total_tasks=1, file_glob="*.json")[0]["status"] == (
+            "complete"
+        )
+
+    def test_zero_byte_non_csv_incomplete_flat_scan(self, tmp_path):
+        """F22 fire path (strategy 2): the flat-directory scan skips a 0-byte
+        non-CSV result rather than marking its sorted-position task complete."""
+        result_dir = tmp_path / "results"
+        result_dir.mkdir(parents=True)
+        (result_dir / "out.json").write_text("")  # 0-byte, no task_N/ subdir
+
+        assert 0 not in check_results(result_dir, total_tasks=1, file_glob="*.json")
+        assert 0 not in check_results(result_dir, total_tasks=1, file_glob="*")
+
     def test_header_only_csv_complete_via_tasks_dict(self, tmp_path):
         """Same contract as the check_results variant above, but driven
         through ``check_results_from_tasks`` (the per-task dict path)."""

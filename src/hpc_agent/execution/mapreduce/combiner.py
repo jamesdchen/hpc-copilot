@@ -148,9 +148,17 @@ def _weighted_mean(entries):
         # Skip non-numeric values: write_metrics accepts an arbitrary
         # JSON dict, so a metrics.json may carry string/list labels;
         # ``v * w`` on those would raise and abort the whole wave.
+        # ``weights`` is built one-to-one over ``entries`` above, so the two
+        # are equal-length by construction — a bare ``zip`` is safe. The
+        # ``strict=`` keyword is Python 3.10+, but this module is deployed
+        # standalone and run under any cluster ``python3`` (>=3.8; RHEL/Rocky 8,
+        # torch-1.x conda envs — see the deploy-floor lint and F18), where
+        # ``zip(..., strict=True)`` raises ``TypeError`` and aborts every wave
+        # combine. ``# noqa: B905`` stops a modernization pass from re-adding
+        # ``strict=`` and re-raising the cluster floor.
         pairs = [
             (e[key], w)
-            for e, w in zip(entries, weights, strict=True)
+            for e, w in zip(entries, weights)  # noqa: B905 - deploy floor <3.10; equal length by construction
             if key in e and isinstance(e[key], (int, float))
         ]
         if not pairs:

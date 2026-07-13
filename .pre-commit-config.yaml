@@ -42,6 +42,17 @@ repos:
         pass_filenames: false
         files: '^(src/hpc_agent/execution/mapreduce/(dispatch|combiner)\.py|src/hpc_agent/state/runs\.py|scripts/lint_schema_versions\.py)$'
 
+      - id: lint-deploy-python-floor
+        name: cluster-deployed files stay under the Python version floor
+        entry: python scripts/lint_deploy_python_floor.py
+        language: system
+        pass_filenames: false
+        # Fires when a deployed module, the ship-list definition (transport.py),
+        # or the lint itself changes. The lint re-derives the actual ship list
+        # from _build_deploy_items, so this trigger only needs to cover the
+        # sources that CAN change what/whom it scans.
+        files: '^(src/hpc_agent/(execution/mapreduce/.*|_kernel/contract/.*|infra/(transport|time)\.py|errors\.py|executor_cli\.py)|scripts/lint_deploy_python_floor\.py)$'
+
       - id: build-primitive-frontmatter
         name: regenerate primitive frontmatter
         entry: python scripts/build_primitive_frontmatter.py --write

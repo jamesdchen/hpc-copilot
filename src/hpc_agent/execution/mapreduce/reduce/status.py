@@ -179,6 +179,22 @@ def check_results(
         except OSError:
             return None
 
+    def _nonempty_result(path_str: str) -> bool:
+        """False when *path_str* is a 0-byte regular file (skip it).
+
+        A crash-truncated empty result (``out.json``, ``out.txt``, or any
+        non-CSV glob) is incomplete, not complete — matching the twin
+        :func:`check_results_from_tasks` and the dispatcher's 0-byte
+        idempotency skip. ``check_results`` previously guarded 0-byte only
+        inside the CSV branch, so a ``file_glob='*.json'`` / ``'*'`` scan
+        marked a zero-byte file ``complete`` and masked the failure (F22 /
+        sweep bug #62). A directory match or an unstattable path is left to
+        the caller (a dir is never a 0-byte file; an ``OSError`` skips)."""
+        try:
+            return not (os.path.isfile(path_str) and os.path.getsize(path_str) <= 0)
+        except OSError:
+            return False
+
     # Strategy 1: check per-task subdirectories (task_0/, task_1/, ...).
     # Dir index is the 0-based HpcTaskId (the result_dir_template renders
     # ``task_{task_id}`` against the dispatcher's 0-based HPC_TASK_ID).
@@ -191,6 +207,11 @@ def check_results(
                 if _is_framework_artifact(os.path.basename(path_str)):
                     # A dispatcher sidecar (_runtime.json, _checkpoints, …) is
                     # not a produced result — never count it as completion.
+                    continue
+                # 0-byte guard, hoisted above the CSV branch so it applies to
+                # every result kind (non-CSV globs / validate=False too), not
+                # just CSVs (F22).
+                if not _nonempty_result(path_str):
                     continue
                 if validate and path_str.endswith(".csv"):
                     status = _accept_csv(path_str)
@@ -216,6 +237,9 @@ def check_results(
             if "/_wip_" not in p and not _is_framework_artifact(os.path.basename(p))
         ]
         for tid, path_str in enumerate(candidates[:total_tasks], start=0):
+            # 0-byte guard, hoisted above the CSV branch (see strategy 1 / F22).
+            if not _nonempty_result(path_str):
+                continue
             if validate and path_str.endswith(".csv"):
                 status = _accept_csv(path_str)
                 if status is None:
