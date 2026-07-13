@@ -12,17 +12,19 @@ module owns that shape end to end:
 * the **report** side — :class:`WorkerReport`, the structured object a
   delegated worker returns.
 
-so validation never forks across consumers. Each consumer is a thin
-adapter feeding requests to
-:func:`hpc_agent._kernel.extension.spawn_prompt.validate_and_render_parts` and
-parsing reports with
-:func:`hpc_agent._kernel.extension.spawn_prompt.parse_worker_report`; it never
-re-declares the workflow set or re-implements validation.
+so validation never forks across consumers. Historically each consumer
+was a thin adapter feeding requests to, and parsing reports through, the
+``_kernel.extension.spawn_prompt`` logic module — the bare-worker
+(``claude -p --bare``) spawn transport that carried the workflow
+procedure inside the prompt. That transport (and ``spawn_prompt``) was
+deleted in the §6 worker removal; the block-drive skills are the workflow
+entry points now. This module survives as the SHARED shape — the workflow
+registry, decision-point enumeration, and report models — so any future
+consumer validates against one contract rather than re-declaring it.
 
 Kept under ``_wire`` so wire-schema models (the ``load-context``
 ``delegate`` block) can reference :class:`SpawnRequest` without a
-logic-layer import. The logic over this contract lives in
-:mod:`hpc_agent._kernel.extension.spawn_prompt`.
+logic-layer import.
 """
 
 from __future__ import annotations
@@ -37,18 +39,16 @@ from pydantic import BaseModel, ConfigDict, field_validator
 SPAWN_KEY = "hpc_spawn"
 
 # The workflows that may be delegated. Kept consistent with
-# WORKFLOW_PROCEDURES by test_spawn_prompt.test_workflow_name_matches_registry.
+# WORKFLOW_PROCEDURES by
+# tests/_wire/test_decision_points.py::test_workflow_name_matches_registry.
 WorkflowName = Literal["submit", "status", "aggregate", "campaign"]
 
-# workflow id → the worker-prompt template inlined into the spawned
-# subagent's cacheable prefix. Resolved by
-# ``hpc_agent._kernel.extension.spawn_prompt._procedure_body`` (host: package data
-# at ``hpc_agent/_kernel/extension/worker_prompts/<name>.md``; plugins
-# overlay via the ``worker_prompt_assets`` attribute on their entry
-# point). These are
-# *not* Claude Code skills — a headless ``claude -p --bare`` worker has
-# no Skill tool, so the procedure travels inside the prompt itself. See
-# ``docs/internals/skill-policy.md`` for the forcing rule.
+# workflow id → procedure name. Historically this mapped each workflow to a
+# worker-prompt template that ``_kernel.extension.spawn_prompt`` inlined into
+# a headless ``claude -p --bare`` subagent's cacheable prefix (the procedure
+# travelled inside the prompt because a bare worker had no Skill tool). That
+# spawn transport was deleted in the §6 worker removal; the map is retained as
+# the canonical workflow key set the registry consistency test pins.
 WORKFLOW_PROCEDURES: dict[str, str] = {
     "submit": "submit",
     "status": "status",

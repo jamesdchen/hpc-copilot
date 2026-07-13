@@ -368,9 +368,13 @@ def test_snapshot_no_alert_log_yields_empty_alerts(tmp_path: Path) -> None:
 
 
 def _watch_spec(*, invocation_argv: str | None = None) -> StatusWatchSpec:
+    # detach=False keeps these synchronous — they assert the monitor-flow poll +
+    # brief digestion in-process. The default (detach=True) detach-by-contract
+    # path is pinned separately in tests/ops/status/test_block_detach.py.
     return StatusWatchSpec(
         monitor=MonitorFlowSpec(run_id=_RUN_ID),
         invocation_argv=invocation_argv,
+        detach=False,
     )
 
 

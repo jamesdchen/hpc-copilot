@@ -8,7 +8,11 @@ feature on/off — the bad value fails loudly at load time.
 
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
+
 import pytest
+import yaml
 
 from hpc_agent import errors
 from hpc_agent.infra.clusters import (
@@ -19,6 +23,7 @@ from hpc_agent.infra.clusters import (
     get_default_walltime_sec,
     get_max_walltime_sec,
     get_walltime_arbitrage,
+    resolve_ssh_target,
 )
 
 # ─── known scheduler families (pbspro / torque wiring) ───────────────────────
@@ -187,3 +192,120 @@ class TestGetDefaultWalltimeSec:
             wt = get_default_walltime_sec(cfg)
             assert wt > 0, name
             assert wt <= get_max_walltime_sec(cfg), name
+
+
+# ─── resolve_ssh_target — use-time host resolution (run12 finding 23 / RULING 1) ──
+
+
+class TestResolveSshTarget:
+    """``ssh_target`` is CONFIG resolved fresh from clusters.yaml at USE time; the
+    journal records only the CLUSTER key (history). A login-node failover is a
+    config edit, never journal surgery — and when config can't answer, the frozen
+    submit-time target is the disclosed migration-shim fallback.
+    """
+
+    def _point_config_at(self, tmp_path, monkeypatch, mapping):
+        p = tmp_path / "clusters.yaml"
+        p.write_text(yaml.safe_dump(mapping), encoding="utf-8")
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(p))
+        return p
+
+    def test_host_change_resolves_to_new_host_with_no_record_surgery(self, tmp_path, monkeypatch):
+        # The record was submitted when `discovery` pointed at discovery2; its
+        # FROZEN ssh_target still says discovery2. A login-node failover edits
+        # clusters.yaml to discovery1 — a CONFIG change, no journal surgery.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {"discovery": {"scheduler": "slurm", "user": "jc", "host": "discovery1.usc.edu"}},
+        )
+        record = SimpleNamespace(cluster="discovery", ssh_target="jc@discovery2.usc.edu")
+
+        # Use-time resolution yields the NEW host from config...
+        assert resolve_ssh_target(record) == "jc@discovery1.usc.edu"
+        # ...and the record was never rewritten (frozen provenance intact).
+        assert record.ssh_target == "jc@discovery2.usc.edu"
+
+    def test_matching_config_returns_live_target(self, tmp_path, monkeypatch):
+        # When config still agrees with the frozen value, the live target is used
+        # (and equals the frozen one) — no fallback path taken.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {"hoffman2": {"scheduler": "sge", "user": "u", "host": "hoffman2.idre.ucla.edu"}},
+        )
+        record = SimpleNamespace(cluster="hoffman2", ssh_target="u@hoffman2.idre.ucla.edu")
+        assert resolve_ssh_target(record) == "u@hoffman2.idre.ucla.edu"
+
+    def test_template_placeholder_falls_back_to_frozen_and_discloses(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The PACKAGED clusters.yaml template carries '<your_user>@...'
+        # placeholders. A derivation the transport would refuse is NOT a live
+        # resolution (the CI environment has only the template — every
+        # aggregate/monitor test crashed SpecInvalid on '<'/'>' before this
+        # guard): fall back to the frozen submit-time target, disclosed.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {
+                "hoffman2": {
+                    "scheduler": "sge",
+                    "user": "<your_user>",
+                    "host": "hoffman2.idre.ucla.edu",
+                }
+            },
+        )
+        record = SimpleNamespace(cluster="hoffman2", ssh_target="u@h")
+
+        with caplog.at_level(logging.WARNING, logger="hpc_agent.infra.clusters"):
+            resolved = resolve_ssh_target(record)
+
+        assert resolved == "u@h"  # frozen value used, placeholder never escapes
+        assert "not a usable ssh target" in caplog.text
+
+    def test_missing_cluster_key_falls_back_to_frozen_and_discloses(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # clusters.yaml is populated but does NOT define the record's cluster (an
+        # ad-hoc cluster, or one removed after submit) → the FROZEN submit-time
+        # target is used and the fallback is DISCLOSED on the log.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {"hoffman2": {"scheduler": "sge", "user": "u", "host": "hoffman2.idre.ucla.edu"}},
+        )
+        record = SimpleNamespace(cluster="adhoc-box", ssh_target="me@adhoc.example.edu")
+
+        with caplog.at_level(logging.WARNING, logger="hpc_agent.infra.clusters"):
+            resolved = resolve_ssh_target(record)
+
+        assert resolved == "me@adhoc.example.edu"  # frozen value used
+        assert "adhoc-box" in caplog.text
+        assert "absent from clusters.yaml" in caplog.text
+
+    def test_record_predating_cluster_field_falls_back_and_discloses(self, caplog):
+        # A record minted before the cluster field existed carries no cluster key
+        # (empty) → nothing to resolve from config; the frozen target is used and
+        # the fallback is disclosed.
+        record = SimpleNamespace(cluster="", ssh_target="legacy@old.host.edu")
+        with caplog.at_level(logging.WARNING, logger="hpc_agent.infra.clusters"):
+            resolved = resolve_ssh_target(record)
+        assert resolved == "legacy@old.host.edu"
+        assert "no cluster key" in caplog.text
+
+    def test_cluster_without_derivable_target_falls_back_and_discloses(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The cluster entry exists but yields no user@host (no `user`) — the frozen
+        # value is used and the fallback is disclosed.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {"adhoc": {"scheduler": "sge", "host": "adhoc.example.edu"}},  # no user
+        )
+        record = SimpleNamespace(cluster="adhoc", ssh_target="frozen@adhoc.example.edu")
+        with caplog.at_level(logging.WARNING, logger="hpc_agent.infra.clusters"):
+            resolved = resolve_ssh_target(record)
+        assert resolved == "frozen@adhoc.example.edu"
+        assert "no derivable user@host" in caplog.text

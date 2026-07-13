@@ -13,5 +13,7 @@ repos:
         name: build src/ from notebooks (export check)
         entry: hpc-agent export-package --experiment-dir .
         language: system
-        files: \.ipynb$
+        # Notebooks are percent-format .py under notebooks/ (the native
+        # format); .ipynb stays matched for back-compat repos.
+        files: ^notebooks/.*\.(py|ipynb)$
         pass_filenames: false

@@ -2,11 +2,10 @@
 
 Pins these invariants (mirrors ``test_lint_backend_boundary.py``):
 
-1. The real tree passes — no SKILL body / worker prompt offers a raw-ssh
-   affordance today.
+1. The real tree passes — no SKILL body offers a raw-ssh affordance today.
 2. The lint can actually FIRE: a bare ``ssh`` / ``scp`` / ``rsync`` invocation
-   in a code span (inline or fenced) of a SKILL / worker-prompt is reported
-   with the throttled-verb remediation.
+   in a code span (inline or fenced) of a SKILL is reported with the
+   throttled-verb remediation.
 3. Documentation forms do NOT fire: plain-prose mentions outside code spans,
    the bare word with no argument, identifier forms (``ssh_run`` /
    ``ssh_target`` / ``rsync_push`` / ``ssh-add``), and angle-bracket
@@ -39,15 +38,7 @@ def test_real_tree_is_clean() -> None:
 def _skill(tmp_path: Path, body: str, *, name: str = "hpc-demo") -> Path:
     """Write *body* as a SKILL.md under a synthetic scan root and return the root."""
     root = tmp_path / "src"
-    p = root / "slash_commands" / "skills" / name / "SKILL.md"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(body, encoding="utf-8")
-    return root
-
-
-def _worker_prompt(tmp_path: Path, body: str, *, name: str = "demo.md") -> Path:
-    root = tmp_path / "src"
-    p = root / "hpc_agent" / "_kernel" / "extension" / "worker_prompts" / name
+    p = root / "hpc_agent" / "slash_commands" / "skills" / name / "SKILL.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return root
@@ -84,11 +75,6 @@ def test_raw_scp_and_rsync_fire(tmp_path: Path) -> None:
     assert lint.main(root) == 1
 
 
-def test_worker_prompt_is_scanned(tmp_path: Path) -> None:
-    root = _worker_prompt(tmp_path, "Probe via `ssh $SSH_TARGET hostname` first.\n")
-    assert lint.main(root) == 1
-
-
 def test_prose_mention_outside_code_span_is_clean(tmp_path: Path) -> None:
     """Only code spans are scanned — explanatory prose ("raw ssh") is fine."""
     root = _skill(tmp_path, "Do not reach for raw ssh which bypasses the guards.\n")
@@ -119,7 +105,7 @@ def test_placeholder_destination_is_clean(tmp_path: Path) -> None:
 
 def test_allowlist_exempts_a_path(tmp_path: Path, monkeypatch) -> None:
     root = _skill(tmp_path, 'Debug with `ssh usc-discovery "ls"`.\n', name="hpc-debug")
-    rel = "slash_commands/skills/hpc-debug/SKILL.md"
+    rel = "hpc_agent/slash_commands/skills/hpc-debug/SKILL.md"
     assert lint.main(root) == 1  # fires without the exemption
     monkeypatch.setattr(lint, "ALLOWLIST", frozenset({rel}))
     assert lint.main(root) == 0  # cited exemption clears it

@@ -5,13 +5,15 @@ Framework-owned and self-healing: ``hpc-agent build-template`` re-writes
 this file verbatim on every run. Do NOT edit it — project code lives
 elsewhere.
 
-    python .hpc/scaffold.py new <name>    scaffold notebooks/experiments/<name>.ipynb
+    python .hpc/scaffold.py new <name>    scaffold notebooks/executors/<name>.py (percent format)
     python .hpc/scaffold.py discover      list the @register_run experiments
 
-The notebook -> ``src/`` build is `hpc-agent export-package` (run by
-`make build`, CI, the conftest clone hook, and submit). There is no
-committed ``src/`` and no notebook-sync staleness check — the notebook
-is the single reviewed artifact.
+Notebooks are jupytext percent-format ``.py`` files (``# %%`` cells) —
+the reviewable source of truth; ``.ipynb`` is only ever a caller-side
+render. The notebook -> ``src/`` build is `hpc-agent export-package`
+(run by `make build`, CI, the conftest clone hook, and submit). There is
+no committed ``src/`` and no notebook-sync staleness check — the percent
+``.py`` is the single reviewed artifact.
 """
 
 from __future__ import annotations
@@ -32,9 +34,9 @@ def _cmd_new(name: str) -> int:
     from hpc_agent import _PACKAGE_ROOT
 
     skeleton = (
-        _PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.ipynb.tmpl"
+        _PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.py.tmpl"
     )
-    dest = Path("notebooks") / "executors" / f"{name}.ipynb"
+    dest = Path("notebooks") / "executors" / f"{name}.py"
     if dest.exists():
         print(f"refusing to overwrite {dest}", file=sys.stderr)
         return 1

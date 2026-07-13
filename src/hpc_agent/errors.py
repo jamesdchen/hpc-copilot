@@ -10,6 +10,8 @@ The full enum is documented in ``docs/reference/cli-spec.md``.
 
 from __future__ import annotations
 
+import json as _json  # private alias: keep ``json`` out of the public error surface
+
 __all__ = [
     "HpcError",
     "SshUnreachable",
@@ -32,9 +34,14 @@ __all__ = [
     "AlreadyInFlight",
     "SiblingRunLive",
     "ScopeLocked",
+    "SourceUnaudited",
+    "PackReceiptsMissing",
     "SubmissionIncomplete",
     "StructuredOutputError",
     "ModelEndpointError",
+    "TRANSIENT_TRANSPORT_ERRORS",
+    "TOLERANT_RECORD_READ_ERRORS",
+    "is_deterministic_env_failure",
 ]
 
 
@@ -300,10 +307,13 @@ class ClusterPartiallyDegraded(HpcError):
     operation succeeded with partial data.
 
     Carries a ``partial_errors`` list attribute of ``{code, detail}``
-    dicts so the CLI dispatcher can surface the per-source failures to the
-    envelope's top-level ``partial_errors`` key. The operation that
-    raises this still set ok:true cluster-side; the exception is the
-    typed channel for surfacing what was missed.
+    dicts — the typed channel for the *raising operation's handler* to
+    surface per-source failures into the SUCCESS envelope's top-level
+    ``partial_errors`` key (the operation still succeeded cluster-side).
+    Note the generic CLI error path (``_err_from_hpc``) does not read the
+    attribute, and the error envelope has no ``partial_errors`` key: a
+    caller that lets this exception escape to the dispatcher gets an
+    ordinary error envelope and loses the per-source detail.
 
     Retry-safe because the typical cause is a transient scheduler
     daemon stall (qhost, sacct).
@@ -503,6 +513,185 @@ class ScopeLocked(HpcError):
         )
 
 
+class SourceUnaudited(HpcError):
+    """The submit pipeline refuses an entry point not hash-linked to a CURRENT audit.
+
+    Raised by :func:`hpc_agent.ops.notebook_gate.assert_source_audited` — the
+    graduation gate (notebook-audit substrate D8) — at its two synchronous submit
+    seats (:mod:`hpc_agent.ops.resolve_submit_inputs` pre-sidecar,
+    :mod:`hpc_agent.ops.submit_flow` pre-staging) when the interview opted in via
+    an ``audited_source`` block (D7) but one or more REQUIRED (template) sections
+    of the audited ``.py`` are not signed at their current hash: unsigned,
+    drifted (signed then edited — unsigned by construction, no drift state
+    machine), or trust-revoked by a drifted ``linked_sources`` dependency.
+
+    Opt-in and fail-safe by construction: with NO ``audited_source`` block the
+    gate is a byte-identical no-op and this never raises (the
+    :mod:`hpc_agent.ops.scope_gate` fail-safe posture). It fires ONLY inside the
+    opted-in surface.
+
+    Reuses the ``precondition_failed`` error_code (the :class:`ScopeLocked`
+    precedent, itself following :class:`PreconditionFailed`, and the same
+    widen-avoidance posture as :class:`SiblingRunLive`'s ``spec_invalid`` reuse):
+    submitting an un-audited source is a workflow step invoked against on-disk
+    state that forbids it, and adding a new error_code value is a breaking
+    wire-envelope change. ``retry_safe=False``: a bare retry re-hits the same
+    unsigned state; the one exit is a human sign-off (or a re-draft + re-sign) of
+    the named sections.
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = False
+    category = "user"
+    remediation = (
+        "One or more audited sections are unsigned or drifted. Re-sign each named "
+        "section at its CURRENT hash via `hpc-agent append-decision` "
+        "(scope_kind='notebook', block='notebook-sign-off', "
+        "resolved={audit_id, section, section_sha, view_sha}); a section edited "
+        "after signing reads unsigned by construction — re-audit and re-sign it. "
+        "A drifted linked source (a changed imported dependency) likewise revokes "
+        "the section's sign-off. There is no code override."
+    )
+
+    @classmethod
+    def for_sections(cls, audit_id: str, sections: list[tuple[str, str]]) -> SourceUnaudited:
+        """Build the loud message naming each unsigned/drifted section + its status.
+
+        *sections* is a list of ``(slug, status)`` pairs — exactly what the human
+        must re-sign. The message names every one so the refusal is actionable
+        without a separate status query.
+        """
+        detail = ", ".join(f"{slug!r} ({status})" for slug, status in sections)
+        return cls(
+            f"audited source for audit_id {audit_id!r} is not cleared for "
+            f"graduation — {len(sections)} required section(s) not signed at "
+            f"their current hash: {detail}. Re-sign each at its current hash via "
+            "append-decision (scope_kind='notebook', block='notebook-sign-off'); "
+            "an edit (or a drifted linked source) after signing reads unsigned by "
+            "construction (drift = unsigned)."
+        )
+
+
+class PackReceiptsMissing(HpcError):
+    """The submit pipeline refuses an opted-in experiment whose required domain-pack
+    receipts are not CURRENT + ``passed``.
+
+    Raised by :func:`hpc_agent.ops.pack_gate.assert_pack_receipts_current` — the
+    domain-pack receipt gate (``docs/design/domain-packs.md``, "Receipt naming +
+    the gate contract") — at its two synchronous submit seats
+    (:mod:`hpc_agent.ops.resolve_submit_inputs` pre-sidecar,
+    :mod:`hpc_agent.ops.submit_flow` pre-staging) when the interview opted into a
+    ``packs`` block (D7) but one or more caller-authored ``receipt_bindings`` slots
+    do not reduce to a CURRENT, ``passed=true`` receipt: ``missing`` (no receipt),
+    ``stale`` (the bind or a checked file drifted — drift = unsigned by
+    construction), or ``failed`` (the check ran against live content and reported
+    ``passed=false``).
+
+    Opt-in and fail-safe by construction: with NO ``packs`` block the gate is a
+    byte-identical no-op and this never raises. It fires ONLY inside the opted-in
+    surface; a BROKEN setup (a dangling manifest, an unresolvable/unbound pack) is
+    a :class:`SpecInvalid` instead — this class is only the uncleared-receipt case
+    (the T9 refusal split).
+
+    Reuses the ``precondition_failed`` error_code (the :class:`SourceUnaudited` /
+    :class:`ScopeLocked` precedent, itself following :class:`PreconditionFailed`):
+    submitting under un-cleared domain standards is a workflow step invoked against
+    on-disk state that forbids it, and adding a new error_code value is a breaking
+    wire-envelope change. ``retry_safe=False``: a bare retry re-hits the same
+    uncleared state; the one exit is to run the pack's own check and record a
+    current receipt (or re-bind + re-check on drift).
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = False
+    category = "user"
+    #: Structured per-slot remedy — ``[{slot, status, check, check_run}]`` —
+    #: populated by :meth:`for_slots`. ``check`` is the caller-authored command the
+    #: gate ALREADY RAN (CONVERSION 1) to re-earn the slot (``None`` when the caller
+    #: recorded none). ``check_run`` is a one-line outcome of that run when it fired
+    #: but did not clear the slot (``None`` when no check ran). Default empty;
+    #: instances built via :meth:`for_slots` set their own.
+    remedy: list[dict[str, str | None]] = []  # noqa: RUF012
+    remediation = (
+        "One or more required pack receipt slots are missing, stale, or failed. "
+        "Run the pack's own check and record a current receipt via `hpc-agent "
+        "pack-record-receipt` for each named slot; a slot reads stale when the "
+        "bind or a checked file drifted — re-bind via `hpc-agent pack-bind`, then "
+        "re-check. There is no code override: a code receipt never softens a human "
+        "tier, and a human sign-off never fills a code-receipt slot."
+    )
+
+    @classmethod
+    def for_slots(
+        cls,
+        slots: list[tuple[str, str]],
+        *,
+        checks: dict[str, str | None] | None = None,
+        check_runs: dict[str, str] | None = None,
+    ) -> PackReceiptsMissing:
+        """Build the loud message naming each uncleared slot + its status.
+
+        *slots* is a list of ``(slot, status)`` pairs (``status`` one of
+        ``missing`` / ``stale`` / ``failed``) — exactly what the caller must
+        re-receipt. The message names every one so the refusal is actionable
+        without a separate ``pack-status`` query.
+
+        *checks* optionally maps a slot slug → its caller-authored check command
+        (the receipt/check association recorded on the interview ``receipt_bindings``
+        entry). By the time this refusal is raised the AUTO-REMEDY has already
+        re-sealed + re-bound any stale manifest (journaled old→new) AND EXECUTED the
+        caller-side check itself (CONVERSION 1: the gate runs it as a subprocess in
+        the experiment dir, DP2-safe caller-side execution — core never *imports*
+        pack logic). The refusal therefore only survives when a slot declared no
+        check, the check failed/timed out, or the slot is still uncleared after it
+        ran.
+
+        *check_runs* optionally maps a slot slug → a one-line outcome of the check
+        the gate ran (why it did not clear — non-zero exit + tail, timeout, spawn
+        failure). Woven into the message so a surviving refusal NAMES the check
+        output. The instance attribute :attr:`remedy` carries the structured
+        ``[{slot, status, check, check_run}]`` list for a harness to consume.
+        """
+        detail = ", ".join(f"{slot!r} ({status})" for slot, status in slots)
+        checks = checks or {}
+        check_runs = check_runs or {}
+        remedy: list[dict[str, str | None]] = [
+            {
+                "slot": slot,
+                "status": status,
+                "check": checks.get(slot),
+                "check_run": check_runs.get(slot),
+            }
+            for slot, status in slots
+        ]
+        ran = sorted((slot, out) for slot, out in check_runs.items() if out)
+        no_check = sorted(slot for slot, _status in slots if not checks.get(slot))
+        remedy_line = ""
+        if ran:
+            joined = "; ".join(f"{slot!r}: {out}" for slot, out in ran)
+            remedy_line += (
+                " AUTO-REMEDY re-sealed + re-bound any stale manifest AND RAN the "
+                f"caller-side check(s), but the slot(s) did not clear — {joined}. "
+                "Fix the check (it is caller-authored, run entirely outside core) or "
+                "the pack content, then retry."
+            )
+        if no_check:
+            names = ", ".join(repr(s) for s in no_check)
+            remedy_line += (
+                f" No check command is declared for {names}; record a current receipt "
+                "via `hpc-agent pack-record-receipt` (or add a `check` to the "
+                "receipt_bindings entry so the gate can re-earn it unprompted)."
+            )
+        err = cls(
+            f"domain-pack receipts are not cleared for graduation — "
+            f"{len(slots)} required slot(s) not current+passed: {detail}. A stale "
+            "slot means the bind or a checked file drifted (drift = unsigned by "
+            f"construction).{remedy_line}"
+        )
+        err.remedy = remedy
+        return err
+
+
 class SubmissionIncomplete(HpcError):
     """The qsub/sbatch call structurally succeeded but cluster-side init
     crashed before the sidecar got fully populated — the run record has
@@ -594,6 +783,69 @@ class ModelEndpointError(HpcError):
         "or an unsupported response_format; a 5xx or connection error is a "
         "transient outage — retry."
     )
+
+
+# ── Transport / read failure taxonomy (G7: one classified set, not per-consumer
+#    hand-copied except tuples) ────────────────────────────────────────────────
+#
+# The owning-module home for the failure classifications that were re-enumerated
+# as a hand-copied ``except`` tuple at every consumer. A new transport error
+# (``SshCircuitOpen``, ``SshSlotWaitTimeout``) or stdlib corner
+# (``UnicodeDecodeError``) joins the ONE definition here and every seam that
+# imports it inherits the fix, instead of drifting per site (bug-sweep #15/#16/
+# #26/#43/#50/#73; the rc=127 class fought across runs #7/#8).
+
+#: The canonical "a status/poll read over the transport failed transiently" set.
+#: A consumer polling a long-lived remote (the canary / monitor watch loops)
+#: catches THIS ONE tuple instead of re-listing transport error classes per site.
+#: Every member is a *transient-transport* fault that must RIDE the wall-clock
+#: budget (the connection breaker / slot limiter owns the recovery); the
+#: deterministic-env split that escalates fast is :func:`is_deterministic_env_failure`.
+#: ``OSError`` covers the raw-socket / ``TimeoutError`` transport blips
+#: (``TimeoutError`` is an ``OSError`` subclass on all supported runtimes).
+TRANSIENT_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
+    RemoteCommandFailed,
+    SshCircuitOpen,
+    SshUnreachable,
+    SshSlotWaitTimeout,
+    OSError,
+)
+
+#: The canonical degrade set for a TOLERANT read of a durable JSON record (a run
+#: sidecar, a journal record): a missing / torn / non-UTF-8 / foreign-schema file
+#: is ABSENT (present-or-gap), never an uncaught crash. Consumers pass this to
+#: ``except`` (or route through a shared tolerant reader) instead of each
+#: re-deriving which of FileNotFoundError / OSError / UnicodeDecodeError /
+#: JSONDecodeError / a strict schema-version ``HpcError`` they remembered to list
+#: — the drift that sealed a corrupt sidecar into an uncaught traceback at
+#: ``export_dossier`` (#43) and crashed ``prune-orphan-sidecars`` on one bad file
+#: (#73). ``FileNotFoundError`` is an ``OSError`` subclass, named for the reader.
+TOLERANT_RECORD_READ_ERRORS: tuple[type[Exception], ...] = (
+    FileNotFoundError,
+    OSError,
+    UnicodeDecodeError,
+    _json.JSONDecodeError,
+    HpcError,
+)
+
+
+def is_deterministic_env_failure(exc: BaseException) -> bool:
+    """True when *exc* is the broken-env signature that never heals by waiting.
+
+    The SSH connection SUCCEEDED and the remote command deterministically exited
+    126 ("not executable") or 127 ("command not found") — the run's ``python`` /
+    conda env is absent or wrong, so every identical poll fails identically and a
+    watch must escalate FAST rather than ride the whole budget silently (run #7:
+    28+ ticks of rc=127 against a finished array). EVERY other transport failure
+    — a dropped connection, an open breaker, a slot-wait timeout, a plain
+    ``TimeoutError``, or a ``RemoteCommandFailed`` with any other returncode — is
+    transient and rides the budget (that class belongs to the breaker). The
+    returncode is read off the exception attribute, never string-parsed.
+
+    The single home for the rc-126/127 split that ``ops.monitor_flow`` and
+    ``ops.verify_canary`` poll loops each consumed as a hand-copied twin.
+    """
+    return isinstance(exc, RemoteCommandFailed) and getattr(exc, "returncode", None) in (126, 127)
 
 
 def _registry_remediation_with_placeholders(kind: str, placeholders: dict[str, str]) -> str:

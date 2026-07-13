@@ -125,12 +125,27 @@
               "enum": [
                 "gpu_oom",
                 "system_oom",
-                "segv",
                 "walltime",
                 "node_failure",
+                "segv",
                 "queue_stall",
                 "code_bug",
-                "unknown"
+                "unknown",
+                "preempted",
+                "import_error",
+                "file_not_found",
+                "permission_denied",
+                "disk_full",
+                "python_traceback",
+                "uv_not_on_path",
+                "conda_command_not_found",
+                "output_file_required",
+                "module_not_found_hpc_agent",
+                "undefined_var_expansion",
+                "mpi_launcher_missing",
+                "mpi_pe_invalid",
+                "mpi_init_failed",
+                "cluster_env_init"
               ],
               "type": "string"
             },
@@ -215,6 +230,38 @@
           "default": null,
           "description": "Optional targeted probe outputs from caller-supplied probe hooks.",
           "title": "Probes"
+        },
+        "pack_pattern_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Caller-opaque pattern ids that a BOUND domain pack's 'failure_patterns' regexes MATCHED against this failure's stderr/log text — sorted, deduped, united across every opted-in pack (S2, docs/design/domain-packs.md). Evidence ONLY: core counts a hit and records its id, but NEVER maps it to a FailureCategory, an action, or a retry decision — the resolver/human reads the ids. None/omitted when no pack opted in or none matched, so an envelope without pack hits is byte-identical to the pre-packs shape.",
+          "title": "Pack Pattern Ids"
+        },
+        "pack_pattern_echoes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/_PackPatternEcho"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-pack '{pack, version, sha, pattern_ids}' echoes — one entry for each opted-in pack whose patterns hit — carrying the '{pack, version, sha}' stamp verbatim so the dossier can prove WHICH pack's standards flagged the failure. Identity only; core never reads the echo back for meaning.",
+          "title": "Pack Pattern Echoes"
         }
       },
       "title": "FailureFeatures",
@@ -376,6 +423,50 @@
         "text"
       ],
       "title": "_LogTail",
+      "type": "object"
+    },
+    "_PackPatternEcho": {
+      "additionalProperties": false,
+      "description": "One opted-in domain pack's failure-pattern HITS + its opaque\n``{pack, version, sha}`` echo (S2, ``docs/design/domain-packs.md``).\n\nCore COMPILED and matched the pack's caller-opaque ``failure_patterns``\nregexes against the failure's stderr/log text, recorded WHICH pattern ids hit\nhere, and stamped the pack echo verbatim — it NEVER maps a hit to a\n``FailureCategory``, an action, or a retry decision (that mapping is the\nresolver's/human's). The echo is identity-only, copied and never read back for\nmeaning (the ``reproduces`` precedent).",
+      "properties": {
+        "pack": {
+          "description": "The pack name (the bind's subject_id).",
+          "title": "Pack",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The opaque version string the bind recorded; echoed, never compared.",
+          "title": "Version"
+        },
+        "sha": {
+          "description": "The bind's manifest_sha — the identity of the standards in force. A re-bind moves it and revokes everything signed under the old one.",
+          "title": "Sha",
+          "type": "string"
+        },
+        "pattern_ids": {
+          "description": "This pack's HIT pattern ids (sorted, deduped) — evidence only.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Pattern Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pack",
+        "sha",
+        "pattern_ids"
+      ],
+      "title": "_PackPatternEcho",
       "type": "object"
     },
     "_Probe": {

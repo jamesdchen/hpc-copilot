@@ -27,6 +27,26 @@
       "default": null,
       "description": "Optional explicit run name for the reproduction. When null the verb DERIVES it as <original_run_name>-repro so the LLM never authors a run name. Supply one to force a FRESH reproduction when a prior reproduction already occupies the derived run_id (the prior_repro_exists branch).",
       "title": "New Run Name"
+    },
+    "task_sample": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "const": "derived",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "PARTIAL reproduction subset (design center 5). Null reproduces the FULL task list. Either an explicit caller list of task indices (wins over the derived mode), OR the sentinel \"derived\" — the machinery then derives the subset MECHANICALLY from the axes: the canary task (task 0) plus one task per distinct axis value at that axis's row-major stride (a PURE function of axis structure, no representative/importance heuristic). The reproduction keeps the SAME task shape / trial_params / cmd_sha (a rebuilt smaller trial_params would move cmd_sha and be refused by the param-drift guard); the subset only restricts EXECUTION via HPC_TASK_INCLUDE (non-selected indices exit 0 immediately). The selected indices are recorded on the reproduction sidecar (extra.task_sample) so verify-reproduction compares per-task honestly.",
+      "title": "Task Sample"
     }
   }
 }

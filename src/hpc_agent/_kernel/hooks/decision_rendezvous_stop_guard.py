@@ -26,16 +26,35 @@ harness into a void with nothing to advance. The commit-is-the-approval design
 is what lets a single filesystem read distinguish the two states with no
 heuristic about turn content:
 
-* pending_decision marker set **and** the latest decision record is a ``y`` →
+* pending_decision marker set **and** the latest decision record is a ``y`` that
+  TARGETS this boundary (``resolved["next_block"]`` names the parked
+  ``next_verb`` and its ``ts`` is at/after the marker's ``awaiting_since``) →
   approval committed but driver unconsumed → **force continue**.
 * pending_decision marker set but the latest decision is a *nudge* (or there is
-  no decision yet) → still waiting for the human → **silent**.
+  no decision yet), OR the latest ``y`` is a prior boundary's already-consumed
+  greenlight / a same-boundary re-park's stale one that does NOT target this
+  boundary → still waiting for the human → **silent**.
 * no pending_decision marker → not parked → **silent**.
 
 The condition is **self-healing**: the next ``block-drive`` tick consumes the
 approved spec and clears the marker, after which ``is_awaiting_decision`` is
 False and the guard has nothing to block on. Loop-safe: ``stop_hook_active``
 passes straight through.
+
+The rejector → completer (RULED 2026-07-12)
+-------------------------------------------
+``docs/design/stop-hook-completer.md`` rules this guard a COMPLETER: the parked
+obligation — "advance the driver" — is *mechanical* (it is ``block-drive``), so
+when the harness declares the ``stop-hook-append`` capability AND the next verb
+is mechanical (a real chain block, not a recovery arm) AND transport is healthy
+(the run's SSH breaker is CLOSED, no degraded signal), :func:`_completer_output`
+runs the tick IN CODE — advancing self-heals the marker (no bounce), a re-park
+at a new boundary bounces once carrying the fresh brief (render-a-proposal is
+model judgment). The fork-exhaustion night (finding 20/21) is the counter-example
+the transport gate exists for: a tripped breaker → the completer refuses and
+degrades to :func:`_rejector_output` byte-for-byte (today's bounce). Absent/unknown
+capability, a judgment verb, or degraded transport → the same byte-identical
+bounce.
 
 Loop safety & defensiveness
 ---------------------------
@@ -55,9 +74,11 @@ Loop safety & defensiveness
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -72,18 +93,32 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
 
     "Committed but unadvanced" = the run still carries a ``pending_decision``
     marker (:func:`hpc_agent.state.journal.is_awaiting_decision`) **and** the
-    latest record in its decision journal has ``response == "y"``. A marker with
-    a trailing nudge (or no decision yet) is the valid "waiting for the human"
-    stop and yields ``None``.
+    latest decision record is a greenlight that TARGETS this parked boundary —
+    ``response == "y"`` whose ``resolved["next_block"]`` names the marker's
+    ``resume_cursor["next_verb"]`` and whose ``ts`` is at/after the marker's
+    ``awaiting_since`` (the shared :func:`block_drive.greenlight_targets_boundary`
+    predicate). A marker with a trailing nudge, no decision yet, a PREVIOUS
+    boundary's already-consumed ``y`` (bug-sweep #23), or a same-boundary re-park's
+    stale ``y`` (run-12 finding 21) is the valid "waiting for the human" stop and
+    yields ``None`` — the guard never forces a tick into a void (§5).
+
+    The decision journal is read under the SCOPE the marker's workflow selects
+    — mirroring how ``block_drive.run_tick`` locates the committed greenlight:
+    a ``campaign`` chain journals its decisions under scope ``"campaign"``
+    (keyed by the same id the marker is parked under), everything else under
+    scope ``"run"``. Reading only the run scope would make the guard blind to
+    every campaign-chain commit.
 
     Returns ``{"run_id", "block", "workflow"}`` for the first such run (block /
     workflow read from the marker; either may be ``None`` if the marker is
     partial). Filesystem / journal errors on any single run are swallowed — a
     run we cannot read is treated as not-pending.
     """
+    from hpc_agent import errors
+    from hpc_agent._kernel.lifecycle.block_drive import greenlight_targets_boundary
     from hpc_agent.state.decision_journal import read_decisions
     from hpc_agent.state.index import find_in_flight_runs
-    from hpc_agent.state.journal import is_awaiting_decision, read_pending_decision
+    from hpc_agent.state.journal import read_pending_decision
 
     try:
         records = find_in_flight_runs(experiment_dir)
@@ -93,17 +128,32 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
     for record in records:
         run_id = record.run_id
         try:
-            if not is_awaiting_decision(run_id, experiment_dir=experiment_dir):
+            marker = read_pending_decision(run_id, experiment_dir=experiment_dir)
+            if not marker:
                 continue
-            decisions = read_decisions(experiment_dir, "run", run_id)
-        except (OSError, ValueError):
+            scope_kind = "campaign" if marker.get("workflow") == "campaign" else "run"
+            decisions = read_decisions(experiment_dir, scope_kind, run_id)
+        except (OSError, ValueError, errors.SpecInvalid):
             continue
         if not decisions:
             continue
-        if decisions[-1].get("response") != "y":
-            # Latest touchpoint is a nudge / not an approval — still waiting.
+        # BOUNDARY-SCOPED (bug-sweep #23 / run-12 finding 21): fire only when the
+        # latest committed decision is a greenlight that actually TARGETS this
+        # parked boundary — mirroring the driver + ``ops/block_gate.py`` via the
+        # ONE shared predicate ``block_drive.greenlight_targets_boundary``. A prior
+        # boundary's already-consumed ``y`` (its ``resolved`` names an earlier
+        # verb) or a same-boundary re-park's stale ``y`` (older than the marker's
+        # ``awaiting_since``) is NOT this decision: the run is still legitimately
+        # waiting for the human, so stay silent rather than force a tick into a
+        # void (§5). A trailing nudge is likewise still-waiting (not a greenlight).
+        cursor = marker.get("resume_cursor") or {}
+        next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+        if not greenlight_targets_boundary(
+            decisions[-1],
+            next_verb=next_verb,
+            awaiting_since=marker.get("awaiting_since"),
+        ):
             continue
-        marker = read_pending_decision(run_id, experiment_dir=experiment_dir)
         return {
             "run_id": run_id,
             "block": marker.get("block"),
@@ -125,9 +175,14 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
       human — is a *valid* stop; the guard stays silent, not forcing
       continuation into a void).
 
-    Otherwise returns the Claude Code Stop hook-output shape::
+    Otherwise routes the committed-unadvanced hit through :func:`_decide` — the
+    REJECTOR bounce (the default, capability-dark)::
 
         {"decision": "block", "reason": "<invoke block-drive to advance>"}
+
+    or, when the ``stop-hook-append`` capability is declared and the gates pass,
+    the COMPLETER (runs the tick in code; a ``systemMessage`` audit note on a
+    clean advance, a fresh-brief bounce on a new boundary — :func:`_completer_output`).
     """
     if not isinstance(payload, dict):
         return None
@@ -153,16 +208,225 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
         hit = find_committed_unadvanced(cand)
         if hit is None:
             continue
-        run_id = hit["run_id"]
-        block = hit.get("block") or "?"
-        workflow = hit.get("workflow") or "?"
-        reason = (
-            f"approved spec committed for {run_id} block {block} — invoke "
-            f"`hpc-agent block-drive --run-id {run_id} --workflow {workflow}` "
-            "to advance the driver (do not end the turn)."
-        )
-        return {"decision": "block", "reason": reason}
+        return _decide(cand, hit)
     return None
+
+
+def _rejector_output(hit: dict[str, Any]) -> dict[str, Any]:
+    """Today's REJECTOR shape — the capability-absent (dark) default.
+
+    Byte-identical to the pre-completer bounce: the model invokes ``block-drive``
+    to advance the driver. This is what the completer degrades to wherever the
+    ``stop-hook-append`` capability is absent, the next verb is a JUDGMENT verb,
+    or transport is unhealthy (breaker open / degraded) — the fork-exhaustion
+    night (finding 20/21) is exactly the last case.
+    """
+    run_id = hit["run_id"]
+    block = hit.get("block") or "?"
+    workflow = hit.get("workflow") or "?"
+    reason = (
+        f"approved spec committed for {run_id} block {block} — invoke "
+        f"`hpc-agent block-drive --run-id {run_id} --workflow {workflow}` "
+        "to advance the driver (do not end the turn)."
+    )
+    return {"decision": "block", "reason": reason}
+
+
+def _next_verb_is_mechanical(next_verb: Any) -> bool:
+    """True when *next_verb* is a deterministic block span code can run itself.
+
+    The MECHANICAL / JUDGMENT boundary (docs/design/stop-hook-completer.md §3 +
+    "The decision-rendezvous guard"): a real block verb in the ONE chaining SoT
+    (:data:`hpc_agent.infra.block_chain.WORKFLOW_OF`) is a deterministic advance —
+    running the tick is the omission "advance the driver". A recovery arm
+    (``retarget-run`` — not a chain block), an anomaly resume, or an
+    absent/unknown next verb is JUDGMENT (the model must author it) and stays a
+    bounce. Fail-closed: any error → not mechanical (bias to the bounce).
+    """
+    if not isinstance(next_verb, str) or not next_verb:
+        return False
+    try:
+        from hpc_agent.infra import block_chain
+
+        return next_verb in block_chain.WORKFLOW_OF
+    except Exception:
+        return False
+
+
+def _marker_next_verb(experiment_dir: Path, run_id: str) -> tuple[str | None, Any]:
+    """The parked marker's ``(next_verb, awaiting_since)``, or ``(None, None)``.
+
+    Read read-only from the ``pending_decision`` marker (the completer re-reads it
+    rather than widening :func:`find_committed_unadvanced`'s pinned return dict).
+    Fail-open: any error yields ``(None, None)`` — the completer then treats the
+    verb as non-mechanical and degrades to the bounce.
+    """
+    try:
+        from hpc_agent.state.journal import read_pending_decision
+
+        marker = read_pending_decision(run_id, experiment_dir=experiment_dir)
+    except Exception:
+        return (None, None)
+    if not isinstance(marker, dict):
+        return (None, None)
+    cursor = marker.get("resume_cursor") or {}
+    next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+    return (next_verb if isinstance(next_verb, str) else None, marker.get("awaiting_since"))
+
+
+def _transport_healthy(experiment_dir: Path, run_id: str) -> bool:
+    """True when the run's SSH circuit breaker is CLOSED (the ruling's gate).
+
+    Running a tick opens an SSH volley; the fork-exhaustion night (finding 20/21)
+    is the counter-example a blind completer would have AMPLIFIED. So the
+    completer fires only when the run's host breaker reads ``"closed"`` via the
+    ONE read-side predicate (:func:`hpc_agent.infra.ssh_circuit.effective_state` —
+    a genuinely-cooling ``"open"`` or a ``"half_open_eligible"`` both refuse). A
+    run that never tripped the breaker has no state file → ``effective_state``
+    reads ``"closed"`` (fail-open healthy). Fail-CLOSED on any error reading the
+    run record / host / breaker (bias to the bounce — the safe degrade).
+    """
+    try:
+        from hpc_agent.state.journal import load_run
+
+        record = load_run(experiment_dir, run_id)
+        ssh_target = getattr(record, "ssh_target", None) if record is not None else None
+    except Exception:
+        return False
+    if not isinstance(ssh_target, str) or not ssh_target:
+        return False
+    try:
+        from hpc_agent.infra import ssh_circuit
+
+        # Host normalization mirrors ssh_circuit._host (user@host / bare alias).
+        host = ssh_target.rsplit("@", 1)[-1].strip()
+        if not host:
+            return False
+        path = ssh_circuit.circuit_state_path(host)
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = None
+        if not isinstance(doc, dict):
+            doc = None
+        return ssh_circuit.effective_state(doc, now=time.time()) == "closed"
+    except Exception:
+        return False
+
+
+def _run_drive_tick(experiment_dir: Path, run_id: str, workflow: str | None) -> tuple[Any, int]:
+    """Run one ``block-drive`` tick in code — the completer's mechanical advance.
+
+    A thin, monkeypatchable seam over
+    :func:`hpc_agent._kernel.lifecycle.block_drive.run_tick` (tests substitute it
+    to simulate advance / re-park without a live cluster). Returns the tick's
+    ``(BlockDriveResult, exit_code)``.
+    """
+    from hpc_agent._kernel.lifecycle.block_drive import run_tick
+
+    return run_tick(experiment_dir, run_id=run_id, workflow=workflow)
+
+
+def _completer_output(experiment_dir: Path, hit: dict[str, Any]) -> dict[str, Any] | None:
+    """The COMPLETER (RULED 2026-07-12): run the mechanical tick in code, no bounce.
+
+    Gated three ways — the ``stop-hook-append`` capability, a MECHANICAL next verb,
+    and a HEALTHY transport (breaker closed). Any gate failing degrades to
+    :func:`_rejector_output` byte-for-byte (the fork-exhaustion night = the
+    breaker-open case). All gates pass → run ``block-drive`` in code:
+
+    * the tick ADVANCES (marker clears — self-heals, nothing to block): PROCEED
+      with a code-appended ``systemMessage`` audit note (no bounce);
+    * the tick re-parks at a NEW decision boundary (a fresh brief the human must
+      answer — render-a-proposal is model judgment, §3): BOUNCE carrying the fresh
+      brief so the model renders it (block-once, loop-safe);
+    * the tick re-parks at the SAME boundary (the block did not advance —
+      not_ready / a first-span failure re-parked verbatim): PROCEED (the model
+      bounce buys nothing, finding 21; the scheduled ``doctor`` tick is the
+      out-of-session backstop — the doc's "silence + doctor backstop" landing).
+
+    Any exception running the tick → the bounce (invariant 4: degrade to the
+    rejector, never wedge). The completer NEVER runs on a ``stop_hook_active``
+    forced continuation (``build_hook_output`` returns early), so the bounce leg
+    is block-once by construction.
+    """
+    run_id = hit["run_id"]
+    workflow = hit.get("workflow")
+
+    before_next_verb, before_awaiting = _marker_next_verb(experiment_dir, run_id)
+    if not _next_verb_is_mechanical(before_next_verb):
+        return _rejector_output(hit)  # judgment verb → the model must author it
+    if not _transport_healthy(experiment_dir, run_id):
+        return _rejector_output(hit)  # breaker open / degraded → never fire blindly
+
+    try:
+        result, _code = _run_drive_tick(experiment_dir, run_id, workflow)
+    except Exception:
+        return _rejector_output(hit)  # a broken tick degrades to the bounce
+
+    after_next_verb, after_awaiting = _marker_next_verb(experiment_dir, run_id)
+    action = getattr(result, "action", None)
+
+    if after_next_verb is None:
+        # Marker cleared — the driver advanced past the boundary (chained /
+        # detached / terminal). Nothing left to block on.
+        return {
+            "systemMessage": (
+                "hpc-agent decision-rendezvous completer — advanced the driver in "
+                f"code (run {run_id}, action {action}; model-untouched). The parked "
+                "greenlight was consumed; nothing to relay."
+            )
+        }
+
+    if (after_next_verb, after_awaiting) != (before_next_verb, before_awaiting):
+        # Re-parked at a NEW boundary: a genuinely new human decision. Rendering
+        # its brief as a proposal is model judgment (§3) → bounce carrying it.
+        brief = getattr(result, "brief", None)
+        brief_txt = ""
+        if isinstance(brief, dict) and brief:
+            with contextlib.suppress(TypeError, ValueError):
+                brief_txt = " Fresh brief: " + json.dumps(brief, sort_keys=True, default=str)
+        return {
+            "decision": "block",
+            "reason": (
+                f"advanced {run_id} in code to block {after_next_verb}, which parks "
+                "for a fresh human greenlight — render its proposal for the human "
+                f"(do not end the turn).{brief_txt}"
+            ),
+        }
+
+    # Same boundary re-parked: the block did not advance (not_ready / first-span
+    # failure). A model bounce buys nothing (finding 21); PROCEED — the breaker
+    # (which will open under a real storm) and the scheduled doctor tick backstop.
+    return {
+        "systemMessage": (
+            "hpc-agent decision-rendezvous completer — ran a tick in code for run "
+            f"{run_id} (action {action}); the block did not advance (still parked). "
+            "Backstop: the scheduled doctor tick."
+        )
+    }
+
+
+def _decide(experiment_dir: Path, hit: dict[str, Any]) -> dict[str, Any] | None:
+    """Route a committed-unadvanced *hit* to the completer or the rejector (D1).
+
+    Capability-gated (docs/design/stop-hook-completer.md): with the
+    ``stop-hook-append`` capability declared the completer runs the mechanical
+    ``block-drive`` tick in code (gated further on a mechanical verb + healthy
+    transport); absent/unknown — the default, since no harness declares it — it
+    degrades to :func:`_rejector_output` byte-for-byte. Fail-open: any error
+    reading the capability degrades to the rejector.
+    """
+    try:
+        from hpc_agent.ops.harness_capabilities import detect_stop_hook_append
+
+        completer_active = detect_stop_hook_append() is True
+    except Exception:
+        completer_active = False
+
+    if completer_active:
+        return _completer_output(experiment_dir, hit)
+    return _rejector_output(hit)
 
 
 def main(argv: list[str] | None = None) -> int:

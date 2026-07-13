@@ -63,6 +63,13 @@ _EXPECTED_SOURCES = frozenset(
         "scope-journal",
         "look-ledger",
         "aggregated",
+        "audited-source",
+        "notebook-journal",
+        "renders",
+        "determinism-fingerprint",
+        "pack-manifest",
+        "pack-journal",
+        "live-conformance",
     }
 )
 

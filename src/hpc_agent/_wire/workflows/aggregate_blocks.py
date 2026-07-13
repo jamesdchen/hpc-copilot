@@ -51,6 +51,11 @@ AggregateBlockStage = Literal[
     # aggregate-run — combine + reduce + extract.
     "harvested",  # every wave combined; results table ready.
     "harvest_partial",  # some waves escalated; partial results table.
+    # Detach-by-contract (design §3; run-#10 F-K): aggregate-run spawned a durable
+    # detached worker to own the combine + rsync harvest and returned immediately —
+    # the results-table brief arrives on completion, read from the journal (never
+    # held in a process that could wedge the synchronous MCP server for 20+ min).
+    "detached",
 ]
 
 
@@ -107,6 +112,30 @@ class AggregateBlockResult(BaseModel):
             "(run_id etc.). Surfaced, greenlit, journaled under "
             "``resolved.next_block``, and enforced by the successor gate — never "
             "free-prose."
+        ),
+    )
+    started: bool = Field(
+        default=False,
+        description=(
+            "Detach-by-contract handle (design §3): True when aggregate-run spawned a "
+            "durable detached worker (which owns the combine SSH + rsync harvest) and "
+            "returned immediately instead of harvesting in-process. The results brief "
+            "is read from the journal on completion. False on the synchronous "
+            "(detach=False) path."
+        ),
+    )
+    watch: str | None = Field(
+        default=None,
+        description=(
+            'How to learn the detached harvest\'s outcome — ``"journal"`` when '
+            "``started`` is True. None on the synchronous path."
+        ),
+    )
+    detached_pid: int | None = Field(
+        default=None,
+        description=(
+            "The detached worker's OS process id (informational — do NOT wait on it; "
+            "read the journal). None on the synchronous path."
         ),
     )
 
@@ -171,5 +200,20 @@ class AggregateRunSpec(BaseModel):
             "reduces. Its terminal-status precondition gate is aggregate-run's "
             "own invariant (ensure_all_combined + non-terminal → precondition "
             "failure); ensure_all_combined=false is the deliberate-partial opt-in."
+        ),
+    )
+    detach: bool = Field(
+        default=True,
+        description=(
+            "Detach-by-contract (design §3; run-#10 F-K): default ON — never-stall is "
+            "the norm. When True the greenlight gate + scope gate fire SYNCHRONOUSLY "
+            "(gate → detach), then aggregate-run spawns a durable detached worker to "
+            "own the harvest (per-wave combine SSH + rsync pull can ride a throttled "
+            "cluster or an open breaker's wait-and-retry for many minutes) and returns "
+            "immediately with a {started, watch: journal, detached_pid} handle; the "
+            "results-table brief is read from the journal on completion, never held in "
+            "a process. Set False to run the harvest synchronously in-process "
+            "(block-drive child / tests / CI). NOTE the embedded aggregate-flow spec "
+            "carries its OWN detach (default OFF) — the composed reduce never detaches."
         ),
     )

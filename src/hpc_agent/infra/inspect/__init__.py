@@ -119,6 +119,15 @@ def inspect_cluster(
         cached = _CACHE.get(cache_key)
         if cached is not None:
             return _snapshot_from_dict(cached)
+        # Cross-process sibling of _CACHE: a separate CLI/worker/MCP process
+        # may have inspected this cluster seconds ago. A disk hit elides the
+        # scheduler round-trip and re-warms the in-process cache.
+        from hpc_agent.state import snapshot_cache
+
+        disk_cached = snapshot_cache.load_fresh(cluster_name, scheduler=scheduler)
+        if disk_cached is not None:
+            _CACHE.put(cache_key, disk_cached)
+            return _snapshot_from_dict(disk_cached)
     if runner is None:
         # ssh_target is a computed property on ClusterConfig (user@host),
         # never a literal key in clusters.yaml. Reading it via .get() on
@@ -155,7 +164,12 @@ def inspect_cluster(
         runner=runner,
     )
     if use_cache:
-        _CACHE.put(cache_key, snap.to_dict())
+        snap_dict = snap.to_dict()
+        _CACHE.put(cache_key, snap_dict)
+        # SUCCESS-only, fail-open write to the cross-process disk cache.
+        from hpc_agent.state import snapshot_cache
+
+        snapshot_cache.store(cluster_name, scheduler=scheduler, snapshot=snap_dict)
     if persist_dir is not None:
         # Best-effort: a snapshot persistence failure must not blow up
         # the planning pipeline. We only emit the file under a real

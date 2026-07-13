@@ -38,6 +38,13 @@ def experiment(tmp_path: Path) -> Path:
     return d
 
 
+def _loaded_count(experiment_dir: Path) -> int:
+    """Persisted ``auto_resume_count`` for the seeded run (asserts it exists)."""
+    rec = load_run(experiment_dir, _RUN_ID)
+    assert rec is not None
+    return int(rec.auto_resume_count)
+
+
 def _seed_record(experiment_dir: Path, **overrides: Any) -> RunRecord:
     base: dict[str, Any] = {
         "run_id": _RUN_ID,
@@ -109,7 +116,7 @@ def test_opt_in_off_never_resubmits(journal_home: Path, experiment: Path) -> Non
     assert outcome.action == "escalate"
     assert "not enabled" in outcome.reason
     assert rec.calls == []
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 0
+    assert _loaded_count(experiment) == 0
 
 
 def test_opt_in_off_skips_the_cluster_fetch(journal_home: Path, experiment: Path) -> None:
@@ -148,7 +155,7 @@ def test_supplied_ids_skip_the_cluster_fetch(journal_home: Path, experiment: Pat
     # Passed straight through — no compensating shift.
     assert outcome.task_ids == (0, 2)
     assert rec.calls[0]["failed_task_ids"] == [0, 2]
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 1
+    assert _loaded_count(experiment) == 1
 
 
 def test_empty_supplied_ids_falls_back_to_fetch(journal_home: Path, experiment: Path) -> None:
@@ -200,7 +207,7 @@ def test_resume_fires_with_exactly_preempted_ids(journal_home: Path, experiment:
     assert call["job_name"] == "myjob"
     assert call["job_env"] == {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
 
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 1
+    assert _loaded_count(experiment) == 1
     assert outcome.auto_resume_count == 1
 
 
@@ -218,7 +225,7 @@ def test_oom_only_escalates_never_resubmits(journal_home: Path, experiment: Path
     assert outcome.action == "escalate"
     assert "not a resumable kill" in outcome.reason
     assert rec.calls == []
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 0
+    assert _loaded_count(experiment) == 0
 
 
 def test_preempt_then_oom_cycle_escalates_not_spins(journal_home: Path, experiment: Path) -> None:
@@ -249,7 +256,7 @@ def test_cap_reached_escalates(journal_home: Path, experiment: Path) -> None:
     assert outcome.action == "escalate"
     assert "cap reached (2/2)" in outcome.reason
     assert rec.calls == []
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 2
+    assert _loaded_count(experiment) == 2
 
 
 # ── cluster fetch failure → escalate gracefully (don't crash the monitor) ──
@@ -283,7 +290,7 @@ def test_request_id_distinct_per_attempt(journal_home: Path, experiment: Path) -
     maybe_auto_resume(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
 
     assert rec.calls[0]["request_id"] != rec.calls[1]["request_id"]
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 2
+    assert _loaded_count(experiment) == 2
 
 
 # ── deduped replay does not consume a cap slot ────────────────────────────
@@ -299,7 +306,40 @@ def test_deduped_replay_does_not_increment_count(journal_home: Path, experiment:
     assert outcome.action == "resume"
     assert outcome.resubmitted is False
     assert len(rec.calls) == 1
-    assert load_run(experiment, _RUN_ID).auto_resume_count == 0
+    assert _loaded_count(experiment) == 0
+
+
+# ── counter-write failure after resubmit → fail closed, no crash (#69) ─────
+
+
+def test_counter_write_failure_fails_closed_no_crash(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#69: a journal-write failure AFTER the resubmit already fired must not
+    crash the monitor's terminal-FAILED tick, and must fail CLOSED — the fired
+    attempt still counts against the cap. An un-counted attempt would LOOSEN the
+    cap (the next tick would fire an extra resume past the ceiling)."""
+    import hpc_agent.ops.auto_resume_flow as arf
+
+    _seed_record(experiment)
+    rec = _Recorder(new_job_ids=["9100"])
+    fetch = _fetcher([1, 2])
+
+    def _boom_write(*a: Any, **k: Any) -> Any:
+        raise OSError("journal disk full")
+
+    monkeypatch.setattr(arf, "update_run_status", _boom_write)
+
+    # No exception escapes.
+    outcome = maybe_auto_resume(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
+
+    assert outcome.action == "resume"
+    assert outcome.resubmitted is True
+    # The resubmit fired exactly once — no crash before it, no retry after.
+    assert len(rec.calls) == 1
+    # Fail closed: the attempt is counted (1), not left at the un-bumped 0, so a
+    # subsequent cap check reading this outcome does not gain an extra attempt.
+    assert outcome.auto_resume_count == 1
 
 
 # ── no journal record → escalate gracefully ───────────────────────────────

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_scaffold_template.output.json",
+  "title": "notebook-scaffold-template output data",
+  "description": "The scaffold receipt.\n\n* ``output_path`` — the resolved path the scaffold was written to.\n* ``slugs`` — the section slugs as VERIFIED by the round-trip parse of the\n  written file (equal to the requested slugs by construction — the verb\n  refuses and deletes the file otherwise).\n* ``module_sha`` — :func:`hpc_agent.state.audit_source.sha256_normalized`\n  over the written module, from the same round-trip parse (the fingerprint\n  a later audit of the untouched scaffold reproduces).",
+  "type": "object",
+  "required": [
+    "output_path",
+    "slugs",
+    "module_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "output_path": {
+      "title": "Output Path",
+      "type": "string"
+    },
+    "slugs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Slugs",
+      "type": "array"
+    },
+    "module_sha": {
+      "title": "Module Sha",
+      "type": "string"
+    }
+  }
+}

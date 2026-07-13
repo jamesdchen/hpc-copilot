@@ -217,6 +217,48 @@ class TestReducePartials:
                 assert abs(bt_result[key][metric] - pp_result[key][metric]) < 1e-9
 
 
+class TestGroupSizeWeighting:
+    """When metrics carry no ``n_samples``, partials carry their task count
+    (``_hpc_group_n``) and the cross-wave reduce weights by it — a grid point
+    split 9/1 across waves previously gave the lone task 9x its weight."""
+
+    def test_reduce_metrics_stamps_group_count(self, tmp_path):
+        for i, mse in enumerate([0.10, 0.20, 0.30]):
+            _write_metrics(tmp_path / f"t{i}", {"mse": mse})  # no n_samples
+        result = reduce_metrics([tmp_path / f"t{i}" for i in range(3)])
+        assert abs(result["mse"] - 0.20) < 1e-9
+        assert result["_hpc_group_n"] == 3
+        assert "n_samples" not in result
+
+    def test_reduce_partials_weights_by_group_count(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        # Wave 0 aggregated 9 tasks; wave 1 a single straggler task.
+        _write_wave(combiner_dir, 0, {"ridge_1": {"mse": 0.10, "_hpc_group_n": 9}})
+        _write_wave(combiner_dir, 1, {"ridge_1": {"mse": 1.0, "_hpc_group_n": 1}})
+        result = reduce_partials(combiner_dir)
+        # Task-weighted: (0.10*9 + 1.0*1) / 10 — not the equal-wave 0.55.
+        assert abs(result["ridge_1"]["mse"] - 0.19) < 1e-9
+        assert result["ridge_1"]["_hpc_group_n"] == 10
+
+    def test_reduce_partials_legacy_wave_files_default_to_weight_1(self, tmp_path):
+        """Old wave partials (no n_samples, no group carrier) keep the prior
+        equal weighting — backward compat for already-written waves."""
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave(combiner_dir, 0, {"ridge_1": {"mse": 0.10}})
+        _write_wave(combiner_dir, 1, {"ridge_1": {"mse": 0.30}})
+        result = reduce_partials(combiner_dir)
+        assert abs(result["ridge_1"]["mse"] - 0.20) < 1e-9
+
+    def test_n_samples_still_wins_when_present(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave(combiner_dir, 0, {"g": {"mse": 0.10, "n_samples": 100}})
+        _write_wave(combiner_dir, 1, {"g": {"mse": 0.30, "n_samples": 300}})
+        result = reduce_partials(combiner_dir)
+        assert abs(result["g"]["mse"] - 0.25) < 1e-9
+        assert result["g"]["n_samples"] == 400
+        assert "_hpc_group_n" not in result["g"]
+
+
 class TestNeumaierSumReduce:
     """Numerical stability of the reduce-side weighted mean."""
 

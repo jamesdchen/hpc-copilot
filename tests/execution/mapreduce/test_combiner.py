@@ -334,6 +334,209 @@ class TestMainWritesOutputAtomically:
         assert data["wave"] == 0
 
 
+# ─── Frozen-manifest kwargs (sidecar trial_params is ground truth) ──────────
+
+
+class TestFrozenManifestCombine:
+    """The combiner reads per-task kwargs from the sidecar's frozen
+    ``trial_params`` — the same ground truth dispatch.py executes against —
+    and must NOT re-execute tasks.py. A state-dependent ``resolve()`` (the
+    optuna/pbt strategy scaffolds) returns the NEXT iteration's kwargs at
+    combine time: wrong result_dirs, silently empty partials."""
+
+    def _seed_manifest_run(self, tmp_path, *, tasks_py_body: str | None) -> None:
+        """Sidecar with trial_params seeds 0/1; metrics live under s0/, s1/."""
+        from tests.conftest import make_sidecar_json  # noqa: PLC0415
+
+        for seed, mse in ((0, 0.10), (1, 0.20)):
+            rdir = tmp_path / "results" / f"s{seed}"
+            rdir.mkdir(parents=True)
+            (rdir / "metrics.json").write_text(json.dumps({"mse": mse, "n_samples": 100}))
+        make_sidecar_json(
+            tmp_path,
+            run_id="test_run",
+            result_dir_template=str(tmp_path / "results" / "s{seed}"),
+            task_count=2,
+            wave_map={"0": [0, 1]},
+            trial_params=[{"seed": 0}, {"seed": 1}],
+        )
+        if tasks_py_body is not None:
+            (tmp_path / ".hpc" / "tasks.py").write_text(tasks_py_body)
+
+    def test_sidecar_params_win_over_state_dependent_resolve(self, tmp_path, monkeypatch):
+        """resolve() disagrees with the frozen manifest (points at dirs that
+        do not exist) — the combiner must combine against the sidecar."""
+        self._seed_manifest_run(
+            tmp_path,
+            # A state-dependent resolve: every call returns the NEXT
+            # iteration's seed, whose result dir does not exist.
+            tasks_py_body=("def total(): return 2\ndef resolve(i): return {'seed': i + 100}\n"),
+        )
+        _patch_sibling_lookup(monkeypatch, tmp_path / ".hpc")
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert out["errors"] == []
+        # Grid keys derive from the FROZEN params (seeds 0/1), not resolve()'s
+        # next-iteration seeds (100/101).
+        assert sorted(out["grid_points"]) == ["0", "1"]
+        assert abs(out["grid_points"]["0"]["mse"] - 0.10) < 1e-9
+        assert abs(out["grid_points"]["1"]["mse"] - 0.20) < 1e-9
+
+    def test_manifest_path_needs_no_tasks_py(self, tmp_path, monkeypatch):
+        """With a frozen manifest the combiner never imports tasks.py — it
+        succeeds even when the file is absent (mirrors the dispatch fast path)."""
+        self._seed_manifest_run(tmp_path, tasks_py_body=None)
+        _patch_sibling_lookup(monkeypatch, tmp_path / ".hpc")
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert out["errors"] == []
+        assert len(out["grid_points"]) == 2
+
+    def test_manifest_out_of_range_and_non_dict_record_errors(self, tmp_path, monkeypatch):
+        from tests.conftest import make_sidecar_json  # noqa: PLC0415
+
+        rdir = tmp_path / "results" / "s0"
+        rdir.mkdir(parents=True)
+        (rdir / "metrics.json").write_text(json.dumps({"mse": 0.10, "n_samples": 1}))
+        make_sidecar_json(
+            tmp_path,
+            run_id="test_run",
+            result_dir_template=str(tmp_path / "results" / "s{seed}"),
+            task_count=3,
+            wave_map={"0": [0, 1, 5]},  # 5 is out of range of the manifest
+            trial_params=[{"seed": 0}, "not-a-dict"],
+        )
+        _patch_sibling_lookup(monkeypatch, tmp_path / ".hpc")
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        # Task 0 combined; tasks 1 and 5 recorded as errors, wave not aborted.
+        assert len(out["grid_points"]) == 1
+        assert any("not a dict" in e for e in out["errors"])
+        assert any("out of range" in e for e in out["errors"])
+
+    def test_fallback_to_tasks_py_without_manifest(self, tmp_path, monkeypatch):
+        """Old sidecars (no trial_params) still combine via tasks.py."""
+        rdir = tmp_path / "results" / "task_0"
+        rdir.mkdir(parents=True)
+        (rdir / "metrics.json").write_text(json.dumps({"mse": 0.10, "n_samples": 1}))
+        hpc = _scaffold(tmp_path, kwargs_per_task=[{"model": "ridge"}])
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert out["errors"] == []
+        assert list(out["grid_points"]) == ["ridge"]
+
+
+# ─── Cross-wave group-size weighting (no n_samples in user metrics) ─────────
+
+
+class TestGroupSizeWeighting:
+    """When per-task metrics carry no ``n_samples``, each per-wave partial
+    must carry its task count (``_hpc_group_n``) so the cross-wave reduce
+    weights waves by task count — not equally. A 9/1 wave split previously
+    gave the lone task 9x its correct weight."""
+
+    def test_wave_partial_carries_group_count(self, tmp_path, monkeypatch):
+        for tid in range(3):
+            rdir = tmp_path / "results" / f"task_{tid}"
+            rdir.mkdir(parents=True)
+            (rdir / "metrics.json").write_text(json.dumps({"mse": 0.10}))  # no n_samples
+        hpc = _scaffold(tmp_path, kwargs_per_task=[{"model": "ridge"}] * 3)
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert out["grid_points"]["ridge"]["_hpc_group_n"] == 3
+
+    def test_nine_one_wave_split_is_task_weighted(self, tmp_path, monkeypatch):
+        """9 tasks in wave 0, 1 task in wave 1, one grid point, no n_samples:
+        the final reduce must produce the task-weighted mean 0.19 — not the
+        equal-wave mean 0.55."""
+        for tid in range(10):
+            rdir = tmp_path / "results" / f"task_{tid}"
+            rdir.mkdir(parents=True)
+            mse = 0.10 if tid < 9 else 1.0
+            (rdir / "metrics.json").write_text(json.dumps({"mse": mse}))  # no n_samples
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}] * 10,
+            wave_map={"0": list(range(9)), "1": [9]},
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main(argv=["--wave", "0"])
+        main(argv=["--wave", "1"])
+        main(argv=["--final"])
+
+        agg = json.loads(
+            (tmp_path / "_aggregated" / "test_run" / "metrics_aggregate.json").read_text()
+        )
+        gp = agg["aggregated_metrics"]["ridge"]
+        assert abs(gp["mse"] - 0.19) < 1e-9
+        assert gp["_hpc_group_n"] == 10
+
+    def test_n_samples_weighting_unchanged(self, tmp_path, monkeypatch):
+        """Metrics that DO carry n_samples keep the existing weighting and
+        never grow a group-count key."""
+        entries = [
+            {"mse": 0.10, "n_samples": 100},
+            {"mse": 0.20, "n_samples": 300},
+        ]
+        result = _weighted_mean(entries)
+        assert abs(result["mse"] - 0.175) < 1e-9
+        assert result["n_samples"] == 400
+        assert "_hpc_group_n" not in result
+
+    def test_weighted_mean_stays_in_sync_with_reduce_metrics_copy(self):
+        """Sync pin for the deliberate mirror: the combiner's _weighted_mean
+        and reduce/metrics.py's copy must agree entry-for-entry (the combiner
+        ships standalone and cannot import the package, so drift here splits
+        cluster-side and local-side aggregates)."""
+        from hpc_agent.execution.mapreduce.reduce.metrics import (
+            _weighted_mean as reduce_weighted_mean,
+        )
+
+        cases = [
+            [],
+            [{"mse": 0.5}],
+            [{"mse": 0.10}, {"mse": 1.0}],
+            [{"mse": 0.10, "n_samples": 100}, {"mse": 0.20, "n_samples": 300}],
+            [{"mse": 0.10, "_hpc_group_n": 9}, {"mse": 1.0, "_hpc_group_n": 1}],
+            [{"mse": 0.10, "n_samples": 10}, {"mse": 1.0}],
+            [{"mse": 0.10, "label": "a"}, {"mse": 0.30, "n_samples": True}],
+        ]
+        for entries in cases:
+            assert _weighted_mean([dict(e) for e in entries]) == reduce_weighted_mean(
+                [dict(e) for e in entries]
+            ), f"mirror divergence on {entries!r}"
+
+
 # ─── Runtime-sample aggregation (warm-axis-picker pipeline) ─────────────────
 
 

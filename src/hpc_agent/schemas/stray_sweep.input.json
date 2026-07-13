@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stray_sweep.input.json",
+  "title": "stray-sweep input spec",
+  "description": "Input spec for the ``stray-sweep`` verb.",
+  "type": "object",
+  "required": [
+    "ssh_target"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ssh_target": {
+      "description": "SSH destination of the login node to sweep — user@host or an OpenSSH alias, exactly as the run record's ssh_target.",
+      "minLength": 1,
+      "title": "Ssh Target",
+      "type": "string"
+    },
+    "reap": {
+      "default": false,
+      "description": "When True, kill the strays this sweep found (MARKED framework processes older than max_age_sec) — and ONLY those exact PIDs, never an unmarked user process. Default False makes the verb pure detection (the never-act-without-the-flag posture).",
+      "title": "Reap",
+      "type": "boolean"
+    },
+    "max_age_sec": {
+      "default": 3900,
+      "description": "Age (seconds) beyond which a MARKED process is a stray. Defaults just above the remote self-destruct default (3600s deadline + 60s margin + slack): a marked process older than this outlived even the generous no-client-timeout bound, so it is an orphan the timeout wrapper failed to reap (or a pre-wrapper process).",
+      "minimum": 1,
+      "title": "Max Age Sec",
+      "type": "integer"
+    },
+    "warn_threshold": {
+      "default": 40,
+      "description": "Total process count above which needs_attention flips — the early-warning the quota-wedge lacked (the login-node fork limit is typically a few hundred; 40 leaves ample headroom to act).",
+      "minimum": 1,
+      "title": "Warn Threshold",
+      "type": "integer"
+    }
+  }
+}

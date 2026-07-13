@@ -71,22 +71,34 @@ _tasks = st.lists(_kwargs, min_size=1, max_size=12)
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
 
+# ``deadline=None`` on every property below: these pin correctness invariants
+# of a PURE function (``json.dumps(sort_keys=True)`` + ``sha256`` — no I/O, no
+# randomness, no wall-clock dependence), NOT latency. Under the full suite's
+# ``-n auto`` xdist parallelism (plus Windows Defender scanning %TEMP%, see
+# pytest.ini) a single ``compute_cmd_sha`` example over up to 12 tasks can be
+# preempted past Hypothesis's default 200ms deadline, which raises
+# ``DeadlineExceeded`` — a false positive by construction for a determinism
+# property (verified: 2000 random examples, deadline off, zero nondeterminism).
+# Disabling the deadline removes the load-flake without hiding any real
+# instability; a genuine hash regression still fails the assertion.
+
+
 @given(_tasks)
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_compute_cmd_sha_is_deterministic(tasks: list[dict[str, Any]]) -> None:
     m = _FakeTasksModule(tasks)
     assert compute_cmd_sha(m) == compute_cmd_sha(m)
 
 
 @given(_tasks)
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_compute_cmd_sha_output_is_64_lowercase_hex(tasks: list[dict[str, Any]]) -> None:
     sha = compute_cmd_sha(_FakeTasksModule(tasks))
     assert _HEX_64.fullmatch(sha) is not None, sha
 
 
 @given(_tasks)
-@settings(max_examples=75)
+@settings(max_examples=75, deadline=None)
 def test_compute_cmd_sha_invariant_under_kwargs_key_reorder(
     tasks: list[dict[str, Any]],
 ) -> None:
@@ -101,7 +113,7 @@ def test_compute_cmd_sha_invariant_under_kwargs_key_reorder(
 
 
 @given(_tasks)
-@settings(max_examples=75)
+@settings(max_examples=75, deadline=None)
 def test_compute_cmd_sha_position_sensitive(tasks: list[dict[str, Any]]) -> None:
     """Reordering the task list (the i-axis) changes the hash. Two
     campaigns that materialize the same tasks in different order are

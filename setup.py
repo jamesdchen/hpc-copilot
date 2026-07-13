@@ -69,15 +69,22 @@ class BuildPyWithBuildInfo(build_py):
         if not target.is_file():
             return
         source = target.read_text(encoding="utf-8")
+        # Match the pristine placeholder OR an already-stamped value:
+        # setuptools' build_py copies by TIMESTAMP, so a stale build/lib can
+        # hand this hook a file stamped by a PREVIOUS build. The old
+        # placeholder-only regex silently kept that stale sha (every wheel
+        # built in this checkout between d712e69a and 2026-07-07 was
+        # mislabeled). Re-stamping an already-stamped line makes the hook
+        # idempotent on the CURRENT HEAD regardless of build-tree staleness.
         stamped, n_sha = re.subn(
-            r"^BUILD_SHA: str \| None = None$",
+            r'^BUILD_SHA: str \| None = (?:None|"[0-9a-f]{7,40}")$',
             f'BUILD_SHA: str | None = "{sha}"',
             source,
             count=1,
             flags=re.MULTILINE,
         )
         stamped, n_dirty = re.subn(
-            r"^BUILD_DIRTY: bool = False$",
+            r"^BUILD_DIRTY: bool = (?:False|True)$",
             f"BUILD_DIRTY: bool = {dirty}",
             stamped,
             count=1,

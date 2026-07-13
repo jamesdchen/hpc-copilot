@@ -2,7 +2,7 @@
 name: interview
 verb: scaffold
 side_effects:
-- file_write: <campaign_dir>/{interview.json,meta.json,.claude/settings.json}
+- file_write: <campaign_dir>/{interview.json,meta.json}
 idempotent: true
 idempotency_key: campaign_dir
 error_codes: []

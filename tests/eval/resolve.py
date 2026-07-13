@@ -264,6 +264,16 @@ def resolve_via_llm(case: EvalCase, *, register: str = "user") -> dict[str, Any]
     # run_workflow gates on a usable worker credential and spawns a real
     # ``claude -p`` worker, so it is correctly key-gated and offline-safe to
     # leave unwired here.
+    #
+    # HONEST STATUS: this is a PLACEHOLDER, not a bug and not dead code. The
+    # ``run_workflow`` seam it would call was deleted in the §6 worker removal,
+    # so the function raises unconditionally. Its sole caller
+    # (``test_llm_resolution_matches_expect``) is doubly gated —
+    # skipif(no ANTHROPIC_API_KEY) AND xfail(NotImplementedError, strict=False)
+    # — so ZERO current environments execute this raise as a live failure. The
+    # non-strict xfail is deliberate: re-wiring the seam should flip the test to
+    # a real assertion, not XPASS-break the suite. Do not delete this to "clean
+    # up" the raise; it is the key-gated hook the LLM tier fills in.
     raise NotImplementedError(
         "resolve_via_llm: the autonomous free-text→envelope driver is not wired "
         "in this first slice (needs a fixture repo the worker can fully execute "

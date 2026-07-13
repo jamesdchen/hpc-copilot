@@ -1,0 +1,7 @@
+{
+  "fields": ["widget-owner", "jam-threshold"],
+  "prerequisites": [
+    {"slot": "audit-slot", "kind": "notebook-audit"},
+    {"slot": "repro-slot", "kind": "reproduction"}
+  ]
+}

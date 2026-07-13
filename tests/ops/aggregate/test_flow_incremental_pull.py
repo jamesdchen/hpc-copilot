@@ -309,3 +309,42 @@ def test_second_call_pulls_strictly_fewer_files_than_first(journal_home, experim
         f"pass1={pass1_effective}, pass2={pass2_effective}"
     )
     assert pass2_effective == 0
+
+
+def test_failed_summary_rsync_labels_truthfully_and_carries_stderr(journal_home, experiment):
+    """A failed summaries rsync must surface a dedicated ``summary_rsync_failed``
+    escalation token carrying the real stderr — NOT a mislabeled
+    ``combiner_failed_max_retries:waves=-1`` that discards the error, and NOT a
+    non-None summaries_dir_local pointing at an empty/partial dir (bug-sweep #68).
+    """
+    _seed_run(experiment, combined_waves=[0])
+    _seed_sidecar(experiment, wave_map={"0": [0, 1]})
+
+    def _split_rsync(*_a, **kw):
+        # The _combiner pull succeeds; the summaries pull fails hard.
+        if kw.get("remote_subdir") == "_combiner":
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=[], returncode=23, stdout="", stderr="rsync: connection unexpectedly closed"
+        )
+
+    spec = AggregateFlowSpec(
+        run_id="r1",
+        ensure_all_combined=False,
+        pull_summaries=True,
+        summary_glob="summary_*.csv",
+    )
+    with (
+        mock.patch.object(af_module, "rsync_pull", mock.MagicMock(side_effect=_split_rsync)),
+        mock.patch.object(af_module, "reduce_partials", return_value={}),
+        mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
+    ):
+        result = aggregate_flow(experiment, spec=spec)
+
+    reason = result.escalation_reason or ""
+    assert "summary_rsync_failed:" in reason
+    assert "connection unexpectedly closed" in reason
+    # The mislabeling class is gone.
+    assert "waves=-1" not in reason
+    # And the empty/partial summaries dir is not offered for column validation.
+    assert result.summaries_dir_local is None

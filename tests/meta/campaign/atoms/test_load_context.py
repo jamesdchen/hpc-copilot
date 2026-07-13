@@ -189,6 +189,35 @@ def test_campaign_without_cursor_omits_cursor_fields(journal_home, experiment):
     assert "cursor_iteration" not in camp
 
 
+@pytest.mark.parametrize(
+    "cursor_doc",
+    [
+        # Newer schema than this framework reads.
+        {"cursor_schema_version": 999, "iteration": 3},
+        # Non-int schema version (manual JSON edit / corruption).
+        {"cursor_schema_version": "one", "iteration": 3},
+    ],
+    ids=["newer-schema", "non-int-schema"],
+)
+def test_corrupt_cursor_downgrades_to_warning(journal_home, experiment, cursor_doc):
+    """``read_cursor`` raises ``errors.JournalCorrupt`` for a bad
+    ``cursor_schema_version``; one corrupt cursor.json must surface as the
+    documented per-campaign warning, not crash load-context for the repo."""
+    import json
+
+    _write_sidecar(experiment, "20260521-120000-aaa", campaign_id="optuna-1")
+    camp_dir = experiment / ".hpc" / "campaigns" / "optuna-1"
+    camp_dir.mkdir(parents=True, exist_ok=True)
+    (camp_dir / "cursor.json").write_text(json.dumps(cursor_doc), encoding="utf-8")
+
+    ctx = load_context(experiment_dir=experiment)
+
+    camp = ctx["campaigns"][0]
+    assert camp["campaign_id"] == "optuna-1"
+    assert "cursor_iteration" not in camp
+    assert any("cursor unreadable" in w and "optuna-1" in w for w in ctx["warnings"])
+
+
 def test_delegate_submit_is_agent_kind(journal_home, experiment):
     _onboard(experiment)
     delegate = load_context(experiment_dir=experiment)["delegate"]
@@ -281,6 +310,38 @@ def test_async_refill_decides_while_runs_in_flight(journal_home, experiment):
     assert delegate["campaign_id"] == "optuna-1"
     assert delegate["spawn_request"] is None
     assert "campaign" in delegate["prompt"]
+
+
+def test_async_refill_greenlit_routes_cli_refill(journal_home, experiment):
+    """RFC #362 (flag ON): async ON + manifest GREENLIT + advance decides refill →
+    the delegate is a DETERMINISTIC ``kind="cli"`` campaign-refill step (no
+    judgement), not the agent decide chain. Exercises the ``_refill_is_deterministic``
+    True path + the ``kind="cli"`` refill arm of ``_build_delegate`` (the house rule
+    that every new branch gets a test with the flag ON — the un-greenlit sibling
+    above pins the ``kind="agent"`` fallback)."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_in_flight_campaign_run(experiment, "20260521-120000-aaa", "optuna-1")
+    write_manifest(
+        experiment,
+        campaign_id="optuna-1",
+        async_refill=True,
+        max_in_flight=4,
+        greenlit=True,
+        greenlit_at="2026-07-12T00:00:00Z",
+    )
+
+    ctx = load_context(experiment_dir=experiment)
+    # 1 in flight < K=4, unbounded budget → real campaign-advance decides refill.
+    assert ctx["next_step_hint"] == "decide"
+    delegate = ctx["delegate"]
+    assert delegate["kind"] == "cli"
+    assert delegate["step"] == "refill"
+    assert delegate["campaign_id"] == "optuna-1"
+    # Refill is keyed on campaign_id, never a run_id (no per-run dispatch shape).
+    assert delegate["run_id"] is None
+    assert delegate["spawn_request"] is None
+    assert "campaign-refill" in delegate["prompt"]
 
 
 def test_async_off_still_monitors_in_flight(journal_home, experiment):

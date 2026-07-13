@@ -49,6 +49,11 @@ StatusBlockStage = Literal[
     "watch_terminal",  # clean terminal; harvest guaranteed → hand off to harvest.
     "watch_anomaly",  # failed / abandoned → §5 anomaly terminator (evidence brief).
     "watch_timeout",  # wall-clock budget hit; cluster jobs may run on.
+    # Detach-by-contract (design §3): status-watch spawned a durable detached
+    # worker to own the ONE cold dial per lifetime and returned immediately — the
+    # terminal/anomaly brief arrives on completion, read from the journal (never
+    # held in a process, never dialed inline on an unattended cron tick).
+    "detached",
 ]
 
 
@@ -118,6 +123,33 @@ class StatusBlockResult(BaseModel):
             "free-prose."
         ),
     )
+    started: bool = Field(
+        default=False,
+        description=(
+            "Detach-by-contract handle (design §3): True when status-watch spawned a "
+            "durable detached worker (which owns the ONE cold dial per lifetime — warm "
+            "engine, lease-single, watchdog-covered, exits at terminal) and returned "
+            "immediately instead of dialing the cluster in-process. The brief is not "
+            "held in a process — read it from the journal via status-snapshot / the "
+            "completion notification. False on the synchronous (detach=False) path."
+        ),
+    )
+    watch: str | None = Field(
+        default=None,
+        description=(
+            'How to learn the detached watch\'s outcome — ``"journal"`` when '
+            "``started`` is True (the detached worker stamps the per-run journal "
+            "record as it polls; poll it cluster-free). None on the synchronous path."
+        ),
+    )
+    detached_pid: int | None = Field(
+        default=None,
+        description=(
+            "The detached worker's OS process id (informational — do NOT wait on it; "
+            "read the journal). None on the synchronous path. A dead worker is detected "
+            "by the §5 watchdog / doctor dead-worker scan, not by this pid."
+        ),
+    )
 
 
 class StatusSnapshotSpec(BaseModel):
@@ -142,8 +174,8 @@ class StatusSnapshotSpec(BaseModel):
     reconcile: bool = Field(
         default=False,
         description=(
-            "Re-derive ground truth from the cluster (reconcile-journal) before "
-            "digesting — the only path that touches SSH. Requires run_id + "
+            "Re-derive ground truth from the cluster (via the `reconcile` verb) "
+            "before digesting — the only path that touches SSH. Requires run_id + "
             "scheduler."
         ),
     )
@@ -197,4 +229,19 @@ class StatusWatchSpec(BaseModel):
     user_invoked_via_loop: bool | None = Field(
         default=None,
         description="True iff this tick runs under /loop (the user drives cadence; no cron armed).",
+    )
+    detach: bool = Field(
+        default=True,
+        description=(
+            "Detach-by-contract (design §3): default ON — no UNATTENDED cold dial may "
+            "exist (connection-broker.md, 2026-07-07). When True status-watch spawns a "
+            "durable detached worker that owns the ONE cold dial per lifetime (warm "
+            "engine, lease-single, watchdog-covered, exits at terminal — never an "
+            "immortal daemon) and returns immediately with a {started, watch: journal, "
+            "detached_pid} handle; the terminal/anomaly brief is read from the journal "
+            "on completion. So an unattended `block-drive --workflow status` tick that "
+            "chains snapshot→watch spawns-and-returns with ZERO inline ssh (the "
+            "snapshot is journal-first; the watch detaches). Set False to run the "
+            "monitor poll synchronously in-process (the attended/CLI/tests path)."
+        ),
     )

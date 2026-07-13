@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_refresh.input.json",
+  "title": "pack-refresh input spec",
+  "description": "Inputs to ``pack-refresh`` — one named pack, or every opted-in pack.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "pack": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pack slug to refresh; omit to refresh every opted-in pack.",
+      "title": "Pack"
+    }
+  }
+}

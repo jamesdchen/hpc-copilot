@@ -42,6 +42,7 @@ I/O contracts:
 from __future__ import annotations
 
 import dataclasses
+import re
 from typing import TYPE_CHECKING, Any
 
 import pydantic
@@ -49,7 +50,7 @@ import pydantic
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
-from hpc_agent._wire.actions.interview import InterviewSpec
+from hpc_agent._wire.actions.interview import _PARAM_NAME, InterviewSpec
 from hpc_agent._wire.queries.scaffold_spec import ScaffoldSpecResult
 from hpc_agent._wire.workflows.campaign_run import CampaignRunSpec
 from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsSpec
@@ -693,10 +694,24 @@ def _scaffold_interview(ctx: _Context, acc: _Acc) -> dict[str, Any]:
     if preferred_kind == "shell_command":
         ep: dict[str, Any] = {"kind": "shell_command"}
         acc.sources["entry_point.kind"] = "detect-entry-point candidates[0] (shell)"
+        # The shell_command entry's run_name is pattern-constrained to
+        # ``_PARAM_NAME`` (``^[a-zA-Z_][a-zA-Z0-9_]*$``). A context run name that
+        # is not identifier-shaped (hyphen/dot-bearing, e.g. ``causal-tune.v2``)
+        # would make the final model_validate raise SpecInvalid 'internal bug' —
+        # so gate it through the same predicate the schema enforces and fall back
+        # to the placeholder (flagging it unresolved) when it does not match,
+        # preserving the never-hard-fail guarantee (#287).
+        sc_run_name = ctx.run_name if ctx.run_name and re.match(_PARAM_NAME, ctx.run_name) else None
+        if ctx.run_name and sc_run_name is None:
+            acc.warnings.append(
+                f"context run name {ctx.run_name!r} is not identifier-shaped "
+                f"(shell_command run_name must match {_PARAM_NAME}); replaced with a "
+                "placeholder — set entry_point.run_name to a valid identifier."
+            )
         acc.req(
             ep,
             "run_name",
-            ctx.run_name,
+            sc_run_name,
             "load-context latest_run.profile / --run-name",
             _PH_RUN_NAME,
             prefix="entry_point.",

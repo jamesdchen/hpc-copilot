@@ -213,6 +213,7 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         auto_retry=spec.auto_retry,
         aggregate_defaults=spec.aggregate_defaults,
         results=spec.results,
+        summary_artifact=spec.summary_artifact,
         trial_tokens=spec.trial_tokens,
         trial_params=spec.trial_params,
         parent_run_ids=spec.parent_run_ids,
@@ -236,5 +237,14 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         # reproduces, recorded verbatim (the -canary identity exemption above
         # is untouched — this field is not part of the identity cross-check).
         reproduces=spec.reproduces,
+        # data-trace T3: DISCLOSURE of an exercised digest override — passed
+        # straight through to the state layer (only-write-non-None: null omits
+        # it). Normally stamped in code by resolve-submit-inputs from the
+        # submit spec's trace_digests lever, never hand-authored.
+        trace_digests_override=spec.trace_digests_override,
+        # Opaque audit-trail echo (notebook-audit T14) — passed straight through
+        # to the state layer, never interpreted; the identity cross-checks above
+        # are untouched. Normally stamped in code by resolve-submit-inputs.
+        audited_source=spec.audited_source,
     )
     return {"path": str(target)}

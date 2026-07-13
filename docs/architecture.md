@@ -15,9 +15,11 @@ rules.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Surfaces (what the user / agent calls into)                        │
 │                                                                     │
-│  src/slash_commands/commands/  src/slash_commands/skills/           │
-│  user-typed entry points        in-chat Skill-tool utilities        │
-│  (paired or workflow-trigger)   (2 paired with slashes)             │
+│  src/hpc_agent/slash_commands/commands/                             │
+│  user-typed entry points (paired or workflow-trigger)               │
+│                                                                     │
+│  src/hpc_agent/slash_commands/skills/                               │
+│  in-chat Skill-tool utilities (2 paired with slashes)               │
 │                                                                     │
 │  src/hpc_agent/_kernel/extension/worker_prompts/                    │
 │  delegated-worker prompts (submit, status, aggregate, campaign)     │
@@ -344,7 +346,7 @@ on success, `{"ok": false, "error_code": str, "category": str,
 Four, organised into three layers (interview → decision → execution).
 See `docs/internals/skill-policy.md` for the full forcing rule.
 
-1. **Slash commands** (`src/slash_commands/commands/<stem>.md`) — the
+1. **Slash commands** (`src/hpc_agent/slash_commands/commands/<stem>.md`) — the
    interview layer; user-typed entry points. Exactly four user-facing
    slashes (`submit-hpc`, `monitor-hpc`, `aggregate-hpc`,
    `campaign-hpc`). Each conducts a propose-then-confirm dialog for
@@ -353,7 +355,7 @@ See `docs/internals/skill-policy.md` for the full forcing rule.
    spec. Slashes carry NO workflow mechanics — they are pure
    human-elicitation prose.
 
-2. **Workflow skills** (`src/slash_commands/skills/hpc-<workflow>/SKILL.md`)
+2. **Workflow skills** (`src/hpc_agent/slash_commands/skills/hpc-<workflow>/SKILL.md`)
    — under the **hpc-copilot fork** these are the **block-loop relay**
    (see [`design/human-amplification-blocks.md`](design/human-amplification-blocks.md)
    and [`internals/skill-policy.md`](internals/skill-policy.md)). Four
@@ -368,7 +370,7 @@ See `docs/internals/skill-policy.md` for the full forcing rule.
    never resolves a decision or shells out to a worker. Invoked by the
    matching slash, or directly by an external autonomous agent.
 
-   **Sub-skills** (`src/slash_commands/skills/hpc-<topic>/SKILL.md`) —
+   **Sub-skills** (`src/hpc_agent/slash_commands/skills/hpc-<topic>/SKILL.md`) —
    the same decision layer, finer grained. Three sub-skills
    (`hpc-classify-axis`, `hpc-wrap-entry-point`, `hpc-build-executor`)
    that workflow skills compose to resolve specific decisions. No

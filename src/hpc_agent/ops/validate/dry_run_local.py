@@ -287,6 +287,25 @@ def _dispatch_env(kwargs: dict, *, task_id: int, run_id: str) -> dict[str, str]:
     return env
 
 
+def _localize_interpreter(command: str) -> str:
+    """Substitute this process's interpreter for a bare ``python3``/``python``.
+
+    Executor commands are CLUSTER-shaped (``python3 -m hpc_agent.executor_cli
+    ...``); on the local dev box PATH's ``python3`` may be a foreign
+    interpreter with no ``hpc_agent`` (run #11: msys64 python → every smoke
+    refused). ``sys.executable`` is guaranteed to import ``hpc_agent`` — it is
+    the process running this flow (the ``b30dd76a`` lesson: never trust
+    PATH's interpreter). Only the FIRST token is substituted, and only when it
+    is exactly ``python3`` or ``python`` — an explicit path is respected.
+    """
+    import sys
+
+    first, sep, rest = command.strip().partition(" ")
+    if first in ("python3", "python"):
+        return f'"{sys.executable}"{sep}{rest}'
+    return command
+
+
 def _smoke_exec(
     tasks_module: ModuleType,
     spec: DryRunLocalSpec,
@@ -318,7 +337,7 @@ def _smoke_exec(
     # Refuse the #162 self-recursion footgun: a smoke command that IS the
     # dispatcher would re-enter dispatch forever. The cluster dispatcher
     # rejects this too; catch it before spawning anything locally.
-    command = spec.smoke_command or spec.executor
+    command = _localize_interpreter(spec.smoke_command or spec.executor)
     if _executor_reinvokes_dispatcher(spec.executor, dispatcher_path="_hpc_dispatch.py"):
         return [
             ValidatorFinding(
@@ -366,91 +385,107 @@ def _smoke_exec(
         ]
 
     env = _dispatch_env(kwargs, task_id=spec.smoke_task_id, run_id=spec.run_id)
-    try:
-        proc = subprocess.run(
-            command,
-            shell=True,  # noqa: S602 — same shell-string contract as the dispatcher
-            cwd=str(experiment_dir),
-            env=env,
-            capture_output=True,
-            timeout=spec.smoke_timeout_sec,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        tail = _decode_tail(exc.stderr)
-        return [
-            ValidatorFinding(
-                validator=_VALIDATOR,
-                severity="error",
-                code="smoke_timeout",
-                message=(
-                    f"local smoke run of {command!r} exceeded {spec.smoke_timeout_sec}s "
-                    f"for task {spec.smoke_task_id} and was killed."
-                ),
-                suggested_fix=(
-                    "Provide a cheap smoke_command (import / --help probe) instead of "
-                    "the full per-task run, or raise smoke_timeout_sec."
-                ),
-                evidence={
-                    "task_id": spec.smoke_task_id,
-                    "command": command,
-                    "timeout_sec": spec.smoke_timeout_sec,
-                    "stderr_tail": tail,
-                },
-            )
-        ]
-    except OSError as exc:
-        return [
-            ValidatorFinding(
-                validator=_VALIDATOR,
-                severity="error",
-                code="smoke_spawn_error",
-                message=f"could not launch local smoke run of {command!r}: {exc}",
-                evidence={"task_id": spec.smoke_task_id, "command": command},
-            )
-        ]
+    # The cluster dispatcher exports RESULT_DIR / HPC_RESULT_DIR to the per-task
+    # WIP dir (``execution/mapreduce/dispatch.py``: ``env["RESULT_DIR"] = wip_dir``);
+    # mirror it with a throwaway temp dir so an executor that writes metrics.json
+    # into ``$RESULT_DIR`` (the scaffold default, ``executor_cli`` /
+    # ``executor_template.py``) has a real writable path during the smoke instead
+    # of crashing on an unset one — an env-only artifact, not a real bug. Cleaned
+    # up regardless of how the smoke exits.
+    import shutil
+    import tempfile
 
-    if proc.returncode != 0:
-        tail = _decode_tail(proc.stderr)
-        # Classify a couple of high-signal cases so the cascade can branch
-        # the same way verify-canary does on the cluster side.
-        haystack = tail.lower()
-        if "modulenotfounderror" in haystack:
-            code, hint = (
-                "smoke_import_error",
-                "Install the missing module or fix the import path before submitting.",
+    result_dir = tempfile.mkdtemp(prefix="hpc-smoke-result-")
+    env["RESULT_DIR"] = result_dir
+    env["HPC_RESULT_DIR"] = result_dir
+    try:
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,  # noqa: S602 — same shell-string contract as the dispatcher
+                cwd=str(experiment_dir),
+                env=env,
+                capture_output=True,
+                timeout=spec.smoke_timeout_sec,
+                check=False,
             )
-        elif "importerror" in haystack:
-            code, hint = (
-                "smoke_import_error",
-                "Fix the executor's import error before submitting — the cluster will "
-                "fail identically.",
-            )
-        else:
-            code, hint = (
-                "smoke_nonzero_exit",
-                "Fix the executor so a local smoke run exits 0, or supply an "
-                "import/--help smoke_command that does.",
-            )
-        return [
-            ValidatorFinding(
-                validator=_VALIDATOR,
-                severity="error",
-                code=code,
-                message=(
-                    f"local smoke run of {command!r} for task {spec.smoke_task_id} "
-                    f"exited {proc.returncode} — the cluster would fail the same way."
-                ),
-                suggested_fix=hint,
-                evidence={
-                    "task_id": spec.smoke_task_id,
-                    "command": command,
-                    "returncode": proc.returncode,
-                    "stderr_tail": tail,
-                },
-            )
-        ]
-    return []
+        except subprocess.TimeoutExpired as exc:
+            tail = _decode_tail(exc.stderr)
+            return [
+                ValidatorFinding(
+                    validator=_VALIDATOR,
+                    severity="error",
+                    code="smoke_timeout",
+                    message=(
+                        f"local smoke run of {command!r} exceeded {spec.smoke_timeout_sec}s "
+                        f"for task {spec.smoke_task_id} and was killed."
+                    ),
+                    suggested_fix=(
+                        "Provide a cheap smoke_command (import / --help probe) instead of "
+                        "the full per-task run, or raise smoke_timeout_sec."
+                    ),
+                    evidence={
+                        "task_id": spec.smoke_task_id,
+                        "command": command,
+                        "timeout_sec": spec.smoke_timeout_sec,
+                        "stderr_tail": tail,
+                    },
+                )
+            ]
+        except OSError as exc:
+            return [
+                ValidatorFinding(
+                    validator=_VALIDATOR,
+                    severity="error",
+                    code="smoke_spawn_error",
+                    message=f"could not launch local smoke run of {command!r}: {exc}",
+                    evidence={"task_id": spec.smoke_task_id, "command": command},
+                )
+            ]
+
+        if proc.returncode != 0:
+            tail = _decode_tail(proc.stderr)
+            # Classify a couple of high-signal cases so the cascade can branch
+            # the same way verify-canary does on the cluster side.
+            haystack = tail.lower()
+            if "modulenotfounderror" in haystack:
+                code, hint = (
+                    "smoke_import_error",
+                    "Install the missing module or fix the import path before submitting.",
+                )
+            elif "importerror" in haystack:
+                code, hint = (
+                    "smoke_import_error",
+                    "Fix the executor's import error before submitting — the cluster will "
+                    "fail identically.",
+                )
+            else:
+                code, hint = (
+                    "smoke_nonzero_exit",
+                    "Fix the executor so a local smoke run exits 0, or supply an "
+                    "import/--help smoke_command that does.",
+                )
+            return [
+                ValidatorFinding(
+                    validator=_VALIDATOR,
+                    severity="error",
+                    code=code,
+                    message=(
+                        f"local smoke run of {command!r} for task {spec.smoke_task_id} "
+                        f"exited {proc.returncode} — the cluster would fail the same way."
+                    ),
+                    suggested_fix=hint,
+                    evidence={
+                        "task_id": spec.smoke_task_id,
+                        "command": command,
+                        "returncode": proc.returncode,
+                        "stderr_tail": tail,
+                    },
+                )
+            ]
+        return []
+    finally:
+        shutil.rmtree(result_dir, ignore_errors=True)
 
 
 # How many trailing chars of the smoke run's stderr to retain in a finding.

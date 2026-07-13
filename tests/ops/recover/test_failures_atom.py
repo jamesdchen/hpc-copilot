@@ -106,3 +106,145 @@ def test_resolve_falls_back_to_defaults_when_sidecar_override_is_malformed(
     )
     resolved = _resolve_auto_retry(tmp_path, _common_required_kwargs()["run_id"])
     assert resolved == DEFAULT_AUTO_RETRY_POLICY
+
+
+# ---------------------------------------------------------------------------
+# job_task_spans pass-through: the atom threads the sidecar's per-job global
+# task windows into fetch_task_logs (waved runs read the RIGHT job's log with
+# the job-LOCAL index); an old sidecar without the field passes None.
+# ---------------------------------------------------------------------------
+
+
+def _seed_journal_record(tmp_path, monkeypatch, experiment, run_id: str, job_ids: list[str]):
+    from hpc_agent.state import run_record
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", tmp_path / "home_hpc")
+    record = RunRecord(
+        run_id=run_id,
+        profile="p",
+        cluster="c",
+        ssh_target="user@h",
+        remote_path="/x",
+        job_name="j",
+        job_ids=list(job_ids),
+        total_tasks=2000,
+        submitted_at="2026-01-01T00:00:00+00:00",
+        experiment_dir=str(experiment.resolve()),
+    )
+    upsert_run(experiment, record)
+
+
+def _drive_fetch_failures(tmp_path, monkeypatch, *, run_id: str):
+    """Drive the real fetch_failures atom with mocked SSH primitives and
+    return the kwargs the (monkeypatched) fetch_task_logs received."""
+    from hpc_agent.ops.recover import failures_atom
+
+    experiment = tmp_path / "exp"
+    experiment.mkdir(exist_ok=True)
+    _seed_journal_record(tmp_path, monkeypatch, experiment, run_id, ["100", "200"])
+
+    monkeypatch.setattr(
+        failures_atom,
+        "_ssh_status_report",
+        lambda **_: {"tasks": {"1005": {"status": "failed"}}},
+    )
+    monkeypatch.setattr(
+        failures_atom, "load_clusters_config", lambda: {"c": {"scheduler": "slurm"}}
+    )
+    captured: dict = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return [{"task_id": 1005, "content": "boom", "job_id": "200"}]
+
+    monkeypatch.setattr(failures_atom, "fetch_task_logs", _capture)
+    failures_atom.fetch_failures(experiment_dir=experiment, run_id=run_id)
+    return experiment, captured
+
+
+def test_fetch_failures_passes_recorded_job_task_spans_to_fetch_task_logs(
+    tmp_path, monkeypatch
+) -> None:
+    from hpc_agent.state.runs import update_run_sidecar_job_ids, write_run_sidecar
+
+    run_id = "20260101-000000-spans"
+    experiment = tmp_path / "exp"
+    experiment.mkdir()
+    # A waved submit recorded spans next to job_ids on the sidecar.
+    write_run_sidecar(experiment, **_common_required_kwargs(run_id))
+    update_run_sidecar_job_ids(
+        experiment,
+        run_id,
+        ["100", "200"],
+        job_task_spans={"100": (0, 999), "200": (1000, 1999)},
+    )
+
+    _, captured = _drive_fetch_failures(tmp_path, monkeypatch, run_id=run_id)
+    assert captured["job_task_spans"] == {"100": (0, 999), "200": (1000, 1999)}
+    assert captured["job_ids"] == ["100", "200"]
+    assert captured["task_ids"] == [1005]
+
+
+def test_fetch_failures_passes_none_spans_for_old_sidecar(tmp_path, monkeypatch) -> None:
+    """Back-compat: a sidecar without the field (pre-feature, or ≤cap single
+    array) threads None — fetch_task_logs keeps the global-index probe."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    run_id = "20260101-000000-oldsc"
+    experiment = tmp_path / "exp"
+    experiment.mkdir()
+    write_run_sidecar(experiment, **_common_required_kwargs(run_id))
+
+    _, captured = _drive_fetch_failures(tmp_path, monkeypatch, run_id=run_id)
+    assert "job_task_spans" in captured
+    assert captured["job_task_spans"] is None
+
+
+def test_fetch_failures_passes_none_spans_with_no_sidecar_at_all(tmp_path, monkeypatch) -> None:
+    """A journal-only run (no sidecar on disk) must not error: the reader is
+    best-effort and resolves to None."""
+    run_id = "20260101-000000-nosc"
+    _, captured = _drive_fetch_failures(tmp_path, monkeypatch, run_id=run_id)
+    assert captured["job_task_spans"] is None
+
+
+def test_fetch_failures_seeds_reporter_activation_from_record_cluster(
+    tmp_path, monkeypatch
+) -> None:
+    """G6 / #13-sibling: ``fetch_failures`` was the SEVENTH, unseeded reporter
+    consumer — it ran the login-node status reporter with no ``remote_activation``
+    and so exited 127 on conda clusters. The record always knows the cluster; the
+    reporter must receive the derived conda activation for a bare sidecar."""
+    from hpc_agent.ops.recover import failures_atom
+
+    run_id = "20260101-000000-actv"
+    experiment = tmp_path / "exp"
+    experiment.mkdir()
+    _seed_journal_record(tmp_path, monkeypatch, experiment, run_id, ["100", "200"])
+
+    captured: dict = {}
+
+    def _reporter(**kwargs):
+        captured.update(kwargs)
+        return {"tasks": {}}  # no failed tasks — short-circuits before log fetch
+
+    monkeypatch.setattr(failures_atom, "_ssh_status_report", _reporter)
+    # The record's cluster "c" carries conda config; the bare sidecar has none,
+    # so activation MUST derive from the cluster (fallback_cluster arm, #281).
+    monkeypatch.setattr(
+        failures_atom,
+        "load_clusters_config",
+        lambda: {"c": {"conda_source": "/c/conda.sh", "conda_envs": ["hpc-env"]}},
+    )
+    import hpc_agent.infra.clusters as clusters_mod
+
+    monkeypatch.setattr(
+        clusters_mod,
+        "load_clusters_config",
+        lambda: {"c": {"conda_source": "/c/conda.sh", "conda_envs": ["hpc-env"]}},
+    )
+
+    failures_atom.fetch_failures(experiment_dir=experiment, run_id=run_id)
+    assert "conda activate hpc-env" in captured.get("remote_activation", "")

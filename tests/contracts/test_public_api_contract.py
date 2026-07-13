@@ -64,6 +64,7 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "ExecutorNotFound",
         "HpcError",
         "JournalCorrupt",
+        "PackReceiptsMissing",
         "ModelEndpointError",
         "OutputsMissing",
         "PreconditionFailed",
@@ -76,12 +77,26 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         # human-journaled scope-unlock via append-decision.
         "ScopeLocked",
         "SiblingRunLive",
+        # SourceUnaudited (notebook-audit graduation gate, 2026-07-08): an
+        # opted-in repo whose audited source has unsigned/drifted sections —
+        # precondition_failed-coded; the exit is re-sign or auto-clear via
+        # the hpc-notebook-audit loop.
+        "SourceUnaudited",
         "SpecInvalid",
         "SshCircuitOpen",
         "SshSlotWaitTimeout",
         "SshUnreachable",
         "StructuredOutputError",
         "SubmissionIncomplete",
+        # G7 per-site-exception-taxonomy (2026-07-12): the failure
+        # classifications owned by ONE definition here and consumed by import at
+        # the poll/read seams (transient-transport tuple, the durable-record
+        # tolerant-read degrade set, the rc-126/127 deterministic-env predicate)
+        # instead of a hand-copied ``except`` tuple per consumer. Additive,
+        # non-breaking (no error_code change).
+        "TRANSIENT_TRANSPORT_ERRORS",
+        "TOLERANT_RECORD_READ_ERRORS",
+        "is_deterministic_env_failure",
         # ``from __future__ import annotations`` leaks ``annotations`` into
         # ``dir(module)``. Snapshotted verbatim so a future cleanup (e.g.
         # ``del annotations`` or dropping the future import) is a deliberate

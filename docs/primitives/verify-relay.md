@@ -17,7 +17,7 @@ backed_by:
 Deterministic audit of an agent's **draft relay text** against a run's durable
 records — the mechanized counterpart of conduct rule 10 ("never relay
 numbers/state that don't match the journal",
-`docs/design/proving-run-2-hardening.md` §6). The doctrine holds the LLM to
+`docs/design/history/proving-run-2-hardening.md` §6). The doctrine holds the LLM to
 relaying only code-digested briefs, but the relay itself is unguarded: a
 rounded number, a swapped run-id, or a stale state claim ("running" when the
 journal recorded "failed") can still reach the durable record. This verb

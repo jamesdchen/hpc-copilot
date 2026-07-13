@@ -75,11 +75,25 @@ _V2_CONFIG = frozenset(
         "auto_retry",
         "aggregate_defaults",
         "results",
+        # summary_artifact (F-J): per-task summary filename the reducer +
+        # completion counting read; absent → metrics.json via
+        # resolved_summary_artifact.
+        "summary_artifact",
         "trial_tokens",
         "trial_params",
         "parent_run_ids",
         "node_sha",
         "data_sha",
+        # data_manifest_sha (data-manifest amendment 0b): the manifest-doc
+        # identity of the declared input roots at submit — the fingerprint's
+        # data-identity dimension reads it.
+        "data_manifest_sha",
+        # trace_digests_override (data-trace T3): the exercised caller override
+        # of the digest classifier, disclosed on the sidecar.
+        "trace_digests_override",
+        # packs (domain-packs T10): opaque {pack, version, sha, manifest} echoes
+        # of the bound packs at submit; export-dossier seals the named files.
+        "packs",
         "env_hash",
         # scopes (rigor primitives): the caller-attached opaque evidence-scope
         # tags the reduction gate + look ledger key on.
@@ -88,6 +102,11 @@ _V2_CONFIG = frozenset(
         # reproduction re-runs; find_run_by_cmd_sha's reproduction_of lever
         # reads it to skip a prior repro of the same original.
         "reproduces",
+        # audited_source (notebook-audit T14): opaque {source, template,
+        # audit_id} echo of interview.json's audit-trail identity, stamped
+        # at resolve after the graduation gate passes; export-dossier reads
+        # it to seal the audit trail.
+        "audited_source",
     ]
 )
 _RUNTIME_WRITTEN = frozenset(

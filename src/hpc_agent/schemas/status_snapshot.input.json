@@ -21,7 +21,7 @@
     },
     "reconcile": {
       "default": false,
-      "description": "Re-derive ground truth from the cluster (reconcile-journal) before digesting — the only path that touches SSH. Requires run_id + scheduler.",
+      "description": "Re-derive ground truth from the cluster (via the `reconcile` verb) before digesting — the only path that touches SSH. Requires run_id + scheduler.",
       "title": "Reconcile",
       "type": "boolean"
     },

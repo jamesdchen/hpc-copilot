@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Spec review — separating syntax from logic at the human boundary
 
 **Status:** DRAFT — a design plan in the human-amplification line. Extends the

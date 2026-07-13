@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_status.input.json",
+  "title": "notebook-status input spec",
+  "description": "Inputs to ``notebook-status``.\n\nAll three relpaths / ids are resolved against the ``--experiment-dir``: the\n``source`` and ``template`` are ``.py`` files in jupytext percent format\n(parsed by the same section parser), and ``audit_id`` names the notebook\ndecision-journal scope whose sign-off / auto-clear records are replayed.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "source",
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug) whose sign-off / auto-clear records are reduced. Caller-authored.",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format). Its per-section shas are recomputed fresh on every call.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "template": {
+      "description": "Experiment-relative path to the template .py. Its section slugs are the REQUIRED inventory the rollup verdict is computed over.",
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    }
+  }
+}

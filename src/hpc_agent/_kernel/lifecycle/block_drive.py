@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._wire.workflows.block_drive import BlockDriveResult
 from hpc_agent.infra import block_chain
+from hpc_agent.infra.time import parse_iso_utc_or_none
 from hpc_agent.ops import field_ownership
 from hpc_agent.state.journal import (
     clear_pending_decision,
@@ -54,12 +55,16 @@ from hpc_agent.state.journal import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+
+    from hpc_agent.ops.overnight import ConsumptionOutcome
 
 __all__ = [
     "plan_block_action",
     "run_tick",
     "block_drive_once",
+    "greenlight_targets_boundary",
     "main",
 ]
 
@@ -81,6 +86,11 @@ _META_KEYS: frozenset[str] = frozenset({"next_block"})
 # ``block-drive`` tick — the driver returns a clear ``skip`` rather than running a
 # doomed span (see :func:`_fresh_entry_spec` / :func:`run_tick`).
 _FRESH_ENTRY_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot", "aggregate-check"})
+# The subset whose spec accepts an ABSENT run_id: only ``status-snapshot``
+# (``{}`` is its fleet digest). ``aggregate-check`` REQUIRES ``run_id``
+# (``AggregateCheckSpec.run_id`` is a required ``RunIdStrict``), so a bare tick
+# without one gets the clear skip, never a doomed ``SpecInvalid`` span.
+_FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot"})
 
 
 # ── pure planning (no I/O) ─────────────────────────────────────────────────────
@@ -414,15 +424,48 @@ def _fresh_entry_spec(verb: str | None, run_id: str | None) -> dict[str, Any] | 
     """Build the FIRST span's spec for a FRESH chain start, or ``None`` if unbuildable.
 
     ``status-snapshot`` / ``aggregate-check`` accept a top-level ``run_id`` (§3), so
-    the driver materializes ``{"run_id": run_id}`` (or ``{}`` — a fleet digest — when
-    no run_id is supplied to ``status-snapshot``). ``submit-s1`` and
-    ``campaign-greenlight`` need inputs a bare tick can't supply, so the driver
-    returns ``None`` and :func:`run_tick` reports a clear ``skip`` naming the missing
-    inputs rather than running a span the block would reject with ``SpecInvalid``.
+    the driver materializes ``{"run_id": run_id}``. With NO run_id, only
+    ``status-snapshot`` is still buildable (``{}`` — a fleet digest);
+    ``aggregate-check``'s spec REQUIRES ``run_id``, so it is as unbuildable as
+    ``submit-s1`` / ``campaign-greenlight`` (inputs a bare tick can't supply).
+    In every unbuildable case the driver returns ``None`` and :func:`run_tick`
+    reports a clear ``skip`` naming the missing inputs rather than running a
+    span the block would reject with ``SpecInvalid``.
     """
     if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
-        return {"run_id": run_id} if run_id else {}
+        if run_id:
+            return {"run_id": run_id}
+        if verb in _FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS:
+            return {}
     return None
+
+
+def _spec_model_field_names(verb: str) -> frozenset[str] | None:
+    """The declared field names of *verb*'s input spec model, or ``None``.
+
+    Resolves the block's spec model through the primitive registry — the same
+    ``CliShape.spec_model`` the CLI validates ``--spec`` against — via the
+    single-verb fast-path map, so the acting-spec filter can never drift from
+    what the block actually accepts. Returns ``None`` when the verb is not in
+    the map or carries no spec model; the caller then falls back to
+    metadata-only stripping.
+    """
+    from hpc_agent._kernel.registry.primitive import get_meta, register_single_module
+    from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
+
+    entry = VERB_MODULE_MAP.get(verb)
+    if entry is None:
+        return None
+    primitive_name, module_name = entry
+    try:
+        register_single_module(module_name)
+        model = getattr(get_meta(primitive_name).cli, "spec_model", None)
+    except Exception:  # noqa: BLE001 — a stale map entry must not crash the tick
+        return None
+    fields = getattr(model, "model_fields", None)
+    if not isinstance(fields, dict):
+        return None
+    return frozenset(fields)
 
 
 # ── the tick ───────────────────────────────────────────────────────────────────
@@ -452,13 +495,35 @@ def run_tick(
     committed_resolved: dict[str, Any] | None = None
     last_run_inputs: dict[str, Any] | None = None
     if run_id:
-        # Read the latest committed greenlight even with NO pending marker: an
-        # interview-driven chain starts by direct invocation (nothing ever
-        # parked), so the committed ``resolved`` is the only durable cursor the
-        # planner has for its journal-derived resume (run #9).
         scope_wf = (pending.get("workflow") if pending else None) or workflow
         scope_kind = "campaign" if scope_wf == "campaign" else "run"
-        committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
+        if pending:
+            # RESUME path — BOUNDARY-SCOPED (bug-sweep #1 / run-12 finding 21).
+            # The approval of a parked boundary is ONLY the greenlight that targets
+            # THIS boundary. A prior boundary's already-consumed ``y`` (its
+            # ``resolved`` names an earlier verb) or a same-boundary re-park's stale
+            # ``y`` (older than the new ``awaiting_since``) must NOT be replayed as
+            # this decision's approval: doing so either re-runs the block every tick
+            # or force-advances into the gated successor whose gate then refuses —
+            # a spurious "block failed" masking the true "awaiting the human" state.
+            # When nothing targets the boundary the reader returns ``None`` →
+            # :func:`plan_block_action` returns ``awaiting_decision`` (exit 0).
+            cursor = pending.get("resume_cursor") or {}
+            next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+            committed_resolved = _boundary_scoped_committed_resolved(
+                experiment_dir,
+                scope_kind,
+                run_id,
+                next_verb=next_verb,
+                awaiting_since=pending.get("awaiting_since"),
+            )
+        else:
+            # NO-MARKER journal-derived resume (run #9): an interview-driven chain
+            # starts by direct invocation (nothing ever parked), so the latest
+            # committed greenlight's own ``next_block`` is the only durable cursor.
+            # There is no parked boundary to scope to → the UNSCOPED latest-``y``
+            # scan is correct here (that path must not regress).
+            committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
     if pending:
         cursor = pending.get("resume_cursor", {})
         last_run_inputs = cursor.get("input_spec") if isinstance(cursor, dict) else None
@@ -503,9 +568,22 @@ def run_tick(
 
     # Executable resume actions consumed the approved ``resolved`` — clear the
     # pending marker before running so a re-entry does not double-consume it.
+    # If the FIRST resumed span then FAILS, the approval was NOT consumed: the
+    # marker is re-parked verbatim (see :func:`_chain`'s ``on_first_failure``)
+    # so the next tick retries the SAME route instead of replaying the resume
+    # as a bare journal-derived advance (dropping a nudge's rerun + the §4
+    # ``input_spec`` diff base).
     resume_action = action in ("advance", "rerun", "advance_carrying")
+    on_first_failure: Callable[[], None] | None = None
     if pending and resume_action and run_id:
         clear_pending_decision(run_id, experiment_dir=experiment_dir)
+        marker = dict(pending)
+        rid = run_id
+
+        def _repark() -> None:
+            _repark_marker(experiment_dir, rid, marker)
+
+        on_first_failure = _repark
 
     verb: str | None = plan["verb"]
     wf = plan.get("workflow") or workflow
@@ -517,29 +595,45 @@ def run_tick(
     #   the LLM committed IS the correctly-shaped acting spec for the routed block
     #   (the gated block's nested-object spec, or the current block's for a rerun).
     #   The downstream edits an ``advance_carrying`` folds are already inside
-    #   ``resolved``; the ``next_block`` routing token is stripped as metadata.
+    #   ``resolved``. Stripped as non-inputs: the ``next_block`` routing token,
+    #   plus any journal-sanctioned identity echo (``cmd_sha`` / ``run_id`` /
+    #   ``total_tasks`` — ops/decision/journal.py) the TARGET block's
+    #   ``extra="forbid"`` spec model does not declare. The filter is the
+    #   model's own declared fields, so a block whose spec genuinely takes
+    #   ``run_id`` (aggregate-check) keeps it.
     # * FRESH: the entry block's minimal spec, or ``None`` when the block is not
-    #   bare-startable (submit-s1 / campaign-greenlight) → a clear skip.
+    #   bare-startable (submit-s1 / campaign-greenlight, or aggregate-check
+    #   without a run_id) → a clear skip.
     if resume_action:
+        accepted = _spec_model_field_names(verb) if verb else None
         first_spec: dict[str, Any] = {
-            k: v for k, v in (committed_resolved or {}).items() if k not in _META_KEYS
+            k: v
+            for k, v in (committed_resolved or {}).items()
+            if k not in _META_KEYS and (accepted is None or k in accepted)
         }
     else:
         built = _fresh_entry_spec(verb, run_id)
         if built is None:
+            if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
+                reason = (
+                    f"cannot fresh-start {verb} without a run_id — its spec requires "
+                    "one. Re-run with --run-id <id>."
+                )
+            else:
+                reason = (
+                    f"cannot fresh-start {verb} from a bare block-drive tick — it "
+                    "needs inputs beyond (run_id, workflow) "
+                    "(submit-s1: goal/task_generator/walk; campaign-greenlight: "
+                    "campaign_id). Drive its fresh start via the interview skill / "
+                    "campaign reconcile driver."
+                )
             return (
                 BlockDriveResult(
                     action="skip",
                     run_id=run_id,
                     workflow=wf,
                     next_verb=verb,
-                    reason=(
-                        f"cannot fresh-start {verb} from a bare block-drive tick — it "
-                        "needs inputs beyond (run_id, workflow) "
-                        "(submit-s1: goal/task_generator/walk; campaign-greenlight: "
-                        "campaign_id). Drive its fresh start via the interview skill / "
-                        "campaign reconcile driver."
-                    ),
+                    reason=reason,
                 ),
                 0,
             )
@@ -561,6 +655,7 @@ def run_tick(
         first_verb=verb,
         first_spec=first_spec,
         first_label=first_label,
+        on_first_failure=on_first_failure,
     )
 
 
@@ -572,6 +667,7 @@ def _chain(
     first_verb: str | None,
     first_spec: dict[str, Any],
     first_label: str,
+    on_first_failure: Callable[[], None] | None = None,
 ) -> tuple[BlockDriveResult, int]:
     """Run block spans, chaining deterministic successors until a stop (§2).
 
@@ -583,6 +679,11 @@ def _chain(
     in-code chain never journals it), and a terminal exits. The FIRST span's spec
     is materialized by the caller (:func:`run_tick`); chained spans take the
     predecessor's ``spec_hint`` — never a blind top-level ``run_id`` injection (§3).
+
+    ``on_first_failure`` (a niladic callable) fires ONLY when the FIRST span
+    fails: :func:`run_tick` uses it to re-park a pending marker it cleared for
+    a resume that never consumed its approval. Later chained spans do not fire
+    it — by then the first span succeeded, so the approval WAS consumed.
     """
     from hpc_agent._kernel.lifecycle.drive import _stamp_driver_tick
 
@@ -590,12 +691,15 @@ def _chain(
     spec: dict[str, Any] = dict(first_spec)
     last_action = first_label
     last_result: dict[str, Any] = {}
+    first_span = True
 
     while verb is not None:
         result, code = _run_block_verb(verb, spec, experiment_dir)
         if run_id:
             _stamp_driver_tick(experiment_dir, run_id)
         if not result:
+            if first_span and on_first_failure is not None:
+                on_first_failure()
             if code == _TIMEOUT_EXIT_CODE:
                 deadline = block_chain.verb_deadline_seconds(verb, spec)
                 reason = (
@@ -615,6 +719,7 @@ def _chain(
                 code or 1,
             )
 
+        first_span = False
         last_result = result
         stage = result.get("stage_reached")
         successor = _next_verb_of(result)
@@ -682,7 +787,26 @@ def _chain(
         # a resume cursor whose ``next_verb`` is the gated block, and exit. A later
         # tick advances into it once the human's greenlight is journaled and its
         # gate finds it (design: needs_decision + gate agree, zero gate re-scoping).
+        #
+        # OVERNIGHT AUTO-ADVANCE (item 8 seam 1): before parking, consult the run's
+        # standing consent. A LIVE consent covering this named boundary consumes the
+        # greenlight — the auto-advance is recorded to the consumption ledger in the
+        # same breath (:func:`_consume_overnight`), and the driver chains into the
+        # gated block (whose own consent-aware gate re-verifies the same consent). A
+        # not-live / not-named boundary parks exactly as today, carrying the refusal
+        # reason so the park brief says WHY the overnight consent did not carry.
         if block_chain.is_gated(successor):
+            overnight = _consume_overnight(experiment_dir, run_id, successor)
+            if overnight is not None and overnight.consumed:
+                _log.info(
+                    "overnight consent for %s consumed the %s greenlight — auto-advancing",
+                    run_id,
+                    successor,
+                )
+                last_action = "chained"
+                spec = _next_spec_hint(result)
+                verb = successor
+                continue
             _park(
                 experiment_dir,
                 run_id=run_id,
@@ -693,6 +817,14 @@ def _chain(
                 spec=spec,
                 result=result,
             )
+            park_reason = result.get("reason") or (
+                f"{verb} complete; greenlight required before {successor} — parked."
+            )
+            if overnight is not None and not overnight.consumed:
+                park_reason = (
+                    f"{park_reason} (no live standing consent to auto-advance overnight: "
+                    f"{overnight.decision.reason})"
+                )
             return (
                 BlockDriveResult(
                     action="awaiting_decision",
@@ -702,10 +834,7 @@ def _chain(
                     next_verb=successor,
                     stage_reached=stage,
                     brief=result.get("brief") if isinstance(result.get("brief"), dict) else None,
-                    reason=(
-                        result.get("reason")
-                        or f"{verb} complete; greenlight required before {successor} — parked."
-                    ),
+                    reason=park_reason,
                 ),
                 0,
             )
@@ -727,6 +856,41 @@ def _chain(
             reason="no block verb to run",
         ),
         0,
+    )
+
+
+def _consume_overnight(
+    experiment_dir: Path, run_id: str, successor: str
+) -> ConsumptionOutcome | None:
+    """Consult the run's standing consent at a gated boundary (item 8 seam 1).
+
+    Returns ``None`` when there is no run to key on (a bare tick) — the caller then
+    parks as usual. Otherwise returns the substrate's :class:`ConsumptionOutcome`:
+    ``consumed=True`` means a LIVE consent covered this named boundary and the
+    auto-advance was ledgered in the same breath, so the driver may chain into
+    ``successor``; ``consumed=False`` carries the refusal leg for the park brief.
+
+    ``current_cmd_sha`` is the run's sidecar tree fingerprint — the identity a spec
+    change moves — read here so the consent's spec-identity binding is checked against
+    the SAME token the S3 gate uses. A fail-safe read: any sidecar surprise yields an
+    empty identity, which the substrate treats as a spec mismatch (not live) → parks.
+    """
+    if not run_id:
+        return None
+    from hpc_agent.ops.overnight import consume_boundary_under_consent
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+        current_cmd_sha = str((sidecar or {}).get("cmd_sha") or "")
+    except Exception:  # noqa: BLE001 — a bad sidecar must not crash the tick; park instead
+        current_cmd_sha = ""
+    return consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=run_id,
+        boundary_block=successor,
+        current_cmd_sha=current_cmd_sha,
     )
 
 
@@ -768,16 +932,69 @@ def _park(
         "next_spec_hint": _next_spec_hint(result),
     }
     brief = result.get("brief")
-    mark_pending_decision(
-        run_id,
-        block=verb,
-        workflow=wf or "",
-        brief=brief if isinstance(brief, dict) else {},
-        resume_cursor=resume_cursor,
-        awaiting_since=utcnow_iso(),
-        cmd_sha=_spec_sha(spec),
-        experiment_dir=experiment_dir,
-    )
+    # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
+    # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
+    # submit-s2 (the qsub) — S1's resolve leg writes only the per-run sidecar.
+    # So the FIRST park (the S1→S2 greenlight gate) is reached before any record
+    # exists, and ``mark_pending_decision`` → ``update_run_status`` raises
+    # FileNotFoundError for a sidecar-only run. That crashed the driver tick at
+    # the rendezvous for BOTH of run #11's runs, pushing the agent off-pipeline
+    # to per-block CLI (notebook-audit.md Addendum 13.0). The BlockDriveResult
+    # the caller returns already carries the brief to the human, so the human
+    # still sees the decision; only the DURABLE journal marker (the §5 "parked ≠
+    # stalled" flag + resume_cursor) is skipped here — and the §5 watchdog keys
+    # off journal records anyway, so a record-less run is unwatched regardless.
+    # Warn + continue, mirroring ``_repark_marker``'s OSError guard and
+    # ``_stamp_driver_tick``'s "warn, don't vanish" philosophy (drive.py).
+    try:
+        mark_pending_decision(
+            run_id,
+            block=verb,
+            workflow=wf or "",
+            brief=brief if isinstance(brief, dict) else {},
+            resume_cursor=resume_cursor,
+            awaiting_since=utcnow_iso(),
+            cmd_sha=_spec_sha(spec),
+            experiment_dir=experiment_dir,
+        )
+    except FileNotFoundError:
+        _log.warning(
+            "no run record for %s at park (%s → %s) — the sidecar-only run has "
+            "no journal record yet (minted at submit-s2/qsub); the decision brief "
+            "is still disclosed to the human but the durable pending-decision "
+            "marker is skipped until the record is minted",
+            run_id,
+            verb,
+            successor,
+        )
+
+
+def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> None:
+    """Re-write a cleared pending marker verbatim after a FAILED resume span.
+
+    :func:`run_tick` clears the marker BEFORE the resumed span runs (so a
+    re-entry cannot double-consume the approval); when that first span fails
+    the approval was NOT consumed, so the marker — the resume cursor plus the
+    §4 ``input_spec`` diff base — must survive: the next tick then retries the
+    SAME route (a nudge's ``rerun`` stays a rerun) instead of degrading to a
+    journal-derived ``advance``. A missing run record is logged, not raised —
+    the tick is already on its failure path and must still report it.
+    """
+    brief = marker.get("brief")
+    cursor = marker.get("resume_cursor")
+    try:
+        mark_pending_decision(
+            run_id,
+            block=marker.get("block") or "",
+            workflow=marker.get("workflow") or "",
+            brief=brief if isinstance(brief, dict) else {},
+            resume_cursor=cursor if isinstance(cursor, dict) else {},
+            awaiting_since=marker.get("awaiting_since") or "",
+            cmd_sha=marker.get("cmd_sha"),
+            experiment_dir=experiment_dir,
+        )
+    except OSError:
+        _log.warning("failed to re-park the pending marker for %s after a failed span", run_id)
 
 
 def _latest_committed_resolved(
@@ -800,6 +1017,89 @@ def _latest_committed_resolved(
         return None
     for record in reversed(records):
         if record.get("response") == "y":
+            resolved = record.get("resolved")
+            return dict(resolved) if isinstance(resolved, dict) else {}
+    return None
+
+
+def greenlight_targets_boundary(
+    record: dict[str, Any],
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> bool:
+    """True iff a committed decision *record* is the greenlight for THIS parked boundary.
+
+    The SINGLE predicate the driver (:func:`run_tick` via
+    :func:`_boundary_scoped_committed_resolved`) and the ``block-drive`` Stop guard
+    (:func:`hpc_agent._kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced`)
+    both key on, so a CONSUMED greenlight can never masquerade as a fresh one and
+    the two surfaces cannot drift. A committed ``y`` counts as the approval of the
+    boundary a marker is parked at only when it:
+
+    * is a greenlight (``response == "y"`` — never a nudge), AND
+    * NAMES the parked successor — ``resolved["next_block"]`` (block_gate
+      ``_journaled_target`` semantics: the verb string or the ``{"verb": ...}``
+      hint) equals the marker's ``resume_cursor["next_verb"]``. This rejects a
+      PREVIOUS boundary's already-consumed greenlight, whose target names an
+      earlier verb: nothing is appended when a ``y`` is consumed, so a shared run
+      journal's latest ``y`` may belong to a prior boundary (the exact pitfall
+      ``ops/block_gate.py`` documents), AND
+    * was journaled AT OR AFTER the marker was (re-)parked
+      (``ts >= awaiting_since``). This rejects a SAME-boundary re-park's stale
+      ``y`` — a greenlight that DID name this boundary but was already consumed by
+      a tick that ran the block and re-parked, stamping a newer ``awaiting_since``
+      (run-12 finding 21). The 2026-06-10 stall class stays closed: a genuinely
+      unconsumed ``y`` is always newer than the marker it answers, so it passes.
+
+    The timestamp leg only REFUSES when both stamps parse and ``ts`` is strictly
+    older than ``awaiting_since``; a missing/unparseable stamp falls back to the
+    boundary-name test alone (fail toward the pre-fix behavior rather than
+    over-refusing a live greenlight).
+    """
+    from hpc_agent.ops.block_gate import _journaled_target
+
+    if str(record.get("response") or "") != "y":
+        return False
+    if _journaled_target(record.get("resolved")) != next_verb:
+        return False
+    parked_at = parse_iso_utc_or_none(awaiting_since)
+    ts = record.get("ts")
+    recorded_at = parse_iso_utc_or_none(ts if isinstance(ts, str) else None)
+    consumed_before_park = (
+        parked_at is not None and recorded_at is not None and recorded_at < parked_at
+    )
+    return not consumed_before_park
+
+
+def _boundary_scoped_committed_resolved(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> dict[str, Any] | None:
+    """The ``resolved`` of the latest greenlight that TARGETS the parked boundary.
+
+    The boundary-scoped counterpart of :func:`_latest_committed_resolved`, used on
+    the RESUME path (a pending marker exists). Scans the decision journal
+    newest-first — exactly as ``block_gate.assert_greenlit_target`` does — and
+    returns the ``resolved`` of the first record for which
+    :func:`greenlight_targets_boundary` holds, else ``None``. ``None`` means no
+    committed greenlight answers THIS boundary yet: the tick is still awaiting the
+    human (a valid parked stop, exit 0), never a spurious advance/rerun.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    if not scope_id:
+        return None
+    try:
+        records = read_decisions(experiment_dir, scope_kind, scope_id)
+    except Exception:  # noqa: BLE001 — a bad scope must not crash the tick
+        return None
+    for record in reversed(records):
+        if greenlight_targets_boundary(record, next_verb=next_verb, awaiting_since=awaiting_since):
             resolved = record.get("resolved")
             return dict(resolved) if isinstance(resolved, dict) else {}
     return None

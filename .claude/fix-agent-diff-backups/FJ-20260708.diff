@@ -1,0 +1,478 @@
+diff --git a/src/hpc_agent/_wire/actions/write_run_sidecar.py b/src/hpc_agent/_wire/actions/write_run_sidecar.py
+index 31d1c145..b8f92c8e 100644
+--- a/src/hpc_agent/_wire/actions/write_run_sidecar.py
++++ b/src/hpc_agent/_wire/actions/write_run_sidecar.py
+@@ -127,6 +127,11 @@ class WriteRunSidecarInput(BaseModel):
+     auto_retry: dict[str, Any] | None = None
+     aggregate_defaults: dict[str, Any] | None = None
+     results: dict[str, Any] | None = None
++    # Per-task summary filename the reducer + per-task completion counting read
++    # (F-J). Declared by the caller when the executor emits a non-default name
++    # (e.g. results_reduce.json); absent → readers default to metrics.json via
++    # state.runs.resolved_summary_artifact, so an existing sidecar is unchanged.
++    summary_artifact: str | None = None
+     # Opaque per-task reconciliation tokens a closed-loop strategy round-trips
+     # (task-ordered; e.g. an Optuna trial number per task). Recorded verbatim
+     # and re-surfaced by prior_records(); never interpreted by the framework.
+diff --git a/src/hpc_agent/execution/mapreduce/combiner.py b/src/hpc_agent/execution/mapreduce/combiner.py
+index 4cd3a4e4..444249eb 100644
+--- a/src/hpc_agent/execution/mapreduce/combiner.py
++++ b/src/hpc_agent/execution/mapreduce/combiner.py
+@@ -380,6 +380,17 @@ def main(max_workers=None, argv=None):
+         print("[combiner] ERROR: sidecar missing result_dir_template", file=sys.stderr)
+         sys.exit(1)
+ 
++    # Per-task summary filename the run declared (F-J). Absent → the historical
++    # metrics.json literal, so an existing run is byte-identical. Resolved inline
++    # (this module is deployed cluster-side standalone, no hpc_agent import) but
++    # kept in lock-step with state.runs.resolved_summary_artifact.
++    _declared_summary = sidecar.get("summary_artifact")
++    summary_name = (
++        _declared_summary.strip()
++        if isinstance(_declared_summary, str) and _declared_summary.strip()
++        else "metrics.json"
++    )
++
+     # --- Load tasks.py ---
+     tasks_path = here / "tasks.py"
+     if not tasks_path.is_file():
+@@ -424,9 +435,9 @@ def main(max_workers=None, argv=None):
+         except KeyError as exc:
+             errors.append(f"task {tid}: result_dir_template missing key {exc.args[0]!r}")
+             continue
+-        metrics_path = os.path.join(result_dir, "metrics.json")
++        metrics_path = os.path.join(result_dir, summary_name)
+         if not os.path.isfile(metrics_path):
+-            errors.append(f"task {tid}: metrics.json not found")
++            errors.append(f"task {tid}: {summary_name} not found")
+             continue
+         # Per-task runtime sidecar (timing + axis_bindings) is optional —
+         # the dispatcher writes it best-effort. Missing → no warm-picker
+@@ -453,7 +464,7 @@ def main(max_workers=None, argv=None):
+                 try:
+                     metrics = future.result()
+                 except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+-                    errors.append(f"task {tid}: failed to read metrics.json: {exc}")
++                    errors.append(f"task {tid}: failed to read {summary_name}: {exc}")
+                     continue
+                 groups.setdefault(grid_key, []).append(metrics)
+                 # Best-effort runtime row. A malformed _runtime.json is
+diff --git a/src/hpc_agent/execution/mapreduce/dispatch.py b/src/hpc_agent/execution/mapreduce/dispatch.py
+index 21e83c61..c6690387 100644
+--- a/src/hpc_agent/execution/mapreduce/dispatch.py
++++ b/src/hpc_agent/execution/mapreduce/dispatch.py
+@@ -593,6 +593,18 @@ def main() -> None:
+         )
+         sys.exit(1)
+ 
++    # Per-task summary filename the run declared (F-J) — the per-task completion
++    # marker this dispatcher keys its idempotency skip on AND promotes LAST for
++    # crash-safety. Absent → the historical metrics.json literal, so an existing
++    # run is byte-identical. Resolved inline (deployed cluster-side standalone,
++    # no hpc_agent import) but in lock-step with state.runs.resolved_summary_artifact.
++    _declared_summary = sidecar.get("summary_artifact")
++    summary_name = (
++        _declared_summary.strip()
++        if isinstance(_declared_summary, str) and _declared_summary.strip()
++        else "metrics.json"
++    )
++
+     # --- Fail loud on a self-referential per-task runner ---
+     # The per-task command must NOT be the dispatcher itself. When a submit
+     # ships a run sidecar whose ``executor`` was synthesized from the job
+@@ -775,7 +787,7 @@ def main() -> None:
+         if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
+             cmd_sha_changed = True
+ 
+-    metrics_path = Path(result_dir) / "metrics.json"
++    metrics_path = Path(result_dir) / summary_name
+     already_complete = False
+     if metrics_path.is_file():
+         try:
+@@ -785,7 +797,7 @@ def main() -> None:
+             already_complete = False
+     if already_complete and not force_rerun and not cmd_sha_changed:
+         print(
+-            f"[hpc-agent] task {task_id} already complete (metrics.json found); skipping",
++            f"[hpc-agent] task {task_id} already complete ({summary_name} found); skipping",
+             file=sys.stderr,
+         )
+         sys.exit(0)
+@@ -1018,9 +1030,9 @@ def main() -> None:
+                 src = os.path.join(root, fname)
+                 rel = os.path.relpath(src, wip_dir)
+                 promote_pairs.append((src, rel))
+-        # Sort: metrics.json at the top level last (it's the
+-        # idempotency marker); everything else alphabetically.
+-        promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
++        # Sort: the declared per-task summary file at the top level last (it's
++        # the idempotency marker); everything else alphabetically.
++        promote_pairs.sort(key=lambda pair: (pair[1] == summary_name, pair[1]))
+         if not promote_pairs:
+             # #16 (proving run #5): exit 0 but the WIP result dir is EMPTY —
+             # the executor produced NO files. Under WIP/atomic-promote
+diff --git a/src/hpc_agent/execution/mapreduce/reduce/history.py b/src/hpc_agent/execution/mapreduce/reduce/history.py
+index c2dcab0e..052a7f32 100644
+--- a/src/hpc_agent/execution/mapreduce/reduce/history.py
++++ b/src/hpc_agent/execution/mapreduce/reduce/history.py
+@@ -27,7 +27,11 @@ from typing import Any
+ 
+ from hpc_agent import errors
+ from hpc_agent.execution.mapreduce.reduce.metrics import reduce_metrics
+-from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
++from hpc_agent.state.runs import (
++    find_existing_runs,
++    read_run_sidecar,
++    resolved_summary_artifact,
++)
+ 
+ __all__ = [
+     "find_sidecars_by_campaign",
+@@ -106,13 +110,16 @@ def result_dirs_for_sidecar(
+     Substitutes ``{run_id}`` and ``{task_id}`` in the sidecar's
+     ``result_dir_template`` from sidecar fields; replaces every other
+     ``{name}`` placeholder with a glob ``*`` and walks the filesystem.
+-    Each returned path is the directory containing a ``metrics.json``.
++    Each returned path is the directory containing the run's declared
++    per-task summary file — ``sidecar.summary_artifact`` (F-J), defaulting to
++    ``metrics.json`` when the run never declared one.
+     """
+     template = sidecar.get("result_dir_template")
+     if not template:
+         return []
+     run_id = sidecar.get("run_id", "")
+     task_count = int(sidecar.get("task_count") or 0)
++    summary_name = resolved_summary_artifact(sidecar)
+     base = Path(experiment_dir)
+ 
+     found: list[Path] = []
+@@ -121,7 +128,7 @@ def result_dirs_for_sidecar(
+         # such as ``{task_id:03d}``); any other ``{name}`` placeholder is
+         # a per-task kwarg (seed, lr, …) whose value we cannot know
+         # without tasks.py, so it becomes a glob wildcard and the
+-        # presence of metrics.json narrows the over-match.
++        # presence of the declared summary file narrows the over-match.
+         def _expand(m: re.Match[str], _rid: str = run_id, _tid: int = task_id) -> str:
+             name, spec = m.group(1), m.group(2)
+             if name == "run_id":
+@@ -134,7 +141,7 @@ def result_dirs_for_sidecar(
+         candidate = base / pattern if not Path(pattern).is_absolute() else Path(pattern)
+         for hit in glob.glob(str(candidate)):
+             p = Path(hit)
+-            if (p / "metrics.json").is_file():
++            if (p / summary_name).is_file():
+                 found.append(p)
+     # De-duplicate while preserving order (one task may match multiple
+     # globs when wildcards overlap, e.g. nested dirs).
+@@ -167,7 +174,7 @@ def prior(
+     history: list[dict[str, Any]] = []
+     for sidecar in sidecars:
+         dirs = result_dirs_for_sidecar(experiment_dir, sidecar)
+-        history.append(reduce_metrics(dirs))
++        history.append(reduce_metrics(dirs, filename=resolved_summary_artifact(sidecar)))
+     return history
+ 
+ 
+@@ -235,7 +242,7 @@ def prior_records(
+                 "trial_tokens": sidecar.get("trial_tokens"),
+                 "trial_params": sidecar.get("trial_params"),
+                 "result_dirs": [str(d) for d in dirs],
+-                "metrics": reduce_metrics(dirs),
++                "metrics": reduce_metrics(dirs, filename=resolved_summary_artifact(sidecar)),
+                 "complete": bool(dirs),
+             }
+         )
+@@ -281,7 +288,7 @@ def parent_records(
+                 "trial_tokens": sidecar.get("trial_tokens"),
+                 "trial_params": sidecar.get("trial_params"),
+                 "result_dirs": [str(d) for d in dirs],
+-                "metrics": reduce_metrics(dirs),
++                "metrics": reduce_metrics(dirs, filename=resolved_summary_artifact(sidecar)),
+                 "complete": bool(dirs),
+             }
+         )
+diff --git a/src/hpc_agent/execution/mapreduce/reduce/metrics.py b/src/hpc_agent/execution/mapreduce/reduce/metrics.py
+index a2db556b..06af2a32 100644
+--- a/src/hpc_agent/execution/mapreduce/reduce/metrics.py
++++ b/src/hpc_agent/execution/mapreduce/reduce/metrics.py
+@@ -109,8 +109,12 @@ def _weighted_mean(entries: list[dict]) -> dict:
+     return agg
+ 
+ 
+-def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
+-    """Reduce per-task metrics JSON sidecars into a single summary.
++def reduce_metrics(
++    result_dirs: Sequence[str | Path],
++    *,
++    filename: str = "metrics.json",
++) -> dict:
++    """Reduce per-task summary JSON sidecars into a single summary.
+ 
+     Computes a weighted mean of each metric key across tasks, weighted by
+     ``n_samples`` when present.  The ``n_samples`` key itself is summed.
+@@ -119,7 +123,11 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
+     Parameters
+     ----------
+     result_dirs : list of str or Path
+-        Directories to scan for a ``metrics.json`` file in each.
++        Directories to scan for the per-task summary file in each.
++    filename : str
++        The per-task summary filename to read in each dir. Defaults to
++        ``metrics.json`` (the historical hardcode); callers thread the run's
++        declared ``summary_artifact`` (F-J) so a non-default emitter is read.
+ 
+     Returns
+     -------
+@@ -129,7 +137,7 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
+     entries: list[dict] = []
+ 
+     for rdir in result_dirs:
+-        path = Path(rdir) / "metrics.json"
++        path = Path(rdir) / filename
+         if not path.exists():
+             continue
+         try:
+diff --git a/src/hpc_agent/ops/write_run_sidecar.py b/src/hpc_agent/ops/write_run_sidecar.py
+index fc852154..2e40738d 100644
+--- a/src/hpc_agent/ops/write_run_sidecar.py
++++ b/src/hpc_agent/ops/write_run_sidecar.py
+@@ -213,6 +213,7 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
+         auto_retry=spec.auto_retry,
+         aggregate_defaults=spec.aggregate_defaults,
+         results=spec.results,
++        summary_artifact=spec.summary_artifact,
+         trial_tokens=spec.trial_tokens,
+         trial_params=spec.trial_params,
+         parent_run_ids=spec.parent_run_ids,
+diff --git a/src/hpc_agent/schemas/resolve_submit_inputs.input.json b/src/hpc_agent/schemas/resolve_submit_inputs.input.json
+index 5bbdaf98..f9dda98b 100644
+--- a/src/hpc_agent/schemas/resolve_submit_inputs.input.json
++++ b/src/hpc_agent/schemas/resolve_submit_inputs.input.json
+@@ -765,6 +765,18 @@
+           "default": null,
+           "title": "Results"
+         },
++        "summary_artifact": {
++          "anyOf": [
++            {
++              "type": "string"
++            },
++            {
++              "type": "null"
++            }
++          ],
++          "default": null,
++          "title": "Summary Artifact"
++        },
+         "trial_tokens": {
+           "anyOf": [
+             {
+diff --git a/src/hpc_agent/schemas/submit_s1.input.json b/src/hpc_agent/schemas/submit_s1.input.json
+index 009e9494..3246e919 100644
+--- a/src/hpc_agent/schemas/submit_s1.input.json
++++ b/src/hpc_agent/schemas/submit_s1.input.json
+@@ -1129,6 +1129,18 @@
+           "default": null,
+           "title": "Results"
+         },
++        "summary_artifact": {
++          "anyOf": [
++            {
++              "type": "string"
++            },
++            {
++              "type": "null"
++            }
++          ],
++          "default": null,
++          "title": "Summary Artifact"
++        },
+         "trial_tokens": {
+           "anyOf": [
+             {
+diff --git a/src/hpc_agent/schemas/write_run_sidecar.input.json b/src/hpc_agent/schemas/write_run_sidecar.input.json
+index e3e77dbd..0621d877 100644
+--- a/src/hpc_agent/schemas/write_run_sidecar.input.json
++++ b/src/hpc_agent/schemas/write_run_sidecar.input.json
+@@ -267,6 +267,18 @@
+       "default": null,
+       "title": "Results"
+     },
++    "summary_artifact": {
++      "anyOf": [
++        {
++          "type": "string"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "title": "Summary Artifact"
++    },
+     "trial_tokens": {
+       "anyOf": [
+         {
+diff --git a/src/hpc_agent/state/runs.py b/src/hpc_agent/state/runs.py
+index 53ed9d33..81562bb5 100644
+--- a/src/hpc_agent/state/runs.py
++++ b/src/hpc_agent/state/runs.py
+@@ -30,6 +30,7 @@ from hpc_agent.state.code_drift import detect_code_drift
+ from hpc_agent.state.wave_map import derive_wave_map
+ 
+ __all__ = [
++    "DEFAULT_SUMMARY_ARTIFACT",
+     "MAX_RUNS",
+     "SIDECAR_SCHEMA_VERSION",
+     "find_existing_runs",
+@@ -39,6 +40,7 @@ __all__ = [
+     "prune_orphan_sidecars",
+     "read_run_sidecar",
+     "resolve_node_sha",
++    "resolved_summary_artifact",
+     "run_sidecar_path",
+     "sidecar_effective_identity",
+     "update_run_sidecar_job_ids",
+@@ -58,6 +60,32 @@ MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
+ # v1 sidecars on disk continue to load via ``read_run_sidecar`` backfill.
+ SIDECAR_SCHEMA_VERSION: int = 2
+ 
++# The per-task summary filename every reducer / per-task completion counter has
++# historically hardcoded. Made a declared sidecar field (``summary_artifact``,
++# F-J) so a run whose executor emits a differently-named summary
++# (e.g. ``results_reduce.json``) is read correctly instead of read incomplete/
++# abandoned. A sidecar WITHOUT the field resolves back to this literal, so
++# nothing existing moves.
++DEFAULT_SUMMARY_ARTIFACT: str = "metrics.json"
++
++
++def resolved_summary_artifact(sidecar: dict[str, Any] | None) -> str:
++    """Return the per-task summary filename declared on *sidecar*, or the default.
++
++    The single reader every completion/reduce consumer routes through so the
++    "which file marks a task's summary?" decision has ONE home (F-J). A sidecar
++    that never declared ``summary_artifact`` (every run written before this
++    field existed, and every run whose executor emits the historical name)
++    resolves to :data:`DEFAULT_SUMMARY_ARTIFACT` (``metrics.json``) — byte-for-byte
++    today's behavior. A ``None``/empty/blank value is treated as absent.
++    """
++    if not isinstance(sidecar, dict):
++        return DEFAULT_SUMMARY_ARTIFACT
++    declared = sidecar.get("summary_artifact")
++    if isinstance(declared, str) and declared.strip():
++        return declared.strip()
++    return DEFAULT_SUMMARY_ARTIFACT
++
+ # A run_id is a timestamp-prefixed identifier produced by the slash command
+ # layer. Format: ``YYYYMMDD-HHMMSS-<short_sha>``. We only validate loosely
+ # — anything filesystem-safe that doesn't contain a path separator works.
+@@ -116,6 +144,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
+     "auto_retry",  # dict — per-category retry policy
+     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
+     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
++    "summary_artifact",  # str — per-task summary filename reducer reads (default metrics.json)
+     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
+     "trial_params",  # list[dict] — opaque per-task resolved params (cmd_sha pre-image; provenance)
+     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
+@@ -161,6 +190,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
+     "auto_retry": None,
+     "aggregate_defaults": None,
+     "results": None,
++    "summary_artifact": None,
+     "trial_tokens": None,
+     "trial_params": None,
+     "parent_run_ids": None,
+@@ -234,6 +264,7 @@ def write_run_sidecar(
+     auto_retry: dict[str, Any] | None = None,
+     aggregate_defaults: dict[str, Any] | None = None,
+     results: dict[str, Any] | None = None,
++    summary_artifact: str | None = None,
+     trial_tokens: list[Any] | None = None,
+     trial_params: list[dict[str, Any]] | None = None,
+     parent_run_ids: list[str] | None = None,
+@@ -363,6 +394,10 @@ def write_run_sidecar(
+         "auto_retry": auto_retry,
+         "aggregate_defaults": aggregate_defaults,
+         "results": results,
++        # Per-task summary filename the reducer + per-task completion counting
++        # read (F-J). Absent → the reader defaults to metrics.json via
++        # resolved_summary_artifact, so an existing sidecar is byte-identical.
++        "summary_artifact": summary_artifact,
+         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
+         "trial_params": [dict(p) for p in trial_params] if trial_params is not None else None,
+         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
+diff --git a/tests/execution/mapreduce/test_history.py b/tests/execution/mapreduce/test_history.py
+index 3b48a74d..f7ac26a0 100644
+--- a/tests/execution/mapreduce/test_history.py
++++ b/tests/execution/mapreduce/test_history.py
+@@ -15,7 +15,7 @@ from hpc_agent.execution.mapreduce.reduce.history import (
+     prior_records,
+     result_dirs_for_sidecar,
+ )
+-from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
++from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path, write_run_sidecar
+ 
+ if TYPE_CHECKING:
+     from pathlib import Path
+@@ -328,3 +328,61 @@ def test_prior_records_oldest_first_index_matches_iteration_order(tmp_path: Path
+ 
+     records = prior_records(tmp_path, "A")
+     assert [r["metrics"]["val_loss"] for r in records] == [pytest.approx(0.0), pytest.approx(1.0)]
++
++
++# ---------------------------------------------------------------------------
++# summary_artifact declaration (F-J): a run whose executor emits a non-default
++# per-task summary file (e.g. results_reduce.json) is read COMPLETE — not
++# incomplete/abandoned — once the sidecar declares summary_artifact.
++# ---------------------------------------------------------------------------
++
++
++def test_fires_declared_summary_artifact_reads_complete(tmp_path: Path) -> None:
++    """FIRES: a physically-complete run emitting results_reduce.json.
++
++    Today (no declaration) the metrics.json-hardcoded completion counting reads
++    it incomplete. Declaring summary_artifact='results_reduce.json' on the
++    sidecar makes result_dirs_for_sidecar + prior_records classify it complete
++    and reduce over the real file.
++    """
++    run_id = "20260101-000000-reducejson"
++    result_dir = tmp_path / "results" / run_id / "task_0"
++    result_dir.mkdir(parents=True, exist_ok=True)
++    (result_dir / "results_reduce.json").write_text(json.dumps({"metric": 7.0, "n_samples": 1}))
++
++    # --- Without the declaration: the physically-complete run reads incomplete
++    #     (the pre-fix behavior — metrics.json is the hardcoded assumption).
++    write_run_sidecar(tmp_path, **_common_required_kwargs(run_id), campaign_id="A")
++    undeclared = read_run_sidecar(tmp_path, run_id)
++    assert result_dirs_for_sidecar(tmp_path, undeclared) == []
++    recs_before = prior_records(tmp_path, "A")
++    assert recs_before[0]["complete"] is False
++    assert recs_before[0]["metrics"] == {}
++
++    # --- With the declaration: same on-disk state now reads complete + reduces.
++    write_run_sidecar(
++        tmp_path,
++        **_common_required_kwargs(run_id),
++        campaign_id="A",
++        summary_artifact="results_reduce.json",
++    )
++    declared = read_run_sidecar(tmp_path, run_id)
++    assert declared["summary_artifact"] == "results_reduce.json"
++    dirs = result_dirs_for_sidecar(tmp_path, declared)
++    assert [str(d) for d in dirs] == [str(result_dir)]
++    recs_after = prior_records(tmp_path, "A")
++    assert recs_after[0]["complete"] is True
++    assert recs_after[0]["metrics"]["metric"] == pytest.approx(7.0)
++
++
++def test_default_path_unchanged_metrics_json(tmp_path: Path) -> None:
++    """A sidecar WITHOUT summary_artifact still keys on metrics.json (unchanged)."""
++    run_id = "20260101-000000-defaultmj"
++    _write_metrics(tmp_path / "results" / run_id / "task_0", {"metric": 3.0, "n_samples": 1})
++    write_run_sidecar(tmp_path, **_common_required_kwargs(run_id), campaign_id="A")
++    sidecar = read_run_sidecar(tmp_path, run_id)
++    # Absent on the written sidecar (compact only-write-non-None), backfilled None.
++    assert sidecar.get("summary_artifact") is None
++    dirs = result_dirs_for_sidecar(tmp_path, sidecar)
++    assert [str(d) for d in dirs] == [str(tmp_path / "results" / run_id / "task_0")]
++    assert prior_records(tmp_path, "A")[0]["complete"] is True

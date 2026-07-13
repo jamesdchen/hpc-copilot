@@ -17,9 +17,16 @@ import pytest
 from hpc_agent import errors
 from hpc_agent.ops.monitor.batch_status import batch_status
 
+# The sentinel-ack line a real scheduler query echoes (positive-evidence rule,
+# docs/design/connection-broker.md). ``_cp`` appends it by default so fabricated
+# "the query ran" stdouts pass the new ack gate; ``ack=None`` fabricates the
+# silent/truncated channel (no ack) the ruling routes to UNKNOWN.
+_ACK = "__HPC_SCHED_ACK__=0\n"
 
-def _cp(stdout: str = "", rc: int = 0) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr="boom")
+
+def _cp(stdout: str = "", rc: int = 0, ack: str | None = _ACK) -> subprocess.CompletedProcess[str]:
+    body = stdout + ack if ack is not None else stdout
+    return subprocess.CompletedProcess(args=[], returncode=rc, stdout=body, stderr="boom")
 
 
 def _run(run_id: str, *, job_ids, ssh_target="u@h", cluster="disc", backend="slurm"):
@@ -148,6 +155,26 @@ def test_ssh_failure_raises(monkeypatch, tmp_path) -> None:
         records=records,
         clusters={"disc": {"scheduler": "slurm"}},
         ssh_handler=lambda cmd, **k: _cp(rc=255),
+    )
+    with pytest.raises(errors.SshUnreachable):
+        batch_status(experiment_dir=tmp_path)
+
+
+def test_silent_ackless_read_raises_not_all_terminal(monkeypatch, tmp_path) -> None:
+    """Sentinel-ack ruling: an rc-0 empty read with NO ack token is a silently
+    truncated / never-run channel — UNKNOWN, not "every job left the queue".
+
+    Without the ack gate this exact stdout (empty, rc 0) would report every
+    job as ``missing_job_ids`` (terminal), flipping a fleet of live runs to
+    terminal on one silent blip. The query must instead raise so the caller
+    keeps the runs' prior state.
+    """
+    records = [_run("r1", job_ids=["7", "8"])]
+    _wire(
+        monkeypatch,
+        records=records,
+        clusters={"disc": {"scheduler": "slurm"}},
+        ssh_handler=lambda cmd, **k: _cp("", ack=None),  # rc 0, no ack: silence
     )
     with pytest.raises(errors.SshUnreachable):
         batch_status(experiment_dir=tmp_path)

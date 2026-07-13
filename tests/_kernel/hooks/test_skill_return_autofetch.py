@@ -207,7 +207,8 @@ def test_malformed_envelope_json_is_noop(tmp_path: Path) -> None:
 
 
 def test_malformed_payload_is_noop() -> None:
-    for bad in (None, [], "string", 42, {"tool_name": "Bash"}):
+    bad_payloads: list[object] = [None, [], "string", 42, {"tool_name": "Bash"}]
+    for bad in bad_payloads:
         assert hook.build_hook_output(bad) is None
 
 
@@ -230,6 +231,46 @@ def test_absent_cwd_falls_back_to_process_cwd(tmp_path: Path, monkeypatch) -> No
     del payload["cwd"]
     out = hook.build_hook_output(payload)
     assert out is not None
+
+
+# ─── finding #56: gate on emit success, reject mere mentions ─────────────────
+
+
+@pytest.mark.parametrize(
+    "tool_response",
+    [
+        {"exit_code": 1},
+        {"returncode": 2},
+        {"code": 127},
+        {"interrupted": True},
+        {"stdout": '{"ok": false, "error_code": "spec_invalid"}'},
+    ],
+)
+def test_failed_emit_does_not_autofetch_stale_envelope(tmp_path: Path, tool_response: dict) -> None:
+    """A stale envelope on disk + a FAILED emit must NOT be injected."""
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)  # yesterday's leftover
+    payload = _payload(tmp_path, _KNOWN_SKILL)
+    payload["tool_response"] = tool_response
+    assert hook.build_hook_output(payload) is None
+
+
+def test_successful_emit_signal_still_autofetches(tmp_path: Path) -> None:
+    """A positive success signal (exit 0 / ok:true) injects as before."""
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    payload = _payload(tmp_path, _KNOWN_SKILL)
+    payload["tool_response"] = {"exit_code": 0, "stdout": '{"ok": true}'}
+    assert hook.build_hook_output(payload) is not None
+
+
+def test_read_only_grep_mentioning_emit_is_noop(tmp_path: Path) -> None:
+    """Finding #56: a read-only command that merely MENTIONS emit-skill-return
+    (no `hpc-agent emit-skill-return` invocation) must not fire."""
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    command = f"grep -- emit-skill-return --skill {_KNOWN_SKILL} notes.md"
+    payload = _payload(tmp_path, _KNOWN_SKILL, command=command)
+    assert hook.build_hook_output(payload) is None
+    # And the parser itself rejects the mention.
+    assert hook.extract_emit_invocation(command) is None
 
 
 # ─── extract_emit_invocation unit ───────────────────────────────────────────

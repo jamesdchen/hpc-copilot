@@ -127,3 +127,74 @@ def test_main_is_a_clean_noop_on_garbage_stdin(
     monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
     assert utterance_capture.main() == 0
     assert capsys.readouterr().out == ""
+
+
+# --- MT4: HPC_ACTOR attribution (seam onto MT1's ``append_utterance(actor=)``) ---
+#
+# MT1 (parallel, not in this worktree) adds ``actor=None`` to
+# ``append_utterance``. These tests monkeypatch the writer to assert the hook
+# passes ``actor=`` ONLY when a valid ``HPC_ACTOR`` is set — so the byte-identical
+# unset/invalid path never grows the kwarg (works before AND after MT1 lands).
+
+
+def _spy_append(monkeypatch: pytest.MonkeyPatch) -> list[tuple[tuple, dict]]:
+    """Replace ``append_utterance`` (imported at call time inside ``capture``)
+    with a spy recording (args, kwargs); return the call log."""
+    calls: list[tuple[tuple, dict]] = []
+
+    def _spy(*args: object, **kwargs: object) -> dict:
+        calls.append((args, kwargs))
+        return {"ts": "t", "sha256": "s", "text": str(args[1]) if len(args) > 1 else ""}
+
+    monkeypatch.setattr("hpc_agent.state.utterances.append_utterance", _spy)
+    return calls
+
+
+def test_capture_passes_actor_kwarg_when_hpc_actor_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_ACTOR", "alice")
+    calls = _spy_append(monkeypatch)
+
+    utterance_capture.capture({"cwd": str(tmp_path), "prompt": "20 seeds at 1M"})
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs == {"actor": "alice"}
+
+
+def test_capture_omits_actor_kwarg_when_hpc_actor_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HPC_ACTOR", raising=False)
+    calls = _spy_append(monkeypatch)
+
+    utterance_capture.capture({"cwd": str(tmp_path), "prompt": "20 seeds at 1M"})
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert "actor" not in kwargs  # byte-identical to today's positional call
+
+
+def test_capture_omits_actor_kwarg_when_hpc_actor_invalid_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A path-unsafe slug fails open to the unattributed (unsuffixed) path.
+    monkeypatch.setenv("HPC_ACTOR", "not a/valid slug")
+    calls = _spy_append(monkeypatch)
+
+    utterance_capture.capture({"cwd": str(tmp_path), "prompt": "20 seeds at 1M"})
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert "actor" not in kwargs
+
+
+def test_capture_unset_env_is_byte_identical_end_to_end(tmp_path: Path) -> None:
+    """No HPC_ACTOR + real writer: the record lands in the unsuffixed log
+    exactly as before MT4 (no reliance on MT1's signature)."""
+    _scaffold_namespace(tmp_path)
+    record = utterance_capture.capture({"cwd": str(tmp_path), "prompt": "hello"})
+    assert record is not None
+    assert utterances_path(tmp_path).name == "utterances.jsonl"
+    assert read_utterances(tmp_path)[0]["text"] == "hello"

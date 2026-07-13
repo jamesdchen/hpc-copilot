@@ -98,7 +98,7 @@ def test_crontab_viable_selects_cron(tmp_path: Path, monkeypatch: pytest.MonkeyP
     ssh = _ScriptedSSH(
         [
             # crontab -l viable: "no crontab for user" is fine.
-            ("crontab -l 2>&1", (1, "no crontab for user u", "")),
+            ("crontab -l 2>&1 || true", (1, "no crontab for user u", "")),
             ("command -v python3", (0, "/usr/bin/python3\n", "")),
         ]
     )
@@ -124,8 +124,11 @@ def test_crontab_denied_slurm_falls_to_scrontab(
     ssh = _ScriptedSSH(
         [
             # scrontab rule FIRST — "crontab -l" is a substring of "scrontab -l".
-            ("scrontab -l 2>&1", (1, "no scrontab for user u", "")),
-            ("crontab -l 2>&1", (1, "You (u) are not allowed to use this program (crontab)", "")),
+            ("scrontab -l 2>&1 || true", (1, "no scrontab for user u", "")),
+            (
+                "crontab -l 2>&1 || true",
+                (1, "You (u) are not allowed to use this program (crontab)", ""),
+            ),
             ("command -v python3", (0, "/usr/bin/python3\n", "")),
         ]
     )
@@ -146,7 +149,7 @@ def test_crontab_denied_non_slurm_falls_to_job(
     upsert_run(tmp_path, _record())
     ssh = _ScriptedSSH(
         [
-            ("crontab -l 2>&1", (127, "crontab: command not found", "")),
+            ("crontab -l 2>&1 || true", (127, "crontab: command not found", "")),
             ("command -v python3", (0, "/usr/bin/python3\n", "")),
         ]
     )
@@ -177,7 +180,7 @@ def test_nothing_available_is_loud_none(tmp_path: Path, monkeypatch: pytest.Monk
     upsert_run(tmp_path, _record())
     ssh = _ScriptedSSH(
         [
-            ("crontab -l 2>&1", (127, "crontab: command not found", "")),
+            ("crontab -l 2>&1 || true", (127, "crontab: command not found", "")),
             ("command -v python3", (0, "/usr/bin/python3\n", "")),
         ]
     )
@@ -198,7 +201,7 @@ def test_job_submit_failure_falls_to_loud_none(
     upsert_run(tmp_path, _record())
     ssh = _ScriptedSSH(
         [
-            ("crontab -l 2>&1", (127, "crontab: command not found", "")),
+            ("crontab -l 2>&1 || true", (127, "crontab: command not found", "")),
             ("command -v python3", (0, "/usr/bin/python3\n", "")),
         ]
     )
@@ -223,7 +226,7 @@ def test_reinstall_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     upsert_run(tmp_path, _record())
     ssh = _ScriptedSSH(
         [
-            ("crontab -l 2>&1", (0, "", "")),
+            ("crontab -l 2>&1 || true", (0, "", "")),
             ("command -v python3", (0, "/usr/bin/python3\n", "")),
         ]
     )
@@ -237,6 +240,35 @@ def test_reinstall_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     for reg in ssh.dispatched("| crontab -"):
         assert "grep -vF" in reg
         assert "hpc-agent-watcher run_id=r1" in reg
+
+
+def test_register_cron_line_is_fail_closed_and_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-sweep #45: the register command must NOT be the blind
+    ``crontab -l 2>/dev/null | grep | crontab -`` pipeline that truncates the
+    whole table on a transient ``-l`` failure. It must capture ``-l``'s rc,
+    recognize the empty-table message, and serialize under a lock.
+    """
+    upsert_run(tmp_path, _record())
+    ssh = _ScriptedSSH([("crontab -l 2>&1 || true", (1, "no crontab for user u", ""))])
+    _patch_ssh(monkeypatch, ssh)
+
+    watcher_install(experiment_dir=tmp_path, run_id="r1", scheduler="slurm")
+
+    reg = ssh.dispatched("| crontab -")
+    assert reg, "no crontab register command was dispatched"
+    cmd = reg[0]
+    # Fail-closed read: explicit rc capture + the recognized empty-table guard.
+    assert "rc=$?" in cmd
+    assert "no crontab for" in cmd
+    # Serialized read-modify-write under a per-user lock (mkdir-based).
+    assert "cron.lock" in cmd
+    # Still idempotent (strips the prior marker) and writes the fresh line.
+    assert "grep -vF" in cmd
+    assert "hpc-agent-watcher run_id=r1" in cmd
+    # The old truncating pipeline is gone: no bare `-l 2>/dev/null | grep`.
+    assert "2>/dev/null | grep" not in cmd
 
 
 # ── uninstall + status ───────────────────────────────────────────────────────

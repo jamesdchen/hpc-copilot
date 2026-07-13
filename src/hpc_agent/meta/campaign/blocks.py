@@ -47,12 +47,43 @@ __all__ = ["campaign_complete", "campaign_greenlight", "campaign_watch"]
 
 # ``campaign-advance`` decisions grouped by the watch terminator they map to.
 # HEALTHY: the campaign is nominal (self-chaining ticks, no human boundary).
+# REFILL is split OUT (RFC #362): a ``refill`` decision is NOT a passive healthy
+# tick — it hands off to the ``campaign-refill`` actor (``watching_refill``), so
+# it must not lump into ``watching_healthy`` (which maps to a chain END).
 # ANOMALY: a §5 loud-fail guard tripped, or a budget halt needs a human. A
 # ``stop_converged`` maps to the COMPLETE hand-off (handled separately).
-_WATCH_HEALTHY: frozenset[str] = frozenset({"continue", "wait_in_flight", "refill"})
+_WATCH_HEALTHY: frozenset[str] = frozenset({"continue", "wait_in_flight"})
 _WATCH_ANOMALY: frozenset[str] = frozenset(
     {"stop_circuit_breaker", "stop_resubmit_cap", "stop_over_budget"}
 )
+
+# The manifest fields whose change kills a campaign standing consent — the greenlit
+# spec (goal / budget / strategy / stop_criteria / anomaly_policy). A campaign has no
+# per-run tree ``cmd_sha``, so its consent binds to THIS identity: the analog the
+# substrate's spec-identity leg compares (a re-greenlit campaign ⇒ a new identity ⇒
+# consent dies, exactly like a regenerated grid moves a run's cmd_sha).
+_CAMPAIGN_IDENTITY_FIELDS: tuple[str, ...] = (
+    "goal",
+    "budget",
+    "strategy",
+    "stop_criteria",
+    "anomaly_policy",
+)
+
+
+def _campaign_spec_identity(manifest: dict[str, Any] | None) -> str:
+    """The greenlit-spec identity a campaign standing consent binds to.
+
+    Reuses ``block_drive._spec_sha`` — the ONE definition of an input-spec identity
+    the substrate names — over the greenlit manifest fields, so the campaign case
+    computes the same kind of token the run case reads from the sidecar. An absent
+    manifest yields the sha of ``{}`` (a stable non-empty identity), which a real
+    consent's bound ``cmd_sha`` will not match ⇒ not live ⇒ parks.
+    """
+    from hpc_agent._kernel.lifecycle.block_drive import _spec_sha
+
+    spec = {k: (manifest or {}).get(k) for k in _CAMPAIGN_IDENTITY_FIELDS}
+    return _spec_sha(spec)
 
 
 def _next_block(
@@ -72,14 +103,25 @@ def _next_block(
 # ── greenlight helpers ───────────────────────────────────────────────────────
 
 
-def _digest_spec(manifest: dict[str, Any]) -> dict[str, Any]:
+def _digest_spec(experiment_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Digest the greenlit-once campaign spec into the brief's shape (§4).
 
     Pulls exactly the fields the design names as the campaign contract —
     goal / budget / strategy / stop_criteria / anomaly_policy / async_refill —
     plus the greenlight provenance marker so the brief shows whether it is
     already stamped. Round-tripped verbatim: the block never interprets them.
+
+    Additive ``evidence`` field (evidence-memory E-embed): the ADVISORY
+    point digest for this campaign's declared scope tags. FAIL-OPEN — the one
+    :func:`ops.evidence_embed.build_evidence_embed` helper wraps the whole
+    collect+render in a broad guard, so a collector bug degrades to a disclosed
+    ``{unavailable}`` stub and NEVER reshapes the greenlight (the never-blocking
+    pin; T-NB). Never a private re-collection — the one-collector row.
     """
+    from hpc_agent.ops.evidence_embed import build_evidence_embed
+
+    scopes = manifest.get("scopes") or manifest.get("tags") or []
+    tags = [t for t in scopes if isinstance(t, str)] if isinstance(scopes, list) else []
     return {
         "goal": manifest.get("goal", ""),
         "budget": manifest.get("budget"),
@@ -90,6 +132,7 @@ def _digest_spec(manifest: dict[str, Any]) -> dict[str, Any]:
         "max_in_flight": manifest.get("max_in_flight"),
         "greenlit": bool(manifest.get("greenlit", False)),
         "greenlit_at": manifest.get("greenlit_at"),
+        "evidence": build_evidence_embed(experiment_dir, tags=tags),
     }
 
 
@@ -188,7 +231,7 @@ def campaign_greenlight(
     # (needs_decision=False); the block only persists it.
     if spec.confirm:
         updated = mark_greenlit(experiment_dir, campaign_id=cid)
-        brief = _digest_spec(updated)
+        brief = _digest_spec(experiment_dir, updated)
         if spec.journal:
             from hpc_agent.state.decision_journal import append_decision
 
@@ -220,7 +263,7 @@ def campaign_greenlight(
             ),
         )
 
-    brief = _digest_spec(manifest)
+    brief = _digest_spec(experiment_dir, manifest)
 
     # Already greenlit (and not re-confirming): an idempotent re-read. Nothing
     # is stamped or journaled — the decision was recorded on the first confirm.
@@ -274,9 +317,10 @@ def campaign_greenlight(
             "running campaign for a health / anomaly brief. Composes "
             "campaign-advance's evidence — it OBSERVES, never runs a tick (ticks "
             "self-chain via the driver). Terminators: watching_healthy (no "
-            "boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, "
-            "surfaces the anomaly_brief) / watching_complete (stop criterion "
-            "fired → hand off to campaign-complete)."
+            "boundary) / watching_refill (free pool slot → hand off to "
+            "campaign-refill, no boundary) / watching_anomaly (loud-fail or budget "
+            "halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop "
+            "criterion fired → hand off to campaign-complete)."
         ),
         spec_arg=True,
         spec_model=CampaignWatchSpec,
@@ -299,7 +343,10 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
       (``needs_decision=True``), surfacing the drafted ``anomaly_brief``;
     * a fired stop criterion (``stop_converged``) → ``watching_complete``
       (``needs_decision=False``), a hand-off hint to ``campaign-complete``;
-    * anything nominal (``continue`` / ``wait_in_flight`` / ``refill``) →
+    * a free pool slot with budget headroom (``refill``, RFC #362) →
+      ``watching_refill`` (``needs_decision=False``), a hand-off hint to
+      ``campaign-refill`` — autonomous execution the greenlight authorized;
+    * anything nominal (``continue`` / ``wait_in_flight``) →
       ``watching_healthy`` (``needs_decision=False``).
     """
     from hpc_agent.meta.campaign.atoms.advance import campaign_advance
@@ -343,14 +390,82 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
             ),
         )
 
+    if decision == "refill":
+        # RFC #362: a free pool slot with budget headroom — hand off to the
+        # campaign-refill ACTOR (needs_decision=False; it is autonomous execution
+        # the greenlight already authorized, not a human boundary). Split out of
+        # watching_healthy because that terminator maps to a chain END, whereas
+        # refill must chain to campaign-refill (block_chain SUCCESSORS).
+        return CampaignBlockResult(
+            block="watch",
+            stage_reached="watching_refill",
+            needs_decision=False,
+            reason=(
+                f"campaign {cid!r} has free pool slot(s) (advance: {adv.get('reason')}); "
+                "hand off to campaign-refill to top the pool up."
+            ),
+            campaign_id=cid,
+            brief=brief,
+            next_block=_next_block(
+                "campaign-watch",
+                "watching_refill",
+                "free slots with budget headroom; refill the pool.",
+                campaign_id=cid,
+            ),
+        )
+
     if decision in _WATCH_ANOMALY:
+        # OVERNIGHT AUTO-ADVANCE (item 8 seam 1): a LIVE campaign-scope standing
+        # consent lets the anomaly halt be consumed unattended — the campaign keeps
+        # self-chaining up to the consent's caps until the morning boundary — and the
+        # auto-advance is recorded to the consumption ledger in the same breath so the
+        # morning brief discloses it. A not-live / absent consent parks for a y/nudge
+        # exactly as today, carrying the refusal leg. (Recording an audit-disclosure
+        # line is the ONLY write this otherwise-read-only block makes; it never
+        # actuates the campaign.) The record-time wake gate requires the wake
+        # token's presence but skips the per-run lease check for a campaign scope
+        # (a campaign has no per-run watch key); the RUNTIME reconcile-chain
+        # liveness that the record-time skip left open is now closed by the
+        # overnight self-heal (`overnight.campaign_chain_status` / the doctor
+        # `self_heal` seat — see notebook-audit.md item 8).
+        from hpc_agent.ops.overnight import consume_boundary_under_consent
+
+        outcome = consume_boundary_under_consent(
+            experiment_dir,
+            scope_kind="campaign",
+            scope_id=cid,
+            boundary_block="campaign-watch",
+            current_cmd_sha=_campaign_spec_identity(manifest),
+            event_kind="anomaly",
+            detail={"anomaly": decision, "reason": adv.get("reason")},
+        )
+        if outcome.consumed:
+            brief["overnight_auto_advanced"] = {
+                "anomaly": decision,
+                "reason": adv.get("reason"),
+                "ledger_line": outcome.line,
+            }
+            return CampaignBlockResult(
+                block="watch",
+                stage_reached="watching_healthy",
+                needs_decision=False,
+                reason=(
+                    f"campaign {cid!r} anomaly {decision} ({adv.get('reason')}) "
+                    "auto-advanced under a live standing consent — self-chaining "
+                    "continues; the morning brief discloses the consumption."
+                ),
+                campaign_id=cid,
+                brief=brief,
+            )
+        brief["overnight_refusal"] = outcome.decision.reason
         return CampaignBlockResult(
             block="watch",
             stage_reached="watching_anomaly",
             needs_decision=True,
             reason=(
                 f"campaign {cid!r} anomaly: {decision} ({adv.get('reason')}); "
-                "surface for a y/nudge decision."
+                f"surface for a y/nudge decision (no live standing consent to "
+                f"auto-advance: {outcome.decision.reason})."
             ),
             campaign_id=cid,
             brief=brief,

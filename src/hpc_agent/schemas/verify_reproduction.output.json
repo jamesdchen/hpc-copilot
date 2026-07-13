@@ -14,17 +14,19 @@
   "additionalProperties": false,
   "properties": {
     "stage_reached": {
-      "description": "Overall verdict: match, mismatch (any key mismatched), or incomparable.",
+      "description": "Overall verdict. v1: match / mismatch (any key mismatched) / incomparable. v2 also emits auto_cleared (every deviation inside a well-evidenced envelope — a code attestation, zero human attention) and needs_verdict (a thin-envelope / novelty / incomparable residue routed to the human with the evidence brief).",
       "enum": [
         "match",
         "mismatch",
-        "incomparable"
+        "incomparable",
+        "auto_cleared",
+        "needs_verdict"
       ],
       "title": "Stage Reached",
       "type": "string"
     },
     "needs_decision": {
-      "description": "True for mismatch/incomparable (a FINDING the human decides on); False for match.",
+      "description": "True for a FINDING the human decides on (mismatch / incomparable / needs_verdict); False when the comparison auto-cleared (exact match or well-evidenced envelope).",
       "title": "Needs Decision",
       "type": "boolean"
     },
@@ -43,6 +45,310 @@
       "description": "Absolute path of the append-only receipts ledger this verification appended to.",
       "title": "Receipt Path",
       "type": "string"
+    },
+    "appended_sample": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeterminismSampleRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The determinism-fingerprint sample this comparison appended to the experiment's ledger (D-consume: verify appends the comparison as a new sample). Null when no sample was minted (e.g. a v1-only comparison, or missing artifacts). Echoed so a consumer sees the evidence just recorded."
+    },
+    "diverged_stage": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stage-localized mismatch (the data-trace fingerprint interlock): the first diverging stage by pipeline order when both runs carry ingested traces and the verdict routed to the human — the brief renders 'diverges at <stage>' from this machine field. Null otherwise.",
+      "title": "Diverged Stage"
+    }
+  },
+  "$defs": {
+    "DeterminismSampleRecord": {
+      "additionalProperties": false,
+      "description": "One append-only ledger line — a single observed run-to-run comparison.\n\nA valid ``state/attestation.py::validate`` record: the attestation fields\n(``attestor``, ``subject_kind``, ``subject_id``, ``content_sha``) make each\nline bind-lockable, so a spread cannot be asserted into existence. The\nsubject is the experiment IDENTITY, not one run — original and reproduction\nsamples accumulate to the SAME ledger, keyed on ``subject_id`` (cmd_sha).",
+      "properties": {
+        "ts": {
+          "description": "ISO-8601 UTC append timestamp.",
+          "title": "Ts",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "description": "Sample-record schema version (bump on shape change).",
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "attestor": {
+          "const": "code",
+          "default": "code",
+          "description": "Always code — a sample is a code attestation.",
+          "title": "Attestor",
+          "type": "string"
+        },
+        "subject_kind": {
+          "const": "determinism-fingerprint",
+          "default": "determinism-fingerprint",
+          "description": "Attestation subject kind.",
+          "title": "Subject Kind",
+          "type": "string"
+        },
+        "subject_id": {
+          "description": "The experiment identity this sample attests (cmd_sha).",
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "content_sha": {
+          "description": "Canonical SHA over the two COMPARED on-disk payloads (harness-contract canonicalization) — the bind recompute key and the admission join key.",
+          "title": "Content Sha",
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/SampleIdentity",
+          "description": "Full identity fields, lifted verbatim."
+        },
+        "source": {
+          "description": "double-canary (n=2 prior) or verify-reproduction (accreting sample).",
+          "enum": [
+            "double-canary",
+            "verify-reproduction"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "run_ids": {
+          "description": "The two runs compared; [a, b].",
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "title": "Run Ids",
+          "type": "array"
+        },
+        "cluster": {
+          "description": "The measuring cluster (cross-cluster spread is an env-sensitivity finding).",
+          "title": "Cluster",
+          "type": "string"
+        },
+        "scale": {
+          "description": "canary (double-canary) or main (verify-reproduction) — never judged.",
+          "enum": [
+            "canary",
+            "main"
+          ],
+          "title": "Scale",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "The comparison's verdict AT APPEND (judgment precedes append).",
+          "enum": [
+            "auto_cleared",
+            "needs_verdict",
+            "mismatch"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "same_submission": {
+          "default": false,
+          "description": "True for a double-canary pair (one environment observed twice) — a correlated-sample label.",
+          "title": "Same Submission",
+          "type": "boolean"
+        },
+        "partial": {
+          "default": false,
+          "description": "True for a partial-reproduction sample (subset of tasks).",
+          "title": "Partial",
+          "type": "boolean"
+        },
+        "task_indices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The exact task indices compared on a partial sample; null for a full sample.",
+          "title": "Task Indices"
+        },
+        "per_key": {
+          "description": "Per-flattened-key observed pairs for this comparison.",
+          "items": {
+            "$ref": "#/$defs/SampleKeyDiff"
+          },
+          "title": "Per Key",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ts",
+        "subject_id",
+        "content_sha",
+        "identity",
+        "source",
+        "run_ids",
+        "cluster",
+        "scale",
+        "verdict"
+      ],
+      "title": "determinism fingerprint sample record",
+      "type": "object"
+    },
+    "SampleIdentity": {
+      "additionalProperties": false,
+      "description": "The experiment IDENTITY every sample carries verbatim (the ``_IDENTITY_FIELDS``\ndiscipline) — the CURRENT-identity filter compares against these, reading a\n``tasks_py_sha``-drifted prior STALE.",
+      "properties": {
+        "cmd_sha": {
+          "description": "Param identity (state/run_sha.py) — the ledger key.",
+          "title": "Cmd Sha",
+          "type": "string"
+        },
+        "tasks_py_sha": {
+          "description": "Task-generator code identity.",
+          "title": "Tasks Py Sha",
+          "type": "string"
+        },
+        "executor": {
+          "description": "Executor script identity.",
+          "title": "Executor",
+          "type": "string"
+        },
+        "data_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Data-identity leg (Phase-3 amendment, ruled 0b): the data-manifest sha of the declared input roots at record time, lifted from the run sidecar's data_manifest_sha. ADDITIVE + optional — null is 'data identity unknown (no manifest at record time)', disclosed and never blocking. A sample under DIFFERENT data is excluded as data drift, never admitted as nondeterminism evidence; a pre-amendment record (no data_sha) parses byte-identically.",
+          "title": "Data Sha"
+        }
+      },
+      "required": [
+        "cmd_sha",
+        "tasks_py_sha",
+        "executor"
+      ],
+      "title": "determinism sample identity",
+      "type": "object"
+    },
+    "SampleKeyDiff": {
+      "additionalProperties": false,
+      "description": "One flattened metric leaf's observed pair in a sample (D-store ``per_key``).\n\n``a`` / ``b`` are the two compared VALUES — opaque scalars, never named. The\ndiff fields are null for non-numeric leaves (equality-only), present for\nfloat leaves.",
+      "properties": {
+        "key": {
+          "description": "Flattened metric key (opaque path; the comparator never reads its meaning).",
+          "title": "Key",
+          "type": "string"
+        },
+        "a": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Value observed on side A (opaque scalar).",
+          "title": "A"
+        },
+        "b": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Value observed on side B (opaque scalar).",
+          "title": "B"
+        },
+        "abs_diff": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "|a - b| for numeric leaves; null otherwise.",
+          "title": "Abs Diff"
+        },
+        "rel_diff": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "|a - b| / max(|a|, |b|) for numeric leaves; null otherwise.",
+          "title": "Rel Diff"
+        },
+        "static_class": {
+          "description": "Structural class of this leaf (only float is tolerance-eligible).",
+          "enum": [
+            "float",
+            "int",
+            "str",
+            "bool",
+            "shape"
+          ],
+          "title": "Static Class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "a",
+        "b",
+        "static_class"
+      ],
+      "title": "determinism sample per-key diff",
+      "type": "object"
     }
   }
 }

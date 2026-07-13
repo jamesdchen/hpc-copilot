@@ -60,15 +60,30 @@ def git_output(args: list[str], *, cwd: Path, timeout: float = _GIT_TIMEOUT_SECO
     Fail-open by contract: missing git binary, non-repo cwd, nonexistent
     cwd, timeout, non-zero exit and empty output all return ``None`` —
     callers treat "no answer" as "skip", never as an error.
+
+    Two hard disciplines, both from the 2026-07-10 live MCP-server wedge
+    (run #12: ``audit-preflight`` hung the WHOLE server on its first live
+    call — py-spy stack: this function's post-timeout drain):
+
+    * ``stdin=DEVNULL`` — a bare ``subprocess.run`` child INHERITS the
+      parent's stdin, which inside ``mcp-serve`` is the live JSON-RPC pipe;
+      a child that reads it blocks forever (offline probes never reproduce
+      this: piped-file stdin hits EOF instantly).
+    * tree-kill on timeout via
+      :func:`hpc_agent.infra.bounded_subprocess.run_capture_bounded` — plain
+      ``subprocess.run(timeout=)`` kills only the immediate child and then
+      drains until EOF; a git grandchild (fsmonitor daemon et al.) holding
+      the pipe defeats the timeout entirely (the run-#7 orphaned-ssh class,
+      same cure). ``git -C <cwd>`` replaces the ``cwd=`` kwarg the bounded
+      runner does not take.
     """
+    from hpc_agent.infra.bounded_subprocess import run_capture_bounded
+
     try:
-        proc = subprocess.run(
-            ["git", *args],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
+        proc = run_capture_bounded(
+            ["git", "-C", str(cwd), *args],
+            timeout_sec=timeout,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, ValueError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return None

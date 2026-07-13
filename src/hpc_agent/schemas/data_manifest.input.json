@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/data_manifest.input.json",
+  "title": "data-manifest input spec",
+  "description": "Input for ``data-manifest`` — mint an identity record for the input data.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional OPAQUE relpath roots (files or directories) whose bytes are hashed into the manifest. When absent, defaults to the experiment's existing input declaration (interview.json's audited_source.input_roots) — the ONE 'what are my inputs' declaration. With neither present the verb REFUSES (spec_invalid): core never guesses a data/ directory.",
+      "title": "Roots"
+    },
+    "output_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional manifest destination relpath (or absolute). Defaults to .hpc/data_manifest.json — the copilot-consumed caller record that sits with interview.json / axes.yaml.",
+      "title": "Output Path"
+    }
+  }
+}

@@ -76,6 +76,34 @@ def run(data, N):
     assert result.halo_expr == "10"
 
 
+def test_deque_window_plus_unexplained_carry_is_not_bounded_halo(tmp_path: Path) -> None:
+    """A ``deque(maxlen=W)`` append PLUS an unbounded prefix sum: the window
+    pattern explains only the deque's carry, so committing ``bounded_halo``
+    would let chunked execution with halo W silently corrupt the prefix sum.
+    The matcher must bail to ``sequential`` (the stencil matcher's deliberate
+    safe direction) — never ``bounded_halo``."""
+    src = _write(
+        tmp_path,
+        """
+from collections import deque
+
+def run(data, W, N):
+    buf = deque(maxlen=W)
+    total = 0
+    out = []
+    for t in range(N):
+        buf.append(data[t])
+        total += data[t]
+        out.append(total + sum(buf))
+    return out
+""",
+    )
+    result = classify_axis_easy(src, "run")
+    assert result.kind != "bounded_halo", result
+    assert result.kind == "sequential", result
+    assert result.halo_expr is None
+
+
 def test_deque_rebuilt_inside_loop_is_not_bounded_window(tmp_path: Path) -> None:
     """A ``deque(maxlen=W)`` constructed INSIDE the loop is re-created every
     iteration and carries no cross-iteration window, so it must NOT be matched

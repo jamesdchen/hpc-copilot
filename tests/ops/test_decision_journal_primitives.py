@@ -8,7 +8,8 @@ append-only discipline, both scopes, and the greenlight/nudge responses.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -19,6 +20,8 @@ from hpc_agent.ops.decision.journal import append_decision, read_decisions
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from hpc_agent._wire.queries.notebook_audit_view import NotebookAuditViewResult
 
 
 def _append(tmp_path: Path, **overrides: object) -> AppendDecisionResult:
@@ -912,3 +915,962 @@ def test_lock_append_needs_no_authorship_bar(tmp_path: Path) -> None:
     )
     assert out.record.resolved["scope_action"] == "lock"
     assert out.count == 1
+
+
+# ---------------------------------------------------------------------------
+# Notebook sign-off authorship gate (D5 three locks + D-attention, T8): a
+# sign-off ATTESTS a human reviewed a section at a specific hash — the section
+# sha is RECOMPUTED (un-fakeable, via the attestation kernel), the response must
+# name the slug and, for a HUMAN-REQUIRED section, engage the change.
+# ---------------------------------------------------------------------------
+
+_NB_TEMPLATE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data)
+"""
+
+# ``load-data`` is byte-identical to the template (inherited, no assertions →
+# AUTO_CLEARED); ``model-fit`` diverges and adds an assertion (modified + an
+# ungreen assert → HUMAN_REQUIRED).
+_NB_SOURCE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data, regularization=0.5)
+assert model.converged
+"""
+
+
+def _write_notebook_fixture(
+    tmp_path: Path,
+    *,
+    source: str = _NB_SOURCE,
+    template: str = _NB_TEMPLATE,
+    audit_id: str = "audit-x",
+) -> None:
+    (tmp_path / "source.py").write_text(source, encoding="utf-8")
+    (tmp_path / "template.py").write_text(template, encoding="utf-8")
+    interview = {
+        "audited_source": {
+            "source": "source.py",
+            "template": "template.py",
+            "audit_id": audit_id,
+        }
+    }
+    import json as _json
+
+    (tmp_path / "interview.json").write_text(_json.dumps(interview), encoding="utf-8")
+
+
+def _nb_shas(
+    slug: str, *, source: str = _NB_SOURCE, template: str = _NB_TEMPLATE
+) -> tuple[str, str]:
+    """The current ``(section_sha, view_sha)`` for *slug* — what a real sign-off asserts."""
+    from hpc_agent.ops.notebook.audit_view import build_audit_view
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    src = parse_percent_source(source)
+    tmpl = parse_percent_source(template)
+    sect = next(s for s in src.sections if s.slug == slug)
+    sv = next(v for v in build_audit_view(src, tmpl, ()).sections if v.slug == slug)
+    return sect.section_sha, sv.view_sha
+
+
+def _write_section_render(
+    tmp_path: Path,
+    *,
+    section: str,
+    audit_id: str = "audit-x",
+    source: str = _NB_SOURCE,
+    template: str = _NB_TEMPLATE,
+) -> Path:
+    """Write the content-addressed TRUSTED-DISPLAY render for *section* (T8 lock).
+
+    Mirrors what ``notebook-audit-view`` does per section — the render-then-sign
+    contract the T8 gate now enforces. Built from the SAME (source, template) the
+    sign-off's view_sha/section_sha derive from, so the render is current.
+    """
+    from hpc_agent.ops.notebook.audit_view import build_audit_view
+    from hpc_agent.ops.notebook.render_store import write_render
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    src = parse_percent_source(source)
+    tmpl = parse_percent_source(template)
+    sv = next(v for v in build_audit_view(src, tmpl, ()).sections if v.slug == section)
+    return write_render(tmp_path, audit_id=audit_id, view=sv)
+
+
+def _signoff(
+    tmp_path: Path,
+    *,
+    section: str,
+    response: str,
+    section_sha: str,
+    view_sha: str = "view-sha-1",
+    audit_id: str = "audit-x",
+    resolved_extra: dict[str, object] | None = None,
+    render: bool = True,
+    render_source: str = _NB_SOURCE,
+    render_template: str = _NB_TEMPLATE,
+    **overrides: object,
+) -> AppendDecisionResult:
+    # Render-then-sign (T8 trusted-display lock): by default write the render for
+    # this section first, so the sign-off finds the current artifact. Tests probing
+    # the missing/stale-render refusals pass ``render=False`` and stage the render
+    # (or its absence) themselves.
+    if render:
+        _write_section_render(
+            tmp_path,
+            section=section,
+            audit_id=audit_id,
+            source=render_source,
+            template=render_template,
+        )
+    resolved: dict[str, object] = {
+        "audit_id": audit_id,
+        "section": section,
+        "section_sha": section_sha,
+        "view_sha": view_sha,
+    }
+    if resolved_extra:
+        resolved.update(resolved_extra)
+    base: dict[str, object] = {
+        "scope_kind": "notebook",
+        "scope_id": audit_id,
+        "block": "notebook-sign-off",
+        "response": response,
+        "resolved": resolved,
+    }
+    base.update(overrides)
+    return append_decision(experiment_dir=tmp_path, spec=AppendDecisionInput.model_validate(base))
+
+
+def test_signoff_current_sha_and_engaging_response_passes(tmp_path: Path) -> None:
+    """The green path: the asserted sha matches the recompute, the response names
+    the slug AND engages a diff identifier — the HUMAN_REQUIRED bar is met."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    assert out.record.resolved["section"] == "model-fit"
+    assert "redundant" not in out.record.resolved
+
+
+def test_signoff_sha_mismatch_refused(tmp_path: Path) -> None:
+    """Lock 2: an asserted section_sha that does not match the recomputed one is
+    refused — a hash cannot be asserted into existence."""
+    _write_notebook_fixture(tmp_path)
+    with pytest.raises(errors.SpecInvalid, match="does not match the recomputed"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha="deadbeef" * 8,
+        )
+    # Nothing was journaled.
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "notebook", "scope_id": "audit-x"}),
+    )
+    assert result.count == 0
+
+
+def test_signoff_bare_ack_refused(tmp_path: Path) -> None:
+    """Lock 3 floor: a bare `y` cannot sign off — signing is a HUMAN act."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="HUMAN act"):
+        _signoff(
+            tmp_path, section="model-fit", response="y", section_sha=section_sha, view_sha=view_sha
+        )
+
+
+def test_signoff_missing_slug_token_refused(tmp_path: Path) -> None:
+    """Lock 3: the response must NAME the section slug (token-exact, #26)."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must NAME the section slug"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="looks good, the regularization term is fine",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_human_required_generic_praise_refused(tmp_path: Path) -> None:
+    """D-attention: a HUMAN_REQUIRED section demands the response ENGAGE the
+    change — naming the slug with only generic praise is refused."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit looks great, nice work",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_logged_utterance_lands_when_response_is_mechanical(tmp_path: Path) -> None:
+    """The tiered evidence leg (run-#12 finding 9): with the capture hook / popup
+    log present, a logged human utterance that names the slug and engages the
+    diff lands the sign-off — the agent-relayed response is only the record.
+    This is the leg that lets the E4 elicitation retry succeed. Render written
+    FIRST: only an utterance that post-dates the render counts (finding 10)."""
+    _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    _log_utterance(
+        tmp_path, "sign model-fit — the regularization=0.5 term is intentional, converged asserted"
+    )
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="sign-off requested: model-fit",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+
+
+def test_signoff_composed_response_refused_when_log_lacks_signoff(tmp_path: Path) -> None:
+    """The run-#11 laundering closure: with a live utterance log, an agent-composed
+    response that would pass every token check attests nothing — the human never
+    typed a sign-off."""
+    _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_logged_generic_praise_still_refused(tmp_path: Path) -> None:
+    """The raised HUMAN_REQUIRED bar applies to the logged utterance too — naming
+    the slug with generic praise engages nothing."""
+    _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    _log_utterance(tmp_path, "model-fit looks great, nice work")
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="sign-off requested: model-fit",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_stale_utterance_refused_temporal_binding(tmp_path: Path) -> None:
+    """Run-#12 finding 10 (the live false-pass): a prior prompt that happens to
+    name the slug + diff identifiers is NOT attestation — candidates must
+    post-date the render the human signs. The render's mtime is pushed forward
+    to make the pre-existing utterance unambiguously stale."""
+    import os as _os
+    import time as _time
+
+    _write_notebook_fixture(tmp_path)
+    _log_utterance(
+        tmp_path,
+        "resume the run: model-fit uses regularization=0.5, converged asserted — popup expected",
+    )
+    render = _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    future = _time.time() + 300
+    _os.utime(render, times=(future, future))
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="sign-off requested: model-fit",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_auto_cleared_accepted_and_marked_redundant(tmp_path: Path) -> None:
+    """An AUTO_CLEARED section accepts a voluntary human sign-off but marks it
+    redundant (the recorded accept-vs-refuse decision)."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("load-data")
+    out = _signoff(
+        tmp_path,
+        section="load-data",
+        response="reviewed load-data anyway to be safe",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    assert out.record.resolved["redundant"] is True
+
+
+def test_signoff_missing_view_sha_refused(tmp_path: Path) -> None:
+    """view_sha binds what-the-human-saw (D5) and is required, non-empty."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, _ = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="view_sha"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha=section_sha,
+            view_sha="",
+        )
+
+
+def test_signoff_unresolvable_source_refused(tmp_path: Path) -> None:
+    """No interview.json audited_source and no resolved['source'] → the source
+    cannot be recomputed → REFUSED loudly (never silently skipped)."""
+    section_sha, view_sha = _nb_shas("model-fit")  # a sha the gate can never confirm
+    with pytest.raises(errors.SpecInvalid, match="could not resolve"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_source_via_resolved_path_overrides_interview(tmp_path: Path) -> None:
+    """The caller may supply the source/template paths directly in resolved."""
+    (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
+    (tmp_path / "t.py").write_text(_NB_TEMPLATE, encoding="utf-8")
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit regularization=0.5 verified",
+        section_sha=section_sha,
+        view_sha=view_sha,
+        resolved_extra={"source": "s.py", "template": "t.py"},
+    )
+    assert out.count == 1
+
+
+def test_signoff_no_template_refused(tmp_path: Path) -> None:
+    """FULL-VIEW RECOMPUTE (v1.6, supersedes the retired conservative-empty-template
+    boundary): the canonical view is a diff-from-template projection, so a sign-off
+    whose template cannot be resolved (no resolved['template'], no interview.json)
+    is REFUSED loudly — the signed view_sha is not reproducible without the
+    template."""
+    (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
+    section_sha, view_sha = _nb_shas("load-data")
+    with pytest.raises(errors.SpecInvalid, match="could not resolve"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data: read_csv on input.csv is correct",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            resolved_extra={"source": "s.py"},
+        )
+
+
+def test_signoff_block_is_notebook_only(tmp_path: Path) -> None:
+    """The notebook-sign-off block is refused for a non-notebook scope_kind."""
+    with pytest.raises(errors.SpecInvalid, match="only valid for scope_kind='notebook'"):
+        _append(tmp_path, block="notebook-sign-off", response="model-fit reviewed")
+
+
+def test_notebook_scope_non_signoff_block_unaffected(tmp_path: Path) -> None:
+    """A notebook-scoped record under a DIFFERENT block passes untouched — the
+    gate keys strictly on the notebook-sign-off block."""
+    out = append_decision(
+        experiment_dir=tmp_path,
+        spec=AppendDecisionInput.model_validate(
+            {
+                "scope_kind": "notebook",
+                "scope_id": "audit-x",
+                "block": "notebook-note",
+                "response": "y",
+                "resolved": {},
+            }
+        ),
+    )
+    assert out.count == 1
+
+
+def test_signoff_gate_routes_through_attestation_kernel(tmp_path: Path) -> None:
+    """Enforcement-map route-through (docs/internals/engineering-principles.md):
+    the sign-off recompute lock calls the ONE attestation kernel `bind`, never a
+    re-inlined recompute-and-compare (the migrating-member assertion T8 adds)."""
+    import inspect
+
+    from hpc_agent.ops.decision import journal as _journal
+
+    src = inspect.getsource(_journal._assert_signoff_authorship)
+    assert "attestation.bind(" in src
+
+
+def test_signoff_gate_routes_through_canonical_view(tmp_path: Path) -> None:
+    """One-definition route-through (v1.6 full-view recompute): the gate builds the
+    view via the shared ``build_canonical_view`` (through the notebook_view facade),
+    never a re-inlined view build — so its view_shas match the verbs' + plugin's."""
+    import inspect
+
+    from hpc_agent.ops.decision import journal as _journal
+
+    src = inspect.getsource(_journal._assert_signoff_authorship)
+    assert "build_canonical_view(" in src
+
+
+def test_no_signoff_affordance_in_registry(tmp_path: Path) -> None:
+    """Lock 1 (no affordance): NO primitive is named like a sign-off verb — a
+    sign-off is an append-decision record or nothing (D5 lock 1). append-decision
+    is the only write path."""
+    from tests._registry_helpers import core_only_registry
+
+    offenders = [name for name in core_only_registry() if "sign-off" in name or "signoff" in name]
+    assert offenders == [], f"a sign-off verb affordance leaked into the registry: {offenders}"
+
+
+def test_no_unlock_affordance_in_registry_or_chains(tmp_path: Path) -> None:
+    """The no-unlock-verb doctrine's affordance leg (enforcement map: 'a
+    scope-unlock verb / chain-reachable unlock step appears' fires the row): NO
+    primitive is named like an unlock/relax verb, and NO chain table step carries
+    one — a scope unlock is an append-decision record under the gated block or
+    nothing (mirrors ``test_no_signoff_affordance_in_registry``)."""
+    from hpc_agent.infra.block_chain import ORDER
+    from tests._registry_helpers import core_only_registry
+
+    offenders = [name for name in core_only_registry() if "unlock" in name or "relax" in name]
+    assert offenders == [], f"an unlock verb affordance leaked into the registry: {offenders}"
+    chain_offenders = [
+        step for chain in ORDER.values() for step in chain if "unlock" in step or "relax" in step
+    ]
+    assert chain_offenders == [], (
+        f"a chain-reachable unlock step leaked into a chain table: {chain_offenders}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trusted-display lock (v1.5): a sign-off requires the content-addressed render
+# for what-the-human-saw to exist on disk AND be current at append. The audit
+# view relayed in chat is model-carried; the render file code wrote is trusted.
+# ---------------------------------------------------------------------------
+
+
+def test_signoff_no_render_file_refused(tmp_path: Path) -> None:
+    """No render artifact on disk → the sign-off is refused NAMING the path — the
+    unforceable chat relay is not enough; the code-written render must exist."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="trusted-display lock"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            render=False,  # stage NO render
+        )
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "notebook", "scope_id": "audit-x"}),
+    )
+    assert result.count == 0
+
+
+def test_signoff_render_present_and_current_passes(tmp_path: Path) -> None:
+    """Render present + current (its header section_sha == the recompute) → the
+    sign-off lands. The render was written by _write_section_render (the view verb's
+    job) from the same current source."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    # The render artifact is on disk at the content-addressed path.
+    from hpc_agent.ops.notebook.render_store import read_render_header, render_path
+
+    path = render_path(tmp_path, audit_id="audit-x", section="model-fit", view_sha=view_sha)
+    header = read_render_header(path)
+    assert header is not None
+    assert header["view_sha"] == view_sha and header["section"] == "model-fit"
+
+
+def test_signoff_edit_after_render_refused(tmp_path: Path) -> None:
+    """Edit-after-render: the render was produced, then the source was edited (its
+    recomputed sha moved) and the record's own sha updated so the bind lock passes —
+    the STALE render's header sha no longer matches, so the sign-off is refused. This
+    is exactly the seam the bind lock alone does NOT cover."""
+    _write_notebook_fixture(tmp_path)
+    _old_sha, old_view_sha = _nb_shas("model-fit")
+    # Render produced against the ORIGINAL source.
+    _write_section_render(tmp_path, section="model-fit")
+    # Now edit the source so model-fit's sha moves.
+    edited = _NB_SOURCE.replace("regularization=0.5", "regularization=0.9")
+    (tmp_path / "source.py").write_text(edited, encoding="utf-8")
+    new_sha, _new_view_sha = _nb_shas("model-fit", source=edited)
+    with pytest.raises(errors.SpecInvalid, match="STALE"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: regularization=0.9 change reviewed",
+            section_sha=new_sha,  # current → bind passes
+            view_sha=old_view_sha,  # addresses the now-stale render
+            render=False,  # do NOT re-render; the stale artifact stays
+        )
+
+
+def test_signoff_render_view_sha_mismatch_refused(tmp_path: Path) -> None:
+    """A render artifact at the content-addressed path whose header disagrees with
+    the signed view_sha is refused — the defensive cross-reference leg (the render
+    header must agree on view_sha/section, not merely exist)."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    from hpc_agent.ops.notebook.render_store import render_path
+
+    # Hand-write a render at the address the gate will look up, but with a WRONG
+    # header view_sha (a corrupt / wrong artifact).
+    path = render_path(tmp_path, audit_id="audit-x", section="model-fit", view_sha=view_sha)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "<!-- hpc-render audit_id: audit-x -->\n"
+        "<!-- hpc-render section: model-fit -->\n"
+        f"<!-- hpc-render section_sha: {section_sha} -->\n"
+        "<!-- hpc-render view_sha: not-the-signed-view -->\n\n"
+        "# stale body\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(errors.SpecInvalid, match="does not match the signed view"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term reviewed",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            render=False,
+        )
+
+
+def test_signoff_redundant_requires_render(tmp_path: Path) -> None:
+    """The trusted-display lock applies to a REDUNDANT (auto-cleared) sign-off too:
+    the human claims a review, so the artifact must exist. Without a render it is
+    refused; with one it lands and is marked redundant."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("load-data")
+    with pytest.raises(errors.SpecInvalid, match="trusted-display lock"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="reviewed load-data anyway to be safe",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            render=False,
+        )
+    out = _signoff(
+        tmp_path,
+        section="load-data",
+        response="reviewed load-data anyway to be safe",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    assert out.record.resolved["redundant"] is True
+
+
+# ---------------------------------------------------------------------------
+# FULL-VIEW RECOMPUTE (v1.6): the gate RECOMPUTES view_sha from the canonical
+# ingredients — real lint (recorded roots), journaled receipts, recorded order —
+# and refuses a mismatch. A section human-required SOLELY by a lint flag now
+# refuses a bare-slug sign-off (the closed conservative-floor gap).
+# ---------------------------------------------------------------------------
+
+# ``load-data`` reads a path literal (``data/input.csv``) and is byte-identical to
+# the template (inherited). Present data file → the section is auto_cleared; a
+# MISSING data file makes the executes-live lint flag the section, flipping it to
+# human_required and MOVING its per-section view_sha.
+_LINT_TEMPLATE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("data/input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data)
+"""
+
+_LINT_SOURCE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("data/input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data, regularization=0.5)
+assert model.converged
+"""
+
+
+def _write_lint_fixture(
+    tmp_path: Path, *, data_present: bool, audit_id: str = "audit-lint"
+) -> None:
+    """Source/template + interview.json recording input_roots; optional data file."""
+    import json as _json
+
+    (tmp_path / "source.py").write_text(_LINT_SOURCE, encoding="utf-8")
+    (tmp_path / "template.py").write_text(_LINT_TEMPLATE, encoding="utf-8")
+    (tmp_path / "interview.json").write_text(
+        _json.dumps(
+            {
+                "audited_source": {
+                    "source": "source.py",
+                    "template": "template.py",
+                    "audit_id": audit_id,
+                    "input_roots": ["."],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    if data_present:
+        (tmp_path / "data").mkdir(exist_ok=True)
+        (tmp_path / "data" / "input.csv").write_text("x\n1\n", encoding="utf-8")
+
+
+def _canonical_view(tmp_path: Path, audit_id: str = "audit-lint") -> NotebookAuditViewResult:
+    """Run notebook-audit-view (CANONICAL) — writes the renders, returns the result."""
+    from hpc_agent._wire.queries.notebook_audit_view import NotebookAuditViewSpec
+    from hpc_agent.ops.notebook.view_op import notebook_audit_view
+
+    return notebook_audit_view(
+        experiment_dir=tmp_path,
+        spec=NotebookAuditViewSpec.model_validate(
+            {"audit_id": audit_id, "source": "source.py", "template": "template.py"}
+        ),
+    )
+
+
+def test_signoff_stale_view_sha_refused_when_lint_input_vanishes(tmp_path: Path) -> None:
+    """The core defect fix: view once (data present → load-data auto_cleared, its
+    view_sha V1, render written at V1), THEN the data file vanishes, THEN sign V1.
+    The section BODY is unchanged (bind passes) and the render exists (section_sha
+    still current), so the gate's FULL recompute catches the moved lint ingredient —
+    the recomputed view_sha differs from V1 → refused, naming the ingredient class."""
+    _write_lint_fixture(tmp_path, data_present=True)
+    result = _canonical_view(tmp_path)
+    by_slug = {s.slug: s for s in result.sections}
+    assert result.canonical is True
+    ld = by_slug["load-data"]
+
+    # The data file vanishes AFTER the view was rendered/signed.
+    (tmp_path / "data" / "input.csv").unlink()
+
+    with pytest.raises(errors.SpecInvalid, match="full-view recompute"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data: read_csv on data/input.csv reviewed",
+            section_sha=ld.section_sha,
+            view_sha=ld.view_sha,
+            audit_id="audit-lint",
+            render=False,  # the V1 render is already on disk from the view call
+        )
+
+
+def test_signoff_tier_by_real_lint_flag_refuses_bare_slug(tmp_path: Path) -> None:
+    """Closed gap: a section human-required SOLELY by a lint flag (a missing data
+    path — no diff, no assertion) now recomputes as HUMAN_REQUIRED at the gate, so a
+    bare-slug sign-off that does not ENGAGE the change is refused."""
+    from hpc_agent.ops.notebook.audit_view import HUMAN_REQUIRED
+
+    _write_lint_fixture(tmp_path, data_present=False)  # data missing → lint flags load-data
+    result = _canonical_view(tmp_path)
+    ld = {s.slug: s for s in result.sections}["load-data"]
+    assert ld.tier == HUMAN_REQUIRED  # the lint flag forced it
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data reviewed, looks good",  # names slug, engages nothing
+            section_sha=ld.section_sha,
+            view_sha=ld.view_sha,
+            audit_id="audit-lint",
+            render=False,
+        )
+
+
+def test_signoff_canonical_flow_end_to_end(tmp_path: Path) -> None:
+    """lint → auto-clear → view → sign with REAL flags: the default canonical flow
+    produces a gate-accepted sign-off. model-fit (modified) is signed with an
+    engaging response; the canonical view_sha is accepted."""
+    from hpc_agent._wire.actions.notebook_auto_clear import NotebookAutoClearSpec
+    from hpc_agent.ops.notebook.auto_clear_op import notebook_auto_clear
+
+    _write_lint_fixture(tmp_path, data_present=True)
+    ac = notebook_auto_clear(
+        experiment_dir=tmp_path,
+        spec=NotebookAutoClearSpec.model_validate(
+            {"audit_id": "audit-lint", "source": "source.py", "template": "template.py"}
+        ),
+    )
+    assert "load-data" in [c.section for c in ac.cleared]
+    result = _canonical_view(tmp_path)
+    mf = {s.slug: s for s in result.sections}["model-fit"]
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+        section_sha=mf.section_sha,
+        view_sha=mf.view_sha,
+        audit_id="audit-lint",
+        render=False,
+    )
+    # The scope journal now holds the load-data auto-clear + this model-fit sign-off.
+    assert out.record.resolved["section"] == "model-fit"
+    assert "redundant" not in out.record.resolved
+
+
+def test_signoff_preview_view_sha_refused(tmp_path: Path) -> None:
+    """A PREVIEW view (canonical=false — built with an explicit lint_findings
+    override) carries per-section view_shas the gate recomputes differently, so
+    signing a preview view_sha is refused."""
+    from hpc_agent._wire.queries.notebook_audit_view import NotebookAuditViewSpec
+    from hpc_agent.ops.notebook.view_op import notebook_audit_view
+
+    _write_lint_fixture(tmp_path, data_present=True)
+    preview = notebook_audit_view(
+        experiment_dir=tmp_path,
+        spec=NotebookAuditViewSpec.model_validate(
+            {
+                "audit_id": "audit-lint",
+                "source": "source.py",
+                "template": "template.py",
+                "lint_findings": [{"rule": "executes_live", "section": "load-data", "detail": "x"}],
+            }
+        ),
+    )
+    assert preview.canonical is False
+    ld = {s.slug: s for s in preview.sections}["load-data"]
+    with pytest.raises(errors.SpecInvalid, match="full-view recompute"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data: read_csv on data/input.csv reviewed",
+            section_sha=ld.section_sha,
+            view_sha=ld.view_sha,
+            audit_id="audit-lint",
+            render=False,
+        )
+
+
+# ---------------------------------------------------------------------------
+# E2 (docs/design/mcp-elicitation.md D4/E2): the authorship-refusal marker.
+# The authorship/sign-off BAR raise sites attach
+# ``failure_features.authorship_evidence == "missing"`` — a machine-readable
+# discriminator the MCP elicitation hook keys on WITHOUT parsing prose. It must
+# survive the real CLI envelope path (``cli/_helpers._err_from_hpc`` → JSON on
+# stdout, exactly what ``cli/dispatch.main`` runs on an HpcError) AND survive the
+# synthesis trap: ``_err_from_hpc`` synthesizes a DEFAULT ``failure_features`` for
+# EVERY spec_invalid, so a generic refusal has the BLOCK but not the KEY.
+# ---------------------------------------------------------------------------
+
+
+def _err_envelope(call: Callable[[], object]) -> dict[str, Any]:
+    """Route the HpcError a refusing append raises through the CLI output boundary.
+
+    ``cli/dispatch.main`` catches ``errors.HpcError`` and returns
+    ``_err_from_hpc(exc)`` (dispatch.py) — this reproduces that exact seam and
+    returns the emitted ok:false envelope dict, the real path E2's marker rides.
+    """
+    import contextlib
+    import io
+    import json as _json
+
+    from hpc_agent.cli._helpers import _err_from_hpc
+
+    with pytest.raises(errors.HpcError) as ei:
+        call()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _err_from_hpc(ei.value)
+    env: dict[str, Any] = _json.loads(buf.getvalue())
+    assert env["ok"] is False
+    assert env["error_code"] == "spec_invalid"
+    return env
+
+
+def test_signoff_bare_ack_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """A notebook sign-off bare-ack refusal surfaces the E2 marker through the
+    envelope's ``failure_features``."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path, section="model-fit", response="y", section_sha=section_sha, view_sha=view_sha
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_signoff_slug_not_named_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The slug-naming floor refusal is an authorship-bar refusal → marked."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="looks good, the regularization term is fine",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_signoff_human_required_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The raised HUMAN_REQUIRED 'engage the change' refusal is authorship → marked."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit looks great, nice work",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_unlock_bare_ack_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The scope-unlock bare-ack refusal is authorship → marked."""
+    env = _err_envelope(lambda: _unlock(tmp_path, response="y"))
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_unlock_harness_mismatch_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The scope-unlock harness-captured-mismatch refusal is authorship → marked."""
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    env = _err_envelope(
+        lambda: _unlock(tmp_path, response="reopen the embargoed evaluation partition")
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_human_authorship_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The human-authorship gate (proving-run-#4 shape) refusal is marked."""
+    env = _err_envelope(
+        lambda: _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            proposal=_RUN4_PROPOSAL,
+            resolved={"task_generator": _RUN4_TASK_GENERATOR},
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_generic_spec_invalid_has_features_without_authorship_key(tmp_path: Path) -> None:
+    """The synthesis trap: a generic (non-authorship) spec_invalid refusal — here the
+    code-derived-field gate — still carries a synthesized ``failure_features`` BLOCK
+    (error_class/error_class_raw), but WITHOUT the ``authorship_evidence`` KEY. The
+    MCP hook must key on the KEY, never the block's presence."""
+    env = _err_envelope(lambda: _append(tmp_path, resolved={"executor": "monte_carlo_pi"}))
+    features = env["failure_features"]
+    assert features is not None
+    assert "authorship_evidence" not in features
+    # The synthesized default is intact (proves the block is present-but-different).
+    assert features.get("error_class") == "code_bug"
+
+
+def test_structural_signoff_refusal_not_marked_authorship(tmp_path: Path) -> None:
+    """A STRUCTURAL sign-off refusal (a stale/asserted section_sha — the recompute
+    lock, not missing authorship) must NOT carry the marker: re-eliciting a human
+    utterance cannot fix a hash mismatch, so the MCP retry-once must not fire."""
+    _write_notebook_fixture(tmp_path)
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha="deadbeef" * 8,
+        )
+    )
+    features = env["failure_features"]
+    # Either the synthesized default (no authorship key) — never the marker.
+    assert features is None or "authorship_evidence" not in features
+
+
+def test_unresolvable_source_signoff_refusal_not_marked_authorship(tmp_path: Path) -> None:
+    """An unresolvable-source sign-off refusal is a setup error, not missing
+    authorship → not marked."""
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+    )
+    features = env["failure_features"]
+    assert features is None or "authorship_evidence" not in features
+
+
+def test_success_envelope_carries_no_failure_features(tmp_path: Path, capsys: Any) -> None:
+    """The end-to-end success path (in-process ``dispatch.main``): a passing
+    append-decision emits an ok:true envelope with no ``failure_features`` at all —
+    the marker is a refusal-only discriminator."""
+    import json
+
+    from hpc_agent.cli.dispatch import main
+
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(
+        json.dumps(
+            {
+                "scope_kind": "run",
+                "scope_id": "run-e2",
+                "block": "submit.S1",
+                "response": "y",
+                "resolved": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = main(["append-decision", "--experiment-dir", str(tmp_path), "--spec", str(spec_file)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    env = json.loads([line for line in out.splitlines() if line.strip().startswith("{")][-1])
+    assert env["ok"] is True
+    assert "failure_features" not in env

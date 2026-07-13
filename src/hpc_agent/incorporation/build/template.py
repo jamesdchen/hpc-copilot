@@ -12,8 +12,10 @@ Deliberately **not a wire primitive.** It is a human-facing CLI command
 primitive catalog that headless orchestrators compose against. The
 scaffold is bilingual via ``--shape``: ``script`` (the default — a
 ``train.py`` with ``@register_run`` + argparse, agent-writable) and
-``notebook`` (``notebooks/experiment.ipynb``, the literate / iteration
-shape). Both shapes carry the same ``@register_run`` contract; see
+``notebook`` (``notebooks/experiment.py``, jupytext percent format — the
+literate / iteration shape, and the audit doctrine's reviewable source;
+raw ``.ipynb`` stays a caller-side render). Both shapes carry the same
+``@register_run`` contract; see
 ``docs/internals/experiment-contract.md``.
 
 Two tiers, with different overwrite discipline:
@@ -62,7 +64,7 @@ _ROOT_ASSETS: tuple[tuple[str, str], ...] = (
 # `@register_run`-decorated function (see docs/internals/experiment-contract.md).
 _SHAPE_ASSETS: dict[str, tuple[str, str]] = {
     "script": ("train.py.tmpl", "train.py"),
-    "notebook": ("experiment.ipynb.tmpl", "notebooks/experiment.ipynb"),
+    "notebook": ("experiment.py.tmpl", "notebooks/experiment.py"),
 }
 
 # The single line a root Makefile needs; appended non-destructively.
@@ -78,7 +80,7 @@ _MAKEFILE_INCLUDE = "include .hpc/template.mk"
             "<repo_dir>/{.hpc/template.mk,.hpc/scaffold.py} (self-healing); "
             "<repo_dir>/{Makefile,.gitignore,pyproject.toml,.pre-commit-config.yaml,"
             "conftest.py,.github/workflows/ci.yml,train.py | "
-            "notebooks/experiment.ipynb} (refuse-without-force at repo root)",
+            "notebooks/experiment.py} (refuse-without-force at repo root)",
         ),
     ],
     error_codes=[errors.SpecInvalid],
@@ -110,7 +112,8 @@ _MAKEFILE_INCLUDE = "include .hpc/template.mk"
                     "Which experiment-seed shape to inject: `script` writes "
                     "`train.py` (the default — peer to the notebook scaffold, "
                     "for already-finalized executors), `notebook` writes "
-                    "`notebooks/experiment.ipynb`. See "
+                    "`notebooks/experiment.py` (jupytext percent format — "
+                    "ipynb is a caller-side render). See "
                     "docs/internals/experiment-contract.md."
                 ),
             ),
@@ -135,8 +138,8 @@ def build_template(*, repo_dir: Path, force: bool = False, shape: str = "script"
     shape:
         Which experiment-seed shape to inject — ``"script"`` (the default;
         writes ``train.py``) or ``"notebook"`` (writes
-        ``notebooks/experiment.ipynb``). Both carry the same
-        ``@register_run`` contract; see
+        ``notebooks/experiment.py``, jupytext percent format). Both carry
+        the same ``@register_run`` contract; see
         ``docs/internals/experiment-contract.md``.
 
     Returns
@@ -218,7 +221,7 @@ def build_template(*, repo_dir: Path, force: bool = False, shape: str = "script"
         framework.append(".hpc/pyproject-fragment.toml")
         needs_manual_merge.append("pyproject.toml")
 
-    # 4b. Experiment seed (train.py or notebooks/experiment.ipynb).
+    # 4b. Experiment seed (train.py or notebooks/experiment.py).
     #     Refuse-without-force — the user iterates on it in place.
     shape_asset, shape_rel = _SHAPE_ASSETS[shape]
     shape_dest = repo_dir / shape_rel

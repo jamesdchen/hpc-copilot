@@ -48,12 +48,16 @@ choice is auditable):
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._wire.fixtures.escalation import EscalationCluster
 from hpc_agent._wire.fixtures.failure_features import FailureFeatures
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from hpc_agent.state.pack_declarations import FailurePatternsDecl
     from hpc_agent.state.run_record import RunRecord
 
 __all__ = ["build_escalation_cluster", "build_failure_features"]
@@ -118,6 +122,73 @@ def _retry_facts(record: RunRecord, task_ids: list[Any]) -> tuple[int, list[str]
     return max_attempts, strategies
 
 
+def _cluster_stderr_text(cluster: dict[str, Any]) -> str:
+    """The stderr/log text a pack pattern matches against — the cluster's own
+    digest of the failure.
+
+    The cluster carries two text-bearing fields derived from the task stderr
+    (``ops.recover.runner_failures.cluster_failures_by_fingerprint``): the
+    noise-stripped ``fingerprint`` (its last exception line) and the raw
+    ``sample`` (the last 200 chars). Both are joined so a caller-opaque regex can
+    match either the normalized signature or the raw tail. This is READ-ONLY: the
+    pack never learns what the text means, and the match result never touches
+    ``error_class``/``category`` (S2 — no pattern→category mapping).
+    """
+    parts = [
+        value
+        for key in ("fingerprint", "sample")
+        if isinstance((value := cluster.get(key)), str) and value
+    ]
+    return "\n".join(parts)
+
+
+def _match_pack_patterns(
+    cluster: dict[str, Any],
+    failure_patterns: Sequence[FailurePatternsDecl] | None,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Compile + COUNT each declared regex over the cluster stderr; return the HITS.
+
+    Returns ``(pack_pattern_ids, pack_pattern_echoes)``:
+
+    * ``pack_pattern_ids`` — the sorted, deduped UNION of every hit id across all
+      opted-in packs (the flat evidence list the resolver reads).
+    * ``pack_pattern_echoes`` — one ``{pack, version, sha, pattern_ids}`` dict per
+      pack whose patterns hit, carrying that pack's own sorted/deduped hit ids and
+      the ``{pack, version, sha}`` echo copied verbatim.
+
+    MATCH-AND-RECORD ONLY (S2, ``docs/design/domain-packs.md``): core compiles,
+    searches, and records the id — it never maps a hit to a category, an action,
+    or a retry. Each regex is compiled DEFENSIVELY: a non-compiling pattern was
+    already shape-refused at pack load (``state/pack.py``), so belt-and-braces we
+    skip it rather than let a re-introduced bad regex crash the recover flow (the
+    load-time refusal is the disclosure). A pack that opted in but whose patterns
+    all miss contributes nothing — so an unmatched failure's vector is
+    byte-identical to the pre-packs shape.
+    """
+    if not failure_patterns:
+        return [], []
+    text = _cluster_stderr_text(cluster)
+    united: set[str] = set()
+    echoes: list[dict[str, Any]] = []
+    for decl in failure_patterns:
+        hits: set[str] = set()
+        for pattern_id, regex in decl.patterns.items():
+            try:
+                compiled = re.compile(regex)
+            except re.error:
+                # Belt-and-braces: shape validation already refused a non-compiling
+                # regex at load; skip-and-disclose (the load refusal is the
+                # disclosure) rather than crash the recover flow.
+                continue
+            if compiled.search(text):
+                hits.add(pattern_id)
+        if hits:
+            sorted_hits = sorted(hits)
+            united.update(sorted_hits)
+            echoes.append({**decl.echo.as_dict(), "pattern_ids": sorted_hits})
+    return sorted(united), echoes
+
+
 def build_escalation_cluster(cluster: dict[str, Any], *, run_id: str) -> EscalationCluster:
     """Build the :class:`EscalationCluster` provenance for one failure cluster.
 
@@ -138,6 +209,7 @@ def build_failure_features(
     *,
     record: RunRecord,
     sidecar: dict[str, Any] | None,
+    failure_patterns: Sequence[FailurePatternsDecl] | None = None,
 ) -> FailureFeatures:
     """Map one ``fetch_failures`` cluster + the run state → a :class:`FailureFeatures`.
 
@@ -154,10 +226,20 @@ def build_failure_features(
       seam; a retry count is not progress — see the module docstring).
     * ``attempts_this_episode`` — the max prior attempt count + the prior
       strategies, so the exhaustion fall-through can fire.
+    * ``pack_pattern_ids`` / ``pack_pattern_echoes`` — the hit ids (sorted,
+      deduped, united across packs) of any BOUND-pack ``failure_patterns`` regex
+      that matched the cluster stderr, plus the per-pack ``{pack, version, sha}``
+      echoes. *failure_patterns* is the resolved, pack-IGNORANT declaration list
+      the caller passes in (``state/pack_declarations.resolve_failure_patterns``);
+      this glue never learns a pack exists. MATCH-AND-RECORD ONLY (S2): a hit is
+      evidence for the resolver/human — it never changes ``error_class`` or any
+      other field. ``None`` when no pack opted in / nothing matched, so the vector
+      stays byte-identical to the pre-packs shape.
     """
     task_ids = list(cluster.get("task_ids") or [])
     resource_spec = _resource_spec_from_sidecar(sidecar)
     max_attempts, strategies = _retry_facts(record, task_ids)
+    pack_pattern_ids, pack_pattern_echoes = _match_pack_patterns(cluster, failure_patterns)
 
     # phase="unknown": a retry count is not a progress signal (see the module
     # docstring) and resolve() reads "unknown" as not-first_attempt. The
@@ -177,6 +259,10 @@ def build_failure_features(
                 "count": max_attempts,
                 "strategies": strategies or None,
             },
+            # S2: hit ids + per-pack echoes as EVIDENCE. `or None` keeps the
+            # no-hit vector byte-identical to the pre-packs envelope.
+            "pack_pattern_ids": pack_pattern_ids or None,
+            "pack_pattern_echoes": pack_pattern_echoes or None,
         }
     )
     return features

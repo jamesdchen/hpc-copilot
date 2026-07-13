@@ -1,0 +1,644 @@
+---
+status: shipped
+---
+# The harness-conformance kit — publishing the harness contract
+
+**Status: IMPLEMENTED (K1-K10 landed 2026-07-09 in the slate; status flipped
+2026-07-09 — the flip itself lagged the landing and was caught by the
+anti-vendor-lockout plan's inventory verification, unit T1).** Live surface:
+`src/hpc_agent/conformance/` (adapter protocol, capability tests,
+`report.py`, `export_attestations.py`, reference adapters `claude_code.py`
+[CONFORMING] and `notebook_render.py` [PARTIAL]), contract v1.0.0 three-way
+pinned, and the `conformance:` CI matrix job self-certifying both adapters
+on every push. Originally the hand-off plan (the `notebook-audit.md`
+pattern): settled decisions + rationale, file-disjoint Opus task waves,
+enforcement rows, boundary-drift flags. Cite `path::symbol`, never line
+numbers. Implementation drift is recorded in the drift log at the end.
+
+## Product intent
+
+`docs/internals/harness-contract.md` is documented but NOT published.
+Publishing a contract = a **version**, a **name**, and an **executable
+CONFORMANCE KIT** a second harness runs to prove conformance — the
+TCK / Web-Platform-Tests pattern. The kit does two jobs at once:
+
+1. It turns "harness-agnostic" from prose into a **checkable claim**: a
+   stranger's harness runs the kit against its own capability providers and
+   earns (or is refused) the named conformance verdict.
+2. It **pins our own side in CI**: the Claude Code hooks and the notebook
+   plugin are certified by the same kit on every push, so the contract can
+   never drift from the code that implements it (the same drift-guard
+   philosophy as `tests/contracts/test_harness_contract.py`, upgraded from
+   doc-prose pins to behavior).
+
+The protocol rides (user-approved, DECIDED inputs to this plan):
+
+- **Capability 1 rides MCP ELICITATION** where clients support it — the
+  elicitation sections of `docs/internals/harness-contract.md` have LANDED
+  (ba83eac3), and the `harness-capabilities` verb (`ops/harness_capabilities.py`)
+  EXISTS in the registry. This kit CONSUMES both; it builds neither. (K6
+  consumes the E3-a-reshaped `harness-capabilities` result; wave C's K10
+  re-reads the now-present elicitation sections before stamping the
+  version.)
+- **The attestation/dossier export steals the in-toto/DSSE Statement
+  envelope**: subject = sealed file digests, predicateType = our record
+  vocabulary, predicate = the records verbatim; v1 = unsigned Statements in
+  a DSSE-ready envelope. Ecosystem tools verify the bundle without hpc-agent.
+- **Capability negotiation is LSP-style DETECTION** (the
+  `harness-capabilities` verb): `declared == detected == behaved` is the
+  kit's negotiation assertion. No self-asserted capability manifests.
+- **Capability 2 splits into INSPECT and ACT**: INSPECT (reading the final
+  agent-visible message) may ride the OTel GenAI semantic conventions where
+  the harness emits them; ACT (forcing one continuation) has two conforming
+  implementation shapes — harness hooks (the
+  `_kernel/hooks/relay_audit_stop.py` posture) OR a **response gateway**
+  applying `ops/decision/verify_relay.py::verify_relay` pre-delivery. The
+  kit's scenario fixtures exercise both through one adapter seam.
+
+## Settled decisions
+
+### D-K1 — kit shape: a pytest package SHIPPED IN THE WHEEL, parameterized by a harness adapter
+
+The kit is a pytest test package at `src/hpc_agent/conformance/`, run as
+
+```bash
+pytest --pyargs hpc_agent.conformance --harness-adapter mypkg.adapter:build
+```
+
+**Where it lives — the tradeoff, recorded.** Three candidates:
+
+- `tests/conformance/` (repo-only): rejected — the kit's defining
+  requirement is running OUTSIDE our repo against a stranger's harness;
+  repo tests don't ship.
+- A separate installable (`hpc-agent-conformance` wheel): rejected — a
+  second release artifact means version-skew between contract, kit, and
+  reference implementation, plus duplicated release machinery. The
+  plugins-lane precedent (`examples/plugins/`) is explicitly UNPUBLISHED
+  example code, so it is not a home for a normative artifact either.
+- **A subpackage of the shipped `hpc_agent` wheel (chosen).** A conforming
+  harness necessarily has hpc-agent installed — the CLI is the invariant
+  substrate the harness wraps ("The CLI is the invariant substrate",
+  harness-contract.md) — so the kit rides the wheel the harness already
+  depends on, `pytest --pyargs` makes it runnable anywhere, fixtures ship
+  as package data, and the kit version is pinned to the package version by
+  construction. Cost: pytest becomes a runtime requirement *of running the
+  kit* — NOT of core; the kit package imports pytest only inside its own
+  test modules, and nothing in `hpc_agent` outside `conformance/` may
+  import from it (enforcement row below).
+
+### D-K2 — the adapter interface (exact)
+
+`src/hpc_agent/conformance/adapter.py` — stdlib-only, importable without
+pytest:
+
+```python
+class EnforcementOutcome(NamedTuple):
+    blocked: bool            # the harness forced a continuation
+    reason: str | None       # itemized mismatch summary when blocked
+
+class WakeEvent(NamedTuple):
+    woke: bool               # the driver was re-invoked after detach
+    terminal_seen: bool      # the wake observed the worker's terminal record
+
+class HarnessAdapter(Protocol):
+    name: str                # the harness's published name (report identity)
+
+    # --- capability 1: the out-of-band utterance channel ---
+    def write_utterance(self, experiment_dir: Path, text: str) -> None:
+        """Deliver *text* through YOUR harness's human-input channel
+        end-to-end, exactly as if a human typed it — so the record (if any)
+        lands via your writer, filters included. The kit never writes the
+        log directly; it drives your channel and reads the log back through
+        state/utterances.py::read_utterances."""
+
+    # --- capability 2: the relay enforcement point (ACT) ---
+    def run_enforcement_point(
+        self, experiment_dir: Path, final_message: str, *, previously_blocked: bool = False
+    ) -> EnforcementOutcome:
+        """Run YOUR enforcement seam over *final_message* as the final
+        agent-visible text for the cwd repo. Hook-shaped harnesses replay
+        their Stop seam; gateway-shaped harnesses run their pre-delivery
+        verify_relay pass. previously_blocked=True models the
+        stop_hook_active re-entry — a conforming seam NEVER blocks twice."""
+
+    # --- capability 3: backgrounding / wake ---
+    def start_background(self, experiment_dir: Path, argv: list[str]) -> Any: ...
+    def await_wake(self, handle: Any, timeout_s: float) -> WakeEvent: ...
+
+    # --- optional; kit skips the matching assertions when absent ---
+    def answer_question(
+        self, experiment_dir: Path, offered_labels: list[str], answer: str
+    ) -> None:
+        """Drive YOUR structured-question channel (the AskUserQuestion /
+        MCP-elicitation analog) with *answer* against *offered_labels* —
+        exercises the clicked-vs-typed provenance line (_is_clicked)."""
+
+    def detect_capabilities(self, experiment_dir: Path) -> frozenset[str]:
+        """Default implementation (provided): invoke the core
+        `harness-capabilities` verb via the CLI in the harness's
+        environment and return its detected set."""
+```
+
+Adapter loading: `--harness-adapter <module.path:factory>` (a zero-arg
+factory returning the adapter). "Declared" = the set of Protocol methods the
+adapter actually implements (no manifest field — implementing the callable
+IS the declaration; detection-only doctrine). Capability names are the three
+contract nouns: `"utterance-log"`, `"relay-enforcement"`, `"backgrounding"`.
+
+**Skips are honest, not failures**: an adapter without capability 3 gets the
+backgrounding modules SKIPPED and the final report names the degraded tier
+verbatim from the contract ("synchronous in-turn execution; correctness
+unaffected"). But the CONFORMANCE verdict ("conforming to harness contract
+v1") requires all three capabilities passing — the contract says a
+conforming harness MUST provide all three; anything less is reported as
+"partial: <capability list>", never as conforming.
+
+### D-K3 — per-capability assertions
+
+**Capability 1 — the utterance log** (`test_capability_utterance_log.py`).
+Every write goes through `adapter.write_utterance`; every read through
+`state/utterances.py::read_utterances`. Asserted, per the normative §2:
+
+- **Record schema byte-rules**: exactly `{ts, sha256, text}`, sorted-keys
+  JSON, one object per line, append-only oldest-first; writer adds no other
+  fields.
+- **Full-text sha**: `sha256` digests the FULL raw text even when `text` is
+  capped (fixture: a >4096-byte utterance; assert digest matches the
+  uncapped input).
+- **Codepoint truncation**: a multi-byte-codepoint fixture straddling the
+  `MAX_UTTERANCE_BYTES` boundary decodes cleanly — never a mid-codepoint
+  cut.
+- **Storage locator**: the record lands at
+  `state/utterances.py::utterances_path` for the fixture repo — i.e. the
+  writer reused `_current_homedir` + `repo_hash`, never a re-derived hash
+  (a divergent hash simply fails the read-back).
+- **No-scaffold**: writing against a repo with NO journal namespace leaves
+  ZERO footprint (no directory created, no exception).
+- **Provenance filters**: text opening with each `HARNESS_INJECTION_RE` tag,
+  fed through the adapter's human channel, must NOT land (the filter routes
+  through `state.utterances.is_harness_injected` — one definition; the kit
+  derives its tag fixtures FROM the exported regex so a filter extension
+  auto-extends the fixtures). A tag quoted mid-text MUST land. When
+  `answer_question` is implemented: a pure click on offered labels must not
+  land; typed "Other" residue must land (the `_is_clicked` line).
+- **Fail-open**: an unwritable log (read-only namespace fixture) degrades to
+  a clean no-op — the channel never raises into the harness.
+- **The consumer-defined pass (load-bearing integration assert)**: after the
+  adapter writes utterances stating a sweep ("20 seeds at 1M samples"),
+  `append-decision` committing a REQUIRED_CALLER `task_generator` derived
+  from that text is GRANTED at tier 1 by hpc-agent's own gate
+  (`ops/decision/journal.py::_assert_human_authorship` over
+  `::_harness_human_texts`), and a fabricated value the utterances never
+  stated is REFUSED. Both directions — the gate passing is only meaningful
+  because it can also fire (engineering-principles: verify a guard can
+  actually fire). This is the assertion that makes the kit a TCK rather
+  than a lint: the candidate harness's records satisfy the real consumer.
+
+**Capability 2 — relay enforcement** (`test_capability_relay.py`).
+Scenario fixtures: `(journal state, final message, expected verdict)`
+triples under `conformance/fixtures/relay/`, exercising every contradiction
+kind in `relay_audit_stop._CONTRADICTION_KINDS` plus the pass cases:
+
+- `number` — a rounded/altered numeric claim vs the recorded value;
+- `state` — "running" relayed over a journaled `failed` (the proving-run-#3
+  scenario), and the notebook form: a wrong section status / module
+  `passed` verdict (`verify_relay.py::verify_notebook_relay` reuses the
+  kind);
+- `run_id` — a run-id-like token matching no journaled id;
+- notebook `number` — a sha-hex matching neither current nor recorded shas;
+- PASS: `unverifiable` claims (a final message legitimately carries them),
+  truncation-prefix decimals, a message naming no run/audit at all;
+- **loop safety**: the same triple with `previously_blocked=True` must not
+  block (block at most once, never hard-block a session);
+- **fail-open**: an unreadable journal fixture → not blocked.
+
+The SAME triples certify both conforming ACT shapes — hooks and response
+gateway — because the adapter seam is outcome-shaped
+(`EnforcementOutcome`), not mechanism-shaped. INSPECT is the adapter's
+business (transcript tail, OTel GenAI `gen_ai` events, gateway buffer); the
+kit hands it the final text and judges only the ACT.
+
+**Capability 3 — backgrounding/wake** (`test_capability_backgrounding.py`).
+One detached-lifecycle fixture: the kit supplies a stub worker script that
+sleeps briefly and writes a terminal JSON into the journal namespace;
+`start_background` + `await_wake` must yield `woke=True, terminal_seen=True`
+within the timeout — i.e. the journal remained the durable rendezvous the
+woken driver reads. No scheduler, no SSH, no network.
+
+**Negotiation** (`test_negotiation.py`). The kit's closing assertion:
+`declared == detected == behaved` — the adapter's implemented-method set,
+the `harness-capabilities` verb's detected set (via
+`adapter.detect_capabilities`), and the set of capabilities whose kit
+modules actually PASSED must be one set. A harness that detects a
+capability it cannot behave, or behaves one detection misses, is
+non-conforming: detection is only trustworthy if it is exact.
+
+**The projection rule (verb → kit nouns; coherence review 2026-07-07).** The
+real `harness-capabilities` verb reports FOUR capabilities, one of which —
+`trusted_display` — it always reports as `"unknown"` (core cannot verify a
+harness renders trusted content; there is no kit noun for it, and it is
+EXCLUDED from the negotiation set). The other three project onto the kit's
+three contract nouns `{"utterance-log", "relay-enforcement",
+"backgrounding"}`; the negotiation set is that projection, never the raw
+four.
+
+**Which detection leg is a per-harness SEAM vs a core-side CONSTANT** (the
+honest-detection rule):
+
+- `"backgrounding"` detection is a CORE-SIDE constant — always true (the CLI
+  substrate always supports the detached-worker path), so the kit asserts
+  only BEHAVED for it (the fixture wakes), never a per-harness detection.
+- `"relay-enforcement"` and `"utterance-log"` detection are per-harness SEAMS.
+  For **Claude Code**, capability-1 detection is by SEAM — the hook needles
+  the verb probes. For a **non-Claude-Code harness**, capability-1 detection
+  is detection-BY-BEHAVIOR: the adapter's `write_utterance` path proving the
+  reader (`read_utterances`) accepts what it wrote, NOT the Claude-Code hook
+  needles (which a foreign harness never presents). A harness providing a
+  capability through a different seam is detected by BEHAVING it.
+- An honestly-PARTIAL adapter (a capability genuinely absent) earns a SKIP on
+  that capability's modules and is reported partial — never a negotiation
+  FAILURE. Negotiation fails only on three-way DISAGREEMENT for a capability
+  the harness DOES claim (detected-but-not-behaved, or behaved-but-not-
+  detected): detection must be exact for what it claims, silent for what it
+  skips.
+
+**Canonicalization** (`test_canonicalization.py`). Fixture payloads (JSON
+values + expected digests, committed under `conformance/fixtures/canon/`)
+recomputed byte-for-byte per the normative sha section: `sort_keys=True`
+(code-point key order — deliberately NOT RFC 8785), compact separators,
+`ensure_ascii=False`, UTF-8, SHA-256 lowercase hex; plus
+`state/audit_source.py::normalize_source` vectors (CRLF, lone CR, trailing
+whitespace). Fixtures include the adversarial cases where Python sort and
+JCS UTF-16 ordering DIVERGE (keys above U+FFFF vs BMP), so a non-Python
+implementation that silently plugged JCS fails loudly here — the recorded
+escape is `canon_version` on new records, never a silent swap.
+
+### D-K4 — the in-toto export: a SIBLING verb, `export-attestations`
+
+**Not an extension of `export-dossier`.** Three pins force the sibling:
+`tests/contracts/test_dossier_boundary.py` holds the manifest entry shape
+to exactly `{source, path, sha256, bytes}` by AST (a Statement-shaped entry
+breaks it), holds `DOSSIER_SOURCES` closed by equality, and bans
+`json.load(s)` in the module. The dossier stays the sealing layer; the
+attestation export is the PORTABILITY layer over it.
+
+- **Verb shape**: `export-attestations` (mutate, `agent_facing=True`,
+  idempotent on `run_id`), module `ops/export_attestations.py`, wire
+  `_wire/actions/export_attestations.py`. Spec
+  `{run_id, include_lineage?, output_path?}`; it calls the public
+  `ops/export_dossier.py::export_dossier` in-process (one gather
+  definition — never a second walk of the stores) and projects the sealed
+  entries into one Statement per bundled store file. Default output:
+  `<experiment>/_dossier/<run_id>.attestations.jsonl` (one DSSE envelope
+  per line).
+- **The Statement mapping table** (record store noun → predicateType URI;
+  scheme `https://hpc-agent.dev/attestation/<store-noun>/v1`, one URI per
+  `DOSSIER_SOURCES` noun):
+
+  | store noun (`DOSSIER_SOURCES`) | predicateType |
+  |---|---|
+  | `sidecar` | `https://hpc-agent.dev/attestation/sidecar/v1` |
+  | `decision-journal` | `.../decision-journal/v1` |
+  | `briefs` | `.../briefs/v1` |
+  | `block-terminal` | `.../block-terminal/v1` |
+  | `journal-record` | `.../journal-record/v1` |
+  | `scope-journal` | `.../scope-journal/v1` |
+  | `look-ledger` | `.../look-ledger/v1` |
+  | `aggregated` | `.../aggregated/v1` |
+  | `audited-source` | `.../audited-source/v1` |
+  | `notebook-journal` | `.../notebook-journal/v1` |
+  | `renders` | `.../renders/v1` |
+
+  The map is derived FROM `DOSSIER_SOURCES` (one closed vocabulary, one
+  derivation), so a new store noun automatically fails the sibling boundary
+  test until its URI row is added deliberately. **The table above is
+  illustrative of the derivation at plan time, not normative** — the
+  equality pin in the boundary test against the live `DOSSIER_SOURCES` is
+  the normative artifact. (Proof the posture is right: the first draft of
+  this table rotted before implementation even began — `renders` landed in
+  `DOSSIER_SOURCES` the same night this plan was written and the row above
+  was added by the 2026-07-07 pre-implementation review. K3 derives from
+  the CODE's set, and phases 2–4 of the slate add more nouns before K3
+  runs — see `docs/design/slate-sequencing.md` Phase 5.)
+- **Statement form**: `_type = https://in-toto.io/Statement/v1`; `subject`
+  = the entry's `{name: <archive path>, digest: {sha256: <entry sha>}}` —
+  digests copied VERBATIM from the dossier manifest, never recomputed here;
+  `predicate` = `{"contentType": "<application/x.jsonl | application/json |
+  text/x-python | application/octet-stream>", "content": "<the store's
+  bytes verbatim as UTF-8 text, or base64 for non-UTF-8>"}`. **The export
+  never parses record contents** — the predicate embeds the raw text; no
+  `json.loads` anywhere in the module (the dossier no-parse posture
+  extends, pinned by the same AST test shape).
+- **Unsigned v1, DSSE-ready**: each Statement rides a DSSE envelope
+  (`payloadType: application/vnd.in-toto+json`, base64 payload,
+  `signatures: []`). Signing is a future concern; the envelope shape means
+  adding a signature later changes nothing upstream.
+- **The kit assertion** (`conformance/test_attestation_export.py`): an
+  exported bundle round-trips through STOCK in-toto tooling — the
+  `in-toto-attestation` Python bindings parse every Statement and the
+  subject digests verify against the bundled dossier's entries. **Scope of
+  the claim, pinned (pre-implementation review 2026-07-07): "verify" here
+  means parse + subject-digest comparison, NOT DSSE signature
+  verification** — whether stock verifiers accept a `signatures: []`
+  envelope as valid is UNVERIFIED (the DSSE spec arguably requires ≥1
+  signature for envelope validity) and is an implementation-time CHECK for
+  K7: if stock tooling rejects empty-signature envelopes, the kit asserts
+  the parse/digest round-trip only and the doc prose for "ecosystem tools
+  verify the bundle" is narrowed to match. in-toto is
+  a **dev-dep of the kit's CI lane only** (installed in the conformance CI
+  job like the plugins job installs jupytext); the test module
+  `pytest.importorskip`s it, and it NEVER enters core dependencies.
+
+### D-K5 — self-conformance in CI: the first two certified harnesses ship with the kit
+
+Reference adapters live in `src/hpc_agent/conformance/adapters/`:
+
+- `claude_code.py` — drives the hook modules IN-PROCESS as the harness:
+  `write_utterance` builds a `UserPromptSubmit` payload and calls
+  `_kernel/hooks/utterance_capture.py::capture`; `answer_question` builds a
+  PostToolUse payload for `answer_capture.py::capture`;
+  `run_enforcement_point` builds a Stop payload (writing a synthetic
+  transcript JSONL) and calls `relay_audit_stop.py::build_hook_output`;
+  backgrounding drives the detach machinery's local worker path. No live
+  Claude Code needed — the hooks ARE the implementation under test.
+- `notebook_render.py` — the SECOND harness, certified FIRST among
+  externals: `write_utterance` materializes a rendered `.ipynb` with the
+  text typed into a sign-off cell and runs the plugin's
+  `notebook-ingest-signoffs` path (lazy plugin import; the CI job installs
+  `examples/plugins/hpc-agent-notebook-render` + the render stack).
+  **F1 update (2026-07-07, landed after this plan was drafted): ingest's
+  `write_utterance_log` now defaults FALSE and is documented
+  HUMAN-INVOKED-ONLY** — the adapter must pass `write_utterance_log=true`
+  EXPLICITLY, which is legitimate here by the flag's own contract: the
+  adapter IS the harness's human-input channel for the test (the kit's
+  `write_utterance` semantics are "as if a human typed it"), so it models
+  the human invocation rather than an agent setting the flag. The kit must
+  also cover the default-off direction: an ingest WITHOUT the flag must
+  leave the utterance log untouched (the F1 laundering close staying
+  closed is itself conformance behavior). It
+  certifies capability 1 (+ the consumer pass) and is honestly PARTIAL on
+  capabilities 2–3 — the report says so; the notebook harness has never
+  claimed relay enforcement.
+
+CI: a new `conformance` job in `.github/workflows/ci.yml`, plugins-style
+ISOLATED (matrix `adapter: [claude-code, notebook-render]`), offline only,
+installing in-toto + (for the notebook leg) the plugin and render stack.
+Isolation matters for the same reason as the plugins job: installing the
+plugin shifts the entry-point registry, which must never leak into the core
+`test` matrix.
+
+### D-K6 — publishing mechanics
+
+- **Contract version stamp**: `docs/internals/harness-contract.md` gains a
+  SemVer header line (`Contract version: 1.0.0`) and a core constant
+  `HARNESS_CONTRACT_VERSION = "1.0.0"` that the `harness-capabilities` verb
+  reports. **K10 explicitly OWNS both the constant and the verb's result
+  field that carries it** — the concurrent elicitation stream reshaped the
+  verb's evidence keys (`docs/design/mcp-elicitation.md` E3-a) but did not
+  add this field; the constant's single home is beside the verb in
+  `ops/harness_capabilities.py` (which now exists), and the doc stamp and the
+  constant are pinned equal by a contract test. Note (verified against code
+  2026-07-07): `_wire/queries/harness_capabilities.py::HarnessCapabilitiesResult`
+  is `extra="forbid"`, so "the result field that carries it" is a wire-MODEL
+  edit (a new field on the result model) + output-schema regen — not a loose
+  dict key; K10's regen tail covers it. The kit stamps its report
+  with both the contract version and `hpc_agent.__version__`.
+- **What "conforming to v1" claims**: all three capabilities' kit modules
+  passed, plus canonicalization and negotiation, against a named
+  `hpc-agent` version — stated as "conforming: harness contract v1
+  (kit hpc-agent X.Y.Z)". Partial results claim only the named
+  capabilities. The report never grades on a curve: skips are listed with
+  their contract-named degraded tier.
+- **Deprecation posture**: within major 1, changes are ADDITIVE-ONLY — a
+  new assertion/fixture may land as a minor bump only if both reference
+  adapters stay green (a previously-conforming harness failing a minor is
+  the definition of a breaking change → major). The sha canonicalization is
+  the canonical major trigger: changing it drift-revokes every stored
+  attestation, so it can only ever ship as v2 + `canon_version` on new
+  records. Capability REMOVAL never happens; a capability may gain a new
+  conforming implementation shape (as ACT did with the gateway) as a minor.
+- **Relation to `tests/contracts/test_harness_contract.py`**: the doc-prose
+  pins STAY (they are cheap, run in core CI, and guard the document
+  itself); the kit ABSORBS their behavioral intent (the frozen schema is
+  deliberately double-covered — the doc says it, the kit proves it). The
+  registry pin `test_no_utterance_writing_verb_in_registry` stays core: it
+  guards our registry, not a harness. K10 adds the version-stamp pin there.
+
+## Task waves (file-disjoint, Opus-sized)
+
+**Inputs from the concurrent stream (now landed):** the
+`harness-capabilities` verb (`ops/harness_capabilities.py`, in the registry)
++ the MCP-elicitation sections of `harness-contract.md` (ba83eac3). K6 and
+K10 consume them; everything else does not.
+
+Wave A (parallel):
+
+- **K1** — `src/hpc_agent/conformance/` skeleton: `adapter.py` (the exact
+  Protocol above, stdlib-only), `conftest.py` (`--harness-adapter` loading,
+  per-capability skip machinery, the conformance report summary hook),
+  fixture-repo builder (a temp experiment dir with a claimed journal
+  namespace, honoring `HPC_JOURNAL_DIR`). Unit tests for the kit machinery
+  itself in `tests/conformance_kit/` (the kit is code; it gets tests).
+  Packaging: fixtures as package data in `pyproject.toml`.
+- **K2** — canonicalization fixtures + `conformance/test_canonicalization.py`
+  (the JCS-divergence vectors, `normalize_source` vectors, expected-digest
+  files).
+- **K3** — `ops/export_attestations.py` + `_wire/actions/export_attestations.py`
+  + `tests/contracts/test_attestation_export_boundary.py` (predicateType
+  map derived from `DOSSIER_SOURCES`, equality-pinned; the no-`json.loads`
+  AST pin; Statement/DSSE shape pins; the delegate-to-`export_dossier`
+  one-gather pin). Regen tail (below) belongs to this task.
+
+Wave B (after A, parallel):
+
+- **K4** — `conformance/test_capability_utterance_log.py` (all cap-1
+  assertions incl. the consumer-defined authorship-gate pass, both
+  directions).
+- **K5** — `conformance/test_capability_relay.py` +
+  `conformance/fixtures/relay/` triples (all contradiction kinds, notebook
+  claims, loop-safety, fail-open).
+- **K6** — `conformance/test_capability_backgrounding.py` + the stub worker
+  fixture, and `conformance/test_negotiation.py`
+  (declared==detected==behaved; consumes the E3-a-reshaped
+  `harness-capabilities` result — `ops/harness_capabilities.py`, present).
+- **K7** — `conformance/test_attestation_export.py` (stock in-toto
+  round-trip, `importorskip`-guarded; needs K3).
+
+**E7 reservation note (2026-07-08, mcp-elicitation Phase 1 landed):** the
+per-session elicitation capability K6's `test_negotiation.py` asserts
+against is now REAL — `McpServer._initialize` stores
+`self._client_elicitation` from the client's declared
+`capabilities.elicitation` at `initialize`
+(`docs/design/mcp-elicitation.md` D2), and the server-side bit is
+`mcp_server.ELICITATION_SERVER_IMPLEMENTED` (now `True`). The
+elicitation-channel assertion shape is declared == detected == behaved:
+*declared* = the fake client's `initialize` capabilities, *detected* = the
+per-session store, *behaved* = elicitation fires only when the bit is true
+(degrade-to-hook otherwise, silently). The detection leg is the
+fake-client `initialize` seam — NOT the CLI `harness-capabilities` probe,
+which is a separate process that honestly reports client support as
+`"per-session"`/unknown (D2's honesty posture) and can never witness a
+live negotiation. The duplex rig the kit's reference adapter consumes
+already exists: `tests/_mcp_harness.py` (`FakeMcpClient`, built by
+elicitation E1 — the cross-slate reuse-ledger item; one rig, two plans).
+No kit code here; the kit remains its own plan.
+
+**Multi-human reservation note (2026-07-09, `docs/design/multi-human.md` MT8
+landed on a sibling branch; no kit code exists here yet).** When the kit lands
+(K-final), its capability-1 module (`conformance/test_capability_utterance_log.py`,
+K4) gains — as an ADDITIVE MINOR under the D-K6 deprecation posture, never a
+breaking change — an **attributed-capture assertion**, mirroring the harness
+contract's MT8 extension (capability 1 = the "attributed utterance log"):
+
+- An adapter driven with an ACTOR-CONFIGURED session (the actor arrives
+  out-of-band, exactly like the utterance text — the reference binding is the
+  session's `HPC_ACTOR`, `docs/design/multi-human.md` MH1) lands its record in
+  the actor-suffixed locator `state/utterances.py::utterances_path(experiment_dir,
+  actor=<slug>)`, read back via
+  `state/utterances.py::read_utterances(experiment_dir, actor=<slug>)`, and the
+  FROZEN 3-field schema (`{ts, sha256, text}`, sorted-keys JSON, append-only)
+  STILL HOLDS PER FILE — attribution rides the locator, never a fourth record
+  field, so the existing byte-rule assertion is reused per file, not weakened.
+- An UNCONFIGURED adapter (no actor) is BYTE-IDENTICAL to the v1 assertions: it
+  writes the unsuffixed `utterances.jsonl` and no suffixed file is ever created.
+- **Both reference adapters (`claude_code.py`, `notebook_render.py`) stay green
+  by construction** — the unconfigured path is exactly today's, and the
+  attributed path adds a new assertion neither adapter's v1 behavior violates.
+  This is the D-K6 additive-minor rule satisfied: a new assertion lands as a
+  minor bump only because no previously-conforming harness fails it.
+
+The assertion is detection-BY-BEHAVIOR (the D-K3 rule for a per-harness cap-1
+seam): the adapter proving `read_utterances(experiment_dir, actor=<slug>)`
+accepts what its actor-configured session wrote, never a Claude-Code hook needle.
+No adapter-Protocol change is forced — the actor is a session-configuration
+concern (out-of-model, MH1), not a new `write_utterance` argument the kit
+supplies; a candidate harness that cannot attribute is honestly PARTIAL on the
+attributed leg, never a negotiation failure. No kit code here; the kit remains
+its own plan, and this reservation is the only multi-human obligation it carries.
+
+Wave C (sequential — hot/shared files):
+
+- **K8** — reference adapters `conformance/adapters/claude_code.py` +
+  `notebook_render.py` (each verified by running the kit against itself
+  locally).
+- **K9** — the `conformance` CI job in `.github/workflows/ci.yml`
+  (plugins-style isolation, offline, matrix of the two adapters, in-toto +
+  render-stack installs).
+- **K10** — publishing: version stamp on `harness-contract.md` (the
+  elicitation sections have LANDED, ba83eac3 — re-read before stamping);
+  **K10 OWNS adding the `HARNESS_CONTRACT_VERSION` constant in
+  `ops/harness_capabilities.py` and the `harness-capabilities` result field
+  that carries it** (E3-a left the result shape open for this additive
+  field); the `HARNESS_CONTRACT_VERSION` pin test added to
+  `tests/contracts/test_harness_contract.py`, README/docs pointers, and the
+  MCP curated-catalog decision for `export-attestations` (expose it beside
+  `export-dossier`'s posture).
+
+**Regen / inventory tails** (K3 and K10 own them): `export-attestations` is
+a new `@primitive` → `python scripts/bake_operations_json.py --write` +
+schema regen + the registry-count contract tests move; MCP server curated
+catalog updated if exposed; `pyproject.toml` package-data for
+`conformance/fixtures/**`; CI matrix docs.
+
+## Enforcement map
+
+| Rule | Enforced by | Fires when |
+|---|---|---|
+| Core never imports the conformance kit (pytest stays out of runtime) | new `tests/contracts/test_conformance_kit_boundary.py` | any module under `src/hpc_agent/` outside `conformance/` imports `hpc_agent.conformance`, or `conformance/adapter.py` imports pytest |
+| The attestation export never parses record contents | `tests/contracts/test_attestation_export_boundary.py` (AST, the dossier no-parse pin shape) | `json.load`/`json.loads` appears in `ops/export_attestations.py` |
+| predicateType vocabulary is closed and derived from `DOSSIER_SOURCES` | same boundary test, equality pin | the URI map and `DOSSIER_SOURCES` diverge in either direction |
+| One gather definition — the export delegates to `export_dossier` | same boundary test | `ops/export_attestations.py` re-walks any store path instead of consuming the dossier result |
+| in-toto never enters core deps | existing `tests/contracts/test_no_heavy_toplevel_imports.py` posture + a named dep-list assert | `in-toto`/`in-toto-attestation` appears in `pyproject.toml` dependencies or a non-kit extra |
+| Doc stamp == reported contract version | `tests/contracts/test_harness_contract.py` (K10 addition) | `harness-contract.md`'s version line and `HARNESS_CONTRACT_VERSION` disagree |
+| Kit fixtures derive injection tags from the exported filter | kit-internal test in `tests/conformance_kit/` | provenance fixtures hard-code a tag list instead of deriving from `HARNESS_INJECTION_RE` |
+| Both reference adapters stay conforming (self-conformance) | the `conformance` CI job | any push makes the Claude Code hooks or the notebook plugin fail the kit — i.e. the contract drifted from the code |
+
+## Boundary-drift flags (Q1 watch list)
+
+- **The kit never weakens a filter to admit a harness.** The fixtures are
+  normative: an adapter failing the provenance assertions is
+  NON-CONFORMING; `HARNESS_INJECTION_RE` / `_is_clicked` never grow
+  harness-specific carve-outs to make a candidate pass. Pressure to soften
+  here is the feature working.
+- **Adapters never run in core CI with network.** The conformance job is
+  offline like the plugins job; a reference adapter that needs a live
+  harness, a token, or a socket has crossed the lane.
+- **No self-asserted capability manifests — detection only.** The adapter
+  declares by implementing; the verb detects from the environment; the kit
+  proves by behavior. A `capabilities:` field on an adapter (or a config
+  file the harness writes about itself) is exactly the guard-the-LLM-
+  satisfies failure shape, one level up.
+- **The export never parses record contents.** Subject digests are copied
+  from the dossier manifest; predicates embed verbatim bytes. The moment
+  `export_attestations` reads a field out of a record it is interpreting
+  the trail it seals (the dossier's Q1 line, extended).
+- **The kit asserts outcomes, never mechanisms.** `EnforcementOutcome` and
+  `WakeEvent` are the seam; a kit test that inspects HOW an adapter blocked
+  (hook JSON shapes, gateway internals) couples the contract to one
+  implementation and forfeits the two-shapes-of-ACT decision.
+- **Skips stay honest.** A partial harness is reported partial with the
+  contract-named degraded tier — the kit never rounds partial up to
+  conforming, and never invents a tier name the contract lacks.
+
+## Drift log
+
+- **Status flip lag (2026-07-09):** K1-K10 landed in the slate merge train
+  and the CI conformance matrix went live on `b5cb2540`, but this doc's
+  status stayed `plan` — caught two days later by the anti-vendor-lockout
+  plan's verify-at-plan-time inventory (its P0/T1 unit is this flip). The
+  doc-flip step belongs IN the merge-train checklist, not after it; the
+  slate handoff listed "doc status flips still owed" and this one fell
+  through.
+- **Pre-implementation verification (2026-07-07, adversarial plan review;
+  no kit code had landed):**
+  1. *D-K4 table was already stale* — `DOSSIER_SOURCES` gained `renders`
+     the same night the plan was drafted; the row was added and the table
+     demoted to illustrative (the boundary test's equality pin is the
+     normative artifact).
+  2. *D-K4 in-toto claim scoped* — "stock tooling verifies" narrowed to
+     parse + subject-digest comparison; `signatures: []` acceptance by
+     stock DSSE verifiers is an implementation-time CHECK for K7, not an
+     asserted fact.
+  3. *D-K5 notebook_render updated for F1* — ingest's `write_utterance_log`
+     now defaults false / HUMAN-INVOKED-ONLY; the adapter passes it
+     explicitly (it is the human channel under test) and the kit gains the
+     default-off no-write assertion.
+  4. *D-K5 claude_code feasibility CONFIRMED against code* — the hook cores
+     are payload-dict pure functions suitable for in-process driving:
+     `_kernel/hooks/utterance_capture.py::capture(payload)` reads
+     `prompt`/`cwd` from the dict (no stdin/env), `answer_capture.py::capture`
+     likewise, and `relay_audit_stop.py::build_hook_output(payload)` reads
+     `cwd`/`transcript_path`/`stop_hook_active` from the dict — the synthetic
+     transcript JSONL + `stop_hook_active` re-entry modeling in D-K2/D-K5 map
+     one-to-one onto the real seam. `_CONTRADICTION_KINDS` is
+     `{"number","state","run_id"}` and `verify_relay.py::verify_notebook_relay`
+     exists, as D-K3 assumes; `utterances_path` does reuse
+     `state.run_record::_current_homedir` + `repo_hash` as the storage-locator
+     assertion requires.
+  5. *K10 note added* — `HarnessCapabilitiesResult` is `extra="forbid"`;
+     the contract-version result field is a wire-model + schema-regen
+     change, owned by K10's regen tail.
+- **K3 landed (2026-07-09, Wave A):** `ops/export_attestations.py` +
+  `_wire/actions/export_attestations.py` +
+  `tests/contracts/test_attestation_export_boundary.py` +
+  `docs/primitives/export-attestations.md`, per D-K4. Implementation drift
+  from the plan text:
+  1. *The illustrative table rotted further, as predicted* — the live
+     `DOSSIER_SOURCES` at implementation time carries FOURTEEN nouns (the
+     plan's table showed eleven): `determinism-fingerprint`,
+     `pack-manifest`, and `pack-journal` landed between plan and build. The
+     equality pin derives from the CODE's set, so the map has fourteen rows.
+  2. *Live-conformance pair-edit armed* — the live-conformance noun lands in
+     a parallel branch; when its `DOSSIER_SOURCES` entry merges, the
+     boundary test's equality pins fire until the deliberate one-line
+     pair-edit is made in BOTH `PREDICATE_TYPES`
+     (`ops/export_attestations.py`, comment beside the map) and
+     `_EXPECTED_PREDICATE_TYPES` (the boundary test).
+  3. *No-parse pin strengthened beyond the dossier shape* — the boundary
+     test also bans `hashlib` (digests are copied verbatim, never
+     recomputed) and `read_bytes` (a second gather), which the dossier's
+     own pin does not need.
+  4. *Default output path* under `<experiment>/_dossier/` (beside the
+     dossier zip), one DSSE envelope per JSONL line, `signatures: []`
+     (unsigned v1) — exactly as D-K4 specified; the K7 stock-verifier
+     acceptance check remains open.

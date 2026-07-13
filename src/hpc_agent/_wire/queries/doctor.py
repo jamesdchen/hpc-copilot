@@ -38,6 +38,20 @@ class DoctorSpec(BaseModel):
             "JSON nobody reads (design §5)."
         ),
     )
+    self_heal: bool = Field(
+        default=False,
+        description=(
+            "Opt-in overnight self-heal (item 8 ruling, 2026-07-09): when True, "
+            "for every campaign under a LIVE standing consent whose reconcile "
+            "self-chain reads DEAD from local state, respawn the sanctioned "
+            "detached WATCHER (status-watch) up to the consent's heal cap, then "
+            "flip the consent dead and fail loud on exhaustion. Reads only local "
+            "state — never opens SSH — and re-arms the watcher only, never the "
+            "scheduler. Default False keeps the plain detection-only verb "
+            "unchanged; the OS-scheduled installer bakes self_heal=true into its "
+            "durable spec so an asleep human's chain self-heals then alerts."
+        ),
+    )
 
 
 class StalledRunProposal(BaseModel):
@@ -266,5 +280,18 @@ class DoctorResult(BaseModel):
             "hpc-agent source repo that experiment_dir belongs to — the installed "
             "tool is stale; reinstall. Null when the shas agree or either side is "
             "unresolvable (no git, no embedded sha, not that repo — fail-open)."
+        ),
+    )
+    active_env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Every framework-relevant HPC_* environment variable currently "
+            "exported in THIS process's environment, verbatim. Pure disclosure "
+            "— doctor never judges the values. Run-12 finding 24 addendum: "
+            "HPC_SSH_ENGINE='asyncssh' sat exported for days while the session "
+            "record said it was retired, and no surface ever echoed it; the "
+            "resulting env-vs-record drift cost hours of misattribution. An "
+            "override that shows up here unexpectedly IS the finding. Empty "
+            "when no HPC_* variable is set."
         ),
     )

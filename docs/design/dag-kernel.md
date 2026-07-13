@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: the experiment-agnostic DAG kernel
 
 Status: **landed through wiring step 4** (0.10.51). Recursive identity

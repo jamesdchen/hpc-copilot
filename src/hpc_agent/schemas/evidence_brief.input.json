@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/evidence_brief.input.json",
+  "title": "evidence-brief input spec",
+  "description": "Input spec for ``evidence-brief`` — the POINT query (E5, primary).\n\nKeyed by ``tags`` (scope-tag membership) AND/OR ``lineage`` (a ``run_id``\nwhose command-identity chain selects code-identical work — the always-present\nfallback that needs no human to have tagged anything). At LEAST ONE key is\nrequired: an unkeyed point query is the recorded browse NON-GOAL (the agent\nis the browser; there is no faceted explorer). Both may be given; the union\nis disclosed per-source in the result.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "tags": {
+      "description": "Scope-tag slugs to select by (membership; a record matches when it carries any queried tag OR a current conclusion retro-indexes it under one). Opaque caller data — core never interprets a tag's meaning.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "lineage": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "A run_id whose lineage-chain + cmd_sha select by CODE IDENTITY — the tag-free fallback. Null when the query is tag-keyed only.",
+      "title": "Lineage"
+    },
+    "as_of": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 timestamp: the collector includes only records with ts <= as_of, so the digest is 'what was known as of that date'. A timestamp, never a named period ('2025H1' is caller vocabulary).",
+      "title": "As Of"
+    },
+    "fleet": {
+      "default": false,
+      "description": "When False (default), scope is the single experiment_dir. When True, run the identical per-namespace walk over every experiment this machine has journaled (glob '*/repo.json' under the journal home); a torn/unreadable namespace is skipped and counted in 'skipped'.",
+      "title": "Fleet",
+      "type": "boolean"
+    }
+  }
+}

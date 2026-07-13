@@ -44,7 +44,8 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.cost import CostEstimate, estimate_core_hours
 from hpc_agent.ops.aggregate_flow import aggregate_flow
-from hpc_agent.ops.block_gate import assert_greenlit_target
+from hpc_agent.ops.block_gate import assert_greenlit_or_consented, assert_greenlit_target
+from hpc_agent.ops.data_manifest import render_manifest_disclosure
 from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_status
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.relay_render import render_relay
@@ -99,9 +100,12 @@ def _replay_recorded_terminal(
     possibly-stale brief). The replayed result was already finalized on first
     completion (relay rendered, brief appended), so the caller returns it as-is.
     """
-    from hpc_agent.state.block_terminal import read_terminal
+    from hpc_agent.state.block_terminal import read_terminal_with_fallback
 
-    record = read_terminal(experiment_dir, run_id, block)
+    # Read by the canonical VERB key with a legacy short-key fallback (2026-07-07
+    # key-mismatch fix): a run recorded pre-fix sits under the short "s2" key, so a
+    # mid-flight re-invoke must still find and replay it.
+    record = read_terminal_with_fallback(experiment_dir, run_id, block)
     if record is None:
         return None
     current_sha = _current_cmd_sha(experiment_dir, run_id)
@@ -116,7 +120,7 @@ def _replay_recorded_terminal(
 def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlockResult:
     """Durably persist a decision-point brief so the provenance gate can diff it.
 
-    Conduct rule 9 (docs/design/proving-run-2-hardening.md §6): ``append-decision``
+    Conduct rule 9 (docs/design/history/proving-run-2-hardening.md §6): ``append-decision``
     refuses a greenlight whose ``resolved`` diverts a field the brief never
     recommended — but only if the brief the block emitted is on disk. CODE
     persists it here, at the moment a block returns a decision-point Result, in
@@ -148,15 +152,26 @@ def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlo
     # replay returns the same result and must not double-append (the append-only
     # briefs journal stays honest; two identical s2 briefs were seen live).
     if result.run_id and result.block in _DETACHED_BLOCKS and result.stage_reached != "detached":
-        from hpc_agent.state.block_terminal import read_terminal, record_terminal
+        from hpc_agent.state.block_terminal import (
+            read_terminal_with_fallback,
+            record_terminal,
+            terminal_block_key,
+        )
 
+        # Canonical VERB key (2026-07-07 key-mismatch fix): record under
+        # "submit-s2"/"submit-s3"/"submit-s4" — the SAME string the detached lease
+        # stamps and the doctor dead-worker scan reads off it — so a FINISHED submit
+        # worker's terminal is found (no spurious re-invoke). The prior-check read
+        # falls back to the legacy short "s2" key so a mid-flight run recorded
+        # pre-fix is still seen as a prior terminal (no double brief append).
+        block_key = terminal_block_key(result.block)
         cmd_sha = _current_cmd_sha(experiment_dir, result.run_id)
-        prior = read_terminal(experiment_dir, result.run_id, result.block)
+        prior = read_terminal_with_fallback(experiment_dir, result.run_id, block_key)
         is_fresh_terminal = prior is None or str(prior.get("cmd_sha") or "") != cmd_sha
         record_terminal(
             experiment_dir,
             run_id=result.run_id,
-            block=result.block,
+            block=block_key,
             cmd_sha=cmd_sha,
             result_dump=result.model_dump(mode="json"),
         )
@@ -324,6 +339,38 @@ def _recommendations_from_ambiguities(
     return out
 
 
+def _resource_default_disclosures(
+    resolved: dict[str, Any], provenance: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Surface cluster-injected resource defaults as brief disclosures (finding 14).
+
+    A cluster resource default (e.g. ``gpu_type`` = the cluster's first declared
+    GPU) lands in ``resolved`` via ``cluster_default`` provenance — NOT because the
+    workload asked for it. Run #12 shipped ``gpu_type: a100`` into a pure-CPU brief.
+    This is a DISCLOSURE, not a guess or a block: the injected value stays put; the
+    brief just carries a workload-shaped sanity line so a ``y`` is an informed one.
+    """
+    res_prov = provenance.get("resources")
+    if not isinstance(res_prov, dict):
+        return []
+    notes: list[dict[str, Any]] = []
+    if res_prov.get("gpu_type") == "cluster_default" and resolved.get("gpu_type"):
+        gpu = resolved["gpu_type"]
+        notes.append(
+            {
+                "field": "gpu_type",
+                "value": gpu,
+                "provenance": "cluster_default",
+                "sanity": (
+                    f"gpu_type={gpu!r} was injected as the cluster's first declared "
+                    "GPU (cluster_default), not derived from the workload. If this is "
+                    "a CPU-only workload, clear gpu_type before greenlighting."
+                ),
+            }
+        )
+    return notes
+
+
 # ── S2 helpers ──────────────────────────────────────────────────────────────
 
 
@@ -429,6 +476,21 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     # 3. Surface each safe_default as a pre-filled recommendation — NOT applied
     #    into resolved (apply-safe-defaults is the silent actor this kills, §6).
     brief["ambiguities"] = _recommendations_from_ambiguities(walk.ambiguities)
+
+    # Consumer #3 (finding 14): cluster-injected resource defaults (e.g. a
+    # gpu_type the workload never asked for) ride the brief as a workload-shaped
+    # sanity line — a disclosure, never a guess or a block.
+    resource_notes = _resource_default_disclosures(brief["resolved"], brief["provenance"])
+    if resource_notes:
+        brief["resource_default_notes"] = resource_notes
+
+    # Consumer #2 (data-manifest): the VERDICT-FREE, code-rendered data-drift
+    # disclosure rides the greenlight brief. Never gates, never raises (the
+    # accept-with-disclosure rule); None → nothing declared/minted → the brief
+    # stays byte-identical for a repo not using the manifest.
+    disclosure = render_manifest_disclosure(experiment_dir)
+    if disclosure is not None:
+        brief["data_manifest"] = disclosure
 
     if walk.ambiguities:
         return SubmitBlockResult(
@@ -750,11 +812,17 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
 
 
 def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
-    assert_greenlit_target(
+    # Greenlight gate with the overnight-consent fallback (item 8 seam 1): a live
+    # standing consent for this run consumes the S2→S3 greenlight and launches the
+    # main array unattended, recording the auto-advance to the consumption ledger in
+    # the same breath. ``current_cmd_sha`` is the run's tree fingerprint — the SAME
+    # identity a spec change moves, so a regenerated grid kills the consent here too.
+    assert_greenlit_or_consented(
         experiment_dir,
         run_id=spec.submit.submit.run_id,
         verb="submit-s3",
         predecessor="S2",
+        current_cmd_sha=_current_cmd_sha(experiment_dir, spec.submit.submit.run_id),
     )
     # Idempotent re-invoke (run #7): replay a prior worker's recorded terminal for
     # the current tree BEFORE the canary-TTL re-check — the run already ran, so

@@ -61,6 +61,12 @@ def _cache_path() -> Path:
     return _current_homedir() / "_discover_cache.json"
 
 
+def _lock_path(target: Path) -> Path:
+    """Sibling ``.lock`` path for *target* — the same convention as
+    :func:`hpc_agent.state.run_record._lock_path` (``<name>.lock``)."""
+    return target.with_suffix(target.suffix + ".lock")
+
+
 def _tree_fingerprint(experiment_dir: Path) -> str:
     """Hash of ``(relpath, mtime_ns, size)`` over every ``.py`` / ``.ipynb`` file.
 
@@ -185,7 +191,7 @@ def store(experiment_dir: str | Path, infos: list[RunInfo]) -> None:
     """
     if cache_disabled():
         return
-    from hpc_agent.infra.io import atomic_write_json
+    from hpc_agent.infra.io import advisory_flock, atomic_write_json
 
     exp = Path(experiment_dir)
     try:
@@ -198,14 +204,21 @@ def store(experiment_dir: str | Path, infos: list[RunInfo]) -> None:
         return
     path = _cache_path()
     try:
-        cache: dict[str, Any] = {}
-        if path.is_file():
-            with open(path, encoding="utf-8") as fh:
-                existing = json.load(fh)
-            if isinstance(existing, dict):
-                cache = existing
-        cache[str(exp.resolve())] = entry
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(path, cache)
+        # Hold the advisory flock across BOTH the read and the write so two
+        # concurrent stores for DIFFERENT experiment dirs can't lost-update
+        # each other — the same locked-RMW fix ``canary_cache`` /
+        # ``preflight_cache`` carry on their shared global files. A
+        # lock-acquire or write failure degrades to "not cached" (the caller
+        # still returns the live result).
+        with advisory_flock(_lock_path(path), timeout_sec=120.0):
+            cache: dict[str, Any] = {}
+            if path.is_file():
+                with open(path, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+                if isinstance(existing, dict):
+                    cache = existing
+            cache[str(exp.resolve())] = entry
+            atomic_write_json(path, cache)
     except (OSError, ValueError):
         pass

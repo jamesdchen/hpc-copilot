@@ -89,6 +89,11 @@ _SIGNATURE_TO_CATEGORY: dict[str, str] = {
     "mpi_init_failed": "code_bug",
     "mpi_launcher_missing": "code_bug",
     "mpi_pe_invalid": "code_bug",
+    # Grid Engine / Lmod contentless env-init flake (notebook-audit Addendum 10
+    # item 15). Unlike the setup-error rows above, this is a TRANSIENT infra
+    # fault (per-task/per-node), so it maps to "node_failure" — the retry-worthy
+    # infra category /status auto-handles — not to "code_bug" (escalate).
+    "cluster_env_init": "node_failure",
 }
 
 

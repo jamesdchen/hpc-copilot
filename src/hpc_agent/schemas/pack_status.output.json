@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_status.output.json",
+  "title": "pack-status output data",
+  "description": "Pack state keyed by pack slug — one entry per reported pack.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "packs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/PackStatusEntry"
+      },
+      "title": "Packs",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "PackBind": {
+      "additionalProperties": false,
+      "description": "The current-bind projection for a pack (newest valid ``pack-bind``).",
+      "properties": {
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "manifest_sha": {
+          "title": "Manifest Sha",
+          "type": "string"
+        },
+        "bound_at": {
+          "description": "Timestamp of the current bind record.",
+          "title": "Bound At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "version",
+        "manifest_sha",
+        "bound_at"
+      ],
+      "title": "pack current-bind",
+      "type": "object"
+    },
+    "PackDanglingReference": {
+      "additionalProperties": false,
+      "description": "One dangling-reference finding for an opted-in pack (the LOUD path).\n\nAn opted-in repo whose manifest is missing/sha-drifted, whose bind names a\nfile that no longer resolves, or whose slot binding names a pack with no\ncurrent bind. ``reason`` is the honest mechanical note; ``path`` / ``slot``\nname the offending reference when applicable.",
+      "properties": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "pack dangling reference",
+      "type": "object"
+    },
+    "PackSlotStatus": {
+      "additionalProperties": false,
+      "description": "One caller-authored slot's receipt currency — mechanical, never interpreted.\n\n``status`` is the reduction outcome: ``current`` (a fresh, passed receipt),\n``failed`` (fresh receipt but ``passed=false``), ``stale`` (a receipt exists\nbut content it covered drifted — stale = missing by construction), or\n``missing`` (no receipt for the slot). ``passed`` is the recorded boolean\nwhen a receipt exists; ``reason`` is an optional honest note.",
+      "properties": {
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "current",
+            "stale",
+            "missing",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "passed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Passed"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "slot",
+        "status"
+      ],
+      "title": "pack slot status",
+      "type": "object"
+    },
+    "PackStatusEntry": {
+      "additionalProperties": false,
+      "description": "The full status digest for one pack.\n\n``bind`` is the current bind or null; ``slots`` the per-slot receipt\nstatuses; ``unfillable`` the advisory report; ``dangling`` the loud\ndangling-reference findings.",
+      "properties": {
+        "bind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackBind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/PackSlotStatus"
+          },
+          "title": "Slots",
+          "type": "array"
+        },
+        "unfillable": {
+          "items": {
+            "$ref": "#/$defs/PackUnfillableRequirement"
+          },
+          "title": "Unfillable",
+          "type": "array"
+        },
+        "dangling": {
+          "items": {
+            "$ref": "#/$defs/PackDanglingReference"
+          },
+          "title": "Dangling",
+          "type": "array"
+        },
+        "audit_template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Experiment-dir-relative path to this current-bound pack's ``audit_template`` seam file, when it declares one — the AUDIT-FACING template prepared for building an experiment off the pack (run-#12 finding 1). Identity/pointer only: the on-ramp COMPOSES the default template path from this seam and presents a confirm-default rather than an open path question. ``None`` when the pack declares no ``audit_template`` seam or is not current-bound.",
+          "title": "Audit Template"
+        }
+      },
+      "title": "pack status entry",
+      "type": "object"
+    },
+    "PackUnfillableRequirement": {
+      "additionalProperties": false,
+      "description": "A slot the caller bound to a pack whose manifest ``fills_slots`` omits it.\n\nADVISORY only (``fills_slots`` never becomes load-bearing — DP4): a\nrequirement always originates with the caller, so this is an early warning\nthat the pack does not claim it can fill the slot, never a gate.",
+      "properties": {
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "pack",
+        "reason"
+      ],
+      "title": "pack unfillable requirement",
+      "type": "object"
+    }
+  }
+}

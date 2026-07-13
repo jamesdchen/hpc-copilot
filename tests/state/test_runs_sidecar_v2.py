@@ -111,6 +111,27 @@ def test_v2_write_omits_none_keys_to_keep_sidecar_compact(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# trace_digests_override: data-trace T3 digest-override disclosure
+# ---------------------------------------------------------------------------
+
+
+def test_trace_digests_override_roundtrips(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs(), trace_digests_override="force_off")
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trace_digests_override"] == "force_off"
+
+
+def test_trace_digests_override_none_omitted_and_backfilled(tmp_path: Path) -> None:
+    """No override → the key is absent on disk (byte-compact) but read_run_sidecar
+    backfills it to None so callers can read it unconditionally."""
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    raw = json.loads(run_sidecar_path(tmp_path, _common_required_kwargs()["run_id"]).read_text())
+    assert "trace_digests_override" not in raw
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trace_digests_override"] is None
+
+
+# ---------------------------------------------------------------------------
 # scopes: opaque caller-owned evidence-scope tags
 # ---------------------------------------------------------------------------
 
@@ -141,6 +162,39 @@ def test_scopes_absent_backfills_to_none_on_read(tmp_path: Path) -> None:
     write_run_sidecar(tmp_path, **_common_required_kwargs())
     data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
     assert data["scopes"] is None
+
+
+# ---------------------------------------------------------------------------
+# audited_source: opaque audit-trail echo (notebook-audit T14)
+# ---------------------------------------------------------------------------
+
+
+def test_audited_source_absent_sidecar_is_byte_identical_to_today(tmp_path: Path) -> None:
+    """A non-audited run's sidecar is byte-identical whether the new
+    ``audited_source`` kwarg is omitted (pre-feature call shape) or passed as
+    ``None`` — the only-write-non-None pattern keeps the key absent."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    write_run_sidecar(a, **_common_required_kwargs())  # pre-feature call shape
+    write_run_sidecar(b, **_common_required_kwargs(), audited_source=None)  # explicit None
+    run_id = _common_required_kwargs()["run_id"]
+    raw_a = run_sidecar_path(a, run_id).read_bytes()
+    raw_b = run_sidecar_path(b, run_id).read_bytes()
+    assert raw_a == raw_b
+    assert "audited_source" not in json.loads(raw_a)
+
+
+def test_audited_source_write_then_read_roundtrips(tmp_path: Path) -> None:
+    echo = {"source": "src/pi.py", "template": ".hpc/templates/pi.py", "audit_id": "pi-audit-001"}
+    write_run_sidecar(tmp_path, **_common_required_kwargs(), audited_source=echo)
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["audited_source"] == echo
+
+
+def test_audited_source_absent_backfills_to_none_on_read(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["audited_source"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +666,22 @@ def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path:
     assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
 
 
+def test_is_orphan_tolerates_non_utf8_sidecar(_journal_home: Path, tmp_path: Path) -> None:
+    """#73: a non-UTF-8 sidecar (e.g. UTF-16 from a Windows redirect) must be
+    tolerant-read, not crash ``is_orphan_sidecar`` / ``prune_orphan_sidecars``.
+    The undecodable file yields no ``sidecar_job_ids`` (consistent with the
+    corrupt/torn-file posture) → jobless + journal-less → treated as orphan."""
+    from hpc_agent.state.runs import is_orphan_sidecar, run_sidecar_path
+
+    kwargs = _common_required_kwargs(run_id="20260101-000000-badutf08")
+    write_run_sidecar(tmp_path, **kwargs)
+    # Clobber with UTF-16 bytes (invalid as UTF-8) — must not raise.
+    run_sidecar_path(tmp_path, kwargs["run_id"]).write_bytes(
+        '{"job_ids": ["1"], "x": "ÿ"}'.encode("utf-16")
+    )
+    assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
+
+
 def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
 
@@ -667,6 +737,45 @@ def test_prune_orphan_sidecars_skips_excluded_runs(_journal_home: Path, tmp_path
     assert run_sidecar_path(tmp_path, current["run_id"]).is_file()
     assert run_sidecar_path(tmp_path, canary["run_id"]).is_file()
     assert not run_sidecar_path(tmp_path, stale["run_id"]).is_file()
+
+
+def test_canary_gate_pending_main_is_not_orphan(_journal_home: Path, tmp_path: Path) -> None:
+    """#17: during the S2->S3 greenlight window a two-phase ``canary_only``
+    Phase 1 leaves the main run jobless + journal-less on purpose (job_ids land
+    only on the ``<id>-canary`` sibling). A committed canary sibling marks that
+    live gate — the main run must NOT read as an orphan."""
+    from hpc_agent.state.runs import is_orphan_sidecar
+
+    main = _common_required_kwargs(run_id="20260101-000000-mainrun0")
+    canary = _common_required_kwargs(run_id="20260101-000000-mainrun0-canary")
+    write_run_sidecar(tmp_path, **main)  # jobless main, no journal record
+    write_run_sidecar(tmp_path, **canary, job_ids=["9001"])  # committed canary
+
+    assert is_orphan_sidecar(tmp_path, main["run_id"]) is False
+    # The canary itself is committed, hence also not an orphan.
+    assert is_orphan_sidecar(tmp_path, canary["run_id"]) is False
+
+
+def test_prune_spares_canary_gate_pending_main_run(_journal_home: Path, tmp_path: Path) -> None:
+    """#17 end to end: a SIBLING batch's ``prune_orphan_sidecars`` (min_age=0,
+    exclude={B, B-canary}) must not delete run A's greenlit main sidecar while
+    A's canary sibling is committed — deleting it bricks the S3 launch."""
+    from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
+
+    a_main = _common_required_kwargs(run_id="20260101-000000-Arun0000")
+    a_canary = _common_required_kwargs(run_id="20260101-000000-Arun0000-canary")
+    write_run_sidecar(tmp_path, **a_main)  # jobless main under human review
+    write_run_sidecar(tmp_path, **a_canary, job_ids=["7001"])  # committed canary
+
+    deleted = prune_orphan_sidecars(
+        tmp_path,
+        min_age_seconds=0,
+        exclude={"20260101-000000-Brun0000", "20260101-000000-Brun0000-canary"},
+    )
+
+    assert a_main["run_id"] not in deleted
+    assert run_sidecar_path(tmp_path, a_main["run_id"]).is_file()
+    assert run_sidecar_path(tmp_path, a_canary["run_id"]).is_file()
 
 
 def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(
@@ -765,3 +874,85 @@ def test_update_sidecar_job_ids_raises_when_sidecar_missing(
 
     with pytest.raises(FileNotFoundError):
         update_run_sidecar_job_ids(tmp_path, "20260101-000000-nope0000", ["12345"])
+
+
+# ---------------------------------------------------------------------------
+# job_task_spans: per-job global task windows for waved (over-cap) submits
+# ---------------------------------------------------------------------------
+
+
+def test_update_sidecar_job_ids_stamps_job_task_spans(tmp_path: Path) -> None:
+    """A waved submit records job_task_spans in the SAME post-qsub stamp as
+    job_ids: {job_id: [first, last]} 0-based inclusive GLOBAL windows, and
+    read_job_task_spans hands them back as the tuple map fetch_task_logs
+    consumes."""
+    from hpc_agent.state.runs import read_job_task_spans, update_run_sidecar_job_ids
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    update_run_sidecar_job_ids(
+        tmp_path,
+        rid,
+        ["100", "200"],
+        job_task_spans={"100": (0, 999), "200": (1000, 1999)},
+    )
+    raw = json.loads(run_sidecar_path(tmp_path, rid).read_text(encoding="utf-8"))
+    assert raw["job_ids"] == ["100", "200"]
+    assert raw["job_task_spans"] == {"100": [0, 999], "200": [1000, 1999]}
+    assert read_job_task_spans(tmp_path, rid) == {"100": (0, 999), "200": (1000, 1999)}
+
+
+def test_update_sidecar_job_ids_without_spans_preserves_existing_spans(tmp_path: Path) -> None:
+    """submit_and_record re-stamps job_ids WITHOUT spans after the submit
+    pre-stamp wrote them — the default-None call must not erase the field."""
+    from hpc_agent.state.runs import read_job_task_spans, update_run_sidecar_job_ids
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    update_run_sidecar_job_ids(tmp_path, rid, ["100"], job_task_spans={"100": (0, 999)})
+    # The journal-side re-stamp: same ids, no spans kwarg.
+    update_run_sidecar_job_ids(tmp_path, rid, ["100"])
+    assert read_job_task_spans(tmp_path, rid) == {"100": (0, 999)}
+
+
+def test_old_sidecar_without_job_task_spans_reads_as_none(tmp_path: Path) -> None:
+    """Back-compat: a sidecar written before the field existed (or by a ≤cap
+    single-array submit) yields None — the call sites then pass None through
+    to fetch_task_logs, keeping the global-index probe byte-for-byte."""
+    from hpc_agent.state.runs import read_job_task_spans
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    raw = json.loads(run_sidecar_path(tmp_path, rid).read_text(encoding="utf-8"))
+    assert "job_task_spans" not in raw
+    assert read_job_task_spans(tmp_path, rid) is None
+    # read_run_sidecar's uniform shape backfills the key to None.
+    assert read_run_sidecar(tmp_path, rid)["job_task_spans"] is None
+
+
+def test_read_job_task_spans_never_raises(tmp_path: Path) -> None:
+    """Best-effort reader contract: missing sidecar and malformed field both
+    resolve to None (or drop the malformed entries), never an exception —
+    the log-fetch call sites must behave exactly as before the field existed."""
+    from hpc_agent.state.runs import read_job_task_spans
+
+    # Missing sidecar.
+    assert read_job_task_spans(tmp_path, "20260101-000000-nope0000") is None
+
+    # Malformed field shapes: non-dict, and per-entry junk mixed with a good one.
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    path = run_sidecar_path(tmp_path, rid)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["job_task_spans"] = "not-a-dict"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert read_job_task_spans(tmp_path, rid) is None
+
+    doc["job_task_spans"] = {
+        "100": [0, 999],  # good
+        "200": [1000],  # wrong arity
+        "300": ["a", "b"],  # wrong types
+        "400": None,  # not a pair at all
+    }
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert read_job_task_spans(tmp_path, rid) == {"100": (0, 999)}

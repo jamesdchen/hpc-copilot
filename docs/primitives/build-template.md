@@ -3,7 +3,7 @@ name: build-template
 verb: scaffold
 side_effects:
 - writes-file: <repo_dir>/{.hpc/template.mk,.hpc/scaffold.py} (self-healing); <repo_dir>/{Makefile,.gitignore,pyproject.toml,.pre-commit-config.yaml,conftest.py,.github/workflows/ci.yml,train.py
-    | notebooks/experiment.ipynb} (refuse-without-force at repo root)
+    | notebooks/experiment.py} (refuse-without-force at repo root)
 idempotent: true
 idempotency_key: repo_dir
 error_codes:

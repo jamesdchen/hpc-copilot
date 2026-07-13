@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stray_sweep.output.json",
+  "title": "stray-sweep output data",
+  "description": "Shape of the ``data`` field on a ``stray-sweep`` envelope.",
+  "type": "object",
+  "required": [
+    "ssh_target",
+    "total_process_count",
+    "marked_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ssh_target": {
+      "description": "The login node that was swept.",
+      "title": "Ssh Target",
+      "type": "string"
+    },
+    "total_process_count": {
+      "description": "Total processes the user owns on the login node (fork-quota pressure).",
+      "title": "Total Process Count",
+      "type": "integer"
+    },
+    "marked_count": {
+      "description": "How many of those carry the HPC_AGENT_OP framework marker.",
+      "title": "Marked Count",
+      "type": "integer"
+    },
+    "strays": {
+      "description": "MARKED processes older than max_age_sec — orphaned remote halves the timeout wrapper did not reap (or pre-wrapper residue).",
+      "items": {
+        "$ref": "#/$defs/StrayProcess"
+      },
+      "title": "Strays",
+      "type": "array"
+    },
+    "reaped_pids": {
+      "description": "PIDs actually killed this sweep (empty unless spec.reap was True and strays were found). Exactly the stray PIDs — never an unmarked process.",
+      "items": {
+        "type": "integer"
+      },
+      "title": "Reaped Pids",
+      "type": "array"
+    },
+    "reaped": {
+      "default": false,
+      "description": "Whether a reap was requested AND executed this sweep.",
+      "title": "Reaped",
+      "type": "boolean"
+    },
+    "needs_attention": {
+      "default": false,
+      "description": "True when the total process count exceeds warn_threshold OR any stray was found — the early-warning the fork-exhaustion incident lacked.",
+      "title": "Needs Attention",
+      "type": "boolean"
+    },
+    "summary": {
+      "default": "",
+      "description": "One-line human digest of the sweep (counts + verdict).",
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "StrayProcess": {
+      "additionalProperties": false,
+      "description": "One MARKED framework process observed on the login node.",
+      "properties": {
+        "pid": {
+          "description": "Process id on the login node.",
+          "title": "Pid",
+          "type": "integer"
+        },
+        "etimes": {
+          "description": "Elapsed time in whole seconds since the process started.",
+          "title": "Etimes",
+          "type": "integer"
+        },
+        "op": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The HPC_AGENT_OP label parsed from the marker (verb/op tag), or null.",
+          "title": "Op"
+        },
+        "args": {
+          "description": "The process's argv line (ps -o args), for the human.",
+          "title": "Args",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pid",
+        "etimes",
+        "args"
+      ],
+      "title": "stray-sweep marked process",
+      "type": "object"
+    }
+  }
+}

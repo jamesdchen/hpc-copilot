@@ -11,7 +11,7 @@ numbers).
 
 That rule lived only as load-bearing prose with no contract pinning it. This
 binds it to every surface that instructs awaiting a detached worker (enumerated
-by scanning ``src/slash_commands`` for ``wait-detached``), so dropping any of the
+by scanning ``src/hpc_agent/slash_commands`` for ``wait-detached``), so dropping any of the
 three halves — the ``worker_exited``→``block-drive``-tick source, the
 relay-VERBATIM binding, or the never-compose-from-the-worker-log prohibition —
 fails CI.
@@ -23,12 +23,14 @@ import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_SLASH_ROOT = _REPO_ROOT / "src/slash_commands"
+_SLASH_ROOT = _REPO_ROOT / "src/hpc_agent/slash_commands"
 
 # The affordance that marks a surface as instructing awaiting a DETACHED worker.
-# The INVOCATION form (not a bare mention) — hpc-status names ``wait-detached``
-# only to DENY it applies to its synchronous status-watch, which is not an
-# await-a-detached-worker instruction.
+# The INVOCATION form (``hpc-agent wait-detached``), not a bare mention. Since
+# 2026-07-07 (connection-broker.md) ``status-watch`` is ALSO detach-by-contract,
+# so hpc-status now carries the invocation form affirmatively (it no longer
+# denies wait-detached applies) and is enumerated + bound by the rule below,
+# exactly like hpc-submit's S2/S3/S4 blocks.
 _DETACH_WAIT_MARKER = "hpc-agent wait-detached"
 
 # The anchor surface — the submit SKILL is where detached S2/S3/S4 workers live;
@@ -37,7 +39,7 @@ _ANCHOR = _SLASH_ROOT / "skills/hpc-submit/SKILL.md"
 
 
 def _surfaces_awaiting_a_detached_worker() -> list[Path]:
-    """Every SKILL / command markdown under ``src/slash_commands`` that mentions
+    """Every SKILL / command markdown under ``src/hpc_agent/slash_commands`` that mentions
     ``wait-detached`` — i.e. instructs the agent to await a detached worker."""
     candidates = sorted(_SLASH_ROOT.glob("skills/*/SKILL.md")) + sorted(
         _SLASH_ROOT.glob("commands/*.md")

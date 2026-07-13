@@ -1,7 +1,7 @@
 """Pydantic models for the ``verify-relay`` query primitive (conduct rule 10).
 
 The mechanized counterpart to the doctrine's rule "never relay numbers/state
-that don't match the journal" (``docs/design/proving-run-2-hardening.md`` §6,
+that don't match the journal" (``docs/design/history/proving-run-2-hardening.md`` §6,
 row 10). The LLM only ever relays code-digested briefs — but the *relay itself*
 is unguarded: a transcription error, a rounded number, a swapped run-id, or a
 stale state claim ("running" when the journal already recorded "failed" —

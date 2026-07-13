@@ -19,6 +19,17 @@ One JSON object per line: ``{"ts": <iso>, "sha256": <full-text digest>,
 prompt, so a capped entry still carries a verifiable fingerprint of what the
 human sent.
 
+A record MAY additionally carry ``bound`` — an opaque mapping the WRITER binds
+the utterance to the exact subject it was captured FOR (``docs/design/bound-capture.md``).
+A ``UserPromptSubmit`` / ``AskUserQuestion`` chat capture NEVER sets it (those
+surfaces know no scope); only a view-aware surface that knows precisely what the
+typed text signs (the MCP elicitation popup, or a conforming second harness)
+writes ``bound``, so a bound record IMPLIES the elicitation channel. The store is
+opaque to its shape — it round-trips ``bound`` verbatim; only a gate matches it
+(the overnight standing-consent gate is the first bound reader — USER RULING 3,
+2026-07-12). The additive key needs no schema bump: every reader here reads
+defensively by shape and ignores an unknown key.
+
 No-scaffold discipline (the ``notify._alerts_paths`` pattern): the capture
 hook is installed user-globally and fires in ANY repo the user works in, so
 the writer must never create a ``<repo_hash>/`` namespace for an arbitrary
@@ -29,6 +40,40 @@ hpc-agent state write already claimed. Reads are equally non-creating.
 Fail-open everywhere: a missing namespace, an unwritable log, or a corrupt
 line degrades to "no utterances", never an exception — a broken capture
 channel must degrade to the v1 friction posture, not wedge the harness.
+
+HARNESS WRITE API
+-----------------
+This module is the reference implementation of the utterance-log write API
+normatively specified in ``docs/internals/harness-contract.md`` (capability 1
++ §2). :func:`append_utterance` is the SOLE writer; a SECOND conforming harness
+(the scheduled v1.5 jupytext render — a notebook sign-off cell IS out-of-band
+from the LLM) writes records the reader here accepts. The API is importable by
+HARNESS-SIDE code only.
+
+The obligations a conforming writer honors, all embodied below — change them
+here and the contract doc + a second harness drift:
+
+* the storage locator (:func:`utterances_path`) reusing
+  ``state.run_record._current_homedir`` + ``repo_hash`` (never a re-implemented
+  hash);
+* the FROZEN record schema — ``{ts, sha256, text}``, sorted-keys JSON, one per
+  line, append-only, oldest-first; ``sha256`` over the FULL raw text, ``text``
+  capped at :data:`MAX_UTTERANCE_BYTES` on a CODEPOINT boundary;
+* the NO-SCAFFOLD precondition (write only into an existing namespace dir);
+* the PROVENANCE contract (only human-TYPED text; the writer runs out-of-band
+  from the LLM's tool surface and filters harness-injected / agent-authored
+  text — :func:`is_harness_injected` below is THE public reference filter
+  every conforming writer shares; ``_is_clicked`` in
+  ``_kernel.hooks.answer_capture`` is the clicked-option reference);
+* FAIL-OPEN (any error → clean no-op, degrading to the friction tier).
+
+**The LLM must never gain a sanctioned write call.** There is deliberately NO
+CLI verb, MCP tool, or primitive that writes an utterance — appending one is the
+harness's exclusive, out-of-band act. A write verb would let the model author
+its own authorship evidence, exactly the laundering channel the authorship gate
+exists to close (a guard the LLM itself satisfies is not a guard). The absence
+of any utterance-writing verb is pinned by the contract test in
+``tests/contracts/``.
 """
 
 from __future__ import annotations
@@ -36,14 +81,19 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
+
+from hpc_agent import errors
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
+    "HARNESS_INJECTION_RE",
     "MAX_UTTERANCE_BYTES",
     "append_utterance",
+    "is_harness_injected",
     "read_utterances",
     "utterances_path",
 ]
@@ -53,22 +103,78 @@ __all__ = [
 # text so the entry remains a verifiable fingerprint of the whole utterance.
 MAX_UTTERANCE_BYTES = 4096
 
+# THE reference harness-injection filter (write-API provenance clause,
+# ``docs/internals/harness-contract.md``): text whose first non-blank token
+# is a harness-injected tag (background-task notifications, system
+# reminders, local-command echoes) is NOT human-typed — pieces of it are
+# agent-influenced — so a conforming writer must refuse it or it becomes a
+# laundering channel into the authorship gate's trust anchor. A human
+# merely QUOTING a tag mid-text still lands (the anchor is ``^``). ONE
+# definition: every conforming writer (the Claude Code hooks, the notebook
+# ingest verb, any second harness) filters through this symbol — never a
+# re-derived copy.
+HARNESS_INJECTION_RE = re.compile(
+    r"^\s*<(?:task-notification|system-reminder|local-command-caveat|"
+    r"command-name|command-message|local-command-stdout)\b"
+)
+
+
+def is_harness_injected(text: str) -> bool:
+    """True when *text* opens with a harness-injection tag (not human-typed).
+
+    The callable form of :data:`HARNESS_INJECTION_RE` — the write-API's
+    reference provenance filter. Conforming utterance-log writers call this
+    (or match the regex) before :func:`append_utterance`.
+    """
+    return bool(HARNESS_INJECTION_RE.match(text))
+
+
 _UTTERANCES_NAME = "utterances.jsonl"
+
+# The suffixed per-actor locator glob (MH2): ``utterances.<actor>.jsonl`` — the
+# `.<actor>.` segment is what excludes the unsuffixed ``utterances.jsonl`` from
+# this pattern (one dot vs two), so a union read never double-counts the
+# anonymous log. Non-creating everywhere it is used.
+_ACTOR_UTTERANCES_GLOB = "utterances.*.jsonl"
 
 _log = logging.getLogger(__name__)
 
 
-def utterances_path(experiment_dir: Path) -> Path:
-    """``<journal home>/<repo_hash>/utterances.jsonl`` — WITHOUT creating.
+def _actor_utterances_name(actor: str) -> str:
+    """``utterances.<actor>.jsonl`` — the actor slug validated as a path segment.
+
+    The slug rides into a filename, so it is validated by the ONE shared
+    filesystem-safe tag class (``state.scopes.validate_tag`` == the
+    ``RunIdStrict``/tag pattern), never a re-derived one. Raises
+    :class:`errors.SpecInvalid` on an empty or non-slug actor.
+    """
+    from hpc_agent.state.scopes import validate_tag
+
+    validate_tag(actor)
+    return f"utterances.{actor}.jsonl"
+
+
+def utterances_path(experiment_dir: Path, actor: str | None = None) -> Path:
+    """``<journal home>/<repo_hash>/utterances[.<actor>].jsonl`` — WITHOUT creating.
+
+    ``actor=None`` returns the unsuffixed default path, byte-identical to the
+    pre-multi-human locator. An actor slug (validated by the shared tag class —
+    it becomes a PATH SEGMENT, MH2) returns the per-actor suffixed path; an
+    invalid slug raises :class:`errors.SpecInvalid` (callers that must never
+    wedge — :func:`append_utterance`, :func:`read_utterances` — catch it and
+    fail open to the unsuffixed log).
 
     Deliberately not :func:`~hpc_agent.state.run_record.journal_dir` (which
     mkdirs the namespace + writes ``repo.json``): both the capture hook and
     the authorship-gate reader run in arbitrary cwds and must never scaffold
-    a journal namespace there (the ``notify._alerts_paths`` precedent).
+    a journal namespace there (the ``notify._alerts_paths`` precedent). The
+    no-scaffold rule covers the suffixed files identically: files may be
+    created, the NAMESPACE DIRECTORY never is.
     """
     from hpc_agent.state.run_record import _current_homedir, repo_hash
 
-    return _current_homedir() / repo_hash(experiment_dir) / _UTTERANCES_NAME
+    name = _UTTERANCES_NAME if actor is None else _actor_utterances_name(actor)
+    return _current_homedir() / repo_hash(experiment_dir) / name
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
@@ -79,8 +185,29 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
     return raw[:max_bytes].decode("utf-8", errors="ignore")
 
 
-def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
+def append_utterance(
+    experiment_dir: Path,
+    text: str,
+    actor: str | None = None,
+    *,
+    bound: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Append one human prompt to the repo's utterance log; return the record.
+
+    ``actor=None`` appends to the unsuffixed log exactly as before. When the
+    harness knows whose session it is (MH2) it passes the session ``actor``
+    slug and the record lands in ``utterances.<actor>.jsonl`` beside the
+    default — the SAME frozen 3-field record, so a per-actor file is a
+    conforming utterance log byte-for-byte. An INVALID actor slug FAILS OPEN to
+    the unsuffixed log: a broken config degrades to today's tier, never wedges
+    capture.
+
+    ``bound`` (``docs/design/bound-capture.md``) is written VERBATIM under the
+    ``bound`` key when it is a non-empty mapping, and OMITTED otherwise — so a
+    chat-hook capture (which passes nothing) is byte-identical to before. The
+    store never inspects its shape; only a gate matches it. A view-aware surface
+    that knows exactly what the typed text signs (the MCP elicitation popup)
+    passes it; the chat hooks never do.
 
     Returns ``None`` (a clean no-op) when:
 
@@ -97,7 +224,11 @@ def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
     if not text:
         return None
     try:
-        path = utterances_path(experiment_dir)
+        try:
+            path = utterances_path(experiment_dir, actor)
+        except errors.SpecInvalid:
+            # Invalid actor slug → fail open to the unsuffixed log (MH2).
+            path = utterances_path(experiment_dir)
         if not path.parent.is_dir():
             return None
         from hpc_agent.infra.time import utcnow_iso
@@ -107,6 +238,8 @@ def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "text": _truncate_utf8(text, MAX_UTTERANCE_BYTES),
         }
+        if isinstance(bound, dict) and bound:
+            record["bound"] = bound
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
         return record
@@ -114,15 +247,14 @@ def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
         return None
 
 
-def read_utterances(experiment_dir: Path) -> list[dict[str, Any]]:
-    """Every logged utterance for *experiment_dir*, oldest first — non-creating.
+def _read_one(path: Path) -> list[dict[str, Any]]:
+    """Every record in a single utterance log file, append-order — non-creating.
 
-    Returns ``[]`` when the log (or the namespace) does not exist. Blank and
+    Returns ``[]`` when the file (or its namespace) does not exist. Blank and
     individually-corrupt lines are skipped — one bad line never strands the
     rest of the trail (the decision-journal read discipline).
     """
     try:
-        path = utterances_path(experiment_dir)
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
@@ -140,4 +272,50 @@ def read_utterances(experiment_dir: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(obj, dict):
             records.append(obj)
+    return records
+
+
+def read_utterances(
+    experiment_dir: Path, actor: str | None = None, *, union: bool = True
+) -> list[dict[str, Any]]:
+    """Logged utterances for *experiment_dir*, oldest first — non-creating.
+
+    Three read modes (MH2):
+
+    * ``actor=<slug>`` — that actor's ``utterances.<actor>.jsonl`` ONLY. The
+      unsuffixed log is deliberately EXCLUDED from an actor-scoped read:
+      anonymous text must never satisfy an actor-specific evidence check, or
+      cross-actor laundering re-opens. An invalid actor slug fails open to the
+      unsuffixed log (the append-side fail-open, mirrored).
+    * ``actor=None, union=True`` (the default) — the UNION of the unsuffixed
+      log and every ``utterances.<actor>.jsonl``, merged oldest-first by ``ts``
+      so every existing identity-less consumer sees all human text, as today.
+      In a single-actor world (no suffixed file exists) this is byte-identical
+      to reading the unsuffixed log alone.
+    * ``actor=None, union=False`` — the unsuffixed log ONLY (the pre-multi-human
+      read, exactly).
+
+    Returns ``[]`` when the log (or the namespace) does not exist. Blank and
+    individually-corrupt lines are skipped.
+    """
+    if actor is not None:
+        try:
+            scoped = utterances_path(experiment_dir, actor)
+        except errors.SpecInvalid:
+            # Invalid actor slug → fail open to the unsuffixed log (MH2).
+            return _read_one(utterances_path(experiment_dir))
+        return _read_one(scoped)
+
+    unsuffixed = utterances_path(experiment_dir)
+    if not union:
+        return _read_one(unsuffixed)
+
+    records: list[dict[str, Any]] = list(_read_one(unsuffixed))
+    parent = unsuffixed.parent
+    if parent.is_dir():
+        for suffixed in sorted(parent.glob(_ACTOR_UTTERANCES_GLOB)):
+            records.extend(_read_one(suffixed))
+    # ts-merge oldest-first; a stable sort preserves append order for equal or
+    # missing ``ts`` (seconds-resolution stamps can collide within a burst).
+    records.sort(key=lambda r: str(r.get("ts", "")))
     return records

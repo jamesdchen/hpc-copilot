@@ -178,14 +178,48 @@ def test_doctor_no_parked_when_none_awaiting(tmp_path: Path) -> None:
 
 
 def _commit_y(exp: Path, run_id: str) -> None:
+    # A genuine greenlight's ``resolved`` carries the ``next_block`` routing
+    # token naming the gated successor — the boundary the marker is parked at
+    # (matching ``_park``'s resume_cursor.next_verb). The boundary-scoped
+    # predicate (bug-sweep #1/#23, run-12 finding 21) keys on it.
     append_decision(
         exp,
         scope_kind="run",
         scope_id=run_id,
         block="s2",
         response="y",
-        resolved={"approved": True},
+        resolved={"approved": True, "next_block": "s3"},
     )
+
+
+def test_doctor_stale_prior_boundary_y_stays_parked(tmp_path: Path) -> None:
+    """A committed ``y`` that names a DIFFERENT boundary than the marker's
+    (a prior boundary's already-consumed greenlight) must read as PARKED —
+    awaiting the human — not as a stalled driver to re-arm (bug-sweep #1/#23,
+    run-12 finding 21: the consumed-y livelock, doctor surface)."""
+    now = "2026-07-03T01:00:00+00:00"
+    upsert_run(tmp_path, _record("stale-y"))
+    stamp_tick(
+        "stale-y",
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park(tmp_path, "stale-y")  # marker's resume_cursor.next_verb == "s3"
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="stale-y",
+        block="s1",
+        response="y",
+        resolved={"approved": True, "next_block": "s2"},  # names the PRIOR boundary
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["awaiting_advance_count"] == 0
+    assert out["parked_count"] == 1
+    assert out["parked"][0]["run_id"] == "stale-y"
 
 
 def _commit_nudge(exp: Path, run_id: str) -> None:
@@ -470,3 +504,28 @@ def test_doctor_alerts_fail_open_on_corrupt_log(tmp_path: Path) -> None:
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
     assert out["alerts"] == []
     assert out["needs_attention"] is False
+
+
+# ─── env-echo disclosure (run-12 finding 24 addendum) ────────────────────────
+
+
+def test_doctor_echoes_hpc_env_overrides(tmp_path: Path, monkeypatch) -> None:
+    """Every HPC_* env var is echoed verbatim in the brief — the env-vs-record
+    drift seat (HPC_SSH_ENGINE sat exported for days contradicting the session
+    record, invisible to every surface). Disclosure only, never judged."""
+    monkeypatch.setenv("HPC_SSH_ENGINE", "asyncssh")
+    monkeypatch.setenv("HPC_SSH_TIMEOUT_SEC", "1800")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+
+    echoed = out["active_env_overrides"]
+    assert echoed["HPC_SSH_ENGINE"] == "asyncssh"
+    assert echoed["HPC_SSH_TIMEOUT_SEC"] == "1800"
+    assert all(k.startswith("HPC_") for k in echoed)
+
+
+def test_doctor_env_echo_empty_when_unset(tmp_path: Path, monkeypatch) -> None:
+    for key in [k for k in __import__("os").environ if k.startswith("HPC_")]:
+        monkeypatch.delenv(key, raising=False)
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["active_env_overrides"] == {}

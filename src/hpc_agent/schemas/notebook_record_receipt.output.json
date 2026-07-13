@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_record_receipt.output.json",
+  "title": "notebook-record-receipt output data",
+  "description": "Honest accounting of one record-receipt pass.\n\n``recorded`` names the sections a receipt was journaled for; ``skipped`` names\nevery entry whose slug was not found in the parsed source.",
+  "type": "object",
+  "required": [
+    "audit_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "recorded": {
+      "description": "Sections a render receipt was journaled for, in entry order.",
+      "items": {
+        "$ref": "#/$defs/NotebookRecordedReceipt"
+      },
+      "title": "Recorded",
+      "type": "array"
+    },
+    "skipped": {
+      "description": "Entries NOT journaled — unknown-slug (no such section in source).",
+      "items": {
+        "$ref": "#/$defs/NotebookRecordReceiptSkipped"
+      },
+      "title": "Skipped",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "NotebookRecordReceiptSkipped": {
+      "additionalProperties": false,
+      "description": "One entry that was NOT journaled, with the honest reason.\n\n``reason`` is ``unknown-slug`` — the entry named a slug the parsed source\ndoes not contain (a stale or mistyped slug), so there is no section sha to\nbind a receipt against. Reported, never fatal.",
+      "properties": {
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section",
+        "reason"
+      ],
+      "title": "notebook-record-receipt skipped entry",
+      "type": "object"
+    },
+    "NotebookRecordedReceipt": {
+      "additionalProperties": false,
+      "description": "One section a render receipt was journaled for this call.",
+      "properties": {
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "section_sha": {
+          "title": "Section Sha",
+          "type": "string"
+        },
+        "output_sha": {
+          "title": "Output Sha",
+          "type": "string"
+        },
+        "error": {
+          "title": "Error",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "section",
+        "section_sha",
+        "output_sha",
+        "error"
+      ],
+      "title": "notebook-record-receipt recorded section",
+      "type": "object"
+    }
+  }
+}

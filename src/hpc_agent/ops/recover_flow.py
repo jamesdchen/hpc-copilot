@@ -201,6 +201,61 @@ def render_overrides_to_extra_flags(
     return out
 
 
+def _clear_terminal_failure_markers(
+    *,
+    ssh_target: str | None,
+    remote_path: str | None,
+    run_id: str,
+    task_ids: list[int],
+) -> None:
+    """Remove the retry preamble's terminal ``.hpc_failed`` markers for *task_ids*.
+
+    ``hpc_run_with_retry`` (hpc_preamble.sh) writes
+    ``$RESULT_DIR/.hpc_failed/<run>.<task>.failed`` after exhausting in-job
+    attempts and refuses on entry to re-run a (run, task) whose marker exists —
+    deliberate loop-bounding (#161) that would otherwise make every
+    resubmitted task exit 1 in milliseconds forever, defeating the documented
+    resubmit-with-adjusted-resources recovery. The resubmit path therefore
+    clears the markers for exactly the ids it re-submits, and nothing else.
+
+    One ``rm -f`` over ONE ssh call (the :func:`ssh_marker_scan` seam and
+    throttle discipline; ``$RESULT_DIR`` defaults to the job cwd =
+    *remote_path*, the same layout assumption that scan codifies). Best-effort:
+    a clear failure must not block the resubmit — ``rm -f`` on a reachable
+    cluster cannot fail on absent markers, and a transport failure here means
+    the batch submission is about to fail loudly anyway — but it is logged
+    with its consequence since the affected tasks would be refused again.
+    """
+    if not ssh_target or not remote_path or not task_ids:
+        return
+    import shlex
+
+    from hpc_agent.infra import remote
+
+    marker_dir = f"{remote_path.rstrip('/')}/.hpc_failed"
+    markers = " ".join(
+        shlex.quote(f"{marker_dir}/{run_id}.{int(tid)}.failed") for tid in sorted(set(task_ids))
+    )
+    try:
+        proc = remote.ssh_run(f"rm -f -- {markers}", ssh_target=ssh_target)
+        rc = proc.returncode
+        detail = (proc.stderr or "").strip()[:200]
+    except (TimeoutError, OSError) as exc:
+        rc, detail = -1, str(exc)
+    if rc != 0:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "could not clear .hpc_failed markers for run_id=%s tasks=%s (rc=%s: %s); "
+            "the retry preamble will refuse to re-run these tasks until the "
+            "markers are removed",
+            run_id,
+            sorted(set(task_ids)),
+            rc,
+            detail,
+        )
+
+
 def _format_walltime(walltime_sec: int) -> str:
     """Format seconds as ``HH:MM:SS`` for Slurm/SGE walltime flags.
 
@@ -389,18 +444,40 @@ def resubmit_flow(
                     },
                 )
 
+            # Prefer the sidecar's values (they carry any v2 config that
+            # supersedes the journal), but fall back to the journal record
+            # so a missing/empty sidecar doesn't blank these and trip
+            # downstream validation.
+            # ssh_target is CONFIG, resolved fresh from clusters.yaml for the
+            # record's cluster at use time (run12 finding 23 / RULING 1) — the
+            # sidecar's frozen copy is not trusted for the transport call below.
+            from hpc_agent.infra.clusters import resolve_ssh_target
+
+            ssh_target = resolve_ssh_target(existing)
+            remote_path = (sidecar or {}).get("remote_path") or existing.remote_path
+
+            # Clear the retry preamble's terminal ``.hpc_failed`` markers for
+            # the ids being re-submitted BEFORE any batch lands — with a
+            # marker in place the preamble refuses to re-run the task, so the
+            # resubmitted array would fail in milliseconds regardless of the
+            # adjusted resources (see _clear_terminal_failure_markers).
+            # Idempotent (``rm -f``), so the resume path re-clearing already
+            # cleared markers is harmless.
+            _clear_terminal_failure_markers(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                run_id=run_id,
+                task_ids=[int(t) for t in plan_failed_ids],
+            )
+
             try:
                 cluster_job_ids = _submit_resubmit_batches(
                     experiment_dir=experiment_dir,
                     run_id=run_id,
                     failed_task_ids=plan_failed_ids,
                     effective_overrides=plan_overrides,
-                    # Prefer the sidecar's values (they carry any v2
-                    # config that supersedes the journal), but fall back
-                    # to the journal record so a missing/empty sidecar
-                    # doesn't blank these and trip downstream validation.
-                    ssh_target=(sidecar or {}).get("ssh_target") or existing.ssh_target,
-                    remote_path=(sidecar or {}).get("remote_path") or existing.remote_path,
+                    ssh_target=ssh_target,
+                    remote_path=remote_path,
                     slurm_account=(sidecar or {}).get("slurm_account"),
                     slurm_cluster=(sidecar or {}).get("slurm_cluster"),
                     scheduler=backend,
@@ -413,12 +490,28 @@ def resubmit_flow(
                     submitted_ids_out=partial_ids,
                     start_batch=len(prior_ids),
                 )
-            except errors.RemoteCommandFailed:
+            except BaseException:
                 # Record progress so a retry resumes from the next
                 # un-submitted batch — without this marker the retry
                 # either re-submits the batches that already landed or
                 # (if the request_id were stamped) skips the remainder.
-                _save_marker(partial_ids)
+                #
+                # ANY mid-loop failure must persist progress, not just the
+                # wrapped-qsub ``RemoteCommandFailed``: the per-host SSH
+                # circuit breaker raises ``errors.SshCircuitOpen`` (an
+                # HpcError, NOT a RemoteCommandFailed) and the bounded runner
+                # raises ``TimeoutError`` — both escape ``_submit_one_batch``'s
+                # narrow ``except RuntimeError`` re-wrap. If the marker isn't
+                # saved for those, a retry re-submits the batches that already
+                # landed (duplicate concurrent arrays writing the same result
+                # dirs), the exact orphaned/duplicate-jobs class this file's
+                # BUG-4V3-1 comments claim to close. We reraise unchanged, so
+                # catching ``BaseException`` only broadens which failures
+                # persist progress. Guard the write on real progress
+                # (``partial_ids`` grew beyond the prior resume point) so a
+                # zero-progress failure doesn't leave a spurious marker.
+                if len(partial_ids) > len(prior_ids):
+                    _save_marker(partial_ids)
                 raise
             cluster_submitted = True
             # Whole plan landed. Record the marker as *complete* (job_ids
@@ -642,7 +735,7 @@ def _submit_resubmit_batches(
     submitted_ids: list[str] = submitted_ids_out if submitted_ids_out is not None else []
     cwd = experiment_dir
     for batch in plan.batches[start_batch:]:
-        job_id = _submit_one_batch(
+        job_ids = _submit_one_batch(
             backend_obj,
             job_name=job_name,
             task_range=batch.task_range,
@@ -650,7 +743,7 @@ def _submit_resubmit_batches(
             extra_flags=extra_flags,
             cwd=cwd,
         )
-        submitted_ids.append(job_id)
+        submitted_ids.extend(job_ids)
     return submitted_ids
 
 
@@ -662,27 +755,34 @@ def _submit_one_batch(
     job_env: dict[str, str],
     extra_flags: list[str],
     cwd: Path,
-) -> str:
-    """Submit one batch with a precomputed array expression. Returns the job id.
+) -> list[str]:
+    """Submit one batch with a precomputed array expression. Returns ALL job ids.
 
-    #339 increment 3: converges onto the SHARED per-batch primitive
-    :meth:`HPCBackend.submit_one` — the same ``setup_log_dir + _build_command +
-    _execute_command + returncode-check + JOB_ID_REGEX`` sequence the initial
-    submit (``_make_single_array_submission``) and the wave submitter
-    (``submit_plan``) now use, so the duplicated qsub edge lives in one place.
-    Accepts an arbitrary ``task_range`` (e.g. ``"3,7,12-14"`` — resubmit's
-    non-contiguous failed ids) and threads ``extra_flags`` so the
-    planner-adjusted overrides land on the qsub command line. The resubmit loop
-    keeps driving this per-batch (preserving ``start_batch`` partial-resume and
-    the shared ``submitted_ids`` crash-safety list) rather than handing the
-    whole plan to ``submit_plan``, which cannot express partial-resume.
+    #339 increment 3: converges onto the SHARED per-batch primitive — now
+    :meth:`HPCBackend.submit_non_contiguous` (bug-sweep #6), which routes
+    through the same ``setup_log_dir + _build_command + _execute_command +
+    returncode-check + JOB_ID_REGEX`` sequence via :meth:`submit_one`, so the
+    duplicated qsub edge still lives in one place. Accepts an arbitrary
+    ``task_range`` (e.g. ``"3,7,12-14"`` — resubmit's non-contiguous failed
+    ids); on single-range families (SGE/PBS Pro) the backend fans that out
+    into one array per contiguous run and returns EVERY id — the caller
+    extends ``submitted_ids`` with the whole list so no landed array goes
+    untracked. The resubmit loop keeps driving this per-batch (preserving
+    ``start_batch`` partial-resume and the shared ``submitted_ids``
+    crash-safety list) rather than handing the whole plan to ``submit_plan``,
+    which cannot express partial-resume. (A failure mid-fan-out inside ONE
+    batch loses that batch's earlier sub-array ids — strictly better than the
+    pre-#6 behavior, where the whole comma-bearing qsub failed outright; the
+    per-batch marker granularity is unchanged.)
 
-    ``submit_one`` raises a ``RuntimeError`` on a non-zero exit / unparseable
-    id; resubmit re-wraps it as the typed :class:`RemoteCommandFailed` its
-    callers expect.
+    The backend raises ``RuntimeError`` on a non-zero exit / unparseable id;
+    resubmit re-wraps it as the typed :class:`RemoteCommandFailed` its callers
+    expect.
     """
     try:
-        return backend.submit_one(task_range, job_name, job_env, extra_flags=extra_flags, cwd=cwd)
+        return backend.submit_non_contiguous(
+            task_range, job_name, job_env, extra_flags=extra_flags, cwd=cwd
+        )
     except RuntimeError as exc:
         raise errors.RemoteCommandFailed(f"resubmit failed for array {task_range}: {exc}") from exc
 

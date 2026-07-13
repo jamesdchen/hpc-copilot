@@ -37,7 +37,6 @@ harvests partial data.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -45,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent.errors import ScopeLocked, SshCircuitOpen
+from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.run_record import runs_dir
 
@@ -140,6 +140,34 @@ def harvest_on_terminal(
         "harvest_ok": False,
     }
     combiner_dir: str | None = None
+
+    # POSITIVE-EVIDENCE GATE (run-#12 finding 19): the "abnormal-exit"
+    # sentinel means the WATCH died, not the run — three ssh timeouts
+    # unwound the poll loop while 27 healthy jobs sat in the queue, and this
+    # guard then pulled a LIVE run's results for 1800s. Under the sentinel,
+    # harvest only when the JOURNAL positively records a terminal status
+    # (read FRESH — the caller's record predates the unwind); otherwise
+    # record a clean skip and return. The watchdog / doctor re-arm the
+    # watch, and the real terminal path harvests later under its own cause.
+    if terminal_cause == "abnormal-exit":
+        from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES
+        from hpc_agent.state.journal import load_run
+
+        fresh: Any | None = None
+        with contextlib.suppress(Exception):
+            fresh = load_run(experiment_dir, run_id)
+        status = getattr(fresh if fresh is not None else record, "status", None)
+        if status not in TERMINAL_STATUSES:
+            marker["harvest_skipped_reason"] = "run_not_terminal"
+            _log.warning(
+                "terminal harvest: abnormal watch exit for run %s but the journal "
+                "records status %r (not terminal) — clean skip, nothing pulled; "
+                "re-arm the watch (the watchdog sees the stamp gap).",
+                run_id,
+                getattr(status, "value", status),
+            )
+            _write_marker(experiment_dir, run_id, marker)
+            return marker
 
     # (a) Metrics harvest — the same aggregate entry the driver routes to,
     #     so a crash / session-death after the terminal tick still yields a
@@ -296,10 +324,11 @@ def _write_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> 
     mask the terminal cause.
     """
     try:
-        path = harvest_marker_path(experiment_dir, run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(marker, default=str) + "\n")
+        # Route through the canonical JSONL-append seam (flock + fsync +
+        # sort_keys) so a torn/interleaved final line can't strand a finished
+        # run's evidence. The seam CAN raise OSError; this never-raise wrapper
+        # (the guard runs from a caller's ``finally``) swallows it into a log.
+        append_jsonl_line(harvest_marker_path(experiment_dir, run_id), marker)
     except Exception as exc:  # noqa: BLE001 — last-resort: log, never raise
         with contextlib.suppress(Exception):
             _log.warning(

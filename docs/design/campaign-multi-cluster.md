@@ -1,8 +1,11 @@
+---
+status: plan
+---
 # Design: multi-cluster campaigns (N campaign_ids, one repo)
 
 > **Status:** design-complete. Companion to the async-refill RFC
 > [`campaign-async-refill.md`](campaign-async-refill.md) (#362) and its
-> [implementation plan](campaign-async-refill-implementation-plan.md) (Phase 2).
+> [implementation plan](history/campaign-async-refill-implementation-plan.md) (Phase 2).
 > Most of the mechanism **already works** — `campaign_id` is the isolation
 > primitive and the cross-run queries already partition on it. This document
 > names the pattern, the conventions that make it safe, and the one correctness
