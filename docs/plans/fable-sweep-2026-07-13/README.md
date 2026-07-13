@@ -1,8 +1,8 @@
 # Fable sweep 2026-07-13 — machine-readable appendix
 
 Raw artifacts of the experiment-runtime breakdown sweep run at HEAD `fb8428c`
-(code-identical to `d731b12` except uv.lock). The narrative plan doc that ranks
-these into work packages lands as a sibling file; these JSONs are the source of
+(code-identical to `d731b12` except uv.lock). The narrative plan doc ranking these into work packages is the sibling file
+[`../fable-sweep-2026-07-13.md`](../fable-sweep-2026-07-13.md); these JSONs are the source of
 truth the hardening swarm should consume programmatically.
 
 - `verified-findings.json` — 57 canonical findings (55 CONFIRMED / 2 WEAK,
