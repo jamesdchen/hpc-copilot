@@ -53,6 +53,19 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Static-only view of the lazily re-exported resolver names (see the module
+    # ``__getattr__`` below). Not imported at runtime — that is the whole point,
+    # so the deployed reporter never pulls scheduler_profile — but it lets ruff
+    # (F822) and mypy see the ``__all__`` entries resolve.
+    from hpc_agent.execution.mapreduce.reduce.scheduler_profile import (
+        pin_scheduler_profile as pin_scheduler_profile,
+    )
+    from hpc_agent.execution.mapreduce.reduce.scheduler_profile import (
+        resolve_scheduler_profile as resolve_scheduler_profile,
+    )
 
 from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent._kernel.contract.vocabulary import TaskStatus
@@ -61,20 +74,25 @@ from hpc_agent.execution.mapreduce.reduce.rollup import (
     rollup_by_grid_point,
     rollup_by_wave,
 )
-
-# Scheduler-profile RESOLVER (Phase 3) — extracted to a sibling module
-# because it is infra/backends-shaped, not reduce-phase-shaped (see that
-# module's docstring). Re-exported here so the historical
-# ``…reduce.status.resolve_scheduler_profile`` / ``pin_scheduler_profile``
-# import paths keep resolving. A sibling (not ``infra.backends``) import so
-# ``status``'s top-level graph does not eagerly pull the backends package —
-# the resolver's own spine imports stay lazy, preserving the deployed
-# reporter closure invariant.
-from hpc_agent.execution.mapreduce.reduce.scheduler_profile import (
-    pin_scheduler_profile,
-    resolve_scheduler_profile,
-)
 from hpc_agent.infra.time import utcnow_iso
+
+
+# Scheduler-profile RESOLVER (Phase 3) — extracted to a sibling module because
+# it is infra/backends-shaped, not reduce-phase-shaped (see that module's
+# docstring). LAZILY re-exported here (PEP 562 module ``__getattr__``) so the
+# historical ``…reduce.status.resolve_scheduler_profile`` /
+# ``pin_scheduler_profile`` import paths keep resolving WITHOUT eagerly pulling
+# scheduler_profile into the deployed reporter closure. The reporter's runtime
+# never resolves a profile (only host-side ``infra/transport.py`` does), so the
+# deployed ``status`` must not import it at module load — the import is deferred
+# to first attribute access, which on a cluster never happens.
+def __getattr__(name: str) -> object:
+    if name in ("resolve_scheduler_profile", "pin_scheduler_profile"):
+        from hpc_agent.execution.mapreduce.reduce import scheduler_profile
+
+        return getattr(scheduler_profile, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # ---------------------------------------------------------------------------
 # Result checking
