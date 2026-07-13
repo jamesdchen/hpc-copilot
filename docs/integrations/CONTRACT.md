@@ -228,53 +228,69 @@ The terminal/observable values returned by status / monitor / reconcile:
 | `timeout` | Terminal. Wall-clock budget exceeded; cluster jobs may still be running. |
 | `abandoned` | Terminal. Recorded `job_ids` no longer known to the scheduler. |
 
-hpc-agent deliberately does not kill cluster jobs (`settings.json`
-denies `scancel`/`qdel`). If the integrator decides a run is bad,
-stop polling and let it expire.
+If the integrator decides a run is bad, it can `kill` it (below) or
+simply stop polling and let it expire.
 
-## Cancel / abort: out of scope
+## Cancel / abort: the `kill` primitive
 
-hpc-agent has no cancel primitive. Cluster jobs run to walltime.
-This is a permanent design choice — do not work around it. If your
-loop needs to abandon a run, simply stop polling; the journal records
-mark themselves `abandoned` on reconcile when the scheduler no longer
-knows about the run.
+hpc-agent ships a first-class `kill` primitive
+(`hpc-agent kill --spec <path>`, a `mutate` verb backed by
+`hpc_agent.ops.monitor.kill`). Given a `run_id` it: (1) journals the
+kill **intent**, (2) attempts scheduler cancellation *through the backend
+seam* (`hpc_agent.infra.backends`) **if a cancel affordance exists**,
+(3) verifies against the scheduler which recorded `job_ids` are gone,
+(4) journals the verified-gone subset, and reports `N requested, N
+confirmed gone`. The count never claims more than the scheduler confirms.
+
+**Backend-cancel gap (current state).** No backend today exposes a
+cancel-command builder (`build_cancel_cmd`), so `kill` implements the
+journaled-intent + verify-gone half honestly: `_attempt_backend_cancel`
+detects the *absence* of the affordance and reports
+`backend_cancel_available=False` rather than fabricating a
+`scancel`/`qdel` string. Until a backend wires the affordance, `kill`
+records intent and confirms which jobs the scheduler no longer knows — it
+does not itself force-cancel a still-running job.
+
+So to abandon a run: call `kill` to record intent and confirm the
+verified-gone subset, and/or stop polling — the journal records mark
+themselves `abandoned` on reconcile when the scheduler no longer knows
+about the run.
 
 ## Headless loop: caller owns policy, we own protocol
 
-The `hpc-campaign-driver` outer loop (advance one `delegate` step per
-invocation off `load-context`) is a *configuration* of a neutral
-tick-loop mechanism — `hpc_agent._kernel.lifecycle.drive`. The mechanism
-owns the **protocol**: read the `delegate` block, plan the next action,
-dispatch a deterministic `cli` verb or an `agent` judgement step, one
-step per invocation, state-on-disk between ticks. The caller owns the
-**policy**, injected through two seams:
+The `hpc-block-drive` tick (advance one `delegate` step per invocation
+off `load-context`) is a *configuration* of a neutral tick-loop
+mechanism — `hpc_agent._kernel.lifecycle.drive` (the `block-drive`
+console script, `_kernel/lifecycle/block_drive.py`, generalizes it). The
+mechanism owns the **protocol**: read the `delegate` block, plan the next
+action (`drive.plan_action`, a pure function), dispatch a deterministic
+`cli` verb or **skip** an `agent` judgement step, one step per
+invocation, state-on-disk between ticks. The caller owns the **policy**,
+injected through one seam:
 
 - **`StepTable`** (`Mapping[str, str]`) — which `hpc-agent` verb each
   `delegate.step` maps to for `kind: "cli"` steps. Campaign supplies
   `{"monitor": "monitor-flow", "aggregate": "aggregate-flow"}`; a
   different driver can map any step to any verb. A step absent from the
   table skips — the loop bakes in no step vocabulary of its own.
-- **`JudgementResolver`** (`(spawn_request, experiment_dir) -> (report,
-  exit_code)`) — how a `kind: "agent"` step is executed. The default
-  resolver spawns a fresh-context worker via `run_workflow` (the transport
-  is whichever `HPC_AGENT_INVOKER` selects — `claude-cli` by default,
-  `codex-cli`/`gemini-cli` per #305); the seam lets a wholly different
-  resolver stand in without the loop knowing. An injected resolver **owns
-  two obligations the default inherits from `run_workflow`**: (1) a
-  pre-spawn credential fail-fast (surface an actionable error *before*
-  spawning rather than letting the worker die opaquely), and (2)
-  prompt-cache accounting (#244) is *not* carried by the 2-tuple — report
-  it out of band if you need it.
+
+A `kind: "agent"` (judgement) step is **always planned as skip**: a
+judgement step is a human decision boundary, driven via `block-drive`.
+The `claude -p` worker-spawn transport this loop once dispatched — and
+the `JudgementResolver` seam that carried it — were removed in the §6
+worker removal, so there is no resolver to inject; the loop no longer
+takes one.
 
 An integrator that wants to embed the loop without the console-script
-surface calls **`drive_once(experiment_dir, *, step_table, resolver,
-allow_agent_steps, dry_run)`** directly — no argv to synthesize; the
-`hpc-campaign-driver` CLI is a thin argparse wrapper over it.
+surface calls **`drive_once(experiment_dir, *, step_table, dry_run)`**
+directly — no argv to synthesize; the `hpc-block-drive` CLI is a thin
+argparse wrapper over it. See
+[`../workflows/code-driven-orchestration.md`](../workflows/code-driven-orchestration.md)
+for the full code-driven consumption style.
 
 This is the same "mechanism is neutral; the caller owns the rules" split
 the deterministic decision kernel uses one layer down. An integrator
-embedding the loop configures these two seams rather than forking the
+embedding the loop configures the `StepTable` rather than forking the
 dispatch logic.
 
 ## Capabilities introspection

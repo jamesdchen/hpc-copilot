@@ -30,13 +30,14 @@ update both surfaces and bump the version.
 
 ### `error_code` enum
 
-The full set of 17 values that may appear in an error envelope's
+The full set of 18 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
 `hpc_agent/errors.py`.
 
 | `error_code` | Class | `category` | `retry_safe` |
 |---|---|---|---|
 | `ssh_unreachable` | `SshUnreachable` | network | yes |
+| `ssh_circuit_open` | `SshCircuitOpen` | network | no |
 | `model_endpoint_error` | `ModelEndpointError` | network | yes |
 | `scheduler_throttled` | `SchedulerThrottled` | cluster | yes |
 | `spec_invalid` | `SpecInvalid` | user | no |
