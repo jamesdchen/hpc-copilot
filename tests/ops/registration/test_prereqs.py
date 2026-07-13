@@ -243,7 +243,7 @@ def _repro_entry(content_sha: str, requires: dict | None = None) -> ChainEntry:
 def test_reproduction_current(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(tmp_path, [_repro_entry(sha)], dossier_run_ids={_ORIG})
     assert v.status == "current"
     assert v.recomputed_sha == sha
@@ -252,7 +252,7 @@ def test_reproduction_current(tmp_path: Path) -> None:
 def test_reproduction_stale_on_code_drift(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code-v2")  # tree moved
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(tmp_path, [_repro_entry(sha)], dossier_run_ids={_ORIG})
     assert v.status == "stale"
     assert "code drifted" in v.evidence_note
@@ -261,7 +261,7 @@ def test_reproduction_stale_on_code_drift(tmp_path: Path) -> None:
 def test_reproduction_dossier_cross_link_refusal(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     # The dossier names a DIFFERENT run — the receipt's original is not in it.
     [v] = prereqs.check_chain(tmp_path, [_repro_entry(sha)], dossier_run_ids={"some-other-run"})
     assert v.status == "stale"
@@ -280,7 +280,7 @@ def test_reproduction_requires_floor_met(tmp_path: Path) -> None:
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
     for _ in range(3):
         _write_fingerprint_sample(tmp_path, scale="main", cluster="widget-cluster")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     demand = {"min_n": 3, "scales": ["main"], "clusters": ["widget-cluster"]}
     [v] = prereqs.check_chain(
         tmp_path, [_repro_entry(sha, requires=demand)], dossier_run_ids={_ORIG}
@@ -294,7 +294,7 @@ def test_reproduction_requires_floor_unmet_n(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
     _write_fingerprint_sample(tmp_path, scale="main")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(
         tmp_path, [_repro_entry(sha, requires={"min_n": 3})], dossier_run_ids={_ORIG}
     )
@@ -309,7 +309,7 @@ def test_reproduction_requires_floor_unmet_scale(tmp_path: Path) -> None:
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
     for _ in range(3):
         _write_fingerprint_sample(tmp_path, scale="canary")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(
         tmp_path,
         [_repro_entry(sha, requires={"min_n": 3, "scales": ["main"]})],
@@ -324,7 +324,7 @@ def test_reproduction_requires_floor_missing_ledger_is_shortfall(tmp_path: Path)
     # No ledger at all → an ordinary n=0 shortfall, NOT a fabricated pass / crash.
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(
         tmp_path, [_repro_entry(sha, requires={"min_n": 1})], dossier_run_ids={_ORIG}
     )
@@ -355,7 +355,7 @@ def _budget_entry(content_sha: str, max_looks: int) -> ChainEntry:
 def _budget_sha(tmp_path: Path) -> str:
     counts = scopes.count_prior_looks(tmp_path, _SCOPE)
     locked = scopes.is_scope_locked(tmp_path, _SCOPE)
-    sha: str = prereqs._canonical_sha(
+    sha: str = prereqs.canonical_sha(
         {
             "prior_looks": counts["prior_looks"],
             "distinct_lineages": counts["distinct_lineages"],

@@ -45,7 +45,6 @@ Pure local reads — no SSH, no ``_wire`` import, no scheduler.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -54,7 +53,7 @@ from hpc_agent import errors
 from hpc_agent.state import attestation, code_drift, notebook_audit, pack_receipts, scopes
 from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
 from hpc_agent.state.decision_journal import read_decisions
-from hpc_agent.state.determinism import evidence_meets, validate_sample
+from hpc_agent.state.determinism import canonical_sha, evidence_meets, validate_sample
 from hpc_agent.state.fingerprint_store import load_evidence
 from hpc_agent.state.registration import (
     KIND_ATTESTATION,
@@ -130,21 +129,6 @@ class SlotVerdict:
     recorded_sha: str
     recomputed_sha: str | None
     evidence_note: str
-
-
-def _canonical_sha(obj: Any) -> str:
-    """sha256 hexdigest of *obj*'s canonical JSON (harness-contract form).
-
-    ``json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`` per
-    ``docs/internals/harness-contract.md`` "The sha canonicalization" — the ONE
-    local canonicalization this module uses for the ``reproduction`` /
-    ``scope-budget`` recomputed-evidence shas (no ``infra``/``state`` helper of
-    this exact form exists to reuse; the ``ops/notebook/audit_view`` /
-    ``ops/story_render`` copies are private view-sha helpers, not a shared seam).
-    """
-    return hashlib.sha256(
-        json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
 
 
 def _verdict(
@@ -411,7 +395,7 @@ def _check_reproduction(
             ),
         )
 
-    recomputed = _canonical_sha(receipt)
+    recomputed = canonical_sha(receipt)
     overall = receipt.get("overall")
     repro_raw = receipt.get("repro")
     repro_ident: dict[str, Any] = repro_raw if isinstance(repro_raw, dict) else {}
@@ -523,7 +507,7 @@ def _check_scope_budget(
         "distinct_lineages": counts["distinct_lineages"],
         "locked": locked,
     }
-    recomputed = _canonical_sha(projection)
+    recomputed = canonical_sha(projection)
     within_budget = counts["prior_looks"] <= max_looks
     sha_ok = recomputed == entry.content_sha
     if within_budget and not locked and sha_ok:
