@@ -6,13 +6,15 @@ outcome keyed by ``(run_id, block)`` and fingerprinted with the tree's
 is still CURRENT for the tree — recompute the live ``cmd_sha`` and refuse a
 record whose stored ``cmd_sha`` no longer matches — or it replays a stale
 outcome after a nudge moved the tree. Four replay readers do exactly this,
-each through a ``_*_cmd_sha(experiment_dir, run_id)`` recompute + a
-``!= current_sha`` refusal:
+each through a ``read_run_cmd_sha(experiment_dir, run_id)`` recompute + a
+``!= current_sha`` refusal — the ONE shared fingerprint reader in
+``state/runs.py`` that collapsed the five byte-identical per-module
+``_*_cmd_sha`` helpers this contract used to name:
 
-* ``ops/aggregate_blocks.py``  (``_agg_run_cmd_sha``)
-* ``ops/aggregate_flow.py``    (``_agg_flow_cmd_sha``)
-* ``ops/campaign_run.py``      (``_campaign_cmd_sha``)
-* ``ops/status_blocks.py``     (``_watch_cmd_sha``)
+* ``ops/aggregate_blocks.py``  (``aggregate_run``)
+* ``ops/aggregate_flow.py``    (``aggregate_flow``)
+* ``ops/campaign_run.py``      (``_replay_campaign_terminal``)
+* ``ops/status_blocks.py``     (``_replay_watch_terminal``)
 
 Two consumers legitimately read a terminal WITHOUT a currency compare, and
 carry an explicit exemption here (the B7 "one-definition" enforcement row —

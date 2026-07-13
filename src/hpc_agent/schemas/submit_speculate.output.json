@@ -11,6 +11,38 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "started": {
+      "default": false,
+      "description": "Detach-by-contract handle (design §3): True when this atom spawned a durable detached worker and returned immediately instead of blocking the chat on the work (the scheduler dial / harvest / iteration spine). The gate + drift guard already fired synchronously BEFORE the detach; the outcome is not held in a process — read it from the per-run journal via status-snapshot / the completion notification. False on the synchronous (detach=False) path.",
+      "title": "Started",
+      "type": "boolean"
+    },
+    "watch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How to learn the detached work's outcome — ``\"journal\"`` when ``started`` is True (the detached worker stamps the per-run journal record as it runs; poll it cluster-free). None on the synchronous path.",
+      "title": "Watch"
+    },
+    "detached_pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path. A dead worker is detected by the §5 watchdog via a lapsed next_tick_due, not by this pid.",
+      "title": "Detached Pid"
+    },
     "run_id": {
       "description": "The (canary) run this speculation operated on.",
       "pattern": "^[A-Za-z0-9._\\-]+$",
@@ -74,38 +106,6 @@
       "default": null,
       "description": "The verify failure kind when the speculative canary failed.",
       "title": "Failure Kind"
-    },
-    "started": {
-      "default": false,
-      "description": "Detach-by-contract handle (design §3): True when the speculative canary was handed to a durable detached worker and this call returned immediately. ``verified`` is not yet known (the poll runs in the worker) — read the outcome from the journal. False on the synchronous path and on the budget no-op.",
-      "title": "Started",
-      "type": "boolean"
-    },
-    "watch": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "How to learn the detached canary's outcome — ``\"journal\"`` when ``started`` is True. None otherwise.",
-      "title": "Watch"
-    },
-    "detached_pid": {
-      "anyOf": [
-        {
-          "type": "integer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "The detached worker's OS process id (informational). None otherwise.",
-      "title": "Detached Pid"
     }
   }
 }

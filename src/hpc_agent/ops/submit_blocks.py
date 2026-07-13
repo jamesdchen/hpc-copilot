@@ -54,6 +54,7 @@ from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.ops.submit_and_verify import launch_main_array, submit_and_verify
 from hpc_agent.ops.submit_preflight import submit_preflight
 from hpc_agent.ops.walk_submit_ambiguities import walk_submit_ambiguities
+from hpc_agent.state.runs import read_run_cmd_sha
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -68,23 +69,6 @@ __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
 # re-spawn (the single-lease self-heals on a dead pid) — the run #7 papercut.
 # These blocks record their terminal outcome and replay it on re-invoke.
 _DETACHED_BLOCKS: frozenset[str] = frozenset({"s2", "s3", "s4"})
-
-
-def _current_cmd_sha(experiment_dir: Path, run_id: str) -> str:
-    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
-
-    The identity a terminal replay is keyed on: a nudge that re-resolves the run
-    (revise-resolved) rewrites the sidecar ``cmd_sha``, so a mismatch is exactly
-    "the tree moved → do not replay a stale outcome". An unreadable/absent
-    sidecar yields ``""`` — unprovable identity → the replay refuses (re-execute).
-    """
-    from hpc_agent.state.runs import read_run_sidecar
-
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, ValueError, errors.HpcError):
-        return ""
-    return str((sidecar or {}).get("cmd_sha") or "")
 
 
 def _replay_recorded_terminal(
@@ -108,7 +92,7 @@ def _replay_recorded_terminal(
     record = read_terminal_with_fallback(experiment_dir, run_id, block)
     if record is None:
         return None
-    current_sha = _current_cmd_sha(experiment_dir, run_id)
+    current_sha = read_run_cmd_sha(experiment_dir, run_id)
     if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
         return None
     try:
@@ -165,7 +149,7 @@ def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlo
         # falls back to the legacy short "s2" key so a mid-flight run recorded
         # pre-fix is still seen as a prior terminal (no double brief append).
         block_key = terminal_block_key(result.block)
-        cmd_sha = _current_cmd_sha(experiment_dir, result.run_id)
+        cmd_sha = read_run_cmd_sha(experiment_dir, result.run_id)
         prior = read_terminal_with_fallback(experiment_dir, result.run_id, block_key)
         is_fresh_terminal = prior is None or str(prior.get("cmd_sha") or "") != cmd_sha
         record_terminal(
@@ -822,7 +806,7 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         run_id=spec.submit.submit.run_id,
         verb="submit-s3",
         predecessor="S2",
-        current_cmd_sha=_current_cmd_sha(experiment_dir, spec.submit.submit.run_id),
+        current_cmd_sha=read_run_cmd_sha(experiment_dir, spec.submit.submit.run_id),
     )
     # Idempotent re-invoke (run #7): replay a prior worker's recorded terminal for
     # the current tree BEFORE the canary-TTL re-check — the run already ran, so

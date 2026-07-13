@@ -39,6 +39,7 @@ __all__ = [
     "prune_old_runs",
     "prune_orphan_sidecars",
     "read_job_task_spans",
+    "read_run_cmd_sha",
     "read_run_sidecar",
     "resolve_node_sha",
     "resolved_summary_artifact",
@@ -601,6 +602,26 @@ def read_run_sidecar_or_empty(experiment_dir: Path, run_id: str) -> dict[str, An
         return read_run_sidecar(experiment_dir, run_id)
     except errors.TOLERANT_RECORD_READ_ERRORS:
         return {}
+
+
+def read_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The ONE identity a detach-by-contract terminal replay is keyed on — the
+    submit-block, status-watch, aggregate-run, aggregate-flow, and campaign-run
+    replay readers all recompute the current sha through THIS function. A nudge
+    that re-resolves the run (revise-resolved) rewrites the sidecar ``cmd_sha``,
+    so a mismatch against a recorded terminal is exactly "the tree moved → do
+    not replay a stale outcome". An unreadable / absent / foreign-schema sidecar
+    yields ``""`` — an unprovable identity → the replay refuses and the caller
+    re-executes, never a false hit. Pre-submit (before any sidecar exists) also
+    yields ``""`` so the first detach spawns rather than replays.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:

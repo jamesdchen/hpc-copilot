@@ -36,6 +36,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from hpc_agent._wire._shared import DetachedHandleFields
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 
 # The union of every terminator a status block can stop at, modelled as data
@@ -57,7 +58,7 @@ StatusBlockStage = Literal[
 ]
 
 
-class StatusBlockResult(BaseModel):
+class StatusBlockResult(DetachedHandleFields):
     """Shared ``data`` block for every status block (snapshot / watch).
 
     The ``brief`` is the code-digested evidence the LLM drafts a proposal over
@@ -121,33 +122,6 @@ class StatusBlockResult(BaseModel):
             "(run_id etc.). Surfaced, greenlit, journaled under "
             "``resolved.next_block``, and enforced by the successor gate — never "
             "free-prose."
-        ),
-    )
-    started: bool = Field(
-        default=False,
-        description=(
-            "Detach-by-contract handle (design §3): True when status-watch spawned a "
-            "durable detached worker (which owns the ONE cold dial per lifetime — warm "
-            "engine, lease-single, watchdog-covered, exits at terminal) and returned "
-            "immediately instead of dialing the cluster in-process. The brief is not "
-            "held in a process — read it from the journal via status-snapshot / the "
-            "completion notification. False on the synchronous (detach=False) path."
-        ),
-    )
-    watch: str | None = Field(
-        default=None,
-        description=(
-            'How to learn the detached watch\'s outcome — ``"journal"`` when '
-            "``started`` is True (the detached worker stamps the per-run journal "
-            "record as it polls; poll it cluster-free). None on the synchronous path."
-        ),
-    )
-    detached_pid: int | None = Field(
-        default=None,
-        description=(
-            "The detached worker's OS process id (informational — do NOT wait on it; "
-            "read the journal). None on the synchronous path. A dead worker is detected "
-            "by the §5 watchdog / doctor dead-worker scan, not by this pid."
         ),
     )
 
