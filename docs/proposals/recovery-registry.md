@@ -1,7 +1,8 @@
 # Proposal: Central typed recovery registry
 
-Status: prototype landing (3 ported kinds, contract test, CLI verb). Full port
-deferred under the migration plan at the bottom.
+Status: 8 of 9 kinds ported (contract test, CLI verb). Migration items 1–5
+below are done; the one remaining kind (`ssh_unreachable`) is deliberately
+deferred per item 6 — see the migration plan at the bottom.
 
 ## Problem
 
@@ -282,15 +283,29 @@ Port in this order (cheapest-first / highest-leverage-first):
    currently hand-rolled in `_kernel/lifecycle/invoke.py`
    (`missing_credential_remediation`). Recovery menu is the
    `HPC_AGENT_INVOKER=inline` step from commit `88a3869a`.
-4. **`combiner_failed`**, **`outputs_missing`** — port the class-default
-   remediations in `errors.py`. Mechanical.
-5. **`gpu_oom`**, **`system_oom`**, **`walltime`**, **`node_failure`** — port
-   from `failure_signatures.CATALOG.suggested_fix`. Today the recovery
-   action is a flat dict (`{action: "increase-mem-per-gpu", factor: 1.5}`);
-   the registry replaces that with the menu format.
+4. **`combiner_failed`**, **`outputs_missing`** (DONE) — ported from the
+   class-default remediations in `errors.py` as multi-option menus. The
+   `errors.py` class constants are intentionally left in place for now (the
+   registry menu is the canonical source; re-pointing the emit sites at
+   `remediation_for(...)` is a separate follow-up to avoid changing envelope
+   byte-output in the same change that lands the menus).
+5. **`gpu_oom`**, **`system_oom`** (DONE), **`walltime`**, **`node_failure`**
+   (already ported) — ported from `failure_signatures.CATALOG.suggested_fix`
+   (`gpu_oom` → `increase-mem-per-gpu factor 1.5`, `system_oom` →
+   `increase-mem factor 1.5`), with the `gpu_oom` menu also carrying the
+   sharded-vs-unsharded discrimination from
+   `ops/recover/resolve.py::_gpu_oom_action` (more memory per GPU when
+   `tp_size == 1`, reshard/`tp_size` bump when already sharded). The flat
+   `suggested_fix` dict is rendered as the menu format.
 6. **The remaining `errors.HpcError` subclasses** — port iff they grow a
    multi-option menu. Single-line `remediation` constants stay in `errors.py`
-   for now (they're not drift-prone — they're 1:1 with a class).
+   for now (they're not drift-prone — they're 1:1 with a class). This is why
+   **`ssh_unreachable`** (in the `RecoveryKind` open vocabulary but backed by
+   the single-line `errors.SshUnreachable.remediation` / `SshSlotWaitTimeout`)
+   remains the sole un-ported kind and the lone entry on the contract test's
+   migration punch list: it has no multi-option menu today, so porting it
+   would only relocate a 1:1 string. Port it if/when it grows scheduler-
+   specific or multi-step recovery options.
 
 Per-call-site update:
 
