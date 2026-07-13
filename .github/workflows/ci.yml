@@ -73,7 +73,7 @@ jobs:
         # other jobs still see the pre-regen SHA — the auto-commit
         # lands the fix, and the next contributor push (or a manual
         # re-run) turns the checks green.
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore(generated): auto-regenerate after upstream drift"
           file_pattern: "docs/ src/hpc_agent/operations.json src/hpc_agent/schemas/"

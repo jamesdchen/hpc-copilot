@@ -89,7 +89,7 @@ jobs:
         # regen actually changed something. Skipped entirely on push
         # events (where --check below is the hard gate).
         if: github.event_name == 'pull_request'
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore(docs): auto-regenerate primitive catalog + operations index"
           file_pattern: "docs/primitives/README.md docs/generated/operations.md"
