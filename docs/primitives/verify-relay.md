@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.ops.decision.verify_relay.verify_relay
+  python: hpc_agent.ops.decision.journal.verify_relay.verify_relay
 ---
 ## Purpose
 

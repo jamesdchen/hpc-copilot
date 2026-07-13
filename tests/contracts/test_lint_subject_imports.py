@@ -258,9 +258,7 @@ def test_lint_forbids_infra_to_ops(tmp_path: Path) -> None:
     ops_y = tmp_path / "ops" / "y"
     infra.mkdir(parents=True)
     ops_y.mkdir(parents=True)
-    (infra / "reaches.py").write_text(
-        "from hpc_agent.ops.y.thing import VALUE\n", encoding="utf-8"
-    )
+    (infra / "reaches.py").write_text("from hpc_agent.ops.y.thing import VALUE\n", encoding="utf-8")
 
     proc = _run(tmp_path)
     assert proc.returncode != 0, f"infra->ops not caught:\n{proc.stdout}\n{proc.stderr}"
@@ -274,8 +272,7 @@ def test_lint_allows_infra_to_infra_and_state(tmp_path: Path) -> None:
     infra = tmp_path / "infra"
     infra.mkdir(parents=True)
     (infra / "fine.py").write_text(
-        "from hpc_agent.infra.parsing import parse\n"
-        "from hpc_agent.state.runs import load\n",
+        "from hpc_agent.infra.parsing import parse\nfrom hpc_agent.state.runs import load\n",
         encoding="utf-8",
     )
     proc = _run(tmp_path)
@@ -289,9 +286,7 @@ def test_lint_forbids_incorporation_to_ops(tmp_path: Path) -> None:
     ops_y = tmp_path / "ops" / "y"
     incorp.mkdir(parents=True)
     ops_y.mkdir(parents=True)
-    (incorp / "cycle.py").write_text(
-        "from hpc_agent.ops.y import runner\n", encoding="utf-8"
-    )
+    (incorp / "cycle.py").write_text("from hpc_agent.ops.y import runner\n", encoding="utf-8")
     proc = _run(tmp_path)
     assert proc.returncode != 0, f"incorporation->ops not caught:\n{proc.stdout}"
     assert "incorporation must not import ops/meta" in proc.stdout, proc.stdout
@@ -333,9 +328,7 @@ def test_lint_forbids_state_to_ops(tmp_path: Path) -> None:
     ops_y = tmp_path / "ops" / "y"
     state.mkdir(parents=True)
     ops_y.mkdir(parents=True)
-    (state / "leaks.py").write_text(
-        "from hpc_agent.ops.y.thing import stuff\n", encoding="utf-8"
-    )
+    (state / "leaks.py").write_text("from hpc_agent.ops.y.thing import stuff\n", encoding="utf-8")
     proc = _run(tmp_path)
     assert proc.returncode != 0, f"state->ops not caught:\n{proc.stdout}"
     assert "state must not import ops" in proc.stdout, proc.stdout
@@ -357,9 +350,7 @@ def test_dir_allowlist_clears_a_sanctioned_edge() -> None:
     assert not lsi._dir_allowed(
         lsi._STATE_TO_OPS, "state/run_story.py", "hpc_agent.ops.monitor.status"
     )
-    assert not lsi._dir_allowed(
-        lsi._STATE_TO_OPS, "state/other.py", "hpc_agent.ops.overnight"
-    )
+    assert not lsi._dir_allowed(lsi._STATE_TO_OPS, "state/other.py", "hpc_agent.ops.overnight")
 
 
 # ---------------------------------------------------------------------------
@@ -377,8 +368,7 @@ def test_lint_role_root_flags_undeclared_subject_reach(tmp_path: Path) -> None:
     (ops_sub / "__init__.py").write_text("", encoding="utf-8")
     (ops_sub / "thing.py").write_text("VALUE = 1\n", encoding="utf-8")
     (ops / "badroot.py").write_text(
-        "from hpc_agent.ops.sub.thing import VALUE\n"
-        "def go():\n    return VALUE\n",
+        "from hpc_agent.ops.sub.thing import VALUE\ndef go():\n    return VALUE\n",
         encoding="utf-8",
     )
     proc = _run(tmp_path)
