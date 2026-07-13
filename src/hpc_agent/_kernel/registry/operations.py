@@ -122,7 +122,12 @@ def schema_candidate_ladder(
     if cli_name:
         candidates.append(f"{cli_name.replace('-', '_')}.{side}.json")
     seen: set[str] = set()
-    return [c for c in candidates if not (c in seen or seen.add(c))]
+    deduped: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
+    return deduped
 
 
 def schema_for(name: str, side: str, backed_by: dict) -> str | None:
