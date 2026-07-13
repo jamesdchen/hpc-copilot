@@ -349,7 +349,7 @@ _KERNEL_TO_OPS = DirectionalRule(
             ),
             (
                 "_kernel/hooks/relay_audit_stop/_contradiction.py",
-                "hpc_agent.ops.decision.verify_relay",
+                "hpc_agent.ops.decision.journal.verify_relay",
             ),
         }
     ),

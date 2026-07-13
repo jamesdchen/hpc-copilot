@@ -43,7 +43,7 @@ def _gather_violations(
 
     if run_ids:
         from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
-        from hpc_agent.ops.decision.verify_relay import verify_relay
+        from hpc_agent.ops.decision.journal.verify_relay import verify_relay
 
         for run_id in run_ids[:_MAX_RUNS_AUDITED]:
             try:
@@ -68,7 +68,7 @@ def _gather_violations(
                 )
 
     if audit_ids:
-        from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
+        from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
 
         for audit_id in audit_ids[:_MAX_AUDITS_AUDITED]:
             try:

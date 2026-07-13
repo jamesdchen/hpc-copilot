@@ -32,7 +32,7 @@ substrate (transcript parsing, mention scans, the two NamedTuples) in
 
 Why it exists
 -------------
-``verify-relay`` (:mod:`hpc_agent.ops.decision.verify_relay`) mechanized rule
+``verify-relay`` (:mod:`hpc_agent.ops.decision.journal.verify_relay`) mechanized rule
 10 — "never relay numbers/state that don't match the journal" — as a pure
 audit verb, but nothing made a driving agent RUN it: the verb-only MVP was
 explicitly staged, and an unaudited relay still reached the human (proving run
@@ -53,9 +53,9 @@ On a Stop event the hook:
 3. finds which journaled run ids AND notebook audit ids the text actually
    mentions — number/state/status claims are only attributable to a run/audit
    the relay names, so a final message naming neither is a silent pass;
-4. runs :func:`~hpc_agent.ops.decision.verify_relay.verify_relay` in-process
+4. runs :func:`~hpc_agent.ops.decision.journal.verify_relay.verify_relay` in-process
    for each mentioned run, and
-   :func:`~hpc_agent.ops.decision.verify_relay.verify_notebook_relay` for each
+   :func:`~hpc_agent.ops.decision.journal.verify_relay.verify_notebook_relay` for each
    mentioned audit (the hook idiom: hook modules import the ops function
    directly — ``alert_count`` → ``notify``, the stop guards →
    ``skill_returns`` — rather than shelling out to a second subprocess). The
