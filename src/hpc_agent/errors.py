@@ -394,19 +394,6 @@ class SchemaIncompat(HpcError):
 # is the default, not a clamp.
 
 
-def _registry_remediation(kind: str) -> str:
-    """Lazily render a recovery menu by ``kind``.
-
-    Imported at call time to avoid a top-level import cycle between
-    ``hpc_agent.errors`` and ``hpc_agent.recovery.registry`` (the latter
-    has no reverse dep today, but the cycle would land the first time
-    the registry catches an :class:`HpcError` to surface).
-    """
-    from hpc_agent.recovery.registry import remediation_for
-
-    return remediation_for(kind)
-
-
 class AlreadyInFlight(HpcError):
     """A prior run for this cmd_sha is recorded as in_flight in the journal
     AND reconcile confirms the cluster agrees it is still running.
@@ -849,9 +836,13 @@ def is_deterministic_env_failure(exc: BaseException) -> bool:
 
 
 def _registry_remediation_with_placeholders(kind: str, placeholders: dict[str, str]) -> str:
-    """Helper sibling of :func:`_registry_remediation` for the
-    placeholder-substitution path. Kept separate so the no-placeholders
-    call (the common case) doesn't pay the dict-construction cost.
+    """Lazily render a recovery menu by ``kind`` with placeholder
+    substitution.
+
+    Imported at call time to avoid a top-level import cycle between
+    ``hpc_agent.errors`` and ``hpc_agent.recovery.registry`` (the latter
+    has no reverse dep today, but the cycle would land the first time
+    the registry catches an :class:`HpcError` to surface).
     """
     from hpc_agent.recovery.registry import remediation_for
 
