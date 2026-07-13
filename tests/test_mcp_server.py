@@ -458,6 +458,86 @@ def test_mcp_allows_campaign_run_with_detach() -> None:
     assert runner.calls, "detached invocation must reach the runner"
 
 
+def test_mcp_refuses_wait_detached_on_full_catalog() -> None:
+    """``wait-detached`` is the blocking wait itself (no detach remedy). It is
+    invocable on the DEFAULT ``full`` catalog (agent_facing query), so over the
+    synchronous server it would wedge the line — refused outright at the seam,
+    naming the MCP-safe reads (``poll-detached`` / backgrounded Bash). It never
+    reaches the runner."""
+    runner = FakeRunner()
+    server = _server(catalog="full", runner=runner)
+    resp = _call(server, "wait-detached", {"spec": {"run_id": "r1"}})
+    assert "error" in resp
+    assert "poll-detached" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+    assert not runner.calls, "refused blocking wait must not reach the runner"
+
+
+def test_mcp_refuses_wait_detached_via_tiered_run_primitive() -> None:
+    """The tiered catalog routes calls through ``run-primitive``; the blocking-
+    wait refusal fires on the inner name, so ``wait-detached`` is wedge-proof
+    there too."""
+    runner = FakeRunner()
+    server = _server(catalog="tiered", runner=runner)
+    resp = _call(
+        server,
+        "run-primitive",
+        {"name": "wait-detached", "arguments": {"spec": {"run_id": "r1"}}},
+    )
+    assert "error" in resp
+    assert "poll-detached" in resp["error"]["message"]
+    assert not runner.calls, "refused blocking wait must not reach the runner"
+
+
+# ─── curated reachability of the MCP-direct read/recovery verbs ──────────────
+
+
+def _curated_names(**kw) -> set[str]:
+    return {t["name"] for t in _server(catalog="curated", **kw).list_tools()}
+
+
+def test_curated_exposes_the_mcp_direct_read_loop_verbs() -> None:
+    """The read-loop QUERY verbs the SKILLs name "DIRECT through MCP", plus the
+    (MCP-direct)-tagged ``revise-resolved`` mutate, are curated-reachable — the
+    coupling ``scripts/lint_skill_mcp_reachability.py`` enforces. None declares a
+    ``next_block`` (a read/spec-delta is not a block), so this is the explicit
+    union added to ``_CURATED_EXTRA_VERBS``, not derivation."""
+    names = _curated_names()
+    assert {"read-decisions", "verify-relay", "attention-queue", "revise-resolved"} <= names
+    # All four are also members of the module constant (the listing derives from it).
+    assert {"read-decisions", "verify-relay", "attention-queue", "revise-resolved"} <= (
+        M._CURATED_EXTRA_VERBS
+    )
+
+
+def test_revise_resolved_is_an_extra_not_a_derived_block() -> None:
+    """revise-resolved is curated ONLY via the explicit extra, never via
+    ``_declares_next_block`` — the memo's verified verdict: ``ReviseResolvedResult``
+    declares no ``next_block``. (retarget-run, the sibling recovery arm, DOES
+    declare one and derives in — so it needs no extra entry.)"""
+    reg = get_registry()
+    assert "revise-resolved" in reg
+    assert M._declares_next_block(reg["revise-resolved"]) is False
+    assert "revise-resolved" in M._CURATED_EXTRA_VERBS
+    # retarget-run derives (declares next_block) and is NOT hand-listed.
+    assert M._declares_next_block(reg["retarget-run"]) is True
+    assert "retarget-run" not in M._CURATED_EXTRA_VERBS
+
+
+def test_poll_detached_extra_tolerates_sibling_absence() -> None:
+    """poll-detached is a curated extra a SIBLING unit (m-poll) builds. It is a
+    listed extra, but the curated LISTING guards on registry presence — an
+    unbuilt extra is filtered out (``_curated_metas`` unions ``v in base`` only),
+    so its absence never breaks the catalog, and it appears the moment it lands."""
+    assert "poll-detached" in M._CURATED_EXTRA_VERBS
+    reg = get_registry()
+    names = _curated_names()
+    if "poll-detached" in reg:
+        assert "poll-detached" in names
+    else:
+        assert "poll-detached" not in names
+
+
 # ─── isolated runner deadline (src subprocess-timeout discipline) ────────────
 
 

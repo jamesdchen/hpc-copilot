@@ -244,6 +244,15 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "audit-handoff",
         "verify-relay",
         "wait-detached",
+        # poll-detached (packages swarm, memo §2): the instant, non-blocking
+        # snapshot of a detached worker — the MCP-safe sibling of wait-detached.
+        # Spec-taking query; failure_features attaches at the shared dispatch
+        # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (poll_detached.input.json) is baked in the same wave, so it also
+        # appears in the schema-file-parametrized remediation probes ({} is
+        # invalid — run_id and block are required — so the probe refuses at
+        # model validation, before any read).
+        "poll-detached",
         "submit-s1",
         "submit-s2",
         "submit-s3",

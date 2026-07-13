@@ -128,6 +128,42 @@ def test_refuses_absent_manifest(tmp_path: Path) -> None:
         campaign_refill(tmp_path, spec=CampaignRefillSpec(campaign_id="ghost"))
 
 
+# ── guard: prior sidecar missing a required reconstruction field ───────────────
+
+_FIND_RUNS = "hpc_agent.state.index.find_runs_by_campaign"
+_READ_SIDECAR = "hpc_agent.state.runs.read_run_sidecar"
+
+
+@pytest.mark.parametrize(
+    ("missing", "match"),
+    [("executor", "no ``executor``"), ("result_dir_template", "no ``result_dir_template``")],
+)
+def test_refuses_prior_sidecar_missing_required_field(
+    tmp_path: Path, missing: str, match: str
+) -> None:
+    """``_build_iteration_resolve_spec`` reconstructs the next iteration purely
+    from the prior run's sidecar; a sidecar lacking a required field is a loud
+    SpecInvalid, never a spec silently built from a placeholder/None."""
+    from hpc_agent.ops.campaign_refill import _build_iteration_resolve_spec
+
+    sidecar = {
+        "profile": "ml",
+        "cluster": "hoffman2",
+        "remote_path": "/scratch/ml",
+        "executor": "python train.py --seed $SEED",
+        "result_dir_template": "results/{run_id}/{task_id}",
+    }
+    del sidecar[missing]
+    prior = mock.Mock(run_id="ml-aaaa1111", profile="ml", cluster="hoffman2")
+
+    with (
+        mock.patch(_FIND_RUNS, return_value=[prior]),
+        mock.patch(_READ_SIDECAR, return_value=sidecar),
+        pytest.raises(errors.SpecInvalid, match=match),
+    ):
+        _build_iteration_resolve_spec(tmp_path, "camp")
+
+
 # ── no-op: advance did not decide refill ──────────────────────────────────────
 
 

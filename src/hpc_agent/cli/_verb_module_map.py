@@ -94,6 +94,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'pack-refresh': ('pack-refresh', 'hpc_agent.ops.pack.refresh_op'),
     'pack-status': ('pack-status', 'hpc_agent.ops.pack.status_op'),
     'plan-throughput': ('plan-throughput', 'hpc_agent.ops.submit.plan_throughput'),
+    'poll-detached': ('poll-detached', 'hpc_agent.ops.monitor.poll_detached'),
     'preflight': ('check-preflight', 'hpc_agent.ops.preflight.check'),
     'prepare-followup-specs': ('prepare-followup-specs', 'hpc_agent.ops.prepare_followup_specs'),
     'prepare-phase2-spec': ('prepare-phase2-spec', 'hpc_agent.ops.prepare_phase2_spec'),

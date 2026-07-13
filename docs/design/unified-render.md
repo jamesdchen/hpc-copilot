@@ -1,5 +1,5 @@
 ---
-status: planned
+status: plan
 ---
 # Unified render v1 — O3+ chunked read-and-sign (build spec)
 

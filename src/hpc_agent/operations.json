@@ -1074,6 +1074,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent poll-detached --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "poll_detached.input.json",
+    "name": "poll-detached",
+    "output_schema": "poll_detached.output.json",
+    "python": "hpc_agent.ops.monitor.poll_detached.poll_detached",
+    "side_effects": [],
+    "summary": "Snapshot a detached worker's state right now (lease pid-liveness + journal status + block-terminal presence; local, no SSH, non-blocking). The instant, MCP-safe complement to wait-detached: reports running / exited_recorded / exited_unrecorded / no_lease.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]",
     "idempotent": true,
     "input_schema": null,

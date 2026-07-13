@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: shipped
 ---
 # The harness-conformance kit — publishing the harness contract
 
