@@ -130,9 +130,10 @@ KIND_REPRODUCTION = "reproduction"
 #: scope is not locked (``state/scopes.py`` count/lock — COUNTING vs a number).
 KIND_SCOPE_BUDGET = "scope-budget"
 
-#: R3 — the named pack slot's receipt reduces CURRENT with ``passed=true``
-#: (``state/pack_receipts.py`` — RESERVED; T4 ships it as a loud
-#: not-yet-available refusal until the domain-packs substrate lands).
+#: R3 — the named pack slot's receipt reduces CURRENT with ``passed=true`` under
+#: the pack's current bind + on-disk bytes (``state/pack_receipts.py::
+#: slot_status``, the ONE reduction the submit gate also uses). The chain entry's
+#: ``subject_id`` is the full address ``"<pack>:<slot>"``.
 KIND_PACK_RECEIPT = "pack-receipt"
 
 #: R3 — the generic escape hatch: the newest attestation for ``subject_id`` in a
