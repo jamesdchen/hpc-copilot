@@ -234,3 +234,174 @@ def test_lint_subject_imports_rejects_meta_to_ops(tmp_path: Path) -> None:
     assert "cross-subject import: meta/x imports ops/y" in proc.stdout, (
         f"expected cross-role diagnostic missing:\nstdout={proc.stdout}"
     )
+
+
+def _run(scan_root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-c", _driver(scan_root)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Directional role rules — P1 (infra->ops, incorporation->{ops,meta}) and
+# N3 (_kernel->ops, state->ops). Each rule ships its synthetic fire path.
+# ---------------------------------------------------------------------------
+
+
+def test_lint_forbids_infra_to_ops(tmp_path: Path) -> None:
+    """infra is the bottom substrate — a file under ``infra/`` importing
+    any ``hpc_agent.ops.*`` slice must fire (P1)."""
+    infra = tmp_path / "infra"
+    ops_y = tmp_path / "ops" / "y"
+    infra.mkdir(parents=True)
+    ops_y.mkdir(parents=True)
+    (infra / "reaches.py").write_text(
+        "from hpc_agent.ops.y.thing import VALUE\n", encoding="utf-8"
+    )
+
+    proc = _run(tmp_path)
+    assert proc.returncode != 0, f"infra->ops not caught:\n{proc.stdout}\n{proc.stderr}"
+    assert "infra must not import ops" in proc.stdout, proc.stdout
+
+
+def test_lint_allows_infra_to_infra_and_state(tmp_path: Path) -> None:
+    """The directional rule must NOT over-fire: infra reaching sideways
+    into infra/state substrate, or up into meta (not an ops import), is
+    fine under the infra->ops rule."""
+    infra = tmp_path / "infra"
+    infra.mkdir(parents=True)
+    (infra / "fine.py").write_text(
+        "from hpc_agent.infra.parsing import parse\n"
+        "from hpc_agent.state.runs import load\n",
+        encoding="utf-8",
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode == 0, f"infra substrate import wrongly flagged:\n{proc.stdout}"
+
+
+def test_lint_forbids_incorporation_to_ops(tmp_path: Path) -> None:
+    """incorporation feeds submit; importing ``hpc_agent.ops.*`` back is a
+    cycle and must fire (P1)."""
+    incorp = tmp_path / "incorporation"
+    ops_y = tmp_path / "ops" / "y"
+    incorp.mkdir(parents=True)
+    ops_y.mkdir(parents=True)
+    (incorp / "cycle.py").write_text(
+        "from hpc_agent.ops.y import runner\n", encoding="utf-8"
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode != 0, f"incorporation->ops not caught:\n{proc.stdout}"
+    assert "incorporation must not import ops/meta" in proc.stdout, proc.stdout
+
+
+def test_lint_forbids_incorporation_to_meta(tmp_path: Path) -> None:
+    """incorporation must not import ``hpc_agent.meta.*`` either (P1)."""
+    incorp = tmp_path / "incorporation"
+    meta_c = tmp_path / "meta" / "campaign"
+    incorp.mkdir(parents=True)
+    meta_c.mkdir(parents=True)
+    (incorp / "reaches_meta.py").write_text(
+        "from hpc_agent.meta.campaign.manifest import read_manifest\n", encoding="utf-8"
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode != 0, f"incorporation->meta not caught:\n{proc.stdout}"
+    assert "incorporation must not import ops/meta" in proc.stdout, proc.stdout
+
+
+def test_lint_forbids_kernel_to_ops(tmp_path: Path) -> None:
+    """_kernel must not import ops except the enumerated sanctioned seams;
+    a fresh, un-allowlisted kernel->ops edge must fire (N3)."""
+    kern = tmp_path / "_kernel" / "hooks"
+    ops_y = tmp_path / "ops" / "y"
+    kern.mkdir(parents=True)
+    ops_y.mkdir(parents=True)
+    (kern / "new_guard.py").write_text(
+        "from hpc_agent.ops.y.helper import probe\n", encoding="utf-8"
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode != 0, f"_kernel->ops not caught:\n{proc.stdout}"
+    assert "_kernel must not import ops" in proc.stdout, proc.stdout
+
+
+def test_lint_forbids_state_to_ops(tmp_path: Path) -> None:
+    """state must not import ops except the documented run-story inversion;
+    a fresh state->ops edge must fire (N3)."""
+    state = tmp_path / "state"
+    ops_y = tmp_path / "ops" / "y"
+    state.mkdir(parents=True)
+    ops_y.mkdir(parents=True)
+    (state / "leaks.py").write_text(
+        "from hpc_agent.ops.y.thing import stuff\n", encoding="utf-8"
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode != 0, f"state->ops not caught:\n{proc.stdout}"
+    assert "state must not import ops" in proc.stdout, proc.stdout
+
+
+def test_dir_allowlist_clears_a_sanctioned_edge() -> None:
+    """The sanctioned-exception mechanism must actually exempt an entry:
+    the state->ops rule clears ``state/run_story.py -> ops.overnight``
+    while still forbidding any other state->ops module. Proves the allow
+    path (not just the fire path) is live."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    import lint_subject_imports as lsi
+
+    assert lsi._dir_allowed(
+        lsi._STATE_TO_OPS,
+        "state/run_story.py",
+        "hpc_agent.ops.overnight.read_consumption_ledger",
+    )
+    assert not lsi._dir_allowed(
+        lsi._STATE_TO_OPS, "state/run_story.py", "hpc_agent.ops.monitor.status"
+    )
+    assert not lsi._dir_allowed(
+        lsi._STATE_TO_OPS, "state/other.py", "hpc_agent.ops.overnight"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Role-root composes= pass — N2.
+# ---------------------------------------------------------------------------
+
+
+def test_lint_role_root_flags_undeclared_subject_reach(tmp_path: Path) -> None:
+    """An ``ops/`` role-root MODULE file reaching into a subject it does
+    NOT declare via ``@primitive(composes=[...])`` (and that is not on the
+    sanctioned inventory) must fire (N2)."""
+    ops = tmp_path / "ops"
+    ops_sub = ops / "sub"
+    ops_sub.mkdir(parents=True)
+    (ops_sub / "__init__.py").write_text("", encoding="utf-8")
+    (ops_sub / "thing.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (ops / "badroot.py").write_text(
+        "from hpc_agent.ops.sub.thing import VALUE\n"
+        "def go():\n    return VALUE\n",
+        encoding="utf-8",
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode != 0, f"undeclared role-root reach not caught:\n{proc.stdout}"
+    assert "role-root cross-subject import not declared via composes=" in proc.stdout, proc.stdout
+    assert "ops/badroot.py imports ops/sub" in proc.stdout, proc.stdout
+
+
+def test_lint_role_root_allows_composed_subject(tmp_path: Path) -> None:
+    """When the root file DECLARES the reach via ``composes=`` (the composed
+    name resolves through the file's own import binding to that subject),
+    the same import is allowed (N2). Proves the composes-derived allow
+    path is live, not just the fire path."""
+    ops = tmp_path / "ops"
+    ops_sub = ops / "sub"
+    ops_sub.mkdir(parents=True)
+    (ops_sub / "__init__.py").write_text("", encoding="utf-8")
+    (ops_sub / "runner.py").write_text("def do_it():\n    return 1\n", encoding="utf-8")
+    (ops / "goodroot.py").write_text(
+        "from hpc_agent.ops.sub.runner import do_it\n\n"
+        "@primitive(composes=[do_it])\n"
+        "def my_workflow():\n    return do_it()\n",
+        encoding="utf-8",
+    )
+    proc = _run(tmp_path)
+    assert proc.returncode == 0, f"composed subject reach wrongly flagged:\n{proc.stdout}"
