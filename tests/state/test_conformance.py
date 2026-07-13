@@ -431,45 +431,6 @@ def test_status_at_record_vocabulary_excludes_absent():
     assert sorted(cf.STATUS_AT_RECORD) == ["current", "revoked", "stale", "superseded"]
 
 
-# --- window selection arithmetic (C-compare) --------------------------------
-
-
-def test_select_window_last_n():
-    receipts = _stream([0.1, 0.2, 0.3, 0.4, 0.5])
-    picked = cf.select_window(receipts, last_n=2)
-    assert [r["payload"]["reading"] for r in picked] == [0.4, 0.5]
-
-
-def test_select_window_since_until():
-    receipts = _stream([0.1, 0.2, 0.3, 0.4, 0.5])  # days 05-01 .. 05-05
-    since = "2026-05-02T00:00:00+00:00"
-    until = "2026-05-04T00:00:00+00:00"
-    picked = cf.select_window(receipts, since=since, until=until)
-    assert [r["payload"]["reading"] for r in picked] == [0.2, 0.3, 0.4]
-
-
-def test_select_window_requires_a_mode():
-    with pytest.raises(errors.SpecInvalid, match="window selection is required"):
-        cf.select_window(_stream([0.1, 0.2]))
-
-
-def test_select_window_refuses_mixed_modes():
-    with pytest.raises(errors.SpecInvalid, match="never both"):
-        cf.select_window(_stream([0.1, 0.2]), since=_NOW, last_n=2)
-
-
-def test_select_window_bad_last_n_refused():
-    for bad in (0, -1, 2.5):
-        with pytest.raises(errors.SpecInvalid, match="last_n"):
-            cf.select_window(_stream([0.1, 0.2]), last_n=bad)
-
-
-def test_select_window_z_suffix_timestamp():
-    receipts = [_receipt(0.5, observed_at="2026-05-03T00:00:00Z")]
-    picked = cf.select_window(receipts, since="2026-05-02T00:00:00Z")
-    assert len(picked) == 1
-
-
 # --- report disclosure -------------------------------------------------------
 
 

@@ -61,7 +61,6 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from hpc_agent import errors
@@ -96,7 +95,6 @@ __all__ = [
     "to_attestation",
     "validate_declaration",
     "parse_baseline_rows",
-    "select_window",
     "judge_window",
 ]
 
@@ -578,82 +576,6 @@ def _order_statistics_envelope(values: Sequence[float]) -> Envelope:
     return Envelope(lo=lo, hi=hi, rel_spread=rel_spread, n=len(values))
 
 
-# --- window selection arithmetic (C-compare) --------------------------------
-
-
-def _parse_iso(ts: str, *, what: str) -> datetime:
-    """Parse an ISO-8601 timestamp for window arithmetic, or refuse.
-
-    Timestamp comparison only (C-compare: "timestamp/count arithmetic only") —
-    core never names a period. Accepts a trailing ``Z`` (UTC) by normalizing to
-    ``+00:00`` before :func:`datetime.fromisoformat`.
-    """
-    raw = ts[:-1] + "+00:00" if ts.endswith("Z") else ts
-    try:
-        return datetime.fromisoformat(raw)
-    except (ValueError, TypeError) as exc:
-        raise errors.SpecInvalid(
-            f"conformance window: {what} must be an ISO-8601 timestamp; got {ts!r} ({exc})"
-        ) from exc
-
-
-def select_window(
-    receipts: Sequence[Mapping[str, Any]],
-    *,
-    since: str | None = None,
-    until: str | None = None,
-    last_n: int | None = None,
-) -> tuple[Mapping[str, Any], ...]:
-    """Select the live window over the receipt ledger — arithmetic only.
-
-    EXACTLY ONE mode (C-compare: core never picks, defaults, or recommends a
-    window):
-
-    * ``{since, until?}`` — receipts whose ``observed_at`` is ``>= since`` (and
-      ``<= until`` when given), by timestamp arithmetic.
-    * ``last_n`` — the trailing ``last_n`` receipts in append order.
-
-    Supplying neither, or mixing ``last_n`` with ``since``/``until``, is a loud
-    :class:`errors.SpecInvalid` (no invented window). Receipts are assumed in
-    append (chronological) order — the ledger's read order. Returns the selected
-    receipts in append order.
-    """
-    time_mode = since is not None or until is not None
-    count_mode = last_n is not None
-    if time_mode and count_mode:
-        raise errors.SpecInvalid(
-            "conformance window: give EITHER {since, until?} OR last_n, never both — "
-            "core picks no window"
-        )
-    if not time_mode and not count_mode:
-        raise errors.SpecInvalid(
-            "conformance window: a window selection is required ({since, until?} or "
-            "last_n) — core invents no default window"
-        )
-
-    if count_mode:
-        if not isinstance(last_n, int) or isinstance(last_n, bool) or last_n < 1:
-            raise errors.SpecInvalid(
-                f"conformance window: last_n must be a positive integer; got {last_n!r}"
-            )
-        return tuple(receipts[-last_n:])
-
-    lo_bound = _parse_iso(since, what="since") if since is not None else None
-    hi_bound = _parse_iso(until, what="until") if until is not None else None
-    selected: list[Mapping[str, Any]] = []
-    for receipt in receipts:
-        observed_at = receipt.get("observed_at")
-        if not isinstance(observed_at, str):
-            continue
-        ts = _parse_iso(observed_at, what="observed_at")
-        if lo_bound is not None and ts < lo_bound:
-            continue
-        if hi_bound is not None and ts > hi_bound:
-            continue
-        selected.append(receipt)
-    return tuple(selected)
-
-
 # --- the comparator: judge_window (C-compare) -------------------------------
 
 
@@ -808,7 +730,8 @@ def judge_window(
 
     Pure, no I/O (C-compare). *baseline_rows* are the sealed baseline's rows
     (never grown — live receipts NEVER enter them, so no admission path exists);
-    *receipts* are the already-selected live window (via :func:`select_window`);
+    *receipts* are the already-selected live window (via
+    :func:`hpc_agent.state.conformance_store.select_window`);
     *declaration* carries the judged key set and the ``min_window_n`` floor;
     *now* is the caller's ``as_of`` timestamp (threaded for deterministic
     disclosure, never a fabricated window bound).
