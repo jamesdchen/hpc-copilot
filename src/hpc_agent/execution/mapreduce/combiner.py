@@ -281,6 +281,7 @@ def _final_reduce(*, run_id, force):
     waves_reduced = []
     errors_per_wave = {}
     incomplete_waves = []
+    skipped_foreign_waves = []
     for wave_num, path in wave_files:
         try:
             with open(path, encoding="utf-8") as f:
@@ -288,6 +289,16 @@ def _final_reduce(*, run_id, force):
         except (json.JSONDecodeError, OSError) as exc:
             errors_per_wave[str(wave_num)] = [f"unreadable: {exc}"]
             incomplete_waves.append(wave_num)
+            continue
+        # F05: ``_combiner/`` is delete-protected and shared across runs at the
+        # same remote_path, so a prior run's higher-numbered wave partials
+        # persist. Merging them would contaminate THIS run's aggregate with
+        # foreign grid points. Skip (and disclose) any partial whose own run_id
+        # names a different run. Fail OPEN: a partial with no run_id field
+        # (legacy trees) is still reduced, so old runs aggregate unchanged.
+        file_run_id = data.get("run_id")
+        if file_run_id is not None and file_run_id != run_id:
+            skipped_foreign_waves.append(wave_num)
             continue
         waves_reduced.append(wave_num)
         wave_errors = data.get("errors") or []
@@ -307,6 +318,7 @@ def _final_reduce(*, run_id, force):
             "wave_count": len(waves_reduced),
             "incomplete_waves": sorted(set(incomplete_waves)),
             "errors_per_wave": errors_per_wave,
+            "skipped_foreign_waves": sorted(set(skipped_foreign_waves)),
         },
         "manifest": {
             "wave_files": [f"{out_dir}/wave_{w}.json" for w, _ in wave_files],
@@ -451,11 +463,35 @@ def main(max_workers=None, argv=None):
     out_dir = "_combiner"
     out_path = os.path.join(out_dir, f"wave_{wave}.json")
     if os.path.exists(out_path) and not args.force:
-        print(
-            f"[combiner] ERROR: output already exists: {out_path} (use --force to overwrite)",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        # F05: ``_combiner/`` is delete-protected and shared across runs at the
+        # same remote_path, so a prior run's ``wave_<N>.json`` persists. Read the
+        # incumbent's run_id: only refuse when it is THIS run's own output (the
+        # genuine idempotency case). A FOREIGN partial (different run_id) must be
+        # overwritten, not adopted — otherwise this run silently inherits the
+        # other run's aggregate. The refusal carries the incumbent run_id so the
+        # control-plane recovery (``ops/aggregate/combine.py``) can tell a
+        # same-run "already combined" from a foreign collision without a re-read.
+        existing_run_id = None
+        try:
+            with open(out_path, encoding="utf-8") as _ef:
+                existing_run_id = json.load(_ef).get("run_id")
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            existing_run_id = None
+        if existing_run_id is not None and existing_run_id != run_id:
+            print(
+                f"[combiner] overwriting foreign wave partial {out_path} "
+                f"(existing run_id={existing_run_id!r} != {run_id!r})"
+            )
+        else:
+            # Fail closed to the historical refusal when the incumbent is this
+            # run's own output OR carries no run_id (legacy/unreadable): never
+            # clobber a same-run partial on a no-force replay.
+            print(
+                f"[combiner] ERROR: output already exists: {out_path} "
+                f"(use --force to overwrite) [run_id={run_id}]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     print(f"[combiner] wave={wave} run_id={run_id} tasks={len(task_ids)}")
 
@@ -513,6 +549,7 @@ def main(max_workers=None, argv=None):
     workers = max(1, min(workers, len(readable))) if readable else 1
 
     runtime_rows = []  # one dict per task with a readable _runtime.json
+    read_ok = set()  # tids whose metrics were successfully aggregated (F07)
     if readable:
         from concurrent.futures import as_completed
 
@@ -529,6 +566,7 @@ def main(max_workers=None, argv=None):
                     errors.append(f"task {tid}: failed to read {summary_name}: {exc}")
                     continue
                 groups.setdefault(grid_key, []).append(metrics)
+                read_ok.add(tid)
                 # Best-effort runtime row. A malformed _runtime.json is
                 # logged into errors but does NOT abort the wave —
                 # warm-axis-picker contribution is optional, the
@@ -555,6 +593,15 @@ def main(max_workers=None, argv=None):
         "wave": wave,
         "run_id": run_id,
         "task_ids": list(task_ids),
+        # F07: the subset of ``task_ids`` whose metrics actually landed in
+        # ``grid_points``. ``task_ids`` echoes the full wave membership even when
+        # tasks errored, so a completeness gate that reads only ``task_ids`` is
+        # vacuous; ``tasks_read`` is the honest "these were aggregated" evidence.
+        # Ordered by ``task_ids`` for byte-stable output regardless of thread
+        # completion order. Tasks that errored ONLY on the optional _runtime.json
+        # (their metrics were read) stay in ``tasks_read`` — the errors list
+        # conflates those with real metrics misses, so it must not be used here.
+        "tasks_read": [t for t in task_ids if t in read_ok],
         "grid_points": grid_points,
         "errors": errors,
     }

@@ -214,10 +214,18 @@ def reduce_by_grid_point(tasks_data: dict) -> dict[str, dict]:
     return results
 
 
-def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
+def _wave_num_of(path: str | Path) -> int | None:
+    """Wave number encoded in a ``wave_<N>.json`` filename, or None."""
+    try:
+        return int(Path(path).stem.split("_", 1)[1])
+    except (ValueError, IndexError):
+        return None
+
+
+def reduce_partials(combiner_dir: str | Path, *, run_id: str | None = None) -> dict[str, dict]:
     """Merge per-wave partial aggregates from _combiner/wave_*.json.
 
-    Each wave file contains ``grid_points``: a mapping of run-id to
+    Each wave file contains ``grid_points``: a mapping of grid-point key to
     aggregated metrics for that wave.  This function merges across
     waves using the same weighted-mean logic as :func:`reduce_metrics`,
     keyed on ``n_samples``.
@@ -226,10 +234,18 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
     ----------
     combiner_dir : str or Path
         Directory containing ``wave_*.json`` files.
+    run_id : str or None
+        When given, a wave file whose own ``run_id`` field names a DIFFERENT
+        run is skipped (F05): ``_combiner/`` is delete-protected and shared
+        across runs at the same remote_path, so a prior run's partials persist
+        and would otherwise contaminate this run's aggregate. Fails OPEN — a
+        wave with no ``run_id`` field (legacy trees / fixtures) is always
+        reduced, and ``run_id=None`` disables the filter entirely (the
+        historical behavior).
 
     Returns
     -------
-    dict mapping run_id (str) to aggregated metrics (dict).
+    dict mapping grid-point key (str) to aggregated metrics (dict).
     """
     combiner_dir = Path(combiner_dir)
     wave_files = sorted(
@@ -237,7 +253,7 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
         key=lambda p: int(Path(p).stem.split("_", 1)[1]),
     )
 
-    # Collect partial entries per run_id across all waves
+    # Collect partial entries per grid-point key across all waves
     partials: dict[str, list[dict]] = {}
     for wf in wave_files:
         try:
@@ -245,16 +261,21 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
-        for run_id, metrics in data.get("grid_points", {}).items():
-            partials.setdefault(run_id, []).append(metrics)
+        file_run_id = data.get("run_id")
+        if run_id is not None and file_run_id is not None and file_run_id != run_id:
+            continue  # foreign partial from another run — never merge (F05)
+        for grid_key, metrics in data.get("grid_points", {}).items():
+            partials.setdefault(grid_key, []).append(metrics)
 
-    # Weighted-mean aggregation per run_id, sharing the helper with
+    # Weighted-mean aggregation per grid-point key, sharing the helper with
     # reduce_metrics so the two stay in lock-step on rounding and
     # missing-key semantics.
-    return {run_id: _weighted_mean(entries) for run_id, entries in partials.items()}
+    return {grid_key: _weighted_mean(entries) for grid_key, entries in partials.items()}
 
 
-def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
+def collect_wave_errors(
+    combiner_dir: str | Path, *, run_id: str | None = None
+) -> dict[int, list[str]]:
     """Map wave number → the per-task read errors the combiner recorded.
 
     Each ``wave_<N>.json`` carries an ``errors`` list naming tasks whose
@@ -263,21 +284,35 @@ def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
     over the readable subset. A caller that presents the aggregate as
     final should consult this to know the mean was computed over a
     partial task set. Only waves with at least one error are included.
+
+    A wave file that cannot be parsed at all (a truncated pull, a torn scp,
+    a local disk-full write) is itself recorded as that wave's error (F09):
+    :func:`reduce_partials` silently drops its grid_points, so without this
+    the loss would be invisible AND the filename-present file would never be
+    re-pulled. *run_id* skips foreign partials the same way
+    :func:`reduce_partials` does — a prior run's leftover wave is not this
+    run's incomplete wave.
     """
     combiner_dir = Path(combiner_dir)
     out: dict[int, list[str]] = {}
     for wf in sorted(_wave_partial_files(combiner_dir)):
+        wave_num = _wave_num_of(wf)
+        if wave_num is None:
+            continue
         try:
             with open(wf, encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            # F09: an unreadable wave file drops silently from reduce_partials —
+            # surface it as this wave's error so the caller escalates and the
+            # incremental pull re-fetches the intact remote copy.
+            out[wave_num] = [f"wave_{wave_num}.json unreadable: {exc}"]
             continue
+        file_run_id = data.get("run_id")
+        if run_id is not None and file_run_id is not None and file_run_id != run_id:
+            continue  # foreign partial — not this run's incomplete wave (F05)
         errs = data.get("errors") or []
         if not errs:
-            continue
-        try:
-            wave_num = int(Path(wf).stem.split("_", 1)[1])
-        except (ValueError, IndexError):
             continue
         out[wave_num] = [str(e) for e in errs]
     return out

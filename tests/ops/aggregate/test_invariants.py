@@ -349,3 +349,50 @@ def test_no_wave_map_zero_task_count_keeps_legacy_empty_expectations(tmp_path: P
     assert out["ok"] is True
     assert out["wave_map_present"] is False
     assert out["missing_waves"] == []
+
+
+def _write_wave_partial_with_tasks_read(
+    combiner_dir: Path, wave: int, run_id: str, task_ids: list[int], tasks_read: list[int]
+) -> None:
+    combiner_dir.mkdir(parents=True, exist_ok=True)
+    (combiner_dir / f"wave_{wave}.json").write_text(
+        json.dumps(
+            {
+                "wave": wave,
+                "run_id": run_id,
+                "task_ids": task_ids,
+                "tasks_read": tasks_read,
+                "grid_points": {},
+                "errors": [
+                    f"task {t}: metrics.json not found" for t in task_ids if t not in tasks_read
+                ],
+            }
+        )
+    )
+
+
+def test_tasks_read_subset_fails_all_tasks_present(tmp_path: Path) -> None:
+    """F07 FIRE PATH: a partial whose ``task_ids`` echoes the full wave but whose
+    ``tasks_read`` covers only a subset must FAIL ``all_tasks_present`` — the
+    tautology that read only ``task_ids`` could never fire for such a partial."""
+    _seed_sidecar_with_wave_map(tmp_path, "r1", {"0": [0, 1, 2, 3]})
+    combiner_dir = tmp_path / "_combiner_local"
+    # 4-task wave; only 0 and 1 actually aggregated (2, 3 errored).
+    _write_wave_partial_with_tasks_read(combiner_dir, 0, "r1", [0, 1, 2, 3], [0, 1])
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["all_tasks_present"] is False
+    assert out["missing_tasks"] == [2, 3]
+    assert out["ok"] is False
+
+
+def test_legacy_partial_without_tasks_read_falls_back_to_task_ids(tmp_path: Path) -> None:
+    """Fail OPEN: a pre-``tasks_read`` partial keeps the historical semantics
+    (all task_ids counted present) so old pulled trees don't false-alarm."""
+    _seed_sidecar_with_wave_map(tmp_path, "r1", {"0": [0, 1, 2]})
+    combiner_dir = tmp_path / "_combiner_local"
+    _write_wave_partial(combiner_dir, 0, "r1", [0, 1, 2])  # no tasks_read field
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["all_tasks_present"] is True
+    assert out["missing_tasks"] == []

@@ -115,6 +115,14 @@ PROTECTED_OUTPUT_DIRS: list[str] = [
     # other run-output dirs. Empirical 2026-06-09 demo: a re-deploy left ``logs`` a
     # 24KB file instead of a dir of ``*.o<job>.<task>`` entries.
     "logs/",
+    # aggregate-flow lands its outputs under ``_aggregated/<run_id>/`` and the
+    # cluster-side final reduce (``_hpc_combiner.py --final``) writes the
+    # aggregate there too. Without protection the next submit's ``--delete``
+    # pre-clean clobbers the cluster's own aggregate artifacts, and the local
+    # pulled tree (per-task result mirrors + evidence ledgers, potentially GBs)
+    # is pushed back up on every submit (F10). Protect it like the other
+    # run-output dirs — written by the job, not part of the local deploy tree.
+    "_aggregated/",
 ]
 
 # Framework runtime files placed on the cluster by ``deploy_runtime`` (scp'd

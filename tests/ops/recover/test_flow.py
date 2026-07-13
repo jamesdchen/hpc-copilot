@@ -242,3 +242,60 @@ class TestEnvelopeShape:
         assert {"run_id", "retries", "job_ids", "request_id", "deduped"} <= env.keys()
         assert "planner" not in env
         assert "forecast_recommendation" not in env
+
+
+class TestResubmitInvalidatesCombinedWaves:
+    """F06: a resubmit re-runs failed tasks that overwrite their metrics.json,
+    so any wave already combined over the pre-recovery subset is stale. The
+    flow must drop exactly the affected waves from ``combined_waves`` (and flag
+    them in ``failed_waves`` — the forced-recombine signal combine.py reads) so
+    the next aggregate pass re-runs the combiner over the recovered data."""
+
+    def _seed_with_waves(self, experiment, tmp_path, monkeypatch):
+        _write_clusters_yaml(tmp_path, monkeypatch)
+        _seed(experiment, combined_waves=[0, 1, 2])
+        # Re-write the sidecar carrying the wave_map: tasks 40..79 live in wave 1.
+        make_sidecar_json(
+            experiment,
+            run_id=RUN_ID,
+            cluster=CLUSTER,
+            profile=PROFILE,
+            wave_map={
+                "0": list(range(0, 40)),
+                "1": list(range(40, 80)),
+                "2": list(range(80, 100)),
+            },
+        )
+
+    def test_affected_wave_invalidated(self, journal_home, experiment, tmp_path, monkeypatch):
+        self._seed_with_waves(experiment, tmp_path, monkeypatch)
+        # Resubmit failed tasks that all belong to wave 1.
+        resubmit_flow(
+            experiment,
+            RUN_ID,
+            failed_task_ids=[45, 60, 79],
+            category="system_oom",
+        )
+        record = load_run(experiment, RUN_ID)
+        assert 1 not in record.combined_waves  # FIRE PATH: invalidated
+        assert 1 in record.failed_waves
+        # Unaffected waves are untouched.
+        assert 0 in record.combined_waves
+        assert 2 in record.combined_waves
+
+    def test_dedup_replay_does_not_reinvalidate(
+        self, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        self._seed_with_waves(experiment, tmp_path, monkeypatch)
+        kwargs = dict(failed_task_ids=[45], category="system_oom", request_id="rid-1")
+        resubmit_flow(experiment, RUN_ID, **kwargs)
+        # A later force-recombine put wave 1 back into combined_waves.
+        rec = load_run(experiment, RUN_ID)
+        rec.combined_waves = sorted({*rec.combined_waves, 1})
+        rec.failed_waves = [w for w in rec.failed_waves if w != 1]
+        upsert_run(experiment, rec)
+        # A dedup'd replay must NOT re-invalidate the freshly recombined wave.
+        second = resubmit_flow(experiment, RUN_ID, **kwargs)
+        assert second.deduped is True
+        record = load_run(experiment, RUN_ID)
+        assert 1 in record.combined_waves

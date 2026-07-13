@@ -1,13 +1,19 @@
-"""Tests that ``aggregate_flow`` narrows its ``_combiner/`` rsync to the
-waves not already pulled locally.
+"""Tests for ``aggregate_flow``'s ``_combiner/`` rsync include shape.
 
 The cluster-side ``_combiner/`` directory grows linearly with wave count
-(one ``wave_<N>.json`` + one ``wave_<N>.runtime.json`` per wave). Even
-with rsync's ``-az`` short-circuit on unchanged files, walking 1000+
-files on every aggregate-flow call dominates the latency budget. The
-incremental pull restricts each rsync to the diff between the run
-record's ``combined_waves`` and locally-present ``wave_<N>.json`` files,
-so a second call with no new waves transfers nothing.
+(one ``wave_<N>.json`` + one ``wave_<N>.runtime.json`` per wave), so the
+pull passes a small ``--include`` filter rather than a per-wave argv that
+scales with wave count.
+
+F08/F09 re-point: an earlier version narrowed the include to the waves
+ABSENT locally (a filename-only diff), which meant a force-recombined
+REMOTE wave (F08) and a truncated LOCAL wave (F09) — both already present
+by filename — were never re-pulled, so the local reduce read stale/torn
+data for the rest of the campaign. The pull now emits the two-glob filter
+``["wave_*.json", "wave_*.runtime.json"]`` once any wave is present
+locally, letting rsync's own size/mtime delta re-transfer exactly the
+changed files while keeping the argv tiny. First call (nothing local yet)
+and the no-wave_map path still emit an unfiltered pull (``include=None``).
 
 These tests mock ``rsync_pull`` so the assertions exercise the include
 shape, not a live transfer.
@@ -116,8 +122,13 @@ def test_include_patterns_no_combined_waves_returns_none(tmp_path: Path):
     assert _incremental_include_patterns(local, []) is None
 
 
-def test_include_patterns_partial_overlap_targets_only_missing(tmp_path: Path):
-    """Waves 0,1 already pulled + cluster has 0..3 -> include 2 and 3 only."""
+def test_include_patterns_some_local_returns_two_globs(tmp_path: Path):
+    """Any wave present locally -> the two-glob filter (F08/F09 re-point).
+
+    The include no longer narrows to the filename-diff (which excluded a
+    force-recombined remote wave); it re-checks every wave file so rsync's
+    delta can re-pull exactly the changed ones.
+    """
     local = tmp_path / "_combiner"
     local.mkdir()
     (local / "wave_0.json").write_text("{}")
@@ -127,28 +138,24 @@ def test_include_patterns_partial_overlap_targets_only_missing(tmp_path: Path):
     (local / "wave_0.runtime.json").write_text("{}")
 
     patterns = _incremental_include_patterns(local, [0, 1, 2, 3])
-    assert patterns == [
-        "wave_2.json",
-        "wave_2.runtime.json",
-        "wave_3.json",
-        "wave_3.runtime.json",
-    ]
+    assert patterns == ["wave_*.json", "wave_*.runtime.json"]
 
 
-def test_include_patterns_all_present_returns_sentinel(tmp_path: Path):
-    """Every combined wave already local -> non-matching pattern, no transfer."""
+def test_include_patterns_all_present_still_rechecks(tmp_path: Path):
+    """Every combined wave already local -> STILL emit the wave globs.
+
+    F08: a force-recombined remote wave (whose local copy exists by
+    filename) must be re-pulled, so the include must MATCH the local wave
+    files — the old "non-matching sentinel that transfers nothing" is
+    exactly the bug.
+    """
     local = tmp_path / "_combiner"
     local.mkdir()
     (local / "wave_0.json").write_text("{}")
     (local / "wave_1.json").write_text("{}")
 
     patterns = _incremental_include_patterns(local, [0, 1])
-    # Caller still issues an rsync (cheap connectivity check) but the
-    # filter must exclude every file. Any non-matching include is fine.
-    assert patterns is not None
-    for w in (0, 1):
-        assert f"wave_{w}.json" not in patterns
-        assert f"wave_{w}.runtime.json" not in patterns
+    assert patterns == ["wave_*.json", "wave_*.runtime.json"]
 
 
 # ---------------------------------------------------------------------------
@@ -186,13 +193,13 @@ def test_first_call_emits_unfiltered_pull(journal_home, experiment):
     assert combiner_call.kwargs.get("include") is None
 
 
-def test_second_call_with_no_new_waves_uses_non_matching_include(journal_home, experiment):
-    """All waves already pulled -> include narrows so rsync transfers nothing.
+def test_second_call_still_rechecks_all_waves(journal_home, experiment):
+    """All waves already pulled -> the pull STILL re-checks every wave (F08).
 
-    This is the optimization's core: on a re-run of aggregate_flow over
-    an already-aggregated terminal run, the cluster's ``_combiner/``
-    walk is skipped entirely (rsync still issues a stat round-trip, but
-    the file list is empty).
+    A force-recombined remote wave has a locally-present file by filename;
+    the include must match it so rsync's delta can re-pull the changed
+    bytes. The old "narrow so the second call transfers nothing" behavior
+    is exactly what dropped the recovered/force-recombined data.
     """
     _seed_run(experiment, combined_waves=[0, 1, 2])
     _seed_sidecar(experiment, wave_map={"0": [0, 1], "1": [2, 3], "2": [4, 5]})
@@ -210,19 +217,15 @@ def test_second_call_with_no_new_waves_uses_non_matching_include(journal_home, e
     combiner_call = rsync_mock.call_args_list[0]
     assert combiner_call.kwargs["remote_subdir"] == "_combiner"
     includes = combiner_call.kwargs.get("include")
-    assert includes is not None, "second call must pass --include= filters"
-    # None of the include patterns should match a real wave file.
-    for w in (0, 1, 2):
-        assert f"wave_{w}.json" not in includes
-        assert f"wave_{w}.runtime.json" not in includes
+    # The wave globs MUST be present so rsync re-verifies every wave file.
+    assert includes == ["wave_*.json", "wave_*.runtime.json"]
 
 
-def test_second_call_with_new_waves_pulls_only_the_diff(journal_home, experiment):
-    """Waves 0,1 already pulled + cluster has waves 0..3 -> include 2 and 3 only.
+def test_second_call_with_new_waves_still_uses_wave_globs(journal_home, experiment):
+    """Waves 0,1 already local + cluster has 0..3 -> the two-glob filter.
 
-    Proves the strict-subset case: an aggregate run that races ahead of
-    monitor still picks up the latest combined waves without paying for
-    a re-walk of the prefix already on disk.
+    rsync's delta fetches waves 2/3 (absent locally) AND re-verifies 0/1 —
+    so a force-recombine of an already-local wave is not silently skipped.
     """
     _seed_run(experiment, combined_waves=[0, 1, 2, 3])
     _seed_sidecar(
@@ -246,69 +249,38 @@ def test_second_call_with_new_waves_pulls_only_the_diff(journal_home, experiment
 
     combiner_call = rsync_mock.call_args_list[0]
     includes = combiner_call.kwargs.get("include")
-    assert includes == [
-        "wave_2.json",
-        "wave_2.runtime.json",
-        "wave_3.json",
-        "wave_3.runtime.json",
-    ]
+    assert includes == ["wave_*.json", "wave_*.runtime.json"]
 
 
-def test_second_call_pulls_strictly_fewer_files_than_first(journal_home, experiment):
-    """The headline guarantee: pass 2 narrows to a subset of pass 1.
+def test_include_argv_stays_bounded_regardless_of_wave_count(journal_home, experiment):
+    """The argv-size guarantee survives F08: the filter is two globs, not
 
-    Pass 1 (cold cache) sends no include filter (effectively unbounded —
-    matches every file in ``_combiner/``). Pass 2 (warm cache, no new
-    waves) sends a finite, non-matching include set.
-
-    Counting *target* wave files on each side:
-
-    * Pass 1 effective set: every ``wave_<N>.json`` for N in
-      combined_waves (since rsync would transfer all of them).
-    * Pass 2 effective set: zero (the include list is a non-matching
-      sentinel).
-
-    Asserting ``len(pass2) < len(pass1)`` proves the optimization at
-    the level the user cares about (file transfers avoided).
+    a per-wave list that scales with wave count. Both the cold first call
+    (unfiltered) and the warm re-check emit at most a constant-size filter.
     """
-    _seed_run(experiment, combined_waves=[0, 1, 2, 3, 4])
+    _seed_run(experiment, combined_waves=list(range(5)))
     _seed_sidecar(
         experiment,
         wave_map={str(w): [2 * w, 2 * w + 1] for w in range(5)},
     )
 
-    # Pass 1: cold cache.
+    # Pass 1: cold cache -> unfiltered.
     rsync_mock_1, _ = _run_aggregate(experiment)
     pass1_include = rsync_mock_1.call_args_list[0].kwargs.get("include")
+    assert pass1_include is None
 
-    # Simulate the pull having succeeded: write the combiner files
-    # locally so pass 2 sees them.
+    # Simulate the pull having succeeded: write the combiner files locally.
     out = experiment / "_aggregated" / "r1" / "_combiner"
     out.mkdir(parents=True, exist_ok=True)
     for w in range(5):
         (out / f"wave_{w}.json").write_text("{}")
         (out / f"wave_{w}.runtime.json").write_text("{}")
 
-    # Pass 2: warm cache.
+    # Pass 2: warm cache -> two globs (constant size), which re-verify all.
     rsync_mock_2, _ = _run_aggregate(experiment)
     pass2_include = rsync_mock_2.call_args_list[0].kwargs.get("include")
-
-    # Effective file count: pass 1 has no filter (unbounded). Use the
-    # cluster-side combined_waves count as the cardinality proxy.
-    pass1_effective = 5 if pass1_include is None else len(pass1_include) // 2
-    # Pass 2's include is the non-matching sentinel; effective transfers = 0.
-    pass2_effective = 0
-    for w in range(5):
-        if pass2_include and (
-            f"wave_{w}.json" in pass2_include or f"wave_{w}.runtime.json" in pass2_include
-        ):
-            pass2_effective += 1
-
-    assert pass2_effective < pass1_effective, (
-        f"second call should transfer fewer waves than first; "
-        f"pass1={pass1_effective}, pass2={pass2_effective}"
-    )
-    assert pass2_effective == 0
+    assert pass2_include == ["wave_*.json", "wave_*.runtime.json"]
+    assert len(pass2_include) == 2  # bounded regardless of the 5 waves
 
 
 def test_failed_summary_rsync_labels_truthfully_and_carries_stderr(journal_home, experiment):

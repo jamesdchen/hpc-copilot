@@ -68,9 +68,18 @@ class TestCombinerCliContract:
         assert out_path.exists()
         data = json.loads(out_path.read_text())
 
-        assert set(data.keys()) == {"wave", "run_id", "task_ids", "grid_points", "errors"}
+        assert set(data.keys()) == {
+            "wave",
+            "run_id",
+            "task_ids",
+            "tasks_read",
+            "grid_points",
+            "errors",
+        }
         assert data["wave"] == 0
         assert data["task_ids"] == [0, 1]
+        # F07: both tasks wrote metrics, so tasks_read echoes task_ids.
+        assert data["tasks_read"] == [0, 1]
         assert isinstance(data["grid_points"], dict)
         assert isinstance(data["errors"], list)
 

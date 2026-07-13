@@ -206,10 +206,12 @@ def verify_aggregation_complete(
     * ``missing_waves`` — wave_ids on the wave_map that don't have a
       partial pulled. Empty list when ``all_waves_combined``.
     * ``all_tasks_present`` — every task_id reachable from the
-      wave_map appears in at least one of the pulled
-      ``wave_<N>.json`` partials' ``task_ids`` field.
-    * ``missing_tasks`` — task_ids in the wave_map but not in any
-      partial.
+      wave_map was actually aggregated: it appears in some pulled
+      ``wave_<N>.json`` partial's ``tasks_read`` list (the subset the
+      combiner read into ``grid_points``). Older partials without a
+      ``tasks_read`` field fall back to ``task_ids``.
+    * ``missing_tasks`` — task_ids in the wave_map that no partial
+      aggregated (errored / never wrote metrics).
     * ``unexpected_tasks`` — task_ids in some partial but NOT in the
       wave_map (a sign of cross-run contamination).
     * ``provenance_present`` — every wave partial has the expected
@@ -338,18 +340,36 @@ def verify_aggregation_complete(
     all_waves_combined = not missing_waves
 
     pulled_tasks: set[int] = set()
+    read_tasks: set[int] = set()
     provenance_present = True
     for w, doc in pulled_waves.items():
         # Provenance check: each partial must self-identify.
         if doc.get("run_id") != run_id or doc.get("wave") != w:
             provenance_present = False
-        for tid in doc.get("task_ids") or []:
+        task_id_field = doc.get("task_ids") or []
+        for tid in task_id_field:
             try:
                 pulled_tasks.add(int(tid))
             except (TypeError, ValueError):
                 continue
+        # F07: ``task_ids`` echoes the FULL wave membership even for tasks that
+        # errored (their metrics never landed in ``grid_points``), so building
+        # missing_tasks from it makes ``all_tasks_present`` a tautology — it can
+        # never fire for a production partial. Prefer the combiner's
+        # ``tasks_read`` list (the subset actually aggregated) when present; a
+        # task in the wave_map but absent from every partial's ``tasks_read`` is
+        # genuinely missing from the aggregate. Fall back to ``task_ids`` for
+        # older partials that predate the field (byte-identical to the historical
+        # behavior — no false missing on legacy pulled trees).
+        tasks_read_field = doc.get("tasks_read")
+        read_source = tasks_read_field if isinstance(tasks_read_field, list) else task_id_field
+        for tid in read_source:
+            try:
+                read_tasks.add(int(tid))
+            except (TypeError, ValueError):
+                continue
 
-    missing_tasks = sorted(expected_tasks - pulled_tasks)
+    missing_tasks = sorted(expected_tasks - read_tasks)
     unexpected_tasks = sorted(pulled_tasks - expected_tasks)
     all_tasks_present = not missing_tasks
 
