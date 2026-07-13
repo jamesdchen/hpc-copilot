@@ -255,9 +255,7 @@ def test_partial_static_census_settles_abandoned_when_scheduler_empty(
     assert harvested == [str(LifecycleState.ABANDONED)]
     assert probes  # the liveness cross-check actually fired
     # The provenance marks that the census was corrected by a scheduler probe.
-    assert (
-        result.last_status.get("status_source") == "task_announcements+scheduler_liveness"
-    )
+    assert result.last_status.get("status_source") == "task_announcements+scheduler_liveness"
 
 
 def test_partial_static_census_stays_in_flight_when_scheduler_alive(
@@ -269,9 +267,7 @@ def test_partial_static_census_stays_in_flight_when_scheduler_alive(
     _seed_record(experiment)
     harvested = _harvest_recorder(monkeypatch)
     _stub_census(monkeypatch, _present(2, 0))
-    monkeypatch.setattr(
-        monitor_flow_module, "_census_liveness_probe", lambda record: {"9001"}
-    )
+    monkeypatch.setattr(monitor_flow_module, "_census_liveness_probe", lambda record: {"9001"})
 
     clock = {"t": 0.0}
     result = monitor_flow(

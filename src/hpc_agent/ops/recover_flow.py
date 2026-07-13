@@ -608,9 +608,7 @@ def resubmit_flow(
         # monitor/aggregate pass FORCE-recombines them (see combine.py's
         # failed_waves recombine guard). Skipped on a dedup'd replay (already
         # invalidated on the first landing).
-        _invalidate_combined_waves_for_tasks(
-            experiment_dir, run_id, failed_task_ids, sidecar
-        )
+        _invalidate_combined_waves_for_tasks(experiment_dir, run_id, failed_task_ids, sidecar)
 
     return ResubmitFlowResult(
         run_id=record.run_id,

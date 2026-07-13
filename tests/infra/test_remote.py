@@ -842,7 +842,8 @@ class TestEngineSeamIdempotence:
         from hpc_agent.infra import ssh_engine
 
         self._engine_raises(
-            monkeypatch, ssh_engine.EngineUnavailable("connect refused")  # dispatched=False
+            monkeypatch,
+            ssh_engine.EngineUnavailable("connect refused"),  # dispatched=False
         )
         with patch("hpc_agent.infra.remote._capture_via_select") as one_shot:
             one_shot.return_value = _cp(stdout="JOB1\n", returncode=0)

@@ -134,9 +134,7 @@ def test_journal_root_if_exists_is_non_creating(journal_home: Path, experiment: 
         lambda exp: find_runs_by_campaign(exp, "some-campaign"),
     ],
 )
-def test_read_paths_do_not_scaffold_namespace(
-    journal_home: Path, experiment: Path, call
-) -> None:
+def test_read_paths_do_not_scaffold_namespace(journal_home: Path, experiment: Path, call) -> None:
     """F46 fire path: with the home present but this experiment's namespace
     absent, a read returns empty AND leaves no ``~/.claude/hpc/<hash>/`` behind —
     the guard that ``journal_dir().exists()`` could never be."""
@@ -151,9 +149,7 @@ def test_read_paths_do_not_scaffold_namespace(
 # ── F30: forked-namespace detection after a mid-campaign rename ────────────────
 
 
-def test_detect_forked_namespace_after_rename(
-    journal_home: Path, tmp_path: Path
-) -> None:
+def test_detect_forked_namespace_after_rename(journal_home: Path, tmp_path: Path) -> None:
     old_dir = tmp_path / "exp1"
     old_dir.mkdir()
     old_resolved = str(old_dir.resolve())
@@ -171,9 +167,7 @@ def test_detect_forked_namespace_after_rename(
     assert report["current_hash"] == repo_hash(new_dir)
 
 
-def test_detect_forked_namespace_none_when_healthy(
-    journal_home: Path, experiment: Path
-) -> None:
+def test_detect_forked_namespace_none_when_healthy(journal_home: Path, experiment: Path) -> None:
     upsert_run(experiment, _record("run_live0001", experiment))
     assert detect_forked_namespace(experiment) is None
 

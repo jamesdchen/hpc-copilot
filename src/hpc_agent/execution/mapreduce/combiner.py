@@ -154,8 +154,8 @@ def _weighted_mean(entries):
         # standalone and run under any cluster ``python3`` (>=3.8; RHEL/Rocky 8,
         # torch-1.x conda envs — see the deploy-floor lint and F18), where
         # ``zip(..., strict=True)`` raises ``TypeError`` and aborts every wave
-        # combine. ``# noqa: B905`` stops a modernization pass from re-adding
-        # ``strict=`` and re-raising the cluster floor.
+        # combine. The B905 suppression on the ``zip`` below stops a
+        # modernization pass from re-adding ``strict=`` and re-raising the floor.
         pairs = [
             (e[key], w)
             for e, w in zip(entries, weights)  # noqa: B905 - deploy floor <3.10; equal length by construction

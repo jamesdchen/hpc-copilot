@@ -354,9 +354,7 @@ def test_threaded_canary_decision_run_fires_canary(tmp_path, _journal_home) -> N
         mock.patch.object(sf, "_submit_main_array", return_value=(["300"], None)),
         mock.patch.object(sf, "submit_and_record"),
     ):
-        res = sf._submit_one_spec(
-            experiment_dir=tmp_path, spec=spec, canary_decision=(True, None)
-        )
+        res = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec, canary_decision=(True, None))
     fire.assert_called_once()
     assert res.canary_done is True
 
@@ -404,9 +402,7 @@ def test_replayed_canary_does_not_gate_main_on_stale_id(tmp_path, _journal_home)
         mock.patch.object(sf, "_submit_main_array", return_value=(["300"], None)) as mainmk,
         mock.patch.object(sf, "submit_and_record"),
     ):
-        res = sf._submit_one_spec(
-            experiment_dir=tmp_path, spec=spec, canary_decision=(True, None)
-        )
+        res = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec, canary_decision=(True, None))
     # The replayed canary id still rides the RESULT, but the main array is un-gated.
     assert res.canary_job_ids == ["9999"]
     assert mainmk.call_args.kwargs["gate_job_ids"] == []

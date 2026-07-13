@@ -225,11 +225,7 @@ def test_pbs_finished_rows_not_counted_alive(family, term_state):
 @pytest.mark.parametrize("family", ["pbspro", "torque"])
 def test_pbs_job_id_regex_ignores_banner_dotted_numbers(family):
     cls = get_backend_class(family)
-    poisoned = (
-        "estimated start in 1.5 hours\n"
-        "PBS Pro Version 2022.1.3\n"
-        "12345[].pbs01\n"
-    )
+    poisoned = "estimated start in 1.5 hours\nPBS Pro Version 2022.1.3\n12345[].pbs01\n"
     # The old shape-only pattern matched '1' in '1.5' (first match); the
     # line-anchored prefer-last pattern binds the real id line.
     assert cls.JOB_ID_REGEX.search(poisoned).group(1) == "12345[]"

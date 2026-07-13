@@ -150,12 +150,15 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
         cursor = marker.get("resume_cursor") or {}
         next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
         marker_block = marker.get("block")
-        if committed_greenlight_for_boundary(
-            decisions,
-            block=marker_block if isinstance(marker_block, str) else None,
-            next_verb=next_verb,
-            awaiting_since=marker.get("awaiting_since"),
-        ) is None:
+        if (
+            committed_greenlight_for_boundary(
+                decisions,
+                block=marker_block if isinstance(marker_block, str) else None,
+                next_verb=next_verb,
+                awaiting_since=marker.get("awaiting_since"),
+            )
+            is None
+        ):
             continue
         return {
             "run_id": run_id,

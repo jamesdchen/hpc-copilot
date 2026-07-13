@@ -2206,9 +2206,7 @@ class TestWpCDuplicateExecution:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
             pytest.raises(errors.SpecInvalid, match="rsync_excludes"),
         ):
-            submit_flow_batch(
-                tmp_path, spec=_batch([_spec("r0", rsync_excludes=["data/raw/"])])
-            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0", rsync_excludes=["data/raw/"])]))
         assert submit_one.call_count == 0
 
     def test_single_spec_submit_flow_honours_rsync_excludes(

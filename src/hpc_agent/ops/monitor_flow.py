@@ -621,9 +621,7 @@ def monitor_flow(
                             # TIMEOUT with the bumped tasks never resubmitted.
                             last_status["pending"] = 0
                             last_status["unknown"] = census_missing
-                            last_status["status_source"] = (
-                                "task_announcements+scheduler_liveness"
-                            )
+                            last_status["status_source"] = "task_announcements+scheduler_liveness"
                             logging.getLogger(__name__).warning(
                                 "monitor: run %s — announce census static with %d "
                                 "unannounced task(s) and the scheduler holds "

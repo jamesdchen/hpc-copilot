@@ -198,9 +198,7 @@ def test_interrupted_transfer_leaves_manifest_unwritten_so_retry_reships():
             return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
         ),
         patch("hpc_agent.infra.transport._deploy_transfer", side_effect=_capture_transfer),
-        patch(
-            "hpc_agent.infra.transport._write_deploy_manifest", side_effect=_record_manifest
-        ),
+        patch("hpc_agent.infra.transport._write_deploy_manifest", side_effect=_record_manifest),
     ):
         transport.deploy_runtime(ssh_target="u@c", remote_path="/p", scheduler="sge")
 

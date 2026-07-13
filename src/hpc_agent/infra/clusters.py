@@ -825,11 +825,6 @@ def validate_clusters_config(clusters: dict[str, Any]) -> None:
             ) from exc
 
 
-def _allowed_cluster_keys() -> frozenset[str]:
-    """The recognized per-cluster ``clusters.yaml`` keys (the ``ClusterConfig`` fields)."""
-    return frozenset(ClusterConfig.model_fields)
-
-
 def near_miss_cluster_keys(entry: dict[str, Any]) -> dict[str, list[str]]:
     """Map each unrecognized key in *entry* to close-matching allowed keys.
 

@@ -238,9 +238,7 @@ def test_failed_delete_retains_manifest_provenance(
     assert retained == {"ours/dropped.py"}
 
 
-def test_confirmed_delete_drops_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_confirmed_delete_drops_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A CONFIRMED delete removes the extra from the remote, so it must NOT be
     retained — keeping it would resurrect a phantom prunable on the next push."""
     monkeypatch.setattr(transport, "_read_prior_push_manifest", lambda **_: {"ours/dropped.py"})

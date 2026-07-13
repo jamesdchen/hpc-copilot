@@ -589,9 +589,7 @@ def test_stale_pack_declaration_degrades_not_crashes(
     assert len(rec.calls) == 1
 
 
-def test_resubmit_ssh_fault_parks_held_not_crashes(
-    journal_home: Path, experiment: Path
-) -> None:
+def test_resubmit_ssh_fault_parks_held_not_crashes(journal_home: Path, experiment: Path) -> None:
     """F26: a transient SSH fault on the resubmit leg must NOT propagate through
     the monitor's terminal-FAILED tick and kill the detached watch. The cluster
     is parked HELD with the reason (nothing landed → the cap is NOT consumed), so
