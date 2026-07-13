@@ -100,9 +100,6 @@ src/hpc_agent/ops/attention_queue.py
 src/hpc_agent/ops/auto_resume_flow.py
 src/hpc_agent/ops/campaign_refill.py
 src/hpc_agent/ops/conformance/record_op.py
-src/hpc_agent/ops/decision/journal.py
-src/hpc_agent/ops/decision/scope_lock.py
-src/hpc_agent/ops/decision/verify_relay.py
 src/hpc_agent/ops/detect_entry_point.py
 src/hpc_agent/ops/dir_digest.py
 src/hpc_agent/ops/evidence_project.py
@@ -169,3 +166,10 @@ src/hpc_agent/state/user_profiles.py
 src/hpc_agent/_kernel/extension/mcp_elicitation.py
 src/hpc_agent/_kernel/hooks/relay_audit_stop/__init__.py
 src/hpc_agent/_kernel/hooks/relay_audit_stop/_shared.py
+src/hpc_agent/ops/decision/journal/_shared.py
+src/hpc_agent/ops/decision/journal/challenge.py
+src/hpc_agent/ops/decision/journal/conclusion.py
+src/hpc_agent/ops/decision/journal/registration.py
+src/hpc_agent/ops/decision/journal/scope_lock.py
+src/hpc_agent/ops/decision/journal/signoff.py
+src/hpc_agent/ops/decision/journal/verify_relay.py
