@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.ops.monitor.classify import classify_polling
 
 __all__ = ["_ingest_runtime_at_terminal", "_is_terminal"]
@@ -51,7 +52,7 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
         with tempfile.TemporaryDirectory(prefix="hpc_runtime_pull_") as local_dir_str:
             local_dir = Path(local_dir_str)
             result = rsync_pull(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 remote_subdir="_combiner",
                 local_dir=str(local_dir),

@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_audit_view.input.json",
+  "title": "notebook-audit-view input spec",
+  "description": "Inputs to ``notebook-audit-view``.\n\n``source`` / ``template`` are ``.py`` relpaths resolved against the\n``--experiment-dir`` (jupytext percent format, parsed by the same section\nparser). ``lint_findings`` is the OPAQUE, caller-chained finding list (from\n``notebook-lint``); ``receipt`` is the opaque v1.5 execution receipt accepted\nfor forward-compat.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "source",
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug). Names where the TRUSTED-DISPLAY render files are written: per section, this verb writes `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` — the content-addressed, code-written artifact the T8 sign-off gate requires (the audit view relayed in chat is model-carried; the render file on disk is the trusted one).",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format). Every SOURCE section is projected; per-section shas are recomputed fresh on every call.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "template": {
+      "description": "Experiment-relative path to the template .py. Each source section is classified (inherited / added / modified) and diffed against the template section that shares its slug.",
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    },
+    "input_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque data-path roots for the CANONICAL view's server-side lint recompute. Default (null) uses the audit's RECORDED roots (interview.json audited_source) — so the skill's default flow produces CANONICAL view_shas the T8 gate accepts. Passing roots explicitly is an OVERRIDE that makes the result a PREVIEW (`canonical: false`).",
+      "title": "Input Roots"
+    },
+    "source_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque import roots for the canonical lint recompute. Default (null) uses the recorded roots; an explicit value is a PREVIEW override.",
+      "title": "Source Roots"
+    },
+    "output_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque WRITE-target roots for the canonical lint recompute: a path literal under one is a declared output, exempt from the executes-live not-exists flag. Default (null) uses the recorded roots; an explicit value is a PREVIEW override.",
+      "title": "Output Roots"
+    },
+    "lint_findings": {
+      "description": "OPAQUE lint findings for a PREVIEW build. When NON-EMPTY the view is a PREVIEW (`canonical: false`) built from these caller-supplied findings instead of the server-recomputed lint — its view_shas the T8 gate may refuse. Leave EMPTY (the default) to get the CANONICAL view whose lint is recomputed server-side from the recorded roots. Each finding names its section via a `slug` / `section` / `section_slug` key.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Lint Findings",
+      "type": "array"
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional OPAQUE INLINE execution receipt `{slug: {output_sha, error}}` for preview only (this read-only verb journals nothing). `error is False` marks that section's declared assertions GREEN; absent a receipt, a section WITH assertions is not green (unverified is not green). An inline entry carries no `section_sha`, so it is not sha-freshness-gated here — the mutate `notebook-auto-clear` path reads JOURNALED, sha-bound receipts (`notebook-record-receipt`) instead, which drift stale by construction.",
+      "title": "Receipt"
+    },
+    "attention_order": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional caller-supplied section-slug ordering for the presented sections + markdown (T12). Default (null) is source order. Listed slugs are shown FIRST in the given order; unknown slugs are ignored; source slugs the order omits keep source order after the listed ones. It changes what the human saw, so it participates in the module view_sha; per-section view_shas are unaffected.",
+      "title": "Attention Order"
+    },
+    "full": {
+      "default": false,
+      "description": "Payload selector (run-#12 finding 12, B1). Default (false) returns the DIGEST `markdown` — the per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), the render-file pointers, and the next-actions footer — with NO diff/assertion/flag body bytes. Under popup-primary the bodies live in the content-addressed render files (`render_path`) and the sign-off popup, so the agent needs the digest + pointers only. Pass `full: true` to get the whole-body `markdown` render (~11k tokens) for a harness that still MODEL-RELAYS the audit. The per-section view_shas and `render_path`s are identical either way — `full` selects only how much of the render the RESPONSE carries, never what the human signs.",
+      "title": "Full",
+      "type": "boolean"
+    }
+  }
+}

@@ -68,6 +68,7 @@ class _SubmitFlowResultEntry(BaseModel):
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
     main_launched: bool = True
+    canary_skip_reason: str | None = None
 
 
 class SubmitFlowBatchResult(BaseModel):
@@ -86,7 +87,7 @@ class SubmitFlowBatchResult(BaseModel):
             "Per-spec submit-flow result, in input order. Each entry "
             "has the shape of submit_flow.output.json (run_id, "
             "job_ids, total_tasks, deduped, canary_done, "
-            "canary_run_id, canary_job_ids)."
+            "canary_run_id, canary_job_ids, canary_skip_reason)."
         ),
     )
     n_results: int = Field(

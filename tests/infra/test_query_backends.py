@@ -121,6 +121,118 @@ class TestSacctErrorShape:
         assert out["tasks"][4]["state"] == "COMPLETED"
 
 
+class TestSacctNonArrayJob:
+    """#293 single multi-rank MPI jobs submit with ``array=False``: sacct
+    reports a PLAIN JobID (no ``_``) plus its step rows. Those rows must
+    ingest as the run's single task 0 — dropping them left a failed MPI
+    run with no accounting state at all (``tasks={}`` and no error)."""
+
+    def test_plain_jobid_rows_map_to_task_zero(self, monkeypatch):
+        stdout = (
+            "12345|FAILED|1:0|3600|8|cpu=8,gres/gpu=2\n"
+            "12345.batch|FAILED|1:0|3600|8|cpu=8\n"
+            "12345.extern|COMPLETED|0:0|3600|8|\n"
+        )
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["12345"])
+        assert set(out["tasks"]) == {0}
+        task = out["tasks"][0]
+        # The main record wins; .batch/.extern steps dedup into it exactly
+        # like array step rows do.
+        assert task["state"] == "FAILED"
+        assert task["exit_code"] == "1:0"
+        assert task["job_id"] == "12345"
+        assert task["elapsed_s"] == 3600
+        assert task["cpu_s"] == 8 * 3600
+        assert task["gpu_s"] == 2 * 3600
+        assert out["errors"] == []
+
+    def test_unrelated_plain_jobid_rows_filtered(self, monkeypatch):
+        # The job_ids scoping applies to plain rows too — an unrelated
+        # non-array job must not be ingested as this run's task 0.
+        stdout = "888|COMPLETED|0:0\n999_1|COMPLETED|0:0\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["tasks"][0]["job_id"] == "999"
+        assert all(t["job_id"] != "888" for t in out["tasks"].values())
+
+    def test_non_array_resubmit_newest_wins(self, monkeypatch):
+        # Same newest-wins dedup as array rows: a resubmitted MPI job's
+        # newer attempt (later in job_ids) overrides the prior failure.
+        stdout = "111|FAILED|1:0\n222|COMPLETED|0:0\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["111", "222"])
+        assert out["tasks"][0]["state"] == "COMPLETED"
+        assert out["tasks"][0]["job_id"] == "222"
+
+
+class TestSacctPendingAggregate:
+    """sacct collapses not-yet-started array elements into a single
+    ``<jobid>_[<spec>]`` PENDING row (#7). These must expand to per-index
+    pending tasks, never a dropped ``malformed_row``.
+    """
+
+    def test_pending_aggregate_expands_to_all_indices(self, monkeypatch):
+        # 1-based ArrayIndex [1-10] -> 0-based HpcTaskId 0..9, all PENDING.
+        stdout = "999_[1-10]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        assert set(out["tasks"]) == set(range(10))  # 0-based keys 0..9
+        t0 = out["tasks"][0]
+        assert t0["state"] == "PENDING"
+        assert t0["job_id"] == "999"
+        assert t0["elapsed_s"] == 0
+        assert t0["cpu_s"] == 0
+        assert t0["gpu_s"] == 0
+
+    def test_throttled_pending_aggregate_strips_percent_limit(self, monkeypatch):
+        # The ``%2`` concurrency throttle must be stripped, not parsed as an id.
+        stdout = "999_[1-10%2]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        assert set(out["tasks"]) == set(range(10))
+
+    def test_comma_and_step_bracket_spec_expands(self, monkeypatch):
+        # Mixed comma list + stepped range inside the bracket.
+        stdout = "999_[1,5,7-9:2]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        # 1,5,7,9 (1-based) -> 0,4,6,8 (0-based)
+        assert set(out["tasks"]) == {0, 4, 6, 8}
+
+    def test_mixed_running_and_pending_aggregate(self, monkeypatch):
+        # Some tasks started (999_1 RUNNING) while the remainder is aggregated
+        # pending (999_[2-4]) — disjoint sets, no malformed_row, correct keys.
+        stdout = "999_1|RUNNING|0:0|10|4|\n999_[2-4]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        assert out["tasks"][0]["state"] == "RUNNING"  # ArrayIndex 1 -> tid 0
+        assert out["tasks"][1]["state"] == "PENDING"  # ArrayIndex 2 -> tid 1
+        assert out["tasks"][3]["state"] == "PENDING"  # ArrayIndex 4 -> tid 3
+        assert set(out["tasks"]) == {0, 1, 2, 3}
+
+    def test_genuinely_malformed_bracket_still_reports_error(self, monkeypatch):
+        # A bracket with a non-numeric token is neither an int nor a valid
+        # spec — it must still fall through to malformed_row.
+        stdout = "999_[abc]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["tasks"] == {}
+        assert [e["code"] for e in out["errors"]] == ["malformed_row"]
+
+
 # ---------------------------------------------------------------------------
 # query_sge
 # ---------------------------------------------------------------------------
@@ -188,3 +300,60 @@ class TestSgeErrorShape:
         out = qmod.query_sge(["111"], user="u")
         codes = [e["code"] for e in out["errors"]]
         assert "sge_unavailable" in codes
+
+
+def _qacct_block(taskid: int, exit_status: int) -> str:
+    return f"=====\ntaskid       {taskid}\nexit_status  {exit_status}\nfailed       0\n"
+
+
+class TestSgeResubmitDedup:
+    """The run record's ``job_ids`` are ordered oldest→newest (resubmits
+    append), and consumers that prefer the most-recent attempt rely on
+    that order — mirroring query_sacct's newest-wins dedup. A task that
+    failed in job A and completed in resubmitted job B must report the
+    NEWER attempt, while live qstat data still beats qacct accounting."""
+
+    def test_resubmitted_task_reports_newest_attempt(self, monkeypatch):
+        def responder(cmd, *a, **kw):
+            if cmd[0] == "qstat":
+                return _cp(stdout="")
+            # qacct: the old array's attempt failed, the resubmit completed.
+            if cmd[-1] == "111":
+                return _cp(stdout=_qacct_block(3, 1))
+            return _cp(stdout=_qacct_block(3, 0))
+
+        monkeypatch.setattr(subprocess, "run", responder)
+        out = qmod.query_sge(["111", "222"], user="u")
+        # taskid 3 (ArrayIndex) -> HpcTaskId 2. Newest (222) wins.
+        assert out["tasks"][2]["state"] == "COMPLETED"
+        assert out["tasks"][2]["job_id"] == "222"
+
+    def test_live_qstat_still_beats_qacct_accounting(self, monkeypatch):
+        # Task 3 is RUNNING under the resubmit (live qstat) while the old
+        # array's qacct row says FAILED — the live state must survive
+        # phase 2 regardless of job order.
+        qstat_out = "222 0.55555 ml u r 07/09/2026 10:00:00 all.q@n1 1 3\n"
+
+        def responder(cmd, *a, **kw):
+            if cmd[0] == "qstat":
+                return _cp(stdout=qstat_out)
+            if cmd[-1] == "111":
+                return _cp(stdout=_qacct_block(3, 1))
+            return _cp(returncode=1)  # resubmit not yet in accounting
+
+        monkeypatch.setattr(subprocess, "run", responder)
+        out = qmod.query_sge(["111", "222"], user="u")
+        assert out["tasks"][2]["state"] == "RUNNING"
+        assert out["tasks"][2]["job_id"] == "222"
+
+    def test_first_block_still_wins_within_one_job(self, monkeypatch):
+        # Within a single qacct buffer (one job) the pre-existing
+        # first-block-wins rule is preserved.
+        def responder(cmd, *a, **kw):
+            if cmd[0] == "qstat":
+                return _cp(stdout="")
+            return _cp(stdout=_qacct_block(3, 0) + _qacct_block(3, 1))
+
+        monkeypatch.setattr(subprocess, "run", responder)
+        out = qmod.query_sge(["111"], user="u")
+        assert out["tasks"][2]["state"] == "COMPLETED"

@@ -25,7 +25,7 @@ Run::
 
     python scripts/lint_skills.py
 
-CI integration: pytest ``-m lint`` (see ``tests/contract/test_lint_skills.py``).
+CI integration: pytest ``-m lint`` (see ``tests/contracts/test_lint_skills.py``).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / "src" / "slash_commands" / "skills"
+SKILLS_DIR = REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills"
 
 # ─── Rule definitions ──────────────────────────────────────────────────────
 

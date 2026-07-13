@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_draft_context.input.json",
+  "title": "notebook-draft-context input spec",
+  "description": "Inputs to ``notebook-draft-context`` — all roots caller-declared, OPAQUE.\n\n``source_roots`` / ``input_roots`` default from the audit's RECORDED\nconfiguration when ``audit_id`` is given (the one-declaration reuse rule):\nan explicit list overrides, ``null`` falls back to the recorded config, and\nan audit with no recorded config yields empty roots. ``inventory_roots`` is\ndraft-context-specific (extra opaque roots to list) and never defaulted.",
+  "type": "object",
+  "required": [
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "template": {
+      "description": "Experiment-relative path to the template .py (jupytext percent format). Its slugs + cell prose are echoed verbatim and its imports are the declared engines the projection resolves.",
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    },
+    "source_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE import roots the engines resolve under. null => default from the audit's recorded config (when audit_id is given), else empty.",
+      "title": "Source Roots"
+    },
+    "input_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE data roots whose files are listed in the inventory. null => default from the audit's recorded config (when audit_id is given), else empty.",
+      "title": "Input Roots"
+    },
+    "inventory_roots": {
+      "description": "Additional OPAQUE roots to list in the inventory (e.g. a configs dir). Never defaulted from the audit — draft-context-specific.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Inventory Roots",
+      "type": "array"
+    },
+    "audit_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional notebook audit id. When given, absent source_roots / input_roots default from that audit's recorded configuration (interview.json audited_source, else the journaled record).",
+      "title": "Audit Id"
+    },
+    "engines": {
+      "description": "Additional dotted engine names to resolve beyond the template's own imports (run-#12 finding 6b: the variable sections' planned callables are not template imports). Each entry is tried as a whole module first, then as module.symbol. Resolved identically to template imports and listed with a [declared] tag; an entry resolving nowhere under source_roots is listed unresolved, never dropped.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Engines",
+      "type": "array"
+    }
+  }
+}

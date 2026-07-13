@@ -285,3 +285,67 @@ def test_verify_aggregation_complete_column_gate_noop_without_results_dir(
     out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
     assert out["columns_checked"] is False
     assert out["ok"] is True
+
+
+# ── implicit wave-0 (no wave_map — bug-sweep 2026-07-11 disputed, arm (a)) ───
+
+
+def _seed_sidecar_no_wave_map(experiment: Path, run_id: str, task_count: int) -> None:
+    write_run_sidecar(
+        experiment,
+        run_id=run_id,
+        cmd_sha="0" * 64,
+        hpc_agent_version="0.2.0",
+        submitted_at="2026-01-01T00:00:00Z",
+        executor="python3 src/run.py",
+        result_dir_template="results/{seed}",
+        task_count=task_count,
+        tasks_py_sha="1" * 64,
+        wave_map=None,
+    )
+
+
+def test_no_wave_map_empty_combiner_is_not_vacuously_ok(tmp_path: Path) -> None:
+    """An un-batched sidecar (no wave_map) over an EMPTY combiner dir must
+    report the implicit wave-0 missing — never green-light zero aggregated
+    output (the arm-(a) vacuous pass)."""
+    _seed_sidecar_no_wave_map(tmp_path, "r1", task_count=3)
+    combiner_dir = tmp_path / "_combiner_local"
+    combiner_dir.mkdir(parents=True)
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["ok"] is False
+    assert out["wave_map_present"] is False
+    assert out["missing_waves"] == [0]
+    assert out["missing_tasks"] == [0, 1, 2]
+    assert out["all_waves_combined"] is False
+    assert out["all_tasks_present"] is False
+
+
+def test_no_wave_map_implicit_wave0_partial_verifies_clean(tmp_path: Path) -> None:
+    """The implicit wave-0 partial listing every task compares like-for-like:
+    ok=True with NO tasks flagged as cross-run contamination (arm (b) of the
+    disputed finding must stay impossible even if such a partial appears)."""
+    _seed_sidecar_no_wave_map(tmp_path, "r1", task_count=3)
+    combiner_dir = tmp_path / "_combiner_local"
+    _write_wave_partial(combiner_dir, 0, "r1", [0, 1, 2])
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["ok"] is True
+    assert out["wave_map_present"] is False
+    assert out["missing_waves"] == []
+    assert out["missing_tasks"] == []
+    assert out["unexpected_tasks"] == []
+
+
+def test_no_wave_map_zero_task_count_keeps_legacy_empty_expectations(tmp_path: Path) -> None:
+    """task_count 0/absent derives nothing to verify — legacy behavior stands
+    (no false missing-wave alarm on a sidecar that never recorded a count)."""
+    _seed_sidecar_no_wave_map(tmp_path, "r1", task_count=0)
+    combiner_dir = tmp_path / "_combiner_local"
+    combiner_dir.mkdir(parents=True)
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["ok"] is True
+    assert out["wave_map_present"] is False
+    assert out["missing_waves"] == []

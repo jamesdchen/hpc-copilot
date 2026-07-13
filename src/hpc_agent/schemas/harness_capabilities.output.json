@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/harness_capabilities.output.json",
+  "title": "harness-capabilities output data",
+  "description": "The detected capability set plus the tier consequence of each absence.\n\n``capabilities`` maps the four contract capability names to their detected\n:class:`CapabilityEntry`. ``tier_consequences`` maps the same names to the\nexact degrade each absence implies — the contract's named friction tiers,\nquoted, not invented. This is detection-as-negotiation: what the code can\nverify IS the declaration.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "capabilities": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CapabilityEntry"
+      },
+      "description": "Capability name -> its detected report.",
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "tier_consequences": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Capability name -> the named tier its absence degrades to.",
+      "title": "Tier Consequences",
+      "type": "object"
+    },
+    "harness_contract_version": {
+      "default": "",
+      "description": "The SemVer of the harness contract this verb reports against — the single ``HARNESS_CONTRACT_VERSION`` constant beside the verb (``ops/harness_capabilities.py``), pinned equal to the ``docs/internals/harness-contract.md`` version line and the conformance kit's stamped version (conformance-kit D-K6/K10). Within major 1 the contract is additive-only.",
+      "title": "Harness Contract Version",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "CapabilityEntry": {
+      "additionalProperties": false,
+      "description": "The detected state of ONE harness capability.\n\n``present`` is a tri-state: ``true`` / ``false`` when code can observe the\ncapability, ``\"unknown\"`` when there is no detection seam yet (the honest\nnon-answer — never asserted ``true``). ``channel`` names the seam the\ndetection reads; ``evidence`` carries the raw observations the verdict rolled\nup from, so a caller can audit the ``present`` bit rather than trust it.",
+      "properties": {
+        "present": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "true / false when code can observe the capability; the string \"unknown\" when there is no detection seam (never asserted true).",
+          "title": "Present"
+        },
+        "channel": {
+          "description": "The seam the detection reads (the hook, the log, the core machinery).",
+          "title": "Channel",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "The raw observations the `present` verdict rolled up from.",
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "present",
+        "channel"
+      ],
+      "title": "harness capability report",
+      "type": "object"
+    }
+  }
+}

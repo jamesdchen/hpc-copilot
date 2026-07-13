@@ -48,13 +48,99 @@ from hpc_agent.infra.time import utcnow_iso
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["SCHEMA_VERSION", "record_terminal", "read_terminal", "terminal_path"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "legacy_terminal_block_keys",
+    "read_terminal",
+    "read_terminal_with_fallback",
+    "record_terminal",
+    "terminal_block_key",
+    "terminal_path",
+]
 
 # Bump only on a breaking record-shape change; readers tolerate unknown extra
 # keys (forward-compat) so additive fields do NOT need a bump.
 SCHEMA_VERSION = 1
 
 _log = logging.getLogger(__name__)
+
+
+# ── ONE key derivation (2026-07-07 key-mismatch fix) ─────────────────────────
+#
+# The terminal store, the detached lease (``_kernel/lifecycle/detached.py``), the
+# doctor dead-worker scan (``ops/recover/doctor.py``), and the status-watch
+# recorder must all key a detached block's terminal by the SAME string, or the
+# doctor's cross-read mis-fires. Before this fix the submit recorder keyed by the
+# block's SHORT literal ("s2"/"s3"/"s4") while the lease + doctor keyed by the
+# detach VERB ("submit-s2"/"submit-s3"/"submit-s4"): a FINISHED submit worker
+# recorded "s2" but the doctor looked up "submit-s2", found nothing, and drafted a
+# spurious re-invoke (writer↔replayer agreed on the short key, so replay itself
+# worked — only the doctor cross-read broke). status-watch was already correct
+# (verb everywhere). The canonical key is therefore the VERB, and this is the ONE
+# place that maps a block's short literal to it.
+_SUBMIT_BLOCK_TO_VERB: dict[str, str] = {"s2": "submit-s2", "s3": "submit-s3", "s4": "submit-s4"}
+
+
+def terminal_block_key(block_or_verb: str) -> str:
+    """Canonical terminal-store block key for a detached block — the detach VERB.
+
+    Accepts EITHER a submit block's short literal (``"s2"``/``"s3"``/``"s4"`` — what
+    ``SubmitBlockResult.block`` carries) OR a verb already
+    (``"submit-s2"``/``"submit-s3"``/``"submit-s4"``/``"submit-speculate"``/
+    ``"status-watch"`` — what the lease stamps and the doctor reads off it), and
+    returns the canonical VERB key. IDEMPOTENT: a verb maps to itself, so a caller
+    that already holds the verb (the doctor, status-watch) is a no-op, while the
+    submit recorder/replayer (which hold the short literal) canonicalize.
+
+    THIS is the single derivation every writer and reader routes through — the
+    submit recorder, the submit replay reader, the status-watch recorder, and the
+    doctor dead-worker scan — so the store can never re-develop the "recorded under
+    a short key, read under the verb key" split. Pinned by
+    ``tests/state/test_block_terminal.py::test_terminal_block_key_is_the_one_derivation``.
+    """
+    return _SUBMIT_BLOCK_TO_VERB.get(block_or_verb, block_or_verb)
+
+
+def legacy_terminal_block_keys(canonical_verb: str) -> tuple[str, ...]:
+    """Pre-fix short keys a reader must ALSO try during the deprecation window.
+
+    A run whose terminal was recorded BEFORE the 2026-07-07 canonical-key fix sits
+    on disk under the submit block's SHORT literal ("s2"/"s3"/"s4"). A reader that
+    only looked under the new verb key would miss it — re-executing a completed
+    block (submit replay) or drafting a spurious re-invoke (doctor). So a reader
+    tries the canonical verb key first and falls back to these legacy keys. Only
+    the three numbered submit blocks ever wrote a short key; ``submit-speculate``
+    and ``status-watch`` never did (verb == key from the start), so they have no
+    legacy fallback. Remove this once no mid-flight run predates the fix.
+    """
+    if canonical_verb.startswith("submit-"):
+        short = canonical_verb[len("submit-") :]
+        if short in _SUBMIT_BLOCK_TO_VERB:  # "s2"/"s3"/"s4" only, never "speculate"
+            return (short,)
+    return ()
+
+
+def read_terminal_with_fallback(
+    experiment_dir: Path, run_id: str, block_or_verb: str
+) -> dict[str, Any] | None:
+    """Read a terminal by its canonical VERB key, falling back to legacy short keys.
+
+    The migration-aware read: canonicalize *block_or_verb* to the verb key
+    (:func:`terminal_block_key`), read it, and on a miss try each
+    :func:`legacy_terminal_block_keys` short key so a run recorded pre-fix still
+    replays / is still recognized as finished. Fail-open exactly like
+    :func:`read_terminal` (absent/corrupt → ``None``). Writers use the canonical
+    key directly (:func:`terminal_block_key`); only READERS carry the fallback.
+    """
+    key = terminal_block_key(block_or_verb)
+    record = read_terminal(experiment_dir, run_id, key)
+    if record is not None:
+        return record
+    for legacy in legacy_terminal_block_keys(key):
+        record = read_terminal(experiment_dir, run_id, legacy)
+        if record is not None:
+            return record
+    return None
 
 
 def _validate_segment(value: str, *, what: str) -> None:
@@ -114,7 +200,7 @@ def record_terminal(
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with advisory_flock(_lock_path(path)):
+    with advisory_flock(_lock_path(path), timeout_sec=120.0):
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(record, fh, sort_keys=True, default=str)
             fh.flush()

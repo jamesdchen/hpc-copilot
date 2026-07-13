@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/attention_queue.output.json",
+  "title": "attention-queue output data",
+  "description": "Shape of the ``data`` field on an ``attention-queue`` envelope (D7).\n\n``render`` rides the result the way ``relay`` rides ``StatusBlockResult`` —\nthe agent relays it VERBATIM. The single ``computed_at`` stamp dates the whole\nprojection (D6): an overnight digest read at noon is visibly a 6am projection,\nand the remedy is stated in the render header (re-run the verb).",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The single instant the queue was computed against (ISO-8601 UTC).",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "items": {
+      "description": "Queue items in the D2-REVISED total order: fan-out (unblocks) descending, then class order, then oldest-since, then (kind, scope_id).",
+      "items": {
+        "$ref": "#/$defs/AttentionItemModel"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Item count per class ({blocked: n, verdict: m, informational: k}).",
+      "title": "Counts",
+      "type": "object"
+    },
+    "skipped": {
+      "description": "Namespaces / audits skipped during collection (fail-open accounting).",
+      "items": {
+        "$ref": "#/$defs/SkippedNamespace"
+      },
+      "title": "Skipped",
+      "type": "array"
+    },
+    "render": {
+      "description": "The deterministic markdown digest — relayed to the human verbatim.",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "AttentionItemModel": {
+      "additionalProperties": false,
+      "description": "One queue item: identity + class + evidence pointer, never a score (D1).\n\nPriority is expressed ONLY as ``item_class`` (the D2 class) plus position in\nthe D2 total order — both recomputable from the record, neither asserted.\nThere is deliberately no urgency-score field (a number the code cannot\njustify invites the LLM to re-rank by it).",
+      "properties": {
+        "kind": {
+          "description": "Opaque kind string: greenlight-unadvanced / run-parked / run-stalled / run-anomaly / dead-worker / campaign-pending / audit-section-unsigned / audit-section-stale / alert / ssh-circuit-open.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "class": {
+          "description": "blocked / verdict / informational (D2) — the ordering class.",
+          "title": "Class",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/AttentionSubject",
+          "description": "Who/what this item is about (D1)."
+        },
+        "experiment_dir": {
+          "description": "Which experiment this item belongs to (fleet mode disambiguator).",
+          "title": "Experiment Dir",
+          "type": "string"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where, when the subject has a cluster; else null.",
+          "title": "Cluster"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO-8601 ts when this item's condition began, read from the SOURCE record (awaiting_since / last_tick_at / decision ts / alert ts); null when the source carries no timestamp. Ordering input only — never interpreted as a judgment.",
+          "title": "Since"
+        },
+        "action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The source predicate's OWN drafted proposal/note string (the dead-worker re-invoke proposal, the anomaly recommendation's action DATA); null when the source drafts none. The queue NEVER authors one.",
+          "title": "Action"
+        },
+        "unblocks": {
+          "default": 0,
+          "description": "The D2-revision LEVERAGE key (user, 2026-07-08): the count of pending downstream subjects that become actionable when this one verdict clears, COUNTED over the dependency edges the journals already encode (a committed-unadvanced greenlight → its run; an unsigned/stale audit section → the module's passed gate → every run whose sidecar audited_source echo names the audit; a campaign-pending verdict → the campaign's remaining runs). Never a score — where no encoded edge exists it is 0 and the item falls through to the class order. The primary sort key (fan-out descending).",
+          "title": "Unblocks",
+          "type": "integer"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "The source's own structured evidence dict, passed through opaque.",
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "class",
+        "subject",
+        "experiment_dir"
+      ],
+      "title": "attention-queue item",
+      "type": "object"
+    },
+    "AttentionSubject": {
+      "additionalProperties": false,
+      "description": "The subject a queue item points at (D1).\n\n``scope_kind`` is one of the decision-journal scope kinds\n(``state/decision_journal.py::SCOPE_KINDS`` — run / campaign / scope /\nnotebook) for a scoped item, or null for a fleet-level infra signal (an\n``alert`` or an ``ssh-circuit-open``, which carry no run/campaign/scope/\nnotebook subject). The queue introduces ZERO new domain vocabulary.",
+      "properties": {
+        "scope_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "run / campaign / scope / notebook, or null for a fleet-level signal.",
+          "title": "Scope Kind"
+        },
+        "scope_id": {
+          "description": "The subject id (run_id / campaign_id / audit_id / host / alert ts).",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "block": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The block / section slug the item is scoped to, when the source carries one.",
+          "title": "Block"
+        }
+      },
+      "required": [
+        "scope_id"
+      ],
+      "title": "attention-queue subject",
+      "type": "object"
+    },
+    "SkippedNamespace": {
+      "additionalProperties": false,
+      "description": "One namespace / audit skipped during collection, with the reason (D3).\n\nA wiped demo repo, an unreadable/torn ``repo.json``, or an audit with no\nresolvable ``audited_source`` opt-in must never crash the morning read — it\nis skipped silently and counted here (fail-open discipline).",
+      "properties": {
+        "ref": {
+          "description": "The repo_hash / audit_id / campaign_id that was skipped.",
+          "title": "Ref",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it was skipped (unreadable, no opt-in, torn, absent).",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "reason"
+      ],
+      "title": "attention-queue skipped entry",
+      "type": "object"
+    }
+  }
+}

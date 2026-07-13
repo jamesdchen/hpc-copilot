@@ -95,4 +95,6 @@ def test_abandoned_escalates(tmp_path: Path) -> None:
 
     assert res.stage_reached == "abandoned"
     assert res.needs_decision is True
-    assert "reconcile-journal" in res.reason
+    # Guidance speaks the CLI verb (`reconcile`), never `reconcile-journal`
+    # (run-#12 finding 22).
+    assert "reconcile " in res.reason and "reconcile-journal" not in res.reason

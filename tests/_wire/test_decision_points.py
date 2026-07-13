@@ -2,8 +2,28 @@
 
 from __future__ import annotations
 
+from typing import get_args
+
 from hpc_agent._kernel.registry.operations import operations_catalog
-from hpc_agent._wire.spawn_contract import DECISION_POINTS, WORKFLOW_PROCEDURES
+from hpc_agent._wire.spawn_contract import (
+    DECISION_POINTS,
+    WORKFLOW_PROCEDURES,
+    WorkflowName,
+)
+
+
+def test_workflow_name_matches_registry() -> None:
+    """The delegatable-workflow ``Literal`` and the procedure registry are one set.
+
+    The real invariant behind the ``WorkflowName`` comment: the type that
+    constrains a :class:`SpawnRequest.workflow` field and the
+    ``WORKFLOW_PROCEDURES`` key set must enumerate exactly the same workflows —
+    a member added to one but not the other would let a spec name a workflow
+    with no procedure (or vice versa). Both are ``{submit, status, aggregate,
+    campaign}``. (Replaces the deleted-module citation
+    ``test_spawn_prompt.test_workflow_name_matches_registry``.)
+    """
+    assert set(WORKFLOW_PROCEDURES) == set(get_args(WorkflowName))
 
 
 def test_every_workflow_has_decision_points() -> None:

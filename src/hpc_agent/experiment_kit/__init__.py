@@ -18,7 +18,10 @@ dispatch time on a stdlib-only cluster runtime:
 - :func:`save_artifact` — write a large artifact under the per-task
   output directory.
 - :func:`export_notebook` — extract the importable surface of a
-  ``.ipynb`` into a ``.py`` executor module (strict AST allowlist).
+  ``.ipynb`` into a ``.py`` executor module (strict AST allowlist);
+  :func:`export_cells` / :func:`export_cells_markers` are the
+  format-agnostic cores over plain cell sources (a percent-format ``.py``
+  notebook feeds the same extraction rules).
 - :func:`discover_runs` — find ``@register_run`` functions by AST walk,
   without importing the experiment's heavy dependencies.
 - :func:`flags_from_signature` / :func:`flags_for_run` — the
@@ -78,6 +81,8 @@ from hpc_agent.experiment_kit.elision import (
     check_elision,
 )
 from hpc_agent.experiment_kit.notebook import (
+    export_cells,
+    export_cells_markers,
     export_notebook,
     export_notebook_markers,
     notebook_imports_runtime,
@@ -104,6 +109,8 @@ __all__ = [
     "register_run",
     "RunSpec",
     "save_artifact",
+    "export_cells",
+    "export_cells_markers",
     "export_notebook",
     "export_notebook_markers",
     "notebook_imports_runtime",

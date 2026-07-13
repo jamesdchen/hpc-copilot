@@ -9,6 +9,7 @@ path — no cluster, no journal, ``tmp_path`` for the experiment dir.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 from unittest import mock
 
@@ -162,6 +163,57 @@ def test_resolved_builds_submit_spec(tmp_path: Path) -> None:
     bt.assert_not_called()  # tasks.py present → no scaffold
     # A RUNNABLE caller-supplied executor stays warning-free (the legit path).
     assert "WARNING" not in res.reason
+
+
+def test_digest_override_disclosed_on_sidecar_and_reproduces_threaded(tmp_path: Path) -> None:
+    """data-trace T3: an exercised ``trace_digests`` override is disclosed on the
+    sidecar as ``trace_digests_override``; ``reproduction_of`` is threaded onto
+    the build-submit-spec input as ``reproduces`` so the classifier sees the
+    identity signal."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    spec = ResolveSubmitInputsSpec(
+        run_name="ridge",
+        submit=_submit_input().model_copy(update={"trace_digests": "force_on"}),
+        sidecar=_sidecar_input(),
+        reproduction_of="ridge-0badf00d",
+    )
+    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 2}
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value=built) as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()) as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=spec)
+
+    assert res.stage_reached == "resolved"
+    # the override rides the sidecar spec (disclosure), and reproduction_of is
+    # threaded onto the classifier's build input.
+    assert ws.call_args.kwargs["spec"].trace_digests_override == "force_on"
+    assert bs.call_args.kwargs["spec"].reproduces == "ridge-0badf00d"
+
+
+def test_no_digest_override_leaves_sidecar_field_none(tmp_path: Path) -> None:
+    """No ``trace_digests`` lever → the sidecar field stays None (omitted on
+    write; byte-identical to a pre-T3 sidecar). The classifier decides unaided."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 2}
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value=built) as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()) as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+    ):
+        resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert ws.call_args.kwargs["spec"].trace_digests_override is None
+    assert bs.call_args.kwargs["spec"].reproduces is None
 
 
 def test_no_interview_interface_blind_executor_warns_in_reason(tmp_path: Path) -> None:
@@ -595,6 +647,244 @@ def test_overcount_task_count_refused_naming_both_counts(tmp_path: Path) -> None
     assert "2 tasks" in msg  # the true count
     bs.assert_not_called()
     ws.assert_not_called()
+
+
+# ── run #11 mechanization item 1: the two S1 disclosures (both NEVER-blocking) ──
+
+
+def _git_repo(cwd: Path, *, dirty: bool) -> None:
+    """Init a git repo in *cwd*, commit everything, and (if *dirty*) leave one
+    untracked file so ``git status --porcelain`` reports a dirty worktree."""
+    import subprocess
+
+    def _g(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.co", "-c", "user.name=t", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+
+    _g("init")
+    (cwd / "README.md").write_text("x\n", encoding="utf-8")
+    # A normal Python repo gitignores bytecode; without this the tasks.py import
+    # resolve triggers writes .hpc/__pycache__/ and spuriously dirties the tree.
+    (cwd / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+    _g("add", "-A")
+    _g("commit", "-m", "init")
+    if dirty:
+        (cwd / "uncommitted.txt").write_text("wip\n", encoding="utf-8")
+
+
+def _resolved_mocks() -> Any:
+    """The four-atom mock stack that drives resolve to its ``resolved`` terminal."""
+    return (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value={"ok": 1}),
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()),
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+    )
+
+
+def _git_experiment(tmp_path: Path, *, dirty: bool) -> Path:
+    """A git-backed experiment dir at ``tmp_path/exp`` with tasks.py present.
+
+    The experiment is a SUBDIR so the autouse conftest journal home
+    (``tmp_path/hpc_journal_home``) stays a sibling OUTSIDE the git repo — as in
+    production, where the journal home is the user's ``~``, never inside the
+    experiment repo. Without this the journal reads resolve does would create an
+    untracked dir and spuriously dirty the tree."""
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    _touch_tasks_py(exp)
+    _git_repo(exp, dirty=dirty)
+    return exp
+
+
+def test_dirty_worktree_discloses_in_s1_brief(tmp_path: Path) -> None:
+    """A DIRTY experiment repo → the resolved S1 brief discloses that uncommitted
+    work is invisible to provenance. NEVER a blocker: the decision surface
+    (stage_reached, needs_decision) is byte-identical to the clean case."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    exp = _git_experiment(tmp_path, dirty=True)
+    with contextlib.ExitStack() as stack:
+        for m in _resolved_mocks():
+            stack.enter_context(m)
+        res = resolve_submit_inputs(exp, spec=_spec())
+
+    assert res.stage_reached == "resolved"  # decision surface unchanged
+    assert res.needs_decision is False
+    assert "dirty worktree" in res.reason
+    assert "DISCLOSURES" in res.reason
+
+
+def test_clean_worktree_discloses_nothing(tmp_path: Path) -> None:
+    """A CLEAN committed experiment repo (and no audited_source) → no disclosure
+    line at all (the fires-and-passes companion of the dirty case)."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    exp = _git_experiment(tmp_path, dirty=False)
+    with contextlib.ExitStack() as stack:
+        for m in _resolved_mocks():
+            stack.enter_context(m)
+        res = resolve_submit_inputs(exp, spec=_spec())
+
+    assert res.stage_reached == "resolved"
+    assert "dirty worktree" not in res.reason
+    assert "DISCLOSURES" not in res.reason
+
+
+def test_non_git_experiment_dir_discloses_nothing(tmp_path: Path) -> None:
+    """No git repo backs the experiment dir → the dirty check fails open (silent),
+    never an error (git_output returns None on a non-repo cwd)."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)  # tmp_path is NOT a git repo
+    with contextlib.ExitStack() as stack:
+        for m in _resolved_mocks():
+            stack.enter_context(m)
+        res = resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert res.stage_reached == "resolved"
+    assert "dirty worktree" not in res.reason
+
+
+# Audit-currency disclosure fixtures (mirror tests/ops/test_notebook_gate.py).
+
+_CURRENCY_AUDIT_ID = "pi-audit-cur"
+_CURRENCY_MODULE = (
+    "# %%\n"
+    "# hpc-audit-section: setup\n"
+    "import numpy as np\n"
+    "\n"
+    "# %%\n"
+    "# hpc-audit-section: run\n"
+    "result = int(np.array([1]).sum())\n"
+    "assert result == 1\n"
+)
+
+
+def _sign_section(experiment_dir: Path, slug: str, *, text: str = _CURRENCY_MODULE) -> None:
+    from hpc_agent.state.audit_source import parse_percent_source
+    from hpc_agent.state.decision_journal import append_decision
+
+    sha = next(s.section_sha for s in parse_percent_source(text).sections if s.slug == slug)
+    append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=_CURRENCY_AUDIT_ID,
+        block="notebook-sign-off",
+        response="y",
+        resolved={
+            "audit_id": _CURRENCY_AUDIT_ID,
+            "section": slug,
+            "section_sha": sha,
+            "view_sha": "view-" + sha[:8],
+        },
+    )
+
+
+def _setup_audited(experiment_dir: Path, *, sign_run: bool = True) -> None:
+    """Write an opted-in audited source + template + interview.json, and sign both
+    sections (unless *sign_run* is False)."""
+    import json as _json
+
+    (experiment_dir / "source.py").write_text(_CURRENCY_MODULE, encoding="utf-8")
+    (experiment_dir / "template.py").write_text(_CURRENCY_MODULE, encoding="utf-8")
+    (experiment_dir / "interview.json").write_text(
+        _json.dumps(
+            {
+                "goal": "x",
+                "task_count": 1,
+                "audited_source": {
+                    "source": "source.py",
+                    "template": "template.py",
+                    "audit_id": _CURRENCY_AUDIT_ID,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _sign_section(experiment_dir, "setup")
+    if sign_run:
+        _sign_section(experiment_dir, "run")
+
+
+def test_audit_currency_disclosure_current(tmp_path: Path) -> None:
+    """Every required section signed at its current hash → ``audit <id>: current``."""
+    from hpc_agent.ops.resolve_submit_inputs import _audit_currency_disclosure
+
+    _setup_audited(tmp_path)
+    assert _audit_currency_disclosure(tmp_path) == f"audit {_CURRENCY_AUDIT_ID}: current"
+
+
+def test_audit_currency_disclosure_stale_after_edit(tmp_path: Path) -> None:
+    """A section EDITED after sign-off has moved (reads unsigned by construction) →
+    ``audit <id>: STALE (1 section(s) moved since sign-off)``. Tested at the helper
+    seam because the graduation gate (4b) refuses a stale audit before the resolved
+    brief is reached — the disclosure is the honest fallback, not a full-resolve
+    surface."""
+    from hpc_agent.ops.resolve_submit_inputs import _audit_currency_disclosure
+
+    _setup_audited(tmp_path)  # both signed at the current hash
+    edited = _CURRENCY_MODULE.replace("result = int(np.array([1]).sum())", "result = 1  # edited")
+    (tmp_path / "source.py").write_text(edited, encoding="utf-8")  # 'run' section moves
+
+    assert (
+        _audit_currency_disclosure(tmp_path)
+        == f"audit {_CURRENCY_AUDIT_ID}: STALE (1 section(s) moved since sign-off)"
+    )
+
+
+def test_no_audited_source_no_currency_disclosure(tmp_path: Path) -> None:
+    """Not opted into audited_source → the currency disclosure is silently absent
+    (the D7 silence)."""
+    from hpc_agent.ops.resolve_submit_inputs import _audit_currency_disclosure
+
+    assert _audit_currency_disclosure(tmp_path) is None
+
+
+def test_resolved_discloses_audit_current_in_reason(tmp_path: Path) -> None:
+    """End-to-end on the resolved path: a fully-signed (current) audited source
+    lands ``audit <id>: current`` in the S1 brief reason."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    _setup_audited(tmp_path)
+    with contextlib.ExitStack() as stack:
+        for m in _resolved_mocks():
+            stack.enter_context(m)
+        res = resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert res.stage_reached == "resolved"
+    assert f"audit {_CURRENCY_AUDIT_ID}: current" in res.reason
+
+
+def test_crashing_currency_check_degrades_absent_never_errors(tmp_path: Path) -> None:
+    """A currency-check CRASH degrades to disclosed-absent — never an S1 error.
+    The graduation gate (4b) still passes (source is signed), so resolve reaches
+    the resolved terminal; the fail-open disclosure guard swallows the crash."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    _setup_audited(tmp_path)  # signed → the graduation gate passes cleanly
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(
+            mock.patch(
+                "hpc_agent.ops.notebook_gate.audit_currency",
+                side_effect=RuntimeError("boom"),
+            )
+        )
+        for m in _resolved_mocks():
+            stack.enter_context(m)
+        res = resolve_submit_inputs(tmp_path, spec=_spec())  # must NOT raise
+
+    assert res.stage_reached == "resolved"  # crash degraded, no S1 error
+    assert f"audit {_CURRENCY_AUDIT_ID}" not in res.reason  # disclosed-absent
 
 
 def test_one_count_disagreeing_refused(tmp_path: Path) -> None:

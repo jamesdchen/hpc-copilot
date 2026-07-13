@@ -290,6 +290,39 @@ def test_tier2_counts_campaigns_without_runtime_files(tmp_path: Path) -> None:
     assert rt["total_task_samples"] == 1
 
 
+def test_tier2_skips_malformed_samples_instead_of_crashing(tmp_path: Path) -> None:
+    """One poisoned runtimes file must not sink the whole rollup (the module's
+    tolerant-read contract): non-dict samples are skipped, a non-numeric
+    exit_code counts the sample without counting it failed, and the healthy
+    campaign's numbers still aggregate."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    _write_interview(a)
+    _write_interview(b)
+    _write_runtime_samples(
+        a,
+        samples=[
+            "not-a-dict",
+            None,
+            [{"elapsed_sec": 5}],
+            {"elapsed_sec": "fast", "exit_code": "boom"},
+            {"elapsed_sec": 100, "exit_code": 1},
+        ],
+    )
+    _write_runtime_samples(b, samples=[{"elapsed_sec": 200, "exit_code": 0}])
+    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"][
+        "runtime_rollup"
+    ]  # noqa: E501
+    # The three non-dict entries are skipped; the two dict samples (one with
+    # unusable values) plus b's healthy sample are counted.
+    assert rt["total_task_samples"] == 3
+    assert rt["walltime_per_task_sec"]["n_samples"] == 2
+    assert rt["walltime_per_task_sec"]["min"] == 100
+    assert rt["walltime_per_task_sec"]["max"] == 200
+    assert rt["failure_rate"] == pytest.approx(1 / 3)
+    assert rt["campaigns_with_no_runtime"] == 0
+
+
 def test_tier2_absent_when_not_requested(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a")
     _write_runtime_samples(tmp_path / "a", samples=[{"elapsed_sec": 60, "exit_code": 0}])

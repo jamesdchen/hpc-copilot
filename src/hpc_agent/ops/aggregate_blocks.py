@@ -43,17 +43,29 @@ from hpc_agent._wire.workflows.aggregate_blocks import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.aggregate.invariants import verify_aggregation_complete
-from hpc_agent.ops.aggregate_flow import aggregate_flow
+from hpc_agent.ops.aggregate_flow import aggregate_flow, per_task_fallback_reducible
 from hpc_agent.ops.aggregate_preflight import aggregate_preflight
 from hpc_agent.ops.block_gate import assert_greenlit_target
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
+from hpc_agent.ops.scope_gate import assert_scopes_unlocked
+from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
+from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["aggregate_check", "aggregate_run"]
+
+
+# The block-terminal store, the detached lease, and the doctor dead-worker scan
+# all key a detached aggregate-run under its VERB ("aggregate-run") — the SAME
+# string ``_spawn_detached`` stamps into the lease. Sourced from the ONE key
+# derivation (:func:`state.block_terminal.terminal_block_key`) so this recorder
+# can never drift from the replay reader / doctor scan (the verb is already
+# canonical, so this is an identity call that documents the shared seam).
+_AGG_RUN_BLOCK_KEY = terminal_block_key("aggregate-run")
 
 
 def _next_block(
@@ -82,6 +94,7 @@ _INTEGRITY_REPORT_KEYS = (
     "unexpected_tasks",
     "unexpected_aggregated_keys",
     "provenance_present",
+    "wave_map_present",
     "columns_checked",
     "column_violations",
 )
@@ -189,6 +202,54 @@ def _integrity_issues(vac: dict[str, Any], *, allow_partial: bool) -> list[dict[
     return issues
 
 
+def _reducibility_issue(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """Surface, BEFORE the greenlight, a run that can NEVER reduce (finding 28).
+
+    A run submitted with NO ``aggregate_cmd`` (no custom / pack reducer) AND whose
+    declared summary artifact is non-JSON takes the built-in no-combiner per-task
+    fallback at aggregate-run — a JSON weighted-mean (:func:`reduce_metrics`) that
+    structurally cannot reduce the artifact. The run path refuses at RUN time, but
+    only after a 40+ minute results/ pull; the condition is knowable HERE from the
+    sidecar the submit wrote (``aggregate_defaults.aggregate_cmd`` +
+    ``resolved_summary_artifact``), so surface it as a never-auto-masked readiness
+    decision — the SAME predicate the run path keys on
+    (:func:`per_task_fallback_reducible`), lifted so the two can never disagree.
+
+    Returns the issue dict, or ``None`` when the run has a reducer / a JSON
+    artifact / no readable sidecar. Best-effort: a missing or corrupt sidecar is
+    not this gate's concern (the readiness gate already handles a missing record).
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, ValueError, errors.HpcError):
+        return None
+    if not isinstance(sidecar, dict):
+        return None
+    # Same records the run path reads in aggregate_flow._combiner_only_reduce: an
+    # aggregate_cmd routes to the custom reducer (cluster-reduce hint), never this
+    # fallback — so no aggregate_cmd is the precondition for the fallback firing.
+    has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
+    if has_agg_cmd:
+        return None
+    summary_name = resolved_summary_artifact(sidecar)
+    if per_task_fallback_reducible(summary_name):
+        return None
+    return {
+        "issue": "non_reducible_summary_artifact",
+        "detail": {"summary_artifact": summary_name, "aggregate_cmd": None},
+        "recommendation": (
+            f"this run has NO aggregate_cmd and declares a non-JSON summary "
+            f"artifact ({summary_name!r}); the built-in no-combiner per-task "
+            f"fallback is a JSON weighted-mean (reduce_metrics) and can NEVER "
+            f"reduce it — the reduce would refuse at aggregate-run after a full "
+            f"results/ pull. Register an aggregate_cmd / pack reducer that "
+            f"understands the artifact, or re-submit declaring a JSON summary "
+            f"artifact."
+        ),
+        "auto_masked": False,
+    }
+
+
 # ── run helpers ───────────────────────────────────────────────────────────────
 
 
@@ -227,13 +288,19 @@ def _harvest_ledger_tail(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
         lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except OSError:
         return None
-    if not lines:
-        return None
-    try:
-        parsed = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    # Scan BACKWARD for the newest PARSEABLE marker. A crash mid-append can leave
+    # a torn final line; the whole-line-atomic append seam keeps every *prior*
+    # line intact, so a torn tail falls back to the last good marker rather than
+    # stranding a finished run's harvest evidence. Only an entirely-unparseable
+    # ledger yields None.
+    for line in reversed(lines):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 # ── aggregate-check ───────────────────────────────────────────────────────────
@@ -319,6 +386,19 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
         # Combiner not pulled yet (pre-run check) — nothing to verify or mask
         # here; aggregate-run owns the post-pull integrity verification.
         integrity_checked = False
+
+    # Reducibility readiness (finding 28): a run with NO aggregate_cmd and a
+    # non-JSON summary artifact takes the no-combiner per-task fallback, which can
+    # NEVER reduce it — knowable HERE from the sidecar, surfaced before the
+    # greenlight instead of after a 40+ min pull. Gated on integrity NOT checked:
+    # ``integrity_checked`` is True iff a local ``_combiner/`` was found, meaning
+    # the combiner ran and aggregate-run reduces via ``local_reduce`` (never the
+    # per-task fallback) — so there is no reducibility problem to surface then.
+    if not integrity_checked:
+        reducibility = _reducibility_issue(experiment_dir, run_id)
+        if reducibility is not None:
+            integrity_issues = [*integrity_issues, reducibility]
+
     brief["integrity_checked"] = integrity_checked
     brief["integrity_report"] = integrity_report
     brief["integrity_issues"] = integrity_issues  # never auto-masked (§2)
@@ -373,6 +453,108 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
             "run is clean to reduce; combine, reduce, and extract the results table.",
             run_id=run_id,
         ),
+    )
+
+
+# ── aggregate-run detach-by-contract helpers (design §3; run-#10 F-K) ─────────
+
+
+def _agg_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The identity a terminal replay is keyed on (mirrors
+    ``ops/submit_blocks._current_cmd_sha`` / ``ops/status_blocks._watch_cmd_sha``):
+    a nudge that re-resolves the run rewrites the sidecar ``cmd_sha``, so a
+    mismatch is "the tree moved → do not replay a stale outcome". An
+    unreadable/absent sidecar yields ``""`` → the replay refuses (re-execute).
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def _detached_agg_run_spec_dict(spec: AggregateRunSpec) -> dict[str, Any]:
+    """Serialize *spec* with ``detach`` forced OFF for the detached child.
+
+    The child runs the SAME aggregate-run body synchronously (its harvest IS the
+    point), so its spec must carry ``detach=False`` — a truthy detach would fork
+    forever (mirrors ``ops/submit_blocks._detached_spec_dict``).
+    """
+    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
+
+
+def _replay_agg_run_terminal(experiment_dir: Path, run_id: str) -> AggregateBlockResult | None:
+    """Return a finished aggregate-run worker's recorded terminal for the CURRENT
+    tree, else ``None`` (run #7 idempotent re-invoke).
+
+    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
+    the terminal — proof the outcome still applies. A moved/absent ``cmd_sha`` (a
+    nudge), an absent record, or a corrupt record all return ``None`` so the caller
+    re-executes (never replays a possibly-stale harvest). The replayed result was
+    already finalized on first completion, so the caller returns it as-is.
+    """
+    from hpc_agent.state.block_terminal import read_terminal
+
+    record = read_terminal(experiment_dir, run_id, _AGG_RUN_BLOCK_KEY)
+    if record is None:
+        return None
+    current_sha = _agg_run_cmd_sha(experiment_dir, run_id)
+    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
+        return None
+    try:
+        return AggregateBlockResult.model_validate(record["result"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _record_agg_run_terminal(experiment_dir: Path, result: AggregateBlockResult) -> None:
+    """Record a genuine aggregate-run terminal so a re-invoke replays it.
+
+    Called on the harvested / harvest_partial terminals (the detached handle,
+    ``stage_reached="detached"``, is not terminal and is never recorded). A run
+    with no run_id carries nothing to key on.
+    """
+    if not result.run_id:
+        return
+    from hpc_agent.state.block_terminal import record_terminal
+
+    record_terminal(
+        experiment_dir,
+        run_id=result.run_id,
+        block=_AGG_RUN_BLOCK_KEY,
+        cmd_sha=_agg_run_cmd_sha(experiment_dir, result.run_id),
+        result_dump=result.model_dump(mode="json"),
+    )
+
+
+def _detached_agg_run_result(
+    *, run_id: str, pid: int, log_path: str | None
+) -> AggregateBlockResult:
+    """The immediate-return handle for a detached aggregate-run (design §3).
+
+    ``needs_decision`` is False (nothing to decide yet — the results brief arrives
+    on completion, read from the journal) and ``next_block`` is null (the journal,
+    not this process, carries the next-block suggestion). ``block_drive._chain``
+    exits on this via ``_is_detached`` (started / watch / detached_pid /
+    stage=="detached").
+    """
+    return AggregateBlockResult(
+        block="run",
+        stage_reached="detached",
+        needs_decision=False,
+        reason=(
+            "aggregate-run detached — the combine + rsync harvest runs in a durable "
+            "background worker; its results brief arrives on completion (read the "
+            "journal). The greenlight and scope gates already passed synchronously "
+            "before the detach."
+        ),
+        run_id=run_id,
+        brief={"run_id": run_id, "log_path": log_path},
+        started=True,
+        watch="journal",
+        detached_pid=pid,
     )
 
 
@@ -434,6 +616,14 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
     ``aggregate-check``'s ready brief. The terminal-or-explicitly-partial
     invariant is left to the composed ``aggregate-flow`` gate (compose, don't
     duplicate).
+
+    Detach-by-contract (design §3; run-#10 F-K): with ``detach`` ON (default) the
+    greenlight + scope gates fire synchronously, then a durable detached worker
+    owns the harvest (combine SSH round-trips + rsync pull + the breaker-deadline
+    wait-and-retry) and the block returns a ``{started, watch: journal,
+    detached_pid}`` handle immediately — the results-table brief is read from the
+    journal on completion. A re-invoke after the worker finished REPLAYS the
+    recorded terminal (no re-combine, no SSH).
     """
     assert_greenlit_target(
         experiment_dir,
@@ -441,6 +631,37 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
         verb="aggregate-run",
         predecessor="aggregate-check",
     )
+    # Scope gate (rigor-primitives T3), gate → detach ordering PROOF (same shape as
+    # submit-s4): a locked evidence-scope refuses SYNCHRONOUSLY in the parent, never
+    # inside a detached child's log where a "spent a reserved look" refusal is
+    # invisible. Defense in depth — ONE definition (assert_scopes_unlocked), TWO
+    # call sites: the detached CHILD re-hits the very same gate inside aggregate_flow,
+    # so a scope locked in the window between this parent check and the child's reduce
+    # is still caught. Fail-safe: a scope-less run passes silently.
+    assert_scopes_unlocked(experiment_dir, spec.aggregate.run_id)
+    # Detach-by-contract (design §3): the gates above fired SYNCHRONOUSLY (gate →
+    # detach — a gate failure surfaces here, loudly, never inside a detached child).
+    if spec.detach:
+        # Idempotent re-invoke (run #7): a prior detached worker may have already
+        # driven this block to its terminal for the current tree — replay that
+        # recorded outcome instead of re-spawning a redundant worker (no SSH, no
+        # re-combine). A moved cmd_sha (a nudge) or no record → fall through and
+        # spawn; a still-LIVE worker is refused by the single-lease.
+        replay = _replay_agg_run_terminal(experiment_dir, spec.aggregate.run_id)
+        if replay is not None:
+            return replay
+
+        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
+
+        launch = launch_submit_block_detached(
+            verb="aggregate-run",
+            experiment_dir=str(experiment_dir),
+            spec=_detached_agg_run_spec_dict(spec),
+        )
+        return _detached_agg_run_result(
+            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
+        )
+
     agg = aggregate_flow(experiment_dir, spec=spec.aggregate)
 
     brief: dict[str, Any] = {
@@ -463,15 +684,15 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
     # Per-scope PRIOR look counts recorded by the composed reduction (T3): copy
     # verbatim, the framework interprets nothing. Key ABSENT (not None) for a
     # scope-less run so a scope-less brief stays byte-identical to pre-T3. The
-    # scope GATE (ScopeLocked refusal + the look-ledger side effect) fires ONCE,
-    # inside the composed ``aggregate-flow`` — aggregate-run has no pre-flow seam
-    # analogous to submit-s4's pre-detach gate, and it never detaches, so there
-    # is no ordering hazard: the flow's gate + ledger write cover this block.
+    # look-ledger side effect fires ONCE, inside the composed ``aggregate-flow``;
+    # the scope GATE now fires TWICE (defense in depth) — the synchronous
+    # pre-detach ``assert_scopes_unlocked`` above AND the child's own check inside
+    # ``aggregate-flow`` — with one definition, so the two can never disagree.
     if agg.scope_looks is not None:
         brief["scope_looks"] = agg.scope_looks
 
     partial = bool(agg.escalation_reason) or bool(agg.failed_waves)
-    return AggregateBlockResult(
+    result = AggregateBlockResult(
         block="run",
         stage_reached="harvest_partial" if partial else "harvested",
         needs_decision=True,
@@ -483,3 +704,9 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
         run_id=agg.run_id,
         brief=brief,
     )
+    # Record the genuine terminal so a re-invoke (the block-drive tick after the
+    # detached worker exits) REPLAYS this brief instead of re-combining a
+    # completed harvest. This runs on the synchronous path — which is exactly what
+    # the detached child executes — so the parent's replay finds it.
+    _record_agg_run_terminal(experiment_dir, result)
+    return result

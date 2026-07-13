@@ -20,10 +20,10 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SURFACES = (
-    _REPO_ROOT / "src/slash_commands/skills/hpc-status/SKILL.md",
-    _REPO_ROOT / "src/slash_commands/skills/hpc-submit/SKILL.md",
+    _REPO_ROOT / "src/hpc_agent/slash_commands/skills/hpc-status/SKILL.md",
+    _REPO_ROOT / "src/hpc_agent/slash_commands/skills/hpc-submit/SKILL.md",
 )
-_COMMAND = _REPO_ROOT / "src/slash_commands/commands/monitor-hpc.md"
+_COMMAND = _REPO_ROOT / "src/hpc_agent/slash_commands/commands/monitor-hpc.md"
 
 # The distinctive phrase carrying the rule — kept in lockstep with the SKILLs.
 _MARKER = "cron lifecycle"

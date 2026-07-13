@@ -564,9 +564,9 @@ def _main(argv: list[str] | None = None) -> int:
     # it cheaply.
     from pathlib import Path as _P
 
-    from hpc_agent import load_tasks_module
     from hpc_agent.execution.mapreduce.reduce.status import (
         _build_per_task_dict_from_sidecar,
+        resolve_report_tasks_module,
     )
 
     sidecar_path = _P(".hpc") / "runs" / f"{args.run_id}.json"
@@ -580,8 +580,22 @@ def _main(argv: list[str] | None = None) -> int:
         from hpc_agent.state.runs import read_run_sidecar
 
         sidecar = read_run_sidecar(_P("."), args.run_id)
-        tasks = load_tasks_module(_P(".hpc") / "tasks.py")
-        per_task_dict = _build_per_task_dict_from_sidecar(sidecar, tasks)
+    except Exception as exc:
+        print(f"failed to read sidecar: {exc}", file=sys.stderr)
+        return 2
+    # Frozen-manifest-vs-tasks.py resolved by the SAME shared accessor the status
+    # reporter uses (#29): the TUI no longer unconditionally imports/replays
+    # tasks.py — a frozen manifest skips the import (no phantom optuna/pbt trial
+    # at launch), a foreign/heavy tasks.py degrades instead of wedging, and the
+    # import fires only when the template genuinely needs resolve() kwargs.
+    tasks_module, frozen_trial_params, _, tasks_py_missing = resolve_report_tasks_module(sidecar)
+    if tasks_py_missing is not None:
+        print(f"tasks.py not found: {tasks_py_missing}", file=sys.stderr)
+        return 2
+    try:
+        per_task_dict = _build_per_task_dict_from_sidecar(
+            sidecar, tasks_module, trial_params=frozen_trial_params
+        )
     except Exception as exc:
         print(f"failed to build per-task dict: {exc}", file=sys.stderr)
         return 2

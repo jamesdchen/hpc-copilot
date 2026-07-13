@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: per-host SSH connection broker
 
 Status: **PHASE 2 SHIPPED as the asyncssh engine** (2026-07-06,
@@ -184,3 +187,169 @@ amortizes to one handshake per session; polls become ~RTT.
    files — the worst rsync-per-file case).
 3. Retire the per-call `ssh_slots` waits for brokered hosts (the cap is
    trivially satisfied at 1).
+
+## The unattended cold-dial map (2026-07-07 investigation — the daemon's actual successor)
+
+User decision 2026-07-07: **no UNATTENDED cold-SSH dial may exist; attended
+cold dials stay, deliberately** (slow-but-bounded, human present, Ctrl-C-able
+— the daemon is NOT built; MCP-server-as-daemon remains the recorded shape if
+run #10 ever stalls CLI-driven stages).
+
+The investigation (full map in the session transcript, condensed here):
+
+- The armed monitor CRON is already SSH-free — `status-snapshot` is
+  journal-first; the arm's `invocation_argv` is an agent prompt
+  (`ops/monitor/arm.py::decide_monitor_arm`; call sites
+  `ops/status_blocks.py` watch_timeout + `ops/submit_blocks.py::_submit_s3_impl`).
+- **The dial hides in the ungated in-code chain hop**:
+  `infra/block_chain.py::SUCCESSORS` chains `(status-snapshot,
+  snapshot_clean) -> status-watch` (and `watch_timeout` self-loop, and
+  `submit-s3 watching_timeout -> status-watch`) with NO human gate
+  (`GATED_BLOCKS` excludes status-watch), and `status-watch` polls
+  SYNCHRONOUSLY IN-PROCESS by contract-pinned design (absent from
+  `SUPPORTED_DETACHED_BLOCK_VERBS`; pinned by
+  `tests/contracts/test_detached_worker_brief_guidance.py` +
+  `test_monitor_arm_cron_lifecycle_guidance.py`). So any unattended
+  `block-drive --workflow status` tick on a live run cold-dials.
+- The doctor's dead-worker scan is detection-only (drafts a proposal;
+  never re-spawns, never dials).
+
+**The fix (Option 1, user-preferred) — IMPLEMENTED 2026-07-07 (before run #10,
+by explicit user decision; it reverses a pinned invariant, so every behavior
+change carried its updated test):** status-watch got the submit-S3
+detach-by-contract treatment — `detach` on `StatusWatchSpec` (default on), the
+generalized `launch_submit_block_detached` (its run_id extractor + the verb set
+carry the per-family knowledge; the submit paths stay byte-identical),
+`status-watch` added to `SUPPORTED_DETACHED_BLOCK_VERBS` and to the MCP
+`_DETACH_REQUIRED_VERBS`. The detached child owns the ONE cold dial per lifetime
+(warm engine, lease-single keyed `(run_id, status-watch)`, watchdog/doctor
+dead-worker scan, exits at terminal — never an immortal daemon). `block_drive
+._chain` exits on the `detached` result so the ungated hop is spawn-and-return;
+the cron tick is journal-only (snapshot journal-first → watch detaches, ZERO
+inline ssh). A re-firing tick returns a LIVE worker's handle (no second spawn);
+a DEAD lease is re-spawned via the same launcher (never re-dialed inline); a
+GENUINE watch terminal (`watch_terminal`/`watch_anomaly`, NOT the keep-watching
+`watch_timeout`) is recorded to `state/block_terminal` so a re-invoke REPLAYS
+instead of re-dialing — the `worker_exited → one block-drive tick` seam. The
+three skills + monitor-hpc.md prose were reversed (no pipe chars) and the
+synchronous-status-watch contract pins reversed honestly. Enforcement row: "No
+UNATTENDED ssh — the cron-fired path is journal-only" (engineering-principles.md),
+held by `tests/ops/status/test_block_detach.py`'s zero-ssh guard on an unattended
+status tick.
+
+**arm.py needed NO functional change:** `decide_monitor_arm` never sets
+`reconcile` and the armed `invocation_argv` fires `block-drive --workflow status`
+(snapshot journal-first → detached watch), so the journal-first property is
+structural; the re-spawn seam is the lease self-heal, not an arm branch.
+
+**Schema bake tail (NOT run here — human runs `scripts/build_schemas.py --write`
++ the operations bake):** the two model-derived per-verb schemas
+(`status_watch.input.json` gained `detach`; `status_block.output.json` gained
+`started`/`watch`/`detached_pid` + the `detached` stage) were regenerated via the
+build module's `_emit` (byte-exact, required for the CLI validation seam + the
+roundtrip test). The orchestrator embed (`operations.json`) + docs/generated +
+primitive frontmatter still need the human's full bake.
+
+Rejected: Option 3 (refuse to dial outside a detached context, keep polling
+in-process) — achieves zero unattended SSH but drops self-advance on
+timed-out runs: a silent wedge traded for a silent stall.
+
+## Ruling record (2026-07-10 user, recorded from session): sentinel-ack transport
+
+Success on every transport op = an AFFIRMATIVE token (the per-command sentinel
+pattern above, promoted to a rule): silence, an empty read, or a timeout is
+NEVER success — timeouts report UNKNOWN, not pass (positive-evidence verdicts).
+Kills the silence-as-success class. Spec + build = post-run-#12 batch item 5.
+
+### Build (2026-07-10): inventory + what shipped
+
+The live transport/remote-op paths were inventoried and classified. Success on
+a query already required an affirmative token in most seams; the two genuine
+`… || true` violators — where silence read as a *terminal* verdict — were
+converted, and the sentinel-clean seams recorded (untouched). A third seam (the
+status reporter read) was reclassified from sentinel-clean to VIOLATOR on
+2026-07-11 after run-12 finding 24 caught it live — see its table row below.
+
+| Seam (symbol) | Prior semantics | New semantics |
+|---|---|---|
+| **Scheduler liveness / state query** — `ProfileBackend.build_alive_check_cmd` / `build_scheduler_state_cmd`; consumers `reconcile._ssh_alive_job_ids`, `cluster_status.ssh_batch_scheduler_states`, `verify_submitted` | `<qstat/squeue> 2>/dev/null \|\| true` → a FAILED scheduler binary (missing / server down) returned rc 0 + empty, indistinguishable from an empty queue; consumers read absence as "all jobs left the queue → terminal" (reconcile→abandoned, batch-status/verify-submitted→gone). **VIOLATOR.** | Command ends `; echo "__HPC_SCHED_ACK__=$?"`; `scheduler_query_ran(stdout)→(clean, ran_ok)`. Ack ABSENT = UNKNOWN (all families); SGE/PBS also require rc 0 (they exit 0 on empty); SLURM accepts any rc (squeue exits non-zero once ids leave — leans on ack presence, defers completed-vs-failed to the reporter). UNKNOWN → each consumer's EXISTING conservative branch (`RemoteCommandFailed`→`alive_check_failed`→`unable_to_verify`; `SshUnreachable`). |
+| **Combined-wave listing** — `reconcile._ssh_list_combined_waves` | `cd <path> && ls _combiner/wave_*.json 2>/dev/null \|\| true` → a silently-failed `cd` short-circuited the `&&`, hit `\|\| true`, returned rc 0 + empty = "zero waves", which OVERWRITES the journal's `combined_waves` with `[]`. **VIOLATOR.** | Echoes `__HPC_WAVE_ACK__` after a successful `cd`; absence (failed cd / truncated read) raises `RemoteCommandFailed` → reconcile's existing wave-fallback PRESERVES the journal `combined_waves`. |
+| **Status reporter read** — `cluster_status.ssh_status_report`; consumers `record_status`/`reconcile`/`verify_canary`/`failures_atom`/`logs_atom`/`aggregate_flow` | Originally recorded sentinel-clean on the theory that "an empty rc-0 read fails `parse_remote_json` and raises." Run-12 **finding 24 DISPROVED that**: three channel-severing mechanisms (NAT idle-drop ~100s, the asyncssh idle reaper, an expired remote deadline) delivered rc 0 with truncated/empty stdout that *masqueraded as "the reporter emitted nothing"* — a misdiagnosis, and a truncation to coincidentally-valid JSON would parse-and-trust. **VIOLATOR (reclassified, batch item 5 build 2026-07-11).** | The command captures the reporter's rc, runs the optional watcher probe, then echoes `__HPC_STATUS_ACK__=$rc` LAST and `exit $rc` (rc preserved as the ssh returncode). Client: `split_ack` strips the ack; `rc≠0` surfaces the real rc as before (incl. import-guard 127 / remote-deadline 124); a **rc-0 read with NO ack** raises `RemoteCommandFailed` ("channel severed / output truncated") — UNKNOWN, routed to each consumer's existing `unable_to_verify`/`reporter_unreachable` branch, never a settled "empty report". Rides INSIDE `ssh_run`'s `timeout … bash -c` wrapper so an expired deadline kills the shell before the echo (no false ack). |
+
+The ack-wrap + ack-split mechanism was extracted to ONE definition —
+`ssh_validation.wrap_with_ack` / `split_ack` (the scheduler `_with_ack` /
+`scheduler_query_ran` and the status reporter both compose it; the status site
+adds its own rc-preserving `exit $rc` because, unlike the scheduler read, its
+process rc IS the reporter's verdict, not the ssh-transport rc).
+
+Seams left sentinel-clean (recorded, NOT touched — absence/silence already
+routes conservative, never to success):
+
+- **`cluster_status.ssh_marker_scan`** (`ls … \| grep … \|\| true`) — its own
+  docstring pins it: `count == 0` proves ABSENCE of a failure marker, NEVER
+  success; the caller keeps the never-pass-unverified posture (absent →
+  `reporter_unreachable`). A silent empty read routes conservative already.
+- **`_remote_base.preflight_executor_exists`** — `test -f` is a positive check
+  (rc 0 ⇔ file exists); any non-zero / silent read → `RemoteCommandFailed`
+  (fails the submit closed). Conservative.
+- **`transport._remote_push_manifest` / `_parse_remote_push_manifest`** — an
+  absent/empty/corrupt manifest returns `None` → full-copy tar fallback ("never
+  claim a remote file is present unless the manifest proves it"). Absence never
+  reads as "already deployed".
+- **`_tar_ssh_push`** — folds a pump-side truncation into a non-zero rc even if
+  ssh + tar both reported 0, so a truncated transfer never reports success.
+- **`monitor.watcher_install`** — install/uninstall verify via an explicit
+  `grep -Fq <marker> && echo YES || echo NO` affirmative token, not exit code.
+- **`ssh_circuit` / `probe_cache`** — the tri-state idiom the ruling reuses:
+  `effective_state → closed/open/half_open_eligible`, and the cache's
+  SUCCESS-only + breaker-invalidated posture. UNKNOWN outcomes above route into
+  these existing conservative states rather than inventing a new one.
+
+`build_cancel_cmd` was deliberately left as-is: its contract already says
+gone-ness is confirmed by a follow-up alive-check (now ack-gated), never by the
+cancel command's own exit code.
+
+## Drift note (2026-07-12): the G4 library-native lifecycle shrink
+
+User RULING 5 (upstream-fixes plan, pulled forward pre-run-13): shrink the
+hand-rolled transport-lifecycle MECHANISMS to what asyncssh already owns; the
+ban-risk circuit breaker (`infra/ssh_circuit.py`) and the connection-RATE
+courtesy (the `ssh_slots` per-host COUNT) are cluster-social POLICY and STAY
+hand-rolled by design. What changed, mechanism by mechanism:
+
+- **Engine idle reaper → keepalive-native liveness (`infra/ssh_engine.py`).**
+  Death detection is now asyncssh's own keepalives (`keepalive_interval` via the
+  shared `HPC_SSH_KEEPALIVE_INTERVAL` knob + `keepalive_count_max`): the LIBRARY
+  keeps a NAT'd flow alive and declares a silently-dropped session dead, and the
+  close surfaces as an asyncssh exception (`ConnectionLost` / channel-open
+  failure) on the NEXT `run()`, which discards + reconnects. The hand-rolled
+  `_reap_if_idle` (idle-by-last-completion, the run-#12 finding-24 severing
+  mechanism — a long-silent in-flight command read as "idle" and cut, then
+  re-executed one-shot, bug-sweep #8) is DELETED; a still-live connection that
+  merely went quiet is now REUSED, not reaped, saving a handshake. The ONE
+  retained framework recycle is the background `_sweep_idle`, reframed as a
+  SLOT/SESSION courtesy: it closes a connection idle past `IDLE_CLOSE_SEC` **only
+  at zero inflight** (a whole-connection recycle at a SAFE point, the only shape
+  the ruling permits) to free its per-host slot + login session promptly (the
+  run-#10 F-B residual). It never severs an in-flight command.
+- **`ssh_slots` TTL → pid-liveness reap (`infra/ssh_slots.py`).** The
+  wall-clock `SLOT_TTL_SEC` expiry is DELETED. A crashed holder's slot is
+  reclaimed by PID-LIVENESS alone (`infra/proc.pid_alive`); the holder RELEASES
+  its own slot (ownership-bound, bug-sweep #35). A wall-clock lease below the
+  worst legitimate hold was exactly the #35 over-admission, and ownership-bound
+  release already guards the hand-off race the TTL was reaching for. The per-host
+  slot COUNT (the connection-RATE courtesy) is unchanged. Honest limit recorded
+  inline: pid-liveness assumes the claim's pid shares the reader's namespace
+  (true for the local journal home); a machine-shared home degrades toward
+  under-admission (waiters wait, never over-admit), bounded by the fail-open
+  `SLOT_WAIT_MAX_SEC` give-up.
+- **Detached `lease.lock` bounded acquire (`_kernel/lifecycle/detached.py`).**
+  The `(run_id, block)` decide→spawn→stamp lock is acquired under
+  `advisory_flock(timeout_sec=_LEASE_LOCK_TIMEOUT_SEC=60)` (run-#12 finding 16: a
+  timeout-less acquire froze a successor 15 min at 0 CPU); on expiry the refusal
+  (`DetachedLeaseHeld`) NAMES the wedged holder's pid, read from the sibling
+  `.lease.json`.
+
+Kept as policy (untouched): `infra/ssh_circuit.py` (ban-risk breaker) and the
+`ssh_slots` count. The B16 `test_transport_lifecycle_homes` contract test and
+the multiplexing-assembly check remain the banked post-run-13 follow-up.

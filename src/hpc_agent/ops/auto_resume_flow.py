@@ -219,12 +219,33 @@ def maybe_auto_resume(
     if not deduped:
         # A real resubmit fired — bump the counter so the gate's "count < cap"
         # backstop tightens with every attempt. A deduped replay put nothing
-        # new on the cluster, so it must NOT consume a cap slot. Best-effort: a
-        # failed counter write leaves the cap stale-by-one, which is safe (it
-        # can only escalate sooner, never later).
+        # new on the cluster, so it must NOT consume a cap slot.
+        #
+        # Fail CLOSED on a journal-write failure. The resubmit ALREADY put
+        # work on the cluster, so this attempt MUST count against the cap even
+        # when we cannot persist the bump. An uncaught write failure here would
+        # (a) crash the monitor's terminal-FAILED tick outright and (b) leave
+        # the counter un-bumped — which LOOSENS the cap (the next tick reads
+        # the stale count and fires an extra resume PAST the intended ceiling),
+        # the opposite of the old "can only escalate sooner" comment. So we
+        # keep the bumped count for the returned outcome and log loudly rather
+        # than under-count or propagate.
         count += 1
-        updated = update_run_status(experiment_dir, run_id, auto_resume_count=count)
-        count = int(updated.auto_resume_count)
+        try:
+            updated = update_run_status(experiment_dir, run_id, auto_resume_count=count)
+            count = int(updated.auto_resume_count)
+        except (errors.HpcError, OSError) as exc:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "auto-resume for run_id=%s fired a resubmit but FAILED to "
+                "persist the cap-counter bump (%s); counting the attempt "
+                "in-memory to fail CLOSED so the resume cap cannot loosen. The "
+                "journal auto_resume_count may be stale-by-one until the next "
+                "successful status write.",
+                run_id,
+                exc,
+            )
 
     return AutoResumeOutcome(
         "resume",

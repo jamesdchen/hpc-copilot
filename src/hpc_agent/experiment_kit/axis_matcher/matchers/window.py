@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import ast
 
-from hpc_agent.experiment_kit.axis_matcher._ast_utils import _called_name
+from hpc_agent.experiment_kit.axis_matcher._ast_utils import (
+    _called_name,
+    _carried_state_names,
+)
 
 __all__ = ["_match_bounded_window_deque", "_render_halo_token"]
 
@@ -24,12 +27,23 @@ __all__ = ["_match_bounded_window_deque", "_render_halo_token"]
 def _match_bounded_window_deque(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
     loop: ast.For | ast.While,
+    carried: set[str] | None = None,
 ) -> tuple[str, str] | None:
     """Detect ``buf = deque(maxlen=W)`` in func + ``buf.append(...)`` in loop.
 
     Returns ``(halo_expr, evidence)`` where halo_expr is ``W`` (literal
     integer or bare parameter name).
+
+    *carried* is the loop's carried-state name set (computed from *loop*
+    when omitted). The deque explains ONLY its own buffer's carry: when
+    the loop carries any other state (e.g. a prefix sum next to the
+    window), committing ``bounded_halo`` would let chunked execution
+    with halo W silently corrupt the unbounded accumulation — so the
+    matcher bails (no match → the classifier falls through to
+    ``sequential``, the stencil matcher's deliberate safe direction).
     """
+    if carried is None:
+        carried = _carried_state_names(loop)
     # Find deque(maxlen=W) constructions in the function body but OUTSIDE the
     # loop. A deque rebuilt inside the loop is re-created every iteration and
     # carries no cross-iteration window, so it is not a bounded-window pattern;
@@ -60,6 +74,9 @@ def _match_bounded_window_deque(
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
         buf_name = node.targets[0].id
+        # Carried state the window pattern does not explain → no match.
+        if carried - {buf_name}:
+            continue
         # Confirm the loop body appends to buf_name.
         for sub in ast.walk(loop):
             if (

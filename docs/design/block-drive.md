@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Wave 4 — `block-drive`: the code-driven chain
 
 **Status:** SPEC — the next deliberate step after waves 1–3 (the block

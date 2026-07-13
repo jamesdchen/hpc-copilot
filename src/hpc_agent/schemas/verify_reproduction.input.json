@@ -2,22 +2,29 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_reproduction.input.json",
   "title": "verify-reproduction input spec",
-  "description": "Input spec for ``verify-reproduction``.\n\n``tolerance`` absent (``None``) — or present with every bound absent —\nmeans an EXACT comparison.",
+  "description": "Input spec for ``verify-reproduction`` — recorded-original OR external-baseline.\n\nTwo mutually-exclusive modes:\n\n* **recorded-original** (default): compare ``repro_run_id`` against the\n  recorded ``original_run_id`` it names via its sidecar ``reproduces`` link,\n  under the top-level ``tolerance``. ``tolerance`` absent (``None``) — or\n  present with every bound absent — means an EXACT comparison.\n* **external-baseline** (``external_baseline`` set): compare ``repro_run_id``\n  (a fresh observed run) against a human-authored CLAIM. The claim is the\n  baseline; the receipt kind is ``claim-check`` (never a reproduction). In this\n  mode ``original_run_id`` and the top-level ``tolerance`` must both be absent —\n  the claim carries its own tolerance (ruling 6a).",
   "type": "object",
   "required": [
-    "original_run_id",
     "repro_run_id"
   ],
   "additionalProperties": false,
   "properties": {
     "original_run_id": {
-      "description": "Run id of the ORIGINAL run being reproduced.",
-      "pattern": "^[A-Za-z0-9._\\-]+$",
-      "title": "Original Run Id",
-      "type": "string"
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Run id of the ORIGINAL run being reproduced (recorded-original mode). Required in recorded-original mode; must be absent in external-baseline mode.",
+      "title": "Original Run Id"
     },
     "repro_run_id": {
-      "description": "Run id of the reproduction run. Its sidecar's `reproduces` field MUST name original_run_id, or the verb refuses (SpecInvalid).",
+      "description": "Run id of the reproduction / fresh observed run. In recorded-original mode its sidecar's `reproduces` field MUST name original_run_id, or the verb refuses (SpecInvalid). In external-baseline mode it is the fresh run compared against the claim.",
       "pattern": "^[A-Za-z0-9._\\-]+$",
       "title": "Repro Run Id",
       "type": "string"
@@ -32,10 +39,67 @@
         }
       ],
       "default": null,
-      "description": "Caller-owned tolerance; None (or all-absent) → exact comparison."
+      "description": "Caller-owned tolerance for recorded-original mode; None (or all-absent) → exact comparison. Must be absent in external-baseline mode (the claim carries its own tolerance)."
+    },
+    "external_baseline": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExternalBaseline"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When set, switches to external-baseline (claim-check) mode: the baseline is this human-authored claim, not a recorded run. Mutually exclusive with original_run_id and the top-level tolerance."
     }
   },
   "$defs": {
+    "ExternalBaseline": {
+      "additionalProperties": false,
+      "description": "A human-authored external CLAIM to compare a fresh observed run against.\n\nThe onboard-by-reproduction front door (``docs/design/onboard-by-reproduction.md``,\nrulings 6a/6b): the scientist arrives with a *claimed result* and no recorded\noriginal. The claim itself is the baseline side of the comparison, embedded\nVERBATIM into a ``claim-check`` receipt. It is authorship-gated at\n``append-decision`` like every human spec; there is deliberately NO required\nclaim record elsewhere (ruling 6a, the LEAN shape).\n\nA ``claim-check`` is NEVER a reproduction (ruling 6b): an external claim was\nnever observed, so no fingerprint sample is minted from it and the comparison\ncan only assert *consistency with a fresh observed run under caller tolerance*,\nnever \"reproduced\".",
+      "properties": {
+        "claimed_values": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "Human-authored claimed metric values keyed by the (flattened) metric key — the baseline side of the comparison, embedded verbatim in the claim-check receipt.",
+          "minProperties": 1,
+          "title": "Claimed Values",
+          "type": "object"
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReproTolerance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Caller-owned tolerance for the claim-vs-fresh comparison; None (or all-absent) → exact. Carried HERE, not at the spec top level, so the claim record is self-contained."
+        },
+        "claimed_data_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional data identity (a manifest) recorded at claim time. When present, a mismatch brief can name the data dimension ('the data changed since the claim'); when absent, the brief discloses it 'cannot distinguish result decay from data drift — no manifest'.",
+          "title": "Claimed Data Sha"
+        }
+      },
+      "required": [
+        "claimed_values"
+      ],
+      "title": "external-baseline claim",
+      "type": "object"
+    },
     "KeyTolerance": {
       "additionalProperties": false,
       "description": "Per-metric-key tolerance override.\n\nBoth bounds optional; an absent bound is simply not applied. When BOTH\nare absent the key is compared EXACTLY (``==``) — same as supplying no\ntolerance at all.",

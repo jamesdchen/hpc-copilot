@@ -113,6 +113,39 @@ def test_accepts_modules_alone_as_env_activation() -> None:
     assert spec["job_env"]["MODULES"] == "anaconda3/2024.06"
 
 
+class TestDigestClassifierThreading:
+    """data-trace T3: build-submit-spec computes the digest classification and
+    threads ``HPC_TRACE_DIGESTS`` into the job env (the HPC_TASK_INCLUDE
+    precedent; dispatch stays dumb). End-to-end at the submit-path funnel."""
+
+    def _env(self, **overrides: object) -> dict:
+        spec = build_submit_spec(spec=BuildSubmitSpecInput(**{**_required(), **overrides}))
+        return dict(spec["job_env"])
+
+    def test_big_array_no_signal_digests_off(self) -> None:
+        # total_tasks=42 (the _required() default), no canary/reproduces/override.
+        assert self._env()["HPC_TRACE_DIGESTS"] == "0"
+
+    def test_small_array_digests_on(self) -> None:
+        assert self._env(total_tasks=3)["HPC_TRACE_DIGESTS"] == "1"
+
+    def test_reproduces_set_digests_on(self) -> None:
+        env = self._env(reproduces="train-deadbeef")
+        assert env["HPC_TRACE_DIGESTS"] == "1"
+
+    def test_override_force_on_wins_over_big_array(self) -> None:
+        assert self._env(trace_digests="force_on")["HPC_TRACE_DIGESTS"] == "1"
+
+    def test_override_force_off_wins_over_small_array(self) -> None:
+        assert self._env(total_tasks=2, trace_digests="force_off")["HPC_TRACE_DIGESTS"] == "0"
+
+    def test_flag_is_authoritative_over_extra_env(self) -> None:
+        # A caller cannot smuggle the flag in via extra_env (NO KNOB): the
+        # classifier's value is exported AFTER the extra_env merge.
+        env = self._env(total_tasks=100, extra_env={"HPC_TRACE_DIGESTS": "1"})
+        assert env["HPC_TRACE_DIGESTS"] == "0"
+
+
 def test_conda_env_with_source_is_coherent() -> None:
     """conda_env + conda_source is the coherent activation the preamble needs (#281)."""
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))
@@ -248,6 +281,28 @@ def test_campaign_id_threaded_to_env_and_top_level() -> None:
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), campaign_id="ml_ridge_q1"))
     assert spec["campaign_id"] == "ml_ridge_q1"
     assert spec["job_env"]["HPC_CAMPAIGN_ID"] == "ml_ridge_q1"
+
+
+def test_campaign_strategy_kw_env_does_not_leak_into_os_environ(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A campaign's ``strategy.params`` reach the cluster via ``job_env`` but must
+    NOT permanently mutate the control-plane ``os.environ``. A prior version
+    unconditionally ``os.environ.update``d the HPC_KW_* params here, leaking one
+    campaign's knobs into every later enumeration in the same process (#31)."""
+    import hpc_agent.incorporation.build.submit_spec as ss
+
+    monkeypatch.setattr(ss, "_campaign_strategy_kw_env", lambda *a, **k: {"HPC_KW_ALPHA": "0.5"})
+    monkeypatch.delenv("HPC_KW_ALPHA", raising=False)
+
+    spec = build_submit_spec(
+        tmp_path, spec=BuildSubmitSpecInput(**_required(), campaign_id="camp-1")
+    )
+
+    # The campaign knob still reaches the cluster job env ...
+    assert spec["job_env"]["HPC_KW_ALPHA"] == "0.5"
+    # ... but never leaks into the control-plane process env.
+    assert "HPC_KW_ALPHA" not in os.environ
 
 
 def test_extra_env_wins_over_framework_default_on_collision() -> None:
@@ -505,33 +560,49 @@ def test_campaign_strategy_params_materialized_into_job_env(
     assert spec["job_env"]["HPC_CAMPAIGN_ID"] == "ridge_q1"
 
 
-def test_campaign_strategy_params_present_in_enumeration_env(
+def test_campaign_strategy_params_scoped_to_the_in_build_enumeration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """BUG 4: the strategy params are exported into the PROCESS env BEFORE the
-    local enumeration imports tasks.py — so a Path-B strategy tasks.py that
-    reads os.environ["HPC_KW_*"] enumerates the RIGHT task list (not the empty
-    one whose cmd_sha is the empty-string hash e3b0c442…)."""
-    import hpc_agent
+    """BUG 4 + #31: the strategy params are exported into the PROCESS env for the
+    DURATION of build-submit-spec's own tasks.py enumeration (the $VAR-reference
+    guard's resolve()), so a Path-B strategy enumerates the RIGHT task list — but
+    the env is RESTORED afterward, never permanently leaking one campaign's knobs
+    into a later enumeration in the same process (the fixed leak)."""
+    import hpc_agent.incorporation.build.submit_spec as ss
 
     monkeypatch.delenv("HPC_KW_N_TRIALS", raising=False)
     monkeypatch.delenv("HPC_KW_LR", raising=False)
-    _write_strategy_tasks_py(tmp_path)
     _write_manifest_with_params(
         tmp_path, campaign_id="ridge_q1", params={"n_trials": 16, "lr": 0.01}
     )
+
+    # Probe the sole in-build consumer: capture what it sees in os.environ, and
+    # return a kwarg set that satisfies the $HPC_KW_LR reference below.
+    seen: dict[str, str | None] = {}
+
+    def _probe(experiment_dir: Path | None) -> set[str]:
+        seen["n_trials"] = os.environ.get("HPC_KW_N_TRIALS")
+        seen["lr"] = os.environ.get("HPC_KW_LR")
+        return {"lr"}
+
+    monkeypatch.setattr(ss, "_resolve_kwargs_keys", _probe)
+
     build_submit_spec(
         tmp_path,
-        spec=BuildSubmitSpecInput(**_required(), campaign_id="ridge_q1"),
+        spec=BuildSubmitSpecInput(
+            **_required(),
+            campaign_id="ridge_q1",
+            # A "$"-referencing executor makes build run its var-reference guard,
+            # the sole in-build consumer of the strategy env (a comma-free,
+            # -c-free dispatcher form passes the EXECUTOR-shape guards).
+            extra_env={"EXECUTOR": "python3 -m my.custom_dispatch $HPC_KW_LR"},
+        ),
     )
-    # The build set the strategy params into the process env, so a subsequent
-    # local enumeration of the strategy tasks.py (exactly what compute-run-id /
-    # the var-ref guard do) sees them and produces the right task list.
-    assert os.environ["HPC_KW_N_TRIALS"] == "16"
-    assert os.environ["HPC_KW_LR"] == "0.01"
-    mod = hpc_agent.load_tasks_module(tmp_path / ".hpc" / "tasks.py")
-    assert mod.total() == 16
-    assert mod.resolve(0) == {"lr": "0.01", "task_id": 0}
+    # The params WERE visible to the in-build enumeration ...
+    assert seen == {"n_trials": "16", "lr": "0.01"}
+    # ... and were restored afterward — no permanent leak into the process env.
+    assert "HPC_KW_N_TRIALS" not in os.environ
+    assert "HPC_KW_LR" not in os.environ
 
 
 def test_no_campaign_id_writes_no_hpc_kw_env(

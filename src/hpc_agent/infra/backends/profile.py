@@ -60,6 +60,99 @@ KNOWN_FAMILIES = frozenset({"slurm", "sge", "pbspro", "torque"})
 
 
 @dataclass(frozen=True)
+class FamilyDialect:
+    """Per-family scheduler capability profile (the G9 upstream leg).
+
+    Captures the grammar / exit-code semantics that the engine's command
+    builders and query verdicts must branch on, so a family the primary dev
+    loop does not exercise (``pbspro`` / ``torque``) cannot silently inherit
+    a *sibling* family's rule by fallthrough — the whole G9
+    "scheduler-dialect-monoculture" class. Keyed by ``family`` in
+    :data:`FAMILY_DIALECTS`; the engine reads each capability off the dialect
+    rather than hardcoding one family's behaviour into another's branch.
+
+    Every ``family`` in :data:`KNOWN_FAMILIES` has exactly one dialect (pinned
+    by a per-family contract fixture matrix in the tests), so adding a family
+    without its capabilities fails a test rather than inheriting SGE's.
+
+    Attributes
+    ----------
+    supports_comma_array_ranges:
+        The array flag accepts a comma index LIST (``4,8,13-15``). ``True`` for
+        SLURM ``--array`` and TORQUE ``-t``; ``False`` for SGE ``qsub -t`` and
+        PBS Pro ``qsub -J`` (which accept a single ``n[-m[:s]]`` range only), so
+        a non-contiguous resubmit on a ``False`` family is split into one array
+        per contiguous run before submission (#6).
+    cap_style:
+        How an in-array concurrency cap is emitted (#32). ``"range_suffix"``
+        appends ``%N`` to the array range (SLURM ``--array=1-100%20``, TORQUE
+        ``-t 1-100%20``); ``"tc_flag"`` emits a separate ``-tc N`` flag and
+        leaves the range bare (SGE/UGE); ``"max_run_subjobs"`` emits a separate
+        ``-l max_run_subjobs=N`` attribute and leaves the range bare (PBS Pro,
+        whose ``-J`` rejects a ``%N`` suffix — ``qsub: illegal -J value``).
+    explicit_id_liveness_query:
+        The liveness / state query names EXPLICIT job ids (SLURM ``squeue -j``,
+        PBS ``qstat -t <ids>``), so a non-zero rc means the queried ids have
+        left the queue — expected, not a failure — and sentinel-ack PRESENCE
+        alone proves the query ran (#5). ``False`` for SGE, whose
+        ``qstat -u $USER`` queries the whole user queue and exits 0 on an empty
+        queue, so a non-zero rc IS the qstat binary failing and rc==0 is
+        required to trust the (possibly empty) answer.
+    """
+
+    family: str
+    supports_comma_array_ranges: bool
+    cap_style: str
+    explicit_id_liveness_query: bool
+
+
+# The per-family capability matrix. One entry per :data:`KNOWN_FAMILIES`
+# member (a test pins the keyset equality). ``pbspro`` and ``torque`` diverge
+# on BOTH the comma-list grammar and the cap syntax, which is exactly why the
+# monoculture bugs (#5/#6/#32) fired: the PBS branch had copied TORQUE's/SGE's
+# rule onto PBS Pro.
+FAMILY_DIALECTS: Mapping[str, FamilyDialect] = MappingProxyType(
+    {
+        "slurm": FamilyDialect(
+            family="slurm",
+            supports_comma_array_ranges=True,
+            cap_style="range_suffix",
+            explicit_id_liveness_query=True,
+        ),
+        "torque": FamilyDialect(
+            family="torque",
+            supports_comma_array_ranges=True,
+            cap_style="range_suffix",
+            explicit_id_liveness_query=True,
+        ),
+        "sge": FamilyDialect(
+            family="sge",
+            supports_comma_array_ranges=False,
+            cap_style="tc_flag",
+            explicit_id_liveness_query=False,
+        ),
+        "pbspro": FamilyDialect(
+            family="pbspro",
+            supports_comma_array_ranges=False,
+            cap_style="max_run_subjobs",
+            explicit_id_liveness_query=True,
+        ),
+    }
+)
+
+
+def dialect_for(family: str) -> FamilyDialect:
+    """Return the :class:`FamilyDialect` for *family* (loud on an unknown one)."""
+    try:
+        return FAMILY_DIALECTS[family]
+    except KeyError:
+        raise errors.SpecInvalid(
+            f"no scheduler dialect for family {family!r}; "
+            f"known families are {sorted(FAMILY_DIALECTS)}"
+        ) from None
+
+
+@dataclass(frozen=True)
 class SchedulerProfile:
     """The data that defines one scheduler.
 

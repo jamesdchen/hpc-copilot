@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_refill.input.json",
+  "title": "campaign-refill input spec",
+  "description": "Inputs to ``campaign-refill`` (RFC #362).\n\nJust the campaign id: the greenlit manifest is the COMPLETE contract (mirror\n:class:`~hpc_agent._wire.workflows.campaign_blocks.CampaignWatchSpec`).\n``async_refill`` / ``max_in_flight`` (the pool target K) / budget / stop all\ndefault from the manifest via ``campaign-advance`` — refill NEVER re-specifies\nK here, so the routing target (``campaign-watch``/``load-context``) and the\nrefill target read the same authority.",
+  "type": "object",
+  "required": [
+    "campaign_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "description": "The greenlit async-refill campaign whose pool to top up this tick.",
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    }
+  }
+}

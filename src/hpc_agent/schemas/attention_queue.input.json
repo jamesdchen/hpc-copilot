@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/attention_queue.input.json",
+  "title": "attention-queue input spec",
+  "description": "Input spec for the ``attention-queue`` verb (D7).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "fleet": {
+      "default": false,
+      "description": "When False (default), scope is the single experiment_dir. When True, widen to every experiment this machine has ever journaled — glob the journal home for '*/repo.json', recover each experiment root, and run the identical per-experiment collection there (D3). A namespace whose experiment_dir no longer exists / is unreadable / is torn is skipped silently and counted in 'skipped'.",
+      "title": "Fleet",
+      "type": "boolean"
+    },
+    "class_order": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional class-sequence override (D2, the T12 attention_order precedent): listed classes ('blocked' / 'verdict' / 'informational') first in the given order, UNKNOWN names ignored (not refused), unlisted classes keep the default order after them. The default is 'blocked, verdict, informational'. This overrides ONLY the class sequence — the within-class rule (oldest-since first, then (kind, scope_id)) is fixed, never overridable (re-ranking individual items would be a caller doing prioritization prose).",
+      "title": "Class Order"
+    },
+    "now": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 UTC 'now' override for deterministic testing (the doctor precedent). When omitted, the current time is used. It sets the queue's computed_at stamp and the instant ages are rendered against — never an agent-facing knob for reshaping ages.",
+      "title": "Now"
+    }
+  }
+}

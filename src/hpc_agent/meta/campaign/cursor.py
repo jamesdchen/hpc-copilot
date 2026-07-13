@@ -51,7 +51,9 @@ def read_cursor(experiment_dir: Path | str, campaign_id: str) -> dict[str, Any] 
 
     Forward-compat guard: a cursor on disk with a
     ``cursor_schema_version`` greater than the current
-    :data:`CURSOR_SCHEMA_VERSION` raises :class:`ValueError`. The user is
+    :data:`CURSOR_SCHEMA_VERSION` raises
+    :class:`~hpc_agent.errors.JournalCorrupt` (as does a non-integer
+    version — see below). The user is
     running an older framework binary against a cursor that a newer
     binary wrote, and silently parsing it could mis-interpret fields the
     older binary doesn't understand.

@@ -181,7 +181,7 @@ def test_submit_main_array_single_wave_under_cap(
     _capped_cluster: None,
 ) -> None:
     backend = _WaveBackend()
-    ids = sf._submit_main_array(
+    ids, spans = sf._submit_main_array(
         backend,
         job_name="probe",
         total_tasks=50,
@@ -193,6 +193,9 @@ def test_submit_main_array_single_wave_under_cap(
         cluster="c",
     )
     assert ids == ["501"]
+    # ≤cap single array: local index == global index, so no span map is
+    # recorded and fetch_task_logs keeps today's global probe.
+    assert spans is None
     assert len(backend.commands) == 1
     assert backend.commands[0][backend.commands[0].index("-t") + 1] == "1-50"
 
@@ -201,7 +204,7 @@ def test_submit_main_array_multi_wave_over_cap_with_canary_gate(
     _capped_cluster: None,
 ) -> None:
     backend = _WaveBackend()
-    ids = sf._submit_main_array(
+    ids, spans = sf._submit_main_array(
         backend,
         job_name="probe",
         total_tasks=250,
@@ -217,6 +220,10 @@ def test_submit_main_array_multi_wave_over_cap_with_canary_gate(
     # 1-<size> with a per-wave TASK_OFFSET recovering the global id — NOT a
     # global range that would exceed the scheduler's array-index cap.
     assert ids == ["501", "502", "503"]
+    # Per-job GLOBAL task windows (0-based inclusive), parsed from the plan's
+    # global task_range per batch — what fetch_task_logs needs to probe each
+    # wave's job with the job-LOCAL log index.
+    assert spans == {"501": (0, 83), "502": (84, 167), "503": (168, 249)}
     ranges = [c[c.index("-t") + 1] for c in backend.commands]
     assert ranges == ["1-84", "1-84", "1-82"]
     offsets = [e.get("TASK_OFFSET") for e in backend.envs]
@@ -260,5 +267,121 @@ def test_submit_main_array_mid_plan_failure_surfaces_partial_ids(
             backend_name="sge",
             cluster="c",
         )
-    # The two waves that landed before the failure are recoverable.
+    # The two waves that landed before the failure are recoverable — ids AND
+    # their global task windows, so the crash-safety pre-stamp records spans
+    # alongside the ids for the sidecar-reading recovery paths.
     assert exc.value.partial_submit_job_ids == ["501", "502"]  # type: ignore[attr-defined]
+    assert exc.value.partial_submit_job_task_spans == {  # type: ignore[attr-defined]
+        "501": (0, 83),
+        "502": (84, 167),
+    }
+
+
+def test_submit_main_array_global_index_backend_records_no_spans(
+    _capped_cluster: None,
+) -> None:
+    # A global-index backend (GHA-like) names its logs with the GLOBAL index,
+    # so the local-index arithmetic a span implies would misroute every
+    # wave>=1 probe — no span map is recorded and the global probe stands.
+    class _GlobalIndexBackend(_WaveBackend):
+        uses_global_array_index = True
+
+    backend = _GlobalIndexBackend()
+    ids, spans = sf._submit_main_array(
+        backend,
+        job_name="probe",
+        total_tasks=250,
+        job_env={},
+        cwd=Path("."),
+        resources=None,
+        gate_job_ids=[],
+        backend_name="sge",
+        cluster="c",
+    )
+    assert ids == ["501", "502", "503"]
+    assert spans is None
+    # Sanity: the arrays really were submitted with GLOBAL windows.
+    ranges = [c[c.index("-t") + 1] for c in backend.commands]
+    assert ranges == ["1-84", "85-168", "169-250"]
+
+
+# --------------------------------------------------------------------------- #
+# Sidecar persistence: the waved plan's per-job spans land on the run sidecar.
+# --------------------------------------------------------------------------- #
+
+
+def test_submit_one_spec_stamps_job_task_spans_on_sidecar_for_waved_plan(
+    tmp_path: Path,
+    _capped_cluster: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end through ``_submit_one_spec``: an over-cap (waved) submit
+    records ``job_task_spans`` next to ``job_ids`` on the run sidecar, keyed
+    by the scheduler job id with the 0-based inclusive GLOBAL window each
+    wave's array covers. ``read_job_task_spans`` hands the same map back in
+    the tuple shape ``fetch_task_logs`` consumes."""
+    from unittest import mock
+
+    from hpc_agent.state import run_record
+    from hpc_agent.state.runs import read_job_task_spans, read_run_sidecar
+
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", tmp_path / "home_hpc")
+
+    spec = _required_sidecar_spec("20260101-000000-spans", total_tasks=250)
+    sf._ensure_run_sidecar(tmp_path, spec)
+
+    backend = _WaveBackend()
+    with (
+        mock.patch.object(sf, "build_remote_backend", return_value=backend),
+        mock.patch.object(sf, "submit_and_record"),
+        mock.patch.object(sf, "load_run", return_value=None),
+    ):
+        result = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec)
+
+    assert result.job_ids == ["501", "502", "503"]
+    sidecar = read_run_sidecar(tmp_path, spec.run_id)
+    assert sidecar["job_ids"] == ["501", "502", "503"]
+    # JSON round-trips tuples as lists; the sidecar stores [first, last].
+    assert sidecar["job_task_spans"] == {
+        "501": [0, 83],
+        "502": [84, 167],
+        "503": [168, 249],
+    }
+    assert read_job_task_spans(tmp_path, spec.run_id) == {
+        "501": (0, 83),
+        "502": (84, 167),
+        "503": (168, 249),
+    }
+
+
+def test_submit_one_spec_stamps_no_spans_for_single_array(
+    tmp_path: Path,
+    _capped_cluster: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ≤cap sweep keeps today's sidecar byte-shape: no ``job_task_spans``
+    key is written, and the reader resolves to None (global probe)."""
+    from unittest import mock
+
+    from hpc_agent.state import run_record
+    from hpc_agent.state.runs import read_job_task_spans, run_sidecar_path
+
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", tmp_path / "home_hpc")
+
+    spec = _required_sidecar_spec("20260101-000000-nospans", total_tasks=50)
+    sf._ensure_run_sidecar(tmp_path, spec)
+
+    backend = _WaveBackend()
+    with (
+        mock.patch.object(sf, "build_remote_backend", return_value=backend),
+        mock.patch.object(sf, "submit_and_record"),
+        mock.patch.object(sf, "load_run", return_value=None),
+    ):
+        result = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec)
+
+    assert result.job_ids == ["501"]
+    import json as _json
+
+    raw = _json.loads(run_sidecar_path(tmp_path, spec.run_id).read_text(encoding="utf-8"))
+    assert "job_task_spans" not in raw
+    assert read_job_task_spans(tmp_path, spec.run_id) is None

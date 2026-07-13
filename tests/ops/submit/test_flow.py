@@ -157,6 +157,11 @@ def _spec(run_id: str, **overrides: Any):
         # result_dir_template + a real executor let it synthesize one when
         # Step 6d was skipped (these tests submit without pre-writing a sidecar).
         result_dir_template="results/{run_id}/task_{task_id}",
+        # These tests exercise stamping/batching mechanics with FAKE executors
+        # that were never meant to run; the pre-stage task-0 smoke (queue item
+        # 7) would execute them and refuse on their nonzero exit. Opt out —
+        # the smoke has its own dedicated suite (test_submit_flow_pre_stage_smoke).
+        pre_stage_smoke=False,
     )
     base.update(overrides)
     return SubmitFlowSpec(**base)  # type: ignore[arg-type]
@@ -539,6 +544,48 @@ class TestSubmitFlowBatch:
 
         # The orphan sidecar is gone.
         assert not run_sidecar_path(tmp_path, orphan_id).is_file()
+
+    def test_pre_rsync_canary_mirror_uses_decision_not_raw_field(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        """#18: HPC_AGENT_ALWAYS_CANARY forces a canary that WINS over an agent
+        ``canary=false`` opt-out, so the pre-rsync sidecar mirror must gate on
+        the canary DECISION (``_should_run_canary``), not the raw ``spec.canary``
+        field. Otherwise the forced canary's ``<run_id>-canary.json`` is never
+        on disk when the shared rsync ships, and the canary task dies
+        ``sidecar_not_found`` on the cluster (#175)."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.state.runs import run_sidecar_path
+
+        monkeypatch.setenv("HPC_AGENT_ALWAYS_CANARY", "1")
+        spec = _spec("r0", canary=False)
+        seen: dict[str, bool] = {}
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            # The pre-rsync mirror loop runs BEFORE _push_and_deploy ships the
+            # tree, so the canary sidecar must already be on disk at deploy time.
+            def _deploy(*_a: Any, **_k: Any) -> None:
+                seen["canary_on_disk"] = run_sidecar_path(tmp_path, "r0-canary").is_file()
+
+            push_deploy.side_effect = _deploy
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+
+        # _submit_one_spec (which owns the post-rsync mirror) is mocked out, so
+        # the ONLY writer of the canary sidecar is the decision-gated pre-rsync
+        # loop — its presence proves the fix fires on the forced-canary path.
+        assert run_sidecar_path(tmp_path, "r0-canary").is_file()
+        assert seen.get("canary_on_disk") is True
 
     def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
@@ -1238,7 +1285,11 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
     from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
 
-    spec = _spec("rC", canary=True)  # _spec carries a real per-task EXECUTOR
+    # total_tasks above the #263 tiny-batch skip threshold (4) so the canary
+    # DECISION is "run" — the pre-rsync mirror is now gated on _should_run_canary
+    # (#18), not the raw spec.canary field, so it fires only when a canary
+    # actually launches.
+    spec = _spec("rC", canary=True, total_tasks=8)  # _spec carries a real per-task EXECUTOR
     seen: dict[str, bool] = {}
 
     def _capture_at_deploy(
@@ -1289,7 +1340,10 @@ def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -
             "fixed_params": {"tp_size": 2},
         },
     )
-    spec = _spec("rCmk", canary=True, total_tasks=3, job_env={"EXECUTOR": executor_cmd})
+    # total_tasks above the #263 tiny-batch skip threshold (4): the pre-rsync
+    # mirror is decision-gated (#18), so a canary that auto-skips would not
+    # mirror. Keep the canary decision "run" to exercise the spec_kwargs copy.
+    spec = _spec("rCmk", canary=True, total_tasks=8, job_env={"EXECUTOR": executor_cmd})
 
     with (
         mock.patch.object(sf_module, "_preflight_probe"),

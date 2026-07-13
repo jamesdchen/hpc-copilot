@@ -121,6 +121,127 @@ class TestDispatchAtomicOutput:
 
 
 @_posix_shell_executor
+class TestTerminalAnnouncement:
+    """Crash-only Phase 1: the dispatcher announces its own per-task verdict.
+
+    ONE filename-state-encoded marker per task under ``.hpc/announce/<run_id>/``,
+    written on BOTH the success and failure terminal paths, atomically, and
+    best-effort (a raising marker write never changes the task's exit code).
+    """
+
+    def test_success_writes_complete_marker(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo hello > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        announce_dir = hpc / "announce" / "test_run"
+        complete_marker = announce_dir / "task_1.complete"
+        assert complete_marker.exists()
+        assert not (announce_dir / "task_1.failed").exists()
+        payload = json.loads(complete_marker.read_text())
+        assert payload["task_id"] == 1
+        assert payload["state"] == "complete"
+        assert payload["exit_code"] == 0
+        assert payload["finished_at"]
+
+    def test_failure_writes_failed_marker(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo partial > "$RESULT_DIR/out.csv" && exit 1',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 1
+        announce_dir = hpc / "announce" / "test_run"
+        failed_marker = announce_dir / "task_0.failed"
+        assert failed_marker.exists()
+        assert not (announce_dir / "task_0.complete").exists()
+        payload = json.loads(failed_marker.read_text())
+        assert payload["state"] == "failed"
+        assert payload["exit_code"] == 1
+
+    def test_empty_output_verdict_reflected_in_marker(self, tmp_path, monkeypatch):
+        # finding-16: exit 0 but no output is REMAPPED to a failure. The marker
+        # must mirror the promote/failure VERDICT, not the raw executor rc 0.
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="true",  # exits 0, writes nothing
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == dispatch._EXIT_NO_OUTPUT
+        announce_dir = hpc / "announce" / "test_run"
+        assert (announce_dir / "task_0.failed").exists()
+        assert not (announce_dir / "task_0.complete").exists()
+        payload = json.loads((announce_dir / "task_0.failed").read_text())
+        assert payload["state"] == "failed"
+        assert payload["exit_code"] == dispatch._EXIT_NO_OUTPUT
+
+    def test_marker_write_failure_never_fails_task(self, tmp_path, monkeypatch):
+        # Best-effort: a raising atomic-write must be swallowed — the task keeps
+        # its own exit code, the announcement is merely lost.
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo hello > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        real_atomic = dispatch._atomic_write_json
+
+        def _boom(path, data):
+            # Only sabotage the announcement write (under announce/), never the
+            # runtime/cmd_sha writes the success path also does.
+            if "announce" in str(path):
+                raise OSError("simulated marker write failure")
+            return real_atomic(path, data)
+
+        monkeypatch.setattr(dispatch, "_atomic_write_json", _boom)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        # Task still succeeds; marker simply absent.
+        assert exc_info.value.code == 0
+        assert not (hpc / "announce" / "test_run" / "task_0.complete").exists()
+
+
+@_posix_shell_executor
 class TestDispatchStaleWipRetry:
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):
         result_root = tmp_path / "results"
@@ -461,6 +582,63 @@ class TestDispatchEmptyOutputIsFailure:
         # The recorded per-task exit code (what the canary reads) is non-zero.
         runtime = json.loads((result_dir / "_runtime.json").read_text())
         assert runtime["exit_code"] == dispatch._EXIT_NO_OUTPUT
+
+    @_posix_shell_executor
+    def test_trace_only_output_is_failure(self, tmp_path, monkeypatch):
+        """#28: an executor that emits ONLY the framework data-trace transport
+        file (``_trace.jsonl``) but no real result must be treated as
+        empty-output — the trace is telemetry, not a produced result, so
+        promoting it would be the same FALSE GREEN #16 guards against."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo \'{"trace": 1}\' > "$RESULT_DIR/_trace.jsonl"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == dispatch._EXIT_NO_OUTPUT
+        result_dir = result_root / "0"
+        # Not promoted: no trace file lands at the top level, no success marker.
+        assert not (result_dir / "_trace.jsonl").exists()
+        assert not (result_dir / ".hpc_cmd_sha").exists()
+        runtime = json.loads((result_dir / "_runtime.json").read_text())
+        assert runtime["exit_code"] == dispatch._EXIT_NO_OUTPUT
+
+    @_posix_shell_executor
+    def test_trace_beside_real_output_still_completes(self, tmp_path, monkeypatch):
+        """When a real result exists, the trace is promoted alongside it — the
+        guard only rejects a trace-ONLY (output-less) dir."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor=(
+                'echo \'{"value": 1, "n_samples": 1}\' > "$RESULT_DIR/metrics.json"; '
+                'echo \'{"trace": 1}\' > "$RESULT_DIR/_trace.jsonl"'
+            ),
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        result_dir = result_root / "0"
+        assert (result_dir / "metrics.json").is_file()
+        assert (result_dir / "_trace.jsonl").is_file()  # promoted alongside output
+        assert not (result_dir / "_wip_0").exists()
 
     @_posix_shell_executor
     def test_real_metrics_json_still_completes(self, tmp_path, monkeypatch):
@@ -865,3 +1043,269 @@ class TestFrozenManifest:
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
         assert "trial_params" in err and "re-submit" in err
+
+
+class TestServiceEnvPassthrough:
+    """HPC_SERVICE_ENV → HPC_SERVICE_* task-env passthrough (#231 Tier 1).
+
+    The dispatcher used to reach for ``hpc_agent.ops.recover.service`` at
+    dispatch time, but deploy ships no ``hpc_agent`` package — every array
+    task of a service_env run died with ModuleNotFoundError before the
+    executor spawned. The logic is now inlined stdlib-only; these tests pin
+    both the inlined behavior and its parity with the control-plane copy.
+    """
+
+    def test_inlined_injection_matches_control_plane_copy(self):
+        """Sync pin: the stdlib twin must behave exactly like
+        ``ops.recover.service.inject_service_env`` (the deliberate
+        cluster-side duplication, same discipline as _CHECKPOINT_RES)."""
+        from hpc_agent.ops.recover import service
+
+        assert dispatch._SERVICE_ENV_NAMESPACE == service.SERVICE_ENV_NAMESPACE
+        cases = [
+            {"compile_url": "http://n01:8080", "Port": 8081, "token": None},
+            {},
+            None,
+        ]
+        for service_env in cases:
+            env_a: dict = {"KEEP": "me"}
+            env_b: dict = {"KEEP": "me"}
+            ret_a = dispatch._inject_service_env(env_a, service_env)
+            ret_b = service.inject_service_env(env_b, service_env)
+            assert env_a == env_b, f"divergence for {service_env!r}"
+            # Both return the mutated env for caller convenience.
+            assert ret_a is env_a
+            assert ret_b is env_b
+
+    def test_inlined_injection_namespaces_and_stringifies(self):
+        env: dict = {}
+        dispatch._inject_service_env(env, {"compile_url": "http://n01:8080", "port": 8081})
+        assert env == {
+            "HPC_SERVICE_COMPILE_URL": "http://n01:8080",
+            "HPC_SERVICE_PORT": "8081",
+        }
+
+    @_posix_shell_executor
+    def test_service_env_reaches_executor(self, tmp_path, monkeypatch):
+        """End-to-end: a JSON HPC_SERVICE_ENV lands as $HPC_SERVICE_* in the
+        executor's env — with no hpc_agent package importable cluster-side."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo "$HPC_SERVICE_COMPILE_URL" > "$RESULT_DIR/service.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_SERVICE_ENV", json.dumps({"compile_url": "http://n01:8080"}))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "0" / "service.txt").read_text().strip() == "http://n01:8080"
+
+    @_posix_shell_executor
+    def test_malformed_service_env_warns_and_still_runs(self, tmp_path, monkeypatch, capsys):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo ok > "$RESULT_DIR/out.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_SERVICE_ENV", "{not json")
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert "malformed HPC_SERVICE_ENV" in capsys.readouterr().err
+
+
+class TestStaleMetricsQuarantine:
+    """The cmd_sha-changed re-run path must quarantine the PREVIOUS
+    experiment's metrics.json before re-running: left in place, a failed (or
+    still-running) new attempt lets status/combiner count the stale file as
+    this run's completed result."""
+
+    def _seed_stale(self, result_dir, content='{"value": 1}'):
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "metrics.json").write_text(content)
+        # Sidecar default cmd_sha is "deadbeef"*8; stamp a different one so
+        # the cmd_sha-changed re-run path fires.
+        (result_dir / ".hpc_cmd_sha").write_text("0" * 64)
+
+    @_posix_shell_executor
+    def test_failed_rerun_leaves_no_stale_completion_marker(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="exit 1",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        self._seed_stale(result_dir)
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+
+        # The stale marker is GONE from the completion-scan namespace…
+        assert not (result_dir / "metrics.json").exists()
+        # …and preserved as evidence under the _wip_ family every scanner skips.
+        quarantined = list(result_dir.glob("_wip_0_stale_metrics_*.json"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text() == '{"value": 1}'
+        # The reporter must NOT count this task complete anymore (the
+        # quarantined name lives in the _wip_ family every scanner skips).
+        assert check_results(result_dir, total_tasks=1, file_glob="*") == {}
+
+    @_posix_shell_executor
+    def test_successful_rerun_promotes_fresh_metrics(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo \'{"value": 2}\' > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        self._seed_stale(result_dir)
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Fresh result promoted; stale evidence retained alongside.
+        assert json.loads((result_dir / "metrics.json").read_text()) == {"value": 2}
+        assert len(list(result_dir.glob("_wip_0_stale_metrics_*.json"))) == 1
+        assert (result_dir / ".hpc_cmd_sha").read_text() == "deadbeef" * 8
+
+    @_posix_shell_executor
+    def test_force_rerun_does_not_quarantine(self, tmp_path, monkeypatch):
+        """HPC_FORCE_RERUN re-runs the SAME experiment (matching cmd_sha) —
+        the prior result stays a valid last-known completion, not stale."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="exit 1",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        result_dir.mkdir(parents=True)
+        (result_dir / "metrics.json").write_text('{"value": 1}')
+        (result_dir / ".hpc_cmd_sha").write_text("deadbeef" * 8)  # matches sidecar
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_FORCE_RERUN", "1")
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+        assert (result_dir / "metrics.json").read_text() == '{"value": 1}'
+        assert list(result_dir.glob("_wip_0_stale_metrics_*.json")) == []
+
+
+class TestPartialReproductionInclude:
+    """HPC_TASK_INCLUDE — the partial-reproduction execution restriction (T6).
+
+    A partial reproduction keeps the FULL task array (same trial_params /
+    cmd_sha) and threads the selected task indices through the job env as an
+    include-list. A non-selected index exits 0 IMMEDIATELY — before resolving
+    kwargs, formatting result_dir, or spawning — so its slot costs milliseconds
+    and it writes NO output (the reduce never sees a spurious row).
+    """
+
+    def test_included_helper_parsing(self) -> None:
+        """The include predicate: absent/blank/malformed → no restriction; else membership."""
+        assert dispatch._task_is_included(0, {}) is True
+        assert dispatch._task_is_included(0, {"HPC_TASK_INCLUDE": ""}) is True
+        assert dispatch._task_is_included(0, {"HPC_TASK_INCLUDE": "   "}) is True
+        assert dispatch._task_is_included(1, {"HPC_TASK_INCLUDE": "0,2,4"}) is False
+        assert dispatch._task_is_included(4, {"HPC_TASK_INCLUDE": "0,2,4"}) is True
+        assert dispatch._task_is_included(5, {"HPC_TASK_INCLUDE": " 5 , 7 "}) is True
+        # Non-integer garbage parses to an empty set → treated as no restriction
+        # (never silently skip the whole array on a bad env var).
+        assert dispatch._task_is_included(3, {"HPC_TASK_INCLUDE": "nope"}) is True
+
+    def test_excluded_index_exits_0_without_running(self, tmp_path, monkeypatch):
+        """A task_id absent from HPC_TASK_INCLUDE exits 0 fast — no result dir, no output."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo NEVER_RUN > "$RESULT_DIR/marker.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_TASK_INCLUDE", "0,2")  # task 1 excluded
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Exited before result_dir was even created → no dir, no marker.
+        assert not (result_root / "1").exists()
+
+    @_posix_shell_executor
+    def test_included_index_runs(self, tmp_path, monkeypatch):
+        """A task_id present in HPC_TASK_INCLUDE runs the executor normally."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo RAN > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "2")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_TASK_INCLUDE", "0,2")  # task 2 included
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "2" / "metrics.json").read_text().strip() == "RAN"
+
+    @_posix_shell_executor
+    def test_no_include_runs_full(self, tmp_path, monkeypatch):
+        """Absent HPC_TASK_INCLUDE runs every task (an ordinary full run)."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo RAN > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "1" / "metrics.json").read_text().strip() == "RAN"

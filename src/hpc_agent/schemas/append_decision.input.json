@@ -16,7 +16,12 @@
       "enum": [
         "run",
         "campaign",
-        "scope"
+        "scope",
+        "notebook",
+        "registration",
+        "pack",
+        "conclusion",
+        "challenge"
       ],
       "title": "Scope Kind",
       "type": "string"

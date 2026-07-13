@@ -27,7 +27,8 @@
         "snapshot_anomaly",
         "watch_terminal",
         "watch_anomaly",
-        "watch_timeout"
+        "watch_timeout",
+        "detached"
       ],
       "title": "Stage Reached",
       "type": "string"
@@ -81,6 +82,38 @@
       "default": null,
       "description": "The DETERMINISTICALLY-computed next block — ``{verb, why, spec_hint}`` — or null at a terminal / human-branch terminator (design §2, the ``_next_step_hint`` pattern generalized). ``verb`` names the next block's CLI verb; ``spec_hint`` carries the minimal next-spec skeleton (run_id etc.). Surfaced, greenlit, journaled under ``resolved.next_block``, and enforced by the successor gate — never free-prose.",
       "title": "Next Block"
+    },
+    "started": {
+      "default": false,
+      "description": "Detach-by-contract handle (design §3): True when status-watch spawned a durable detached worker (which owns the ONE cold dial per lifetime — warm engine, lease-single, watchdog-covered, exits at terminal) and returned immediately instead of dialing the cluster in-process. The brief is not held in a process — read it from the journal via status-snapshot / the completion notification. False on the synchronous (detach=False) path.",
+      "title": "Started",
+      "type": "boolean"
+    },
+    "watch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How to learn the detached watch's outcome — ``\"journal\"`` when ``started`` is True (the detached worker stamps the per-run journal record as it polls; poll it cluster-free). None on the synchronous path.",
+      "title": "Watch"
+    },
+    "detached_pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path. A dead worker is detected by the §5 watchdog / doctor dead-worker scan, not by this pid.",
+      "title": "Detached Pid"
     }
   }
 }

@@ -188,10 +188,12 @@ def backend_for_record(record: RunRecord, *, scheduler: str | None = None) -> HP
     overrides ``record.backend`` for callers (reconcile / status) that already
     hold the name; otherwise the name recorded on the run is used.
     """
+    from hpc_agent.infra.clusters import resolve_ssh_target
+
     return build_remote_backend(
         backend_name=scheduler or record.backend,
         script=record.script,
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         pass_env_keys=None,
         job_env_keys=tuple(record.job_env or ()),

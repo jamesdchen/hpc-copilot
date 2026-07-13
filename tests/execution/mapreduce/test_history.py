@@ -15,7 +15,7 @@ from hpc_agent.execution.mapreduce.reduce.history import (
     prior_records,
     result_dirs_for_sidecar,
 )
-from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
+from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path, write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -328,3 +328,61 @@ def test_prior_records_oldest_first_index_matches_iteration_order(tmp_path: Path
 
     records = prior_records(tmp_path, "A")
     assert [r["metrics"]["val_loss"] for r in records] == [pytest.approx(0.0), pytest.approx(1.0)]
+
+
+# ---------------------------------------------------------------------------
+# summary_artifact declaration (F-J): a run whose executor emits a non-default
+# per-task summary file (e.g. results_reduce.json) is read COMPLETE — not
+# incomplete/abandoned — once the sidecar declares summary_artifact.
+# ---------------------------------------------------------------------------
+
+
+def test_fires_declared_summary_artifact_reads_complete(tmp_path: Path) -> None:
+    """FIRES: a physically-complete run emitting results_reduce.json.
+
+    Today (no declaration) the metrics.json-hardcoded completion counting reads
+    it incomplete. Declaring summary_artifact='results_reduce.json' on the
+    sidecar makes result_dirs_for_sidecar + prior_records classify it complete
+    and reduce over the real file.
+    """
+    run_id = "20260101-000000-reducejson"
+    result_dir = tmp_path / "results" / run_id / "task_0"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (result_dir / "results_reduce.json").write_text(json.dumps({"metric": 7.0, "n_samples": 1}))
+
+    # --- Without the declaration: the physically-complete run reads incomplete
+    #     (the pre-fix behavior — metrics.json is the hardcoded assumption).
+    write_run_sidecar(tmp_path, **_common_required_kwargs(run_id), campaign_id="A")
+    undeclared = read_run_sidecar(tmp_path, run_id)
+    assert result_dirs_for_sidecar(tmp_path, undeclared) == []
+    recs_before = prior_records(tmp_path, "A")
+    assert recs_before[0]["complete"] is False
+    assert recs_before[0]["metrics"] == {}
+
+    # --- With the declaration: same on-disk state now reads complete + reduces.
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs(run_id),
+        campaign_id="A",
+        summary_artifact="results_reduce.json",
+    )
+    declared = read_run_sidecar(tmp_path, run_id)
+    assert declared["summary_artifact"] == "results_reduce.json"
+    dirs = result_dirs_for_sidecar(tmp_path, declared)
+    assert [str(d) for d in dirs] == [str(result_dir)]
+    recs_after = prior_records(tmp_path, "A")
+    assert recs_after[0]["complete"] is True
+    assert recs_after[0]["metrics"]["metric"] == pytest.approx(7.0)
+
+
+def test_default_path_unchanged_metrics_json(tmp_path: Path) -> None:
+    """A sidecar WITHOUT summary_artifact still keys on metrics.json (unchanged)."""
+    run_id = "20260101-000000-defaultmj"
+    _write_metrics(tmp_path / "results" / run_id / "task_0", {"metric": 3.0, "n_samples": 1})
+    write_run_sidecar(tmp_path, **_common_required_kwargs(run_id), campaign_id="A")
+    sidecar = read_run_sidecar(tmp_path, run_id)
+    # Absent on the written sidecar (compact only-write-non-None), backfilled None.
+    assert sidecar.get("summary_artifact") is None
+    dirs = result_dirs_for_sidecar(tmp_path, sidecar)
+    assert [str(d) for d in dirs] == [str(tmp_path / "results" / run_id / "task_0")]
+    assert prior_records(tmp_path, "A")[0]["complete"] is True

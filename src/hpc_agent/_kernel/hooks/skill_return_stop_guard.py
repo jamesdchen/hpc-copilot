@@ -38,6 +38,20 @@ committed file by default, so after the agent follows the reason the guard has
 nothing left to block on — including for a stale envelope left over by an
 older session, which gets flushed by exactly one block-fetch-continue cycle.
 
+The rejector → completer split (RULED 2026-07-12)
+-------------------------------------------------
+``docs/design/stop-hook-completer.md`` rules this guard a HYBRID: the FETCH is
+code's (the autofetch sibling already reads the same envelope) but the "continue
+the parent skill's next step" is judgment. When the harness declares the
+``stop-hook-append`` capability (both the proceeding and the on-block bits — the
+injection rides a BLOCKED stop, D2), :func:`_completer_output` reads each envelope
+through the ONE shared reader
+(:func:`hpc_agent._kernel.hooks.skill_return_autofetch.read_committed_envelope`),
+injects it via ``systemMessage``, and CLEARS the committed file (completing the
+fetch) — while the output still BOUNCES for the parent-skill continuation only.
+Absent/unknown (the default, since no harness declares it) the guard degrades to
+:func:`_rejector_output` byte-for-byte: today's fetch-then-continue bounce.
+
 Loop safety & defensiveness
 ---------------------------
 * If the payload carries ``stop_hook_active`` (Claude Code's marker that this
@@ -52,6 +66,7 @@ Loop safety & defensiveness
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -127,8 +142,49 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
         for skill in pending_skill_returns(cand):
             pending_by_skill.setdefault(skill, cand)
     if not pending_by_skill:
+        # No committed envelope (never emitted, or already fetched — the
+        # self-healing no-op). Both rejector and completer are silent here.
         return None
 
+    # The RULED split (docs/design/stop-hook-completer.md, 2026-07-12): code
+    # completes the FETCH (inject the envelope, clear the file — the judgment-free
+    # half the autofetch sibling already does in code) and the bounce survives
+    # ONLY for the parent-skill continuation (the judgment half). Capability-gated
+    # (D1/D2): the injection rides a BLOCKED stop (the continuation always bounces),
+    # so it needs the harness's `append_on_block` confirmation. Absent/unknown —
+    # the default, since no harness declares it — the whole guard degrades to the
+    # REJECTOR EXACTLY (today's fetch-then-continue bounce).
+    try:
+        from hpc_agent.ops.harness_capabilities import (
+            detect_stop_hook_append,
+            detect_stop_hook_append_on_block,
+        )
+
+        completer_active = (
+            detect_stop_hook_append() is True and detect_stop_hook_append_on_block() is True
+        )
+    except Exception:
+        completer_active = False
+
+    if completer_active:
+        completed = _completer_output(pending_by_skill)
+        if completed is not None:
+            return completed
+        # Reading/clearing every envelope failed → fall through to the rejector,
+        # which tells the model to fetch them itself (invariant 4: degrade to the
+        # rejector, never claim an un-injected fetch).
+
+    return _rejector_output(pending_by_skill)
+
+
+def _rejector_output(pending_by_skill: dict[str, Path]) -> dict[str, Any]:
+    """Today's REJECTOR shape — the capability-absent (dark) default (D1).
+
+    Byte-identical to the pre-completer bounce: the model runs
+    ``fetch-skill-return`` for each pending envelope, then continues the parent
+    skill. This is what the completer degrades to wherever the
+    ``stop-hook-append`` capability is absent/unknown (or a completer read fails).
+    """
     # Forward-slash form: the agent will paste this into a Git Bash command,
     # where a bare backslash path invites the \U-escape-collapse bug class
     # (agent_assets._hook_python). shlex.quote still covers spaces. Each skill
@@ -145,6 +201,75 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
         "of the turn."
     )
     return {"decision": "block", "reason": reason}
+
+
+def _completer_output(pending_by_skill: dict[str, Path]) -> dict[str, Any] | None:
+    """The COMPLETER shape (D1/D2): inject the envelopes in code, bounce only for
+    the parent-skill continuation.
+
+    For each pending skill, read its envelope through the ONE shared reader the
+    autofetch sibling uses (:func:`skill_return_autofetch.read_committed_envelope`)
+    and CLEAR the committed file (completing the fetch — mirroring
+    ``fetch-skill-return``'s default clear, so a later stop is silent). The
+    envelopes ride ONE ``systemMessage``; the output ALSO carries
+    ``{"decision":"block", ...}`` for the parent-skill continuation — the judgment
+    the model must author. A skill whose read or clear fails is left on the
+    model-fetch path (its fetch command stays in the reason).
+
+    Returns ``None`` when NOT ONE envelope could be injected in code — the caller
+    then emits the full rejector (invariant 4: never claim an un-injected fetch).
+    """
+    from hpc_agent._kernel.hooks.skill_return_autofetch import read_committed_envelope
+
+    injected: list[tuple[str, str]] = []
+    model_fetch: dict[str, Path] = {}
+    for skill, found_dir in pending_by_skill.items():
+        envelope = read_committed_envelope(found_dir, skill)
+        if envelope is None:
+            model_fetch[skill] = found_dir
+            continue
+        # Complete the fetch: clear the committed file so a later stop is silent
+        # (fetch-skill-return clears by default). A failed clear means the fetch
+        # is NOT complete → keep the skill on the model-fetch path.
+        cleared = False
+        with contextlib.suppress(OSError):
+            _committed_path(found_dir, skill).unlink()
+            cleared = True
+        if not cleared:
+            model_fetch[skill] = found_dir
+            continue
+        injected.append((skill, envelope))
+
+    if not injected:
+        return None  # nothing completed in code → the caller emits the rejector
+
+    system_message = (
+        "hpc-agent skill-return completer — code-fetched the sub-skill return "
+        "envelope(s) (model-untouched; the fetch is done, do NOT re-run "
+        "fetch-skill-return for these):\n"
+        + "\n".join(f"[{skill}] {envelope}" for skill, envelope in injected)
+    )
+
+    if model_fetch:
+        fetches = " && ".join(
+            f"hpc-agent fetch-skill-return --skill {skill} "
+            f"--experiment-dir {shlex.quote(found_dir.as_posix())}"
+            for skill, found_dir in model_fetch.items()
+        )
+        reason = (
+            f"Fetched {', '.join(s for s, _ in injected)} in code (above). Still "
+            f"un-fetched: {', '.join(model_fetch)} — run `{fetches}`, then continue "
+            "the parent skill's next step — a sub-skill composition boundary is not "
+            "the end of the turn."
+        )
+    else:
+        # The judgment half: only the parent-skill continuation remains.
+        reason = (
+            "Sub-skill return envelope(s) fetched in code (above). Continue the "
+            "parent skill's next step — a sub-skill composition boundary is not the "
+            "end of the turn."
+        )
+    return {"systemMessage": system_message, "decision": "block", "reason": reason}
 
 
 def main(argv: list[str] | None = None) -> int:

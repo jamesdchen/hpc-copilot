@@ -334,6 +334,35 @@
       ],
       "default": null,
       "title": "Service Env"
+    },
+    "reproduces": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reproduces"
+    },
+    "trace_digests": {
+      "anyOf": [
+        {
+          "enum": [
+            "force_on",
+            "force_off"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trace Digests"
     }
   },
   "$defs": {

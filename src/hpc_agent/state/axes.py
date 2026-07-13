@@ -40,6 +40,7 @@ __all__ = [
     "axes_path",
     "axes_schema",
     "compute_wave_map",
+    "derive_stride_subset",
     "pick_array_axis",
     "pick_array_axis_warm",
     "read_axes",
@@ -477,3 +478,52 @@ def compute_wave_map(
         wave_map[str(wave_id)] = sorted(task_ids)
 
     return wave_map
+
+
+def derive_stride_subset(experiment_dir: Path | str) -> list[int]:
+    """Derive the partial-reproduction subset MECHANICALLY from the axes.
+
+    The determinism-fingerprint design center 5 (derived subsets): the canary
+    task (task 0) plus, for EACH axis, one task per distinct axis value at that
+    axis's fixed row-major stride over its coordinate range. Concretely, holding
+    every other axis at coordinate 0, axis ``i`` with size ``s_i`` contributes the
+    task ids ``0, strides[i], 2*strides[i], … (s_i-1)*strides[i]`` — a fixed,
+    reproducible stride over that axis's range. The union across axes (task 0 is
+    shared by every axis's ``v=0`` term, so the canary is always present) is the
+    subset.
+
+    A PURE function of the axis structure — no importance sampling, no
+    metric-aware / "representative" heuristic (the Q1 boundary flag). The
+    row-major encoding is the SAME one :func:`compute_wave_map` uses
+    (last-axis-varies-fastest), computed here from the same ``axes.yaml`` ordered
+    ``axes`` list so there is one definition of the coordinate→task_id mapping.
+
+    Raises :class:`errors.SpecInvalid` when ``axes.yaml`` is absent and
+    :class:`errors.JournalCorrupt` when it declares no ``axes`` enumeration — the
+    derived mode cannot invent a subset without the axis structure (the caller
+    should supply an explicit ``task_sample`` list instead).
+    """
+    config = read_axes(experiment_dir)
+    if config is None:
+        raise errors.SpecInvalid(
+            "derive_stride_subset: axes.yaml not found — the derived subset mode "
+            "needs the axis structure. Supply an explicit task_sample list instead."
+        )
+    axes = config.get("axes")
+    if not axes:
+        raise errors.JournalCorrupt(
+            "derive_stride_subset: axes.yaml has no 'axes' enumeration to derive a "
+            "subset from. Supply an explicit task_sample list instead."
+        )
+
+    sizes = [int(a["size"]) for a in axes]
+    # Row-major strides: last axis varies fastest (identical to compute_wave_map).
+    strides = [1] * len(sizes)
+    for i in range(len(sizes) - 2, -1, -1):
+        strides[i] = strides[i + 1] * sizes[i + 1]
+
+    indices: set[int] = {0}  # the canary task (also every axis's v=0 term)
+    for i, size in enumerate(sizes):
+        for value in range(size):
+            indices.add(value * strides[i])
+    return sorted(indices)

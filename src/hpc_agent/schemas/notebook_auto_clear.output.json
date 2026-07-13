@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_auto_clear.output.json",
+  "title": "notebook-auto-clear output data",
+  "description": "Honest accounting of one auto-clear pass.\n\n``cleared`` names the sections a NEW record was appended for; ``skipped``\nnames every other source section with its reason. An idempotent re-run at\nunchanged hashes clears nothing and skips everything ``already-current``.",
+  "type": "object",
+  "required": [
+    "audit_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "cleared": {
+      "description": "Sections a fresh CODE auto-clear was journaled for, in source order.",
+      "items": {
+        "$ref": "#/$defs/NotebookAutoClearedSection"
+      },
+      "title": "Cleared",
+      "type": "array"
+    },
+    "skipped": {
+      "description": "Sections NOT cleared, in source order — human_required (never clearable by code) or already-current (idempotent no-op).",
+      "items": {
+        "$ref": "#/$defs/NotebookAutoClearSkipped"
+      },
+      "title": "Skipped",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "NotebookAutoClearSkipped": {
+      "additionalProperties": false,
+      "description": "One section that was NOT auto-cleared, with the honest reason.\n\n``reason`` is either a D-attention tier (``human_required`` — a modified /\nlint-flagged / ungreen-assertion section the code may never clear) or\n``already-current`` (the section is already cleared-current in the journal —\nan auto-clear or a human sign-off at this hash — so a re-run appends nothing).",
+      "properties": {
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section",
+        "reason"
+      ],
+      "title": "notebook-auto-clear skipped section",
+      "type": "object"
+    },
+    "NotebookAutoClearedSection": {
+      "additionalProperties": false,
+      "description": "One section a CODE auto-clear record was appended for this call.",
+      "properties": {
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "section_sha": {
+          "title": "Section Sha",
+          "type": "string"
+        },
+        "view_sha": {
+          "title": "View Sha",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section",
+        "section_sha",
+        "view_sha"
+      ],
+      "title": "notebook-auto-clear cleared section",
+      "type": "object"
+    }
+  }
+}

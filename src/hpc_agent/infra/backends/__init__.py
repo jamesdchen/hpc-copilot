@@ -305,6 +305,20 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement parse_scheduler_states")
 
     @staticmethod
+    def scheduler_query_ran(stdout: str) -> tuple[str, bool]:
+        """Split the sentinel-ack line off a liveness / state query's *stdout*.
+
+        Returns ``(clean_stdout, ran_ok)`` — the positive-evidence transport
+        verdict (docs/design/connection-broker.md, sentinel-ack ruling). A
+        liveness/state query proves it RAN by echoing an affirmative token; a
+        caller must treat ``ran_ok=False`` (an empty / silently-truncated read
+        that carries no token) as UNKNOWN, never as "no jobs left the queue".
+        Default raises so an unmigrated backend is loud, matching the other
+        query hooks.
+        """
+        raise NotImplementedError("backend does not implement scheduler_query_ran")
+
+    @staticmethod
     def classify_scheduler_state(state: str) -> str:
         """Bucket a raw scheduler state token into ``alive`` / ``error`` / ``held``."""
         raise NotImplementedError("backend does not implement classify_scheduler_state")
@@ -333,6 +347,13 @@ class HPCBackend(abc.ABC):
         Used by /failures and the auto-retry resolver to fetch
         per-task stderr without re-deriving the path from the
         scheduler-specific %x_%A_%a / job-array format string.
+
+        *task_id* is the 0-based id WITHIN *job_id*'s own array — the
+        scheduler names log files by its local array index, so a waved
+        batch (LOCAL ``1-<size>`` array + ``TASK_OFFSET``) must subtract
+        its offset before calling this (see
+        :func:`hpc_agent.infra.cluster_logs.fetch_task_logs`). For a
+        single-array run the local id equals the global ``HpcTaskId``.
         """
         raise NotImplementedError("backend does not implement stderr_log_path")
 
@@ -402,11 +423,20 @@ class HPCBackend(abc.ABC):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         """Return the scheduler command for the given task range.
 
         *array* selects the array shape (``task_range`` elements); a single
         multi-rank MPI job (#293) passes ``array=False`` with ``task_range=None``.
+
+        *concurrency_cap* (#339 item 16) is the scheduler-native in-array
+        concurrency limit (SLURM ``%N``, SGE ``-tc N``); the profile engine
+        emits it only for an array submission with a positive cap and is
+        byte-identical otherwise. ``submit_one`` passes it through only when a
+        cap is actually set, so a backend override that predates item 16 (and
+        every stub in the wave tests) is called with the historic keyword set
+        unchanged.
         """
         ...
 
@@ -492,6 +522,7 @@ class HPCBackend(abc.ABC):
         cwd: Path | None = None,
         array: bool = True,
         setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
     ) -> str:
         """Submit ONE scheduler array (or one non-array job) and return its id.
 
@@ -519,9 +550,14 @@ class HPCBackend(abc.ABC):
         cwd = cwd or Path.cwd()
         if setup_log_dir:
             self._setup_log_dir()
-        cmd = self._build_command(
-            task_range, job_name, job_env, extra_flags=extra_flags, array=array
-        )
+        # #339 item 16: pass the native concurrency cap ONLY when one is set, so
+        # a backend override predating item 16 (every wave-test stub) is called
+        # with exactly the historic keyword set — the no-cap edge stays
+        # byte-identical and no stub signature has to grow the keyword.
+        build_kwargs: dict[str, Any] = {"extra_flags": extra_flags, "array": array}
+        if concurrency_cap is not None:
+            build_kwargs["concurrency_cap"] = concurrency_cap
+        cmd = self._build_command(task_range, job_name, job_env, **build_kwargs)
         result = self._execute_command(cmd, job_env, cwd)
         if result.returncode != 0:
             stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
@@ -536,6 +572,44 @@ class HPCBackend(abc.ABC):
             raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
         return match.group(1)
 
+    def submit_non_contiguous(
+        self,
+        task_range: str | None,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+        cwd: Path | None = None,
+        array: bool = True,
+        setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
+    ) -> list[str]:
+        """Submit a possibly non-contiguous array expression; return ALL job ids.
+
+        Base default: one :meth:`submit_one` call, one-element id list — correct
+        for every backend whose scheduler grammar accepts the expression
+        verbatim, and for stub/test backends that never see comma-bearing
+        ranges. :class:`ProfileBackend` overrides this with the family-aware
+        split (bug-sweep #6): SGE/PBS Pro ``qsub`` accept only a single
+        ``n[-m[:s]]`` range, so a scattered resubmit fans out into one array per
+        contiguous run and every resulting id must be threaded to the caller —
+        dropping the tail would leave live arrays untracked (silent orphans).
+        recover-flow's ``_submit_one_batch`` routes through THIS method so the
+        family decision lives with the backend, not the resubmit loop.
+        """
+        return [
+            self.submit_one(
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                cwd=cwd,
+                array=array,
+                setup_log_dir=setup_log_dir,
+                concurrency_cap=concurrency_cap,
+            )
+        ]
+
     def submit_plan(
         self,
         plan: SubmissionPlan,
@@ -546,6 +620,7 @@ class HPCBackend(abc.ABC):
         per_wave_extra_flags: list[str] | None = None,
         gate_job_ids: list[str] | None = None,
         setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[tuple[int, str, str]]:
         """Submit a :class:`SubmissionPlan` as wave-sequenced array jobs (#339).
 
@@ -575,6 +650,15 @@ class HPCBackend(abc.ABC):
         a single scheduler dependency flag by
         :meth:`_build_wave_dependency_flag`. *per_wave_extra_flags* (resource
         flags) are applied to every wave.
+
+        *concurrency_cap* (#339 item 16) is the scheduler-native in-array
+        concurrency limit (SLURM ``%N`` / SGE ``-tc N``) applied to EACH array
+        this plan submits. On the single-array plan (``concurrency_mode ==
+        "native-cap"``) it is the sole concurrency bound — one array, no
+        ``afterany`` boundary, perfect back-fill. On a genuinely multi-wave plan
+        (waves carry semantics) it caps concurrency WITHIN each wave's arrays
+        while the ``afterany`` chain still bounds cross-wave concurrency. ``None``
+        (the default) emits no cap, byte-identical to the pre-item-16 submit.
 
         Returns ``(wave, task_range, job_id)`` tuples in submission order.
 
@@ -654,6 +738,7 @@ class HPCBackend(abc.ABC):
                         extra_flags=dep_flags,
                         cwd=cwd,
                         setup_log_dir=False,
+                        concurrency_cap=concurrency_cap,
                     )
                 except RuntimeError as exc:
                     # Partial accounting on mid-plan failure (#339 inc 4),

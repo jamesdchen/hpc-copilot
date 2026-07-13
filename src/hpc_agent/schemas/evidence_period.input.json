@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/evidence_period.input.json",
+  "title": "evidence-period input spec",
+  "description": "Input spec for ``evidence-period`` — the WINDOW projection (E5).\n\nA time-window digest over the SAME collector, ending with the\nunconcluded-campaigns list. ``since`` is required (a window has a start);\n``until`` defaults to open-ended (up to now). ``tags`` optionally narrows the\nwindow to matching scope tags; an empty ``tags`` is the whole-window view (a\nperiod is inherently time-keyed, so no at-least-one-key rule applies here).",
+  "type": "object",
+  "required": [
+    "since"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "since": {
+      "description": "ISO-8601 window start: only records with ts >= since are projected.",
+      "title": "Since",
+      "type": "string"
+    },
+    "until": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ISO-8601 window end (only records with ts <= until); null = open-ended (up to now).",
+      "title": "Until"
+    },
+    "tags": {
+      "description": "Optional scope-tag slugs narrowing the window; empty = the whole window. Opaque caller data — core never interprets a tag's meaning.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "fleet": {
+      "default": false,
+      "description": "When True, run the identical per-namespace walk over every journaled experiment (the evidence-brief fleet posture); torn namespaces are skipped and counted.",
+      "title": "Fleet",
+      "type": "boolean"
+    }
+  }
+}

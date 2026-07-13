@@ -1,0 +1,11 @@
+ M src/hpc_agent/_wire/actions/write_run_sidecar.py
+ M src/hpc_agent/execution/mapreduce/combiner.py
+ M src/hpc_agent/execution/mapreduce/dispatch.py
+ M src/hpc_agent/execution/mapreduce/reduce/history.py
+ M src/hpc_agent/execution/mapreduce/reduce/metrics.py
+ M src/hpc_agent/ops/write_run_sidecar.py
+ M src/hpc_agent/schemas/resolve_submit_inputs.input.json
+ M src/hpc_agent/schemas/submit_s1.input.json
+ M src/hpc_agent/schemas/write_run_sidecar.input.json
+ M src/hpc_agent/state/runs.py
+ M tests/execution/mapreduce/test_history.py

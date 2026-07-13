@@ -8,7 +8,8 @@ not judgement:
 * whether the strategy *can* run async is a code fact —
   ``classify-campaign-path``'s ``supports_async_concurrency``;
 * whether there is room to run more is a code fact —
-  ``campaign-budget``'s ``remaining`` headroom minus what's in flight.
+  ``campaign-budget``'s ``remaining`` headroom (which already nets out the
+  in-flight runs, since each carries a sidecar from submit time).
 
 So this primitive resolves the deterministic majority in code
 (``decided_by="code"``, ``sequential``) — the strategy isn't built for
@@ -44,7 +45,8 @@ __all__ = ["decide_concurrency"]
             "Decide campaign iteration concurrency from observable evidence: "
             "the strategy's async support (classify-campaign-path's "
             "supports_async_concurrency) and budget headroom (campaign-budget's "
-            "remaining minus in-flight). Resolves sequential deterministically "
+            "remaining, which already nets in-flight). Resolves sequential "
+            "deterministically "
             "(decided_by=code) when async is unsupported or there's no headroom; "
             "otherwise escalates the how-aggressive choice (decided_by=judgement) "
             "carrying the computed safe max_in_flight bound."
@@ -88,7 +90,13 @@ def decide_concurrency(
     from hpc_agent._kernel.decision import decide
     from hpc_agent._wire.fixtures.escalation import CandidateAction, Escalation
 
-    headroom = None if remaining_jobs is None else max(0, remaining_jobs - in_flight)
+    # ``remaining_jobs`` is campaign-budget's ``remaining.max_jobs`` = cap −
+    # len(sidecars); sidecars are written at submit time, so in-flight runs are
+    # ALREADY subtracted. It must NOT be reduced by ``in_flight`` again — the old
+    # ``remaining - in_flight`` double-counted the in-flight jobs and wrongly
+    # resolved "sequential (no headroom)" while jobs were still affordable (the
+    # exact double-count advance.py's _refill documents and fixed).
+    headroom = None if remaining_jobs is None else max(0, remaining_jobs)
     safe_bound = k_cap if headroom is None else max(1, min(k_cap, headroom))
 
     def _not_async(_: Any) -> CandidateAction | None:
@@ -105,7 +113,10 @@ def decide_concurrency(
             return CandidateAction(
                 action="sequential",
                 source="policy",
-                rationale=f"no budget headroom (remaining={remaining_jobs}, in_flight={in_flight})",
+                rationale=(
+                    f"no budget headroom (remaining={remaining_jobs} already nets "
+                    f"{in_flight} in-flight)"
+                ),
             )
         return None
 

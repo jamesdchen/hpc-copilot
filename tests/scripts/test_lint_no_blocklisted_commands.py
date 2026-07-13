@@ -2,8 +2,9 @@
 
 Pins these invariants (mirrors ``test_lint_no_raw_ssh.py``):
 
-1. The real tree passes — no SKILL / worker-prompt authors a harness-blocked
-   command today.
+1. The real tree passes — no SKILL authors a harness-blocked command today
+   (``worker_prompts/*.md`` is retired from the scan; its invoke-only rule is
+   exercised via ``lint_file`` directly).
 2. The lint FIRES on each blocked shape: ``python -c`` / ``bash -c`` with a real
    argument, command substitution ``$(...)``, a pipe, a deny-listed verb
    (``scancel`` / ``rm -rf`` / …), a chain to a non-allow-listed command, a
@@ -34,18 +35,24 @@ _SPEC.loader.exec_module(lint)
 
 def _skill(tmp_path: Path, body: str, *, name: str = "hpc-demo") -> Path:
     root = tmp_path / "src"
-    p = root / "slash_commands" / "skills" / name / "SKILL.md"
+    p = root / "hpc_agent" / "slash_commands" / "skills" / name / "SKILL.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return root
 
 
-def _worker_prompt(tmp_path: Path, body: str, *, name: str = "demo.md") -> Path:
-    root = tmp_path / "src"
-    p = root / "hpc_agent" / "_kernel" / "extension" / "worker_prompts" / name
+def _worker_prompt_file(tmp_path: Path, body: str, *, name: str = "demo.md") -> Path:
+    """Write *body* at a ``worker_prompts/`` path and return the FILE.
+
+    The ``worker_prompts/*.md`` glob is retired from the default scan (see
+    ``scripts/_agent_prose_targets.py``), so the invoke-only worker-strictness
+    logic is exercised by handing the path straight to :func:`lint_file`, not
+    by scanning a root through ``main``.
+    """
+    p = tmp_path / "src" / "hpc_agent" / "_kernel" / "extension" / "worker_prompts" / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
-    return root
+    return p
 
 
 def test_real_tree_is_clean() -> None:
@@ -91,9 +98,17 @@ def test_background_fires(tmp_path: Path) -> None:
 
 
 def test_chain_in_worker_prompt_fires(tmp_path: Path) -> None:
-    """The invoke-only worker forbids ALL chaining — even all-hpc-agent."""
-    root = _worker_prompt(tmp_path, "First `hpc-agent install-commands && hpc-agent submit`.\n")
-    assert lint.main(root) == 1
+    """The invoke-only worker forbids ALL chaining — even all-hpc-agent.
+
+    ``worker_prompts/*.md`` is retired from the default scan, so the
+    worker-strictness path is exercised by handing the file to ``lint_file``
+    directly (``is_worker`` still keys off the path's ``worker_prompts`` part).
+    """
+    path = _worker_prompt_file(
+        tmp_path, "First `hpc-agent install-commands && hpc-agent submit`.\n"
+    )
+    findings = lint.lint_file(path)
+    assert any("worker is invoke-only" in category for _lineno, category, _msg in findings)
 
 
 # --- the lint stays QUIET on legitimate forms -----------------------------
@@ -128,7 +143,7 @@ def test_nonframework_counterexample_is_clean(tmp_path: Path) -> None:
 
 def test_prose_semicolon_in_message_is_clean(tmp_path: Path) -> None:
     """A ``;`` inside a quoted prose/message string (no framework command) is fine."""
-    root = _worker_prompt(tmp_path, "Record `note: main.py present, no marker; ask the user`.\n")
+    root = _skill(tmp_path, "Record `note: main.py present, no marker; ask the user`.\n")
     assert lint.main(root) == 0
 
 
@@ -140,7 +155,7 @@ def test_python_type_hint_in_python_fence_is_clean(tmp_path: Path) -> None:
 
 def test_allowlist_exempts_a_path_and_category(tmp_path: Path, monkeypatch) -> None:
     root = _skill(tmp_path, "Cancel with `scancel 9580235`.\n", name="hpc-debug")
-    rel = "slash_commands/skills/hpc-debug/SKILL.md"
+    rel = "hpc_agent/slash_commands/skills/hpc-debug/SKILL.md"
     assert lint.main(root) == 1  # fires without the exemption
     monkeypatch.setattr(lint, "ALLOWLIST", frozenset({(rel, "scancel")}))
     assert lint.main(root) == 0  # cited (path, category) exemption clears it

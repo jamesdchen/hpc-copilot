@@ -68,6 +68,7 @@ from hpc_agent.ops.recover.features_glue import (
 from hpc_agent.ops.recover.resolve import resolve as _resolve
 from hpc_agent.ops.recover_flow import resubmit_flow as _resubmit_flow
 from hpc_agent.state.journal import load_run, mark_pending_verdict, update_run_status
+from hpc_agent.state.pack_declarations import resolve_failure_patterns
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -96,7 +97,10 @@ class ClusterOutcome:
       cap/opt-out blocked from acting) was parked via ``mark_pending_verdict``.
     * ``"verdict_only"`` — opt-in OFF: the verdict was computed and surfaced but
       no side effect was taken (no resubmit, no park).
-    * ``"skipped"`` — a ``preempted`` cluster left to the auto-resume path.
+    * ``"skipped"`` — a ``preempted`` cluster left to the auto-resume path, or
+      a cluster whose ``error_class`` the wire ``FailureFeatures`` model cannot
+      validate (vocabulary gap — left for human triage rather than crashing
+      the monitor tick; the reason names the contract test to extend).
 
     ``decided_by`` mirrors the resolver verdict (``"code"`` | ``"judgement"``)
     for clusters that were resolved; ``None`` for a skipped cluster.
@@ -360,6 +364,20 @@ def maybe_resolve_and_recover(
     sidecar = _read_sidecar(experiment_dir, run_id) if clusters else None
     resources = sidecar.get("resources") if isinstance(sidecar, dict) else None
 
+    # S2 domain-pack seam: resolve every opted-in pack's failure_patterns ONCE (the
+    # ops-root caller is the pack-declaration boundary; the features glue stays
+    # pack-ignorant, receiving the typed opaque declarations). A repo that never
+    # opted in returns [] with zero probes beyond interview.json (the D7 silence),
+    # so an un-opted-in run's evidence vectors are byte-identical to the pre-packs
+    # shape. The declarations ride into build_failure_features, which COUNTS hits
+    # as evidence and NEVER maps a hit to a category/action/retry.
+    #
+    # T8 seam: the "pack" decision-journal scope kind + its records reader land
+    # separately; until then resolve_failure_patterns reads the opt-in shape-only
+    # (an opted-in repo with no current bind is loud by design, never a silent
+    # pass), and this call gains records_reader=... when that scope kind exists.
+    failure_patterns = resolve_failure_patterns(experiment_dir) if clusters else []
+
     outcomes: list[ClusterOutcome] = []
     count = int(record.auto_recover_count)
     cap = int(record.max_auto_recovers)
@@ -384,7 +402,34 @@ def maybe_resolve_and_recover(
             )
             continue
 
-        features = build_failure_features(cluster, record=record, sidecar=sidecar)
+        # Defense-in-depth under the widened wire FailureCategory (bug-sweep #2):
+        # a cluster whose error_class the wire model STILL cannot validate (a
+        # future catalog row, a leaked sentinel) must degrade to a per-cluster
+        # skipped outcome — never propagate and kill the whole monitor
+        # terminal-FAILED tick, which fires exactly when the operator needs it.
+        from pydantic import ValidationError
+
+        try:
+            features = build_failure_features(
+                cluster, record=record, sidecar=sidecar, failure_patterns=failure_patterns
+            )
+        except ValidationError as exc:
+            outcomes.append(
+                ClusterOutcome(
+                    fingerprint=fingerprint,
+                    error_class=error_class,
+                    task_ids=task_ids,
+                    disposition="skipped",
+                    reason=(
+                        f"failure-features vocabulary gap: {exc.error_count()} validation "
+                        f"error(s) building features for error_class={error_class!r} — "
+                        "widen the wire FailureCategory (contract test: "
+                        "test_failure_category_covers_classifier); cluster left for "
+                        "human triage"
+                    ),
+                )
+            )
+            continue
         esc_cluster = build_escalation_cluster(cluster, run_id=run_id)
         resolution = _resolve(features, cluster=esc_cluster, max_code_attempts=max_code_attempts)
 

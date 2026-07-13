@@ -26,6 +26,7 @@ branching logic and stay hand-written.
 from __future__ import annotations
 
 import argparse
+import copy
 import functools
 import json
 from importlib.resources import files as _resource_files
@@ -139,6 +140,7 @@ def _err(
     remediation: str | None = None,
     failure_features: dict[str, Any] | None = None,
     escalation: dict[str, Any] | None = None,
+    spec_skeleton: Any = None,
 ) -> int:
     payload = {
         "ok": False,
@@ -153,6 +155,10 @@ def _err(
         payload["failure_features"] = failure_features
     if escalation is not None:
         payload["escalation"] = escalation
+    if spec_skeleton is not None:
+        # A minimal valid instance of the failing schema (refusals-carry-a-valid-
+        # skeleton). Only ever set on a spec_invalid schema-validation refusal.
+        payload["spec_skeleton"] = spec_skeleton
     _emit(payload)
     return _EXIT_CODE_BY_CATEGORY.get(category, EXIT_INTERNAL)
 
@@ -225,6 +231,9 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
     failure_features = getattr(exc, "failure_features", None)
     if failure_features is None and exc.error_code == "spec_invalid":
         failure_features = _spec_invalid_failure_features(exc)
+    # A schema-validation SpecInvalid attaches a code-generated minimal valid
+    # instance (``build_spec_skeleton``); ride it into the refusal envelope so
+    # the caller fills it in instead of reconstructing the shape from the schema.
     return _err(
         error_code=exc.error_code,
         message=str(exc),
@@ -232,6 +241,7 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
         retry_safe=exc.retry_safe,
         remediation=remediation,
         failure_features=failure_features,
+        spec_skeleton=getattr(exc, "spec_skeleton", None),
     )
 
 
@@ -311,6 +321,16 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
         loaded = json.loads(spec_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise errors.SpecInvalid(f"--spec file not found: {spec_path}") from exc
+    except UnicodeDecodeError as exc:
+        # A UTF-16 (or otherwise non-UTF-8) spec file — the classic offender is
+        # PowerShell redirection (``... > spec.json``) which writes UTF-16LE
+        # with a BOM. That is a user file-encoding error, not an ``internal``
+        # envelope; classify it as spec_invalid with a fix hint.
+        raise errors.SpecInvalid(
+            f"--spec file is not valid UTF-8 ({spec_path}): {exc}. "
+            "Re-save it as UTF-8 (PowerShell ``>`` redirection writes UTF-16 — "
+            "use ``Set-Content -Encoding utf8`` or ``Out-File -Encoding utf8``)."
+        ) from exc
     except OSError as exc:
         # Not-a-readable-file for any other reason (invalid characters in the
         # path on Windows, a directory, permissions). Same user-error class as
@@ -325,6 +345,197 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
     if schema_name is not None:
         _validate_against_schema(loaded, schema_name)
     return loaded
+
+
+# ─── spec skeleton (refusals carry a valid skeleton) ───────────────────────
+#
+# notebook-audit.md queue item 14 / Addendum 9 (run-#11): a spec_invalid refusal
+# that only names the failing JSON path made the agent burn describe|grep
+# round-trips reconstructing the shape. So a schema-validation refusal now
+# carries ``spec_skeleton`` — a code-generated MINIMAL VALID instance of the
+# schema (defaults where declared, typed placeholders for required-without-
+# default, optional fields omitted). Pure, deterministic, no LLM.
+
+_SKELETON_MAX_DEPTH = 6
+#: Serialized-size cap for the embedded skeleton (context-budget principle):
+#: a pathological/huge schema is truncated to its top-level keys with a note
+#: rather than flooding the refusal envelope.
+_SKELETON_BYTES_CAP = 4096
+
+
+def _resolve_local_ref(node: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
+    """Resolve an in-document ``{"$ref": "#/$defs/..."}`` against *root*.
+
+    Only same-document JSON-pointer refs (``#/...``) are followed — the
+    self-contained Pydantic-emitted schemas this serves use exactly those.
+    An external/unresolvable ref is left as-is (the caller then falls through
+    to an untyped placeholder).
+    """
+    ref = node.get("$ref")
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return node
+    target: Any = root
+    for part in ref[2:].split("/"):
+        part = part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(target, dict) or part not in target:
+            return node
+        target = target[part]
+    return target if isinstance(target, dict) else node
+
+
+def _merge_all_of(node: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
+    """Shallow-merge an ``allOf`` node's branches (properties + required)."""
+    merged = {k: v for k, v in node.items() if k != "allOf"}
+    props: dict[str, Any] = dict(merged.get("properties", {}))
+    required: list[Any] = list(merged.get("required", []))
+    for sub in node.get("allOf", []):
+        if not isinstance(sub, dict):
+            continue
+        sub = _resolve_local_ref(sub, root)
+        if "allOf" in sub:
+            sub = _merge_all_of(sub, root)
+        props.update(sub.get("properties", {}))
+        required.extend(sub.get("required", []))
+        for key, value in sub.items():
+            if key not in ("properties", "required", "allOf"):
+                merged.setdefault(key, value)
+    if props:
+        merged["properties"] = props
+    if required:
+        merged["required"] = list(dict.fromkeys(required))
+    return merged
+
+
+def _string_placeholder(node: dict[str, Any]) -> str:
+    hint = node.get("description") or node.get("title") or "value"
+    snippet = " ".join(str(hint).split())[:48]
+    return f"<string: {snippet}>"
+
+
+def _number_placeholder(node: dict[str, Any], *, integer: bool) -> Any:
+    """A minimum-aware numeric placeholder so the skeleton validates directly.
+
+    Numbers are not placeholder strings, so pick a value inside the declared
+    bound (``minimum`` / ``exclusiveMinimum``) rather than a blind ``0`` that a
+    ``minimum: 1`` field would reject.
+    """
+    if "minimum" in node and isinstance(node["minimum"], (int, float)):
+        val: float = node["minimum"]
+    elif "exclusiveMinimum" in node and isinstance(node["exclusiveMinimum"], (int, float)):
+        val = node["exclusiveMinimum"] + 1
+    else:
+        val = 0
+    return int(val) if integer else val
+
+
+def _skeleton(node: Any, root: dict[str, Any], depth: int) -> Any:
+    """Recursive core of :func:`build_spec_skeleton`."""
+    if not isinstance(node, dict):
+        return None
+    if depth > _SKELETON_MAX_DEPTH:
+        # Bounded recursion: a self-referential/pathological schema stops here.
+        return None
+    node = _resolve_local_ref(node, root)
+    if "allOf" in node:
+        node = _merge_all_of(node, root)
+    # Union: take the first branch, preferring a non-null one (oneOf per the
+    # spec; anyOf is how Pydantic renders nullable/union fields).
+    for union_key in ("oneOf", "anyOf"):
+        branches = node.get(union_key)
+        if isinstance(branches, list) and branches:
+            dict_branches = [b for b in branches if isinstance(b, dict)]
+            if not dict_branches:
+                return None
+            non_null = [b for b in dict_branches if b.get("type") != "null"]
+            chosen = dict(non_null[0] if non_null else dict_branches[0])
+            for carry in ("default", "description", "title"):
+                if carry in node and carry not in chosen:
+                    chosen[carry] = node[carry]
+            return _skeleton(chosen, root, depth)
+    if "default" in node:
+        return copy.deepcopy(node["default"])
+    if "const" in node:
+        return copy.deepcopy(node["const"])
+    enum = node.get("enum")
+    if isinstance(enum, list) and enum:
+        return copy.deepcopy(enum[0])
+    typ = node.get("type")
+    if isinstance(typ, list):
+        typ = next((t for t in typ if t != "null"), typ[0] if typ else None)
+    if typ == "object" or (typ is None and "properties" in node):
+        return _object_skeleton(node, root, depth)
+    if typ == "array":
+        # Required arrays: an empty list (context-budget — we do not fabricate
+        # example members). A caller-required non-empty array is named in the
+        # message's JSON path.
+        return []
+    if typ == "string":
+        return _string_placeholder(node)
+    if typ == "integer":
+        return _number_placeholder(node, integer=True)
+    if typ == "number":
+        return _number_placeholder(node, integer=False)
+    if typ == "boolean":
+        return False
+    if typ == "null":
+        return None
+    return None
+
+
+def _object_skeleton(node: dict[str, Any], root: dict[str, Any], depth: int) -> dict[str, Any]:
+    """Build the required-only instance of an object schema."""
+    props = node.get("properties")
+    required = node.get("required", [])
+    out: dict[str, Any] = {}
+    if not isinstance(props, dict):
+        return out
+    for name in required:
+        if name in props:
+            out[name] = _skeleton(props[name], root, depth + 1)
+        else:
+            out[name] = None
+    return out
+
+
+def build_spec_skeleton(schema: dict[str, Any]) -> Any:
+    """Code-generate a MINIMAL VALID instance of a JSON schema.
+
+    Deterministic, pure, no LLM. Defaults are filled where the schema declares
+    them; required fields without a default get a typed placeholder
+    (``"<string: ...>"``, a bound-aware number, ``false``, ``[]`` / a nested
+    required-only ``{}``); optional fields are omitted. In-document ``$ref``
+    (``#/$defs/...``) and ``allOf`` are merged; ``oneOf`` / ``anyOf`` take the
+    first (non-null-preferring) branch; recursion is depth-capped so a
+    pathological schema cannot blow up.
+
+    Returns ``None`` when *schema* is not a dict.
+    """
+    if not isinstance(schema, dict):
+        return None
+    return _skeleton(schema, schema, 0)
+
+
+def _bounded_skeleton(skeleton: Any) -> Any:
+    """Cap the skeleton's serialized size (context-budget principle).
+
+    Under the cap: returned unchanged. Over it: truncated to its top-level
+    keys, each value replaced by a pointer note, with a ``_truncated`` marker —
+    the caller still learns the top-level shape without flooding the envelope.
+    """
+    text = json.dumps(skeleton, sort_keys=True)
+    if len(text.encode("utf-8")) <= _SKELETON_BYTES_CAP:
+        return skeleton
+    if isinstance(skeleton, dict):
+        truncated: dict[str, Any] = {
+            "_truncated": (
+                f"spec_skeleton exceeded {_SKELETON_BYTES_CAP}B; showing top-level "
+                "required keys only — read the schema for the nested shape"
+            )
+        }
+        for key in skeleton:
+            truncated[key] = "<see schema>"
+        return truncated
+    return {"_truncated": f"spec_skeleton exceeded {_SKELETON_BYTES_CAP}B"}
 
 
 def _validate_against_schema(payload: Any, schema_name: str) -> None:
@@ -387,11 +598,24 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
         # Schema names are underscored (interview, submit_flow); CLI verbs are
         # hyphenated (interview, submit-flow). The mapping is mechanical.
         verb = schema_name.replace("_", "-")
-        raise errors.SpecInvalid(
+        spec_invalid = errors.SpecInvalid(
             f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}",
             remediation=(
                 f"Inspect the schema: `hpc-agent describe {verb}` (returns the "
                 f"input_schema name) or read hpc_agent/schemas/"
-                f"{schema_name}.input.json directly. Failing JSON path: {path}."
+                f"{schema_name}.input.json directly. Failing JSON path: {path}. "
+                "The refusal carries a spec_skeleton — a minimal valid instance "
+                "(placeholders for required fields, defaults where declared) to "
+                "fill in rather than reconstruct the shape."
             ),
-        ) from exc
+        )
+        # Refusals carry a valid skeleton (notebook-audit.md item 14 / run-#11):
+        # a code-generated minimal valid instance the caller fills in, capped so
+        # a huge schema can't flood the envelope.
+        try:
+            skeleton = build_spec_skeleton(schema)
+        except Exception:  # noqa: BLE001 — the skeleton is a best-effort hint; never mask the real refusal
+            skeleton = None
+        if skeleton is not None:
+            spec_invalid.spec_skeleton = _bounded_skeleton(skeleton)  # type: ignore[attr-defined]
+        raise spec_invalid from exc

@@ -33,12 +33,38 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent.infra.backends import _TASK_OFFSET_ENV, HPCBackend
-from hpc_agent.infra.backends.profile import SchedulerProfile
+from hpc_agent.infra.backends.profile import SchedulerProfile, dialect_for
 from hpc_agent.infra.backends.profile import render_script as _render_script
+from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
 
 if TYPE_CHECKING:
     import subprocess
     from collections.abc import Callable
+    from pathlib import Path
+
+
+# Sentinel-ack transport verdict (docs/design/connection-broker.md, 2026-07-10).
+# Every scheduler-liveness / -state query (:meth:`ProfileBackend.build_alive_check_cmd`
+# / :meth:`~ProfileBackend.build_scheduler_state_cmd`) ends by echoing this token
+# with the scheduler command's own exit code. Its PRESENCE is the affirmative
+# proof that the remote shell ran the query to completion; an empty read that
+# does NOT carry it is a silently-truncated / never-executed channel — UNKNOWN,
+# never "no jobs left the queue". This kills the silence-as-terminal class the
+# old ``… || true`` masking created: a scheduler binary that failed (qstat
+# missing, slurmctld down) returned rc 0 + empty stdout, indistinguishable from
+# an empty queue, so every job read as terminal. See
+# :meth:`ProfileBackend.scheduler_query_ran`.
+_SCHED_ACK_PREFIX = "__HPC_SCHED_ACK__="
+
+
+def _with_ack(cmd: str) -> str:
+    """Suffix *cmd* with the scheduler sentinel-ack echo (see :data:`_SCHED_ACK_PREFIX`).
+
+    Thin alias for the shared :func:`hpc_agent.infra.ssh_validation.wrap_with_ack`
+    primitive (the ONE definition of the ack-wrap mechanism); this keeps the
+    scheduler prefix as the call-site default.
+    """
+    return wrap_with_ack(cmd, _SCHED_ACK_PREFIX)
 
 
 def _fmt_hms(total_seconds: int) -> str:
@@ -328,6 +354,7 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         """Assemble the submit command.
 
@@ -335,18 +362,117 @@ class ProfileBackend(HPCBackend):
         elements). A single multi-rank MPI job (#293) is submitted with
         ``array=False`` and ``task_range=None`` — one job whose internal
         parallelism is the rank count, not a scheduler array.
+
+        *concurrency_cap* (#339 item 16) is the scheduler-native in-array
+        concurrency limit — how many array TASKS may run at once — spelled
+        per-family (SLURM ``--array=<range>%N``, SGE ``qsub -tc N``, PBS
+        ``-J/-t <range>%N``). It is emitted ONLY for an array submission
+        (``array`` True) with a positive cap; a ``None`` / non-positive cap or a
+        non-array (single MPI) job leaves the command byte-identical to the
+        pre-item-16 output. The native cap gives perfect back-fill inside ONE
+        array (no ``afterany`` wave boundary that drains to ~zero while
+        stragglers finish), so it is the concurrency-bounding mechanism for a
+        single-array sweep; the wave chain is kept only where waves carry
+        semantics (per-wave combine checkpoints, staged canary gates).
         """
         if self.profile.family == "slurm":
             return self._build_slurm_command(
-                task_range, job_name, job_env, extra_flags=extra_flags, array=array
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                array=array,
+                concurrency_cap=concurrency_cap,
             )
         if self.profile.family in ("pbspro", "torque"):
             return self._build_pbs_command(
-                task_range, job_name, job_env, extra_flags=extra_flags, array=array
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                array=array,
+                concurrency_cap=concurrency_cap,
             )
         return self._build_sge_command(
-            task_range, job_name, job_env, extra_flags=extra_flags, array=array
+            task_range,
+            job_name,
+            job_env,
+            extra_flags=extra_flags,
+            array=array,
+            concurrency_cap=concurrency_cap,
         )
+
+    def submit_non_contiguous(
+        self,
+        task_range: str | None,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+        cwd: Path | None = None,
+        array: bool = True,
+        setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
+    ) -> list[str]:
+        """Submit a possibly non-contiguous array expression, family-aware (#6).
+
+        recover-flow's :func:`compact_task_ids` packs the exact failed ids into
+        a comma-bearing expression (``"4,8,13-15"``). SLURM ``--array`` and
+        TORQUE ``-t`` accept that verbatim — one submission, one job id. SGE/UGE
+        ``qsub -t`` and PBS Pro ``qsub -J`` accept only a SINGLE ``n[-m[:s]]``
+        range, so for those families this splits the expression on commas
+        (:func:`compact_task_ids`'s output is already one contiguous run per
+        comma-delimited segment) and submits ONE array job per run via
+        :meth:`submit_one`, accumulating every resulting job id.
+
+        Returning the full id list — rather than the single-id
+        :meth:`submit_one` contract — is deliberate: a scattered resubmit that
+        fans out into N arrays produces N job ids, and dropping the tail would
+        leave those arrays untracked by monitor/kill (silent orphans). Callers
+        that thread resubmit ids (recover-flow's submit loop) extend their
+        ``submitted_ids`` with the whole list so partial-resume semantics hold.
+
+        The log dir is created once here (``setup_log_dir=True``) and each
+        per-run :meth:`submit_one` skips its own idempotent ``mkdir``.
+        """
+        one_shot = (
+            not array
+            or task_range is None
+            or "," not in str(task_range)
+            or dialect_for(self.profile.family).supports_comma_array_ranges
+        )
+        if one_shot:
+            return [
+                self.submit_one(
+                    task_range,
+                    job_name,
+                    job_env,
+                    extra_flags=extra_flags,
+                    cwd=cwd,
+                    array=array,
+                    setup_log_dir=setup_log_dir,
+                    concurrency_cap=concurrency_cap,
+                )
+            ]
+
+        runs = [seg.strip() for seg in str(task_range).split(",") if seg.strip()]
+        if setup_log_dir:
+            self._setup_log_dir()
+        job_ids: list[str] = []
+        for run in runs:
+            job_ids.append(
+                self.submit_one(
+                    run,
+                    job_name,
+                    job_env,
+                    extra_flags=extra_flags,
+                    cwd=cwd,
+                    array=array,
+                    setup_log_dir=False,
+                    concurrency_cap=concurrency_cap,
+                )
+            )
+        return job_ids
 
     def _build_pbs_command(
         self,
@@ -356,6 +482,7 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         # PBS Pro array flag is ``-J``; TORQUE uses ``-t`` (like SGE). Streams
         # joined with ``-j oe`` (PBS) cf. SGE's ``-j y``. Otherwise the qsub
@@ -363,7 +490,44 @@ class ProfileBackend(HPCBackend):
         array_flag = "-J" if self.profile.family == "pbspro" else "-t"
         cmd = [self.profile.submit_bin]
         if array:
-            cmd += [array_flag, str(task_range)]
+            if (
+                not dialect_for(self.profile.family).supports_comma_array_ranges
+                and task_range is not None
+                and "," in str(task_range)
+            ):
+                # PBS Pro ``qsub -J`` accepts only a single ``X-Y[:Z]`` range —
+                # no comma lists (TORQUE's ``-t`` does; its dialect sets
+                # ``supports_comma_array_ranges=True``). A non-contiguous
+                # resubmit expression must be split into one array per contiguous
+                # run via :meth:`submit_non_contiguous`; a comma reaching the
+                # builder would emit an invalid qsub, so fail loudly here (#6).
+                raise errors.SpecInvalid(
+                    f"PBS Pro qsub {array_flag} accepts only a single "
+                    f"'X-Y[:Z]' range, not a comma list ({str(task_range)!r}). "
+                    "Route non-contiguous task ranges through "
+                    "submit_non_contiguous, which splits them into one array "
+                    "job per contiguous run."
+                )
+            # PBS in-array concurrency cap (#339 item 16, #32): the two forks
+            # diverge and must NOT share one rule. TORQUE ``-t`` accepts the
+            # ``%N`` slot-limit suffix on the array range
+            # (cap_style="range_suffix"), but PBS Pro ``-J`` REJECTS it
+            # (``qsub: illegal -J value``) and caps running subjobs via the
+            # separate ``-l max_run_subjobs=N`` attribute
+            # (cap_style="max_run_subjobs"). Read the emission style off the
+            # dialect so PBS Pro can't silently inherit TORQUE's suffix rule. A
+            # None/non-positive cap leaves the range bare AND emits no attribute,
+            # so the command stays byte-identical to the pre-item-16 output.
+            array_spec = str(task_range)
+            cap_attr: list[str] = []
+            if concurrency_cap and concurrency_cap > 0:
+                cap_style = dialect_for(self.profile.family).cap_style
+                if cap_style == "range_suffix":
+                    array_spec = f"{array_spec}%{int(concurrency_cap)}"
+                elif cap_style == "max_run_subjobs":
+                    cap_attr = ["-l", f"max_run_subjobs={int(concurrency_cap)}"]
+            cmd += [array_flag, array_spec]
+            cmd += cap_attr
         cmd += [
             "-N",
             job_name,
@@ -401,12 +565,21 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         cmd = [self.profile.submit_bin]
         if getattr(self, "cluster", ""):
             cmd.append(f"--clusters={self.cluster}")
         if array:
-            cmd += ["--array", str(task_range)]
+            # SLURM in-array concurrency cap (#339 item 16): the ``%N`` suffix on
+            # the array range (``--array=1-100%20``) limits simultaneously
+            # running tasks, back-filling as they finish. Only meaningful for an
+            # array; a None/non-positive cap leaves the range bare, so the
+            # command is byte-identical to the pre-item-16 output.
+            array_spec = str(task_range)
+            if concurrency_cap and concurrency_cap > 0:
+                array_spec = f"{array_spec}%{int(concurrency_cap)}"
+            cmd += ["--array", array_spec]
         cmd += ["--job-name", job_name]
         if getattr(self, "account", ""):
             cmd += ["--account", self.account]
@@ -450,10 +623,32 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         cmd = [self.profile.submit_bin]
         if array:
+            if task_range is not None and "," in str(task_range):
+                # SGE/UGE ``qsub -t`` grammar is a SINGLE ``n[-m[:s]]`` range —
+                # no comma lists (only SLURM/TORQUE accept those). A
+                # non-contiguous resubmit expression ("4,8,13-15") must be split
+                # into one array per contiguous run via
+                # :meth:`submit_non_contiguous`; reaching the builder with a
+                # comma still present would emit an invalid qsub that the
+                # scheduler rejects with an opaque error, so fail loudly and
+                # diagnosably here instead (#6).
+                raise errors.SpecInvalid(
+                    "SGE qsub -t accepts only a single 'n[-m[:s]]' range, not a "
+                    f"comma list ({str(task_range)!r}). Route non-contiguous "
+                    "task ranges through submit_non_contiguous, which splits "
+                    "them into one array job per contiguous run."
+                )
             cmd += ["-t", str(task_range)]
+            # UGE/SGE in-array concurrency cap (#339 item 16): ``-tc N`` limits
+            # how many array tasks run at once, back-filling as they finish. Only
+            # meaningful for an array; a None/non-positive cap emits nothing so
+            # the command is byte-identical to the pre-item-16 output.
+            if concurrency_cap and concurrency_cap > 0:
+                cmd += ["-tc", str(int(concurrency_cap))]
         cmd += [
             "-N",
             job_name,
@@ -497,7 +692,7 @@ class ProfileBackend(HPCBackend):
             # squeue (active states only) so completed/failed jobs don't
             # leak history and make abandoned-run detection useless.
             csv = ",".join(job_ids)
-            return f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
+            return _with_ack(f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # PBS: query the explicit ids (NOT ``qstat -u``). ``-u`` triggers PBS's
             # *wide* alternate listing where the state column is no longer index 4
@@ -506,10 +701,10 @@ class ProfileBackend(HPCBackend):
             # ``-t`` expands array parents into subjobs; ids that have left the
             # queue print to stderr (discarded) and are simply absent from stdout.
             ids = " ".join(shlex.quote(str(j)) for j in job_ids)
-            return f"qstat -t {ids} 2>/dev/null || true"
+            return _with_ack(f"qstat -t {ids} 2>/dev/null")
         # sge: one ``qstat -u $USER`` call regardless of N; filtering happens
         # in parse_alive_output. $USER expands cluster-side.
-        return 'qstat -u "$USER" 2>/dev/null || true'
+        return _with_ack('qstat -u "$USER" 2>/dev/null')
 
     @classmethod
     def parse_alive_output(cls, stdout: str, job_ids: list[str]) -> set[str]:
@@ -571,14 +766,61 @@ class ProfileBackend(HPCBackend):
             return "true"
         if cls.profile.family == "slurm":
             csv = ",".join(job_ids)
-            return f"squeue -j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null || true"
+            return _with_ack(f"squeue -j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # See build_alive_check_cmd: explicit ids (+ ``-t`` for arrays) keep
             # PBS in its brief format so the state token stays at column 4.
             ids = " ".join(shlex.quote(str(j)) for j in job_ids)
-            return f"qstat -t {ids} 2>/dev/null || true"
+            return _with_ack(f"qstat -t {ids} 2>/dev/null")
         # sge: qstat -u output already carries the state column.
-        return 'qstat -u "$USER" 2>/dev/null || true'
+        return _with_ack('qstat -u "$USER" 2>/dev/null')
+
+    @classmethod
+    def scheduler_query_ran(cls, stdout: str) -> tuple[str, bool]:
+        """Split the sentinel-ack line off *stdout*; return ``(clean_stdout, ran_ok)``.
+
+        The positive-evidence transport verdict for a liveness / state query
+        (sentinel-ack ruling, docs/design/connection-broker.md). ``ran_ok`` is a
+        claim about whether the QUERY executed — never about the remote command
+        succeeding — so a caller can distinguish "the scheduler answered (its
+        answer may be an empty queue)" from "the channel returned nothing / was
+        truncated" (UNKNOWN) instead of reading silence as "all jobs terminal".
+
+        Rules:
+
+        * **Ack absent** → ``ran_ok=False`` for every family: the remote shell
+          never reached the trailing echo (empty / silently-truncated read).
+          This is the class the ruling exists to kill.
+        * **Ack present, whole-queue query (SGE)** → ``ran_ok`` iff the recorded
+          rc is ``0``. SGE's ``qstat -u $USER`` lists the whole user queue and
+          exits 0 on an empty queue, so a non-zero rc is the scheduler binary
+          ITSELF failing (missing / server down) — exactly the case the old
+          ``|| true`` masked into a spurious "no jobs".
+        * **Ack present, explicit-id query (SLURM / PBS Pro / TORQUE)** →
+          ``ran_ok=True`` regardless of rc. These families query EXPLICIT ids
+          (``squeue -j`` / ``qstat -t <ids>``) and exit non-zero once a queried
+          id has left the queue (SLURM "invalid job id", PBS "Unknown Job Id" /
+          "job has finished"), indistinguishable from a genuine binary failure
+          by rc alone — so they lean on ack PRESENCE (the channel-silence guard)
+          and defer the completed-vs-failed decision to the reporter's positive
+          task evidence (``ops/monitor/classify.settle``), never to this query's
+          emptiness. Reading a non-zero rc as "query failed" here is the G9 bug
+          that pinned every finished PBS run at UNKNOWN (#5): once one job leaves
+          the queue the rc-0 rule can never settle the run terminal. The family
+          capability is read off :class:`FamilyDialect`
+          (``explicit_id_liveness_query``), not hardcoded per branch, so a family
+          the dev loop doesn't exercise can't inherit SGE's whole-queue rule.
+
+        The ack line is stripped from the returned stdout so the family parsers
+        see only real scheduler rows (they already skip a non-digit-led line,
+        but stripping keeps the contract explicit).
+        """
+        clean, rc = split_ack(stdout, _SCHED_ACK_PREFIX)
+        if rc is None:
+            return clean, False
+        if dialect_for(cls.profile.family).explicit_id_liveness_query:
+            return clean, True
+        return clean, rc == 0
 
     @classmethod
     def parse_scheduler_states(cls, stdout: str, job_ids: list[str]) -> dict[str, str]:
@@ -711,9 +953,11 @@ class ProfileBackend(HPCBackend):
     def stderr_log_path(cls, remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 
-        *task_id* is the 0-based ``HpcTaskId``. Both families' array scripts
-        derive it as ``<scheduler array index> - 1``, so the on-disk filename
-        carries the 1-based ``ArrayIndex`` — recovered here through
+        *task_id* is the 0-based id within *job_id*'s OWN array (equal to the
+        global ``HpcTaskId`` for a single-array run; a waved batch's caller
+        subtracts its ``TASK_OFFSET`` first — the scheduler names the file by
+        its local index, ``%a`` / ``$SGE_TASK_ID``). The on-disk filename
+        carries the 1-based local ``ArrayIndex`` — recovered here through
         :func:`~hpc_agent._kernel.contract.task_id.to_array_index`, the single
         validated ``±1``.
         """

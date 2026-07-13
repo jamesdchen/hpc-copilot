@@ -51,6 +51,10 @@ _BLOCKING_FUNCS = {"run", "call", "check_call", "check_output"}
 # A finding is exempt when ANY function on its enclosing-def stack matches.
 # Every entry must cite WHY the site is bounded (or deliberately unbounded).
 _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
+    # The kit reference adapter's start_background IS the detached-worker
+    # capability under test: a background worker deliberately outlives the call
+    # (await_wake carries the bounded timeout_s instead).
+    "src/hpc_agent/conformance/adapters/claude_code.py": {"start_background"},
     # The compliant capture wrappers themselves — the S2-wedge fix. Every
     # wait inside is bounded: `_capture_windows` kills on deadline then
     # drains for at most _POST_KILL_DRAIN_SEC; `_capture_via_select` bounds

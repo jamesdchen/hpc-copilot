@@ -117,6 +117,40 @@ def _async_should_refill(
     return False
 
 
+def _refill_is_deterministic(experiment_dir: Path, campaign_id: str) -> bool:
+    """True when this campaign's next step is a deterministic ``campaign-refill``.
+
+    RFC #362: refill is the deterministic (no-judgement) route ONLY when the
+    campaign opted into async refill, is GREENLIT (the standing consent
+    ``campaign-refill`` itself re-checks and refuses without), AND
+    ``campaign-advance`` — the authoritative ladder, the SAME call
+    :func:`_async_should_refill` routes on — decides ``refill`` this tick. Any
+    other case (sync campaign, un-greenlit, or advance would wait/stop) keeps the
+    agent decide delegate, so the un-async default is byte-identical. Degrades to
+    ``False`` (never crashes load-context) on an unreadable manifest/journal.
+    """
+    async_on, _k = _campaign_async_config(experiment_dir, campaign_id)
+    if not async_on:
+        return False
+    from hpc_agent.meta.campaign.manifest import read_manifest
+
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except (OSError, ValueError, KeyError):
+        return False
+    if not manifest or not manifest.get("greenlit"):
+        return False
+    from hpc_agent.meta.campaign.atoms.advance import campaign_advance
+
+    try:
+        decision = campaign_advance(experiment_dir=experiment_dir, campaign_id=campaign_id)[
+            "decision"
+        ]
+    except (OSError, ValueError, KeyError):
+        return False
+    return bool(decision == "refill")
+
+
 def _next_step_hint(
     experiment_dir: Path,
     in_flight: list[dict[str, Any]],
@@ -250,6 +284,33 @@ def _build_delegate(
         }
     if hint == "decide":
         campaign_id = _decide_campaign_id(campaigns, latest_run)
+        # RFC #362: when async_refill is ON, the campaign is greenlit, AND advance
+        # authoritatively decides ``refill``, the refill step is DETERMINISTIC — it
+        # routes to the ``campaign-refill`` CLI actor (no judgement), not the agent
+        # decide chain. Any other case (sync campaign, un-greenlit, or advance
+        # would wait/stop) keeps the agent decide delegate below unchanged.
+        if campaign_id is not None and _refill_is_deterministic(experiment_dir, campaign_id):
+            return {
+                "kind": "cli",
+                "step": "refill",
+                "run_id": None,
+                "campaign_id": campaign_id,
+                "experiment_dir": exp,
+                "reason": (
+                    f"campaign {campaign_id!r} has free pool slot(s); refill "
+                    "deterministically via campaign-refill (greenlight is the "
+                    "standing consent — no per-iteration judgement)"
+                ),
+                "spawn_request": None,
+                "prompt": (
+                    f"Refill campaign {campaign_id!r} in {exp}: run `campaign-refill "
+                    f'--spec {{"campaign_id": {campaign_id!r}}} --experiment-dir '
+                    f"{exp}` (or the campaign-refill typed MCP tool). This is a "
+                    "deterministic CLI step — campaign-advance already decided "
+                    "refill; the actor resolves + submits refill_count detached "
+                    "iterations. No judgement required."
+                ),
+            }
         return {
             "kind": "agent",
             "step": "decide",
@@ -261,10 +322,13 @@ def _build_delegate(
                 "iteration(s) (a free slot in async-refill mode, or an idle "
                 "campaign in synchronous mode)"
             ),
-            # step stays "decide" even for an async refill: the campaign block
-            # flow (blocks.py → atoms/advance.py) dispatches the decide chain,
-            # then campaign-advance returns decision="refill" and the refill
-            # arm submits refill_count iterations (#362, plan §1.4).
+            # An async refill that advance decides is routed to campaign-refill
+            # above (kind="cli"). This agent path covers the sync decide step and
+            # the un-greenlit / not-yet-refilling async case: campaign-advance
+            # decides iterate/refill/stop, and when it decides refill under a
+            # greenlit async manifest the ``campaign-refill`` actor
+            # (ops/campaign_refill.py) submits the iterations — the re-home of the
+            # deleted deterministic_resolver refill arm (#362).
             "spawn_request": None,
             "prompt": (
                 f"Advance campaign {campaign_id!r} in {exp} via the campaign "
@@ -431,7 +495,9 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
         if camp_root.is_dir():
             try:
                 cursor = read_cursor(experiment_dir, campaign_id)
-            except ValueError as exc:
+            except (ValueError, errors.JournalCorrupt) as exc:
+                # read_cursor raises JournalCorrupt (non-int / newer
+                # cursor_schema_version); ValueError kept for legacy paths.
                 cursor = None
                 warnings.append(f"campaign {campaign_id} cursor unreadable: {exc}")
             if cursor is not None:

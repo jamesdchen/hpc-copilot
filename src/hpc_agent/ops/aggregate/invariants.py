@@ -283,6 +283,7 @@ def verify_aggregation_complete(
         raise errors.SpecInvalid(str(exc)) from exc
 
     wave_map: dict[str, list[int]] = sidecar.get("wave_map") or {}
+    wave_map_present = bool(wave_map)
     expected_tasks: set[int] = set()
     for tids in wave_map.values():
         for tid in tids:
@@ -290,6 +291,22 @@ def verify_aggregation_complete(
                 expected_tasks.add(int(tid))
             except (TypeError, ValueError):
                 continue
+    if not wave_map_present:
+        # Implicit wave-0 (bug-sweep 2026-07-11 DISPUTED, adjudicated: arm (a)
+        # confirmed): an un-batched ≤cap run legitimately ships NO wave_map —
+        # state/wave_map.py documents "downstream treats a missing wave_map as
+        # single implicit wave-0" and runner._wave_task_ids implements it. With
+        # no fallback here, expected_waves/expected_tasks were BOTH empty, so an
+        # empty _combiner dir verified ok=True — the vacuous green-light this
+        # verb exists to prevent. Mirror the runner: expect wave 0 carrying
+        # range(task_count). task_count==0/absent keeps the legacy empty
+        # expectations (nothing derivable to verify).
+        try:
+            implicit_count = int(sidecar.get("task_count", 0))
+        except (TypeError, ValueError):
+            implicit_count = 0
+        if implicit_count > 0:
+            expected_tasks = set(range(implicit_count))
 
     # Walk the pulled partials. Key by the wave number encoded in the
     # FILENAME (``wave_<N>.json``), which is the authoritative source-of-truth
@@ -315,6 +332,8 @@ def verify_aggregation_complete(
         pulled_waves[file_wave] = data
 
     expected_waves = {int(k) for k in wave_map if str(k).isdigit()}
+    if not wave_map_present and expected_tasks:
+        expected_waves = {0}  # the implicit wave-0 (see fallback above)
     missing_waves = sorted(expected_waves - set(pulled_waves.keys()))
     all_waves_combined = not missing_waves
 
@@ -415,6 +434,9 @@ def verify_aggregation_complete(
         "provenance_present": provenance_present,
         "columns_checked": columns_checked,
         "column_violations": column_violations,
+        # False = the expectations came from the implicit-wave-0 fallback, not
+        # a recorded wave_map — disclosed so briefs can say what was verified.
+        "wave_map_present": wave_map_present,
         "expected_wave_count": len(expected_waves),
         "pulled_wave_count": len(pulled_waves),
         "expected_task_count": len(expected_tasks),

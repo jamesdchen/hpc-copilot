@@ -155,6 +155,86 @@ class TestReportStatusResourceUsage:
         assert ru["gpu_hours"] == 1.0
         assert ru["tasks_counted"] == 2
 
+    def test_completed_by_result_file_keeps_accounting(self, tmp_path):
+        """A task classified complete by its result FILE must keep the
+        scheduler's cpu_s/gpu_s/elapsed_s — dropping the job_info record made
+        a fully complete run report cpu_hours 0 / tasks_counted 0 exactly
+        when it consumed the most compute."""
+        for tid in range(2):
+            task_dir = tmp_path / f"task_{tid}"
+            task_dir.mkdir()
+            (task_dir / "out.csv").write_text("col\n1\n")
+        fake_query = {
+            "tasks": {
+                0: {"state": "COMPLETED", "elapsed_s": 3600, "cpu_s": 4 * 3600, "gpu_s": 3600},
+                1: {"state": "COMPLETED", "elapsed_s": 1800, "cpu_s": 4 * 1800, "gpu_s": 0},
+            },
+            "errors": [],
+        }
+        with (
+            patch(
+                "hpc_agent.execution.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
+            ),
+            patch("hpc_agent.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status(
+                result_dir=tmp_path,
+                job_ids=["12345"],
+                total_tasks=2,
+                scheduler="slurm",
+            )
+        # Both tasks classified complete on the result-file evidence…
+        assert result["summary"]["complete"] == 2
+        task0 = result["tasks"]["0"]
+        assert task0["status"] == "complete"
+        # …with the accounting fields carried over, and ONLY those — the
+        # scheduler's state/exit_code never overrides result-file evidence.
+        assert task0["cpu_s"] == 4 * 3600
+        assert task0["elapsed_s"] == 3600
+        assert "state" not in task0
+        ru = result["resource_usage"]
+        assert ru["cpu_hours"] == round((4 * 3600 + 4 * 1800) / 3600.0, 4)
+        assert ru["gpu_hours"] == 1.0
+        assert ru["tasks_counted"] == 2
+
+    def test_completed_by_result_file_from_tasks_keeps_accounting(self, tmp_path):
+        """Same accounting merge on the per-task-dict variant
+        (report_status_from_tasks)."""
+        from hpc_agent.execution.mapreduce.reduce.status import report_status_from_tasks
+
+        rdirs = {}
+        for tid in range(2):
+            rdir = tmp_path / f"r{tid}"
+            rdir.mkdir()
+            (rdir / "metrics.json").write_text('{"value": 1}')
+            rdirs[str(tid)] = str(rdir)
+        tasks_data = {
+            "total_tasks": 2,
+            "tasks": {tid: {"result_dir": rd, "params": {}} for tid, rd in rdirs.items()},
+        }
+        fake_query = {
+            "tasks": {
+                0: {"state": "COMPLETED", "elapsed_s": 100, "cpu_s": 400, "gpu_s": 0},
+                1: {"state": "COMPLETED", "elapsed_s": 300, "cpu_s": 1200, "gpu_s": 0},
+            },
+            "errors": [],
+        }
+        with (
+            patch(
+                "hpc_agent.execution.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
+            ),
+            patch("hpc_agent.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status_from_tasks(
+                tasks_data, job_ids=["12345"], scheduler="slurm", file_glob="*"
+            )
+        assert result["summary"]["complete"] == 2
+        assert result["tasks"]["0"]["cpu_s"] == 400
+        assert "state" not in result["tasks"]["0"]
+        ru = result["resource_usage"]
+        assert ru["cpu_hours"] == round((400 + 1200) / 3600.0, 4)
+        assert ru["tasks_counted"] == 2
+
 
 class TestHeaderOnlyCsv:
     """Header-only CSVs should count as complete by default (P1.4 bug fix).
@@ -486,6 +566,121 @@ class TestMainImportGating:
         codes = [e["code"] for e in doc.get("errors", [])]
         assert "tasks_py_import_degraded" in codes
         assert "tasks_py_import_error" not in codes
+
+
+class _ResolveExploded(Exception):
+    """Sentinel: raised if ``resolve()`` is called on the frozen-manifest path."""
+
+
+class _ExplodingTasksModule:
+    """A ``tasks_module`` whose ``resolve()`` must NEVER be called.
+
+    Models a state-dependent strategy (optuna/pbt scaffold) whose ``resolve``
+    would mint the next trial / return the next iteration's kwargs — the exact
+    hazard the frozen-manifest fast path exists to avoid.
+    """
+
+    def resolve(self, _i):  # noqa: D401 - test stub
+        raise _ResolveExploded("resolve() must not run when trial_params exists")
+
+
+class TestFrozenManifestStatus:
+    """#3: when the sidecar carries ``trial_params`` the status reporter takes
+    per-task kwargs from that frozen manifest and NEVER re-executes tasks.py —
+    mirroring dispatch.py/combiner.py's fast path. A state-dependent resolve()
+    would otherwise point every poll tick at result dirs the dispatcher never
+    wrote and mint a phantom optimizer trial on the login node."""
+
+    def test_manifest_kwargs_win_and_resolve_never_called(self):
+        from hpc_agent.execution.mapreduce.reduce.status import _build_per_task_dict_from_sidecar
+
+        sidecar = {
+            "task_count": 2,
+            "result_dir_template": "results/{run_id}/lr_{lr}/task_{task_id}",
+            "run_id": "r1",
+            "wave_map": {},
+            "trial_params": [{"lr": "0.01"}, {"lr": "0.02"}],
+        }
+        out = _build_per_task_dict_from_sidecar(
+            sidecar,
+            _ExplodingTasksModule(),  # resolve() would raise if ever called
+            trial_params=sidecar["trial_params"],
+        )
+        # Result dirs are formatted from the FROZEN manifest, not resolve().
+        assert out["tasks"]["0"]["result_dir"] == "results/r1/lr_0.01/task_0"
+        assert out["tasks"]["1"]["result_dir"] == "results/r1/lr_0.02/task_1"
+        assert out["tasks"]["0"]["params"] == {"lr": "0.01"}
+
+    def test_short_manifest_degrades_task_to_empty_kwargs_with_error(self):
+        from hpc_agent.execution.mapreduce.reduce.status import _build_per_task_dict_from_sidecar
+
+        sidecar = {
+            "task_count": 2,
+            "result_dir_template": "results/{run_id}/task_{task_id}",
+            "run_id": "r1",
+            "wave_map": {},
+            "trial_params": [{"lr": "0.01"}],  # only one entry for two tasks
+        }
+        errors: list = []
+        out = _build_per_task_dict_from_sidecar(
+            sidecar,
+            None,
+            trial_params=sidecar["trial_params"],
+            errors_out=errors,
+        )
+        # Task 1 has no manifest entry: degraded to empty kwargs + a recorded
+        # error, never a crash.
+        assert out["tasks"]["1"]["params"] == {}
+        assert any(e["code"] == "trial_params_mismatch" for e in errors)
+
+    def test_main_skips_import_when_manifest_present(self, tmp_path, monkeypatch):
+        """End-to-end: a run with trial_params + a poison-pill tasks.py that
+        raises on import reconciles cleanly (exit 0, no import error) — the
+        import was never attempted."""
+        sidecar = {
+            "task_count": 2,
+            "result_dir_template": "results/{run_id}/lr_{lr}/task_{task_id}",
+            "run_id": "run1",
+            "wave_map": {},
+            "trial_params": [{"lr": "0.01"}, {"lr": "0.02"}],
+        }
+
+        def _boom(*_a, **_k):
+            raise AssertionError("tasks.py must NOT be imported when trial_params exists")
+
+        with patch("hpc_agent.load_tasks_module", side_effect=_boom):
+            rc, doc = _drive_main(tmp_path, monkeypatch, sidecar)
+
+        assert rc == 0
+        codes = [e["code"] for e in doc.get("errors", [])]
+        assert "tasks_py_import_degraded" not in codes
+        assert "tasks_py_not_found" not in codes
+        assert "trial_params_mismatch" not in codes
+
+
+class TestCheckResultsIgnoresTraceArtifact:
+    """#27: a result dir containing ONLY the framework data-trace transport
+    file (``_trace.jsonl``) is telemetry, not a produced result — the completion
+    scan must not count the task complete."""
+
+    def test_trace_only_task_dir_not_complete(self, tmp_path):
+        task_dir = tmp_path / "task_0"
+        task_dir.mkdir()
+        (task_dir / "_trace.jsonl").write_text('{"trace": 1}\n')
+
+        tasks_data = {"tasks": {"0": {"result_dir": str(task_dir)}}}
+        results = check_results_from_tasks(tasks_data, file_glob="*")
+        assert results == {}  # trace is telemetry, not a produced result
+
+    def test_trace_beside_real_output_still_complete(self, tmp_path):
+        task_dir = tmp_path / "task_0"
+        task_dir.mkdir()
+        (task_dir / "_trace.jsonl").write_text('{"trace": 1}\n')
+        (task_dir / "metrics.json").write_text('{"value": 1}\n')
+
+        tasks_data = {"tasks": {"0": {"result_dir": str(task_dir)}}}
+        results = check_results_from_tasks(tasks_data, file_glob="*")
+        assert results[0]["status"] == "complete"
 
 
 # ---------------------------------------------------------------------------

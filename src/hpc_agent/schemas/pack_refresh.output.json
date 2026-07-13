@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_refresh.output.json",
+  "title": "pack-refresh output data",
+  "description": "Echo of a ``pack-refresh`` pass — one entry per reported pack.\n\n``any_rebound`` is True when at least one manifest was re-sealed + re-bound\n(the journal now carries the old→new drift event). ``refreshed`` is keyed by\npack slug (the ``pack-status`` precedent).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "any_rebound": {
+      "default": false,
+      "title": "Any Rebound",
+      "type": "boolean"
+    },
+    "refreshed": {
+      "additionalProperties": {
+        "$ref": "#/$defs/PackRefreshEntry"
+      },
+      "title": "Refreshed",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "PackRefreshEntry": {
+      "additionalProperties": false,
+      "description": "The refresh outcome for one pack — what moved and what must be re-earned.\n\n``recipe_found`` is False when no ``sweep.json`` sits beside the manifest (core\ncannot generically re-seal it; the manifest is left untouched). ``stale`` /\n``rebound`` record whether the manifest was semantically stale and re-bound.\nThe file deltas name exactly which sealed files moved (the drift the archive\nrecords); ``slots_to_reearn`` lists every caller-authored obligation now\nun-cleared plus its check command.",
+      "properties": {
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "recipe_found": {
+          "title": "Recipe Found",
+          "type": "boolean"
+        },
+        "stale": {
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "rebound": {
+          "title": "Rebound",
+          "type": "boolean"
+        },
+        "old_manifest_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Old Manifest Sha"
+        },
+        "new_manifest_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "New Manifest Sha"
+        },
+        "added_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Added Files",
+          "type": "array"
+        },
+        "removed_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Removed Files",
+          "type": "array"
+        },
+        "changed_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed Files",
+          "type": "array"
+        },
+        "slots_to_reearn": {
+          "items": {
+            "$ref": "#/$defs/PackSlotToReearn"
+          },
+          "title": "Slots To Reearn",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Honest mechanical note (e.g. no recipe found, dangling reference).",
+          "title": "Note"
+        }
+      },
+      "required": [
+        "pack",
+        "recipe_found",
+        "stale",
+        "rebound"
+      ],
+      "title": "pack refresh entry",
+      "type": "object"
+    },
+    "PackSlotToReearn": {
+      "additionalProperties": false,
+      "description": "One receipt slot that must be re-earned after a refresh, with its remedy.\n\n``status`` is the post-refresh slot reduction (``stale`` / ``missing`` /\n``failed`` — a re-bind moves the manifest sha so a covered receipt reads\n``stale`` by construction). ``check`` is the caller-authored, opaque command\nthe driving skill runs to re-emit the receipt (from the interview\n``receipt_bindings`` entry); ``None`` when the caller recorded no check command\n(the generic ``pack-record-receipt`` guidance applies).",
+      "properties": {
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "check": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Check"
+        }
+      },
+      "required": [
+        "slot",
+        "pack",
+        "status"
+      ],
+      "title": "pack slot to re-earn",
+      "type": "object"
+    }
+  }
+}

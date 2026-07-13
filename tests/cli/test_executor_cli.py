@@ -252,6 +252,35 @@ def test_run_registered_stale_run_name_is_loud(
         run_registered(["mc.py", "--run-name", "ghost"])
 
 
+def test_run_registered_dispatches_the_named_run_not_the_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two @register_run functions in one file: --run-name naming the FIRST must
+    execute the first, never the module-level ``compute`` (which register_run
+    overwrites on every decoration, so it always points at the LAST run). The
+    guard proving the name EXISTS is not enough — the wrong-function dispatch is
+    the exact 'silently running the wrong module' class it claims to prevent."""
+    _write_register_run_module(
+        tmp_path / "mc.py",
+        "@register_run\n"
+        "def train(seed: int = 0) -> dict:\n"
+        "    return {'which': 'train'}\n"
+        "@register_run\n"
+        "def evaluate(seed: int = 0) -> dict:\n"
+        "    return {'which': 'evaluate'}\n",
+    )
+    result_dir = tmp_path / "out"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(result_dir))
+
+    assert run_registered(["mc.py", "--run-name", "train"]) == 0
+    assert json.loads((result_dir / "metrics.json").read_text())["which"] == "train"
+
+    # And the last-defined run still resolves to itself.
+    assert run_registered(["mc.py", "--run-name", "evaluate"]) == 0
+    assert json.loads((result_dir / "metrics.json").read_text())["which"] == "evaluate"
+
+
 def test_run_registered_module_without_compute_is_loud(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

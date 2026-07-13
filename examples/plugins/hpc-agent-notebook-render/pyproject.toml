@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hpc-agent-notebook-render"
+version = "0.1.0"
+description = "hpc-agent plugin: render an audited percent-format .py as a jupytext notebook, and ingest human sign-offs typed into it (the second conforming harness)"
+requires-python = ">=3.10"
+# The render/ingest verbs need jupytext (percent <-> notebook), nbformat (the
+# .ipynb model), nbclient (execution) and a kernel (ipykernel provides the
+# ``python3`` kernelspec ``--execute`` runs against). These are the RENDERER's
+# deps — plugin-side, never core (docs/design/notebook-audit.md D-source: jupytext
+# never enters src/hpc_agent). ``hpc-agent`` itself is the only shared runtime.
+dependencies = [
+    "hpc-agent",
+    "jupytext>=1.14",
+    "nbformat>=5.7",
+    "nbclient>=0.7",
+    "ipykernel>=6.0",
+    # nbdime OWNS the output canonical-form definition (which output fields are
+    # transient vs meaningful) that each --execute output_sha hashes over. That
+    # definition can shift across a major, so pin to the current major and record
+    # the resolved version on every receipt-bearing render (result model +
+    # notebook metadata) — a version bump then reads as an explicit canonicalizer
+    # change, never as silent receipt drift.
+    "nbdime>=4,<5",
+]
+
+# The entire opt-in: installing this distribution makes the host's entry-point
+# scan (hpc_agent._kernel.registry.plugins.load_plugins) discover the package and
+# import its primitive_modules, registering the two @primitive verbs.
+[project.entry-points."hpc_agent.plugins"]
+notebook_render = "hpc_agent_notebook_render"
+
+[tool.setuptools.packages.find]
+where = ["src"]

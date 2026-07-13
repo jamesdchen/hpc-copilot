@@ -22,7 +22,7 @@ chaining table; ``first_block`` here is only the *entry* the driver starts at.
 
 TODO(wave4): project the slash command bodies from this table in the
 surface-deletion pass. Today the hand-authored
-``src/slash_commands/commands/<slash_name>.md`` files remain the projected
+``src/hpc_agent/slash_commands/commands/<slash_name>.md`` files remain the projected
 slash body — deleting/auto-generating them now risks breaking the install and
 ``scripts/lint_skill_command_sync.py``. This table is the SoT that pass will
 project from; the slash bodies are the second copy that lint exists to police.

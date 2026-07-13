@@ -69,14 +69,38 @@ def _is_clicked(answer: str, labels: set[str]) -> bool:
     """True when *answer* is composed entirely of offered option labels.
 
     A single-select click IS a label; a multi-select click is the selected
-    labels joined by commas. Any residue beyond offered labels means the
-    human typed something — the whole answer then counts as typed.
+    labels joined by ``", "``. Recognising that join by naive comma-splitting
+    breaks the moment a label itself contains a comma (finding #22): the split
+    fragments no longer match any offered label, so a clicked, agent-authored
+    option would be mis-read as human-typed and laundered into the authorship
+    gate's trust anchor. Match structurally instead — the answer is a click iff
+    it decomposes left-to-right into offered labels separated by the ``", "``
+    join delimiter, trying the LONGEST offered label first so a label that
+    itself contains ``", "`` is consumed before its fragments. Any residue that
+    is not an offered label means the human typed something — the whole answer
+    then counts as typed.
     """
     text = answer.strip()
     if text in labels:
         return True
-    parts = [p.strip() for p in text.split(",")]
-    return len(parts) > 1 and all(p in labels for p in parts if p)
+    if not labels:
+        return False
+    ordered = sorted((lbl for lbl in labels if lbl), key=len, reverse=True)
+    remaining = text
+    matched_any = False
+    while remaining:
+        for label in ordered:
+            if remaining == label:
+                remaining = ""
+                matched_any = True
+                break
+            if remaining.startswith(label + ", "):
+                remaining = remaining[len(label) + 2 :]
+                matched_any = True
+                break
+        else:  # no offered label consumes the head → typed residue
+            return False
+    return matched_any
 
 
 def _typed_texts(payload: dict[str, Any]) -> list[str]:
@@ -118,16 +142,28 @@ def capture(payload: Any) -> list[dict[str, Any]]:
     ``AskUserQuestion`` PostToolUse mapping, every answer was a click on an
     agent-authored option, or the cwd repo has no journal namespace — all
     clean no-ops).
+
+    A valid ``HPC_ACTOR`` slug in the hook process env
+    (:func:`hpc_agent.infra.env_flags.env_actor`, MH2/MH4) attributes each
+    typed answer to the actor-suffixed locator; unset/invalid → the unsuffixed
+    path, byte-identical to the single-actor world.
     """
+    from hpc_agent.infra.env_flags import env_actor
     from hpc_agent.state.utterances import append_utterance
 
     if not isinstance(payload, dict) or payload.get("tool_name") != _TOOL_NAME:
         return []
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
+    # The actor kwarg is passed only when a declared actor resolves (the tests
+    # pin the omitted-when-unset call shape). Annotated dict[str, Any]: a bare
+    # dict[str, str] splat maps onto the keyword-only ``bound`` param under
+    # mypy's invariance and broke CI's whole-tree check.
+    actor = env_actor()
+    kwargs: dict[str, Any] = {"actor": actor} if actor else {}
     records = []
     for text in _typed_texts(payload):
-        record = append_utterance(cwd_dir, text)
+        record = append_utterance(cwd_dir, text, **kwargs)
         if record is not None:
             records.append(record)
     return records

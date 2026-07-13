@@ -19,7 +19,12 @@ Deliberately NOT in the curated MCP catalog (its Result carries no
 ``next_block``, so the derived catalog excludes it): the MCP server dispatches
 tools in-process and synchronously — a multi-hour blocking tool call would
 wedge the server. This is a CLI-fallback-only affordance by design; the skills
-route it through backgrounded Bash.
+route it through backgrounded Bash. Curated exclusion only covers the curated
+catalog, so the ``full``/``tiered`` catalogs (where this verb is otherwise
+invocable) are backstopped at the seam:
+``_kernel/extension/mcp_server.py::_refuse_blocking_over_mcp`` refuses it
+outright there (``_BLOCKING_WAIT_VERBS``), pointing callers at ``poll-detached``
+or backgrounded Bash.
 
 The §5 watchdog is untouched backstop: this waiter dying (session death) loses
 only the notification — doctor/the watchdog still catch the run.

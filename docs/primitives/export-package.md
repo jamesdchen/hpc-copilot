@@ -42,8 +42,8 @@ ones skipped. A second call with no notebook edits is therefore all
 ## Errors
 
 - `spec_invalid` — two notebooks map to the same `src/` module name
-  after the ordering-prefix strip, or a notebook stem is not a valid
-  Python module name.
+  after the ordering-prefix strip (including a `foo.py` / `foo.ipynb`
+  stem collision), or a notebook stem is not a valid Python module name.
 
 ## Idempotency
 
@@ -54,16 +54,24 @@ extraction plus a `ruff` post-pass — no notebook execution.
 
 ## Notes
 
+- **Percent-format `.py` is the native shape.** A notebook is a jupytext
+  percent-format `.py` (`# %%` cells) — the audit doctrine's
+  diff-reviewable source; raw `.ipynb` is accepted for back-compat.
+  Percent cells are read via
+  `hpc_agent.state.audit_source.percent_cell_sources` (the one
+  percent-format reader) and feed the same exporters the `.ipynb` path
+  uses.
 - **Convention, not a manifest.** Notebooks under `notebooks/pipeline/`,
   `notebooks/executors/`, and `notebooks/scripts/` export; nothing else
   does. The output module name is the notebook stem with a leading
-  `\d+[a-z]?_` ordering prefix stripped — `01_loading.ipynb` →
+  `\d+[a-z]?_` ordering prefix stripped — `01_loading.py` →
   `src/loading.py`.
-- **Exporter auto-picked by content.** A notebook that imports
-  `hpc_agent.experiment_kit` is a `@register_run` executor → strict-AST
-  `export_notebook` (the runtime is inlined, so the cluster node stays
-  stdlib-only). Otherwise it is a pipeline-library notebook → the
-  `# export`-marker `export_notebook_markers`.
+- **Exporter auto-picked by content.** A notebook that applies
+  `@register_run` is an executor → strict-AST
+  `export_cells` / `export_notebook` (the runtime is inlined, so the
+  cluster node stays stdlib-only). Otherwise it is a pipeline-library
+  notebook → the `# export`-marker
+  `export_cells_markers` / `export_notebook_markers`.
 - **The node never builds.** Submit builds locally — where `hpc_agent`
   is installed — and ships finished `.py`. `src/` is `.gitignore`d in
   the experiment repo; output stays at the repo-root `src/` so

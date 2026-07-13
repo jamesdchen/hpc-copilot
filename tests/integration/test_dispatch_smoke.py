@@ -78,7 +78,7 @@ _HARVEST_SEAM = "hpc_agent.ops.monitor_flow.harvest_on_terminal"
 # ``interview --campaign-dir``, ``resubmit --run-id --task-ids``) — firing them
 # with only ``--spec`` exits via argparse with usage-help and no JSON envelope,
 # so the spec-validate path is unreachable from a ``--spec``-only probe. Mirrors
-# ``tests/contract/test_primitive_remediation.py::NEEDS_EXTRA_CLI_ARGS``. The
+# ``tests/contracts/test_primitive_remediation.py::NEEDS_EXTRA_CLI_ARGS``. The
 # per-verb probe below ALSO detects any required extra CliArg dynamically, so a
 # newly-added one is skipped even if it never lands in this set.
 NEEDS_EXTRA_CLI_ARGS: frozenset[str] = frozenset({"interview", "resubmit"})
@@ -350,11 +350,16 @@ def test_status_watch_runs_up_to_the_ssh_boundary(
     """``status-watch`` drives parser → dispatch → monitor-flow → the SSH poll seam.
 
     With the poll seam patched to raise :class:`errors.SshUnreachable` (and the
-    guaranteed-terminal harvest stubbed so the failure path cannot fall through
-    to a real ``scp`` on this platform), the whole plumbing runs and the envelope
-    is a REAL network/cluster error — proving the path is wired end-to-end, with
-    ONLY the connection stubbed. It is NOT ``spec_invalid`` (spec was valid) and
-    NOT an unknown-verb rejection (the verb dispatched).
+    guaranteed-terminal harvest stubbed so no leg can fall through to a real
+    ``scp`` on this platform), the whole plumbing runs — proving the path is
+    wired end-to-end, with ONLY the connection stubbed. Under the bug-sweep-#15
+    contract a connection-class poll failure is TRANSIENT: the watch must NOT
+    die with an error envelope (the pre-fix behavior this test used to pin) but
+    ride its wall-clock budget and return the bounded "keep watching?"
+    decision. Wiring is proven twice over: the stubbed seam was actually polled
+    (call count), and ``elapsed_seconds`` reached the budget (the loop ran
+    against the raising seam the whole way). NOT ``spec_invalid`` (spec was
+    valid), NOT an unknown-verb rejection (the verb dispatched).
     """
     exp = hermetic_experiment
     _journal_run(exp, "ml_run_watch", status="in_flight", last_status={"running": 4})
@@ -364,16 +369,28 @@ def test_status_watch_runs_up_to_the_ssh_boundary(
             "run_id": "ml_run_watch",
             "poll_interval_seconds": 5,
             "wall_clock_budget_seconds": 30,
-        }
+        },
+        # detach=False drives the SYNCHRONOUS poll to the SSH seam in-process; the
+        # default (detach=True) would spawn a durable worker and return a handle
+        # (detach-by-contract, connection-broker.md 2026-07-07).
+        "detach": False,
     }
     with (
-        mock.patch(_SSH_POLL_SEAM, side_effect=errors.SshUnreachable("stubbed: no host")),
+        mock.patch(
+            _SSH_POLL_SEAM, side_effect=errors.SshUnreachable("stubbed: no host")
+        ) as poll_seam,
         mock.patch(_HARVEST_SEAM, return_value=None),
     ):
         env = dispatch_envelope("status-watch", spec, experiment_dir=exp)
 
-    assert env.get("ok") is False, env
-    # The failure is a genuine connection-class error surfaced at the SSH seam —
-    # not spec_invalid, not unknown-verb — so parser → dispatch → SSH-seam is wired.
-    assert env.get("error_code") in {"ssh_unreachable", "remote_command_failed"}, env
-    assert env.get("error_code") != "spec_invalid", env
+    # The SSH seam WAS reached — parser → dispatch → monitor-flow → poll wired.
+    assert poll_seam.call_count >= 1, env
+    # Transient-fault contract (#15): the watch survives to its budget and hands
+    # back the bounded keep-watching decision — never a connection-error death.
+    assert env.get("ok") is True, env
+    assert env.get("error_code") is None, env
+    data = env.get("data") or {}
+    assert data.get("block") == "watch", env
+    assert data.get("needs_decision") is True, env
+    brief = data.get("brief") or {}
+    assert brief.get("elapsed_seconds", 0) >= 30, env

@@ -48,7 +48,8 @@ CampaignBlockStage = Literal[
     "greenlit",  # a confirm re-invocation stamped the marker + journaled it.
     "already_greenlit",  # idempotent re-read — the marker is already set.
     # watch (async execution surface).
-    "watching_healthy",  # campaign nominal (continue / wait / refill); no boundary.
+    "watching_healthy",  # campaign nominal (continue / wait_in_flight); no boundary.
+    "watching_refill",  # advance decided refill → hand off to campaign-refill (needs_decision=False).
     "watching_anomaly",  # §5 loud-fail guard tripped, or a budget halt → y/nudge.
     "watching_complete",  # a stop criterion fired → hand off to campaign-complete.
     # complete (end).

@@ -208,6 +208,18 @@ def test_llm_resolution_matches_expect(case: EvalCase, register: str) -> None:
     unwired driver, so the slow-tier CI passes and the gap is advertised, not
     hidden. Filling in ``resolve_via_llm`` flips these from xfail to real.
     """
+    # HONEST STATUS (do not mistake this for live coverage): the body below
+    # never executes in any current environment. `resolve_via_llm` (resolve.py)
+    # is a PLACEHOLDER that unconditionally raises NotImplementedError — its
+    # `run_workflow` seam was deleted in the §6 worker removal. The double gate:
+    #   * skipif(no ANTHROPIC_API_KEY) — zero CI/dev environments hold a key, so
+    #     the case is SKIPPED, not run;
+    #   * xfail(raises=NotImplementedError, strict=False) — even key-in-hand, the
+    #     placeholder raise makes it an expected-fail. `strict=False` is
+    #     DELIBERATE: re-wiring the seam should flip this to a real PASS
+    #     (an assertion), and a strict xfail would then XPASS-BREAK the suite on
+    #     the very change that fixes it. Keep it non-strict until the seam lands.
+    # This is an intentional key-gated placeholder, NOT dead code to delete.
     resolved = resolve_via_llm(case, register=register)
     result = recursive_compare(case.expect, resolved, tolerant=case.tolerant)
     assert result.ok, f"[{case.id}/{register}] {result.report()}\nresolved={resolved}"

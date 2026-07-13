@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.clusters import resolve_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -117,7 +118,7 @@ def _classify_poll_failure(exc: BaseException) -> str:
     class belongs to the connection breaker). The returncode is read off the
     exception attribute, never string-parsed from the message.
     """
-    if isinstance(exc, errors.RemoteCommandFailed) and exc.returncode in (126, 127):
+    if errors.is_deterministic_env_failure(exc):
         return "deterministic_env"
     return "transient"
 
@@ -360,6 +361,54 @@ def _verify_remote_checkpoint(
     if not isinstance(parsed, dict) or "status" not in parsed:
         return {"status": "probe_failed", "detail": f"unexpected probe payload: {parsed!r}"}
     return parsed
+
+
+def _classify_runtime_exit(
+    exit_code: int, *, canary_run_id: str, result_dir: str
+) -> tuple[str, str] | None:
+    """Map a recorded ``_runtime.json`` exit code to ``(failure_kind, details)``.
+
+    ``None`` for exit 0 (no verdict — the canary's exit leg is clean).
+    Dispatcher SCAFFOLD codes get their own vocabulary (run-#10 lesson: a
+    contract violation surfacing under a generic name nearly bought a wrong
+    diagnosis after a burned wait budget). Kept in lock-step with
+    ``dispatch.py``'s ``_EXIT_NO_RUNNER`` (3) / ``_EXIT_NO_OUTPUT`` (4);
+    everything else non-zero stays ``nonzero_exit`` (#351-3).
+    """
+    if exit_code == 0:
+        return None
+    if exit_code == 4:
+        return (
+            "output_contract",
+            (
+                f"canary {canary_run_id!r} recorded exit_code=4 "
+                "(dispatcher no-output gate): the executor exited 0 but wrote "
+                "NOTHING into $HPC_RESULT_DIR — its outputs went to a literal "
+                "path instead of the write-isolation dir, so there was nothing "
+                "to promote. Fix the entry point to write under $HPC_RESULT_DIR "
+                "when the dispatcher exports it; retrying cannot fix this."
+            ),
+        )
+    if exit_code == 3:
+        return (
+            "no_runner",
+            (
+                f"canary {canary_run_id!r} recorded exit_code=3 "
+                "(dispatcher no-runner gate): the sidecar's executor is empty or "
+                "would re-invoke the dispatcher itself. A deterministic scaffold "
+                "error — fix the executor command; retrying cannot fix this."
+            ),
+        )
+    return (
+        "nonzero_exit",
+        (
+            f"canary {canary_run_id!r} recorded exit_code={exit_code} in "
+            f"{result_dir.rstrip('/')}/_runtime.json — it wrote a result file but "
+            "the task FAILED (a non-zero exit whose traceback may fall outside the "
+            "50-line stderr tail). Refusing to pass the canary; inspect the stderr "
+            "tail / classified_error for the cause before submitting the main array."
+        ),
+    )
 
 
 def _read_canary_exit_code(
@@ -637,6 +686,10 @@ def verify_canary(
       ``"traceback"`` / ``"oom_killed"`` / ``"segfault"`` /
       ``"nonzero_exit"`` (the canary task-0 ``_runtime.json`` recorded a
       non-zero ``exit_code`` even though it wrote a result file — #351-3) /
+      ``"output_contract"`` (dispatcher exit 4: executor exited 0 but wrote
+      nothing into ``$HPC_RESULT_DIR`` — run-#10 finding; deterministic,
+      never retried) / ``"no_runner"`` (dispatcher exit 3: empty or
+      self-recursive executor) /
       ``"missing_output"`` / ``"reporter_unreachable"`` (every status poll
       failed — broken cluster-side reporter; also the fast-escalation verdict
       when K consecutive deterministic broken-env polls (rc 126/127) found NO
@@ -829,7 +882,7 @@ def verify_canary(
             last_watchdog_stamp = now
         try:
             report = ssh_status_report(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 run_id=canary_run_id,
                 job_ids=list(record.job_ids),
@@ -838,7 +891,16 @@ def verify_canary(
                 file_glob=file_glob,
                 remote_activation=remote_activation,
             )
-        except (errors.RemoteCommandFailed, OSError) as exc:
+        except errors.TRANSIENT_TRANSPORT_ERRORS as exc:
+            # SshCircuitOpen (an HpcError, NOT an OSError) is raised when a
+            # transient blip trips the per-host breaker; without it here the
+            # canary gate crashes with an undeclared exception instead of riding
+            # the wait budget. _classify_poll_failure returns "transient" for
+            # everything that is not RemoteCommandFailed rc 126/127, so an
+            # open-circuit poll is recorded as last_poll_error and the loop rides
+            # the budget until the breaker heals or the budget elapses (then the
+            # got_report/last_poll_error arm returns reporter_unreachable). This
+            # also makes the docstring's "SshUnreachable is transient" limb live.
             last_poll_error = exc
             failure_class = _classify_poll_failure(exc)
             rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
@@ -871,7 +933,7 @@ def verify_canary(
 
                 try:
                     scan = ssh_marker_scan(
-                        ssh_target=record.ssh_target,
+                        ssh_target=resolve_ssh_target(record),
                         remote_path=record.remote_path,
                         run_id=canary_run_id,
                     )
@@ -909,19 +971,34 @@ def verify_canary(
         failed = int(last_summary.get("failed") or 0)
         running = int(last_summary.get("running") or 0)
         pending = int(last_summary.get("pending") or 0)
-        unknown = int(last_summary.get("unknown") or 0)
         # Terminal: complete == total OR (failed > 0 and no running/pending).
         if complete >= int(record.total_tasks) and record.total_tasks > 0:
             break
         if failed > 0 and running == 0 and pending == 0:
             break
-        # Job absent from the scheduler's live view: nothing complete, nothing
-        # failed, nothing queued/running, nothing in the unknown bucket. Count
-        # consecutive such polls; once it persists, the canary finished (or
-        # died) and left the queue — break fast as ``completed_unknown`` rather
-        # than time out. The stderr scan below still runs, so a real failure
-        # marker (OOM, traceback) is preferred over the bland unknown verdict.
-        if complete == 0 and failed == 0 and running == 0 and pending == 0 and unknown == 0:
+        # Job absent from the scheduler's live view: no task is complete, failed,
+        # running, or pending — every remaining task sits in the reporter's
+        # ``unknown`` bucket. Count consecutive such polls; once they persist
+        # past the registration grace, the canary finished (or died) and left the
+        # queue — break fast as ``completed_unknown`` rather than time out. The
+        # stderr scan below still runs, so a real failure marker (OOM, traceback)
+        # is preferred over the bland unknown verdict.
+        #
+        # F-L (run #10): this guard previously ALSO required ``unknown == 0``,
+        # but a gone 1-task canary is bucketed ``unknown == 1`` by the status
+        # reporter (a task that is neither complete, in a scheduler-FAILED
+        # accounting state, nor live in qstat lands in ``unknown`` —
+        # reduce/status.py). The five buckets sum to ``total_tasks``, so with the
+        # four active/terminal buckets at zero the remainder is ``unknown >= 1``
+        # for any ``total_tasks >= 1`` — making the all-zero condition
+        # unsatisfiable and the fast arm dead. A job dead on the scheduler in
+        # ~20s therefore rode the full 1800s budget to ``timeout`` (qacct
+        # evidence: job 13956468, exit_status 1). Dropping the ``unknown == 0``
+        # clause makes "all quiet ⇒ every task unknown" the signal; the
+        # registration grace still distinguishes the pre-qstat startup window
+        # (which reads unknown too, but resets the moment a task shows
+        # running/pending) from a job that truly left the queue.
+        if complete == 0 and failed == 0 and running == 0 and pending == 0:
             vanished_polls += 1
             if first_vanished_at is None:
                 first_vanished_at = time.monotonic()
@@ -957,14 +1034,21 @@ def verify_canary(
             f"to guess 'slurm' and risk misrouting the SGE log fetch"
         )
 
+    from hpc_agent.state.runs import read_job_task_spans
+
     logs = fetch_task_logs(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         job_name=record.job_name,
         job_ids=list(record.job_ids),
         scheduler=scheduler,
         task_ids=[0],
         lines=50,
+        # A 1-task canary is never waved, so its sidecar carries no spans and
+        # this resolves to None (the global probe) — threaded anyway so every
+        # fetch_task_logs call site shares one contract, and read_job_task_spans
+        # never raises.
+        job_task_spans=read_job_task_spans(experiment_dir, canary_run_id),
     )
     stderr_tail = ""
     log_path: str | None = None
@@ -986,7 +1070,7 @@ def verify_canary(
             _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
         )
         probe = _verify_remote_checkpoint(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             ckpt_result_dir=ckpt_dir,
             remote_activation=remote_activation,
@@ -1107,7 +1191,7 @@ def verify_canary(
     # Optional output verification.
     if expect_output:
         output_ok, output_detail = verify_combiner_artifact(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             expect_output=expect_output,
         )
@@ -1162,23 +1246,21 @@ def verify_canary(
         _result_dir = None
     if _result_dir is not None:
         runtime = _read_canary_exit_code(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             result_dir=_result_dir,
         )
         if runtime.get("status") == "present":
             canary_exit_code = int(runtime["exit_code"])
-            if canary_exit_code != 0:
+            verdict = _classify_runtime_exit(
+                canary_exit_code, canary_run_id=canary_run_id, result_dir=_result_dir
+            )
+            if verdict is not None:
+                kind, details = verdict
                 return {
                     "ok": False,
-                    "failure_kind": "nonzero_exit",
-                    "details": (
-                        f"canary {canary_run_id!r} recorded exit_code={canary_exit_code} in "
-                        f"{_result_dir.rstrip('/')}/_runtime.json — it wrote a result file but "
-                        "the task FAILED (a non-zero exit whose traceback may fall outside the "
-                        "50-line stderr tail). Refusing to pass the canary; inspect the stderr "
-                        "tail / classified_error for the cause before submitting the main array."
-                    ),
+                    "failure_kind": kind,
+                    "details": details,
                     "stderr_tail": stderr_tail,
                     "metrics_fingerprint": None,
                     "failure_features": _failure_features(stderr_tail, log_path),
@@ -1206,7 +1288,7 @@ def verify_canary(
         try:
             sha = ssh_run(
                 f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'",
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
             )
             if sha.returncode == 0:
                 metrics_fingerprint = sha.stdout.strip() or None

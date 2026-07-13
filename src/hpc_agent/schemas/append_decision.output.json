@@ -41,7 +41,12 @@
           "enum": [
             "run",
             "campaign",
-            "scope"
+            "scope",
+            "notebook",
+            "registration",
+            "pack",
+            "conclusion",
+            "challenge"
           ],
           "title": "Scope Kind",
           "type": "string"
@@ -98,6 +103,18 @@
           "additionalProperties": true,
           "title": "Provenance",
           "type": "object"
+        },
+        "attestor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestor Id"
         }
       },
       "required": [

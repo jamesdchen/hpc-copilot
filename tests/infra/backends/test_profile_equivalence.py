@@ -257,28 +257,35 @@ class TestResourceFlags:
 
 
 class TestAliveAndStateCommands:
+    # Sentinel-ack (positive-evidence rule, docs/design/connection-broker.md):
+    # each query ends by echoing ``__HPC_SCHED_ACK__=$?`` instead of ``|| true``,
+    # so a silent/truncated read (no ack) is UNKNOWN rather than "no jobs".
+    _ACK = '; echo "__HPC_SCHED_ACK__=$?"'
+
     def test_slurm_build_alive_check_cmd(self):
         cls = get_backend_class("slurm")
         assert (
-            cls.build_alive_check_cmd(["1", "2"]) == "squeue -j 1,2 -h -o '%i' 2>/dev/null || true"
+            cls.build_alive_check_cmd(["1", "2"])
+            == "squeue -j 1,2 -h -o '%i' 2>/dev/null" + self._ACK
         )
         assert cls.build_alive_check_cmd([]) == "true"
 
     def test_sge_build_alive_check_cmd(self):
         cls = get_backend_class("sge")
-        assert cls.build_alive_check_cmd(["1", "2"]) == 'qstat -u "$USER" 2>/dev/null || true'
+        assert cls.build_alive_check_cmd(["1", "2"]) == 'qstat -u "$USER" 2>/dev/null' + self._ACK
         assert cls.build_alive_check_cmd([]) == "true"
 
     def test_slurm_build_scheduler_state_cmd(self):
         cls = get_backend_class("slurm")
         assert (
-            cls.build_scheduler_state_cmd(["1"]) == "squeue -j 1 -h -o '%i %T' 2>/dev/null || true"
+            cls.build_scheduler_state_cmd(["1"])
+            == "squeue -j 1 -h -o '%i %T' 2>/dev/null" + self._ACK
         )
         assert cls.build_scheduler_state_cmd([]) == "true"
 
     def test_sge_build_scheduler_state_cmd(self):
         cls = get_backend_class("sge")
-        assert cls.build_scheduler_state_cmd(["1"]) == 'qstat -u "$USER" 2>/dev/null || true'
+        assert cls.build_scheduler_state_cmd(["1"]) == 'qstat -u "$USER" 2>/dev/null' + self._ACK
         assert cls.build_scheduler_state_cmd([]) == "true"
 
     def test_slurm_build_cancel_cmd(self):

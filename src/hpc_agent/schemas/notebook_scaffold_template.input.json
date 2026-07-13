@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_scaffold_template.input.json",
+  "title": "notebook-scaffold-template input spec",
+  "description": "Spec for ``notebook-scaffold-template``.\n\n* ``slugs`` — the ordered section inventory the scaffold declares, one\n  ``# %%`` marker cell per slug. Must be non-empty and duplicate-free\n  (a duplicate would fail the section parse anyway — refused EARLY with\n  the offending slug named).\n* ``output_path`` — where the scaffold ``.py`` is written (relative paths\n  resolve under the experiment dir). An EXISTING file is refused — there\n  is no force flag; the caller deletes first.",
+  "type": "object",
+  "required": [
+    "slugs",
+    "output_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "slugs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Slugs",
+      "type": "array"
+    },
+    "output_path": {
+      "minLength": 1,
+      "title": "Output Path",
+      "type": "string"
+    }
+  }
+}

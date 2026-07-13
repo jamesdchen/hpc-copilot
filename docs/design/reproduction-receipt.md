@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Design: the reproduction receipt — reproduce-run + verify-reproduction
 
 Status: **PROPOSED** (reproduction-receipt wave, task T4 = this decision
@@ -173,6 +176,33 @@ caller content, naming and judging left above (the fabrication class the
 NO-VOCABULARY rule refuses — core must never invent what a metric means).
 Rejected: **a mismatch-as-error** verdict, and **any metric-name special-casing**
 in the comparator.
+
+### Every reduce path leaves the comparator its input (L2 closed)
+
+`verify-reproduction` reads each run's reduced metrics from
+`_aggregated/<run_id>/metrics_aggregate.json` (rung 1 of its artifact ladder).
+That artifact must exist regardless of HOW the run was aggregated. Originally
+only the SSH combiner-only default persisted it, so a run reduced through the
+PURE-API path (`aggregate_flow._pure_api_reduce`) or the CLUSTER-REDUCE path
+(`aggregate_flow` → `ops/aggregate/cluster_reduce.cluster_reduce`) left no
+artifact and verify-reproduction returned an honest-but-needless `incomparable`
+— a coverage hole, not a correctness bug (verifier finding L2, 2026-07-07).
+
+The class fix: `ops/aggregate_flow._persist_local_aggregate` is the ONE
+persistence definition, and every local-reducing path routes through it — the
+default, the pure-API path, and the cluster-reduce path each call it before
+returning, so all three leave the identical `{"aggregated_metrics": ...,
+"provenance": {...}}` shape at the canonical path. A cluster-reduce whose
+reducer emits a non-dict JSON (a bare scalar/list) persists
+`aggregated_metrics: {}` — the honest empty (no keyed metrics to diff), never a
+fabricated scalar the comparator would pretend to match. The opt-in
+cluster-final path (`HPC_CLUSTER_FINAL_REDUCE`) keeps its RICHER
+cluster-produced aggregate (waves/manifest/errors_per_wave) rather than routing
+through the leaner seam, but now lands it at the SAME flat
+`_aggregated/<run_id>/metrics_aggregate.json` verify reads (it previously nested
+the pull one level too deep, where no comparator looked). The enforcement row
+"The durable comparator artifact … has ONE persistence definition" pins every
+path through the seam and names the per-path test.
 
 ## Pipeline seat and extensibility
 

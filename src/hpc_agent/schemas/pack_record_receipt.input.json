@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_record_receipt.input.json",
+  "title": "pack-record-receipt input spec",
+  "description": "Inputs to ``pack-record-receipt`` — a slot outcome, NEVER a sha.\n\n``pack`` / ``slot`` are caller-authored slugs (the slot is the caller's name\nfor one obligation, DP4; core never invents one). ``checked`` lists the\nexperiment-relative paths the domain check covered — the verb recomputes\neach file's sha from disk. ``passed`` is a mechanical boolean (comparison,\nnot interpretation). ``evidence`` is OPAQUE — an arbitrary caller payload\ncore records verbatim and never reads for meaning.\n\nThere is deliberately NO ``content_sha`` / ``manifest_sha`` / per-file sha\nfield: every sha is server-computed from disk at record time.",
+  "type": "object",
+  "required": [
+    "pack",
+    "slot",
+    "passed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "pack": {
+      "description": "The pack (filesystem-safe slug) whose current bind this receipt is recorded under.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Pack",
+      "type": "string"
+    },
+    "slot": {
+      "description": "Caller-authored slot slug this receipt fills — the caller's name for one obligation (DP4). Opaque to core; never invented or defaulted.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Slot",
+      "type": "string"
+    },
+    "checked": {
+      "description": "Experiment-relative paths the domain check covered. The verb recomputes each file's sha ON DISK — a receipt binds the freshly-hashed content, so it reads stale the instant any checked file drifts.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Checked",
+      "type": "array"
+    },
+    "passed": {
+      "description": "Mechanical outcome the domain check reported. `true` is required for a gate to accept the slot.",
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "evidence": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE check evidence (arbitrary nested payload or free text). Recorded verbatim; NEVER read by core for meaning.",
+      "title": "Evidence"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/harness_capabilities.input.json",
+  "title": "harness-capabilities input spec",
+  "description": "Inputs to ``harness-capabilities`` — none required.\n\nThe verb detects the capability set for the ``--experiment-dir`` repo against\nthe harness config it can read (``~/.claude/settings.json``, honoring\n``CLAUDE_CONFIG_DIR``). The spec is intentionally EMPTY: ``{}`` is the whole\nvalid input. ``extra=\"forbid\"`` still rejects a bogus key, so the verb has the\nsame spec-invalid contract as every other ``--spec`` primitive.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

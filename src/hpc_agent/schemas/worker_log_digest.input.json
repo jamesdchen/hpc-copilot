@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/worker_log_digest.input.json",
+  "title": "worker-log-digest input spec",
+  "description": "Inputs to ``worker-log-digest``.",
+  "type": "object",
+  "required": [
+    "log_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "log_path": {
+      "description": "Path to the worker log to digest — a path relative to --experiment-dir, or an absolute path that resolves WITHIN the experiment dir (detached-worker logs land under .hpc/_detached/). No SSH: a local file only.",
+      "minLength": 1,
+      "title": "Log Path",
+      "type": "string"
+    },
+    "tail_lines": {
+      "default": 50,
+      "description": "How many trailing lines to echo verbatim in the digest (default 50). 0 echoes none — the marker counts and total still compute.",
+      "minimum": 0,
+      "title": "Tail Lines",
+      "type": "integer"
+    }
+  }
+}

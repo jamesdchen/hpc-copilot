@@ -46,7 +46,7 @@ def fake_backend():
         def from_build_context(cls, ctx: object) -> _FakeMon:
             return cls()
 
-        def _build_command(self, *a: object, **k: object) -> object:
+        def _build_command(self, *a: object, **k: object) -> object:  # type: ignore[override]
             raise NotImplementedError
 
         def alive_job_ids(self, job_ids: list[str]) -> list[str]:
@@ -103,6 +103,102 @@ def test_reconcile_marks_abandoned_via_backend_alive_hook(tmp_path, monkeypatch,
     assert record.combined_waves == []
 
 
+class _RichMonBackend(HPCBackend):
+    """A pure-API backend that proves per-task counts via ``task_statuses``.
+
+    ``per_task`` and ``alive_return`` are class attrs the test sets so the same
+    backend can stand in for a finished-complete or finished-failed run whose
+    jobs have aged out of the live queue (``alive_return == []``).
+    """
+
+    scheduler_name = "fakerichmonbackend"
+    requires_ssh = False
+    alive_return: list[str] = []
+    per_task: dict[int, str] = {}
+
+    @classmethod
+    def from_build_context(cls, ctx: object) -> _RichMonBackend:
+        return cls()
+
+    def _build_command(self, *a: object, **k: object) -> object:  # type: ignore[override]
+        raise NotImplementedError
+
+    def alive_job_ids(self, job_ids: list[str]) -> list[str]:
+        return list(type(self).alive_return)
+
+    def task_statuses(self, job_ids: list[str], *, total_tasks: int) -> dict[int, str]:
+        return dict(type(self).per_task)
+
+
+@pytest.fixture
+def rich_backend():
+    backends.register("fakerichmonbackend")(_RichMonBackend)
+    try:
+        yield _RichMonBackend
+    finally:
+        backends._REGISTRY.pop("fakerichmonbackend", None)
+        _RichMonBackend.alive_return = []
+        _RichMonBackend.per_task = {}
+
+
+def test_reconcile_pure_api_complete_settles_not_abandoned(tmp_path, monkeypatch, rich_backend):
+    """#44: a fully-COMPLETE pure-API run whose jobs left the live queue must
+    settle COMPLETE on the backend's ``task_statuses`` evidence — NOT be flipped
+    ``abandoned`` from a count-less summary (the #351 class, pure-API path)."""
+    _trap_reconcile_ssh(monkeypatch)
+    rich_backend.alive_return = []  # jobs aged out of the live view
+    rich_backend.per_task = {0: "complete", 1: "complete", 2: "complete", 3: "complete"}
+    upsert_run(tmp_path, _record("r-pure-complete", backend="fakerichmonbackend"))
+
+    record, alive_failed = recon._reconcile_one(
+        tmp_path, "r-pure-complete", scheduler="fakerichmonbackend"
+    )
+
+    assert alive_failed is False
+    assert record.status == "complete"
+    assert (record.last_status or {}).get("verdict_reason") == "all_tasks_complete"
+
+
+def test_reconcile_pure_api_failure_settles_failed_not_abandoned(
+    tmp_path, monkeypatch, rich_backend
+):
+    """#44 symmetric: a pure-API run with positive failure evidence settles
+    ``failed`` (not ``abandoned``) when its jobs have left the live queue."""
+    _trap_reconcile_ssh(monkeypatch)
+    # The FAILED arm tails a task log for the envelope (best-effort seam).
+    monkeypatch.setattr(
+        "hpc_agent.infra.cluster_logs.fetch_task_logs",
+        lambda **_kw: [{"content": "Traceback: boom", "path": "/log", "task_id": 3, "job_id": "1"}],
+    )
+    rich_backend.alive_return = []
+    rich_backend.per_task = {0: "complete", 1: "complete", 2: "complete", 3: "failed"}
+    upsert_run(tmp_path, _record("r-pure-failed", backend="fakerichmonbackend"))
+
+    record, alive_failed = recon._reconcile_one(
+        tmp_path, "r-pure-failed", scheduler="fakerichmonbackend"
+    )
+
+    assert alive_failed is False
+    assert record.status == "failed"
+    assert (record.last_status or {}).get("verdict_reason") == "positive_failure_evidence"
+
+
+def test_reconcile_pure_api_liveness_only_still_abandons(tmp_path, monkeypatch, fake_backend):
+    """A liveness-ONLY backend (no ``task_statuses``) keeps the pinned
+    ``abandoned`` verdict for an evidence-less finished run — the #44 fix does
+    not disturb the liveness-only contract."""
+    _trap_reconcile_ssh(monkeypatch)
+    fake_backend.alive_return = []
+    upsert_run(tmp_path, _record("r-live-only-abandon"))
+
+    record, alive_failed = recon._reconcile_one(
+        tmp_path, "r-live-only-abandon", scheduler="fakemonbackend"
+    )
+
+    assert alive_failed is False
+    assert record.status == "abandoned"
+
+
 def test_reconcile_keeps_in_flight_when_jobs_alive(tmp_path, monkeypatch, fake_backend):
     _trap_reconcile_ssh(monkeypatch)
     fake_backend.alive_return = ["1"]  # one job still alive → not abandoned
@@ -147,7 +243,7 @@ def test_record_status_uses_task_statuses_when_available(tmp_path, monkeypatch):
         def from_build_context(cls, ctx: object) -> _RichBackend:
             return cls()
 
-        def _build_command(self, *a: object, **k: object) -> object:
+        def _build_command(self, *a: object, **k: object) -> object:  # type: ignore[override]
             raise NotImplementedError
 
         def alive_job_ids(self, job_ids: list[str]) -> list[str]:

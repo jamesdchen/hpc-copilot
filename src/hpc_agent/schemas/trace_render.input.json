@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace_render.input.json",
+  "title": "trace-render input spec",
+  "description": "Inputs to ``trace-render`` — EXACTLY ONE selector shape.\n\n* ``scope_kind`` + ``scope_id`` — the DIRECT point lookup (Class C): read\n  ``.hpc/traces/<scope_kind>/<scope_id>/task-<task>.jsonl`` verbatim.\n* ``cmd_sha`` — the REFERENCE lookup (Class B): the newest run whose sidecar\n  records this ``cmd_sha`` (parameter identity), then its run-scope trace.\n* ``profile`` — the REFERENCE lookup by the sidecar's literal ``profile``\n  label: the newest run carrying it (``latest-by-profile``, A7 Class B).\n\n``task`` selects which per-task trace file (single-task local/audit runs use\n``task-0``). ``markdown`` toggles the rendered view string in the result.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "scope_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "run",
+            "audit",
+            "local"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Trace store scope kind for the DIRECT point lookup (with scope_id).",
+      "title": "Scope Kind"
+    },
+    "scope_id": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Trace store scope id for the DIRECT point lookup (with scope_kind).",
+      "title": "Scope Id"
+    },
+    "task": {
+      "default": 0,
+      "description": "Per-task trace file index (single-task runs use task-0).",
+      "minimum": 0,
+      "title": "Task",
+      "type": "integer"
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "REFERENCE lookup: newest run matching this cmd_sha (Class B).",
+      "title": "Cmd Sha"
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "REFERENCE lookup: newest run carrying this sidecar profile label (Class B).",
+      "title": "Profile"
+    },
+    "markdown": {
+      "default": true,
+      "description": "Include the code-rendered markdown views in the result.",
+      "title": "Markdown",
+      "type": "boolean"
+    }
+  }
+}

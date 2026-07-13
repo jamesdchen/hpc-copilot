@@ -7,6 +7,8 @@ run_combiner / run_combiner_checked return-shape contract.
 
 from __future__ import annotations
 
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -19,6 +21,19 @@ import pytest
 from hpc_agent.errors import SshCircuitOpen
 from hpc_agent.infra import remote, transport
 from hpc_agent.infra.ssh_options import _ssh_binary
+
+
+def _inner_remote_cmd(wrapped: str) -> str:
+    """Recover the pre-wrap remote command from a ``build_remote_command`` string.
+
+    Every remote command ``ssh_run`` ships is now wrapped in
+    ``HPC_AGENT_OP=... timeout ... bash -c '<inner>' HPC_AGENT_OP=...`` (run-12
+    finding 20). Tests that assert on the ORIGINAL command shell-quoting look
+    inside the ``bash -c`` payload — the round-trip is exact by construction
+    (``shlex.quote`` in the builder, ``shlex.split`` here).
+    """
+    toks = shlex.split(wrapped)
+    return toks[toks.index("-c") + 1]
 
 
 @pytest.fixture(autouse=True)
@@ -279,8 +294,13 @@ class TestSshRunCapture:
             seam.return_value = _cp()
             remote.ssh_run("ls", ssh_target="u@c")
         assert seam.call_count == 1
-        # argv (remote command last) is the seam's first positional argument.
-        assert seam.call_args[0][0][-1] == "ls"
+        # argv (remote command last) is the seam's first positional argument. It
+        # is now the finding-20 wrapper; the inner command round-trips to "ls",
+        # and the LAYER-2 marker rides the argv (visible to ps/pgrep).
+        wrapped = seam.call_args[0][0][-1]
+        assert _inner_remote_cmd(wrapped) == "ls"
+        assert wrapped.startswith(f"{remote.OP_MARKER_PREFIX}=")
+        assert "timeout -k" in wrapped
 
     def test_capture_false_toggles_capture_output(self):
         with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
@@ -358,7 +378,7 @@ class TestRunCombinerShellQuoting:
                 wave=1,
                 run_id="my run id",
             )
-        cmd_str = mock_run.call_args[0][0][-1]
+        cmd_str = _inner_remote_cmd(mock_run.call_args[0][0][-1])
         assert "cd '/path with space'" in cmd_str
         assert "HPC_RUN_ID='my run id'" in cmd_str
         assert "--run-id 'my run id'" in cmd_str
@@ -1018,3 +1038,101 @@ class TestSshRunEngineFastPath:
         assert result.stdout == "engine\n"
         assert engine.run_calls == 1
         assert seam.call_count == 0  # one-shot never reached
+
+
+# ---------------------------------------------------------------------------
+# build_remote_command — server-side self-destruct + self-id (run-12 finding 20)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRemoteCommand:
+    def test_deadline_derives_from_client_budget_plus_margin(self):
+        # timeout=60 → remote bound 60 + REMOTE_DEADLINE_MARGIN_SEC (60) = 120s,
+        # so the client's own timeout normally fires first.
+        wrapped = remote.build_remote_command("echo hi", timeout=60)
+        assert f"timeout -k 10 {60 + remote.REMOTE_DEADLINE_MARGIN_SEC}s" in wrapped
+
+    def test_no_client_timeout_gets_generous_default_never_unbounded(self):
+        wrapped = remote.build_remote_command("sleep 1", timeout=None)
+        assert f"{remote.REMOTE_DEADLINE_DEFAULT_SEC}s" in wrapped
+        assert "timeout -k" in wrapped  # always bounded, never a bare command
+
+    def test_marker_rides_both_environ_prefix_and_argv_dollar_zero(self):
+        wrapped = remote.build_remote_command("echo hi", timeout=30, op="submit-s2")
+        # Leading env-assignment (environ) and trailing bash $0 (argv/ps/pgrep)
+        # are the SAME token.
+        toks = shlex.split(wrapped)
+        assert toks[0].startswith(f"{remote.OP_MARKER_PREFIX}=submit-s2:")
+        assert toks[-1] == toks[0]
+
+    def test_op_label_sanitised_to_argv_safe(self):
+        wrapped = remote.build_remote_command("echo hi", timeout=30, op="weird op/$(x)")
+        marker = shlex.split(wrapped)[0]
+        # No shell metacharacters survive into the token — only the marker key,
+        # a sanitised label ([A-Za-z0-9._-] with everything else → '_'), and the
+        # epoch remain.
+        assert re.fullmatch(rf"{remote.OP_MARKER_PREFIX}=[A-Za-z0-9._-]+:\d+", marker)
+        for meta in (" ", "/", "$", "(", ")"):
+            assert meta not in marker
+
+    def test_quoting_round_trip_preserves_compound_command_byte_for_byte(self):
+        original = "cd '/path with space' && python -m x | grep 'a b' && echo $?"
+        wrapped = remote.build_remote_command(original, timeout=30)
+        assert _inner_remote_cmd(wrapped) == original
+
+    def test_escape_hatch_returns_command_unwrapped(self, monkeypatch):
+        monkeypatch.setenv("HPC_SSH_NO_REMOTE_DEADLINE", "1")
+        original = "cd /p && python reporter.py"
+        assert remote.build_remote_command(original, timeout=30) == original
+
+    def test_remote_op_context_sets_ambient_label(self):
+        with remote.remote_op("verify-canary"):
+            assert remote.current_remote_op() == "verify-canary"
+            wrapped = remote.build_remote_command("echo hi", timeout=30)
+        assert shlex.split(wrapped)[0].startswith(f"{remote.OP_MARKER_PREFIX}=verify-canary:")
+        # Reset after the context.
+        assert remote.current_remote_op() is None
+
+    def test_explicit_op_overrides_ambient(self):
+        with remote.remote_op("ambient"):
+            wrapped = remote.build_remote_command("echo hi", timeout=30, op="explicit")
+        assert shlex.split(wrapped)[0].startswith(f"{remote.OP_MARKER_PREFIX}=explicit:")
+
+
+class TestCaptureSeamStdinIsolation:
+    """The capture seams never hand the parent's stdin to a child (run-12
+    finding 4): under ``mcp-serve`` (the default IN-PROCESS runner) the
+    parent's stdin is the live JSON-RPC pipe, and ``ssh`` reads-and-forwards
+    local stdin by default — an inheriting child steals protocol bytes or
+    blocks forever. Both capture seams must give the child DEVNULL.
+
+    Fire path: each seam runs in a RE-EXEC'd parent whose stdin carries
+    pending bytes (pytest's own fd 0 is already null-like, so an in-process
+    call could never catch an inheritance regression). The seam's child must
+    read 0 bytes (DEVNULL EOF), never the parent's payload."""
+
+    @staticmethod
+    def _assert_seam_isolates(seam_name: str) -> None:
+        inner = (
+            f"from hpc_agent.infra.remote import {seam_name}; import sys; "
+            f"p = {seam_name}([sys.executable, '-c', "
+            "'import sys; print(len(sys.stdin.buffer.read()))'], timeout=30); "
+            "print('CHILD_READ=' + p.stdout.strip())"
+        )
+        outer = subprocess.run(
+            [sys.executable, "-c", inner],
+            input="PROTOCOL-BYTES-THAT-MUST-NOT-LEAK",
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert outer.returncode == 0, outer.stderr
+        assert "CHILD_READ=0" in outer.stdout
+
+    def test_capture_via_select_child_stdin_is_devnull(self):
+        self._assert_seam_isolates("_capture_via_select")
+
+    def test_capture_windows_child_stdin_is_devnull(self):
+        # The Windows-named seam is portable (plain Popen + communicate), so
+        # its stdin isolation is pinned on every platform.
+        self._assert_seam_isolates("_capture_windows")

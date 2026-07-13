@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/conformance_status.output.json",
+  "title": "conformance-status output data",
+  "description": "The comparator report — per-key verdicts, the overall tier, dual evidence.\n\nDERIVED on every read (no verdict store). ``keys`` is one ``KeyVerdictLine``\nper declared key; ``overall`` is the fold. ``window`` / ``baseline`` carry the\ntwo sides' evidence labels verbatim; ``declaration_echo`` echoes the sealed\nconformance declaration (keys, min_window_n, review_horizon) so a reader sees\nwhat was judged against without a second call; ``render`` is the deterministic\ncode-composed markdown brief (range-phrased, dual-labelled, no urgency or\nrecommendation prose).",
+  "type": "object",
+  "required": [
+    "registration_id",
+    "overall",
+    "window",
+    "baseline",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "registration_id": {
+      "description": "The registration reported on.",
+      "title": "Registration Id",
+      "type": "string"
+    },
+    "overall": {
+      "description": "The fold over the per-key verdicts: nonconforming if any well-evidenced key exits a well-evidenced envelope; else needs_verdict if any key is thin/novel/incomparable; else conforming.",
+      "enum": [
+        "conforming",
+        "needs_verdict",
+        "nonconforming"
+      ],
+      "title": "Overall",
+      "type": "string"
+    },
+    "keys": {
+      "description": "One verdict line per declared key, each dual-labelled with both sides' evidence.",
+      "items": {
+        "$ref": "#/$defs/KeyVerdictLine"
+      },
+      "title": "Keys",
+      "type": "array"
+    },
+    "window": {
+      "$ref": "#/$defs/ConformanceWindow",
+      "description": "The live side's evidence: the selected window's n, span, and observed label sets."
+    },
+    "baseline": {
+      "$ref": "#/$defs/ConformanceBaseline",
+      "description": "The registered side's evidence: the sealed baseline's n and seal date."
+    },
+    "declaration_echo": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Echo of the sealed conformance declaration (keys, min_window_n, review_horizon) the comparison judged against. Opaque; disclosed so a reader need not re-fetch the registration.",
+      "title": "Declaration Echo"
+    },
+    "render": {
+      "description": "Deterministic code-rendered markdown brief — wording composed from record fields, range-phrased and dual-labelled, with no urgency or recommendation vocabulary.",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "ConformanceBaseline": {
+      "additionalProperties": false,
+      "description": "The REGISTERED side's evidence: the sealed baseline's n and seal date.\n\nPoint-in-time and FIXED (C-compare): read from the dossier-bound artifact,\nnever grown by live observations. ``sealed_at`` is when the registration\nsealed it — the second half of the dual evidence label (\"baseline n=126 sealed\n2026-03-02\").",
+      "properties": {
+        "n": {
+          "description": "Number of sealed baseline rows (point-in-time; never grows).",
+          "minimum": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "sealed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO timestamp the registration sealed this baseline (absent when the record carries none).",
+          "title": "Sealed At"
+        }
+      },
+      "required": [
+        "n"
+      ],
+      "title": "conformance sealed-baseline evidence",
+      "type": "object"
+    },
+    "ConformanceWindow": {
+      "additionalProperties": false,
+      "description": "The LIVE side's evidence: the selected window's span and label sets.\n\nDisclosed verbatim beside every verdict (C-compare step 2) — never corrected\nfor autocorrelation or regime shift, only stated. ``since``/``until`` are the\nobserved span of the selected window (absent when the selection was purely\ncount-based and carried no timestamp bound); ``labels`` is the distinct set of\nlabel strings observed across the window (novelty is disclosed, not judged).",
+      "properties": {
+        "n": {
+          "description": "Number of receipts in the selected window.",
+          "minimum": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Earliest observed_at in the window (ISO), when a timestamp bound applies.",
+          "title": "Since"
+        },
+        "until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Latest observed_at in the window (ISO), when a timestamp bound applies.",
+          "title": "Until"
+        },
+        "labels": {
+          "description": "Distinct opaque label strings observed across the window. Novelty disclosed, never interpreted.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        }
+      },
+      "required": [
+        "n"
+      ],
+      "title": "conformance live-window evidence",
+      "type": "object"
+    },
+    "KeyVerdictLine": {
+      "additionalProperties": false,
+      "description": "One declared key's verdict, DUAL-labelled with both sides' evidence.\n\nThe range-phrased, sigma-free evidence line (C-compare step 2): the window's\nobserved order statistics ``[window_lo, window_hi]`` over ``window_n`` obs vs\nthe registered envelope ``[baseline_lo, baseline_hi]`` over ``baseline_n``.\nThe four range bounds are OPTIONAL: they are absent for an incomparable /\nnovel key (a live key the baseline never carried, or vice versa) where one\nside has no order statistics to state. ``window_n`` / ``baseline_n`` are\nALWAYS present — the counts are the mechanical evidence the classifier routes\non (window_n < min_window_n, baseline_n < 3), disclosed even when a range is\nnot.",
+      "properties": {
+        "key": {
+          "description": "The declared metric key (opaque caller slug; core never learns its meaning).",
+          "title": "Key",
+          "type": "string"
+        },
+        "tier_reason": {
+          "description": "Why this key landed where it did: within/outside the well-evidenced envelope, or a thinness/novelty/incomparability route to needs_verdict. The closed seven-member vocabulary (C-compare).",
+          "enum": [
+            "within_envelope",
+            "outside_envelope",
+            "insufficient_window",
+            "thin_baseline",
+            "key_novelty",
+            "label_novelty",
+            "incomparable"
+          ],
+          "title": "Tier Reason",
+          "type": "string"
+        },
+        "window_lo": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Live window observed minimum (order statistic). Absent when the window has no comparable value.",
+          "title": "Window Lo"
+        },
+        "window_hi": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Live window observed maximum (order statistic). Absent when the window has no comparable value.",
+          "title": "Window Hi"
+        },
+        "baseline_lo": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Registered envelope minimum (sealed order statistic). Absent when the baseline never carried this key.",
+          "title": "Baseline Lo"
+        },
+        "baseline_hi": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Registered envelope maximum (sealed order statistic). Absent when the baseline never carried this key.",
+          "title": "Baseline Hi"
+        },
+        "window_n": {
+          "description": "Count of observations in the selected live window for this key. Compared against the caller-declared min_window_n; below it routes insufficient_window in EITHER direction (never a fabricated verdict).",
+          "minimum": 0,
+          "title": "Window N",
+          "type": "integer"
+        },
+        "baseline_n": {
+          "description": "Count of sealed baseline rows carrying this key. Below the reused well-evidenced bar (n>=3) routes thin_baseline; the one mechanized evidence threshold, never a new invention.",
+          "minimum": 0,
+          "title": "Baseline N",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "tier_reason",
+        "window_n",
+        "baseline_n"
+      ],
+      "title": "conformance per-key verdict line",
+      "type": "object"
+    }
+  }
+}

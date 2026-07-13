@@ -252,6 +252,7 @@ def cluster_reduce(
 
     from pathlib import Path as _Path
 
+    from hpc_agent.infra.clusters import resolve_ssh_target
     from hpc_agent.infra.remote import ssh_run
     from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.journal import load_run
@@ -278,7 +279,7 @@ def cluster_reduce(
             run_id=run_id,
             extra_env=extra_env,
         ),
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         timeout=float(timeout_sec),
     )
     stderr_tail = (proc.stderr or "")[-2000:]
@@ -306,7 +307,7 @@ def cluster_reduce(
                 "or a non-root absolute directory."
             )
         pull_proc = rsync_pull(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=abs_dirname,
             remote_subdir="",
             local_dir=str(local_dir_path),
@@ -315,7 +316,7 @@ def cluster_reduce(
         )
     else:
         pull_proc = rsync_pull(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=os.path.dirname(output_rel) or ".",
             local_dir=str(local_dir_path),

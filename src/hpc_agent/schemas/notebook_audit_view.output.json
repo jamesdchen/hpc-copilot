@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_audit_view.output.json",
+  "title": "notebook-audit-view output data",
+  "description": "The whole-source audit view: per-section projections + a module roll-up.\n\n``markdown`` is the code-rendered human projection (the verbatim-relay\nposture — the skill relays it as-is; NO LLM-freeform prose enters the audit\npath). ``view_sha`` is the deterministic roll-up over the section shas and\nthe two module fingerprints; any section OR preamble edit moves it.",
+  "type": "object",
+  "required": [
+    "source_module_sha",
+    "template_module_sha",
+    "view_sha",
+    "markdown"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sections": {
+      "description": "One projection per SOURCE section, in source order.",
+      "items": {
+        "$ref": "#/$defs/NotebookSectionView"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "dropped_template_slugs": {
+      "description": "Template slugs absent from the source (a section the template declared but the draft dropped) — surfaced, never silently hidden. The graduation gate refuses on these; the view only shows them.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Dropped Template Slugs",
+      "type": "array"
+    },
+    "source_module_sha": {
+      "title": "Source Module Sha",
+      "type": "string"
+    },
+    "template_module_sha": {
+      "title": "Template Module Sha",
+      "type": "string"
+    },
+    "canonical": {
+      "default": true,
+      "description": "True when this view was built with the CANONICAL configuration — the audit's RECORDED lint roots + attention order, the server-recomputed lint, and the journaled receipts — so its per-section view_shas MATCH what the T8 sign-off gate recomputes and will accept. False when an OVERRIDE made it a PREVIEW (explicit roots/order differing from the recorded config, explicit lint_findings, or an inline receipt): a preview is for inspection; signing a preview view_sha is refused.",
+      "title": "Canonical",
+      "type": "boolean"
+    },
+    "view_sha": {
+      "description": "Deterministic roll-up sha over the section shas + the two module fingerprints; any section or preamble edit moves it.",
+      "title": "View Sha",
+      "type": "string"
+    },
+    "markdown": {
+      "description": "The code-rendered markdown projection for VERBATIM relay. By DEFAULT (spec `full: false`) this is the DIGEST — per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), render-file pointers, and the next-actions footer, with NO diff/assertion/flag body bytes (run-#12 finding 12, B1: the bodies live in the render files + sign-off popup under popup-primary). Pass spec `full: true` for the whole-body render. Same view + same `full` → byte-identical markdown.",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "NotebookSectionView": {
+      "additionalProperties": false,
+      "description": "The deterministic projection of one SOURCE section (the primary object).\n\n``view_sha`` is the per-section sha a sign-off binds (D5). ``lint_flags``\nembeds the caller's findings for this section OPAQUELY.\n\nThe unified diff-from-template is NOT carried on the wire (run-#12 finding 12,\nB1): it was a pure duplicate of the diff already inside the ``markdown`` render\nand the content-addressed render file (``render_path``). It stays derivable —\nthe render file and the ``full: true`` markdown both carry it — so the wire\nshape ships the diff bytes zero times, never twice.",
+      "properties": {
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "classification": {
+          "title": "Classification",
+          "type": "string"
+        },
+        "tier": {
+          "title": "Tier",
+          "type": "string"
+        },
+        "section_sha": {
+          "title": "Section Sha",
+          "type": "string"
+        },
+        "template_section_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template Section Sha"
+        },
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/NotebookViewAssertion"
+          },
+          "title": "Assertions",
+          "type": "array"
+        },
+        "lint_flags": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Lint Flags",
+          "type": "array"
+        },
+        "view_sha": {
+          "title": "View Sha",
+          "type": "string"
+        },
+        "render_path": {
+          "description": "Experiment-relative path to the content-addressed TRUSTED-DISPLAY render file this verb wrote for the section (`.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`). Where the harness can display files, SEND this file and let chat carry only the slug + shas; the T8 sign-off gate requires it to exist and be current at append (the lock is the gate, not the relay).",
+          "title": "Render Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "classification",
+        "tier",
+        "section_sha",
+        "view_sha",
+        "render_path"
+      ],
+      "title": "notebook-audit-view section",
+      "type": "object"
+    },
+    "NotebookViewAssertion": {
+      "additionalProperties": false,
+      "description": "One statically-discovered ``assert`` in a section (never executed).",
+      "properties": {
+        "test": {
+          "title": "Test",
+          "type": "string"
+        },
+        "lineno": {
+          "title": "Lineno",
+          "type": "integer"
+        },
+        "msg": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Msg"
+        }
+      },
+      "required": [
+        "test",
+        "lineno"
+      ],
+      "title": "notebook-audit-view assertion",
+      "type": "object"
+    }
+  }
+}
