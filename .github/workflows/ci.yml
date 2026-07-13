@@ -171,7 +171,14 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python scripts/lint_telemetry_labels.py
       - name: Lint every schema file is reachable from schema_for
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_schema_reachability.py
+      - name: Lint public wire models resolve to an emitted schema
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_wire_suffix.py
+      - name: Lint mirror comments name their twin + pinning test
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_mirror_ledger.py
       - name: Check JSON schemas regenerated from Pydantic
         if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check
