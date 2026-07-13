@@ -86,6 +86,27 @@ def campaign_spec_identity(manifest: dict[str, Any] | None) -> str:
     return _spec_sha(spec)
 
 
+def _campaign_realised_spend(budget: Any) -> tuple[float | None, float | None]:
+    """The campaign's realised ``(budget, walltime)`` spend for the consent cap meter (F16).
+
+    Reads ``campaign-advance``'s budget block (``budget["spent"]`` — the same
+    ``campaign-budget`` join the completion brief renders): ``core_hours`` meters the
+    consent's ``budget_cap`` and ``walltime_sec`` its ``walltime_cap``. Returns
+    ``(None, None)`` when the shape is absent/non-numeric so the caller falls back to the
+    ledger auto-meter (no worse than today) rather than fabricating a spend. Passed
+    EXPLICITLY to :func:`consume_boundary_under_consent` so the mandatory cap legs can
+    fire against real consumption instead of the ``0.0`` placeholder.
+    """
+    spent = budget.get("spent") if isinstance(budget, dict) else None
+    if not isinstance(spent, dict):
+        return None, None
+
+    def _num(val: Any) -> float | None:
+        return float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else None
+
+    return _num(spent.get("core_hours")), _num(spent.get("walltime_sec"))
+
+
 def _next_block(
     current_verb: str, stage_reached: str, why: str, **spec_hint: Any
 ) -> dict[str, Any] | None:
@@ -430,6 +451,12 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
         # `self_heal` seat — see notebook-audit.md item 8).
         from hpc_agent.ops.overnight import consume_boundary_under_consent
 
+        # F16: meter the caps against the campaign's REALISED spend (campaign-budget's
+        # ``spent``) — passed EXPLICITLY so the over-budget/over-walltime cap legs can
+        # actually fire (nothing writes ``spent_*`` to the ledger, so the auto-meter
+        # would compare against 0 forever). Passing the current total (not a ledger
+        # increment) avoids double-counting across ticks.
+        spent_budget, spent_walltime = _campaign_realised_spend(adv.get("budget"))
         outcome = consume_boundary_under_consent(
             experiment_dir,
             scope_kind="campaign",
@@ -438,21 +465,32 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
             current_cmd_sha=campaign_spec_identity(manifest),
             event_kind="anomaly",
             detail={"anomaly": decision, "reason": adv.get("reason")},
+            spent_budget=spent_budget,
+            spent_walltime=spent_walltime,
         )
         if outcome.consumed:
-            brief["overnight_auto_advanced"] = {
+            # F11: consuming an anomaly halt does NOT clear it — the ladder recomputes
+            # the same stop_* every tick and refill sits behind it, so the campaign is
+            # HALTED, not continuing. Report the halt HONESTLY (``watching_anomaly``,
+            # needs_decision=False) rather than the old ``watching_healthy`` /
+            # "self-chaining continues" lie: the consent ACKNOWLEDGED the halt overnight
+            # (no y/nudge raised) and disclosed it to the ledger, but it surfaces at the
+            # morning boundary. Distinct anomalies each earn a ledger line (F11 key).
+            brief["overnight_halt_acknowledged"] = {
                 "anomaly": decision,
                 "reason": adv.get("reason"),
                 "ledger_line": outcome.line,
             }
             return CampaignBlockResult(
                 block="watch",
-                stage_reached="watching_healthy",
+                stage_reached="watching_anomaly",
                 needs_decision=False,
                 reason=(
-                    f"campaign {cid!r} anomaly {decision} ({adv.get('reason')}) "
-                    "auto-advanced under a live standing consent — self-chaining "
-                    "continues; the morning brief discloses the consumption."
+                    f"campaign {cid!r} anomaly {decision} ({adv.get('reason')}) HALTED the "
+                    "campaign; a live standing consent ACKNOWLEDGED it overnight (no y/nudge "
+                    "raised) and disclosed it to the consumption ledger — but consuming the "
+                    "halt does NOT clear it: the campaign stays halted and surfaces at the "
+                    "morning boundary."
                 ),
                 campaign_id=cid,
                 brief=brief,

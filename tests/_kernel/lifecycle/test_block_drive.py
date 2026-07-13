@@ -956,3 +956,169 @@ def test_run_tick_boundary_targeting_y_advances(
     assert code == 0
     assert ran == ["submit-s3"]  # advanced into the greenlit successor
     assert result.action == "terminal"
+
+
+# ── WP-H fire paths (F12 / F13 / F14) ──────────────────────────────────────────
+
+
+def test_run_block_verb_oserror_returns_failed_span_not_raise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F14: a spawn failure (fork exhaustion / ENOMEM / EMFILE — the documented
+    fork-exhaustion night) must be CAUGHT and returned as a failed span ({}, non-zero)
+    so ``on_first_failure`` re-parks the cleared marker, instead of propagating uncaught
+    and silently downgrading the human's edit to a journal-derived advance."""
+
+    def _raise(*_a: Any, **_k: Any) -> Any:
+        raise OSError("fork: retry: Resource temporarily unavailable")
+
+    monkeypatch.setattr("hpc_agent.infra.remote._capture_via_select", _raise)
+    result, code = bd._run_block_verb("submit-s2", {"run_id": "r1"}, tmp_path)
+    assert result == {}
+    assert code != 0  # a failed span, not an exception
+
+
+def _consumed_outcome() -> Any:
+    from hpc_agent.ops import overnight
+
+    return overnight.ConsumptionOutcome(
+        True, overnight.ConsentDecision(True, "live", {}), {"consumed_block": "submit-s3"}
+    )
+
+
+def test_run_tick_awaiting_consumes_parked_gated_boundary_under_consent(
+    faked: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F12: a standing consent recorded AFTER the driver parked at the gated S2→S3
+    boundary is consulted on the awaiting_decision RESUME path and auto-advances it —
+    the night is no longer lost. (Previously only _chain's fresh-gate site consulted it.)"""
+    pending = _pending(current_verb="submit-s2", next_verb="submit-s3")
+    pending["resume_cursor"]["next_spec_hint"] = {"submit": {"run_id": "r1"}}
+    faked["pending"] = pending
+    faked["committed"] = None  # awaiting — no committed y targets the boundary
+    monkeypatch.setattr(bd, "_boundary_has_post_park_nudge", lambda *_a, **_k: False)
+    monkeypatch.setattr(bd, "_consume_overnight", lambda *_a, **_k: _consumed_outcome())
+    faked["results"] = {
+        "submit-s3": {
+            "block": "s3",
+            "stage_reached": "complete",
+            "needs_decision": False,
+            "next_block": None,
+        }
+    }
+    result, code = run_tick(Path("."), run_id="r1", workflow="submit")
+    assert code == 0
+    assert result.action == "terminal"
+    assert [r["verb"] for r in faked["ran"]] == ["submit-s3"]  # advanced despite awaiting
+    assert faked["cleared"] == ["r1"]  # the marker was consumed transactionally
+
+
+def test_run_tick_awaiting_does_not_consume_when_human_is_redrafting(
+    faked: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F12/F13: a same-boundary nudge journaled after the park means the human is
+    redrafting THIS boundary — a standing consent must NOT steamroll the un-redrafted
+    spec. The consent is not even consulted; the tick stays a valid awaiting stop."""
+    faked["pending"] = _pending(current_verb="submit-s2", next_verb="submit-s3")
+    faked["committed"] = None
+    monkeypatch.setattr(bd, "_boundary_has_post_park_nudge", lambda *_a, **_k: True)
+    consulted = {"called": False}
+
+    def _spy(*_a: Any, **_k: Any) -> None:
+        consulted["called"] = True
+
+    monkeypatch.setattr(bd, "_consume_overnight", _spy)
+    result, code = run_tick(Path("."), run_id="r1", workflow="submit")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert faked["ran"] == []
+    assert consulted["called"] is False  # short-circuited before consulting the consent
+
+
+def _decision_record(
+    response: str,
+    *,
+    next_block: str | None = None,
+    block: str = "submit-s2",
+    ts: str = "2026-07-03T01:00:00+00:00",
+) -> dict[str, Any]:
+    rec: dict[str, Any] = {"response": response, "block": block, "ts": ts}
+    if next_block is not None:
+        rec["resolved"] = {"next_block": next_block}
+    return rec
+
+
+_PARKED_AT = "2026-07-03T00:30:00+00:00"
+
+
+def test_committed_greenlight_superseded_by_same_boundary_nudge() -> None:
+    """F13 direction (a): a `y` targeting the boundary followed by a later SAME-boundary
+    nudge (the human retracting: 'raise the walltime first') → the retracted `y` is NOT
+    returned, so the driver stays awaiting instead of launching the un-redrafted spec."""
+    records = [
+        _decision_record("y", next_block="submit-s3", ts="2026-07-03T01:00:00+00:00"),
+        _decision_record("raise the walltime first", ts="2026-07-03T01:05:00+00:00"),
+    ]
+    assert (
+        bd.committed_greenlight_for_boundary(
+            records, block="submit-s2", next_verb="submit-s3", awaiting_since=_PARKED_AT
+        )
+        is None
+    )
+
+
+def test_committed_greenlight_not_superseded_by_unrelated_later_record() -> None:
+    """F13 direction (b): a `y` targeting the boundary followed by an UNRELATED later
+    record (a different block — an overnight-consent) does NOT retract the `y`: the driver
+    still advances / the guard still forces continue (the record is skipped, not latest-wins)."""
+    records = [
+        _decision_record("y", next_block="submit-s3", ts="2026-07-03T01:00:00+00:00"),
+        _decision_record(
+            "let it run overnight", block="overnight-consent", ts="2026-07-03T01:05:00+00:00"
+        ),
+    ]
+    out = bd.committed_greenlight_for_boundary(
+        records, block="submit-s2", next_verb="submit-s3", awaiting_since=_PARKED_AT
+    )
+    assert out is not None
+    assert out.get("next_block") == "submit-s3"
+
+
+def test_run_requested_walltime_from_sidecar() -> None:
+    """F16: the S3 launch cost the consent's walltime_cap bounds = walltime_sec × task_count.
+    Absent/non-numeric resources yield None (fall back to the ledger meter, no fabrication)."""
+    cost = bd._run_requested_walltime({"resources": {"walltime_sec": 3600}, "task_count": 10})
+    assert cost == 36000  # walltime_sec × task_count
+    assert bd._run_requested_walltime({"resources": {"walltime_sec": 3600}}) == 3600  # task≥1
+    assert bd._run_requested_walltime({"resources": {}, "task_count": 10}) is None
+    assert bd._run_requested_walltime(None) is None
+
+
+def test_consume_overnight_feeds_the_walltime_meter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F16: _consume_overnight stamps the S3 launch's requested walltime as spent_walltime
+    so the consent's walltime_cap can fire — the site that KNOWS the cost feeds the meter
+    nothing else writes."""
+    monkeypatch.setattr(
+        "hpc_agent.state.runs.read_run_sidecar",
+        lambda *_a, **_k: {
+            "cmd_sha": "sha1",
+            "resources": {"walltime_sec": 3600},
+            "task_count": 10,
+        },
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_consume(_exp: Any, **kw: Any) -> Any:
+        captured.update(kw)
+        from hpc_agent.ops import overnight
+
+        return overnight.ConsumptionOutcome(
+            False, overnight.ConsentDecision(False, "no-consent", None), None
+        )
+
+    monkeypatch.setattr("hpc_agent.ops.overnight.consume_boundary_under_consent", _fake_consume)
+    bd._consume_overnight(tmp_path, "r1", "submit-s3")
+    assert captured["spent_walltime"] == 36000.0
+    assert captured["current_cmd_sha"] == "sha1"

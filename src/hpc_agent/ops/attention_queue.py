@@ -322,6 +322,9 @@ def collect_greenlight_and_parked(experiment_dir: Path, *, now: str) -> list[Att
             run_id,
             next_verb=cursor.get("next_verb") if isinstance(cursor, dict) else None,
             awaiting_since=marker.get("awaiting_since") or hit.get("awaiting_since"),
+            # F13: the parked block so a same-boundary retraction nudge supersedes an
+            # earlier `y`, while an unrelated later record does not stall it.
+            block=marker.get("block") if isinstance(marker.get("block"), str) else None,
         )
         kind = GREENLIGHT_UNADVANCED if greenlit else RUN_PARKED
         items.append(

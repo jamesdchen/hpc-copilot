@@ -118,6 +118,20 @@ def assert_greenlit_target(
     ``TODO(wave4)`` (greenlight consumption/monotonicity — refuse a re-fire by
     comparing the block's last-execution against the greenlight timestamp) would
     BREAK (3), so it is superseded by these three backstops, not deferred.
+
+    F13 (the y-then-later-record seat) — DELIBERATELY not unified HERE. The driver
+    (``block_drive.committed_greenlight_for_boundary``) and the ``block-drive`` Stop
+    guard now stop at the first SAME-boundary record of either kind, so a same-boundary
+    retraction nudge supersedes an earlier ``y`` on the AUTOMATED path (a mechanical
+    doctor/completer tick can no longer consume a retracted greenlight — it parks). This
+    gate keeps "latest-greenlight-naming-verb wins" on purpose: a later same-verb nudge
+    NOT retracting is a pinned, intentional invariant
+    (``test_gate_greenlight_survives_later_unrelated_touchpoints``) whose rationale is
+    backstops (2)+(3) — and adding a retraction refusal ahead of the terminal replay
+    (which runs AFTER this gate in ``_submit_s3_impl``) would break (3). The only residue
+    is a DIRECT manual ``hpc-agent submit-s3`` invocation after a self-retraction, which
+    the driver no longer reaches; closing that would require reordering the terminal-replay
+    check ahead of the gate (a ``submit_blocks`` change outside this seam).
     """
     records = read_decisions(experiment_dir, "run", run_id)
     for record in reversed(records):

@@ -448,9 +448,14 @@ def campaign_anomaly(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manifest_mod, "read_manifest", lambda *_a, **_k: dict(_MANIFEST))
 
 
-def test_campaign_anomaly_auto_advances_under_live_consent(
+def test_campaign_anomaly_consumed_under_live_consent_reports_halt_honestly(
     experiment_dir: Path, campaign_anomaly: None
 ) -> None:
+    """F11 (re-pointed): consuming an anomaly halt under a live consent does NOT make
+    the campaign continue (nothing clears the halt), so the watch must NOT report
+    ``watching_healthy`` / 'self-chaining continues'. It ACKNOWLEDGES the halt overnight
+    (no y/nudge raised, ledgered for the morning brief) and reports it HONESTLY as
+    ``watching_anomaly`` with needs_decision=False."""
     from hpc_agent._wire.workflows.campaign_blocks import CampaignWatchSpec
     from hpc_agent.meta.campaign.blocks import campaign_watch
 
@@ -462,8 +467,10 @@ def test_campaign_anomaly_auto_advances_under_live_consent(
     )
     result = campaign_watch(experiment_dir, spec=CampaignWatchSpec(campaign_id=_CAMPAIGN_ID))
     assert result.needs_decision is False
-    assert result.stage_reached == "watching_healthy"
-    assert result.brief["overnight_auto_advanced"]["anomaly"] == "stop_circuit_breaker"
+    # Honest halt report, NOT the old watching_healthy lie.
+    assert result.stage_reached == "watching_anomaly"
+    assert result.brief["overnight_halt_acknowledged"]["anomaly"] == "stop_circuit_breaker"
+    assert "overnight_auto_advanced" not in result.brief
     ledger = overnight.read_consumption_ledger(experiment_dir, "campaign", _CAMPAIGN_ID)
     assert len(ledger) == 1 and ledger[0]["consumed_block"] == "campaign-watch"
 
@@ -478,3 +485,109 @@ def test_campaign_anomaly_parks_without_a_live_consent(
     assert result.needs_decision is True
     assert result.stage_reached == "watching_anomaly"
     assert result.brief["overnight_refusal"] == "no-consent"
+
+
+# ── WP-H fire paths (F11 / F12 / F15 / F16) ────────────────────────────────────
+
+
+def test_distinct_campaign_anomalies_each_earn_a_ledger_line(experiment_dir: Path) -> None:
+    """F11: a breaker then a DISTINCT over-budget halt the same night, under ONE consent +
+    campaign identity, must EACH earn a ledger line — previously the second was masked with
+    ``line=None`` (idempotency keyed on (block, cmd_sha) alone). A RECURRING same anomaly
+    stays idempotent (keyed on the anomaly KIND, not the reason string — no nightly flood)."""
+    _seed_consent(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved=_resolved(cmd_sha=_campaign_identity()),
+    )
+
+    def _consume(anomaly: str) -> Any:
+        return overnight.consume_boundary_under_consent(
+            experiment_dir,
+            scope_kind="campaign",
+            scope_id=_CAMPAIGN_ID,
+            boundary_block="campaign-watch",
+            current_cmd_sha=_campaign_identity(),
+            event_kind="anomaly",
+            detail={"anomaly": anomaly},
+        )
+
+    first = _consume("stop_circuit_breaker")
+    second = _consume("stop_over_budget")  # a DISTINCT anomaly
+    dup = _consume("stop_circuit_breaker")  # the SAME anomaly recurring
+    assert first.consumed and second.consumed and dup.consumed
+    assert first.line is not None and second.line is not None  # both distinct anomalies ledgered
+    assert dup.line is None  # recurring same anomaly stays idempotent (no flood)
+    assert len(overnight.read_consumption_ledger(experiment_dir, "campaign", _CAMPAIGN_ID)) == 2
+
+
+def test_morning_brief_explains_zero_consumption(experiment_dir: Path) -> None:
+    """F12: a consent that produced no auto-advance surfaces a field explaining the zero.
+    Previously ``consumed_count=0`` was silent about WHY the night produced nothing — the
+    exact gap that made a consent recorded after the park (never consulted) undiagnosable."""
+    _seed_consent(experiment_dir)  # run-scope live consent, nothing consumed
+    brief = overnight.overnight_morning_brief(experiment_dir, scope_kind="run", scope_id=_RUN_ID)
+    assert brief["consumed_count"] == 0
+    assert brief["unconsumed_reason"] is not None
+    assert "note" in brief["unconsumed_reason"]
+
+
+def test_morning_brief_no_unconsumed_reason_when_something_advanced(experiment_dir: Path) -> None:
+    """The F12 field is None once a boundary DID advance (nothing to explain)."""
+    _seed_consent(experiment_dir)
+    overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s3",
+        current_cmd_sha=_CMD_SHA,
+    )
+    brief = overnight.overnight_morning_brief(experiment_dir, scope_kind="run", scope_id=_RUN_ID)
+    assert brief["consumed_count"] == 1
+    assert brief["unconsumed_reason"] is None
+
+
+def test_consent_identity_binds_refuses_mismatched_token(
+    experiment_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F15: a consent bound to a cmd_sha that is NOT the token consumption compares (the run
+    sidecar tree fingerprint / campaign identity — e.g. the parked marker's _spec_sha) is
+    refused LOUDLY at record time, instead of silently refusing 'spec-changed' all night."""
+    monkeypatch.setattr(overnight, "consumption_identity", lambda *_a, **_k: "the-real-sidecar-sha")
+    with pytest.raises(errors.SpecInvalid, match="identity"):
+        overnight.assert_consent_identity_binds(
+            experiment_dir,
+            scope_kind="run",
+            scope_id=_RUN_ID,
+            resolved={"cmd_sha": "the-marker-spec-sha"},
+        )
+    # A matching token passes; an undrivable identity (None) fails open (skips validation).
+    overnight.assert_consent_identity_binds(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        resolved={"cmd_sha": "the-real-sidecar-sha"},
+    )
+    monkeypatch.setattr(overnight, "consumption_identity", lambda *_a, **_k: None)
+    overnight.assert_consent_identity_binds(
+        experiment_dir, scope_kind="run", scope_id=_RUN_ID, resolved={"cmd_sha": "anything"}
+    )
+
+
+def test_walltime_cap_fires_against_explicit_boundary_cost(experiment_dir: Path) -> None:
+    """F16: the mandatory walltime cap — metered against 0 forever because no site wrote
+    spent_* — now FIRES when the boundary's cost is passed explicitly (the meter feed the
+    driver's _consume_overnight and campaign_watch now supply)."""
+    _seed_consent(experiment_dir, resolved=_resolved(walltime_cap=3600))
+    outcome = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s3",
+        current_cmd_sha=_CMD_SHA,
+        spent_walltime=7200.0,  # the launch's requested wall-seconds, above the cap
+    )
+    assert outcome.consumed is False
+    assert outcome.decision.reason == "over-walltime-cap"
+    assert overnight.read_consumption_ledger(experiment_dir, "run", _RUN_ID) == []

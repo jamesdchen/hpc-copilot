@@ -14,11 +14,16 @@ consumption (:func:`standing_consent_status`):
 * **hard caps** — an ``expires_at`` (the morning boundary) plus at least one
   resource cap (``budget_cap`` / ``walltime_cap``); a consent with no ceiling is
   refused. Item 8 pin (c).
-* **spec-identity binding** — ``cmd_sha`` (the block-drive §4 input-spec identity,
-  the SAME token a pre-y is carried under). Consumption recomputes the current
-  identity and REFUSES on a mismatch — "consent dies on spec change", item 8 pin
-  (b) — reusing the exact mechanism that made run #11's gate refuse to carry a
-  pre-y across a regenerated grid.
+* **spec-identity binding** — ``cmd_sha``, the token CONSUMPTION compares: the run's
+  SIDECAR tree fingerprint (``read_run_sidecar()['cmd_sha']`` — the same token the S3
+  gate and ``block_drive._consume_overnight`` read) for a run scope, and the campaign's
+  greenlit-spec identity (:func:`campaign_spec_identity`) for a campaign scope. This is
+  NOT the parked marker's ``block_drive._spec_sha`` (a different derivation — a consent
+  bound to it refuses 'spec-changed' at every boundary all night, F15); a supplied
+  ``cmd_sha`` is validated against the right token at record time
+  (:func:`assert_consent_identity_binds`). Consumption recomputes the current identity and
+  REFUSES on a mismatch — "consent dies on spec change", item 8 pin (b) — reusing the exact
+  mechanism that made run #11's gate refuse to carry a pre-y across a regenerated grid.
 * **the wake** — recording a consent verifies a harness-TRACKED ``status-watch``
   is armed for the same scope (:func:`status_watch_armed`), else the consent is
   refused-with-remedy: a pre-y with no armed watch is "consent nobody can
@@ -70,6 +75,8 @@ __all__ = [
     "compose_consent_defaults",
     "arm_consent_wake",
     "compose_overnight_consent",
+    "consumption_identity",
+    "assert_consent_identity_binds",
     "latest_standing_consent",
     "standing_consent_status",
     "assert_standing_consent",
@@ -247,8 +254,9 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
       already-expired consent is nonsense; a consent with no expiry is unbounded).
     * at least one of ``budget_cap`` / ``walltime_cap`` — a resource ceiling; a
       consent that caps neither spend nor walltime accepts unbounded fallout.
-    * ``cmd_sha`` — the block-drive §4 input-spec identity the consent binds to,
-      so consumption can refuse on a spec change (:func:`standing_consent_status`).
+    * ``cmd_sha`` — the identity consumption compares (the run's sidecar tree
+      fingerprint / the campaign greenlit-spec identity — NOT the marker's ``_spec_sha``,
+      F15), so consumption can refuse on a spec change (:func:`standing_consent_status`).
       (``cmd_sha`` is exempt from the code-derived-field refusal — it is a
       journal-sanctioned identity echo — so it rides ``resolved`` legitimately.)
 
@@ -455,6 +463,73 @@ def arm_consent_wake(
     return out
 
 
+def consumption_identity(experiment_dir: Path, scope_kind: str, scope_id: str) -> str | None:
+    """The identity token CONSUMPTION compares a consent's ``cmd_sha`` against (F15).
+
+    THE one derivation of the token :func:`standing_consent_status` checks — a run's
+    SIDECAR tree fingerprint (``read_run_sidecar()['cmd_sha']``, the same token the S3
+    gate and ``block_drive._consume_overnight`` read) for a run scope, and the campaign's
+    greenlit-spec identity (:func:`campaign_spec_identity`) for a campaign scope. Exposed
+    so the record-time gate can bind a consent to the SAME token consumption compares,
+    rather than the parked marker's ``_spec_sha`` (a different derivation the docs used to
+    name — a consent bound to it refuses 'spec-changed' at every boundary all night).
+
+    Fail-open: any read surprise (a sidecar not yet minted at record time, an unreadable
+    manifest) yields ``None`` → the record-time validation is skipped, never a raise into
+    the consent-record path.
+    """
+    try:
+        if scope_kind == "run":
+            from hpc_agent.state.runs import read_run_sidecar
+
+            sidecar = read_run_sidecar(experiment_dir, scope_id)
+            val = (sidecar or {}).get("cmd_sha")
+            return str(val) if isinstance(val, str) and val else None
+        if scope_kind == "campaign":
+            from hpc_agent.meta.campaign.blocks import campaign_spec_identity
+            from hpc_agent.meta.campaign.manifest import read_manifest
+
+            return campaign_spec_identity(read_manifest(experiment_dir, campaign_id=scope_id))
+    except Exception:  # noqa: BLE001 — an identity read must never wedge the consent record
+        return None
+    return None
+
+
+def assert_consent_identity_binds(
+    experiment_dir: Path, *, scope_kind: str, scope_id: str, resolved: dict[str, Any] | None
+) -> None:
+    """Refuse a consent whose ``cmd_sha`` is not the token consumption compares (F15).
+
+    The record-time half of item 8 pin (b) the substrate left open: consumption compares
+    ``resolved.cmd_sha`` against :func:`consumption_identity` (the run sidecar tree
+    fingerprint / the campaign greenlit-spec identity), but the module docs and the parked
+    marker both pointed authors at ``block_drive._spec_sha`` — a DIFFERENT derivation. A
+    consent bound to that token silently refuses 'spec-changed' at every boundary and the
+    night is lost with no visible cause. Validating here turns that silent all-night refusal
+    into a loud, self-remediating refusal naming the expected token.
+
+    Fail-open when the identity is not yet derivable (no sidecar minted, unreadable
+    manifest): no validation, no worse than today. Only a PRESENT ``cmd_sha`` that
+    MISMATCHES a DERIVABLE identity refuses.
+    """
+    if not isinstance(resolved, dict):
+        return
+    bound = resolved.get("cmd_sha")
+    if not (isinstance(bound, str) and bound):
+        return  # absence is the caps gate's business (item 8 pin b)
+    identity = consumption_identity(experiment_dir, scope_kind, scope_id)
+    if identity and bound != identity:
+        raise errors.SpecInvalid(
+            f"overnight-consent identity gate: resolved.cmd_sha ({bound!r}) is not the "
+            f"identity consumption compares for {scope_kind} {scope_id!r} ({identity!r} — "
+            "the run's sidecar tree fingerprint / the campaign's greenlit-spec identity). "
+            "A consent bound to any other token (e.g. the parked marker's _spec_sha) refuses "
+            "'spec-changed' at every boundary and the night is silently lost. Bind cmd_sha to "
+            "read_run_sidecar(run_id)['cmd_sha'] (run) / campaign_spec_identity(manifest) "
+            "(campaign)."
+        )
+
+
 def compose_overnight_consent(
     experiment_dir: Path,
     *,
@@ -470,10 +545,15 @@ def compose_overnight_consent(
     cap defaults (:func:`compose_consent_defaults`) and compose/arm the wake
     (:func:`arm_consent_wake`). Everything composed is disclosed in
     ``composed_defaults``. ``cmd_sha`` is untouched — the one field a default cannot
-    stand in for, so a consent that omits it still refuses at the caps gate.
+    stand in for, so a consent that omits it still refuses at the caps gate — but a
+    SUPPLIED ``cmd_sha`` bound to the wrong derivation is refused HERE
+    (:func:`assert_consent_identity_binds`, F15) rather than silently refusing all night.
     """
     out = compose_consent_defaults(resolved, now_utc=now_utc)
     out = arm_consent_wake(experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out)
+    assert_consent_identity_binds(
+        experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out
+    )
     return out
 
 
@@ -821,20 +901,33 @@ def _already_consumed(
     scope_id: str,
     boundary_block: str,
     bound_cmd_sha: str,
+    event_key: str | None = None,
 ) -> bool:
     """True when this boundary was already ledgered under the SAME consent identity.
 
-    The idempotency key is ``(consumed_block, detail.cmd_sha)``: a boundary is
-    consumed exactly once per spec identity. This keeps re-consulting the consent
-    safe — the driver's park site and the gated block's own gate both funnel here,
-    and a later re-tick / a detached-block replay re-enters the same boundary — so a
-    duplicate audit line (which would double-count in the morning brief) is never
-    written for one real auto-advance.
+    The idempotency key is ``(consumed_block, detail.cmd_sha, detail.anomaly)``: a
+    boundary is consumed exactly once per spec identity PER anomaly KIND. This keeps
+    re-consulting the consent safe — the driver's park site and the gated block's own
+    gate both funnel here, and a later re-tick / a detached-block replay re-enters the
+    same boundary — so a duplicate audit line (which would double-count in the morning
+    brief) is never written for one real auto-advance.
+
+    The *event_key* leg (F11) is what lets a SECOND, DISTINCT anomaly the same night
+    earn its own ledger line: the campaign-watch boundary consumes a breaker at 1am and
+    an over-budget halt at 3am under the same live consent + campaign identity; keyed on
+    ``(block, cmd_sha)`` alone the second was consumed with ``line=None`` — masked with
+    zero disclosure. Keyed on the anomaly KIND (``detail.anomaly``), not the reason
+    string, so a RECURRING same anomaly stays idempotent (one line, not a nightly flood).
+    A boundary carrying no anomaly (the run's ``submit-s3`` launch) passes ``event_key``
+    ``None`` ⇒ compares against the absent ledger field ⇒ back-compatible single-consume.
     """
     for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
         if str(line.get("consumed_block") or "") != boundary_block:
             continue
-        if str(_as_dict(line.get("detail")).get("cmd_sha") or "") == bound_cmd_sha:
+        detail = _as_dict(line.get("detail"))
+        if str(detail.get("cmd_sha") or "") != bound_cmd_sha:
+            continue
+        if str(detail.get("anomaly") or "") == (event_key or ""):
             return True
     return False
 
@@ -898,7 +991,13 @@ def consume_boundary_under_consent(
     if not decision.live:
         return ConsumptionOutcome(False, decision, None)
     stamped_detail: dict[str, Any] = {"cmd_sha": current_cmd_sha, **(detail or {})}
-    if _already_consumed(experiment_dir, scope_kind, scope_id, boundary_block, current_cmd_sha):
+    # F11: the anomaly KIND discriminates the idempotency key so distinct anomalies
+    # the same night each earn a ledger line (a boundary with no anomaly ⇒ None ⇒ the
+    # prior single-consume-per-identity behaviour for the run's submit-s3 launch).
+    event_key = str((detail or {}).get("anomaly") or "") or None
+    if _already_consumed(
+        experiment_dir, scope_kind, scope_id, boundary_block, current_cmd_sha, event_key
+    ):
         # Already ledgered for this identity — a live consent still authorizes the
         # advance, but a second audit line would double-count in the morning brief.
         return ConsumptionOutcome(True, decision, None)
@@ -1649,6 +1748,27 @@ def overnight_morning_brief(
         heal_failed["attempts_detail"] = heal_attempts
     consent_resolved = _as_dict(consent.get("resolved")) if consent is not None else {}
 
+    # F12: a field that says WHY the night was lost. A consent that discloses a zero
+    # consumed_count is otherwise silent about the cause — the exact gap that made a
+    # consent recorded after the driver parked (never consulted on the old resume path)
+    # undiagnosable from the surface the human reads. When a consent exists but nothing
+    # advanced under it, surface the checkable legs so the morning brief explains the zero.
+    unconsumed_reason: dict[str, Any] | None = None
+    if consent is not None and not consumed and heal_failed is None:
+        exp = parse_iso_utc_or_none(consent_resolved.get("expires_at"))
+        expired = exp is not None and surfaced_dt is not None and surfaced_dt >= exp
+        unconsumed_reason = {
+            "expired": expired,
+            "note": (
+                "a standing consent was recorded but NOTHING auto-advanced under it "
+                "overnight (consumed_count=0). Likely causes: no named boundary was "
+                "reached; the consent's spec identity no longer matches the run/campaign "
+                "(spec-changed); or a cap/expiry leg refused. A consent recorded AFTER "
+                "the driver parked at a gated boundary is consulted on the next tick's "
+                "resume path (F12) — check the run's parked marker + consumption ledger."
+            ),
+        }
+
     # Per-class sections (§7.4): A/B heals, C1 parked elicitations, C2 findings. Lazy
     # import — the taxonomy module imports THIS module, so a top-level import would
     # cycle. Fail-open: a taxonomy read error must never blank the brief.
@@ -1680,6 +1800,9 @@ def overnight_morning_brief(
         else None,
         "consumed": consumed,
         "consumed_count": len(consumed),
+        # F12: non-None only when a consent exists but consumed_count is 0 — the field
+        # that explains the zero (a night that produced no auto-advance).
+        "unconsumed_reason": unconsumed_reason,
     }
 
 
