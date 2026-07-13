@@ -185,6 +185,41 @@ def remote_op(op: str) -> Iterator[None]:
         _CURRENT_OP.reset(token)
 
 
+# Ambient idempotence flag (F54/F55): the DEFAULT for :func:`ssh_run`'s
+# ``idempotent`` when a call site cannot easily thread the keyword — notably the
+# scheduler-submit leg, which reaches ``ssh_run`` through a backend's single-arg
+# ``ssh_run`` callable (see ``remote_factory``). A ``non_idempotent_remote()``
+# scope marks the enclosed commands as NON-idempotent: a client-side
+# ``TimeoutError`` is then NOT retried, and a post-dispatch engine failure is NOT
+# re-executed on the one-shot path — the remote half may already be running (a
+# dispatched ``qsub`` outlives the client by ``REMOTE_DEADLINE_MARGIN_SEC``), so a
+# silent re-execution would duplicate the array. ``ssh_run(idempotent=...)`` wins
+# over this ambient value.
+_CURRENT_IDEMPOTENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "hpc_agent_remote_idempotent", default=True
+)
+
+
+@contextlib.contextmanager
+def non_idempotent_remote() -> Iterator[None]:
+    """Mark every :func:`ssh_run` issued in this scope as NON-idempotent.
+
+    Threading the idempotence flag through a backend's single-arg ``ssh_run``
+    callable would require growing every injected stub's signature; this ambient
+    scope reaches the real :func:`ssh_run` without that blast radius. The submit
+    leg (``_execute_command``) wraps its ``qsub``/``sbatch`` round-trip in this so
+    a client timeout or a post-dispatch engine failure surfaces immediately
+    instead of re-submitting a command the scheduler may already have accepted
+    (finding F54/F55). Nestable and contextvar-scoped (safe under threads/async).
+    An explicit ``idempotent=`` on :func:`ssh_run` still overrides it.
+    """
+    token = _CURRENT_IDEMPOTENT.set(False)
+    try:
+        yield
+    finally:
+        _CURRENT_IDEMPOTENT.reset(token)
+
+
 def _remote_deadline_seconds(timeout: float | None) -> int:
     """The server-side ``timeout`` bound (whole seconds) for a client *timeout*.
 
@@ -305,7 +340,7 @@ class _ThrottleRetry(Exception):  # noqa: N818 - a retry *signal*, not an error
         self.cp = cp
 
 
-def _ssh_backoff_policy() -> RetryPolicy:
+def _ssh_backoff_policy(*, retry_on_timeout: bool = True) -> RetryPolicy:
     """The :data:`_BACKOFF_DELAYS_SEC` schedule as a :class:`RetryPolicy`.
 
     Built from the module-level tuple at call time so tests that pin the
@@ -313,13 +348,25 @@ def _ssh_backoff_policy() -> RetryPolicy:
     still drive both the attempt count and the per-attempt delay. ``1 +
     len(...)`` attempts = one initial try plus one retry per scheduled delay,
     matching the previous ``enumerate((0.0, *_BACKOFF_DELAYS_SEC))`` loop.
+
+    ``retry_on_timeout`` (F54): the default retries a client-side
+    :class:`TimeoutError` (the idempotent probe/status/pull surfaces — safe to
+    re-run). A NON-idempotent submit leg passes ``False`` so a client timeout on
+    a dispatched ``qsub`` — whose remote half deliberately outlives the client by
+    :data:`REMOTE_DEADLINE_MARGIN_SEC` — surfaces immediately instead of
+    re-executing and duplicating the array. Throttle failures still retry either
+    way: an sshd rate-limit rejects the connection BEFORE the command dispatches,
+    so re-trying it can never double-run.
     """
     base = _BACKOFF_DELAYS_SEC[0] if _BACKOFF_DELAYS_SEC else 0.0
+    retry_on: tuple[type[BaseException], ...] = (
+        (TimeoutError, _ThrottleRetry) if retry_on_timeout else (_ThrottleRetry,)
+    )
     return RetryPolicy(
         max_attempts=1 + len(_BACKOFF_DELAYS_SEC),
         base_delay_sec=base,
         backoff_factor=2.0,
-        retry_on=(TimeoutError, _ThrottleRetry),
+        retry_on=retry_on,
     )
 
 
@@ -341,6 +388,7 @@ def _with_ssh_backoff(
     *,
     label: str,
     ssh_target: str,
+    retry_on_timeout: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Call *fn* with exponential-backoff retry on transient ssh failures.
 
@@ -412,7 +460,11 @@ def _with_ssh_backoff(
         )
 
     try:
-        return run_with_retry(_attempt, policy=_ssh_backoff_policy(), on_retry=_log_retry)
+        return run_with_retry(
+            _attempt,
+            policy=_ssh_backoff_policy(retry_on_timeout=retry_on_timeout),
+            on_retry=_log_retry,
+        )
     except _ThrottleRetry as exhausted:
         # Every retry consumed and still throttled: return the failing cp for
         # the caller to inspect (an exhausted TimeoutError, by contrast,
@@ -662,6 +714,7 @@ def ssh_run(
     capture: bool = True,
     timeout: float | None = _DEFAULT,
     op: str | None = None,
+    idempotent: bool | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run *cmd* on a remote host via SSH.
 
@@ -694,6 +747,17 @@ def ssh_run(
         through to ``subprocess.run`` as ``timeout=None``.  The timeout
         is applied regardless of *capture* — the two parameters are
         orthogonal.
+    idempotent:
+        Whether re-executing *cmd* is safe (F54/F55). ``True`` (the default when
+        neither this nor a :func:`non_idempotent_remote` scope says otherwise)
+        keeps today's behaviour: a client-side ``TimeoutError`` is retried by the
+        backoff ladder, and a post-dispatch engine failure falls through to the
+        one-shot path. ``False`` (or an enclosing :func:`non_idempotent_remote`
+        scope) is for a command the scheduler may already have ACCEPTED once its
+        remote half started — a ``qsub``/``sbatch`` submit: the client timeout is
+        NOT retried and a dispatched engine failure is NOT re-executed one-shot,
+        so a slow qmaster cannot turn one submit into duplicate arrays. Explicit
+        ``idempotent=`` wins over the ambient scope; ``None`` reads the scope.
 
     Returns
     -------
@@ -705,6 +769,8 @@ def ssh_run(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+    # Explicit kwarg wins; otherwise read the ambient non_idempotent_remote scope.
+    effective_idempotent: bool = _CURRENT_IDEMPOTENT.get() if idempotent is None else idempotent
 
     # LAYER 1 + LAYER 2 (run-12 finding 20): wrap the remote command with a
     # server-side self-destruct deadline (derived from the client budget the
@@ -720,10 +786,13 @@ def ssh_run(
     # engine trouble raises EngineUnavailable → fall straight through to the
     # one-shot path below, the permanent hard fallback. The engine is never
     # load-bearing (engine → one-shot), so an opt-in engine can never be worse
-    # than today. (The deprecated phase-1 in-process broker that once sat
-    # between the engine and the one-shot path was retired + deleted 2026-07-07
-    # per docs/design/connection-broker.md; the one-shot path is now the sole
-    # fallback.)
+    # than today — WITH ONE SCOPED EXCEPTION (F55): a POST-dispatch failure
+    # (``dispatched=True``) of a NON-idempotent command is re-raised rather than
+    # re-executed one-shot (the remote half may still be running; a re-run would
+    # duplicate a qsub). Idempotent commands keep the unconditional fall-through.
+    # (The deprecated phase-1 in-process broker that once sat between the engine
+    # and the one-shot path was retired + deleted 2026-07-07 per
+    # docs/design/connection-broker.md; the one-shot path is now the sole fallback.)
     if capture:
         from hpc_agent.infra import ssh_engine
 
@@ -732,7 +801,22 @@ def ssh_run(
                 return ssh_engine.engine_ssh_run(
                     remote_cmd, ssh_target=ssh_target, timeout=effective_timeout
                 )
-            except ssh_engine.EngineUnavailable:
+            except ssh_engine.EngineUnavailable as exc:
+                # F55: the engine collapses a POST-DISPATCH failure (per-command
+                # asyncssh timeout, torn connection) into EngineUnavailable, and
+                # falling through re-executes the SAME command one-shot. For a
+                # non-idempotent command that already reached the remote host
+                # (``dispatched``), that is a duplicate submit — surface it
+                # instead of silently re-running. A PRE-dispatch failure (breaker
+                # refused, failed connect) never ran the command, so it still
+                # falls through; idempotent commands always fall through (the
+                # "engine can never be worse than off" contract holds for them).
+                if not effective_idempotent and getattr(exc, "dispatched", False):
+                    raise TimeoutError(
+                        f"ssh to {ssh_target}: engine command failed AFTER dispatch "
+                        f"and is not idempotent, so it is not re-executed one-shot "
+                        f"(the remote half may still be running): {_truncate(cmd)}"
+                    ) from exc
                 pass  # fall through to the one-shot path below
 
     # Cap the connection-open *rate* to this host (ban-driver guard): a burst of
@@ -781,4 +865,9 @@ def ssh_run(
         # is None when capture_output=False).
         return run_with_named_pipe_retry(_attempt)
 
-    return _with_ssh_backoff(_run, label=f"ssh {ssh_target}", ssh_target=ssh_target)
+    return _with_ssh_backoff(
+        _run,
+        label=f"ssh {ssh_target}",
+        ssh_target=ssh_target,
+        retry_on_timeout=effective_idempotent,
+    )

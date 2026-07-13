@@ -24,6 +24,8 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING
 
+from hpc_agent.infra.remote import non_idempotent_remote
+
 if TYPE_CHECKING:
     import subprocess
     from collections.abc import Callable
@@ -241,23 +243,34 @@ class RemoteHPCBackend:
         """
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
         bin_name = cmd[0]
-        cached = getattr(self, "_resolved_bins", {}).get(bin_name)
-        if cached:
-            abs_cmd_str = " ".join([shlex.quote(cached), *(shlex.quote(arg) for arg in cmd[1:])])
-            direct = f"cd {shlex.quote(self.remote_repo)} && {abs_cmd_str}"
-            proc = self.ssh_run(direct)
-            if proc.returncode != 127:
-                return proc
-            # Stale path (cluster upgrade moved the scheduler tree): drop the
-            # cache entry and fall through to the login-shell form below,
-            # which re-resolves via the marker.
-            self._resolved_bins.pop(bin_name, None)
-        inner = (
-            f'echo "{_BIN_MARKER}=$(command -v {shlex.quote(bin_name)})" 1>&2; '
-            f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
-        )
-        remote_cmd = f"bash -lc {shlex.quote(inner)}"
-        proc = self.ssh_run(remote_cmd)
+        # F54/F55: this is the scheduler-submit leg — a ``qsub``/``sbatch`` whose
+        # remote half deliberately outlives the client (REMOTE_DEADLINE_MARGIN_SEC)
+        # and which the scheduler ACCEPTS exactly once dispatched. Mark it
+        # NON-idempotent so a client-side timeout is not retried and a
+        # post-dispatch engine failure is not re-executed one-shot — either would
+        # duplicate the array. The ambient scope reaches the real ``ssh_run``
+        # through the backend's single-arg ``ssh_run`` callable without changing
+        # that callable's signature (every injected test stub keeps working).
+        with non_idempotent_remote():
+            cached = getattr(self, "_resolved_bins", {}).get(bin_name)
+            if cached:
+                abs_cmd_str = " ".join(
+                    [shlex.quote(cached), *(shlex.quote(arg) for arg in cmd[1:])]
+                )
+                direct = f"cd {shlex.quote(self.remote_repo)} && {abs_cmd_str}"
+                proc = self.ssh_run(direct)
+                if proc.returncode != 127:
+                    return proc
+                # Stale path (cluster upgrade moved the scheduler tree): drop the
+                # cache entry and fall through to the login-shell form below,
+                # which re-resolves via the marker.
+                self._resolved_bins.pop(bin_name, None)
+            inner = (
+                f'echo "{_BIN_MARKER}=$(command -v {shlex.quote(bin_name)})" 1>&2; '
+                f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
+            )
+            remote_cmd = f"bash -lc {shlex.quote(inner)}"
+            proc = self.ssh_run(remote_cmd)
         self._harvest_bin_marker(bin_name, proc)
         return proc
 

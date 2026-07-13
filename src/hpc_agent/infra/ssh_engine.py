@@ -175,7 +175,18 @@ class EngineUnavailable(Exception):
     channel/connection. NEVER a correctness signal about the remote command
     itself (a remote non-zero exit returns a normal CompletedProcess); it means
     "route this through the ordinary one-shot ssh path instead."
+
+    ``dispatched`` (F55) distinguishes a PRE-dispatch failure (breaker refused,
+    failed connect, connection recycled before this call could claim it — the
+    command never ran, so a one-shot fall-back is safe) from a POST-dispatch one
+    (per-command timeout, torn connection while ``conn.run`` was in flight — the
+    remote half may already be executing). ``remote.ssh_run`` refuses to
+    re-execute a ``dispatched`` failure for a non-idempotent command.
     """
+
+    def __init__(self, *args: object, dispatched: bool = False) -> None:
+        super().__init__(*args)
+        self.dispatched = dispatched
 
 
 def engine_enabled() -> bool:
@@ -504,6 +515,11 @@ class _HostConn:
     ``inflight`` counts commands currently dispatched on this connection. The
     courtesy sweeper skips any connection with ``inflight > 0`` so a long remote
     leg is never severed mid-command (bug-sweep #8 / finding 24).
+
+    ``draining`` (F56): a failure path that could not close the connection
+    because PEERS were still in flight marked it draining (unregistered, no new
+    claims, but left OPEN); the LAST in-flight command performs the deferred
+    close in :meth:`_Engine._finish`.
     """
 
     def __init__(self, ssh_target: str, conn: Any, slot_token: Any, sem: Any) -> None:
@@ -514,6 +530,7 @@ class _HostConn:
         self.last_used = time.monotonic()
         self.alive = True
         self.inflight = 0
+        self.draining = False
 
     def idle_for(self) -> float:
         return time.monotonic() - self.last_used
@@ -576,26 +593,39 @@ class _Engine:
         outer = None if timeout is None else timeout + _RESULT_MARGIN
         try:
             result = _submit(_do_run(hc, cmd, timeout), deadline=outer)
-        except EngineUnavailable:
-            # Outer-deadline backstop tripped (wedged loop): discard + fall back.
-            self._discard(host, hc)
+        except EngineUnavailable as exc:
+            # Outer-deadline backstop tripped (wedged loop): the command WAS
+            # dispatched to the loop, so mark it dispatched (F55) and honor the
+            # inflight veto on teardown (F56) — discard only if no peers, else
+            # drain. Then fall back / re-raise.
+            self._drain_or_discard(host, hc)
+            exc.dispatched = True
             raise
         except Exception as exc:
             # A per-command timeout (asyncssh.TimeoutError, carrying partial
             # output), a channel-open refusal, a torn connection, an OSError —
-            # the connection is dead/wedged. Discard it (invariant 4) and fall
-            # back for THIS call; the next call reconnects breaker-gated. No
-            # breaker record here: the breaker is a CONNECT-time gate (broker's
-            # same division), and the reconnect is the gated attempt.
-            self._discard(host, hc)
+            # the connection is dead/wedged. Tear it down for THIS call; the next
+            # call reconnects breaker-gated. No breaker record here: the breaker
+            # is a CONNECT-time gate (broker's same division), and the reconnect
+            # is the gated attempt.
+            #
+            # F56: honor the same inflight veto the courtesy sweeper honors — if
+            # PEER commands are still multiplexed on this connection, do NOT
+            # close it out from under them (that severs their in-flight channels
+            # and makes each re-execute one-shot); mark it draining and let the
+            # last finisher close. With no peers, discard immediately as before.
+            self._drain_or_discard(host, hc)
             snippet = getattr(exc, "stdout", None)
             partial = f" (partial stdout: {str(snippet)[:200]!r})" if snippet else ""
+            # F55: this failure is POST-dispatch — the remote command reached the
+            # host and may still be running. Mark it so the seam refuses to
+            # re-execute a non-idempotent command one-shot.
             raise EngineUnavailable(
-                f"engine command on {host} failed: {type(exc).__name__}: {exc}{partial}"
+                f"engine command on {host} failed: {type(exc).__name__}: {exc}{partial}",
+                dispatched=True,
             ) from exc
         finally:
-            with self._guard:
-                hc.inflight -= 1
+            self._finish(hc)
         hc.last_used = time.monotonic()
         # One-shot parity: every successful guarded_call RESETS the host's
         # consecutive-failure counter, so a healthy engine session must too —
@@ -724,6 +754,39 @@ class _Engine:
         with contextlib.suppress(Exception):
             _submit(_do_close(hc), deadline=_CLOSE_DEADLINE)
         ssh_slots.release_slot(hc.slot_token)
+
+    def _drain_or_discard(self, host: str, hc: _HostConn) -> None:
+        """Failure-path teardown that honors the inflight veto (F56).
+
+        A per-command failure must not sever a connection its PEERS are still
+        using mid-command — the same no-mid-command-sever rule the courtesy
+        sweeper honors (bug-sweep #8 / finding 24), applied here to SIBLING
+        commands rather than to the sweeper. If other commands are in flight
+        (``inflight > 1`` — the failing command still counts itself), mark the
+        connection DRAINING: unregister it so no new command claims or reuses it,
+        but leave it OPEN; :meth:`_finish` closes it when the last in-flight
+        command completes. With no peers, discard immediately as before.
+        """
+        with self._guard:
+            if hc.inflight > 1:
+                if self._conns.get(host) is hc:
+                    self._conns.pop(host, None)
+                hc.alive = False
+                hc.draining = True
+                return
+        self._discard(host, hc)
+
+    def _finish(self, hc: _HostConn) -> None:
+        """Decrement ``inflight`` and, if a DRAINING connection's last command
+        just finished, perform the close + slot release the failure path deferred
+        to the last finisher (F56)."""
+        with self._guard:
+            hc.inflight -= 1
+            close_now = hc.draining and hc.inflight == 0
+        if close_now:
+            with contextlib.suppress(Exception):
+                _submit(_do_close(hc), deadline=_CLOSE_DEADLINE)
+            ssh_slots.release_slot(hc.slot_token)
 
     def shutdown_all(self) -> None:
         self._stop_sweeper.set()  # halt the background reaper first

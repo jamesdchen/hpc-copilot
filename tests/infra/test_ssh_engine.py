@@ -626,6 +626,107 @@ def test_shutdown_all_closes_the_connection(
     assert engine._conns == {}
 
 
+# --- F55/F56: dispatched marker + inflight veto on the failure-path teardown --
+
+
+def test_post_dispatch_failure_is_marked_dispatched(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F55 fire-path: a failure AFTER the command reached the connection (a torn
+    channel mid-``run``) raises ``EngineUnavailable(dispatched=True)`` so the ssh
+    seam refuses to re-execute a non-idempotent command one-shot (the remote half
+    may still be running)."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    _install_connect(monkeypatch, lambda _t: _StubConn(raises=OSError("channel torn")))
+    with pytest.raises(EngineUnavailable) as ei:
+        engine.run("qsub job.sh", ssh_target="u@h", timeout=15)
+    assert ei.value.dispatched is True
+
+
+def test_pre_dispatch_connect_failure_is_not_dispatched(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F55: a PRE-dispatch failure (the connection never opened) never ran the
+    command — ``dispatched`` stays False, so even a non-idempotent command may
+    safely fall back to one-shot."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
+    monkeypatch.setattr(ssh_slots, "release_slot", lambda *a, **k: None)
+
+    async def _boom(_ssh_target: str) -> _StubConn:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(ssh_engine, "_connect", _boom)
+    with pytest.raises(EngineUnavailable) as ei:
+        engine.run("qsub job.sh", ssh_target="u@h", timeout=15)
+    assert ei.value.dispatched is False
+
+
+def test_peer_command_survives_a_sibling_failure(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F56 fire-path: a per-command failure must NOT close a shared connection out
+    from under PEER commands still multiplexed on it — that severs their channels
+    and forces each to re-run one-shot (the burst the slot/breaker machinery
+    exists to avoid). With a peer in flight the failing command DRAINS the
+    connection (no close) instead of discarding it; the peer completes over the
+    engine, and the last finisher performs the deferred close."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
+    monkeypatch.setattr(ssh_slots, "release_slot", lambda *a, **k: None)
+
+    peer_started = threading.Event()
+    peer_release = threading.Event()
+
+    class _MixedConn(_StubConn):
+        async def run(  # type: ignore[override]
+            self, cmd: str, *, check: bool = False, timeout: float | None = None
+        ) -> _StubResult:
+            import asyncio
+
+            self.run_calls.append(cmd)
+            if cmd == "peer":
+                peer_started.set()  # peer is in flight (inflight == 1)
+                while not peer_release.is_set():
+                    await asyncio.sleep(0.01)
+                return _StubResult(returncode=0, stdout="peer-done")
+            raise OSError("channel torn")  # the failing sibling
+
+    conn = _MixedConn()
+    _install_connect(monkeypatch, lambda _t: conn)
+
+    box: dict[str, object] = {}
+
+    def _peer() -> None:
+        try:
+            box["peer"] = engine.run("peer", ssh_target="u@h", timeout=30)
+        except BaseException as exc:  # noqa: BLE001 — record for the assertion
+            box["peer_exc"] = exc
+
+    worker = threading.Thread(target=_peer)
+    worker.start()
+    try:
+        assert peer_started.wait(5.0), "the peer command never reached the in-flight state"
+        # The sibling fails while the peer is in flight (inflight == 2): it must
+        # DRAIN the connection, not sever it.
+        with pytest.raises(EngineUnavailable) as ei:
+            engine.run("failer", ssh_target="u@h", timeout=30)
+        assert ei.value.dispatched is True
+        assert conn.closed is False, "a sibling failure severed a connection with a peer in flight"
+        assert "h" not in engine._conns, "the drained connection must be unregistered (no reuse)"
+        peer_release.set()
+        worker.join(5.0)
+    finally:
+        peer_release.set()
+        worker.join(5.0)
+    assert "peer_exc" not in box, (
+        f"the peer was severed by the sibling failure: {box.get('peer_exc')!r}"
+    )
+    cp = box["peer"]
+    assert isinstance(cp, subprocess.CompletedProcess)
+    assert cp.stdout == "peer-done"  # the peer completed over the engine, no fallback
+
+
 # --- pure classifier smoke (structural only; the parity table is elsewhere) --
 
 

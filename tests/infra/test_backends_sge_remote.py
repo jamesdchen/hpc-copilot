@@ -126,6 +126,35 @@ class TestSSHWrappedCommand:
         # Script path is present.
         assert "/remote/path/job.sh" in remote_cmd
 
+    def test_submit_leg_runs_under_the_non_idempotent_scope(self, tmp_path):
+        """F54/F55: the scheduler-submit leg (_execute_command) must mark its
+        ssh_run NON-idempotent so a client timeout / post-dispatch engine failure
+        on the qsub is not re-executed (duplicate array). The idempotent-by-default
+        mkdir (_setup_log_dir) stays idempotent. Assert the ambient flag the real
+        ssh_run reads is False during the qsub call and True during the mkdir."""
+        from hpc_agent.infra import remote as _remote
+
+        seen: dict[str, bool] = {}
+
+        def responder(cmd):
+            # Record the ambient idempotence flag the real ssh_run would read.
+            key = "qsub" if "qsub" in cmd else ("mkdir" if cmd.startswith("mkdir") else "other")
+            seen[key] = _remote._CURRENT_IDEMPOTENT.get()
+            return _cp(
+                stdout='Your job-array 42.1-10:1 ("probe") has been submitted\n',
+                returncode=0,
+            )
+
+        backend = RemoteSGEBackend(
+            script="/remote/path/job.sh",
+            ssh_run=_SSHRecorder(responder),
+            remote_repo="/remote/path",
+            log_dir="/remote/path/logs",
+        )
+        backend.submit_plan(_single_batch_plan(1, 10), "probe", job_env={}, cwd=tmp_path)
+        assert seen.get("qsub") is False, "the qsub submit leg must run non-idempotent"
+        assert seen.get("mkdir") is True, "the idempotent mkdir must not be marked non-idempotent"
+
     def test_wave_dependency_hold_jid_in_ssh_command(self, tmp_path):
         """When submit_plan runs a second wave, the remote qsub must carry
         ``-hold_jid`` with the prior wave's job IDs joined by commas."""

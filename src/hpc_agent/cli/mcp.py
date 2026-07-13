@@ -43,6 +43,18 @@ channel — and the ssh seam catches exactly that
 path. Turning the engine on here can therefore never be *worse* than leaving it
 off; the worst case is a cold one-shot handshake per command, i.e. today's
 behaviour.
+
+**One exception, by design (F55).** Fall-through is only harmless when the
+command had NOT yet reached the remote host. A failure AFTER dispatch (a
+per-command timeout while ``conn.run`` was in flight, a torn connection mid-run)
+raises ``EngineUnavailable(dispatched=True)``; for a command the caller marked
+NON-idempotent (a ``qsub``/``sbatch`` submit — see ``remote.non_idempotent_remote``),
+the seam does NOT re-execute it one-shot, because the remote half may still be
+running and a re-run would duplicate the array. Such a command surfaces its
+failure instead of self-healing. Idempotent read surfaces (status polls, pulls)
+keep the unconditional fall-through, so "never worse than off" still holds for
+them — the exception is scoped to exactly the commands where a silent
+re-execution would be a correctness bug, not a slowdown.
 """
 
 from __future__ import annotations
