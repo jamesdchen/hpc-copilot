@@ -622,3 +622,45 @@ form to follow.)
   never executes pack CHECK logic; manifest re-sealing is generic hashing
   over the declarative sweep recipe, which is data, not domain logic).
   Supersedes the "disclosure-first, explicitly invoked" hedge.
+
+- **TIER-1 MOVE LANDED (2026-07-12) — the `quant` DOMAIN pack now ships upstream
+  as distributed content.** Executes tier 1 of the 2026-07-10 three-tier ruling
+  above.
+  - **What moved:** the `quant` domain pack (v0.2.0), from `harxhar-clean`'s
+    sibling layout (`packs/quant/` @ commit `8abb4be`) — the six items
+    `.gitattributes` / `manifest.json` / `sweep.json` / `build_quant_pack.py` /
+    `templates/quant_skeleton.py` / `check/check_quant.py`.
+  - **Where it landed:** repo-root **`packs/quant/`** (with a `README.md`), as
+    git-tracked DISTRIBUTED CONTENT — deliberately NOT under `src/hpc_agent/` and
+    NOT a package. Seat chosen against the live pins: every pack-boundary glob
+    (`tests/contracts/test_pack_boundary.py`) and registration-boundary scan
+    (`test_registration_boundary.py`) is rooted at `src/hpc_agent/`
+    (`_SRC/"state"/glob("pack*.py")`, `_SRC/"ops"/"pack"/*`, `_SRC/"ops"/"pack_gate.py"`,
+    `_SRC.rglob("packs")`, `_SRC.rglob("*.json")`), so a repo-root `packs/quant/`
+    never classifies `quant_skeleton.py`/`check_quant.py` as core pack modules and
+    no "manifest/template ships under `src/hpc_agent/`" pin fires. `packages.find
+    where=["src"]` means it is not importable core.
+  - **Portability enforced (zero lab symbols).** The harxhar-clean v0.2.0 files
+    were NOT fully portable — `check_quant.py`'s default template pointer + several
+    header/docstring lines named `rv` / `packs/rv/rv_audit.py` / `../../writeup/…`
+    and `quant_skeleton.py`'s provenance named the source lab + commit. Those were
+    surgically neutralized on the copy (mechanism/contract semantics unchanged —
+    the five section slugs and `check_sections` logic are byte-for-byte the same);
+    `check_quant.py`'s `--template` now defaults to a portable self-check of the
+    pack's own skeleton (no lab default). `manifest.json` was regenerated over the
+    edited bytes (expected — content moved). Verified: grep for
+    `rv|packs/rv|rv_audit|harxhar|writeup|readers.json|realized-vol|specs/audit`
+    across the pack is ZERO; no pack/seam/slot name contains `harxhar`.
+  - **The `rv` pack does NOT move** — it is the lab's specific CONSUMED instance
+    (per the 2026-07-10 correction) and stays lab-side in harxhar-clean.
+  - **Lint seat:** repo-root `packs/` added to `[tool.ruff] extend-exclude`
+    (pyproject) because CI lints the whole tree (`ruff check .`); the sealed pack
+    files are not reformatted. mypy is `src/hpc_agent`-scoped and unaffected.
+  - **OPEN sub-rulings (deliberately NOT built here):** (1) **wheel packaging** —
+    repo-root `packs/quant/` ships in the git repo/sdist but is NOT in the wheel
+    (`packages.find where=["src"]`); whether the domain pack should travel inside
+    the wheel as package-data (and if so, at what path) is unresolved and left
+    open. (2) The materialization seat (which setup verb copies the pack into an
+    experiment's `.hpc/`), the lab-bindings home, tracked-vs-gitignored pinned
+    content, and the `derived_from` lineage field — all remain per the 2026-07-10
+    ruling. No CLI verb, interview wiring, or core pack-reader was added.

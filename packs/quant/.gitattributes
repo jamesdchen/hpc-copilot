@@ -1,0 +1,9 @@
+# The quant pack is a sha-sealed integrity set: manifest.json records each file's
+# raw-bytes SHA-256. Line-ending conversion would change those bytes and make
+# pack-bind report false drift on checkout, so pin every pack file to verbatim
+# bytes (no CRLF munging), overriding the repo-root `* text=auto`.
+#
+# NOTE: any swept lab docs are referenced via ../../… relpaths and live OUTSIDE
+# this dir, so they are NOT covered here — on a fresh non-LF checkout, rebuild the
+# manifest (`python build_quant_pack.py`) and re-bind (the by-design rebuild flow).
+* -text

@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "path": "check/check_quant.py",
+      "sha256": "e9f497653f2ec283685ff77955fb32cda3f1891f7edb32b306b55abb724171f4"
+    },
+    {
+      "path": "templates/quant_skeleton.py",
+      "sha256": "a8c28b40ac5e9a71e1dbc9515d817fc737bbb39baa64486bfc30d473630642a6"
+    }
+  ],
+  "fills_slots": [
+    "quant-audit"
+  ],
+  "name": "quant",
+  "seams": {
+    "audit_template": "templates/quant_skeleton.py"
+  },
+  "version": "0.2.0"
+}

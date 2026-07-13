@@ -182,6 +182,16 @@ timeout = 300
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# The upstream domain packs under repo-root ``packs/`` are DISTRIBUTED CONTENT,
+# not core Python: their files are sha-sealed data (manifest.json records each
+# file's raw-bytes SHA-256), so reformatting them would move the shas and make
+# ``pack-bind`` report false drift. They also legitimately carry lint "errors"
+# by design — a terminal ``NameError``-by-construction line (``# noqa: F821``)
+# that makes an unfilled audit draft die loudly, Yoda guards, intentional import
+# order. CI runs ``ruff check .`` / ``ruff format --check .`` over the whole
+# tree, so exclude ``packs/`` here rather than restyle sealed content. (mypy is
+# scoped to ``src/hpc_agent`` and never sees these.)
+extend-exclude = ["packs"]
 
 [tool.ruff.format]
 # The generated CLI fast-path map (scripts/build_verb_module_map.py) is a

@@ -1,0 +1,13 @@
+{
+  "name": "quant",
+  "version": "0.2.0",
+  "seams": {
+    "audit_template": "templates/quant_skeleton.py"
+  },
+  "fills_slots": ["quant-audit"],
+  "pack_files": [
+    "templates/quant_skeleton.py",
+    "check/check_quant.py"
+  ],
+  "sweep": []
+}
