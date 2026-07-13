@@ -605,10 +605,10 @@ def _pushable_relpaths(root: Path, exclude: list[str]) -> list[str]:
 def _local_push_manifest(local_path: str | Path, exclude: list[str]) -> Any:
     """Content manifest of the local push tree (exclude-filtered) — item 6b.
 
-    Returns a :class:`hpc_agent.ops.transfer.manifest.Manifest`; imported lazily
+    Returns a :class:`hpc_agent.infra.manifest.Manifest`; imported lazily
     to keep this low-level infra module import-light.
     """
-    from hpc_agent.ops.transfer.manifest import build_manifest
+    from hpc_agent.infra.manifest import build_manifest
 
     root = Path(local_path)
     paths = _pushable_relpaths(root, exclude)
@@ -638,7 +638,7 @@ def _parse_remote_push_manifest(stdout: str) -> Any | None:
     full-copy tar fallback (disclosed). The safe direction: never claim a remote
     file is present unless the manifest proves it.
     """
-    from hpc_agent.ops.transfer.manifest import Manifest
+    from hpc_agent.infra.manifest import Manifest
 
     raw = (stdout or "").strip()
     if not raw:
@@ -715,13 +715,13 @@ _PRUNE_ENV_KILL = "HPC_NO_DEPLOY_PRUNE"
 
 
 def _prune_max_files() -> int:
-    from hpc_agent.ops.transfer.prune import DEFAULT_PRUNE_MAX_FILES
+    from hpc_agent.infra.prune import DEFAULT_PRUNE_MAX_FILES
 
     return _env_int("HPC_DEPLOY_PRUNE_MAX_FILES", DEFAULT_PRUNE_MAX_FILES)
 
 
 def _prune_max_bytes() -> int:
-    from hpc_agent.ops.transfer.prune import DEFAULT_PRUNE_MAX_BYTES
+    from hpc_agent.infra.prune import DEFAULT_PRUNE_MAX_BYTES
 
     return _env_int("HPC_DEPLOY_PRUNE_MAX_BYTES", DEFAULT_PRUNE_MAX_BYTES)
 
@@ -905,8 +905,8 @@ def _prune_manifest_known_extras(
         if not candidates:
             return
 
-        from hpc_agent.ops.transfer.manifest import FileEntry
-        from hpc_agent.ops.transfer.prune import plan_prune
+        from hpc_agent.infra.manifest import FileEntry
+        from hpc_agent.infra.prune import plan_prune
 
         by_path = {e.path: e for e in remote_manifest.entries}
         extra_entries = [by_path.get(p) or FileEntry(path=p, size=0, sha256="") for p in candidates]
@@ -1467,7 +1467,7 @@ def rsync_push(
             else None
         )
         if remote_manifest is not None:
-            from hpc_agent.ops.transfer.manifest import manifest_delta
+            from hpc_agent.infra.manifest import manifest_delta
 
             local_manifest = _local_push_manifest(local_path, exclude)
             delta = manifest_delta(local_manifest, remote_manifest)
