@@ -18,6 +18,7 @@ pytest-of-*/
 .venv/
 venv/
 .claude/worktrees/
+.claude/fix-agent-diff-backups/
 settings.local.json
 
 # Local audit/research scratch files (kept untracked so they don't bloat history).
