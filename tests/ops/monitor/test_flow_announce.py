@@ -187,17 +187,20 @@ def test_full_failed_census_settles_failed_without_walk(
     assert harvested == ["failed"]
 
 
-def test_partial_census_never_settles_and_no_walk(
+def test_partial_census_rides_to_timeout_when_scheduler_unprobeable(
     journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A PARTIAL census (some tasks still unannounced) must NEVER settle terminal:
-    the missing tasks read as pending, so the run rides to the wall-clock budget
-    (TIMEOUT) — still with no reporter walk — and the raw census rides out under
-    ``task_announcements``."""
+    """A PARTIAL census whose scheduler liveness cross-check is UNAVAILABLE must
+    never settle terminal: the missing tasks read as pending, so the run rides to
+    the wall-clock budget (TIMEOUT) with no reporter walk. The autouse
+    ``_no_census_scheduler_probes`` fixture makes ``_census_liveness_probe``
+    return ``None`` (fail closed), so the F17 remap cannot fire — the historical
+    ride-to-budget behavior is preserved exactly when the scheduler cannot be
+    reached."""
     _seed_record(experiment)
     walk = _walk_tripwire(monkeypatch)
     harvested = _harvest_recorder(monkeypatch)
-    # 2 complete, 0 failed, 2 still missing → pending=2 → in flight forever.
+    # 2 complete, 0 failed, 2 still missing → pending=2 → in flight (probe unavailable).
     _stub_census(monkeypatch, _present(2, 0))
 
     clock = {"t": 0.0}
@@ -213,6 +216,218 @@ def test_partial_census_never_settles_and_no_walk(
     assert harvested == ["cap-overrun"]
     progress = result.last_status.get("task_announcements")
     assert progress == {"announced": 2, "complete": 2, "failed": 0, "missing": 2}
+
+
+def test_partial_static_census_settles_abandoned_when_scheduler_empty(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F17 fire path: a partial census that has gone STATIC while the scheduler
+    holds NOTHING alive means the missing tasks died without ever announcing
+    (preemption handler / SIGKILL / node crash). The liveness cross-check re-maps
+    the missing bucket to UNKNOWN so the bounded-unknown watchdog settles the run
+    ABANDONED — instead of riding the whole budget to TIMEOUT with the bumped
+    tasks never resubmitted."""
+    _seed_record(experiment)
+    walk = _walk_tripwire(monkeypatch)
+    harvested = _harvest_recorder(monkeypatch)
+    # 2 complete, 0 failed, 2 missing forever (the 2 bumped tasks never announce).
+    _stub_census(monkeypatch, _present(2, 0))
+    # The scheduler ran clean and holds NOTHING alive for this run's job ids.
+    probes: list[int] = []
+
+    def _empty_probe(record: Any) -> set[str]:
+        probes.append(1)
+        return set()
+
+    monkeypatch.setattr(monitor_flow_module, "_census_liveness_probe", _empty_probe)
+
+    clock = {"t": 0.0}
+    result = monitor_flow(
+        experiment,
+        # Budget generous enough to reach the ABANDONED escalation before TIMEOUT.
+        spec=_spec(wall_clock_budget_seconds=100_000),
+        _sleep=lambda s: clock.__setitem__("t", clock["t"] + s),
+        _now=lambda: clock["t"],
+    )
+
+    assert result.lifecycle_state == LifecycleState.ABANDONED
+    assert walk == []  # census-only; the fix is a scheduler probe, not a walk
+    assert harvested == [str(LifecycleState.ABANDONED)]
+    assert probes  # the liveness cross-check actually fired
+    # The provenance marks that the census was corrected by a scheduler probe.
+    assert (
+        result.last_status.get("status_source") == "task_announcements+scheduler_liveness"
+    )
+
+
+def test_partial_static_census_stays_in_flight_when_scheduler_alive(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F17 guard: when the scheduler still holds the run's jobs ALIVE, a static
+    partial census must NOT escalate — the missing tasks are genuinely still
+    queued/running. The run rides to TIMEOUT (bounded), never a false ABANDONED."""
+    _seed_record(experiment)
+    harvested = _harvest_recorder(monkeypatch)
+    _stub_census(monkeypatch, _present(2, 0))
+    monkeypatch.setattr(
+        monitor_flow_module, "_census_liveness_probe", lambda record: {"9001"}
+    )
+
+    clock = {"t": 0.0}
+    result = monitor_flow(
+        experiment,
+        spec=_spec(wall_clock_budget_seconds=12),
+        _sleep=lambda s: clock.__setitem__("t", clock["t"] + s),
+        _now=lambda: clock["t"],
+    )
+
+    assert result.lifecycle_state == LifecycleState.TIMEOUT
+    assert harvested == ["cap-overrun"]
+
+
+def test_failed_census_stays_in_flight_when_resubmit_alive(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F23 fire path: a FULL census reads complete+failed==total (would settle
+    FAILED), but the scheduler POSITIVELY holds a resubmitted attempt still alive
+    — the .failed markers are stale (a resubmit never cleared them). The census
+    must NOT settle terminal, so auto-resume/recover cannot thrash duplicate
+    arrays; the run stays in-flight (bounded by the budget)."""
+    _seed_record(experiment)
+    harvested = _harvest_recorder(monkeypatch)
+    # 1 complete + 3 failed == 4 total, missing=0 → classify_polling => FAILED.
+    _stub_census(monkeypatch, _present(1, 3))
+    probes: list[int] = []
+
+    def _alive_probe(record: Any) -> set[str]:
+        probes.append(1)
+        return {"9001"}  # attempt-2 array still queued/running
+
+    monkeypatch.setattr(monitor_flow_module, "_census_liveness_probe", _alive_probe)
+
+    clock = {"t": 0.0}
+    result = monitor_flow(
+        experiment,
+        spec=_spec(wall_clock_budget_seconds=12),
+        _sleep=lambda s: clock.__setitem__("t", clock["t"] + s),
+        _now=lambda: clock["t"],
+    )
+
+    # Never settled FAILED — the stale markers did not win over live scheduler
+    # evidence. The run rides to the (bounded) budget instead.
+    assert result.lifecycle_state == LifecycleState.TIMEOUT
+    assert harvested == ["cap-overrun"]
+    assert probes  # the cross-check fired at the would-be-FAILED settle
+
+
+def test_failed_census_still_settles_when_scheduler_empty(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F23 regression: a genuine failure (census FAILED, scheduler holds NOTHING
+    alive) still settles FAILED. The cross-check acts only on POSITIVE liveness
+    evidence, so a dead queue falls through to the normal settle unchanged."""
+    _seed_record(experiment)
+    harvested = _harvest_recorder(monkeypatch)
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "maybe_resolve_and_recover",
+        lambda experiment_dir, run_id, **_kw: ResolveAndRecoverOutcome(run_id=run_id),
+    )
+    _stub_census(monkeypatch, _present(1, 3))
+    monkeypatch.setattr(monitor_flow_module, "_census_liveness_probe", lambda record: set())
+
+    result = monitor_flow(experiment, spec=_spec(), _sleep=lambda s: None, _now=lambda: 0.0)
+
+    assert result.lifecycle_state == LifecycleState.FAILED
+    assert harvested == ["failed"]
+
+
+def _write_wave_sidecar(experiment_dir: Path, wave_map: dict[str, list[int]]) -> None:
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        experiment_dir,
+        run_id=_RUN_ID,
+        cmd_sha="0" * 64,
+        hpc_agent_version="0.10.26",
+        submitted_at="2026-07-12T09:00:00Z",
+        executor="python3 run.py",
+        result_dir_template="results/{task_id}",
+        task_count=4,
+        tasks_py_sha="1" * 64,
+        wave_map=wave_map,
+    )
+
+
+def test_census_leg_combines_waves_from_markers(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F28 fire path: on the census leg, ``auto_combine_waves`` fires by deriving
+    a per-wave completeness block from the announce complete-markers — the census
+    ``last_status`` otherwise carries no ``waves`` block, so combines silently
+    no-op for announce-era runs and the terminal harvest has nothing combined."""
+    _seed_record(experiment)
+    _write_wave_sidecar(experiment, {"0": [0, 1], "1": [2, 3]})
+    _walk_tripwire(monkeypatch)
+    _harvest_recorder(monkeypatch)
+    # Full-complete census (all 4 announced complete) → both waves complete.
+    _stub_census(monkeypatch, _present(4, 0))
+    # The complete-marker listing returns every completed task id.
+    monkeypatch.setattr(
+        monitor_flow_module, "_census_complete_task_ids", lambda record, run_id: {0, 1, 2, 3}
+    )
+    combined: list[int] = []
+
+    def _fake_combine(experiment_dir: Path, run_id: str, *, wave: int, **_kw: Any):
+        combined.append(wave)
+        return (True, "", "")
+
+    monkeypatch.setattr(monitor_flow_module, "combine_wave", _fake_combine)
+
+    result = monitor_flow(
+        experiment,
+        spec=_spec(auto_combine_waves=True),
+        _sleep=lambda s: None,
+        _now=lambda: 0.0,
+    )
+
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+    # BOTH waves were combined from the census markers — the F28 no-op is gone.
+    assert sorted(combined) == [0, 1]
+    assert result.combined_waves == [0, 1]
+
+
+def test_census_leg_wave_bookkeeping_degrades_when_listing_unavailable(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F28 fail-closed: when the complete-marker listing cannot run (``None``),
+    the census leg degrades to NO wave bookkeeping this tick rather than
+    combining on a guessed block — the run still settles, just with no combine."""
+    _seed_record(experiment)
+    _write_wave_sidecar(experiment, {"0": [0, 1], "1": [2, 3]})
+    _harvest_recorder(monkeypatch)
+    _stub_census(monkeypatch, _present(4, 0))
+    # Autouse fixture already defaults _census_complete_task_ids -> None; be explicit.
+    monkeypatch.setattr(
+        monitor_flow_module, "_census_complete_task_ids", lambda record, run_id: None
+    )
+    combined: list[int] = []
+
+    def _fake_combine(experiment_dir: Path, run_id: str, *, wave: int, **_kw: Any):
+        combined.append(wave)
+        return (True, "", "")
+
+    monkeypatch.setattr(monitor_flow_module, "combine_wave", _fake_combine)
+
+    result = monitor_flow(
+        experiment,
+        spec=_spec(auto_combine_waves=True),
+        _sleep=lambda s: None,
+        _now=lambda: 0.0,
+    )
+
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+    assert combined == []  # no waves block derived → no combine attempted
 
 
 def test_pre_announce_falls_back_to_walk_disclosed(

@@ -74,3 +74,24 @@ def _no_announcements(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(reconcile, "read_announcements", _absent)
     monkeypatch.setattr(monitor_flow, "read_announcements", _absent)
+
+
+@pytest.fixture(autouse=True)
+def _no_census_scheduler_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the census marker-lifecycle cross-checks to "unavailable".
+
+    ``monitor_flow``'s announce census gained two fail-closed ssh cross-checks:
+    ``_census_liveness_probe`` (F17/F23 — one scheduler alive-probe when the
+    census is inconclusive) and ``_census_complete_task_ids`` (F28 — a
+    complete-marker listing for wave bookkeeping). Left un-stubbed, any flow test
+    that reaches the census leg with a partial/failed census (or with
+    ``auto_combine_waves``) would attempt a real cluster connection. This autouse
+    fixture defaults BOTH to the fail-closed "could not probe" result (``None``),
+    so every existing test runs byte-identically (no probe == no census
+    adjustment). Tests that exercise a cross-check override the relevant module
+    reference in their own body; a per-test ``monkeypatch.setattr`` wins.
+    """
+    from hpc_agent.ops import monitor_flow
+
+    monkeypatch.setattr(monitor_flow, "_census_liveness_probe", lambda record: None)
+    monkeypatch.setattr(monitor_flow, "_census_complete_task_ids", lambda record, run_id: None)

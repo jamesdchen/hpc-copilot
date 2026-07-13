@@ -241,6 +241,79 @@ class TestTerminalAnnouncement:
         assert not (hpc / "announce" / "test_run" / "task_0.complete").exists()
 
 
+class TestSkipPathAnnouncements:
+    """The two terminal-exit-0 SKIP paths must ALSO announce, or the announce
+    census reads those tasks ``missing`` forever (missing->pending → the watch
+    rides to TIMEOUT, auto-resume/recover unreachable).
+
+    Both skips exit 0 BEFORE spawning any executor, so they are not
+    shell-bound (no ``_posix_shell_executor`` mark).
+    """
+
+    def test_partial_repro_skip_announces_complete(self, tmp_path, monkeypatch):
+        """F19: a task NOT in HPC_TASK_INCLUDE (partial reproduction) exits 0 by
+        design — and must announce COMPLETE so the census closes and the partial
+        reproduction settles, instead of the never-selected tasks reading missing
+        forever."""
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo hello > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(tmp_path / "results" / "{task_id}"),
+            kwargs_per_task=[{}, {}, {}, {}],
+        )
+        # Only task 0 is selected; task 1 is a non-selected index → skip + announce.
+        monkeypatch.setenv("HPC_TASK_INCLUDE", "0")
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        announce_dir = hpc / "announce" / "test_run"
+        marker = announce_dir / "task_1.complete"
+        assert marker.exists()
+        assert not (announce_dir / "task_1.failed").exists()
+        payload = json.loads(marker.read_text())
+        assert payload["task_id"] == 1
+        assert payload["state"] == "complete"
+
+    def test_idempotency_skip_reannounces_complete(self, tmp_path, monkeypatch):
+        """F17: a task whose summary artifact already exists (idempotency skip)
+        exits 0 WITHOUT re-running — and must RE-announce COMPLETE so a task whose
+        attempt-1 marker was lost/cleared does not read ``missing`` forever on the
+        census after a resubmit."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo hello > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],
+        )
+        # Pre-stage a non-empty metrics.json so the idempotency skip fires, and
+        # NO announce marker (attempt-1's marker was lost/cleared).
+        task_dir = result_root / "1"
+        task_dir.mkdir(parents=True)
+        (task_dir / "metrics.json").write_text("x", encoding="utf-8")
+
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        marker = hpc / "announce" / "test_run" / "task_1.complete"
+        assert marker.exists()
+        payload = json.loads(marker.read_text())
+        assert payload["task_id"] == 1
+        assert payload["state"] == "complete"
+
+
 @_posix_shell_executor
 class TestDispatchStaleWipRetry:
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):

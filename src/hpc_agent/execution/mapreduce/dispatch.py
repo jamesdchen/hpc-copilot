@@ -771,6 +771,23 @@ def main() -> None:
             f"[hpc-agent] task {task_id} not in HPC_TASK_INCLUDE (partial reproduction); skipping",
             file=sys.stderr,
         )
+        # F19: a non-selected task reached a terminal state (exit 0) BY DESIGN.
+        # Announce it COMPLETE so the announce census closes (missing -> 0) and
+        # the monitor SETTLES the partial reproduction, instead of the 990
+        # never-selected tasks reading missing->pending forever (TIMEOUT on the
+        # census leg) or COMPLETED-but-no-result -> unknown forever (ABANDONED on
+        # the walk leg). The marker settles LIFECYCLE only — the reduce still sees
+        # no result row for a skipped task (none is written), and the integrity
+        # gate verifies real results independently. Best-effort: the marker never
+        # changes the exit code.
+        _write_announcement(
+            here / _ANNOUNCE_DIRNAME,
+            run_id,
+            task_id,
+            state=_ANNOUNCE_STATE_COMPLETE,
+            exit_code=0,
+            finished_at=_utcnow_iso(),
+        )
         sys.exit(0)
 
     # --- Resolve task kwargs ---
@@ -916,6 +933,21 @@ def main() -> None:
         print(
             f"[hpc-agent] task {task_id} already complete ({summary_name} found); skipping",
             file=sys.stderr,
+        )
+        # F17: re-announce COMPLETE on the idempotency skip. A task whose attempt-1
+        # marker write was lost (best-effort, swallowed) or was cleared by a
+        # resubmit's marker cleanup would otherwise skip attempt-2 WITHOUT
+        # announcing — leaving it ``missing`` in every future census (missing->
+        # pending forever, the watch riding to TIMEOUT). The summary artifact is
+        # already on disk, so COMPLETE is the honest verdict. Best-effort: the
+        # marker never changes the exit code.
+        _write_announcement(
+            here / _ANNOUNCE_DIRNAME,
+            run_id,
+            task_id,
+            state=_ANNOUNCE_STATE_COMPLETE,
+            exit_code=0,
+            finished_at=_utcnow_iso(),
         )
         sys.exit(0)
     if already_complete and cmd_sha_changed:

@@ -45,6 +45,7 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,7 +71,10 @@ from hpc_agent.ops.monitor.terminal import (
 )
 from hpc_agent.ops.monitor.tick_log import _append_tick, _status_fingerprint
 from hpc_agent.ops.monitor.waves import _newly_complete_waves, _read_partial_ok
-from hpc_agent.ops.resolve_and_recover_flow import maybe_resolve_and_recover
+from hpc_agent.ops.resolve_and_recover_flow import (
+    ResolveAndRecoverOutcome,
+    maybe_resolve_and_recover,
+)
 from hpc_agent.state.journal import is_kill_confirmed, load_run, update_run_status
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -161,6 +165,107 @@ _DETERMINISTIC_ENV_POLLS_TO_FAIL: int = 3
 # ``hpc_agent.errors`` (G7) — ``verify_canary`` consumes the same one, so the
 # twin that used to live here and drift per fix is retired.
 _is_deterministic_env_failure = errors.is_deterministic_env_failure
+
+
+#: Consecutive UNCHANGED census ticks with a non-empty ``missing`` bucket before
+#: the announce census pays for ONE scheduler liveness cross-check (F17). The
+#: census consults no scheduler, so a task that died WITHOUT writing a marker
+#: (preemption handler / SIGKILL / node crash) reads ``missing`` forever; once
+#: the census has stopped moving we probe the scheduler once — a still-
+#: progressing run needs no cross-check, keeping the extra call rare.
+_CENSUS_STATIC_POLLS_BEFORE_PROBE: int = 2
+
+
+def _census_liveness_probe(record: Any) -> set[str] | None:
+    """One cheap scheduler alive-probe for the announce census's blind spots.
+
+    The announce census consults NO scheduler (``docs/design/crash-only-monitoring.md``):
+    a task that died WITHOUT writing a terminal marker (the preemption handler's
+    SIGKILL exit, a hard-walltime whole-job kill, a node crash) reads ``missing``
+    forever (F17), and a STALE ``.failed`` marker a resubmit never cleared reads
+    a LIVE re-run as FAILED (F23). This reuses reconcile's positive-evidence
+    alive check (:func:`hpc_agent.ops.monitor.reconcile._ssh_alive_job_ids` — it
+    fails CLOSED on a transport/ack fault, so a down scheduler is never read as
+    "queue empty") to give the census a liveness cross-check for exactly those
+    two cases.
+
+    Returns the subset of the run's ``job_ids`` still alive on the scheduler
+    (possibly EMPTY when the query ran cleanly and holds nothing alive), or
+    ``None`` when the probe could not be run to completion (fail closed — the
+    caller leaves the census untouched rather than acting on a blind guess).
+    """
+    job_ids = [str(j) for j in (record.job_ids or [])]
+    if not job_ids:
+        return None
+    try:
+        from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids
+
+        return _ssh_alive_job_ids(
+            ssh_target=resolve_ssh_target(record),
+            job_ids=job_ids,
+            scheduler=record.backend,
+        )
+    except Exception:  # noqa: BLE001 — probe is best-effort; fail closed to "unknown"
+        return None
+
+
+def _census_complete_task_ids(record: Any, run_id: str) -> set[int] | None:
+    """List the COMPLETE announce-marker task ids in ONE bounded ssh exec.
+
+    The aggregate census (:func:`read_announcements`) returns per-state COUNTS
+    only — enough for the lifecycle verdict, but not for per-wave completeness.
+    This lists the complete-marker filenames (``task_<id>.complete``) so the
+    census leg can derive a ``waves`` block and drive ``auto_combine_waves``
+    mid-flight; without it, wave combines silently no-op for announce-era runs
+    (F28). Returns the set of completed task ids, or ``None`` on any ssh error
+    (fail closed — the caller degrades to no wave bookkeeping this tick).
+    """
+    from hpc_agent.infra import remote
+    from hpc_agent.ops.monitor.announce import ANNOUNCE_STATE_COMPLETE, ANNOUNCE_SUBPATH
+
+    announce_dir = f"{str(record.remote_path).rstrip('/')}/{ANNOUNCE_SUBPATH}/{run_id}"
+    suffix = f".{ANNOUNCE_STATE_COMPLETE}"
+    cmd = f"cd {shlex.quote(announce_dir)} 2>/dev/null && ls task_*{suffix} 2>/dev/null; true"
+    try:
+        proc = remote.ssh_run(cmd, ssh_target=resolve_ssh_target(record))
+    except Exception:  # noqa: BLE001 — best-effort; degrade to no wave bookkeeping
+        return None
+    if proc.returncode != 0:
+        return None
+    ids: set[int] = set()
+    for raw in proc.stdout.splitlines():
+        name = raw.strip()
+        if not (name.startswith("task_") and name.endswith(suffix)):
+            continue
+        mid = name[len("task_") : -len(suffix)]
+        try:
+            ids.add(int(mid))
+        except ValueError:
+            continue
+    return ids
+
+
+def _census_waves_block(
+    wave_map: dict[str, list[int]], complete_ids: set[int]
+) -> dict[str, dict[str, int]]:
+    """Per-wave ``{total, complete}`` derived from *wave_map* and the completed ids.
+
+    Mirrors the shape the cluster-side reporter emits under ``last_status.waves``
+    so :func:`hpc_agent.ops.monitor.waves._newly_complete_waves` reads it
+    unchanged — the census leg thus drives ``auto_combine_waves`` exactly as the
+    walk leg does.
+    """
+    block: dict[str, dict[str, int]] = {}
+    for k, task_ids in wave_map.items():
+        try:
+            ids = [int(t) for t in task_ids]
+        except (TypeError, ValueError):
+            continue
+        block[str(k)] = {
+            "total": len(ids),
+            "complete": sum(1 for t in ids if t in complete_ids),
+        }
+    return block
 
 
 def _floor_poll_interval(requested: float) -> float:
@@ -421,10 +526,21 @@ def monitor_flow(
     # DISCLOSURE-OR-REFUSAL bar, docs/internals/fallback-inventory.md) the first
     # tick that falls to the reporter walk because no announcements are present.
     walk_fallback_disclosed = False
+    # Census marker-lifecycle cross-check state (F17/F23/F28). ``census_prev_sig``
+    # + ``census_static_streak`` detect a partial census that has stopped moving
+    # (the trigger for the F17 liveness probe); ``census_wave_degrade_disclosed``
+    # gates the F28 one-shot degrade log.
+    census_prev_sig: tuple[int, int, int] | None = None
+    census_static_streak = 0
+    census_wave_degrade_disclosed = False
     try:
         while True:
             state.ticks += 1
             elapsed = _now() - started
+            # F23: set true this tick only when the census would settle FAILED but
+            # the scheduler POSITIVELY holds a resubmitted attempt still alive —
+            # the .failed markers are stale, so we must not settle terminal.
+            census_failed_stale_override = False
 
             # --- Crash-only Phase 2: announce-first census ---------------------
             # Prefer the ONE-readdir marker census over the per-task reporter walk
@@ -444,6 +560,9 @@ def monitor_flow(
                 # already persisted ``last_status`` (source-marked).
                 record = announced_record
                 last_status = dict(record.last_status or {})
+                # A clean census read is positive evidence the status channel
+                # works — reset the deterministic-env failure streak (F27).
+                consecutive_env_polls = 0
                 # Progress legibility, census leg — same shape as the walk leg's
                 # per-poll line, but sourced from the one-readdir marker count.
                 logging.getLogger(__name__).info(
@@ -456,6 +575,98 @@ def monitor_flow(
                     last_status.get("failed", 0),
                     last_status.get("pending", 0),
                 )
+
+                # --- F17/F23 marker-lifecycle cross-check ------------------------
+                # The census consults NO scheduler, so its two blind spots each
+                # need a liveness cross-check: (F17) a task that died WITHOUT a
+                # marker reads missing->pending forever; (F23) a STALE .failed
+                # marker a resubmit never cleared reads a live re-run as FAILED.
+                # ONE cheap, fail-closed scheduler alive-probe closes both — and
+                # only when the census is inconclusive, so a normal run pays
+                # nothing.
+                census_complete = int(last_status.get("complete", 0))
+                census_failed = int(last_status.get("failed", 0))
+                # ``missing`` rides as ``pending`` in the census summary.
+                census_missing = int(last_status.get("pending", 0))
+                census_sig = (census_complete, census_failed, census_missing)
+                if census_missing > 0:
+                    # F17: partial census. Only probe once it has gone STATIC (the
+                    # announce dir stopped moving for N ticks) so a still-
+                    # progressing run needs no scheduler round-trip.
+                    if census_sig == census_prev_sig:
+                        census_static_streak += 1
+                    else:
+                        census_static_streak = 0
+                    if census_static_streak >= _CENSUS_STATIC_POLLS_BEFORE_PROBE:
+                        alive = _census_liveness_probe(record)
+                        if alive is not None and not alive:
+                            # Scheduler ran clean and holds NOTHING alive, yet the
+                            # census still shows unannounced tasks: they died
+                            # without ever announcing. Re-map the missing bucket
+                            # from pending to UNKNOWN so the existing bounded-
+                            # unknown watchdog escalates (ABANDONED) — or, with
+                            # failure evidence present, classify_polling settles
+                            # FAILED and the auto-resume/recover gates become
+                            # reachable — instead of riding the whole budget to
+                            # TIMEOUT with the bumped tasks never resubmitted.
+                            last_status["pending"] = 0
+                            last_status["unknown"] = census_missing
+                            last_status["status_source"] = (
+                                "task_announcements+scheduler_liveness"
+                            )
+                            logging.getLogger(__name__).warning(
+                                "monitor: run %s — announce census static with %d "
+                                "unannounced task(s) and the scheduler holds "
+                                "nothing alive; treating them as UNKNOWN (died "
+                                "without a marker) so the watch can settle instead "
+                                "of riding to TIMEOUT.",
+                                run_id,
+                                census_missing,
+                            )
+                elif census_failed > 0 and census_complete < int(record.total_tasks):
+                    # F23: the census would settle FAILED (all tasks announced,
+                    # >=1 failed). Before accepting that terminal, verify no
+                    # resubmitted attempt is still alive — stale .failed markers a
+                    # resubmit never cleared classify a LIVE re-run as FAILED and
+                    # thrash auto-resume/recover into duplicate arrays. Act only on
+                    # POSITIVE liveness evidence (fail closed to the current settle
+                    # otherwise, so a genuine failure with a dead queue still
+                    # settles).
+                    census_static_streak = 0
+                    alive = _census_liveness_probe(record)
+                    if alive:
+                        census_failed_stale_override = True
+                        logging.getLogger(__name__).warning(
+                            "monitor: run %s — announce census reads FAILED but the "
+                            "scheduler still holds %d live job(s); the .failed "
+                            "markers are stale (a resubmit is in flight). Staying "
+                            "in-flight this tick rather than settling terminal.",
+                            run_id,
+                            len(alive),
+                        )
+                else:
+                    census_static_streak = 0
+                census_prev_sig = census_sig
+
+                # --- F28 census wave bookkeeping ---------------------------------
+                # Derive a ``waves`` block from the announce markers so
+                # ``auto_combine_waves`` fires mid-flight on the census leg (the
+                # census last_status otherwise carries no waves block, so combines
+                # silently no-op for announce-era runs and the terminal harvest
+                # has nothing combined to harvest).
+                if auto_combine_waves and wave_map:
+                    complete_ids = _census_complete_task_ids(record, run_id)
+                    if complete_ids is not None:
+                        last_status["waves"] = _census_waves_block(wave_map, complete_ids)
+                    elif not census_wave_degrade_disclosed:
+                        census_wave_degrade_disclosed = True
+                        logging.getLogger(__name__).warning(
+                            "monitor: run %s — could not list announce complete-"
+                            "markers for wave bookkeeping this tick; wave combines "
+                            "are deferred until the listing succeeds or the run "
+                            "settles (DISCLOSURE-OR-REFUSAL).",
+                            run_id,
+                        )
             else:
                 # Pull leg (fallback): no announcements present — a pre-announce
                 # run, or a run no task has announced a terminal state for yet.
@@ -637,6 +848,12 @@ def monitor_flow(
                     _stamp_watchdog(experiment_dir, run_id, sleep_for)
                     _sleep(sleep_for)
                     continue
+                # A poll that ran to completion is positive evidence the reporter
+                # env is healthy: reset the consecutive-broken-env streak so
+                # NON-consecutive rc-126/127 blips across a long watch can no
+                # longer accumulate to the threshold and kill a healthy monitor
+                # (F27 — the escalation message's 'consecutive' claim now holds).
+                consecutive_env_polls = 0
                 last_status = dict(record.last_status or {})
                 # In-band fallback disclosure: mark that this tick's counts came
                 # from the reporter walk, not the announce census (the tick log
@@ -748,6 +965,14 @@ def monitor_flow(
                 partial_ok=_read_partial_ok(experiment_dir, run_id),
                 unknown_streak=state.unknown_streak,
             )
+            if census_failed_stale_override and terminal == LifecycleState.FAILED:
+                # F23: the scheduler positively holds a resubmitted attempt still
+                # alive; the census's FAILED verdict rode on stale .failed markers
+                # a resubmit never cleared. Do NOT settle terminal — fall through
+                # to the in-flight tail and keep polling until the live attempt
+                # announces its own terminal state (its fresh markers overwrite
+                # the stale ones, and the census then settles correctly).
+                terminal, esc_reason = None, None
             if terminal == LifecycleState.COMPLETE:
                 mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
                 _append_tick(
@@ -800,12 +1025,33 @@ def monitor_flow(
                     # round-trip. Absent (older reporter / SGE without exit codes)
                     # → the composite falls back to a log-based fetch.
                     _preempted = last_status.get("preempted_task_ids")
-                    outcome = maybe_auto_resume(
-                        experiment_dir,
-                        run_id,
-                        record=record,
-                        preempted_task_ids=_preempted if isinstance(_preempted, list) else None,
-                    )
+                    try:
+                        outcome = maybe_auto_resume(
+                            experiment_dir,
+                            run_id,
+                            record=record,
+                            preempted_task_ids=(
+                                _preempted if isinstance(_preempted, list) else None
+                            ),
+                        )
+                    except (errors.HpcError, OSError) as exc:
+                        # A composite fault on the terminal-FAILED tick (an SSH blip
+                        # on the resubmit leg, an OSError persisting the cap counter)
+                        # must NEVER kill the detached watch — the module's never-
+                        # blocks policy. Degrade to an escalate outcome so we fall
+                        # through to the plain FAILED surface with the failure
+                        # appended as escalation-as-data (#234), rather than
+                        # propagating and stranding the run non-terminal (F26).
+                        from hpc_agent.ops.auto_resume_flow import AutoResumeOutcome
+
+                        logging.getLogger(__name__).error(
+                            "monitor: run %s — auto-resume raised on the terminal-"
+                            "FAILED tick (%s); degrading to the plain FAILED surface "
+                            "(preempted tasks were NOT auto-resumed).",
+                            run_id,
+                            exc,
+                        )
+                        outcome = AutoResumeOutcome("escalate", f"auto_resume_failed: {exc}")
                     if outcome.action == "resume":
                         actions.append(
                             {
@@ -852,11 +1098,33 @@ def monitor_flow(
                 # not opt in computes the verdict-as-data and takes NO side effect
                 # (no resubmit, no park), so this wiring is behavior-neutral until a
                 # run opts in.
-                recover_outcome = maybe_resolve_and_recover(
-                    experiment_dir,
-                    run_id,
-                    record=record,
-                )
+                try:
+                    recover_outcome = maybe_resolve_and_recover(
+                        experiment_dir,
+                        run_id,
+                        record=record,
+                    )
+                except (errors.HpcError, OSError) as exc:
+                    # Same never-blocks guard as the auto-resume twin above (F25/
+                    # F26): a stale pack declaration (SpecInvalid), an SSH blip on
+                    # the resubmit, or an OSError persisting the counter must NOT
+                    # kill the whole detached watch on the terminal-FAILED tick.
+                    # Degrade to an empty outcome (no clusters, nothing resubmitted
+                    # or held) so control falls through to the plain FAILED surface
+                    # with the failure appended as escalation-as-data (#234).
+                    logging.getLogger(__name__).error(
+                        "monitor: run %s — resolve-and-recover raised on the "
+                        "terminal-FAILED tick (%s); degrading to the plain FAILED "
+                        "surface (no auto-recover this tick).",
+                        run_id,
+                        exc,
+                    )
+                    esc_reason = (
+                        f"{esc_reason}; auto_recover_failed: {exc}"
+                        if esc_reason
+                        else f"auto_recover_failed: {exc}"
+                    )
+                    recover_outcome = ResolveAndRecoverOutcome(run_id=run_id)
                 if recover_outcome.clusters:
                     actions.append(
                         {
