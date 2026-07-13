@@ -19,7 +19,7 @@ from hpc_agent._wire.actions.scope_lock import (
     ScopeStatusInput,
     ScopeStatusResult,
 )
-from hpc_agent.ops.decision.scope_lock import scope_lock, scope_status
+from hpc_agent.ops.decision.journal.scope_lock import scope_lock, scope_status
 from hpc_agent.state import scopes
 
 if TYPE_CHECKING:

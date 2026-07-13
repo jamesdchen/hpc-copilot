@@ -22,7 +22,7 @@ the look ledger counts identities, never reads what a look found.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -37,8 +37,19 @@ from hpc_agent._wire.actions.scope_lock import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state import scopes as _scopes
 
+from ._shared import (
+    _fresh_human_texts,
+    _ha_word_tokens,
+    _is_bare_ack,
+    _newest_lock_ts,
+    _read_interview_actors,
+    _refuse_missing_authorship,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 
 # The decision-journal actions that make up a scope's lock history — mirrors
 # the state layer's ``_SCOPE_ACTIONS`` for the ``lock_history_len`` count.
@@ -182,3 +193,109 @@ def _lock_history_len(experiment_dir: Path, tag: str) -> int:
         if action in _LOCK_ACTIONS:
             count += 1
     return count
+
+
+# ── scope-unlock authorship gate ──────────────────────────────────────────────
+
+# The block-terminator convention for a scope UNLOCK. Locking uses
+# ``state.scopes._SCOPE_LOCK_BLOCK`` ("scope-lock") and needs no bar (the safe
+# direction, ``record_lock`` routes straight through the state layer); an unlock
+# RELAXES the restriction and is a HUMAN act, journaled under this distinct block
+# so this gate can recognise — and refuse — a laundered one.
+_SCOPE_UNLOCK_BLOCK = "scope-unlock"
+
+
+def _assert_unlock_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """Human-authorship gate for a scope UNLOCK — the relax direction of the lock.
+
+    A *scope* (``hpc_agent.state.scopes``) is a caller-tagged experiment scope;
+    LOCKING it only restricts, so ``record_lock`` carries no bar. UNLOCKING
+    re-opens it for another look — the one scope action that loosens a
+    restriction, so it faces the same human-authorship bar the fabricated-
+    task_generator gate does. An unlock is journaled as an ``append-decision``
+    whose ``scope_kind=="scope"``, ``block=="scope-unlock"``, and
+    ``resolved.scope_action=="unlock"`` (the state layer reads ``scope_action``
+    newest-first to decide the lock state; this block name is the convention the
+    gate keys on).
+
+    Block convention, enforced both directions:
+
+    * a ``scope-unlock`` block is refused for any ``scope_kind`` other than
+      ``scope`` (it is a scope-only action), and
+    * a ``scope`` unlock MUST carry ``block=="scope-unlock"`` — a laundered
+      unlock cannot hide under the lock block.
+
+    A LOCK (``scope_action=="lock"``) never reaches the bar; nor does any
+    non-scope record.
+
+    Authorship check, tiered exactly like :func:`_assert_human_authorship`:
+
+    * **A bare ack cannot unlock.** ``response`` in :data:`_BARE_ACK_RESPONSES`
+      (:func:`_is_bare_ack`) — a ``y`` / click carries no authored rationale, and
+      relaxing a scope must be a deliberate human statement, never a rubber-stamp.
+    * **With the harness utterance log present** (:func:`_harness_human_texts` —
+      the shared lock tier), the rationale's word tokens must derive from a logged
+      human utterance, not the agent-relayed ``response``. Without a log the
+      non-bare ``response`` itself is the human's typed rationale (the v1 friction
+      tier); an all-short rationale with no word tokens to check passes on the
+      strength of being non-bare.
+
+    Raises :class:`errors.SpecInvalid`.
+    """
+    is_unlock_block = spec.block == _SCOPE_UNLOCK_BLOCK
+    action = resolved.get("scope_action") if isinstance(resolved, dict) else None
+    is_unlock_action = action == "unlock"
+
+    # The scope-unlock block is a scope-only convention.
+    if is_unlock_block and spec.scope_kind != "scope":
+        raise errors.SpecInvalid(
+            f"block {_SCOPE_UNLOCK_BLOCK!r} is only valid for scope_kind='scope' "
+            f"(a scope unlock); got scope_kind={spec.scope_kind!r}."
+        )
+
+    if not (is_unlock_action and spec.scope_kind == "scope"):
+        return  # not a scope unlock — nothing to gate (a lock passes untouched)
+
+    # A scope unlock must be journaled under the scope-unlock block.
+    if not is_unlock_block:
+        raise errors.SpecInvalid(
+            "scope-unlock authorship gate: a scope unlock "
+            "(resolved.scope_action='unlock') must be journaled with "
+            f"block='{_SCOPE_UNLOCK_BLOCK}', not {spec.block!r} — the distinct block "
+            "is how the gate recognises an unlock (a lock uses 'scope-lock')."
+        )
+
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "scope-unlock authorship gate: unlocking a scope re-opens it for "
+            f"another look and is a HUMAN act — a bare {spec.response!r} (a 'y' / "
+            "click) cannot unlock it. The human must type the rationale for "
+            "re-opening the scope."
+        )
+
+    # B4 ts>=anchor: the rationale must derive from an utterance logged AT OR
+    # AFTER the LOCK it re-opens — a standing prompt that happened to share a word
+    # with the unlock, typed before the scope was ever locked, is not a decision
+    # to re-open it (the philosophy-audit B4 exposure). Anchor = the scope's
+    # newest lock record ts (None → unfiltered: no lock on file yet).
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    anchor = _newest_lock_ts(experiment_dir, spec.scope_id)
+    harness_texts = _fresh_human_texts(experiment_dir, actor_ids=_actor_ids, anchor=anchor)
+    if harness_texts is not None:
+        human_words: set[str] = set()
+        for text in harness_texts:
+            human_words |= _ha_word_tokens(text)
+        rationale_words = _ha_word_tokens(response)
+        if rationale_words and not (rationale_words & human_words):
+            _refuse_missing_authorship(
+                "scope-unlock authorship gate: with the harness utterance log "
+                "installed, the unlock rationale must derive from a logged human "
+                "utterance (harness-captured) dated AT OR AFTER the lock it re-opens "
+                f"(B4 ts>=anchor), not the agent-relayed response {spec.response!r}. "
+                "Have the human state why the scope is being re-opened in a prompt. "
+                "(Under >1 declared actors the pool is the SESSION ACTOR'S log only "
+                "— MH4.)"
+            )

@@ -93,6 +93,23 @@ MODULE_PATH_ALLOWLIST: dict[tuple[str, str], str] = {
         "docs/internals/bug-sweep-2026-07-11.md",
         "src/hpc_agent/_kernel/hooks/relay_audit_stop.py",
     ): "historical: file split into the relay_audit_stop/ package after this sweep",
+    # The decision journal was split from a single module into the package
+    # ``src/hpc_agent/ops/decision/journal/`` (the twelve authorship gates now
+    # live in submodules), and ``verify_relay.py`` / ``scope_lock.py`` were
+    # formalized as members of that package. These historical audit / bug-sweep
+    # logs cite the pre-split file paths as they existed at the time.
+    (
+        "docs/internals/audit-2026-07-09.md",
+        "src/hpc_agent/ops/decision/verify_relay.py",
+    ): "moved to src/hpc_agent/ops/decision/journal/verify_relay.py (journal package split)",
+    (
+        "docs/internals/bug-sweep-2026-07-11.md",
+        "src/hpc_agent/ops/decision/verify_relay.py",
+    ): "moved to src/hpc_agent/ops/decision/journal/verify_relay.py (journal package split)",
+    (
+        "docs/internals/bug-sweep-2026-07-11.md",
+        "src/hpc_agent/ops/decision/journal.py",
+    ): "split into the src/hpc_agent/ops/decision/journal/ package (gates → submodules)",
 }
 
 

@@ -281,12 +281,12 @@ def reference_result(experiment_dir: Path, triple: RelayTriple) -> VerifyRelayRe
     """
     if triple.scope == "run":
         from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
-        from hpc_agent.ops.decision.verify_relay import verify_relay
+        from hpc_agent.ops.decision.journal.verify_relay import verify_relay
 
         return verify_relay(
             experiment_dir=experiment_dir,
             spec=VerifyRelayInput(run_id=triple.target_id, relay_text=triple.final_message),
         )
-    from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
 
     return verify_notebook_relay(experiment_dir, triple.target_id, triple.final_message)

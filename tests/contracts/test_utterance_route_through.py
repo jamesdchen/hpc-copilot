@@ -18,10 +18,32 @@ UNFILTERED pool reader must be on the exemption allowlist below (with a reason)
 from __future__ import annotations
 
 import ast
-import inspect
+import pathlib
 import textwrap
 
 from hpc_agent.ops.decision import journal
+
+
+def _journal_pkg_source() -> str:
+    """The CONCATENATED source of every ``journal`` PACKAGE submodule.
+
+    ``journal`` is now a package (``ops/decision/journal/``), so
+    ``inspect.getsource(journal)`` would return only ``__init__.py`` and the B4
+    route-through scan would go VACUOUS — passing without seeing a single gate.
+    Concatenate every submodule instead so the AST scan sees the whole gate
+    surface (the ``from __future__`` lines are stripped so the concatenation stays
+    a parseable module).
+    """
+    pkg_dir = pathlib.Path(journal.__file__).parent
+    parts: list[str] = []
+    for py in sorted(pkg_dir.glob("*.py")):
+        text = py.read_text(encoding="utf-8")
+        text = "\n".join(
+            line for line in text.splitlines() if not line.startswith("from __future__")
+        )
+        parts.append(text)
+    return "\n\n".join(parts)
+
 
 # The UNFILTERED readers: calling one reads the utterance log with NO temporal
 # anchor. ``read_utterances`` is the raw store read; the other three are the base
@@ -97,7 +119,7 @@ def _unfiltered_consumers(source: str) -> set[str]:
 
 
 def test_every_unbounded_consumer_is_filtered_or_exempt() -> None:
-    consumers = _unfiltered_consumers(inspect.getsource(journal))
+    consumers = _unfiltered_consumers(_journal_pkg_source())
     offenders = sorted(consumers - set(_EXEMPT))
     assert not offenders, (
         "unbounded read_utterances consumer(s) in ops/decision/journal.py must "
