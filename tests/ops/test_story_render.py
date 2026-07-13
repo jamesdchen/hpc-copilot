@@ -135,6 +135,25 @@ def test_counts_only_metric_value_never_renders() -> None:
     assert "cmd_sha=csha" in render.markdown  # a pointer renders
 
 
+def test_c2_finding_cause_class_disposition_render() -> None:
+    # A Class-C2 overnight finding renders its cause, class, and report-only
+    # disposition (identity/classification literals on the whitelist) — the story is
+    # where science lands (overnight-repair §4.4/§7.4).
+    finding = StoryEvent(
+        ts="2026-07-08T17:00:00+00:00",
+        stream="overnight-ledger",
+        actor="code",
+        kind="c2-finding",
+        subject_id="r1",
+        evidence={"cause": "result-anomaly", "heal_class": "C2", "disposition": "report-only"},
+    )
+    render = sr.render_story(_H, [finding], total_events=1, omitted_count=0)
+    assert "c2-finding" in render.markdown
+    assert "cause=result-anomaly" in render.markdown
+    assert "heal_class=C2" in render.markdown
+    assert "disposition=report-only" in render.markdown
+
+
 def test_empty_story_renders_without_error() -> None:
     render = sr.render_story(_H, [], total_events=0, omitted_count=0)
     assert "(no events)" in render.markdown

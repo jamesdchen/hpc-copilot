@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/challenge_status.input.json",
+  "title": "challenge-status input spec",
+  "description": "Input spec for ``challenge-status`` — the ONE read-only challenge query.\n\nEXACTLY ONE addressing mode (C-verb, the honest reading — recorded in the T2\ndrift note):\n\n1. ``challenge_id`` — the THREAD view: filing + verdict/withdrawal + target +\n   evidence for one challenge.\n2. ``content_sha`` — the TARGET view keyed by the exact challenged sha (the\n   full address's discriminator; C-reduce matches on it exactly).\n3. the ``{subject_kind, subject_id}`` PAIR — the TARGET view keyed by subject\n   identity (every standing challenge against that subject, across shas).\n\nThe three map onto ``standing_challenges``'s ``content_sha`` / ``subject_kind``\n/ ``subject_id`` filter params (C-reduce). They are DISTINCT modes and never\ncombine: a ``challenge_id`` alongside a target address, a ``content_sha`` mixed\nwith a subject, or no address at all, each refuses (the ``verify-registration``\nEXACTLY-ONE posture). The subject pair is ATOMIC — a lone ``subject_kind`` or\nlone ``subject_id`` addresses nothing checkable (the R3 full-address\ndiscipline) and refuses. ``fleet`` widens any mode across every journaled\nexperiment.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "challenge_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The caller-authored challenge slug to view as a thread (filing + verdict/withdrawal). Mode 1; null when addressing by target.",
+      "title": "Challenge Id"
+    },
+    "content_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The exact challenged content_sha to find standing challenges against (the full address's discriminator; matched exactly). Mode 2; null otherwise.",
+      "title": "Content Sha"
+    },
+    "subject_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The challenged record's subject_kind (opaque). Mode 3 — REQUIRED with subject_id (the pair is atomic); null otherwise.",
+      "title": "Subject Kind"
+    },
+    "subject_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The challenged record's subject_id (opaque). Mode 3 — REQUIRED with subject_kind (the pair is atomic); null otherwise.",
+      "title": "Subject Id"
+    },
+    "fleet": {
+      "default": false,
+      "description": "When False (default), scope is the single experiment_dir. When True, run the identical challenge walk over every journaled experiment (the evidence-brief fleet posture); torn namespaces are skipped and counted in 'skipped'.",
+      "title": "Fleet",
+      "type": "boolean"
+    }
+  }
+}

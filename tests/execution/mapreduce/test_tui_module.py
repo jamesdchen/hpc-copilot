@@ -107,6 +107,81 @@ def test_run_tui_errors_cleanly_when_rich_missing(monkeypatch, tmp_path, capsys)
     assert "rich" in err.lower()
 
 
+def _write_run(tmp_path, run_id: str, sidecar: dict, tasks_py: str | None = None):
+    """Materialize .hpc/runs/<run_id>.json (+ optional .hpc/tasks.py) under tmp."""
+    import json
+
+    runs = tmp_path / ".hpc" / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / f"{run_id}.json").write_text(json.dumps(sidecar))
+    if tasks_py is not None:
+        (tmp_path / ".hpc" / "tasks.py").write_text(tasks_py)
+
+
+def test_main_uses_frozen_manifest_without_importing_tasks_py(tmp_path, monkeypatch):
+    """#29: the TUI resolves per-task kwargs from the sidecar's frozen
+    ``trial_params`` and NEVER imports/replays ``tasks.py`` — a state-dependent
+    ``resolve()`` would mint a phantom trial and point at next-iteration dirs."""
+    import json
+
+    from hpc_agent.execution.mapreduce.reduce import tui
+
+    run_id = "trial-run"
+    _write_run(
+        tmp_path,
+        run_id,
+        {
+            "run_id": run_id,
+            "result_dir_template": "results/{run_id}/lr_{lr}/task_{task_id}",
+            "trial_params": [{"lr": 0.1}, {"lr": 0.2}],
+            "task_count": 2,
+        },
+        # Importing this would raise — proving the frozen path skips the import.
+        tasks_py="raise RuntimeError('tasks.py must not be imported by the TUI')\n",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_tui(per_task_dict_path, **kwargs):
+        captured["path"] = per_task_dict_path
+        return 0
+
+    monkeypatch.setattr(tui, "run_tui", _fake_run_tui)
+    monkeypatch.chdir(tmp_path)
+
+    rc = tui._main(["--run-id", run_id])
+    assert rc == 0  # did NOT hard-fail on the raising tasks.py
+
+    per_task = json.loads((tmp_path / ".hpc" / "runs" / f"{run_id}.per-task-dict.json").read_text())
+    # result_dir was formatted from the FROZEN manifest, not resolve().
+    assert per_task["tasks"]["0"]["result_dir"] == f"results/{run_id}/lr_0.1/task_0"
+    assert per_task["tasks"]["1"]["result_dir"] == f"results/{run_id}/lr_0.2/task_1"
+
+
+def test_main_degrades_on_foreign_tasks_py(tmp_path, monkeypatch):
+    """#29: a legacy sidecar (no manifest) whose ``tasks.py`` won't import must
+    DEGRADE to task_id-only dirs like the status CLI — not wedge with ``return 2``."""
+    from hpc_agent.execution.mapreduce.reduce import tui
+
+    run_id = "legacy-run"
+    _write_run(
+        tmp_path,
+        run_id,
+        {
+            "run_id": run_id,
+            "result_dir_template": "results/{run_id}/lr_{lr}/task_{task_id}",
+            "task_count": 1,
+        },
+        tasks_py="import definitely_not_installed_xyz  # ImportError at load\n",
+    )
+
+    monkeypatch.setattr(tui, "run_tui", lambda *a, **k: 0)
+    monkeypatch.chdir(tmp_path)
+
+    rc = tui._main(["--run-id", run_id])
+    assert rc == 0  # degraded, not the old hard `return 2`
+
+
 def test_render_returns_rich_group_when_rich_present(tmp_path):
     # If rich isn't available, skip rather than fail the whole suite.
     pytest.importorskip("rich")

@@ -31,9 +31,11 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.kill import KillResult, KillSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids, reconcile
 from hpc_agent.state.journal import load_run, record_kill_confirmed, record_kill_request
+from hpc_agent.state.run_record import TERMINAL_STATUSES, RunRecord
 
 
 def _attempt_backend_cancel(
@@ -118,14 +120,14 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
 
     # 2. Attempt cancellation through the backend seam (no-op today; flagged).
     cancel_attempted, cancel_available = _attempt_backend_cancel(
-        scheduler=spec.scheduler, ssh_target=record.ssh_target, job_ids=job_ids
+        scheduler=spec.scheduler, ssh_target=resolve_ssh_target(record), job_ids=job_ids
     )
 
     # 3. Verify against the scheduler: which requested ids are still alive?
     if job_ids:
         try:
             alive = _ssh_alive_job_ids(
-                ssh_target=record.ssh_target, job_ids=job_ids, scheduler=spec.scheduler
+                ssh_target=resolve_ssh_target(record), job_ids=job_ids, scheduler=spec.scheduler
             )
         except errors.RemoteCommandFailed:
             # Cannot verify — count NOTHING as gone rather than assume success.
@@ -158,17 +160,28 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
     #
     #    Best-effort: a reconcile failure must NOT mask the kill result just
     #    journaled — log a warning and carry ``settled=False`` on.
+    #
+    #    ``settled`` reports what reconcile actually DID, never that it merely
+    #    returned: reconcile's unable_to_verify path (e.g. an SSH blip on its
+    #    OWN alive probe) returns WITHOUT raising while leaving the journal
+    #    in_flight, and the envelope contract (KillResult.settled: "journal
+    #    marked terminal and the terminal harvest fired") must not claim a
+    #    settle that didn't happen — callers would skip the re-reconcile the
+    #    run still needs. So derive it from the reconciled record's status.
     settled = False
     if confirmed_gone and not still_alive:
         try:
-            reconcile(experiment_dir, spec.run_id, scheduler=spec.scheduler)
-            settled = True
+            settled_record = reconcile(experiment_dir, spec.run_id, scheduler=spec.scheduler)
         except Exception as exc:  # noqa: BLE001 — reconcile is best-effort; never mask the kill
             logging.getLogger(__name__).warning(
                 "kill: reconcile settle failed for run %s after a full kill "
                 "(the kill result stands): %s",
                 spec.run_id,
                 exc,
+            )
+        else:
+            settled = (
+                isinstance(settled_record, RunRecord) and settled_record.status in TERMINAL_STATUSES
             )
 
     result = KillResult(

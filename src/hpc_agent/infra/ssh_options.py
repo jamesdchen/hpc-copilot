@@ -42,6 +42,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -168,7 +169,31 @@ def _rsync_rsh_env() -> dict[str, str]:
         parts += _ssh_config_override_opts()
     if parts == ["ssh"]:
         return {}
+    # rsync tokenizes RSYNC_RSH on whitespace, so a binary path containing
+    # spaces (``HPC_SSH_BINARY=C:\Program Files\...\ssh.exe`` — the norm under
+    # Program Files) would exec ``C:\Program`` and break every transport (#64).
+    # Quote the binary so rsync's shell-word split keeps it one token; the
+    # option flags that follow are space-free and pass through unquoted.
+    parts[0] = _quote_rsh_binary(parts[0])
     return {"RSYNC_RSH": " ".join(parts)}
+
+
+def _quote_rsh_binary(binary: str) -> str:
+    """Quote *binary* so rsync's whitespace tokenization of ``RSYNC_RSH`` treats
+    a spaced path as a single shell word (#64).
+
+    rsync's MSYS/Cygwin build honours double-quoting in the remote-shell string;
+    on POSIX ``shlex.quote`` is the canonical shell-safe form. A path with no
+    whitespace is returned unchanged so the common case (bare ``ssh``, an
+    unspaced native path) keeps the exact pre-fix bytes.
+    """
+    if not any(c.isspace() for c in binary):
+        return binary
+    if sys.platform == "win32":
+        # rsync-under-MSYS honours ``"..."`` in the RSH command; a native path
+        # cannot itself contain a double quote, so simple wrapping is total.
+        return f'"{binary}"'
+    return shlex.quote(binary)
 
 
 # Default ControlPersist window. Tunable via ``HPC_SSH_PERSIST_INTERVAL``;
@@ -342,7 +367,13 @@ def _read_ssh_config_text() -> str | None:
         if not path.is_file():
             return None
         return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except (OSError, RuntimeError):
+        # ``Path.home()`` raises RuntimeError (NOT OSError) on Windows when
+        # USERPROFILE / HOMEDRIVE+HOMEPATH / USERNAME are all unset — the
+        # stripped-environment case of a service/scheduled-task context. Without
+        # this the RuntimeError would propagate out of the ``functools.cache``'d
+        # probe and take down every ``ssh_argv("ssh")`` call, defeating the
+        # documented fail-open ("config unreadable -> no override") contract (#65).
         return None
 
 
@@ -648,6 +679,50 @@ def _ssh_connect_opts() -> list[str]:
     return ["-o", f"ConnectTimeout={raw}"]
 
 
+# --- Keepalives (run-12 finding 24: NAT idle-drop on long-silent legs) --------
+#
+# Several framework remote legs are COMPLETELY silent on the wire for many
+# minutes (the status reporter's 2700-task walk, a combiner reduce, a long
+# stage). A NAT'd client (home router / VPN / campus border) drops an idle TCP
+# flow at its idle threshold — observed live 2026-07-11 at ~100s: the channel
+# died mid-reporter with rc 0 and empty stdout while the remote half ground on
+# as an orphan (finding 20's population source), and the manual control run
+# died exit 255 the same way. Protocol-level keepalives every 30s keep the NAT
+# state alive regardless of application silence; CountMax 60 tolerates a
+# 30-minute unresponsive server before ssh gives up (the client-side timeout
+# budget remains the real bound). Framework-owned: depending on the USER's
+# ssh_config for this guarantee is exactly how the live failure happened.
+_DEFAULT_SSH_KEEPALIVE_INTERVAL = "30"
+_DEFAULT_SSH_KEEPALIVE_COUNT_MAX = "60"
+
+
+def _ssh_keepalive_opts() -> list[str]:
+    """SSH ``-o ServerAliveInterval/CountMax`` keeping long-silent channels alive.
+
+    Spliced into the ssh and scp argvs by :func:`ssh_argv`. Tunable via
+    ``HPC_SSH_KEEPALIVE_INTERVAL`` (positive integer seconds; the literal
+    ``default`` drops both overrides and defers to ssh_config). A bad value
+    warns to stderr and falls back — a typo must not break every ssh call.
+    """
+    raw = (os.environ.get("HPC_SSH_KEEPALIVE_INTERVAL") or _DEFAULT_SSH_KEEPALIVE_INTERVAL).strip()
+    if raw.lower() == "default":
+        return []
+    if not raw.isdigit() or int(raw) <= 0:
+        print(
+            f"hpc-agent: ignoring HPC_SSH_KEEPALIVE_INTERVAL={raw!r} "
+            f"(want a positive integer of seconds, or 'default'); using "
+            f"{_DEFAULT_SSH_KEEPALIVE_INTERVAL!r}",
+            file=sys.stderr,
+        )
+        raw = _DEFAULT_SSH_KEEPALIVE_INTERVAL
+    return [
+        "-o",
+        f"ServerAliveInterval={raw}",
+        "-o",
+        f"ServerAliveCountMax={_DEFAULT_SSH_KEEPALIVE_COUNT_MAX}",
+    ]
+
+
 # --- Cipher / MAC / compression tuning (#256) --------------------------------
 #
 # OpenSSH's portable defaults favour broad compatibility: the
@@ -766,6 +841,7 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
             "-o",
             "BatchMode=yes",
             *_ssh_connect_opts(),
+            *_ssh_keepalive_opts(),
             *_ssh_crypto_opts(),
             *_ssh_multiplex_opts(),
             *extra_opts,
@@ -776,6 +852,7 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
             "-o",
             "BatchMode=yes",
             *_ssh_connect_opts(),
+            *_ssh_keepalive_opts(),
             *_ssh_crypto_opts(),
             *_ssh_config_override_opts(),
             *extra_opts,

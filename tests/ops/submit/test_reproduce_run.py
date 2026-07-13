@@ -471,3 +471,119 @@ def test_result_declares_next_block_for_mcp_curation() -> None:
     from hpc_agent._wire.workflows.reproduce_run import ReproduceRunResult
 
     assert "next_block" in ReproduceRunResult.model_fields
+
+
+# ── derived subsets (T6, design center 5) ─────────────────────────────────────
+
+
+def _write_axes(experiment_dir: Path, axes: list[dict[str, Any]]) -> None:
+    from hpc_agent.state.axes import write_axes
+
+    write_axes(experiment_dir, axes=axes)
+
+
+def test_derive_stride_subset_is_pure_canary_and_per_axis() -> None:
+    """The derivation is a PURE function of axis structure: canary task 0 + one
+    task per distinct axis value at that axis's row-major stride; reproducible."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    from hpc_agent.state.axes import derive_stride_subset
+
+    with tempfile.TemporaryDirectory() as td:
+        exp = _Path(td)
+        _write_axes(exp, [{"name": "a", "size": 2}, {"name": "b", "size": 3}])
+        # strides = [3, 1] (last axis varies fastest). axis a: {0, 3}; axis b:
+        # {0, 1, 2}; ∪ {0 canary} = [0, 1, 2, 3].
+        first = derive_stride_subset(exp)
+        assert first == [0, 1, 2, 3]
+        assert 0 in first  # the canary is always present
+        assert derive_stride_subset(exp) == first  # deterministic / reproducible
+
+
+def test_derive_stride_subset_refuses_without_axes(tmp_path: Path) -> None:
+    """Derived mode cannot invent a subset without the axis structure."""
+    from hpc_agent.state.axes import derive_stride_subset
+
+    with pytest.raises(errors.SpecInvalid):
+        derive_stride_subset(tmp_path)
+
+
+def test_caller_list_wins_and_threads_both_seams(tmp_path: Path, monkeypatch: Any) -> None:
+    """An explicit caller list wins over the derived mode, and threads through BOTH
+    seams: HPC_TASK_INCLUDE on the job env (execution restriction) AND
+    extra.task_sample on the sidecar (T5's per-task read)."""
+    old = _setup(tmp_path, monkeypatch)
+    # An axes.yaml exists (derived mode would pick [0, 1]); the caller list [1]
+    # must WIN — distinct from the derived set, so the win is observable.
+    _write_axes(tmp_path, [{"name": "seed", "size": 2}])
+    res = _reproduce(tmp_path, original_run_id=old, task_sample=[1])
+
+    submit_spec = res.brief["resolve"]["submit_spec"]
+    assert submit_spec["job_env"]["HPC_TASK_INCLUDE"] == "1"  # caller list, NOT derived [0,1]
+    # The array stays FULL-SIZE — subsetting restricts execution, never the shape
+    # (the identity constraint: a rebuilt smaller task list would move cmd_sha).
+    assert submit_spec["total_tasks"] == 2
+
+    from hpc_agent.state.runs import read_run_sidecar
+
+    repro_sidecar = read_run_sidecar(tmp_path, _REPRO_RUN_ID)
+    assert repro_sidecar["extra"]["task_sample"] == [1]
+    assert res.brief["partial"] is True
+    assert res.brief["task_sample"] == [1]
+    assert res.brief["uncompared_task_count"] == 1
+
+
+def test_derived_mode_threads_both_seams(tmp_path: Path, monkeypatch: Any) -> None:
+    """task_sample='derived' selects the mechanical per-axis subset and records it
+    on both the job env and the sidecar."""
+    old = _setup(tmp_path, monkeypatch)
+    _write_axes(tmp_path, [{"name": "seed", "size": 2}])  # product == sidecar task_count 2
+    res = _reproduce(tmp_path, original_run_id=old, task_sample="derived")
+
+    submit_spec = res.brief["resolve"]["submit_spec"]
+    assert submit_spec["job_env"]["HPC_TASK_INCLUDE"] == "0,1"
+
+    from hpc_agent.state.runs import read_run_sidecar
+
+    repro_sidecar = read_run_sidecar(tmp_path, _REPRO_RUN_ID)
+    assert repro_sidecar["extra"]["task_sample"] == [0, 1]
+
+
+def test_recorded_subset_readable_by_t5_partial_path(tmp_path: Path, monkeypatch: Any) -> None:
+    """The indices reproduce-run records are exactly what verify-reproduction's
+    per-task load path reads back (extra['task_sample'])."""
+    from hpc_agent.ops.verify_reproduction import _partial_indices
+    from hpc_agent.state.runs import read_run_sidecar
+
+    old = _setup(tmp_path, monkeypatch)
+    _reproduce(tmp_path, original_run_id=old, task_sample=[1, 0])
+    repro_sidecar = read_run_sidecar(tmp_path, _REPRO_RUN_ID)
+    assert _partial_indices(repro_sidecar) == [0, 1]
+
+
+def test_subset_out_of_range_refused(tmp_path: Path, monkeypatch: Any) -> None:
+    """A caller index outside the run's [0, task_count) range is refused — a partial
+    reproduction can only select tasks the run has."""
+    old = _setup(tmp_path, monkeypatch)  # task_count == 2
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        _reproduce(tmp_path, original_run_id=old, task_sample=[0, 5])
+    assert "outside the run's range" in str(excinfo.value)
+
+
+def test_full_reproduction_has_no_include_or_partiality(tmp_path: Path, monkeypatch: Any) -> None:
+    """task_sample=None (default) reproduces the FULL list — no HPC_TASK_INCLUDE,
+    no sidecar extra.task_sample, partial=False."""
+    old = _setup(tmp_path, monkeypatch)
+    res = _reproduce(tmp_path, original_run_id=old)
+
+    submit_spec = res.brief["resolve"]["submit_spec"]
+    assert "HPC_TASK_INCLUDE" not in (submit_spec.get("job_env") or {})
+    assert res.brief["partial"] is False
+    assert res.brief["task_sample"] is None
+    assert res.brief["uncompared_task_count"] == 0
+
+    from hpc_agent.state.runs import read_run_sidecar
+
+    repro_sidecar = read_run_sidecar(tmp_path, _REPRO_RUN_ID)
+    assert "task_sample" not in (repro_sidecar.get("extra") or {})

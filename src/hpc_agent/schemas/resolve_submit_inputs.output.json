@@ -84,6 +84,20 @@
       "description": "Absolute path of the per-run sidecar written on the 'resolved' path (.hpc/runs/<run_id>.json) — the #171 write-first precondition is satisfied, so submit-pipeline can run directly. Set only on stage_reached='resolved'.",
       "title": "Sidecar Path"
     },
+    "evidence": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ADVISORY evidence-memory point digest for this run's declared tags + lineage (evidence-memory E-embed): the newest conclusion, prior-work counts, per-lineage envelopes — dated + sha-cited, code-rendered. NEVER blocks: additive, and it degrades to {unavailable, reason} on any collector failure (fail-open). Set only on stage_reached='resolved'.",
+      "title": "Evidence"
+    },
     "prior_run_id": {
       "anyOf": [
         {

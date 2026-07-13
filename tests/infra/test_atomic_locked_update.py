@@ -265,3 +265,33 @@ def test_append_jsonl_line_concurrent_appends_stay_whole_lines(tmp_path: Path) -
     # of (tid, i) pairs is present exactly once.
     pairs = {(json.loads(ln)["tid"], json.loads(ln)["i"]) for ln in lines}
     assert pairs == {(t, i) for t in range(n_threads) for i in range(per_thread)}
+
+
+def test_advisory_flock_bounded_wait_raises_loud_timeout(tmp_path) -> None:
+    """Run-#12 finding 16: a wedged holder froze a worker at 0 CPU for 15
+    minutes with zero disclosure. A ``timeout_sec``-bounded blocking acquire
+    raises a LOUD, path-naming TimeoutError instead of waiting forever."""
+    import pytest as _pytest
+
+    from hpc_agent.infra.io import advisory_flock
+
+    lock_path = tmp_path / "held.lock"
+    lock = advisory_flock(lock_path)
+    # filelock reentrancy is per-instance; a second advisory_flock on the
+    # same path contends at the OS lock exactly like another process.
+    with (
+        lock,
+        _pytest.raises(TimeoutError, match="held.lock"),
+        advisory_flock(lock_path, timeout_sec=0.2),
+    ):
+        raise AssertionError("must not acquire")  # pragma: no cover
+
+
+def test_advisory_flock_no_timeout_still_blocks_by_default(tmp_path) -> None:
+    """The default (timeout_sec=None) keeps the historical contract: no raise,
+    acquisition succeeds once the holder releases."""
+    from hpc_agent.infra.io import advisory_flock
+
+    lock_path = tmp_path / "free.lock"
+    with advisory_flock(lock_path, timeout_sec=5.0) as got:
+        assert got is True

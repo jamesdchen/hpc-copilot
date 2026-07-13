@@ -200,7 +200,7 @@ def record_terminal(
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with advisory_flock(_lock_path(path)):
+    with advisory_flock(_lock_path(path), timeout_sec=120.0):
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(record, fh, sort_keys=True, default=str)
             fh.flush()

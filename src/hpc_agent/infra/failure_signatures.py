@@ -30,7 +30,14 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["FailureSignature", "classify", "CATALOG", "CLASSIFIER_CATEGORIES"]
+__all__ = [
+    "FailureSignature",
+    "classify",
+    "CATALOG",
+    "CLASSIFIER_CATEGORIES",
+    "CONDA_RUN_BLIND_CLASS",
+    "classify_conda_run_blind",
+]
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,17 @@ class FailureSignature:
     exit_code: int | None
     suggested_fix: dict[str, Any]
     priority: int = 50
+    #: True only when ``exit_code`` is genuinely DISCRIMINATING — i.e. a
+    #: scheduler/signal-specific code that names this failure on its own
+    #: (130 = SIGTERM-trap preemption, 137 = 128+SIGKILL OOM, 271 = SGE h_rt
+    #: walltime). ``classify()``'s pattern-less fallback fires ONLY on rows
+    #: with this flag set. Rows carrying a GENERIC exit code that many
+    #: unrelated failures share (2 = argparse/usage error, 127 = command not
+    #: found, 1 = any Python error) leave this False, so their exit code is a
+    #: tiebreaker for a pattern match but never a standalone diagnosis — a
+    #: bare rc=2 must not be misread as ``uv_not_on_path`` nor rc=127 as
+    #: ``mpi_launcher_missing`` (bug-sweep 2026-07-11 #34).
+    exit_code_sufficient: bool = False
 
 
 CATALOG: list[FailureSignature] = [
@@ -59,6 +77,8 @@ CATALOG: list[FailureSignature] = [
         # the campus user got bumped by higher-priority work, not
         # failed. The harness should resubmit cleanly.
         exit_code=130,
+        # 130 = the dispatcher's SIGTERM trap; nothing else exits 130 here.
+        exit_code_sufficient=True,
         suggested_fix={"action": "resubmit-preempted"},
         priority=100,
     ),
@@ -79,6 +99,8 @@ CATALOG: list[FailureSignature] = [
             r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I
         ),
         exit_code=137,
+        # 137 = 128 + SIGKILL(9), the kernel OOM-killer's signature.
+        exit_code_sufficient=True,
         suggested_fix={"action": "increase-mem", "factor": 1.5},
         priority=100,
     ),
@@ -102,6 +124,9 @@ CATALOG: list[FailureSignature] = [
             re.I,
         ),
         exit_code=271,
+        # 271 = SGE's h_rt walltime-kill exit code (128 + 143-ish qmaster
+        # enforcement); a scheduler-specific walltime signature.
+        exit_code_sufficient=True,
         suggested_fix={"action": "increase-walltime", "factor": 1.5},
         priority=100,
     ),
@@ -347,7 +372,146 @@ CATALOG: list[FailureSignature] = [
         },
         priority=80,
     ),
+    # ── cluster env-init failures (notebook-audit Addendum 10, item 15) ──────
+    # The contentless env-init failure both Grid Engine and Lmod emit when a
+    # task's environment could not be set up — the tail names NO cause, so the
+    # generic "check the stderr" remediation punts at exactly the moment the
+    # stderr is empty. Run #11: HOFFMAN2 (UGE) surfaced the exact Grid Engine
+    # string on ONE ``rlin_tune`` array instance while its siblings ran
+    # healthily (quota clean, login-init + module-load green minutes later) —
+    # a transient, PER-TASK / PER-NODE flake, not a run-wide fault.
+    FailureSignature(
+        error_class="cluster_env_init",
+        # One conservative phrase anchors both dialects: Grid Engine (UGE/SGE)
+        # prints "Unable to initialize environment because of error" and Lmod
+        # emits the lookalike "Unable to initialize environment ..." on a
+        # module-init failure. Nothing benign carries this exact phrase, so the
+        # bare substring (case-insensitive) is safe and covers both without a
+        # scheduler-specific branch. Deliberately NOT anchored on the trailing
+        # "because of error" / a diagnosis token — the whole point is that the
+        # message is contentless, so we match the stable stem only.
+        stderr_pattern=re.compile(
+            r"Unable to initialize environment",
+            re.I,
+        ),
+        # Pattern-only: no reliable exit code (the job/task env-init failure is
+        # surfaced in the log, not a distinct scheduler exit), so this never
+        # fires on exit code alone.
+        exit_code=None,
+        suggested_fix={
+            # ``retry-task`` is the retry-forward signal the structure carries
+            # (the ``action`` string IS the retry marker — cf. preempted's
+            # ``resubmit-preempted`` and node_failure's ``retry-on-different-node``):
+            # a transient per-node env-init flake usually clears on a retry, and
+            # the reduce-side status map routes ``cluster_env_init`` to the
+            # ``node_failure`` infra category rather than a code-bug escalation.
+            "action": "retry-task",
+            "hint": (
+                "Grid Engine / Lmod could not initialize the task's environment "
+                "and the log tail names no cause. This is typically a transient, "
+                "PER-TASK / PER-NODE flake — sibling array tasks are unaffected — "
+                "so RETRY the task/op first. If it recurs, check in priority "
+                "order: (1) a transient scheduler-or-module flake on that exec "
+                "node, (2) home-directory quota exhaustion (a full $HOME breaks "
+                "login-init), (3) a stale module cache (clear the Lmod cache / "
+                "`module --purge` and retry), (4) a broken module or line in the "
+                "login init (.bashrc / .modulerc / a module load in the profile). "
+                "Which scheduler + task the failure landed on is carried in "
+                "failure_features (the remote host is surfaced when the log or a "
+                "scheduler probe names it)."
+            ),
+        },
+        # Same band as node_failure (90): a transient infra class that outranks
+        # the bare-traceback fallback but sits below the exact-token config
+        # signatures (95). No pattern overlap with any other row, so the tie is
+        # moot — list order is deterministic regardless.
+        priority=90,
+    ),
 ]
+
+
+# ── conda-run blindness: a SILENT-SUCCESS signature (NOT a CATALOG row) ──────
+# Documented in the demo-env lore, prose-only until now: on some clusters
+# ``conda run -n <env> ...`` under NON-INTERACTIVE SSH produces SILENTLY EMPTY
+# stdout — conda was never initialized, so the wrapper exits 0 having run
+# nothing. Indistinguishable from a working no-op, so stale/absent results get
+# misread as success (cost: a whole harvest of "nothing changed" read as done).
+#
+# SEAM NOTE — why this deliberately does NOT ride ``classify()`` / ``CATALOG``:
+# ``classify(stderr, exit_code)`` sees ONLY stderr and the exit code. This class
+# has EMPTY stderr and ``exit_code == 0`` (a "success"); its entire
+# discriminating signal is the COMBINATION {the command was ``conda run``-shaped,
+# stdout was empty, rc was 0} — none of which the failure seam can observe.
+# Forcing a ``stderr_pattern``/``exit_code`` catalog row would either never fire
+# (empty stderr, rc 0) or fire on every clean no-op. So the signature lives at
+# the closest seam that CAN see all three features: a dedicated matcher a caller
+# invokes with the command text + stdout + rc it just observed. Keeping it out of
+# ``CATALOG`` also keeps ``CLASSIFIER_CATEGORIES`` / ``FailureCategory`` /
+# ``FailureCategoryResubmittable`` untouched — this is not a resubmittable
+# scheduler failure class, and ``retry_worthy`` is False by construction.
+#
+# GAP disclosed honestly: no EXISTING failure-exit seam carries a rc=0
+# empty-stdout "success" to classify (the failure path only runs on non-success),
+# so wiring a live consumer is a caller's future concern. This module supplies
+# the classifier so the detection lives in ONE place the day a caller (a
+# ``conda run`` ssh op that got empty output) wants to ask "was this blindness?".
+CONDA_RUN_BLIND_CLASS = "conda_run_blind"
+
+_CONDA_RUN_RE = re.compile(r"\bconda\s+run\b", re.I)
+
+
+def classify_conda_run_blind(
+    *,
+    command: str | None,
+    stdout: str | None,
+    exit_code: int | None,
+) -> dict[str, Any] | None:
+    """Detect the conda-run-blindness silent-success signature.
+
+    Returns the ``{error_class, suggested_fix, matched_pattern}`` triple (the
+    same shape :func:`classify` returns) ONLY when ALL three hold:
+
+    * *command* is ``conda run``-shaped (``conda run ...``),
+    * *stdout* is empty or whitespace-only,
+    * *exit_code* is 0 or ``None`` (the wrapper "succeeded" having produced
+      nothing; an unknown rc is not treated as a non-zero failure).
+
+    Returns ``None`` otherwise — a legitimately-empty NON-conda command, or a
+    real ``conda run`` that failed with a non-zero rc, is never mis-tagged.
+
+    ``retry_worthy=False``: re-running the same non-interactive ``conda run``
+    reproduces the blindness. The remediation names, in priority order, the
+    DIRECT env-python invocation (``~/.conda/envs/<env>/bin/python -m ...``),
+    which needs no conda init at all.
+    """
+    if not _CONDA_RUN_RE.search(command or ""):
+        return None
+    if (stdout or "").strip():
+        return None
+    if exit_code is not None and int(exit_code) != 0:
+        return None
+    return {
+        "error_class": CONDA_RUN_BLIND_CLASS,
+        "suggested_fix": {
+            "action": "use-direct-env-python",
+            "retry_worthy": False,
+            "hint": (
+                "`conda run -n <env> ...` produced EMPTY stdout with exit 0 under "
+                "non-interactive SSH — conda was never initialized, so the wrapper "
+                "ran NOTHING and still 'succeeded'. This is indistinguishable from a "
+                "working no-op, so absent/stale results get misread as done. Do NOT "
+                "retry (a non-interactive `conda run` reproduces it). In priority "
+                "order: (1) invoke the env's python DIRECTLY — "
+                "`~/.conda/envs/<env>/bin/python -m <module> ...` (also "
+                "`~/.conda/envs/<env>/bin/<tool>`) — which needs no conda init; "
+                "(2) if a conda wrapper is unavoidable, SOURCE conda first "
+                "(`source <conda_source> && conda activate <env>`) in the same "
+                "non-interactive shell before the command; (3) verify the env name "
+                "and that `~/.conda/envs/<env>/bin/python` actually exists."
+            ),
+        },
+        "matched_pattern": _CONDA_RUN_RE.pattern,
+    }
 
 
 # Every ``error_class`` the catalog (and thus ``classify()``) can emit — the
@@ -368,9 +532,14 @@ def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:
     *exit_code* is only used as a tiebreaker --- a ``stderr_pattern``
     match alone is sufficient, since exit codes are noisy on schedulers
     that wrap them (qsub returns 0 even when the inner job dies). The
-    exit-code-alone path only fires for priority>=90 entries (resource
-    errors) to avoid mis-classifying a generic exit=1 as a python
-    traceback.
+    exit-code-alone path fires ONLY for rows flagged
+    ``exit_code_sufficient`` — the three whose code is genuinely
+    discriminating (130 preempted, 137 system_oom, 271 walltime). Rows
+    carrying a GENERIC code that many unrelated failures share (the
+    priority-95 empirical-config signatures on rc=2 / rc=127) are
+    excluded, so a pattern-less rc=2 is NOT misdiagnosed ``uv_not_on_path``
+    and a bare rc=127 is NOT misdiagnosed ``mpi_launcher_missing``
+    (bug-sweep 2026-07-11 #34).
     """
     text = stderr or ""
     sorted_catalog = sorted(CATALOG, key=lambda s: -s.priority)
@@ -391,7 +560,7 @@ def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:
             and exit_code is not None
             and int(exit_code) == int(sig.exit_code)
         )
-        if exit_hit and sig.priority >= 90:
+        if exit_hit and sig.exit_code_sufficient:
             return {
                 "error_class": sig.error_class,
                 "suggested_fix": dict(sig.suggested_fix),

@@ -18,10 +18,15 @@ no single lint that holds them, so — the drift-guard philosophy of
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOC = _REPO_ROOT / "docs/internals/harness-contract.md"
+
+# The doc's SemVer header line — ``Contract version: 1.0.0`` (D-K6). One capture
+# group is the version; the three-way pin below anchors it to the code constant.
+_DOC_VERSION_RE = re.compile(r"^Contract version:\s*(\d+\.\d+\.\d+)\s*$", re.MULTILINE)
 
 
 def _doc_text() -> str:
@@ -101,6 +106,56 @@ def test_doc_pins_the_frozen_write_api_schema() -> None:
     assert "fail-open" in text.lower(), "fail-open (error → clean no-op) must be pinned"
 
 
+def test_doc_pins_the_attributed_utterance_log() -> None:
+    """Capability 1 is the ATTRIBUTED utterance log (multi-human MT8): the harness
+    MAY write through an actor-suffixed locator, attribution rides the LOCATOR
+    (never a fourth record field — the frozen 3-field schema is UNCHANGED, pinned
+    by ``test_doc_pins_the_frozen_write_api_schema``), the actor is
+    harness-asserted / never verified (same trust limit as the log itself), and a
+    v1-conforming UNATTRIBUTED writer DEGRADES to the friction tier under >1
+    declared actors — stated in the contract's degrades-when-absent form."""
+    text = _doc_text()
+    lower = text.lower()
+    # (a) capability 1 renamed the attributed utterance log.
+    assert "attributed utterance log" in lower, (
+        "capability 1 must be named the attributed utterance log"
+    )
+    # (b) the additive locator sentence — the suffixed form beside the default,
+    # slug-validated, union-read, cited against the landed state/utterances.py symbols.
+    assert "utterances.<actor>.jsonl" in text, (
+        "the actor-suffixed locator utterances.<actor>.jsonl must be pinned"
+    )
+    assert "read_utterances(experiment_dir, actor=<slug>)" in text, (
+        "the actor-scoped read symbol must be cited"
+    )
+    assert "validate_tag" in text, (
+        "the shared-tag-class slug validation (state/scopes.py::validate_tag) must be cited"
+    )
+    assert "rides the locator, never a fourth" in lower, (
+        "attribution rides the locator, not the frozen record schema, must be pinned"
+    )
+    # (c) the trust-limit extension: attributed != verified, impersonation out of scope.
+    assert "harness-asserted" in lower and "attributed ≠ verified" in lower, (
+        "the harness-asserted (attributed != verified) trust limit must be extended"
+    )
+    # (d) the degradation sentence, in the degrades-when-absent form.
+    assert "attribution-conditional" in lower, (
+        "the full-strength tier becoming attribution-conditional must be pinned"
+    )
+    assert "unattributed" in lower and "friction tier" in lower, (
+        "an unattributed conforming writer degrading to the friction tier under "
+        ">1 declared actors must be stated in degrades-when-absent form"
+    )
+    assert "declared-multi-actor" in lower or "more than one actor" in lower, (
+        "the >1-declared-actors degradation condition must be pinned"
+    )
+    # (e) the auth boundary rides the same trust limit (anti-vendor-lockout T2).
+    assert "ANTHROPIC_API_KEY" in text and "harness-side concern" in lower, (
+        "the auth boundary (provider credentials are harness-side, out of scope "
+        "exactly as disabling a capture hook) must be pinned"
+    )
+
+
 def test_utterances_all_carries_the_api_names() -> None:
     """The harness imports these six: writer, reader, locator, cap, and the
     two forms of the provenance filter (the ONE public injection-filter
@@ -157,19 +212,26 @@ def test_doc_pins_capability_negotiation() -> None:
     assert "declared == detected == behaved" in text, (
         "the conformance-kit alignment claim must be pinned"
     )
+    assert "detection asymmetry" in text.lower() and "BY BEHAVIOR" in text, (
+        "the D-K3 rule must be pinned: needles detect OUR reference providers; "
+        "a foreign harness is detected by behavior (the kit verdict)"
+    )
 
 
-def test_doc_pins_mcp_elicitation_specified_not_implemented() -> None:
-    """MCP elicitation is a SECOND capability-1 channel, specified but not
-    implemented: the response filters through the same write API, the clicked-
-    option hazard applies (only free-text lands), the prompt MUST be code-rendered
-    (never LLM-authored), the honest flag records it, and it degrades to the hook
-    path. Client support is stated UNKNOWN, not asserted."""
+def test_doc_pins_mcp_elicitation_implemented() -> None:
+    """MCP elicitation is a SECOND capability-1 channel, IMPLEMENTED by reference
+    (2026-07-08): the doc cites the real pump/handler symbols, the clicked-option
+    hazard applies (only free-text lands), the prompt MUST be code-rendered
+    (never LLM-authored), the honest server flag records it, client support is
+    per-session negotiation, and absent capability degrades to the hook path."""
     text = _doc_text()
     lower = text.lower()
     assert "elicitation" in lower, "the elicitation channel must be named"
-    assert "specified, not implemented" in lower or "specified but not implemented" in lower, (
-        "elicitation must be recorded as specified-not-implemented"
+    assert "specified, not implemented" not in lower, (
+        "the specified-not-implemented posture retired when the pump landed"
+    )
+    assert "specified but not implemented" not in lower, (
+        "the specified-not-implemented posture retired when the pump landed"
     )
     assert "clicked-option hazard" in lower or "clicked option" in lower, (
         "the clicked-option hazard (only free-text qualifies) must be pinned"
@@ -177,7 +239,15 @@ def test_doc_pins_mcp_elicitation_specified_not_implemented() -> None:
     assert "code-rendered" in lower, (
         "the code-rendered (never LLM-authored) prompt provenance rule must be pinned"
     )
-    assert "ELICITATION_SUPPORTED" in text, "the honest server capability flag must be named"
+    assert "ELICITATION_SERVER_IMPLEMENTED" in text, (
+        "the honest server capability flag must be named"
+    )
+    assert "_request_from_client" in text, (
+        "the implemented-by-reference citation of the wait primitive must be present"
+    )
+    assert "_render_elicitation_prompt" in text, "the code-rendered prompt symbol must be cited"
+    assert "_elicit_then_retry" in text, "the retry-once firing symbol must be cited"
+    assert "per-session" in lower, "the per-session client-negotiation posture must be pinned"
     assert "degrades to the hook path" in lower, "the degrade-to-hook-path fallback must be pinned"
 
 
@@ -198,18 +268,77 @@ def test_doc_pins_capability_2_inspect_act_split() -> None:
     )
 
 
-def test_mcp_server_elicitation_flag_is_false() -> None:
-    """The elicitation channel is not implemented: the server capability flag the
-    harness-capabilities verb reads is False (hand-rolled synchronous JSON-RPC, no
-    server-initiated request path). Flipping it True must be a deliberate act that
-    also lands the bidirectional path — this pins the honest default."""
+def test_mcp_server_elicitation_flag_is_true_and_backed() -> None:
+    """The elicitation channel is implemented: the server capability flag the
+    harness-capabilities verb reads is True, and — the honesty condition for the
+    flip — the bidirectional machinery it asserts actually exists on the server
+    class (the wait primitive, the code-rendered prompt, the retry-once firing
+    site). The flag may never outrun the code."""
     from hpc_agent._kernel.extension import mcp_server
 
-    assert mcp_server.ELICITATION_SUPPORTED is False, (
-        "ELICITATION_SUPPORTED must be False until the bidirectional server-request "
-        "path AND the code-rendered elicitation prompt both land"
+    assert mcp_server.ELICITATION_SERVER_IMPLEMENTED is True, (
+        "ELICITATION_SERVER_IMPLEMENTED flipped True with the bidirectional pump; "
+        "it must stay honest — False again only if the pump is removed"
     )
-    assert "ELICITATION_SUPPORTED" in mcp_server.__all__
+    assert "ELICITATION_SERVER_IMPLEMENTED" in mcp_server.__all__
+    assert hasattr(mcp_server.McpServer, "_request_from_client"), (
+        "the flag asserts a wait primitive that must exist"
+    )
+    assert hasattr(mcp_server.McpServer, "_elicit_then_retry"), (
+        "the flag asserts a firing site that must exist"
+    )
+    assert callable(mcp_server._render_elicitation_prompt), (
+        "the flag asserts a code-rendered prompt builder that must exist"
+    )
+
+
+def test_contract_version_stamp_is_the_three_way_agreement() -> None:
+    """K10 version-stamp pin (D-K6, enforcement map "Doc stamp == reported
+    contract version"). The harness contract's SemVer has ONE home —
+    ``ops/harness_capabilities.py::HARNESS_CONTRACT_VERSION`` — and three
+    surfaces MUST agree with it, or a publish ships a lying stamp:
+
+    1. the doc's ``Contract version: X.Y.Z`` header line;
+    2. the constant the ``harness-capabilities`` verb reports;
+    3. the conformance kit's stamped verdict version
+       (``hpc_agent.conformance.report.CONTRACT_VERSION``, re-pointed at the
+       constant in K10).
+
+    The verb's RESULT carries the constant on ``harness_contract_version`` — the
+    additive field E3-a left open — so a negotiating harness reads the same
+    version the doc prints and the kit stamps.
+    """
+    from hpc_agent.conformance.report import CONTRACT_VERSION
+    from hpc_agent.ops.harness_capabilities import (
+        HARNESS_CONTRACT_VERSION,
+        harness_capabilities,
+    )
+
+    match = _DOC_VERSION_RE.search(_doc_text())
+    assert match is not None, (
+        "docs/internals/harness-contract.md must carry a 'Contract version: X.Y.Z' line"
+    )
+    doc_version = match.group(1)
+
+    # SemVer shape (a malformed constant would let the regex above pass a garbage
+    # stamp through unnoticed).
+    assert re.fullmatch(r"\d+\.\d+\.\d+", HARNESS_CONTRACT_VERSION), (
+        f"HARNESS_CONTRACT_VERSION must be SemVer, got {HARNESS_CONTRACT_VERSION!r}"
+    )
+
+    # The three-way agreement.
+    assert doc_version == HARNESS_CONTRACT_VERSION == CONTRACT_VERSION, (
+        "the harness-contract.md version line, HARNESS_CONTRACT_VERSION, and the "
+        "kit report's CONTRACT_VERSION must all agree: "
+        f"doc={doc_version!r} constant={HARNESS_CONTRACT_VERSION!r} "
+        f"kit={CONTRACT_VERSION!r}"
+    )
+
+    # The verb reports the SAME constant on its result (the E3-a-reserved field).
+    result = harness_capabilities(experiment_dir=_REPO_ROOT)
+    assert result.harness_contract_version == HARNESS_CONTRACT_VERSION, (
+        "the harness-capabilities result must stamp harness_contract_version from the ONE constant"
+    )
 
 
 def test_no_utterance_writing_verb_in_registry() -> None:

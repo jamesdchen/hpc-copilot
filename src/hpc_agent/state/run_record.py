@@ -461,7 +461,7 @@ def _locked(target: Path) -> Iterator[None]:
     without ``fcntl`` (e.g. Windows). The lock file is created on demand
     and never deleted — flock semantics handle reuse.
     """
-    with advisory_flock(_lock_path(target)):
+    with advisory_flock(_lock_path(target), timeout_sec=120.0):
         yield
 
 

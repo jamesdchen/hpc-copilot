@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_lint.output.json",
   "title": "notebook-lint output data",
-  "description": "The lint report — a shape T5/T9/the skill consume opaquely.\n\n* ``findings`` — every reported violation (empty = clean).\n* ``unverifiable_paths`` — computed path expressions that could not be\n  checked (the honest executes-live gap).\n* ``linked_sources`` — imports resolved under ``source_roots``, with hashes.",
+  "description": "The lint report — a shape T5/T9/the skill consume opaquely.\n\n* ``findings`` — every reported violation (empty = clean).\n* ``unverifiable_paths`` — computed path expressions that could not be\n  checked (the honest executes-live gap).\n* ``linked_sources`` — imports resolved under ``source_roots``, with hashes.\n* ``declared_outputs`` — path literals under a declared ``output_root``\n  (write targets, exempt from the executes-live flag — reported, never\n  flagged).\n* ``reader_call_echo`` — the opaque ``{pack, version, sha}`` echo carried\n  verbatim from the input WHEN a caller-declared reader match surfaced a\n  record (a finding, an unverifiable gap, or a declared output attributable\n  to a matched reader call) AND the caller supplied one; else ``None``. Core\n  copies it, never interprets it — it is the provenance of the pack whose\n  vocabulary drove the record.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -26,9 +26,56 @@
       },
       "title": "Linked Sources",
       "type": "array"
+    },
+    "declared_outputs": {
+      "items": {
+        "$ref": "#/$defs/DeclaredOutput"
+      },
+      "title": "Declared Outputs",
+      "type": "array"
+    },
+    "reader_call_echo": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reader Call Echo"
     }
   },
   "$defs": {
+    "DeclaredOutput": {
+      "additionalProperties": false,
+      "description": "One path literal recognised as a WRITE target under a declared ``output_root``.\n\nReported, never flagged: an output does not exist before the run, so the\nexecutes-live not-exists check is exempt for it. ``section`` is the source\nsection slug the literal sits in (``None`` for the module preamble).",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "notebook-lint declared output",
+      "type": "object"
+    },
     "LinkedSource": {
       "additionalProperties": false,
       "description": "One import that resolved to a file under a caller ``source_root``.\n\nJudges import ORIGIN IDENTITY only: ``module`` is the imported dotted name,\n``file`` is the resolved file's path (relative to the experiment dir when it\nis under it, else absolute), and ``module_sha`` is\n:func:`hpc_agent.state.audit_source.sha256_normalized` over the file text —\nthe SAME hashing primitive T9 recomputes to drift-check the link at sign-off.",
@@ -62,7 +109,8 @@
           "enum": [
             "structural_completeness",
             "executes_live",
-            "linked_sources"
+            "linked_sources",
+            "template_import_shadowed"
           ],
           "title": "Rule",
           "type": "string"

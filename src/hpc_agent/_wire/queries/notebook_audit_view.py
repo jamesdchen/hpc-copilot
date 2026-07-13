@@ -86,6 +86,15 @@ class NotebookAuditViewSpec(BaseModel):
             "uses the recorded roots; an explicit value is a PREVIEW override."
         ),
     )
+    output_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque WRITE-target roots for the canonical lint recompute: a path "
+            "literal under one is a declared output, exempt from the "
+            "executes-live not-exists flag. Default (null) uses the recorded "
+            "roots; an explicit value is a PREVIEW override."
+        ),
+    )
     lint_findings: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(
@@ -121,6 +130,22 @@ class NotebookAuditViewSpec(BaseModel):
             "view_sha; per-section view_shas are unaffected."
         ),
     )
+    full: bool = Field(
+        default=False,
+        description=(
+            "Payload selector (run-#12 finding 12, B1). Default (false) returns the "
+            "DIGEST `markdown` — the per-section metadata (slug, tier, "
+            "classification, sha12s, verdict/diff COUNTS), the render-file pointers, "
+            "and the next-actions footer — with NO diff/assertion/flag body bytes. "
+            "Under popup-primary the bodies live in the content-addressed render "
+            "files (`render_path`) and the sign-off popup, so the agent needs the "
+            "digest + pointers only. Pass `full: true` to get the whole-body "
+            "`markdown` render (~11k tokens) for a harness that still MODEL-RELAYS "
+            "the audit. The per-section view_shas and `render_path`s are identical "
+            "either way — `full` selects only how much of the render the RESPONSE "
+            "carries, never what the human signs."
+        ),
+    )
 
 
 class NotebookViewAssertion(BaseModel):
@@ -137,10 +162,14 @@ class NotebookViewAssertion(BaseModel):
 class NotebookSectionView(BaseModel):
     """The deterministic projection of one SOURCE section (the primary object).
 
-    ``view_sha`` is the per-section sha a sign-off binds (D5). ``diff`` is the
-    stdlib unified diff of the normalized template → source section (empty ⇔
-    ``inherited``). ``lint_flags`` embeds the caller's findings for this section
-    OPAQUELY.
+    ``view_sha`` is the per-section sha a sign-off binds (D5). ``lint_flags``
+    embeds the caller's findings for this section OPAQUELY.
+
+    The unified diff-from-template is NOT carried on the wire (run-#12 finding 12,
+    B1): it was a pure duplicate of the diff already inside the ``markdown`` render
+    and the content-addressed render file (``render_path``). It stays derivable —
+    the render file and the ``full: true`` markdown both carry it — so the wire
+    shape ships the diff bytes zero times, never twice.
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-audit-view section")
@@ -153,7 +182,6 @@ class NotebookSectionView(BaseModel):
     section_sha: str
     # The template section sha this slug matched, or null when added.
     template_section_sha: str | None = None
-    diff: list[str] = Field(default_factory=list)
     assertions: list[NotebookViewAssertion] = Field(default_factory=list)
     # Opaque findings attributed to this section, in caller order.
     lint_flags: list[dict[str, Any]] = Field(default_factory=list)
@@ -215,7 +243,13 @@ class NotebookAuditViewResult(BaseModel):
     )
     markdown: str = Field(
         description=(
-            "The code-rendered markdown projection of the same fields, for VERBATIM "
-            "relay. Same view → byte-identical markdown."
+            "The code-rendered markdown projection for VERBATIM relay. By DEFAULT "
+            "(spec `full: false`) this is the DIGEST — per-section metadata (slug, "
+            "tier, classification, sha12s, verdict/diff COUNTS), render-file "
+            "pointers, and the next-actions footer, with NO diff/assertion/flag "
+            "body bytes (run-#12 finding 12, B1: the bodies live in the render "
+            "files + sign-off popup under popup-primary). Pass spec `full: true` "
+            "for the whole-body render. Same view + same `full` → byte-identical "
+            "markdown."
         ),
     )

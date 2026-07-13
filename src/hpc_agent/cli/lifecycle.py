@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent.cli._helpers import EXIT_OK, _ok
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.state.journal import load_run
@@ -50,7 +51,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     updated = record_status(
         args.experiment_dir,
         args.run_id,
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         job_ids=record.job_ids,
         job_name=record.job_name,

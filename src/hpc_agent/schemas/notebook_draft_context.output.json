@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_draft_context.output.json",
+  "title": "notebook-draft-context output data",
+  "description": "The drafting projection — structured result plus its trusted-display render.\n\n``markdown`` is the code-authored, deterministic render the drafting agent\nreads and the skill relays VERBATIM (same inputs => byte-identical bytes).\nEvery other field is the structured half the same render is built from.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "template_sections": {
+      "items": {
+        "$ref": "#/$defs/TemplateSection"
+      },
+      "title": "Template Sections",
+      "type": "array"
+    },
+    "resolved_engines": {
+      "items": {
+        "$ref": "#/$defs/ResolvedEngine"
+      },
+      "title": "Resolved Engines",
+      "type": "array"
+    },
+    "call_sites": {
+      "items": {
+        "$ref": "#/$defs/EngineCallSites"
+      },
+      "title": "Call Sites",
+      "type": "array"
+    },
+    "inventory": {
+      "items": {
+        "$ref": "#/$defs/InventoryListing"
+      },
+      "title": "Inventory",
+      "type": "array"
+    },
+    "source_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Roots",
+      "type": "array"
+    },
+    "input_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Roots",
+      "type": "array"
+    },
+    "markdown": {
+      "default": "",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "EngineCallSites": {
+      "additionalProperties": false,
+      "description": "Name-match ``Call`` sites for one engine across ``source_roots``.\n\n``sites`` are ``path:lineno`` strings (AST identity — a call whose function\nname matches, NOT type resolution). ``count`` is the total found; ``sites``\nis capped at ``cap`` and ``truncated`` discloses when more existed (the\nno-silent-caps rule).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "sites": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sites",
+          "type": "array"
+        },
+        "count": {
+          "default": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "cap": {
+          "title": "Cap",
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "cap"
+      ],
+      "title": "draft-context engine call sites",
+      "type": "object"
+    },
+    "InventoryEntry": {
+      "additionalProperties": false,
+      "description": "One inventoried file: its experiment-relative path, sha12, and size.\n\n``cited`` is true when the sha/size came from ``.hpc/data_manifest.json``\n(the reuse seam) rather than from re-hashing the file here.",
+      "properties": {
+        "relpath": {
+          "title": "Relpath",
+          "type": "string"
+        },
+        "sha12": {
+          "title": "Sha12",
+          "type": "string"
+        },
+        "size": {
+          "title": "Size",
+          "type": "integer"
+        },
+        "cited": {
+          "default": false,
+          "title": "Cited",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "relpath",
+        "sha12",
+        "size"
+      ],
+      "title": "draft-context inventory entry",
+      "type": "object"
+    },
+    "InventoryListing": {
+      "additionalProperties": false,
+      "description": "The files found under one declared root.\n\n``kind`` records which declaration the root came from (``input`` /\n``inventory``) — opaque provenance, never a semantic label. ``manifest_cited``\nis true when at least one entry was cited from the data manifest.",
+      "properties": {
+        "root": {
+          "title": "Root",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/InventoryEntry"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "manifest_cited": {
+          "default": false,
+          "title": "Manifest Cited",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "root",
+        "kind"
+      ],
+      "title": "draft-context inventory listing",
+      "type": "object"
+    },
+    "ResolvedEngine": {
+      "additionalProperties": false,
+      "description": "One name the template imports, resolved to its defining file (or not).\n\n``resolved`` is false for an import that does not resolve under any\n``source_root`` (stdlib / site-packages / external) — listed honestly, never\nsilently dropped. When resolved to a ``from M import symbol`` origin, the\n``symbol_lineno`` / ``signature`` / ``doc`` locate the def/class in ``file``;\na plain ``import M`` has no single symbol (those stay null, ``doc`` carries\nthe module docstring's first line). ``module_sha`` is\n:func:`hpc_agent.state.audit_source.sha256_normalized` of the file — the same\nhash ``notebook-lint`` reports.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "module": {
+          "title": "Module",
+          "type": "string"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        },
+        "resolved": {
+          "default": false,
+          "title": "Resolved",
+          "type": "boolean"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "symbol_lineno": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol Lineno"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature"
+        },
+        "doc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doc"
+        },
+        "module_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Module Sha"
+        },
+        "declared": {
+          "default": false,
+          "title": "Declared",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "module"
+      ],
+      "title": "draft-context resolved engine",
+      "type": "object"
+    },
+    "TemplateSection": {
+      "additionalProperties": false,
+      "description": "One template section echoed verbatim: its slug + raw cell prose.",
+      "properties": {
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "source"
+      ],
+      "title": "draft-context template section",
+      "type": "object"
+    }
+  }
+}

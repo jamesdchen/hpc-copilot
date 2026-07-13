@@ -44,6 +44,9 @@ def _run(
     *,
     input_roots: list[str] | None = None,
     source_roots: list[str] | None = None,
+    output_roots: list[str] | None = None,
+    reader_calls: list[str] | None = None,
+    reader_calls_echo: dict | None = None,
 ) -> NotebookLintResult:
     (experiment_dir / "source.py").write_text(source, encoding="utf-8")
     (experiment_dir / "template.py").write_text(template, encoding="utf-8")
@@ -52,6 +55,9 @@ def _run(
         template="template.py",
         input_roots=input_roots or [],
         source_roots=source_roots or [],
+        output_roots=output_roots or [],
+        reader_calls=reader_calls or [],
+        reader_calls_echo=reader_calls_echo,
     )
     return notebook_lint(experiment_dir=experiment_dir, spec=spec)
 
@@ -179,6 +185,42 @@ LABEL = "hello world"
     assert result.unverifiable_paths == []
 
 
+def test_executes_live_docstring_prose_not_flagged(tmp_path: Path) -> None:
+    # Run-#12 false-positive class: module + class docstrings whose PROSE carries
+    # separators ("qlike / mse") are documentation, never path literals — and a
+    # multi-line string is never a path regardless of position.
+    source = '''\
+"""causal_tune — metrics: qlike / mse / rmse / mae spread.
+
+MACHINERY: src.backtest.executor.run_executor with per-bucket guards.
+"""
+
+# %%
+# hpc-audit-section: load-data
+class Roller:
+    """Rolling model / winablate_r1 machinery (single-line docstring)."""
+
+    def solve(self):
+        """fit / predict per bar."""
+        return 1
+'''
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"])
+    assert _rules(result, "executes_live") == []
+    assert result.unverifiable_paths == []
+
+
+def test_executes_live_multiline_non_docstring_literal_not_flagged(tmp_path: Path) -> None:
+    # A multi-line string ANYWHERE is prose (no path carries a newline).
+    source = '''\
+# %%
+# hpc-audit-section: load-data
+BANNER = """spread: a / b / c
+over two lines"""
+'''
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"])
+    assert _rules(result, "executes_live") == []
+
+
 def test_executes_live_computed_fstring_is_unverifiable(tmp_path: Path) -> None:
     source = """\
 # %%
@@ -204,6 +246,240 @@ DATA = "inputs/" + name
     assert any("inputs/" in p for p in result.unverifiable_paths)
 
 
+def test_executes_live_output_literal_is_declared_not_flagged(tmp_path: Path) -> None:
+    # A missing path literal UNDER a declared output_root is a WRITE target —
+    # exempt from the not-exists flag, reported in declared_outputs instead.
+    source = """\
+# %%
+# hpc-audit-section: report
+OUT = "outputs/summary/table.json"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], output_roots=["outputs"])
+    assert _rules(result, "executes_live") == []
+    assert [(d.path, d.section) for d in result.declared_outputs] == [
+        ("outputs/summary/table.json", "report")
+    ]
+
+
+def test_executes_live_missing_literal_outside_output_roots_still_flags(tmp_path: Path) -> None:
+    # A literal under NO root keeps today's behavior: declared output_roots do
+    # not exempt a missing literal that sits outside them.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+DATA = "inputs/missing.csv"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], output_roots=["outputs"])
+    findings = _rules(result, "executes_live")
+    assert len(findings) == 1
+    assert findings[0].evidence["path"] == "inputs/missing.csv"
+    assert result.declared_outputs == []
+
+
+def test_executes_live_existing_input_literal_not_a_declared_output(tmp_path: Path) -> None:
+    # An existing input literal passes as before and never lands in
+    # declared_outputs (it is under the input root, not an output root).
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "inputs" / "data.csv").write_text("x", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: load-data
+DATA = "inputs/data.csv"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], output_roots=["outputs"])
+    assert _rules(result, "executes_live") == []
+    assert result.declared_outputs == []
+
+
+def test_executes_live_existing_literal_under_output_root_is_declared(tmp_path: Path) -> None:
+    # Existence does not change the classification: a literal under an
+    # output_root is a declared output whether or not the file exists yet.
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "table.json").write_text("{}", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: report
+OUT = "outputs/table.json"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, output_roots=["outputs"])
+    assert _rules(result, "executes_live") == []
+    assert [(d.path, d.section) for d in result.declared_outputs] == [
+        ("outputs/table.json", "report")
+    ]
+
+
+# ── rule 2 (S1): caller-declared reader_calls ────────────────────────────────
+#
+# Toy vocabulary only — NEVER a real domain's reader (the S1 examples posture).
+_READERS = ["widgets.load_widget"]
+_ECHO = {"pack": "toy-widgets", "version": "1.2.0", "sha": "deadbeef"}
+
+
+def test_reader_call_missing_literal_arg_fires(tmp_path: Path) -> None:
+    # A bare non-path-shaped literal ("widget_a": no separator, resolves under no
+    # root) is INVISIBLE to the standalone rule — but a declared reader call over
+    # it gets the exists-under-roots check and fires.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+W = widgets.load_widget("widget_a")
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=_READERS)
+    findings = _rules(result, "executes_live")
+    assert len(findings) == 1
+    assert findings[0].section == "load-data"
+    assert findings[0].evidence["path"] == "widget_a"
+    assert findings[0].evidence["reader_call"] == "widgets.load_widget"
+
+
+def test_reader_call_existing_literal_arg_passes(tmp_path: Path) -> None:
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "inputs" / "widget_a").write_text("x", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: load-data
+W = widgets.load_widget("widget_a")
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=_READERS)
+    assert _rules(result, "executes_live") == []
+
+
+def test_reader_call_non_literal_arg_is_unverifiable(tmp_path: Path) -> None:
+    source = """\
+# %%
+# hpc-audit-section: load-data
+name = "widget_a"
+W = widgets.load_widget(name)
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=_READERS)
+    assert _rules(result, "executes_live") == []
+    assert result.unverifiable_paths == ["name"]
+
+
+def test_reader_call_name_identity_only_no_match_when_undeclared(tmp_path: Path) -> None:
+    # Without the declaration, the SAME source is byte-identical clean: the call
+    # arg is not path-shaped, so nothing fires and no echo is carried.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+W = widgets.load_widget("widget_a")
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"])
+    assert _rules(result, "executes_live") == []
+    assert result.reader_call_echo is None
+
+
+def test_reader_call_similar_name_does_not_match(tmp_path: Path) -> None:
+    # NAME IDENTITY over the WHOLE dotted chain: a plural attr and a differently
+    # rooted call both differ from "widgets.load_widget" → no match, no finding.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+A = widgets.load_widgets("widget_a")
+B = other.load_widget("widget_b")
+C = mod.widgets.load_widget("widget_c")
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=_READERS)
+    assert _rules(result, "executes_live") == []
+
+
+def test_reader_call_bare_name_matches_when_declared(tmp_path: Path) -> None:
+    # A bare (non-dotted) reader name matches an unqualified call by identity.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+W = load_widget("widget_a")
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=["load_widget"])
+    findings = _rules(result, "executes_live")
+    assert len(findings) == 1
+    assert findings[0].evidence["reader_call"] == "load_widget"
+
+
+def test_reader_call_attribute_without_call_is_ignored(tmp_path: Path) -> None:
+    # An attribute ACCESS that is not a call never matches (only ast.Call does).
+    source = """\
+# %%
+# hpc-audit-section: load-data
+f = widgets.load_widget
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=_READERS)
+    assert _rules(result, "executes_live") == []
+
+
+def test_reader_call_echo_carried_on_surfaced_finding(tmp_path: Path) -> None:
+    source = """\
+# %%
+# hpc-audit-section: load-data
+W = widgets.load_widget("widget_a")
+"""
+    result = _run(
+        tmp_path,
+        source,
+        _TEMPLATE,
+        input_roots=["inputs"],
+        reader_calls=_READERS,
+        reader_calls_echo=_ECHO,
+    )
+    assert _rules(result, "executes_live")  # a finding surfaced
+    assert result.reader_call_echo == _ECHO
+
+
+def test_reader_call_echo_absent_when_no_reader_match(tmp_path: Path) -> None:
+    # Echo supplied but no reader call present → nothing surfaced → no echo.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+X = 1
+"""
+    result = _run(
+        tmp_path,
+        source,
+        _TEMPLATE,
+        input_roots=["inputs"],
+        reader_calls=_READERS,
+        reader_calls_echo=_ECHO,
+    )
+    assert result.reader_call_echo is None
+
+
+def test_reader_call_literal_not_double_counted(tmp_path: Path) -> None:
+    # A separator-bearing reader arg ("inputs/missing.csv") is checked ONCE by the
+    # reader pass, not re-flagged by the standalone-literal pass.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+W = widgets.load_widget("inputs/missing.csv")
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], reader_calls=_READERS)
+    findings = _rules(result, "executes_live")
+    assert len(findings) == 1
+    assert findings[0].evidence["reader_call"] == "widgets.load_widget"
+
+
+def test_reader_call_output_arg_is_declared_not_flagged(tmp_path: Path) -> None:
+    # A reader arg under a declared output_root follows the existing exemption:
+    # reported in declared_outputs, never flagged (and it still carries the echo).
+    source = """\
+# %%
+# hpc-audit-section: report
+W = widgets.load_widget("outputs/table.json")
+"""
+    result = _run(
+        tmp_path,
+        source,
+        _TEMPLATE,
+        output_roots=["outputs"],
+        reader_calls=_READERS,
+        reader_calls_echo=_ECHO,
+    )
+    assert _rules(result, "executes_live") == []
+    assert [(d.path, d.section) for d in result.declared_outputs] == [
+        ("outputs/table.json", "report")
+    ]
+    assert result.reader_call_echo == _ECHO
+
+
 # ── rule 3: linked_sources ───────────────────────────────────────────────────
 
 
@@ -226,6 +502,25 @@ x = helper.helper()
     assert link.module_sha == sha256_normalized(helper_text)
 
 
+def test_linked_sources_resolves_root_prefixed_module(tmp_path: Path) -> None:
+    # Run-#12 finding 6a: repo-root-relative import style — `src.data.loading`
+    # under source_root `src` must resolve to src/data/loading.py, not the
+    # double-prefixed src/src/data/loading.py.
+    pkg = tmp_path / "src" / "data"
+    pkg.mkdir(parents=True)
+    engine = pkg / "loading.py"
+    engine.write_text("SUBGROUPS = []\n", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: load-data
+from src.data.loading import SUBGROUPS
+"""
+    result = _run(tmp_path, source, _TEMPLATE, source_roots=["src"])
+    files = [ls.file.replace("\\", "/") for ls in result.linked_sources]
+    assert files == ["src/data/loading.py"]
+    assert result.linked_sources[0].module_sha == sha256_normalized("SUBGROUPS = []\n")
+
+
 def test_linked_sources_ignores_non_resolvable_import(tmp_path: Path) -> None:
     source = """\
 # %%
@@ -236,6 +531,213 @@ import numpy as np
 """
     result = _run(tmp_path, source, _TEMPLATE, source_roots=["lib"])
     assert result.linked_sources == []
+
+
+# ── rule 4: template_import_shadowed ─────────────────────────────────────────
+
+# Template whose imports are the "declared engines" (toy names — never domain
+# vocabulary): a from-import, an aliased from-import, and a plain import.
+_SHADOW_TEMPLATE = """\
+# %%
+# hpc-audit-section: load-data
+from toy.engine import compute_stat, helper as calc
+DATA = "placeholder"
+
+# %%
+# hpc-audit-section: fit-model
+import toy.core
+MODEL = None
+
+# %%
+# hpc-audit-section: report
+RESULT = None
+"""
+
+
+def _shadow_findings(result: NotebookLintResult) -> list:
+    return _rules(result, "template_import_shadowed")
+
+
+def test_shadow_def_of_template_import_fires(tmp_path: Path) -> None:
+    source = """\
+# %%
+# hpc-audit-section: load-data
+from toy.engine import compute_stat, helper as calc
+DATA = "placeholder"
+
+# %%
+# hpc-audit-section: fit-model
+def compute_stat(x):
+    return x + 1
+
+# %%
+# hpc-audit-section: report
+RESULT = None
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    findings = _shadow_findings(result)
+    assert len(findings) == 1
+    assert findings[0].section == "fit-model"
+    assert findings[0].evidence["name"] == "compute_stat"
+    assert findings[0].evidence["template_slug"] == "load-data"
+    assert findings[0].evidence["kind"] == "def"
+
+
+def test_shadow_class_of_aliased_import_fires(tmp_path: Path) -> None:
+    # `helper as calc` binds "calc" — a class named calc shadows the alias.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+from toy.engine import compute_stat, helper as calc
+DATA = "placeholder"
+
+# %%
+# hpc-audit-section: report
+class calc:
+    pass
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    findings = _shadow_findings(result)
+    assert [(f.section, f.evidence["name"], f.evidence["kind"]) for f in findings] == [
+        ("report", "calc", "class")
+    ]
+
+
+def test_shadow_toplevel_assignment_fires(tmp_path: Path) -> None:
+    source = """\
+# %%
+# hpc-audit-section: report
+compute_stat = lambda x: x
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    findings = _shadow_findings(result)
+    assert [(f.section, f.evidence["name"], f.evidence["kind"]) for f in findings] == [
+        ("report", "compute_stat", "assignment")
+    ]
+
+
+def test_shadow_different_origin_import_fires(tmp_path: Path) -> None:
+    # Same bound name, DIFFERENT origin — a re-derivation, not a verbatim copy.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+from other.place import compute_stat
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    findings = _shadow_findings(result)
+    assert [(f.section, f.evidence["name"], f.evidence["kind"]) for f in findings] == [
+        ("load-data", "compute_stat", "import")
+    ]
+
+
+def test_shadow_identical_import_copy_is_clean(tmp_path: Path) -> None:
+    # The normal verbatim copy of the template's own import — same origin.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+from toy.engine import compute_stat, helper as calc
+DATA = "placeholder"
+
+# %%
+# hpc-audit-section: fit-model
+import toy.core
+MODEL = None
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    assert _shadow_findings(result) == []
+
+
+def test_shadow_name_inside_function_body_is_clean(tmp_path: Path) -> None:
+    # A binding inside a function body shadows nothing at module scope.
+    source = """\
+# %%
+# hpc-audit-section: report
+def wrapper(x):
+    compute_stat = x
+    return compute_stat
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    findings = _shadow_findings(result)
+    # The def itself binds "wrapper" (not template-imported) — nothing fires.
+    assert findings == []
+
+
+def test_shadow_attribute_assignment_is_clean(tmp_path: Path) -> None:
+    source = """\
+# %%
+# hpc-audit-section: report
+obj = None
+"""
+    source += "obj.compute_stat = 1\n"
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    assert _shadow_findings(result) == []
+
+
+def test_shadow_unimported_name_is_clean(tmp_path: Path) -> None:
+    source = """\
+# %%
+# hpc-audit-section: report
+def unrelated():
+    return 1
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    assert _shadow_findings(result) == []
+
+
+def test_shadow_template_preamble_import_attributed_module_preamble(tmp_path: Path) -> None:
+    template = """\
+import toy.core
+from toy.engine import compute_stat
+
+# %%
+# hpc-audit-section: report
+RESULT = None
+"""
+    source = """\
+# %%
+# hpc-audit-section: report
+compute_stat = 7
+"""
+    result = _run(tmp_path, source, template)
+    findings = _shadow_findings(result)
+    assert len(findings) == 1
+    assert findings[0].evidence["template_slug"] == "module-preamble"
+
+
+def test_shadow_findings_sorted_by_slug_then_name(tmp_path: Path) -> None:
+    # Deterministic (slug, name) ordering — the downstream view_sha stability leg.
+    source = """\
+# %%
+# hpc-audit-section: fit-model
+compute_stat = 1
+calc = 2
+
+# %%
+# hpc-audit-section: load-data
+toy = 3
+"""
+    result = _run(tmp_path, source, _SHADOW_TEMPLATE)
+    findings = _shadow_findings(result)
+    assert [(f.section, f.evidence["name"]) for f in findings] == [
+        ("fit-model", "calc"),
+        ("fit-model", "compute_stat"),
+        ("load-data", "toy"),
+    ]
+
+
+def test_shadow_syntax_error_section_contributes_nothing() -> None:
+    # The rule itself is TOLERANT (mirrors audit_view._assertions): a section
+    # that does not parse contributes no shadow findings. Exercised at the
+    # helper level — the primitive's whole-file parse refuses such a source
+    # upstream (SpecInvalid), so tolerance is the rule's own contract.
+    from hpc_agent.ops.notebook.lint import _check_template_import_shadowed
+
+    findings = _check_template_import_shadowed(
+        [("report", "def compute_stat(:\n")],
+        "",
+        [("load-data", "from toy.engine import compute_stat\n")],
+    )
+    assert findings == []
 
 
 # ── findings never raise / malformed input raises ────────────────────────────

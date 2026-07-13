@@ -1,0 +1,29 @@
+# %% [markdown]
+# # Experiment
+#
+# One `@register_run`-decorated `run()` is the experiment. `hpc-agent`
+# exports the importable surface of this notebook (imports, defs,
+# classes, UPPERCASE constants) to a `src/` executor module; scratch
+# cells — plots, smoke tests, exploratory assignments — are dropped.
+#
+# This file is a jupytext percent-format notebook: `# %%` opens a cell,
+# and any Jupyter frontend (via jupytext) renders it as a notebook. The
+# `.py` is the single reviewed source of truth.
+#
+# Run `make export` (or commit — the pre-commit hook does it) to keep
+# the exported `src/` in sync.
+
+# %%
+from hpc_agent.experiment_kit import register_run
+
+
+# %%
+@register_run
+def run(alpha: float = 1.0) -> dict:
+    """Return this experiment's metrics as a dict (results-by-return)."""
+    return {"score": alpha, "n_samples": 1}
+
+
+# %%
+# Scratch cell — dropped on export. Smoke-test the run here.
+run(alpha=2.0)

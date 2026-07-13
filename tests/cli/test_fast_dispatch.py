@@ -102,6 +102,34 @@ def test_kill_switch_disables_fast_path(monkeypatch: pytest.MonkeyPatch) -> None
     assert _try_fast_dispatch(["monitor-flow"]) is None
 
 
+def test_stale_map_pointing_at_missing_module_defers_not_crashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The OTHER staleness mode (#59): a map entry whose defining module was
+    renamed/deleted must degrade to the full path, not crash ``main()`` with a
+    raw ``ModuleNotFoundError`` (no envelope, wrong exit code).
+
+    Before the fix ``register_single_module`` was a bare ``import_module`` that
+    ``_try_fast_dispatch`` wrapped in nothing, so the ImportError escaped for a
+    verb the full walk dispatches fine. The guard is the ``except ImportError:
+    return None`` fall-through.
+    """
+    import hpc_agent._kernel.registry.primitive as primitive_mod
+    from hpc_agent.cli.dispatch import _try_fast_dispatch
+
+    verb = next(iter(VERB_MODULE_MAP))
+
+    def _raise_import_error(module_name: str) -> None:
+        raise ModuleNotFoundError(f"No module named {module_name!r}")
+
+    # ``_try_fast_dispatch`` imports ``register_single_module`` from the registry
+    # module at call time — patch it there so its import raises the
+    # rename/delete-mode ImportError. The fast path must defer (None), not raise.
+    monkeypatch.setattr(primitive_mod, "register_single_module", _raise_import_error)
+
+    assert _try_fast_dispatch([verb]) is None
+
+
 def test_build_single_verb_parser_rejects_grouped_and_absent() -> None:
     """The single-verb parser builder guards against a stale map pointing at a
     grouped, handler, or non-existent primitive."""

@@ -450,6 +450,154 @@ class TestClusterSubmission:
             )
 
 
+class _RaisingBackend(_StubBackend):
+    """Global-index backend stub whose responses may be exceptions.
+
+    ``uses_global_array_index=True`` skips the resubmit out-of-range guard so a
+    multi-batch plan (``max_array_size`` < ``len(failed)``) actually reaches the
+    submit loop. Each ``_execute_command`` response that is a ``BaseException``
+    is *raised* (simulating a mid-loop ``SshCircuitOpen`` / ``TimeoutError``
+    that escapes ``_submit_one_batch``'s narrow ``except RuntimeError`` re-wrap)
+    instead of returned.
+    """
+
+    uses_global_array_index = True
+
+    def _execute_command(self, cmd, job_env, cwd):
+        self.calls.append({"step": "execute", "cmd": cmd})
+        if self.responses:
+            resp = self.responses.pop(0)
+            if isinstance(resp, BaseException):
+                raise resp
+            return resp
+        self._next_id += 1
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout=f"Submitted batch job {self._next_id}\n",
+            stderr="",
+        )
+
+
+class TestPartialResubmitResumeMarker:
+    """#16: a mid-loop failure that is NOT RemoteCommandFailed must still
+    persist the resume marker, so a retry resumes after the last landed batch
+    instead of re-submitting duplicate array jobs.
+    """
+
+    def _run_until_batch2_fails(self, experiment, tmp_path, monkeypatch, exc):
+        from hpc_agent.infra.constraints import ClusterConstraints
+
+        _write_clusters_yaml(tmp_path, monkeypatch)
+        _seed(experiment, total_tasks=100)
+        # Batch 1 lands (job 90000001); batch 2 raises the supplied exception.
+        good = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="Submitted batch job 90000001\n", stderr=""
+        )
+        stub = _RaisingBackend(submit_responses=[good, exc])
+        with pytest.raises(type(exc)):
+            resubmit_flow(
+                experiment,
+                RUN_ID,
+                failed_task_ids=[0, 1, 2, 3],
+                category="system_oom",
+                submit_to_cluster=True,
+                script="run.sh",
+                backend="slurm",
+                job_name="resub",
+                job_env={"HPC_RUN_ID": RUN_ID},
+                # max_array_size=2 with 4 failed ids → the plan splits into two
+                # batches, so batch 2 is reachable after batch 1 lands.
+                constraints=ClusterConstraints(max_array_size=2),
+                backend_factory=_make_factory(stub),
+            )
+        return stub
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            TimeoutError("bounded runner deadline fired"),
+            errors.SshCircuitOpen("per-host breaker open"),
+        ],
+        ids=["timeout", "circuit_open"],
+    )
+    def test_non_remotecommandfailed_persists_marker(
+        self, exc, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        from hpc_agent.ops.recover.runner import derive_resubmit_request_id
+
+        self._run_until_batch2_fails(experiment, tmp_path, monkeypatch, exc)
+
+        rec = load_run(experiment, RUN_ID)
+        marker = dict(rec.pending_resubmit or {})
+        assert marker, "resume marker must be persisted on a non-RCF mid-loop failure"
+        # Only batch 1's id landed — the marker records exactly that.
+        assert marker["job_ids"] == ["90000001"]
+        expected_rid = derive_resubmit_request_id(
+            failed_task_ids=[0, 1, 2, 3], category="system_oom", overrides=None
+        )
+        assert marker["request_id"] == expected_rid
+        # Top-level job_ids extended (monitor reads these), original preserved.
+        assert "90000001" in rec.job_ids
+        assert "12345678" in rec.job_ids
+
+    def test_retry_resumes_after_last_landed_batch(
+        self, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        from hpc_agent.infra.constraints import ClusterConstraints
+
+        self._run_until_batch2_fails(
+            experiment, tmp_path, monkeypatch, errors.SshCircuitOpen("open")
+        )
+
+        # Retry: same args → same derived request_id → resumes. start_batch is
+        # len(prior landed ids)=1, so ONLY the remaining batch is submitted.
+        retry_stub = _RaisingBackend()
+        result = resubmit_flow(
+            experiment,
+            RUN_ID,
+            failed_task_ids=[0, 1, 2, 3],
+            category="system_oom",
+            submit_to_cluster=True,
+            script="run.sh",
+            backend="slurm",
+            job_name="resub",
+            job_env={"HPC_RUN_ID": RUN_ID},
+            constraints=ClusterConstraints(max_array_size=2),
+            backend_factory=_make_factory(retry_stub),
+        )
+        build_calls = [c for c in retry_stub.calls if c["step"] == "build_command"]
+        assert len(build_calls) == 1, "retry must submit only the un-landed batch"
+        assert result.cluster_submitted is True
+        # Marker cleared once the resubmit completed and stamped the request_id.
+        assert dict(load_run(experiment, RUN_ID).pending_resubmit or {}) == {}
+
+    def test_zero_progress_failure_writes_no_spurious_marker(
+        self, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        from hpc_agent.infra.constraints import ClusterConstraints
+
+        _write_clusters_yaml(tmp_path, monkeypatch)
+        _seed(experiment, total_tasks=100)
+        # Batch 1 (the very first) raises → nothing landed → no marker.
+        stub = _RaisingBackend(submit_responses=[TimeoutError("first batch died")])
+        with pytest.raises(TimeoutError):
+            resubmit_flow(
+                experiment,
+                RUN_ID,
+                failed_task_ids=[0, 1, 2, 3],
+                category="system_oom",
+                submit_to_cluster=True,
+                script="run.sh",
+                backend="slurm",
+                job_name="resub",
+                job_env={"HPC_RUN_ID": RUN_ID},
+                constraints=ClusterConstraints(max_array_size=2),
+                backend_factory=_make_factory(stub),
+            )
+        assert dict(load_run(experiment, RUN_ID).pending_resubmit or {}) == {}
+
+
 class TestEnvelopeShape:
     def test_envelope_includes_new_job_ids_when_cluster_submitted(
         self, journal_home, experiment, tmp_path, monkeypatch

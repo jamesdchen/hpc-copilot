@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/dir_digest.input.json",
+  "title": "dir-digest input spec",
+  "description": "Inputs to ``dir-digest``.",
+  "type": "object",
+  "required": [
+    "path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "Directory to digest. LOCAL (no --cluster): a path relative to --experiment-dir, or an absolute path that resolves WITHIN it. REMOTE (--cluster set): an absolute cluster path that must resolve strictly under the cluster's scratch root (the same confinement inspect-deployment uses).",
+      "minLength": 1,
+      "title": "Path",
+      "type": "string"
+    },
+    "newest": {
+      "default": 10,
+      "description": "How many newest-by-mtime entries to include (default 10). 0 omits the list; the counts/size/histogram still compute.",
+      "minimum": 0,
+      "title": "Newest",
+      "type": "integer"
+    },
+    "marker_scan": {
+      "default": true,
+      "description": "When true (default), scan *.log/*.err files for the engine's known failure markers and report per-marker line-hit counts (bounded per-file). False skips the scan entirely.",
+      "title": "Marker Scan",
+      "type": "boolean"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cluster key from clusters.yaml to digest a REMOTE tree over one throttled ssh read. Omit for a LOCAL digest (the first-class path).",
+      "title": "Cluster"
+    }
+  }
+}

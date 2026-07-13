@@ -1,0 +1,185 @@
+{
+  "note": "Canonicalization vectors for the harness-contract sha form: json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False) -> UTF-8 -> SHA-256 lowercase hex. Reference: state/determinism.py::canonical_sha. `value` may carry the {\"__float__\": \"nan\"|\"inf\"|\"-inf\"} sentinel for floats strict JSON cannot represent; decode before hashing. `divergence_from` is null for a pure form pin, else names the implementation whose bytes DIFFER from the harness form: 'jcs' (RFC 8785 UTF-16 key order / ECMAScript number canon), 'default-json' (ensure_ascii=True escaping), or 'strict-json' (NaN/Infinity are non-JSON) -- the deliberate contract divergence.",
+  "cases": [
+    {
+      "name": "empty_object",
+      "note": "empty object -> {}",
+      "divergence_from": null,
+      "value": {},
+      "expected_canonical": "{}",
+      "expected_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty_array",
+      "note": "empty array -> []",
+      "divergence_from": null,
+      "value": [],
+      "expected_canonical": "[]",
+      "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "key_sort_ascii",
+      "note": "sort_keys reorders to a,b,c",
+      "divergence_from": null,
+      "value": {
+        "b": 1,
+        "a": 2,
+        "c": 3
+      },
+      "expected_canonical": "{\"a\":2,\"b\":1,\"c\":3}",
+      "expected_sha256": "e145110e712e3ed0a6b233551b27a90aa39b4c93ed67e111ba2002d16e5ed1fa"
+    },
+    {
+      "name": "nested_sort",
+      "note": "recursive key sort; array order is preserved (never sorted)",
+      "divergence_from": null,
+      "value": {
+        "z": {
+          "b": 1,
+          "a": 2
+        },
+        "a": [
+          3,
+          2,
+          1
+        ]
+      },
+      "expected_canonical": "{\"a\":[3,2,1],\"z\":{\"a\":2,\"b\":1}}",
+      "expected_sha256": "6a0005fd791ad8bad303dceddf9d20b5cd61c4df129a428ae48582376ff4cc0e"
+    },
+    {
+      "name": "non_ascii_values_unescaped",
+      "note": "ensure_ascii=False emits raw UTF-8; a DEFAULT json.dumps (ensure_ascii=True) escapes to \\uXXXX and diverges here (JCS also keeps raw UTF-8, so this is a default-json divergence, not a JCS one)",
+      "divergence_from": "default-json",
+      "value": {
+        "name": "café",
+        "jp": "日本語",
+        "emoji": "😀"
+      },
+      "expected_canonical": "{\"emoji\":\"😀\",\"jp\":\"日本語\",\"name\":\"café\"}",
+      "expected_sha256": "11df38a034517f42d3b81a2850b1c051e7f3d916f50f86bebbf9e7ff6b3a66cd"
+    },
+    {
+      "name": "non_ascii_key_codepoint_order",
+      "note": "form pin: code-point key order e(0x65) < z(0x7a) < e-acute(0xe9); all BMP so UTF-16 order agrees -- the real code-point/UTF-16 split needs an astral key (see astral_vs_bmp_key_order)",
+      "divergence_from": null,
+      "value": {
+        "é": 1,
+        "e": 2,
+        "z": 3
+      },
+      "expected_canonical": "{\"e\":2,\"z\":3,\"é\":1}",
+      "expected_sha256": "9fd95198b233351043c9e13cbc336297f31bc76a19d0ca2ff093cd1172fa47a1"
+    },
+    {
+      "name": "astral_vs_bmp_key_order",
+      "note": "THE JCS split: Python sorts by CODE POINT -> z, U+FFFF, U+1F600; RFC 8785/JCS sorts by UTF-16 code unit -> the astral U+1F600 (lead surrogate 0xD83D) precedes U+FFFF. A silent JCS swap reorders the keys and fails this digest loudly.",
+      "divergence_from": "jcs",
+      "value": {
+        "z": 1,
+        "￿": 2,
+        "😀": 3
+      },
+      "expected_canonical": "{\"z\":1,\"￿\":2,\"😀\":3}",
+      "expected_sha256": "d5879f25ce1fb5e4ccea53e9d68b1d69472f655ca77e58d15b9e374d2c3d7240"
+    },
+    {
+      "name": "float_integral_keeps_point_zero",
+      "note": "Python -> 1.0 ; JCS ECMAScript number canon -> 1 (drops .0)",
+      "divergence_from": "jcs",
+      "value": {
+        "x": 1.0
+      },
+      "expected_canonical": "{\"x\":1.0}",
+      "expected_sha256": "bf32f56236899e13ef54db875d136c6cbcc65244464829c54911aa9069b0ae25"
+    },
+    {
+      "name": "float_negative_zero",
+      "note": "Python -> -0.0 ; JCS -> 0",
+      "divergence_from": "jcs",
+      "value": {
+        "x": -0.0
+      },
+      "expected_canonical": "{\"x\":-0.0}",
+      "expected_sha256": "529436936b90ebdff10ece80ead76834aeae76aa1e44d6c334ac3ca3832a8fba"
+    },
+    {
+      "name": "int_vs_float_distinct",
+      "note": "int 1 and float 1.0 render distinctly (1 vs 1.0); JCS collapses both to 1",
+      "divergence_from": "jcs",
+      "value": {
+        "a": 1,
+        "b": 1.0
+      },
+      "expected_canonical": "{\"a\":1,\"b\":1.0}",
+      "expected_sha256": "386f210ad07c6df906a0d5d0b05f01a9ad19bf1da1ba515fb01eb4afd012278a"
+    },
+    {
+      "name": "float_exponent_form",
+      "note": "form pin: Python repr -> 1e+21 (pins the exponent spelling)",
+      "divergence_from": null,
+      "value": {
+        "x": 1e+21
+      },
+      "expected_canonical": "{\"x\":1e+21}",
+      "expected_sha256": "f4bcbb57bdf54b5b595d88096406c936d86bf0b6dd316d0ad2b4d2504c610403"
+    },
+    {
+      "name": "float_small_decimal",
+      "note": "form pin: shortest round-trip repr -> 0.1",
+      "divergence_from": null,
+      "value": {
+        "x": 0.1
+      },
+      "expected_canonical": "{\"x\":0.1}",
+      "expected_sha256": "2b018c1708c1cc2f4a8ed7f085c2cc748153117b173f7c076f7d5813bbb50f21"
+    },
+    {
+      "name": "no_unicode_normalization",
+      "note": "pin: neither our form nor JCS applies NFC/NFD; the NFC (U+00E9) and NFD (e + U+0301) values keep distinct byte content (a normalizing impl would collide them)",
+      "divergence_from": null,
+      "value": {
+        "nfc": "é",
+        "nfd": "é"
+      },
+      "expected_canonical": "{\"nfc\":\"é\",\"nfd\":\"é\"}",
+      "expected_sha256": "79eae438d105e852f86ea598ffdda91643386fad0b4f336b941528d30fbf1558"
+    },
+    {
+      "name": "special_float_nan",
+      "note": "Python json.dumps allows NaN by default -> NaN ; strict JSON / JCS FORBID it",
+      "divergence_from": "strict-json",
+      "value": {
+        "x": {
+          "__float__": "nan"
+        }
+      },
+      "expected_canonical": "{\"x\":NaN}",
+      "expected_sha256": "c238cb6e9ac5407491b0988102620ab9445290d2ed7713c516a2b28bd2388968"
+    },
+    {
+      "name": "special_float_inf",
+      "note": "Python -> Infinity ; strict JSON / JCS forbid",
+      "divergence_from": "strict-json",
+      "value": {
+        "x": {
+          "__float__": "inf"
+        }
+      },
+      "expected_canonical": "{\"x\":Infinity}",
+      "expected_sha256": "504a7fad8d7687a0ca0c9eace25c99c63e8e3cf1ad8f4945644c781e4605c02d"
+    },
+    {
+      "name": "special_float_neg_inf",
+      "note": "Python -> -Infinity ; strict JSON / JCS forbid",
+      "divergence_from": "strict-json",
+      "value": {
+        "x": {
+          "__float__": "-inf"
+        }
+      },
+      "expected_canonical": "{\"x\":-Infinity}",
+      "expected_sha256": "5fa9d0e838cd8f7cee5cd7583892ec63e56d7c29d1af404e3ecfc11f329f3af2"
+    }
+  ]
+}

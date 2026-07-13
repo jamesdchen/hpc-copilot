@@ -56,20 +56,29 @@ from hpc_agent import errors
 from hpc_agent.state.runs import _RUN_ID_RE
 
 __all__ = [
+    "CELL_DELIMITER",
     "Section",
     "ParsedModule",
+    "format_section_marker",
     "normalize_source",
     "sha256_normalized",
     "parse_percent_source",
+    "percent_cell_sources",
 ]
 
 #: A jupytext percent-format CELL delimiter — any col-0 line beginning with this
 #: prefix opens a new cell. Matched opaquely; the metadata after it is ignored.
-_CELL_DELIM_PREFIX = "# %%"
+#: Public: the scaffold writer (``notebook-scaffold-template``) emits the same
+#: constant this parser segments on — one definition for both directions.
+CELL_DELIMITER = "# %%"
+
+#: The marker token shared by the READ side (:data:`_MARKER_RE`) and the WRITE
+#: side (:func:`format_section_marker`) — one definition, never a second literal.
+_MARKER_TOKEN = "hpc-audit-section"
 
 #: The section marker: a col-0 ``# hpc-audit-section: <slug>`` comment. The slug
 #: is captured greedily and validated against :data:`_RUN_ID_RE`.
-_MARKER_RE = re.compile(r"^#\s*hpc-audit-section:\s*(?P<slug>.*)$")
+_MARKER_RE = re.compile(rf"^#\s*{_MARKER_TOKEN}:\s*(?P<slug>.*)$")
 
 
 @dataclass(frozen=True)
@@ -136,9 +145,76 @@ def sha256_normalized(text: str) -> str:
     return hashlib.sha256(normalize_source(text).encode("utf-8")).hexdigest()
 
 
+def format_section_marker(slug: str) -> str:
+    """Render the canonical marker line for *slug* — the write-side inverse of
+    the marker grammar this module reads.
+
+    Built from the SAME token :data:`_MARKER_RE` matches (one definition:
+    a writer can never emit a line this parser would not recognize), then
+    round-tripped through the module's own :func:`_extract_slug` — which
+    validates the slug shape (loud :class:`errors.SpecInvalid` naming the
+    offending slug, per the parse side's own rule) AND proves the rendered
+    line reads back as exactly *slug*.
+    """
+    line = f"# {_MARKER_TOKEN}: {slug}"
+    # _extract_slug raises SpecInvalid on an empty / non-slug value; the
+    # equality check below catches the residual class it cannot (e.g. an
+    # embedded newline, where the regex capture stops early yet the prefix
+    # still validates) — a writer must never emit a marker that reads back
+    # as a different slug.
+    if _extract_slug(line) != slug:
+        raise errors.SpecInvalid(
+            f"section slug {slug!r} does not round-trip through the "
+            "hpc-audit-section marker grammar"
+        )
+    return line
+
+
 def _unified_lines(text: str) -> list[str]:
     """Newline-unified line list (no line endings), the segmentation substrate."""
     return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def _cell_starts(lines: list[str]) -> list[int]:
+    """Cell-start indices of the unified *lines*: every :data:`CELL_DELIMITER`
+    line, plus line 0 for the leading implicit cell (content before the first
+    delimiter, e.g. a module docstring).
+
+    The ONE definition of the cell-boundary grammar — both
+    :func:`parse_percent_source` (sections) and :func:`percent_cell_sources`
+    (cell bodies) segment through it.
+    """
+    delim_idxs = [i for i, line in enumerate(lines) if line.startswith(CELL_DELIMITER)]
+    return sorted({0, *delim_idxs})
+
+
+def percent_cell_sources(text: str) -> tuple[str, ...]:
+    """Cell BODIES of a percent-format module, in source order.
+
+    Each cell's ``# %%`` delimiter line is dropped (matching how an
+    ``.ipynb`` code cell carries its source without a delimiter); cells
+    whose body is blank are omitted. The leading implicit cell (content
+    before the first delimiter) is included when non-blank. Markdown-variant
+    cells (``# %% [markdown]``) are NOT special-cased — their bodies are
+    comments, which downstream AST consumers ignore; the metadata after the
+    delimiter stays opaque, per this module's boundary-only doctrine.
+
+    This is the read seam the export layer (``export-package``) consumes so
+    a percent ``.py`` notebook and an ``.ipynb`` feed the SAME exporters —
+    only the reading differs. Segmentation shares :func:`_cell_starts` with
+    :func:`parse_percent_source`: one definition of the boundary grammar.
+    """
+    lines = _unified_lines(text)
+    n = len(lines)
+    starts = _cell_starts(lines)
+    cells: list[str] = []
+    for k, cs in enumerate(starts):
+        ce = starts[k + 1] if k + 1 < len(starts) else n
+        body_start = cs + 1 if lines[cs].startswith(CELL_DELIMITER) else cs
+        body = "\n".join(lines[body_start:ce])
+        if body.strip():
+            cells.append(body)
+    return tuple(cells)
 
 
 def _extract_slug(line: str) -> str:
@@ -180,10 +256,8 @@ def parse_percent_source(text: str) -> ParsedModule:
     lines = _unified_lines(text)
     n = len(lines)
 
-    # Cell starts: every ``# %%`` delimiter line, plus line 0 for the leading
-    # implicit cell (content before the first delimiter, e.g. a module docstring).
-    delim_idxs = [i for i, line in enumerate(lines) if line.startswith(_CELL_DELIM_PREFIX)]
-    cell_starts = sorted({0, *delim_idxs})
+    # Cell starts — the shared boundary grammar (see _cell_starts).
+    cell_starts = _cell_starts(lines)
 
     # Every col-0 marker-shaped line in the whole module. Each MUST turn out to
     # be some cell's first non-blank body line, else it is misplaced.
@@ -194,7 +268,7 @@ def parse_percent_source(text: str) -> ParsedModule:
     for k, cs in enumerate(cell_starts):
         ce = cell_starts[k + 1] if k + 1 < len(cell_starts) else n
         # Body begins after the delimiter line (or at cs for the leading cell).
-        body_start = cs + 1 if lines[cs].startswith(_CELL_DELIM_PREFIX) else cs
+        body_start = cs + 1 if lines[cs].startswith(CELL_DELIMITER) else cs
         first_nonblank = next(
             (i for i in range(body_start, ce) if lines[i].strip()),
             None,

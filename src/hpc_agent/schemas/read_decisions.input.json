@@ -15,7 +15,11 @@
         "run",
         "campaign",
         "scope",
-        "notebook"
+        "notebook",
+        "registration",
+        "pack",
+        "conclusion",
+        "challenge"
       ],
       "title": "Scope Kind",
       "type": "string"

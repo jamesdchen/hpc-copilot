@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/conformance_record.input.json",
+  "title": "conformance-record input spec",
+  "description": "Inputs to ``conformance-record`` — one live observation receipt.\n\nDeliberately carries NO ``content_sha``: the sha is recomputed SERVER-SIDE\nover ``{payload, labels, observed_at}`` and bound at append\n(``state/attestation.py::bind``), so a caller-supplied sha would be a claim\ncore ignores — it is not accepted on the wire at all (C1's recompute lock).\n\nAn observation naming a registration that is ABSENT is refused loudly at the\nverb (there is no hypothesis to test); an observation against a registration\nthat reduces ``stale``/``revoked``/``superseded`` is RECORDED (production is\nthe experiment that never stops) with the reduced status stamped\n``status_at_record`` — disclosed, never silently mixed.",
+  "type": "object",
+  "required": [
+    "registration_id",
+    "payload",
+    "observed_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "registration_id": {
+      "description": "The registration this observation tests (the sealed hypothesis). A caller-authored filesystem-safe slug; the ledger is keyed on it (_aggregated/_conformance/<registration_id>.jsonl). An absent registration is refused loudly (no hypothesis to test).",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Registration Id",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "description": "The flat, already-reduced observation — {caller-key: opaque scalar}, using the SAME keys the registered baseline carries. Values are opaque: identity-compared, range-compared, counted; never read for meaning. Keys are caller vocabulary (core never learns what a key means).",
+      "title": "Payload",
+      "type": "object"
+    },
+    "observed_at": {
+      "description": "ISO timestamp the CALLER says the observation occurred (caller-attested; core hashes it, never verifies it). Distinct from the server-stamped record ts. Feeds the query-time window selection.",
+      "minLength": 1,
+      "title": "Observed At",
+      "type": "string"
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Opaque caller labels for this observation (a cluster, a batch id, a venue tag). Core never learns which; label NOVELTY relative to a window is disclosed evidence at query time, never interpreted.",
+      "title": "Labels",
+      "type": "object"
+    },
+    "emitter": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque caller-declared emitter id — the caller-side machinery that produced this observation. Recorded for provenance; never parsed.",
+      "title": "Emitter"
+    }
+  }
+}

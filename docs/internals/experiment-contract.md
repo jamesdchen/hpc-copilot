@@ -31,7 +31,7 @@ skipping `.hpc/`):
 
 | Location | Shape | When |
 |---|---|---|
-| `notebooks/<name>.ipynb` | Literate, iteration-phase | Author the function alongside scratch cells, plots, smoke tests. The notebook *is* the source of truth. |
+| `notebooks/<name>.py` (jupytext percent format; `.ipynb` accepted for back-compat) | Literate, iteration-phase | Author the function alongside scratch cells, plots, smoke tests. The percent-format `.py` *is* the source of truth — diff-reviewable and auditable (see `docs/design/notebook-audit.md`); an `.ipynb` is only ever a caller-side render. |
 | `train.py` (or `<name>.py` at the repo root or under `src/`) | Already-finalized executor | The function is settled; you don't need a notebook around it. |
 | `mypkg/runner.py` (a package module) | Imported by other code | The function lives inside a larger package that already exists. |
 
@@ -40,12 +40,17 @@ Pick whichever matches the maturity of the experiment. There is no
 
 ## Notebook-specific step: `export-package`
 
-The cluster runs a stdlib-only `.py` executor — no `.ipynb` import on
+The cluster runs a stdlib-only `.py` executor — no notebook import on
 the compute node. For notebook-shaped repos, `hpc-agent export-package`
-converts `notebooks/<name>.ipynb` → `src/<name>.py` (strict-AST for
-`@register_run` executors, `# export`-marker for pipeline libraries),
-content-hash-caches against `.hpc/.build-cache.json`, and ships the
-built `src/` in the rsync bundle.
+converts `notebooks/<name>.py` (percent format — the native shape; a
+legacy `notebooks/<name>.ipynb` still works) → `src/<name>.py`
+(strict-AST for `@register_run` executors, `# export`-marker for
+pipeline libraries), content-hash-caches against
+`.hpc/.build-cache.json`, and ships the built `src/` in the rsync
+bundle. Both formats feed the same exporters; only the cell-reading
+layer differs (percent cells are read via
+`hpc_agent.state.audit_source.percent_cell_sources`, the one
+percent-format reader).
 
 **For repos whose entry point is already a `.py` script, this step is a
 no-op** — there is no notebook to export. The rest of the pipeline

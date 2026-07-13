@@ -262,3 +262,88 @@ def test_main_never_raises_on_core_error(tmp_path: Path, monkeypatch) -> None:
     rc, out = _run_main(monkeypatch, json.dumps(_payload(tmp_path)))
     assert rc == 0
     assert out == ""
+
+
+# ─── the COMPLETER split (RULED 2026-07-12): fetch in code, bounce for continue ─
+#
+# Dark by default: every test ABOVE runs with no capability declared and exercises
+# the REJECTOR (fetch-then-continue bounce). Activating BOTH append markers flips
+# the split on — code fetches the envelope (injects it via systemMessage + clears
+# the file), the bounce survives ONLY for the parent-skill continuation.
+
+
+def _activate_completer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "1")
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", "1")
+
+
+def test_completer_dark_default_is_rejector_identical(tmp_path: Path, monkeypatch) -> None:
+    """With NO capability declared, a pending envelope BOUNCES with the manual
+    fetch-then-continue reason — rejector-identical (the D1 dark landing)."""
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    committed = _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    out = guard.build_hook_output(_payload(tmp_path))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "systemMessage" not in out
+    assert f"fetch-skill-return --skill {_KNOWN_SKILL}" in out["reason"]
+    assert committed.exists()  # a rejector bounce clears nothing
+
+
+def test_completer_injects_envelope_and_clears_bounces_for_continuation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Capability declared: code fetches the envelope (systemMessage + clears the
+    file); the bounce survives ONLY for the parent-skill continuation."""
+    _activate_completer(monkeypatch)
+    committed = _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+
+    out = guard.build_hook_output(_payload(tmp_path))
+    assert out is not None
+    # The fetch is completed in code — injected + file cleared.
+    assert "systemMessage" in out
+    assert _KNOWN_SKILL in out["systemMessage"]
+    assert '"entry_point_kind": "register_run"' in out["systemMessage"]
+    assert not committed.exists()  # completing the fetch clears the committed file
+    # The bounce survives ONLY for the continuation — no re-fetch instruction.
+    assert out["decision"] == "block"
+    assert "parent skill" in out["reason"].lower()
+    assert "fetch-skill-return" not in out["reason"]
+
+
+def test_completer_already_fetched_is_noop(tmp_path: Path, monkeypatch) -> None:
+    """No committed envelope (already fetched) → silent in completer mode too."""
+    _activate_completer(monkeypatch)
+    assert guard.build_hook_output(_payload(tmp_path)) is None
+
+
+def test_completer_cleared_envelope_does_not_refire(tmp_path: Path, monkeypatch) -> None:
+    """Idempotent discharge: once the completer clears the file, a later stop is
+    silent — the fetch cannot re-fire."""
+    _activate_completer(monkeypatch)
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    assert guard.build_hook_output(_payload(tmp_path)) is not None
+    assert guard.build_hook_output(_payload(tmp_path)) is None
+
+
+def test_completer_append_on_block_absent_stays_rejector(tmp_path: Path, monkeypatch) -> None:
+    """D2: the injection rides a BLOCKED stop, so without the on-block display
+    confirmation the split stays the REJECTOR (no envelope loss on a swallowed
+    systemMessage)."""
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "1")
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", raising=False)
+    committed = _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    out = guard.build_hook_output(_payload(tmp_path))
+    assert out is not None
+    assert "systemMessage" not in out
+    assert f"fetch-skill-return --skill {_KNOWN_SKILL}" in out["reason"]
+    assert committed.exists()  # nothing fetched/cleared in code
+
+
+def test_completer_stop_hook_active_is_noop(tmp_path: Path, monkeypatch) -> None:
+    """Loop safety holds in completer mode: a forced continuation passes through
+    before the split runs (no injection, no clear)."""
+    _activate_completer(monkeypatch)
+    committed = _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    assert guard.build_hook_output(_payload(tmp_path, stop_hook_active=True)) is None
+    assert committed.exists()

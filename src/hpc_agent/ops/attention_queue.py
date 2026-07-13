@@ -64,6 +64,9 @@ __all__ = [
     "AUDIT_SECTION_STALE",
     "ALERT",
     "SSH_CIRCUIT_OPEN",
+    "DATA_DRIFT",
+    "DATA_NEW",
+    "DATA_UNMANIFESTED",
     "KIND_CLASS",
     "AttentionItem",
     "QueueCollection",
@@ -75,6 +78,21 @@ __all__ = [
     "collect_audits",
     "collect_alerts",
     "collect_ssh_circuits",
+    "collect_data_manifest",
+    "collect_registrations",
+    "horizon_lapsed_registration_ids",
+    "REGISTRATION_STALE",
+    "REGISTRATION_BLOCKED",
+    "REPRODUCTION_NEEDS_VERDICT",
+    "collect_reproduction_verdicts",
+    "CAMPAIGN_UNCONCLUDED",
+    "collect_campaign_unconcluded",
+    "CHALLENGE_OPEN",
+    "CHALLENGE_UPHELD_UNREMEDIED",
+    "collect_challenges",
+    "CONFORMANCE_NEEDS_VERDICT",
+    "CONFORMANCE_NONCONFORMING",
+    "collect_conformance",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -103,6 +121,72 @@ AUDIT_SECTION_UNSIGNED = "audit-section-unsigned"
 AUDIT_SECTION_STALE = "audit-section-stale"
 ALERT = "alert"
 SSH_CIRCUIT_OPEN = "ssh-circuit-open"
+#: data-manifest drift (docs/design/data-manifest.md "The attention contract"):
+#: a TRACKED file's sha changing / vanishing = needs-attention (the
+#: quiet-corruption class); a NEW untracked file under a declared root = low tier;
+#: NO manifest (roots declared, never minted) = one standing disclosure.
+DATA_DRIFT = "data-drift"
+DATA_NEW = "data-new"
+DATA_UNMANIFESTED = "data-unmanifested"
+#: registration edges (docs/design/registration-kernel.md R8): a registration
+#: BLOCKED on a non-current prerequisite (it blocks CAPITAL, not just a run — the
+#: high-leverage-by-construction class) and a STALE registration (a drifted dossier
+#: signature — the deployment clearance is no longer live, a re-registration
+#: verdict is owed). Routes the currency verdicts through the ONE definitions
+#: (reduce_registration + check_chain), never a re-inlined drift compare.
+REGISTRATION_BLOCKED = "registration-blocked"
+REGISTRATION_STALE = "registration-stale"
+#: determinism-fingerprint verdicts (docs/design/determinism-fingerprint.md T7 +
+#: Amendment 2): a ledger sample whose recorded classifier verdict is
+#: ``needs_verdict`` and whose ``content_sha`` is NOT yet named by a committed
+#: ``reproduction-verdict`` decision on its reproduction run. Amendment 2 —
+#: verdict-on-demand: this parks as a LEVERAGE-ZERO standing item (fan-out 0, no
+#: urgency), pull-only, aging by the sample's ``ts``; it becomes a decision-ready
+#: brief only when a consumer (registration / graduation / an explicit verify)
+#: blocks on the verdict. Routes the "answered" test through the run journal's
+#: ``reproduction-verdict`` records, never re-implementing the envelope math (the
+#: recorded sample verdict IS T1's classifier output).
+REPRODUCTION_NEEDS_VERDICT = "reproduction-needs-verdict"
+#: evidence-memory aging standing item (docs/design/evidence-memory.md E-queue +
+#: E1(a)): a TERMINAL campaign that no CURRENT conclusion names. INFORMATIONAL —
+#: no verdict is pending, nothing is blocked; it is the standing invitation to
+#: close the conclusion loop, aging by the campaign's completion ts. Fan-out stays
+#: 0 (a missing conclusion blocks nothing, by E3's never-blocking pin). Routes the
+#: unconcluded predicate through ``state/evidence.py::collect_evidence``'s
+#: ``unconcluded`` reduction (the D5 one-definition rule), never a re-inlined join.
+CAMPAIGN_UNCONCLUDED = "campaign-unconcluded"
+
+#: An OPEN challenge (challenge-attestation C-queue): a human verdict is pending
+#: (the queue's namesake class). Routes through the ONE reduction
+#: (``state/challenges.py::standing_challenges``) — never a re-read of the
+#: challenge journals. ``since`` is the filing ts so it AGES (old unresolved
+#: dissent is the signal). Fan-out = the pending registrations whose prerequisite
+#: chains name the contested ``content_sha`` (the R8 edge; no other encoded edge
+#: exists → other targets count 0). A dismissed / withdrawn / superseded challenge
+#: yields NO item (resolved).
+CHALLENGE_OPEN = "challenge-open"
+
+#: live-conformance verdicts (docs/design/live-conformance.md C-queue): a
+#: registration whose declared default window (the ledger's trailing
+#: ``min_window_n`` receipts — the ONE mechanical default, the caller's own floor)
+#: judges NEEDS_VERDICT or NONCONFORMING with no newer committed
+#: ``conformance-verdict``. Both class VERDICT — a human judgment the machinery
+#: cannot mechanize. Routes through ``state/conformance.py::judge_window`` (the ONE
+#: comparator, ``inspect.getsource`` route-through pin) over the sealed baseline +
+#: the registration-scoped ledger; NEVER re-implements the envelope arithmetic.
+#: Fan-out stays 0 — no journal encodes what a registration's deployment is worth
+#: (the honest anti-capital-shaping answer; :func:`_fanout_for` gains no conformance
+#: edge). A CONFORMING window (or one cleared by a newer verdict) yields no item.
+CONFORMANCE_NEEDS_VERDICT = "conformance-needs-verdict"
+CONFORMANCE_NONCONFORMING = "conformance-nonconforming"
+
+#: An UPHELD challenge whose target family has NOT yet moved (no revoke, no
+#: re-registration) — awareness that the archive holds a standing refutation
+#: nothing has answered (C-queue; the E-queue ``campaign-unconcluded`` form: a
+#: loop-closing invitation, not a gate). INFORMATIONAL, fan-out 0, never blocking.
+#: An upheld challenge whose subject HAS moved reduces to ``superseded`` (the
+#: headline wins) and yields no item — the remedy already landed.
+CHALLENGE_UPHELD_UNREMEDIED = "challenge-upheld-unremedied"
 
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
@@ -117,6 +201,31 @@ KIND_CLASS: dict[str, str] = {
     AUDIT_SECTION_STALE: INFORMATIONAL,
     ALERT: INFORMATIONAL,
     SSH_CIRCUIT_OPEN: INFORMATIONAL,
+    # Tier map: a changed/vanished TRACKED file is the quiet-corruption class
+    # (verdict — a human must judge the change); new + unmanifested are awareness.
+    DATA_DRIFT: VERDICT,
+    DATA_NEW: INFORMATIONAL,
+    DATA_UNMANIFESTED: INFORMATIONAL,
+    # A blocked registration blocks capital → BLOCKED; a stale registration is a
+    # drifted clearance a human must re-judge → VERDICT.
+    REGISTRATION_BLOCKED: BLOCKED,
+    REGISTRATION_STALE: VERDICT,
+    # A recorded needs_verdict fingerprint sample is a human judgment the machinery
+    # cannot mechanize → VERDICT. Fan-out stays 0 (Amendment 2: leverage-zero,
+    # pull-only) until a consumer blocks on the verdict — no encoded edge yet.
+    REPRODUCTION_NEEDS_VERDICT: VERDICT,
+    # A terminal campaign with no current conclusion is an AGING standing item —
+    # nothing is blocked, it is an awareness invitation to close the loop.
+    CAMPAIGN_UNCONCLUDED: INFORMATIONAL,
+    # An OPEN challenge is a pending human verdict (the namesake class); an UPHELD-
+    # but-unremedied challenge is a loop-closing awareness invitation (never a gate).
+    CHALLENGE_OPEN: VERDICT,
+    CHALLENGE_UPHELD_UNREMEDIED: INFORMATIONAL,
+    # A live-conformance window that judges needs_verdict / nonconforming is a
+    # human judgment the machinery cannot mechanize → VERDICT. Fan-out stays 0
+    # (no encoded edge — the honest anti-capital-shaping answer, C-queue).
+    CONFORMANCE_NEEDS_VERDICT: VERDICT,
+    CONFORMANCE_NONCONFORMING: VERDICT,
 }
 
 
@@ -186,21 +295,34 @@ def collect_greenlight_and_parked(experiment_dir: Path, *, now: str) -> list[Att
     """The ``find_parked_runs`` split (D5 rows 1-2), the SAME split ``doctor`` and
     the Stop guard key on.
 
-    A parked run whose latest committed decision IS a ``y`` greenlight is
-    ``greenlight-unadvanced`` (blocked — the human already decided; a dead driver
-    must be re-armed); otherwise it is ``run-parked`` (verdict — still genuinely
-    awaiting the human). The greenlight test routes through the ONE predicate
-    ``is_latest_committed_greenlight``; the queue never re-inlines it.
+    A parked run whose latest committed decision IS the greenlight for its
+    parked boundary is ``greenlight-unadvanced`` (blocked — the human already
+    decided; a dead driver must be re-armed); otherwise it is ``run-parked``
+    (verdict — still genuinely awaiting the human). BOUNDARY-SCOPED (bug-sweep
+    #1/#23, run-12 finding 21): a consumed ``y`` stays the journal's latest
+    record after a re-park, so the bare latest-is-y read would mint a false
+    ``greenlight-unadvanced`` item on every scan. The greenlight test routes
+    through the ONE predicate ``is_committed_greenlight_for_boundary`` (the
+    Stop guard's and doctor's rule); the queue never re-inlines it.
     """
-    from hpc_agent.state.decision_journal import is_latest_committed_greenlight
+    from hpc_agent.state.decision_journal import is_committed_greenlight_for_boundary
     from hpc_agent.state.index import find_parked_runs
+    from hpc_agent.state.journal import read_pending_decision
 
     exp = _exp(experiment_dir)
     items: list[AttentionItem] = []
     for hit in find_parked_runs(now, experiment_dir=experiment_dir):
         run_id = hit["run_id"]
         block = hit.get("block")
-        greenlit = is_latest_committed_greenlight(experiment_dir, "run", run_id)
+        marker = read_pending_decision(run_id, experiment_dir=experiment_dir) or {}
+        cursor = marker.get("resume_cursor") or {}
+        greenlit = is_committed_greenlight_for_boundary(
+            experiment_dir,
+            "run",
+            run_id,
+            next_verb=cursor.get("next_verb") if isinstance(cursor, dict) else None,
+            awaiting_since=marker.get("awaiting_since") or hit.get("awaiting_since"),
+        )
         kind = GREENLIGHT_UNADVANCED if greenlit else RUN_PARKED
         items.append(
             AttentionItem(
@@ -475,6 +597,672 @@ def collect_ssh_circuits(experiment_dir: Path, *, now: str) -> list[AttentionIte
     return items
 
 
+# ── data-manifest collector (docs/design/data-manifest.md attention contract) ─
+
+
+def collect_data_manifest(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Data-drift items via the ONE drift definition
+    (``state/data_manifest.py::compute_drift``).
+
+    The verdict — which files matched / drifted / are new / are missing — routes
+    through ``compute_drift`` (read-only; this collector re-derives nothing and
+    writes nothing, honoring D6). The tier map (the design's attention contract):
+
+    * a DRIFTED or MISSING tracked file → ``data-drift`` (verdict, the
+      quiet-corruption class) — one item per file so each competes under the
+      leverage sort; ``since`` is the file's change mtime so it ages while
+      unresolved. A RE-MINT makes the file match again → the item simply
+      disappears from this stateless read (silence-by-record, never suppression).
+    * NEW untracked files under a declared root → one ``data-new`` line
+      (informational, low tier).
+    * NO manifest but inputs ARE declared → one standing ``data-unmanifested``
+      disclosure (never a per-run repeat; an experiment with no declaration
+      contributes nothing — ``compute_drift`` + the declaration read are both
+      fail-open).
+    """
+    from hpc_agent.state.data_manifest import compute_drift, declared_input_roots
+
+    exp = _exp(experiment_dir)
+    report = compute_drift(experiment_dir)
+    if report.unmanifested:
+        if declared_input_roots(experiment_dir) is None:
+            return []
+        return [
+            AttentionItem(
+                kind=DATA_UNMANIFESTED,
+                item_class=KIND_CLASS[DATA_UNMANIFESTED],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id="data-manifest",
+                action="mint with `hpc-agent data-manifest`",
+                evidence={"reason": "no data manifest — runs invisible to drift attribution"},
+            )
+        ]
+
+    items: list[AttentionItem] = []
+    for rel in report.drifted:
+        items.append(
+            AttentionItem(
+                kind=DATA_DRIFT,
+                item_class=KIND_CLASS[DATA_DRIFT],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id=rel,
+                since=_file_mtime_iso(Path(experiment_dir) / rel),
+                evidence={"relpath": rel, "change": "drifted"},
+            )
+        )
+    for rel in report.missing:
+        items.append(
+            AttentionItem(
+                kind=DATA_DRIFT,
+                item_class=KIND_CLASS[DATA_DRIFT],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id=rel,
+                evidence={"relpath": rel, "change": "missing"},
+            )
+        )
+    if report.new:
+        items.append(
+            AttentionItem(
+                kind=DATA_NEW,
+                item_class=KIND_CLASS[DATA_NEW],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id="data-manifest",
+                evidence={"new": list(report.new), "count": len(report.new)},
+            )
+        )
+    return items
+
+
+def _file_mtime_iso(path: Path) -> str | None:
+    """The file's mtime as a UTC ISO-8601 string, or ``None`` (fail-open)."""
+    from datetime import datetime, timezone
+
+    try:
+        ts = path.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+# ── registration collector (docs/design/registration-kernel.md R8) ────────────
+
+
+def collect_registrations(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Stale / blocked registrations — the deployment-boundary attention edges.
+
+    Routes the currency verdicts through the ONE definitions (never re-inlined):
+    the dossier-drift verdict through ``state/registration.py::reduce_registration``
+    (which routes its own drift through the attestation kernel) and prerequisite
+    currency through ``ops/registration/prereqs.py::check_chain``. This collector
+    re-derives nothing and writes nothing (D6). Per the design's attention contract:
+
+    * a registration with a NON-CURRENT prerequisite → one ``registration-blocked``
+      item (BLOCKED — an unsigned prerequisite blocking a registration blocks
+      CAPITAL, high-leverage by construction).
+    * a registration whose live dossier signature DRIFTED → one
+      ``registration-stale`` item (VERDICT — the clearance is no longer live).
+
+    A ``revoked`` / ``absent`` / ``superseded`` id contributes nothing. Fail-open
+    per registration: a torn journal, a moved run (the dossier cannot be
+    re-gathered), or an unparseable chain is skipped, never crashing the read.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.registration import STALE as REG_STALE
+    from hpc_agent.state.registration import reduce_registration
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    for reg_id in _discover_registration_ids(experiment_dir):
+        try:
+            records = read_decisions(experiment_dir, "registration", reg_id)
+        except Exception:  # noqa: BLE001 — fail-open: one bad journal never strands the read
+            continue
+        peek = reduce_registration(records, registration_id=reg_id, live_dossier_sha=None)
+        winner = peek.winner
+        if winner is None or peek.status in ("revoked", "absent"):
+            continue
+
+        pending = _pending_prereqs(experiment_dir, winner)
+        if pending:
+            items.append(
+                AttentionItem(
+                    kind=REGISTRATION_BLOCKED,
+                    item_class=KIND_CLASS[REGISTRATION_BLOCKED],
+                    experiment_dir=exp,
+                    scope_kind="registration",
+                    scope_id=reg_id,
+                    since=peek.registered_at,
+                    evidence={
+                        "pending": [{"slot": slot, "status": status} for slot, status in pending],
+                        "run_id": winner.get("run_id"),
+                    },
+                )
+            )
+
+        live_sha = _recompute_registration_dossier(experiment_dir, winner)
+        # ``now`` is threaded so C-horizon's TIME-based staleness joins edit-based
+        # drift in the ONE reduction: a horizon-lapsed registration reads STALE with
+        # ``stale_cause == horizon-lapsed`` and rides THIS existing item (no new kind —
+        # live-conformance C-queue). Drift-based staleness carries ``stale_cause None``.
+        reduced = reduce_registration(
+            records, registration_id=reg_id, live_dossier_sha=live_sha, now=now
+        )
+        if reduced.status == REG_STALE:
+            items.append(
+                AttentionItem(
+                    kind=REGISTRATION_STALE,
+                    item_class=KIND_CLASS[REGISTRATION_STALE],
+                    experiment_dir=exp,
+                    scope_kind="registration",
+                    scope_id=reg_id,
+                    since=reduced.registered_at,
+                    evidence={
+                        "recorded_sha": winner.get("dossier_sha"),
+                        "recomputed_sha": live_sha or "",
+                        "run_id": winner.get("run_id"),
+                        # C-horizon: 'horizon-lapsed' when a review_horizon lapsed,
+                        # None when the dossier drifted — distinguishes "a human owes
+                        # a re-affirm" from "the dossier moved".
+                        "stale_cause": reduced.stale_cause,
+                    },
+                )
+            )
+    return items
+
+
+def horizon_lapsed_registration_ids(experiment_dir: Path, *, now: str) -> set[str]:
+    """Registration ids the time-aware queue flags horizon-lapsed at *now* — a read.
+
+    The DEPLOYMENT gate's TIME leg (live-conformance C-horizon; bug-sweep #48 arm
+    (a)). REUSES the ONE queue reduction (:func:`collect_registrations`, which
+    threads *now* into ``state/registration.py::reduce_registration``) and returns
+    the ids whose ``registration-stale`` item names a lapsed review horizon
+    (``evidence["stale_cause"] == HORIZON_LAPSED``). No SECOND horizon evaluation
+    is minted here — the queue owns it; drift-based staleness (``stale_cause``
+    ``None``) is deliberately excluded (it is a `verify-registration` `status`
+    leg, not the horizon leg). Read-only, fail-open per the collector it wraps.
+    """
+    from hpc_agent.state.registration import HORIZON_LAPSED
+
+    lapsed: set[str] = set()
+    for item in collect_registrations(experiment_dir, now=now):
+        if item.kind == REGISTRATION_STALE and item.evidence.get("stale_cause") == HORIZON_LAPSED:
+            lapsed.add(item.scope_id)
+    return lapsed
+
+
+def _recompute_registration_dossier(experiment_dir: Path, winner: Mapping[str, Any]) -> str | None:
+    """The winner's live dossier ``bundle_sha256``, or ``None`` on any gap (fail-open).
+
+    Routes through the ONE signature seam (``ops/export_dossier.compute_dossier_signature``,
+    the facade module attribute). A missing/moved run — or any read failure — yields
+    ``None`` so the reduction reads the registration ``stale`` rather than crashing.
+    """
+    run_id = winner.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    from hpc_agent.ops import export_dossier
+
+    try:
+        sig = export_dossier.compute_dossier_signature(
+            experiment_dir, run_id, include_lineage=bool(winner.get("include_lineage", False))
+        )
+    except Exception:  # noqa: BLE001 — a moved/absent dossier is stale, not a crash
+        return None
+    return sig.bundle_sha256
+
+
+def _pending_prereqs(experiment_dir: Path, winner: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """The winner's ``(slot, status)`` pairs whose prerequisite is NOT current.
+
+    Routes through ``ops/registration/prereqs.py::check_chain`` (the ONE currency
+    dispatch). Fail-open: an unparseable chain or a checker that raises (the
+    reserved ``pack-receipt`` refusal) yields ``[]`` — the item simply does not
+    fire, never crashing the morning read.
+    """
+    raw = winner.get("prerequisites")
+    if not isinstance(raw, list) or not raw:
+        return []
+    from hpc_agent.ops.registration.prereqs import check_chain
+    from hpc_agent.state.registration import parse_chain_entry
+
+    entries = []
+    try:
+        for e in raw:
+            if isinstance(e, dict):
+                entries.append(parse_chain_entry(e))
+    except Exception:  # noqa: BLE001 — a malformed chain contributes no item
+        return []
+    if not entries:
+        return []
+    try:
+        verdicts = check_chain(experiment_dir, entries)
+    except Exception:  # noqa: BLE001 — a not-yet-available checker never crashes the read
+        return []
+    return [(v.slot, v.status) for v in verdicts if v.status != "current"]
+
+
+# ── fingerprint verdict collector (docs/design/determinism-fingerprint.md T7) ─
+
+
+def collect_reproduction_verdicts(experiment_dir: Path, *, now: str) -> QueueCollection:
+    """Standing determinism-fingerprint ``needs_verdict`` items (T7 + Amendment 2).
+
+    Routes through the ONE reduction WITHOUT re-implementing envelope math: T1's
+    tiered classifier already ran at append time and stamped each sample's
+    ``verdict`` field on the ledger (``state/determinism.py::classify`` →
+    ``state/fingerprint_store.py``), so the collector READS ``verdict ==
+    "needs_verdict"`` rather than re-reducing an envelope. It then joins each such
+    sample against its reproduction run's decision journal
+    (``read_decisions(exp, "run", <repro_run_id>)``): a sample whose
+    ``content_sha`` is named by a committed ``reproduction-verdict`` record —
+    accept OR reject — is ANSWERED and yields NO item (:func:`_needs_verdict_answered`).
+
+    Amendment 2 (verdict-on-demand): the item PARKS as a leverage-ZERO standing
+    item — ``unblocks`` stays 0 (no encoded edge in :func:`_fanout_for`) and it
+    carries no urgency; ``since`` is the sample's own ``ts`` so it ages honestly.
+    It surfaces as a decision-ready brief only when a consumer blocks on the
+    verdict (that routing lives in the consumer, not here). ``evidence`` is the
+    calibrated brief fields lifted VERBATIM from the sample record (deviation vs
+    envelope at n/scale — record fields only, no prose, no re-derivation).
+
+    Ledgers live at ``<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl``;
+    discovery is a NON-CREATING glob and the tolerant read routes through
+    ``state/fingerprint_store.py::read_samples``. Fail-open: an unreadable ledger
+    or journal never crashes the read — a ledger's malformed-line count is
+    disclosed in ``skipped`` (no-silent-caps), and an unreadable repro journal
+    surfaces the item rather than silently marking it answered.
+    """
+    from hpc_agent.state.fingerprint_store import fingerprints_dir, read_samples
+
+    exp = _exp(experiment_dir)
+    base = fingerprints_dir(Path(experiment_dir))
+    items: list[AttentionItem] = []
+    skipped: list[dict[str, str]] = []
+    if not base.is_dir():
+        return QueueCollection(items=items, skipped=skipped)
+    for ledger in sorted(base.glob("*.jsonl")):
+        try:
+            samples, malformed = read_samples(Path(experiment_dir), ledger.stem)
+        except Exception:  # noqa: BLE001 — fail-open: one bad ledger never strands the read
+            skipped.append({"ref": ledger.name, "reason": "unreadable fingerprint ledger"})
+            continue
+        if malformed:
+            skipped.append({"ref": ledger.name, "reason": f"{malformed} malformed ledger line(s)"})
+        for sample in samples:
+            if sample.get("verdict") != "needs_verdict":
+                continue  # auto_cleared / mismatch are not this kind
+            content_sha = sample.get("content_sha")
+            if not content_sha:
+                continue
+            repro_run_id = _repro_run_id(sample)
+            if repro_run_id is None:
+                continue
+            if _needs_verdict_answered(experiment_dir, repro_run_id, content_sha):
+                continue  # a committed reproduction-verdict record already named it
+            items.append(
+                AttentionItem(
+                    kind=REPRODUCTION_NEEDS_VERDICT,
+                    item_class=KIND_CLASS[REPRODUCTION_NEEDS_VERDICT],
+                    experiment_dir=exp,
+                    scope_kind="run",
+                    scope_id=repro_run_id,
+                    block=_REPRODUCTION_VERDICT_BLOCK,
+                    cluster=sample.get("cluster"),
+                    since=sample.get("ts"),
+                    evidence={
+                        "content_sha": content_sha,
+                        "source": sample.get("source"),
+                        "scale": sample.get("scale"),
+                        "cluster": sample.get("cluster"),
+                        "same_submission": sample.get("same_submission"),
+                        "partial": sample.get("partial"),
+                        "task_indices": sample.get("task_indices"),
+                        "run_ids": sample.get("run_ids"),
+                        "per_key": sample.get("per_key"),
+                    },
+                )
+            )
+    return QueueCollection(items=items, skipped=skipped)
+
+
+#: The decision-journal block a needs_verdict resolution rides — the EXISTING run
+#: scope, no new verdict verb (the no-unlock-verb doctrine). Bound once to the
+#: store's constant so the "answered" join and the append site cannot disagree.
+_REPRODUCTION_VERDICT_BLOCK = "reproduction-verdict"
+
+
+def _repro_run_id(sample: Mapping[str, Any]) -> str | None:
+    """The reproduction run id — the SECOND ``run_ids`` member (the run whose
+    journal holds the verdict), or ``None`` for a malformed pair (fail-open)."""
+    run_ids = sample.get("run_ids")
+    if not isinstance(run_ids, (list, tuple)) or len(run_ids) < 2:
+        return None
+    repro = run_ids[1]
+    return repro if isinstance(repro, str) and repro else None
+
+
+def _needs_verdict_answered(experiment_dir: Path, repro_run_id: str, content_sha: str) -> bool:
+    """True iff a committed ``reproduction-verdict`` record names *content_sha*.
+
+    The "answered" join (T7): the human's resolution lands as an ordinary
+    ``append-decision`` record on the reproduction RUN scope (block
+    ``reproduction-verdict``); a record whose ``resolved.content_sha`` equals the
+    sample's bind-locked ``content_sha`` TOKEN-EXACT answers it — accept OR reject
+    (either verdict closes the standing item; admission into the envelope is a
+    SEPARATE, accept-only question the store owns). Fail-open: an unreadable /
+    torn journal reads NOT-answered, so the item surfaces rather than vanishing.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    try:
+        records = read_decisions(experiment_dir, "run", repro_run_id)
+    except Exception:  # noqa: BLE001 — fail-open: an unreadable journal surfaces the item
+        return False
+    for rec in records:
+        if rec.get("block") != _REPRODUCTION_VERDICT_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("content_sha") == content_sha:
+            return True
+    return False
+
+
+# ── evidence-memory collector (E-queue) ──────────────────────────────────────
+
+
+def collect_campaign_unconcluded(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Terminal campaigns no current conclusion names (E-queue) — an AGING item.
+
+    The D5 route-through: the predicate is ``state/evidence.py::collect_evidence``'s
+    ``unconcluded`` reduction (itself composing ``latest_decision`` over campaign
+    journals joined against the conclusion journals' ``concludes`` sets) — this
+    collector CALLS it, never re-implements the join (the module's ``inspect.getsource``
+    route-through pin). ``since`` is the campaign's completion ts (the ActivityItem's
+    ``ts``), so the item ages honestly. Class INFORMATIONAL — a missing conclusion
+    blocks nothing (E3), so it carries NO ``action`` prose beyond the identity line
+    and its fan-out stays 0 (no encoded edge in :func:`_apply_fanout`).
+
+    Fail-open (D3): any exception collecting evidence yields NO items rather than
+    crashing the queue read — an advisory standing item is never load-bearing.
+    """
+    from hpc_agent.state.evidence import collect_evidence
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    try:
+        collection = collect_evidence(experiment_dir)
+    except Exception:  # noqa: BLE001 — fail-open: the advisory item never strands the read
+        return items
+    for row in collection.unconcluded:
+        items.append(
+            AttentionItem(
+                kind=CAMPAIGN_UNCONCLUDED,
+                item_class=KIND_CLASS[CAMPAIGN_UNCONCLUDED],
+                experiment_dir=exp,
+                scope_kind="campaign",
+                scope_id=row.subject_id,
+                since=row.ts,
+                evidence={
+                    "latest_block": row.detail.get("latest_block"),
+                    "terminal": row.detail.get("terminal"),
+                    "concluded": row.detail.get("concluded"),
+                },
+            )
+        )
+    return items
+
+
+# ── challenge collector (docs/design/challenge-attestation.md C-queue) ─────────
+
+
+def collect_challenges(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Open + upheld-unremedied challenges (C-queue) — the dissent attention edges.
+
+    The D5 route-through: the predicate is the ONE reduction
+    ``state/challenges.py::standing_challenges`` (no address filter → every
+    challenge under the namespace) — this collector CALLS it, never re-reads a
+    challenge journal (the module's ``inspect.getsource`` route-through pin). Two
+    tiers, mirroring the reduced per-challenge status:
+
+    * an ``open`` challenge → ``challenge-open`` (VERDICT — a human judgment is
+      pending; the namesake class). ``since`` is the filing ts so the item AGES.
+      Fan-out is the pending registrations whose prerequisite chains name the
+      contested ``content_sha`` (:func:`_fanout_for`; the R8 edge) — a contested
+      registration prerequisite blocks capital, high-leverage by construction.
+    * an ``upheld`` challenge → ``challenge-upheld-unremedied`` (INFORMATIONAL — a
+      standing refutation nothing has answered; fan-out 0, never blocking). An
+      upheld challenge whose subject already MOVED reduces to ``superseded`` (the
+      headline) and yields no item — the remedy landed.
+
+    A ``dismissed`` / ``withdrawn`` / ``superseded`` challenge is resolved and
+    yields nothing (silence-by-record). Fail-open (D3): any exception collecting
+    yields NO items rather than crashing the queue read — an advisory standing
+    item is never load-bearing. The ``content_sha`` rides ``evidence`` so the
+    fan-out edge can read it without a second journal walk.
+    """
+    from hpc_agent.state.challenges import OPEN, UPHELD, standing_challenges
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    try:
+        collected = standing_challenges(experiment_dir)
+    except Exception:  # noqa: BLE001 — fail-open: the advisory item never strands the read
+        return items
+    for st in collected.statuses:
+        target = st.target if isinstance(st.target, dict) else {}
+        content_sha = target.get("content_sha") if isinstance(target, dict) else None
+        evidence = {
+            "content_sha": content_sha,
+            "target_kind": target.get("kind"),
+            "target_subject_kind": target.get("subject_kind"),
+            "target_subject_id": target.get("subject_id"),
+        }
+        if st.status == OPEN:
+            items.append(
+                AttentionItem(
+                    kind=CHALLENGE_OPEN,
+                    item_class=KIND_CLASS[CHALLENGE_OPEN],
+                    experiment_dir=exp,
+                    scope_kind="challenge",
+                    scope_id=st.challenge_id,
+                    since=st.filed_at,
+                    evidence=evidence,
+                )
+            )
+        elif st.status == UPHELD:
+            items.append(
+                AttentionItem(
+                    kind=CHALLENGE_UPHELD_UNREMEDIED,
+                    item_class=KIND_CLASS[CHALLENGE_UPHELD_UNREMEDIED],
+                    experiment_dir=exp,
+                    scope_kind="challenge",
+                    scope_id=st.challenge_id,
+                    since=st.filed_at,
+                    evidence=evidence,
+                )
+            )
+    return items
+
+
+# ── live-conformance collector (docs/design/live-conformance.md C-queue) ──────
+
+#: The registration-scoped decision block a conformance verdict rides — the
+#: EXISTING registration scope, no new verdict verb (the no-unlock-verb doctrine).
+#: Bound once to the registration constant so the "cleared" join and the T7 append
+#: gate cannot disagree.
+_CONFORMANCE_VERDICT_BLOCK = "conformance-verdict"
+
+
+def collect_conformance(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Registrations whose live window judges needs_verdict / nonconforming (C-queue).
+
+    For each registration that OPTED IN (its winning record carries a
+    ``conformance`` declaration), the collector loads the declaration + the
+    registration-scoped ledger, selects the trailing ``min_window_n`` receipts (the
+    ONE mechanical default — the caller's OWN declared floor, never a core-invented
+    span), reads the sealed baseline (disclose-not-refuse — an absent/drifted
+    artifact judges against empty rows and routes the human), and routes through the
+    ONE comparator ``state/conformance.py::judge_window`` (the module's
+    ``inspect.getsource`` route-through pin — NEVER a re-implemented envelope):
+
+    * a :data:`~hpc_agent.state.conformance.NONCONFORMING` fold → one
+      ``conformance-nonconforming`` item (VERDICT — a FINDING awaiting judgment);
+    * a :data:`~hpc_agent.state.conformance.NEEDS_VERDICT` fold → one
+      ``conformance-needs-verdict`` item (VERDICT — thin/novel/incomparable);
+    * a :data:`~hpc_agent.state.conformance.CONFORMING` window → NO item.
+
+    **Cleared mechanically (C-verdict):** the item vanishes when the newest
+    committed ``conformance-verdict`` record on the registration's journal
+    POST-DATES the newest receipt in the offending window (the fingerprint-T7
+    answered-verdict pattern — ``note`` is never parsed for meaning).
+
+    Fan-out is 0 by construction (no encoded edge in :func:`_fanout_for` — the
+    honest anti-capital-shaping answer, C-queue). A ``revoked`` / ``absent``
+    registration contributes nothing. Fail-open per registration (D3): a torn
+    journal, a moved run, or an unparseable declaration is skipped, never crashing
+    the read.
+    """
+    from hpc_agent.state import conformance, conformance_store
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.registration import parse_conformance_declaration, reduce_registration
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    for reg_id in _discover_registration_ids(experiment_dir):
+        try:
+            records = read_decisions(experiment_dir, "registration", reg_id)
+            status = reduce_registration(records, registration_id=reg_id, live_dossier_sha=None)
+            winner = status.winner
+            if winner is None or status.status in ("revoked", "absent"):
+                continue
+            declaration = parse_conformance_declaration(winner)
+            if declaration is None:
+                continue  # not opted in — no conformance machinery runs
+            baseline_rows = _read_conformance_baseline(experiment_dir, declaration)
+            ledger, _skipped = conformance_store.read_observations(experiment_dir, reg_id)
+            window = conformance_store.select_window(ledger, last_n=declaration.min_window_n)
+            report = conformance.judge_window(baseline_rows, window, declaration, now=now)
+        except Exception:  # noqa: BLE001 — fail-open: one bad registration never strands the read
+            continue
+
+        if report.tier == conformance.CONFORMING:
+            continue
+        if _conformance_verdict_cleared(records, window):
+            continue
+
+        kind = (
+            CONFORMANCE_NONCONFORMING
+            if report.tier == conformance.NONCONFORMING
+            else CONFORMANCE_NEEDS_VERDICT
+        )
+        items.append(
+            AttentionItem(
+                kind=kind,
+                item_class=KIND_CLASS[kind],
+                experiment_dir=exp,
+                scope_kind="registration",
+                scope_id=reg_id,
+                block=_CONFORMANCE_VERDICT_BLOCK,
+                since=_newest_receipt_ts(window),
+                evidence={
+                    "overall": report.tier,
+                    "window_n": report.window_n,
+                    "min_window_n": report.min_window_n,
+                    "run_id": winner.get("run_id"),
+                    "per_key": [
+                        {
+                            "key": kv.key,
+                            "tier_reason": kv.tier_reason,
+                            "window_lo": kv.window.lo if kv.window is not None else None,
+                            "window_hi": kv.window.hi if kv.window is not None else None,
+                            "baseline_lo": kv.baseline.lo if kv.baseline is not None else None,
+                            "baseline_hi": kv.baseline.hi if kv.baseline is not None else None,
+                            "baseline_n": kv.baseline_n,
+                            "window_n": kv.window_n,
+                        }
+                        for kv in report.keys
+                    ],
+                },
+            )
+        )
+    return items
+
+
+def _read_conformance_baseline(
+    experiment_dir: Path, declaration: Any
+) -> tuple[dict[str, Any], ...]:
+    """The sealed baseline rows, or ``()`` on any gap (disclose-not-refuse, C-declare).
+
+    The declaration names ``{path, sha256}`` inside the sealed dossier; the reader
+    reads that relpath and parses it via the kernel's ``parse_baseline_rows``
+    (accepting a bare list or a ``{"rows": [...]}`` envelope). Any read/parse gap
+    yields ``()`` so the comparator still runs and routes the thin baseline to the
+    human — the membership GATE (that the pair is a dossier member) is the
+    append-time job (T7), never the reader's. Sha drift is not re-checked here: an
+    honest queue read judges against whatever the artifact currently holds.
+    """
+    from hpc_agent.state import conformance
+
+    rel = declaration.baseline.path
+    try:
+        data = (Path(experiment_dir) / rel).read_bytes()
+        obj = json.loads(data.decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return ()
+    if isinstance(obj, dict) and "rows" in obj:
+        obj = obj["rows"]
+    try:
+        return conformance.parse_baseline_rows(obj)
+    except Exception:  # noqa: BLE001 — a malformed artifact judges as an empty baseline
+        return ()
+
+
+def _newest_receipt_ts(window: Sequence[Mapping[str, Any]]) -> str | None:
+    """The newest caller-attested ``observed_at`` in the window (the finding's freshest evidence).
+
+    Uses ``observed_at`` (the observation TIME), not the ledger-append ``ts``: the
+    finding ages from when the newest EVIDENCE occurred, and a verdict "post-dates the
+    window" when it was authored after that evidence (C-verdict). The append ``ts`` is
+    a wall-clock artefact that at production/replay cadence collides with the verdict's
+    own append ts.
+    """
+    stamps: list[str] = [
+        r["observed_at"]
+        for r in window
+        if isinstance(r.get("observed_at"), str) and r.get("observed_at")
+    ]
+    return max(stamps, default=None)
+
+
+def _conformance_verdict_cleared(
+    records: Sequence[Mapping[str, Any]], window: Sequence[Mapping[str, Any]]
+) -> bool:
+    """True iff a committed ``conformance-verdict`` post-dates the newest window receipt.
+
+    The mechanical resolution (C-verdict): a verdict whose journal ``ts`` is strictly
+    AFTER the newest receipt ``ts`` in the offending window clears the finding — the
+    human judged evidence at least as fresh as the drift. ``note`` is never parsed.
+    An empty window or a verdict with no parseable ts never clears (the item
+    surfaces rather than vanishing — fail-open toward attention).
+    """
+    newest_receipt = parse_iso_utc_or_none(_newest_receipt_ts(window))
+    if newest_receipt is None:
+        return False
+    newest_verdict = None
+    for rec in records:
+        if rec.get("block") != _CONFORMANCE_VERDICT_BLOCK:
+            continue
+        ts = parse_iso_utc_or_none(rec.get("ts") if isinstance(rec.get("ts"), str) else None)
+        if ts is not None and (newest_verdict is None or ts > newest_verdict):
+            newest_verdict = ts
+    return newest_verdict is not None and newest_verdict > newest_receipt
+
+
 # ── composition ──────────────────────────────────────────────────────────────
 
 
@@ -486,6 +1274,7 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
     (Wave C), composing this function per discovered experiment.
     """
     audits = collect_audits(experiment_dir, now=now)
+    verdicts = collect_reproduction_verdicts(experiment_dir, now=now)
     items: list[AttentionItem] = [
         *collect_greenlight_and_parked(experiment_dir, now=now),
         *collect_stalled(experiment_dir, now=now),
@@ -495,8 +1284,17 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *audits.items,
         *collect_alerts(experiment_dir, now=now),
         *collect_ssh_circuits(experiment_dir, now=now),
+        *collect_data_manifest(experiment_dir, now=now),
+        *collect_registrations(experiment_dir, now=now),
+        *verdicts.items,
+        *collect_campaign_unconcluded(experiment_dir, now=now),
+        *collect_challenges(experiment_dir, now=now),
+        *collect_conformance(experiment_dir, now=now),
     ]
-    return QueueCollection(items=_apply_fanout(items, experiment_dir), skipped=audits.skipped)
+    return QueueCollection(
+        items=_apply_fanout(items, experiment_dir),
+        skipped=[*audits.skipped, *verdicts.skipped],
+    )
 
 
 def _resolve_class_order(class_order: Sequence[str] | None) -> tuple[str, ...]:
@@ -621,9 +1419,16 @@ def _fanout_for(item: AttentionItem, experiment_dir: Path) -> int:
     if item.kind == GREENLIGHT_UNADVANCED:
         return 1  # the committed-unadvanced greenlight blocks its whole run
     if item.kind in (AUDIT_SECTION_UNSIGNED, AUDIT_SECTION_STALE):
-        return _count_runs_echoing_audit(experiment_dir, item.scope_id)
+        return _count_runs_echoing_audit(
+            experiment_dir, item.scope_id
+        ) + _count_registrations_naming_audit(experiment_dir, item.scope_id)
     if item.kind == CAMPAIGN_PENDING:
         return _count_campaign_pending_runs(experiment_dir, item.scope_id)
+    if item.kind == CHALLENGE_OPEN:
+        content_sha = item.evidence.get("content_sha")
+        if not isinstance(content_sha, str) or not content_sha:
+            return 0
+        return _count_registrations_naming_challenge(experiment_dir, content_sha)
     return 0
 
 
@@ -799,6 +1604,91 @@ def _discover_audit_ids(experiment_dir: Path) -> list[str]:
         if name.endswith(suffix):
             ids.append(name[: -len(suffix)])
     return ids
+
+
+def _discover_registration_ids(experiment_dir: Path) -> list[str]:
+    """Registration ids with a decision journal — via a NON-CREATING glob (D3).
+
+    Mirrors ``_discover_audit_ids`` over ``.hpc/registrations/`` — the same
+    non-scaffolding read discipline (a read must never mkdir a namespace).
+    """
+    suffix = ".decisions.jsonl"
+    base = Path(experiment_dir) / ".hpc" / "registrations"
+    if not base.is_dir():
+        return []
+    return [
+        p.name[: -len(suffix)] for p in sorted(base.glob(f"*{suffix}")) if p.name.endswith(suffix)
+    ]
+
+
+def _count_registrations_naming_audit(experiment_dir: Path, audit_id: str) -> int:
+    """Live registrations whose winning chain names *audit_id* (the R8 leverage edge).
+
+    The audit→registration fan-out: an unsigned/stale audit section blocks not only
+    the runs that graduate behind it but every registration whose prerequisite chain
+    names that audit (a ``notebook-audit`` slot whose ``subject_id`` is the audit id).
+    A NON-CREATING, fail-open read of the registration journals — a torn journal is
+    skipped; a revoked/absent id contributes nothing (it no longer depends on the
+    audit). Routes winner selection through ``reduce_registration`` (never a re-inlined
+    newest-first).
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.registration import KIND_NOTEBOOK_AUDIT, reduce_registration
+
+    count = 0
+    for reg_id in _discover_registration_ids(experiment_dir):
+        try:
+            records = read_decisions(experiment_dir, "registration", reg_id)
+        except Exception:  # noqa: BLE001 — fail-open: a bad journal never inflates/crashes
+            continue
+        status = reduce_registration(records, registration_id=reg_id, live_dossier_sha=None)
+        winner = status.winner
+        if winner is None or status.status in ("revoked", "absent"):
+            continue
+        raw = winner.get("prerequisites")
+        if not isinstance(raw, list):
+            continue
+        if any(
+            isinstance(e, dict)
+            and e.get("kind") == KIND_NOTEBOOK_AUDIT
+            and e.get("subject_id") == audit_id
+            for e in raw
+        ):
+            count += 1
+    return count
+
+
+def _count_registrations_naming_challenge(experiment_dir: Path, content_sha: str) -> int:
+    """Live registrations whose winning chain names *content_sha* (the R8 leverage edge).
+
+    The challenge→registration fan-out (C-queue): a contested ``content_sha`` blocks
+    capital wherever a live registration's prerequisite chain binds it — the one
+    encoded edge the challenge machinery reuses. A NON-CREATING, fail-open read of
+    the registration journals mirroring :func:`_count_registrations_naming_audit`: a
+    torn journal is skipped; a revoked/absent id contributes nothing. Routes winner
+    selection through ``reduce_registration`` (never a re-inlined newest-first). The
+    match is on the prerequisite entry's ``content_sha`` (the full address's
+    discriminator — the SAME sha the challenge targets), across every kind.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.registration import reduce_registration
+
+    count = 0
+    for reg_id in _discover_registration_ids(experiment_dir):
+        try:
+            records = read_decisions(experiment_dir, "registration", reg_id)
+        except Exception:  # noqa: BLE001 — fail-open: a bad journal never inflates/crashes
+            continue
+        status = reduce_registration(records, registration_id=reg_id, live_dossier_sha=None)
+        winner = status.winner
+        if winner is None or status.status in ("revoked", "absent"):
+            continue
+        raw = winner.get("prerequisites")
+        if not isinstance(raw, list):
+            continue
+        if any(isinstance(e, dict) and e.get("content_sha") == content_sha for e in raw):
+            count += 1
+    return count
 
 
 def _circuit_host(line: str) -> str:

@@ -60,6 +60,34 @@
     "verb": "mutate"
   },
   {
+    "agent_facing": false,
+    "cli": "hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "conformance_record.input.json",
+    "name": "conformance-record",
+    "output_schema": "conformance_record.output.json",
+    "python": "hpc_agent.ops.conformance.record_op.conformance_record",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal ONE live conformance observation against the registration it tests — the emitter's evidence FOR/AGAINST a sealed hypothesis at production cadence. Recomputes the payload content_sha SERVER-SIDE over {payload, labels, observed_at} and binds it (a caller cannot assert a sha; there is no sha field on the spec), stamps the registration's reduced status_at_record (the live dossier-sha leg — current/stale/revoked), and appends exactly one line to <experiment>/_aggregated/_conformance/<registration_id>.jsonl. An absent registration is refused loudly (no hypothesis to test); a stale/revoked/superseded registration is RECORDED and its status disclosed (fail-open for evidence — production is the experiment that never stops). payload/observed_at values stay caller-attested (the emitter's truthfulness, not core's). Local read + one journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "data_manifest.input.json",
+    "name": "data-manifest",
+    "output_schema": "data_manifest.output.json",
+    "python": "hpc_agent.ops.data_manifest.data_manifest",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Mint an identity record (sha256 + size + opaque built_by per file) for the experiment's DECLARED input data into .hpc/data_manifest.json, journal the mint, and refresh the (size, mtime) fast-path cache. Converts silent data changes from invisible to attributed — the quiet-corruption class (same filename, rebuilt bytes) that no robustness layer catches because nothing throws. Roots default to interview.json's audited_source.input_roots (the ONE input declaration); no roots + no declaration REFUSES (core never guesses a data/ dir). Re-minting is the journaled 'new known-good' act. Pure local read + hash + write, no SSH.",
+    "verb": "mutate"
+  },
+  {
     "agent_facing": true,
     "cli": "hpc-agent decorate-entry-point --path <path> --function-name <function_name>",
     "idempotent": true,
@@ -104,6 +132,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "export_attestations.input.json",
+    "name": "export-attestations",
+    "output_schema": "export_attestations.output.json",
+    "python": "hpc_agent.ops.export_attestations.export_attestations",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Project a run's sealed dossier evidence into portable in-toto Statements (one per sealed store entry), each wrapped in an unsigned DSSE envelope, as a JSONL stream ecosystem tooling can verify without hpc-agent. Delegates the gather to export-dossier (the stores are never walked twice); subject digests are copied verbatim and record bytes ride verbatim in the predicate — the export never parses what it attests. --include-lineage widens it to the whole supersession chain. Pure local reads + one local write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "export_dossier.input.json",
@@ -114,6 +156,20 @@
       "file_write"
     ],
     "summary": "Bundle a run's core-owned record trail — sidecar, decision journal, briefs, block terminals, journal record, scope journals + look ledgers, and harvested aggregates — into one integrity-sealed .zip with a provenance manifest. --include-lineage widens it to the run's whole supersession chain. Pure local reads + one local write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent host-retarget --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "host_retarget.input.json",
+    "name": "host-retarget",
+    "output_schema": "host_retarget.output.json",
+    "python": "hpc_agent.ops.host_retarget.host_retarget",
+    "side_effects": [
+      "writes-journal"
+    ],
+    "summary": "Move an IN-FLIGHT run to a different login node of the SAME cluster (run-12 finding 23): patch the run's journaled `cluster` key so resolve_ssh_target derives the new user@host at use time — no journal surgery. The new cluster MUST serve the same scheduler & scratch (a login-node failover, not a cluster move); a different scheduler/scratch is REFUSED — use retarget-run for that. Journals the failover as a decision (the provenance trail the hand-edit lacked).",
     "verb": "mutate"
   },
   {
@@ -161,6 +217,34 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "notebook_draft.input.json",
+    "name": "notebook-draft",
+    "output_schema": "notebook_draft.output.json",
+    "python": "hpc_agent.ops.notebook.draft_op.notebook_draft",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal a CODE draft attestation for one section of an audited source .py — the drafter-attribution seam (multi-human). Records the actor whose SESSION drove the drafting as the section's author, at DRAFT time (the reviewer!=author gate resolves it). Parses the source ON DISK and binds the draft to the freshly-parsed section sha (a draft can only be recorded against current source, and the old draft reads stale the moment the section is redrafted). The actor is resolved SERVER-SIDE from the session env (HPC_ACTOR) and validated against the interview's declared actors.ids — NEVER a wire field (an agent-suppliable actor would let the model choose its identity). Refuses when >1 actor is declared and no session actor resolves (an anonymous act is the laundering channel); records attestor_id=None when zero/one actor is declared. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "notebook_record_config.input.json",
+    "name": "notebook-record-config",
+    "output_schema": "notebook_record_config.output.json",
+    "python": "hpc_agent.ops.notebook.record_config_op.notebook_record_config",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Record the audit configuration (input_roots / source_roots / attention_order / output_roots - opaque relpath lists) for a STANDALONE notebook audit, as a journaled record in the audit's own decision journal. Without it a standalone audit (no interview.json audited_source opt-in) runs ROOTLESS-canonical: the lint recomputes with empty roots and the template-mandated source_roots engine-drift binding is silently inactive (run #10). The canonical view reads the interview block FIRST when present (the opt-in path owns the config), else this journaled record. Refuses when interview.json already carries audited_source for this audit_id (one source of truth) and when a config record already exists (immutable-per-audit - supersede with a NEW audit_id). Recording into an audit that already has journal entries succeeds with a LOUD warning: every view_sha moves, prior sign-offs read stale. Optionally carries the audit-OPEN intent (goal + task_axes - the free-text campaign goal and the names of what varies across tasks) on the same immutable seat, the durable record audit-handoff reads (absent = byte-identical). Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]",
     "idempotent": false,
     "input_schema": "notebook_record_receipt.input.json",
@@ -171,6 +255,62 @@
       "file_write"
     ],
     "summary": "Journal CODE render receipts for the sections of an audited source .py — the emitter's evidence that a section was rendered (executed) and whether its assertions errored. Parses the source ON DISK and binds each receipt to the freshly-parsed section sha (a receipt can only be recorded against current source, and drifts stale when the section moves), then appends a notebook-render-receipt record (attestor=code) per known slug. Unknown slugs are reported skipped. notebook-auto-clear reads these journaled receipts (sha-fresh only) — it never accepts an inline caller receipt. Freshness (the sha bind) is recomputed here; output_sha/error stay caller-attested (D9), weighed by the graduation consumers. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "notebook_scaffold_template.input.json",
+    "name": "notebook-scaffold-template",
+    "output_schema": "notebook_scaffold_template.output.json",
+    "python": "hpc_agent.ops.notebook.scaffold_template_op.notebook_scaffold_template",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Scaffold a content-free notebook-audit template: write a jupytext percent-format .py with one # %% cell per requested section slug, each opening with its hpc-audit-section marker (the ONE marker grammar from state/audit_source.py) plus a one-line placeholder comment. Cell bodies are caller-owned; the verb emits format machinery only, plus a marker-less path-bootstrap preamble cell (before the first marker, outside every audit section) that normalizes sys.path + cwd to the .hpc-marked experiment root under interactive kernels. Round-trip verified: the written file is re-parsed and must yield exactly the requested slugs, else it is deleted and the call refused. Refuses empty/duplicate/malformed slugs and an existing output file (no force flag - delete it first). Pure local write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "pack_bind.input.json",
+    "name": "pack-bind",
+    "output_schema": "pack_bind.output.json",
+    "python": "hpc_agent.ops.pack.bind_op.pack_bind",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Bind a domain pack into an experiment AS DATA: read the caller-referenced manifest ON DISK, recompute every listed file's raw-bytes SHA-256 and the manifest sha server-side (no sha is caller-suppliable), refuse loudly on any drift or a missing/unreadable manifest, then append a CODE attestation (block pack-bind, response 'bound') under the pack's decision journal, bound through the one kernel against the fresh manifest hash. Editing pack content later moves the sha and revokes every clearance signed under the old standards — no drift state machine. Core never imports, executes, or interprets a pack file. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "pack_record_receipt.input.json",
+    "name": "pack-record-receipt",
+    "output_schema": "pack_record_receipt.output.json",
+    "python": "hpc_agent.ops.pack.record_receipt_op.pack_record_receipt",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal a CODE receipt that a domain check reported passed for a caller-authored slot, against a set of checked files, under a pack's current bind. Recomputes every checked file's sha AND the bind's manifest sha ON DISK and builds the composite content_sha server-side (no caller-suppliable sha), then binds it through the one attestation kernel and appends a pack-receipt record. The receipt reads stale the instant any checked file or the bind moves; passed/evidence stay caller-attested (weighed by the gate, never re-derived). No current bind for the named pack is a loud dangling reference. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent pack-refresh --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "pack_refresh.input.json",
+    "name": "pack-refresh",
+    "output_schema": "pack_refresh.output.json",
+    "python": "hpc_agent.ops.pack.refresh_op.pack_refresh",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Re-seal every opted-in domain pack whose manifest is STALE against on-disk bytes (the minimal set — a stale pack never forces another's rebuild) from its declarative sweep.json recipe (pure hashing; core never runs a pack build/check script), rebind each via the pack-bind path (journaling old→new shas — the drift event is the archive record), and report which caller-authored receipt slots must be re-earned plus each one's caller-side check command (core never runs the check). Not opted in → empty and silent. Pure local read + manifest write + journal append, no SSH.",
     "verb": "mutate"
   },
   {
@@ -218,6 +358,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "reconcile-stale",
+    "output_schema": null,
+    "python": "hpc_agent.ops.monitor.reconcile_stale.reconcile_stale",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "summary": "Bulk-close in-flight runs the scheduler no longer knows: ONE scheduler query per login node (via batch-status), then every run whose job_ids are all unknown is closed through the existing reconcile settle classification (abandoned/no-evidence) — never one-by-one SSH, never a cluster action. Ambiguous runs stay open and are listed.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>",
     "idempotent": true,
     "input_schema": "resubmit.input.json",
@@ -247,16 +402,17 @@
   },
   {
     "agent_facing": true,
-    "cli": null,
+    "cli": "hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "update_run_constraints.input.json",
     "name": "update-run-constraints",
     "output_schema": "update_run_constraints.output.json",
     "python": "hpc_agent.ops.monitor.update_constraints.update_run_constraints",
     "side_effects": [
-      "ssh"
+      "ssh",
+      "writes-sidecar"
     ],
-    "summary": "",
+    "summary": "Mutate a run's cluster-side SLURM Features in place via `scontrol update jobid=<id> Features=<expr>` — retargets constraints WITHOUT cancel+resubmit, so the jobs keep their accumulated age priority; mirrors the new feature set onto the run sidecar.",
     "verb": "mutate"
   },
   {
@@ -310,6 +466,30 @@
     "python": "hpc_agent.ops.attention_op.attention_queue",
     "side_effects": [],
     "summary": "The attention queue: the fleet-wide digest ordered by needs-your-verdict-first. Collects every place a human action is the blocking edge (pending greenlights, committed-but-unadvanced decisions, anomaly briefs, campaign completion briefs, unsigned/stale audit sections, dead workers, alerts, open ssh circuits) across one experiment or the whole fleet (fleet=True), orders by leverage (unblock fan-out) then class then oldest, and renders a deterministic markdown digest relayed verbatim. Read-only, no SSH, watermark-neutral (moves no state); recomputed on every read (no cache).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "audit_handoff.input.json",
+    "name": "audit-handoff",
+    "output_schema": "audit_handoff.output.json",
+    "python": "hpc_agent.ops.notebook.audit_handoff_op.audit_handoff",
+    "side_effects": [],
+    "summary": "Project the durable audit records into a DRAFT InterviewSpec (the audit->interview bridge). Reads the audit-open intent (goal + task_axes) and config roots off the notebook-audit-config seat, and AST-scans the source for @register_run entry points and $HPC_RESULT_DIR write candidates. Every field is DERIVED-and-disclosed or an explicit PLACEHOLDER the caller must fill - the verb never guesses (a guessed field becomes a journaled fact via the interview). summary_artifact and entry-point candidates are detected-and-disclosed (multiple = listed, caller confirms). Deterministic: same records -> byte-identical draft. No SSH.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent audit-preflight --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "audit_preflight.input.json",
+    "name": "audit-preflight",
+    "output_schema": "audit_preflight.output.json",
+    "python": "hpc_agent.ops.audit_preflight.audit_preflight",
+    "side_effects": [],
+    "summary": "GO/NO-GO preflight for the notebook-audit loop. Composes existing substrate checks — template present + parses + git-committed-clean (uncommitted = unsigned), version skew (reused from doctor), declared roots exist and are non-empty, and prior audit state (resuming vs fresh) — into one decision-ready brief. Read-only, no SSH; detects nothing new and blocks nothing itself (the gates it predicts remain the enforcement). The kickoff collapses to 'run audit-preflight; if GO, begin'.",
     "verb": "query"
   },
   {
@@ -424,6 +604,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "challenge_status.input.json",
+    "name": "challenge-status",
+    "output_schema": "challenge_status.output.json",
+    "python": "hpc_agent.ops.challenge_status_op.challenge_status",
+    "side_effects": [],
+    "summary": "Read the standing dissent over a committed record. Two views: a challenge_id (the filing/verdict/withdraw thread) or a target address (a content_sha, or a subject_kind+subject_id pair) — 'what stands against this record?'. Reduces each challenge to open / upheld / dismissed / withdrawn / superseded, re-resolves the target (found-current / found-superseded) and each cited evidence sha (verified / unresolvable) — DISCLOSED, never refused. Contested is an orthogonal flag beside the target's status, never blocking. Fleet-capable. Read-only; renders a deterministic markdown brief relayed verbatim, whose canonical-JSON view_sha a verdict may bind.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>",
     "idempotent": true,
     "input_schema": null,
@@ -484,6 +676,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent conformance-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "conformance_status.input.json",
+    "name": "conformance-status",
+    "output_schema": "conformance_status.output.json",
+    "python": "hpc_agent.ops.conformance.status_op.conformance_status",
+    "side_effects": [],
+    "summary": "Report a registration's LIVE conformance: reduce its journal, read its sealed conformance declaration + baseline, select a caller-named window over the ledger ({since,until?} or last_n), and judge it against the REGISTERED evidence via the one comparator. Returns per-key verdicts (within/outside the envelope, or a thin/novel/incomparable route to needs_verdict), the overall tier, both sides' range-phrased evidence, and a deterministic brief. Verdicts are DERIVED on every read — no verdict store, nothing marked seen. A reporter: a nonconforming window is a FINDING that changes no registration status. Read-only, no SSH.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent dag-frontier [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,
@@ -503,7 +707,7 @@
     "output_schema": null,
     "python": "hpc_agent.meta.campaign.atoms.decide_concurrency.decide_concurrency",
     "side_effects": [],
-    "summary": "Decide campaign iteration concurrency from observable evidence: the strategy's async support (classify-campaign-path's supports_async_concurrency) and budget headroom (campaign-budget's remaining minus in-flight). Resolves sequential deterministically (decided_by=code) when async is unsupported or there's no headroom; otherwise escalates the how-aggressive choice (decided_by=judgement) carrying the computed safe max_in_flight bound.",
+    "summary": "Decide campaign iteration concurrency from observable evidence: the strategy's async support (classify-campaign-path's supports_async_concurrency) and budget headroom (campaign-budget's remaining, which already nets in-flight). Resolves sequential deterministically (decided_by=code) when async is unsupported or there's no headroom; otherwise escalates the how-aggressive choice (decided_by=judgement) carrying the computed safe max_in_flight bound.",
     "verb": "query"
   },
   {
@@ -568,6 +772,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "dir_digest.input.json",
+    "name": "dir-digest",
+    "output_schema": "dir_digest.output.json",
+    "python": "hpc_agent.ops.dir_digest.dir_digest",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Bounded, code-rendered digest of a directory tree — replaces raw `ls`/`find` in agent prose (a context-budget hazard on large trees). Reports file/dir counts, total size, the newest N entries, a top-~10 extension histogram, and (opt-in) per-marker line-hit counts across *.log/*.err files. LOCAL by default (path confined to the experiment dir); set --cluster to digest a scratch-confined REMOTE tree over ONE throttled ssh read (never ships a listing). Fails open on a missing/unreadable root. The `render` field is relayed verbatim.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]",
     "idempotent": true,
     "input_schema": null,
@@ -612,6 +830,30 @@
     "python": "hpc_agent.ops.recover.doctor.doctor",
     "side_effects": [],
     "summary": "Driver watchdog (dead-man's switch). Scan live runs for a missed driver-tick deadline and surface each as a DRAFTED recovery proposal plus the evidence. Read-only, no SSH, no scheduler. It NEVER restarts or re-arms anything — detection is its whole job; safe recovery is guaranteed by tick idempotency. Run it out-of-session from an OS scheduler (Task Scheduler / cron).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "evidence_brief.input.json",
+    "name": "evidence-brief",
+    "output_schema": "evidence_brief.output.json",
+    "python": "hpc_agent.ops.evidence_brief_op.evidence_brief",
+    "side_effects": [],
+    "summary": "The evidence brief: the POINT query over the research program's sealed records. Keyed by scope tags and/or a lineage run_id, it projects the cross-store digest for that scope — dated sha-cited conclusions (newest current first), per-tag prior-work counts, per-lineage determinism envelopes quoted verbatim from the fingerprint ledger, and each conclusion's citations re-resolved at read (verified / unresolvable — disclosed, never refused). Cheap (journal-first, no SSH), content-cached, fleet-capable. Read-only; renders a deterministic markdown digest relayed to the human verbatim.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "evidence_period.input.json",
+    "name": "evidence-period",
+    "output_schema": "evidence_period.output.json",
+    "python": "hpc_agent.ops.evidence_period_op.evidence_period",
+    "side_effects": [],
+    "summary": "The evidence PERIOD digest: a time-window projection over the one evidence collector (conclusions, per-tag activity, determinism envelopes) that ENDS with the unconcluded-campaigns list — the standing invitation to close the conclusion loop. since is the inclusive window start; until the inclusive end (default open/now). Read-only, no SSH; recomputed on every read (a content-keyed cache only memoizes — deleting it changes no output). A pure projection: identity, counting, and verbatim record fields — it never interprets what a tag means or what a finding says.",
     "verb": "query"
   },
   {
@@ -675,7 +917,7 @@
     "output_schema": "harness_capabilities.output.json",
     "python": "hpc_agent.ops.harness_capabilities.harness_capabilities",
     "side_effects": [],
-    "summary": "Detect and report the harness capability set as CODE can observe it (LSP-style negotiation for the harness contract). Reports the four contract capabilities — the out-of-band utterance log (installed capture hooks + this repo's log presence + MCP elicitation flag), relay/verbatim enforcement (the relay-audit Stop hook), backgrounding (core-side, always present; watchdog hook reported honestly), and trusted display (unknown — no detection seam yet) — each with the named tier its absence degrades to. Read-only, no SSH, fail-open on an unreadable settings.json. The declaration IS what code can verify.",
+    "summary": "Detect and report the harness capability set as CODE can observe it (LSP-style negotiation for the harness contract). Reports the contract capabilities — the out-of-band utterance log (installed capture hooks + this repo's log presence + MCP elicitation flag), relay/verbatim enforcement (the relay-audit Stop hook), backgrounding (core-side, always present; watchdog hook reported honestly), trusted display (unknown — no detection seam yet), and the Stop-hook append channel (unknown until a conformance probe activates it) — each with the named tier its absence degrades to. Read-only, no SSH, fail-open on an unreadable settings.json. The declaration IS what code can verify.",
     "verb": "query"
   },
   {
@@ -751,7 +993,7 @@
     "output_schema": "monitor_summary.output.json",
     "python": "hpc_agent.ops.monitor.summary.monitor_summary",
     "side_effects": [],
-    "summary": "Render the canonical user-facing tick summary for a run. Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal and returns {lifecycle_state, headline, body, armed_hint}. Slash command prints these verbatim.",
+    "summary": "Render the canonical user-facing tick summary for a run. Reads the journal runs dir's <run_id>.monitor.jsonl (the tick writers' path) + the run journal and returns {lifecycle_state, headline, body, armed_hint}. Slash command prints these verbatim.",
     "verb": "query"
   },
   {
@@ -777,7 +1019,19 @@
     "side_effects": [
       "file_write"
     ],
-    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). By DEFAULT the CANONICAL view: lint recomputed server-side from the audit's recorded roots + journaled receipts, so its view_shas match what the T8 gate accepts (`canonical: true`); explicit findings/receipt/roots make it a preview. The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. Recomputed from the .py on every call. Per section it also WRITES the content-addressed TRUSTED-DISPLAY render file (.hpc/renders/<audit_id>/<slug>.<view_sha12>.md) and returns its render_path — the artifact the T8 sign-off gate requires.",
+    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). By DEFAULT the CANONICAL view: lint recomputed server-side from the audit's recorded roots + journaled receipts, so its view_shas match what the T8 gate accepts (`canonical: true`); explicit findings/receipt/roots make it a preview. The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. By DEFAULT `markdown` is the DIGEST (per-section metadata + render-file pointers, NO diff/assertion/flag body bytes — run-#12 finding 12); pass `full: true` for the whole-body render. Recomputed from the .py on every call. Per section it also WRITES the content-addressed TRUSTED-DISPLAY render file (.hpc/renders/<audit_id>/<slug>.<view_sha12>.md) and returns its render_path — the artifact the T8 sign-off gate requires (and where the full per-section body lives).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_draft_context.input.json",
+    "name": "notebook-draft-context",
+    "output_schema": "notebook_draft_context.output.json",
+    "python": "hpc_agent.ops.notebook.draft_context_op.notebook_draft_context",
+    "side_effects": [],
+    "summary": "Render the deterministic DRAFTING context for a notebook-audit template: the template's slugs + cell prose verbatim; each engine the template imports resolved to its defining file under source_roots (path:lineno, signature, first docstring line, module_sha - the same resolution notebook-lint uses, never executing an import); name-match Call sites across source_roots (path:lineno, count, capped with the cap disclosed); and an inventory of files + sha12 + size under input_roots and each inventory_roots entry (a file recorded in .hpc/data_manifest.json is cited, not re-hashed). Roots default from the audit's recorded config when audit_id is given. The projection LISTS, never nominates - no baseline config, no section ranking. Read-only: the only write is the disposable content-keyed cache in the standard cache home. The result includes markdown - the code-rendered projection the drafting agent reads and the skill relays VERBATIM.",
     "verb": "query"
   },
   {
@@ -787,9 +1041,23 @@
     "input_schema": "notebook_status.input.json",
     "name": "notebook-status",
     "output_schema": "notebook_status.output.json",
-    "python": "hpc_agent.ops.notebook_status.notebook_status",
+    "python": "hpc_agent.ops.notebook.status_op.notebook_status",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Report the per-section audit state of an audited source .py against its template inventory and audit_id journal. No SSH. Each required (template) section reduces to signed_current / auto_cleared / signed_stale / unsigned (drift-revoked by construction); `passed` is the graduation gate's whole-module predicate (every section current). Section shas are recomputed from the .py on every call. A TERMINAL verdict (passed, or failed via a drift-revoked sign-off) journals a relay-due marker the Stop hook discharges only when the verdict is actually relayed (deduplicated; non-terminal runs write nothing).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent pack-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "pack_status.input.json",
+    "name": "pack-status",
+    "output_schema": "pack_status.output.json",
+    "python": "hpc_agent.ops.pack.status_op.pack_status",
     "side_effects": [],
-    "summary": "Report the per-section audit state of an audited source .py against its template inventory and audit_id journal. Read-only, no SSH. Each required (template) section reduces to signed_current / auto_cleared / signed_stale / unsigned (drift-revoked by construction); `passed` is the graduation gate's whole-module predicate (every section current). Section shas are recomputed from the .py on every call.",
+    "summary": "Report an experiment's domain-pack state: per opted-in pack, the current bind (or null), each caller-authored receipt slot's currency (current / failed / stale / missing), an advisory unfillable-requirement report (a slot the bound pack's manifest fills_slots omits), and dangling-reference findings (a missing/sha-drifted manifest, or a slot bound to an unbound pack). Read-only, no SSH; a query REPORTS a dangling reference as data, never raising — the loud refusals live in the mutate verbs and the gate. Not opted in → empty and silent. Recomputed on every call (no cache).",
     "verb": "query"
   },
   {
@@ -802,6 +1070,18 @@
     "python": "hpc_agent.ops.submit.plan_throughput.plan_throughput",
     "side_effects": [],
     "summary": "Pack a task grid into batched submission waves. Pure-local: reads the cluster's constraints from clusters.yaml and returns the wave plan + wave_map for the per-run sidecar.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent poll-detached --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "poll_detached.input.json",
+    "name": "poll-detached",
+    "output_schema": "poll_detached.output.json",
+    "python": "hpc_agent.ops.monitor.poll_detached.poll_detached",
+    "side_effects": [],
+    "summary": "Snapshot a detached worker's state right now (lease pid-liveness + journal status + block-terminal presence; local, no SSH, non-blocking). The instant, MCP-safe complement to wait-detached: reports running / exited_recorded / exited_unrecorded / no_lease.",
     "verb": "query"
   },
   {
@@ -929,6 +1209,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]",
+    "idempotent": true,
+    "input_schema": "stray_sweep.input.json",
+    "name": "stray-sweep",
+    "output_schema": "stray_sweep.output.json",
+    "python": "hpc_agent.ops.recover.stray_sweep.stray_sweep",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Login-node process-hygiene probe (run-12 finding 20). One fork-minimal `ps -u $USER` over ssh: counts total processes, identifies MARKED framework processes (HPC_AGENT_OP) older than the max legitimate deadline as strays, and — only with --reap — kills exactly those PIDs (never an unmarked process). Surfaces the stray count the quota-wedge incident lacked.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent suggest-setup-action [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,
@@ -964,6 +1258,30 @@
     "verb": "query"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "trace_diff.input.json",
+    "name": "trace-diff",
+    "output_schema": "trace_diff.output.json",
+    "python": "hpc_agent.ops.trace_diff_op.trace_diff",
+    "side_effects": [],
+    "summary": "Overlay TWO traces from the local store and report, per stage and per atom, where their measurements diverge — dispatched through the ONE semantics registry (exact / set-delta / tolerance / exact-per-key / equality-chain / exact-endpoints). Highlights the FIRST diverging (stage, atom). Read-only, no SSH. Differences are FACTS (`row_count rows 100 → 90`), never verdicts; absence is disclosed. Tolerance is caller-owned (absent → exact).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent trace-render --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "trace_render.input.json",
+    "name": "trace-render",
+    "output_schema": "trace_render.output.json",
+    "python": "hpc_agent.ops.trace_render_op.trace_render",
+    "side_effects": [],
+    "summary": "Render one task's data trace as FOUR deterministic markdown views — row waterfall (with conservation flags), label-chain line, feature lineage (col_set deltas + column births), and the sketch table (value_sketch / null_count per column per stage) — under a self-describing run/config header. Read-only, no SSH. Selectors (exactly one): DIRECT {scope_kind, scope_id, task?}, or the REFERENCE lookup {cmd_sha} / {profile} (latest-by via a sidecar join). Absence is honest: 'no trace recorded for this scope' rides present/skipped, never an error. The render carries NO verdict vocabulary — the trace SHOWS, the scientist concludes; relay it verbatim.",
+    "verb": "query"
+  },
+  {
     "agent_facing": false,
     "cli": "hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]",
     "idempotent": true,
@@ -973,6 +1291,18 @@
     "python": "hpc_agent.ops.aggregate.invariants.verify_aggregation_complete",
     "side_effects": [],
     "summary": "Walk the run sidecar's wave_map + the locally-pulled _combiner/ dir; report all_waves_combined / all_tasks_present / provenance_present invariants. Returns ok plus the missing / unexpected lists.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "verify_registration.input.json",
+    "name": "verify-registration",
+    "output_schema": "verify_registration.output.json",
+    "python": "hpc_agent.ops.registration.verify_op.verify_registration",
+    "side_effects": [],
+    "summary": "Verify a registration and REPORT its status (current | stale | revoked | superseded | absent) with per-leg detail — the live dossier signature re-gathered vs the sha it bound, the template raw-bytes drift, every prerequisite re-checked through its kind's one checker, and field completeness by counting. Takes exactly one of registration_id / run_id. A REPORTER: it never blocks and never raises on a stale/revoked/missing subject — the deploy refusal is wired caller-side against status. The brief's canonical-JSON sha is the view_sha a sign-off must carry. Read-only, no SSH.",
     "verb": "query"
   },
   {
@@ -998,7 +1328,7 @@
     "side_effects": [
       "filesystem"
     ],
-    "summary": "Compare a reproduction run's reduced metrics against the original it names (sidecar `reproduces` link), under a caller-owned tolerance, and append a durable receipt. A mismatch/incomparable is a FINDING (needs_decision), never an error.",
+    "summary": "Compare a reproduction run's reduced metrics against the original it names (sidecar `reproduces` link), reduce the experiment's determinism envelope, tier the verdict (auto_cleared / needs_verdict / mismatch), append a durable receipt, and append the comparison back as a fingerprint sample. A mismatch/incomparable is a FINDING (needs_decision), never an error.",
     "verb": "query"
   },
   {
@@ -1037,6 +1367,18 @@
     "python": "hpc_agent.ops.walk_submit_ambiguities.walk_submit_ambiguities",
     "side_effects": [],
     "summary": "Walk hpc-submit Steps 2-6 as deterministic branches: resolve cluster / entry_point / data_axis / homogeneous_axes / uncovered_param, reuse resolve-resources for walltime/gpu/partition/mpi_pe, and accumulate Ambiguity entries (safe_default ONLY for auto-resolvable fields; goal/task_generator get none). Returns the needs_resolution envelope {resolved, ambiguities}.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "worker_log_digest.input.json",
+    "name": "worker-log-digest",
+    "output_schema": "worker_log_digest.output.json",
+    "python": "hpc_agent.ops.worker_log_digest.worker_log_digest",
+    "side_effects": [],
+    "summary": "Code-rendered digest of a LOCAL worker log (no SSH). Counts lines carrying each known engine marker ([throttle], [dispatch] FATAL/FAILED/ERROR/WARN), reports the total line count, and echoes the last tail_lines lines verbatim in a fenced block. Fails open on a missing/unreadable file (a clear diagnostic, never a traceback). Mechanizes the premortem's manual raw-log scan (run-#10 G2). The `render` field is relayed verbatim.",
     "verb": "query"
   },
   {
@@ -1174,7 +1516,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
-    "summary": "Build <experiment>/src/ from the notebooks under notebooks/{pipeline,executors,scripts}/. Convention-driven: the output module name and the exporter (strict-AST for @register_run executors, # export-marker for pipeline libraries) are both derived. Content-hash caches against .hpc/.build-cache.json — a second run with no notebook edits is all cache hits.",
+    "summary": "Build <experiment>/src/ from the notebooks under notebooks/{pipeline,executors,scripts}/ — jupytext percent-format .py (the native format) plus .ipynb for back-compat. Convention-driven: the output module name and the exporter (strict-AST for @register_run executors, # export-marker for pipeline libraries) are both derived. Content-hash caches against .hpc/.build-cache.json — a second run with no notebook edits is all cache hits.",
     "verb": "scaffold"
   },
   {
@@ -1221,7 +1563,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force] [--async-refill]",
+    "cli": "hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]",
     "idempotent": true,
     "input_schema": null,
     "name": "scaffold-strategy",
@@ -1230,7 +1572,7 @@
     "side_effects": [
       "writes-file"
     ],
-    "summary": "Scaffold a closed-loop campaign strategy (optuna|pbt) into a repo.",
+    "summary": "Scaffold a campaign strategy (optuna|pbt ask/tell) or a fixed grid into a repo.",
     "verb": "scaffold"
   },
   {
@@ -1332,7 +1674,7 @@
     "output_schema": "notebook_lint.output.json",
     "python": "hpc_agent.ops.notebook.lint.notebook_lint",
     "side_effects": [],
-    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Three read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; computed paths recorded as unverifiable), and linked_sources (imports resolving under source_roots reported with their module_sha). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
+    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Four read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; a literal under a declared output_root is a WRITE target — reported in declared_outputs, never flagged; computed paths recorded as unverifiable), linked_sources (imports resolving under source_roots reported with their module_sha), and template_import_shadowed (a source section defining or rebinding a name the template imports — the template's imports are the declared engines; a verbatim re-import is clean). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
     "verb": "validate"
   },
   {
@@ -1558,6 +1900,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent campaign-refill --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "campaign_refill.input.json",
+    "name": "campaign-refill",
+    "output_schema": "campaign_refill.output.json",
+    "python": "hpc_agent.ops.campaign_refill.campaign_refill",
+    "side_effects": [
+      "scheduler-submit",
+      "writes-campaign-state"
+    ],
+    "summary": "RFC #362 refill actor: top a greenlit async campaign's pool back up this tick. Calls campaign-advance authoritatively; if it decides refill, resolves + submits refill_count iterations SEQUENTIALLY (each a detached campaign-run). Refuses an un-greenlit campaign (greenlight is the standing consent). Stages: refilled / no_refill_needed / refill_blocked. No new state file, no cursor — partial ticks self-correct via next tick's shrunk refill_count.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "campaign_run.input.json",
@@ -1581,7 +1938,7 @@
     "output_schema": "campaign_block.output.json",
     "python": "hpc_agent.meta.campaign.blocks.campaign_watch",
     "side_effects": [],
-    "summary": "Campaign block (async execution surface): a READ-ONLY digest of the running campaign for a health / anomaly brief. Composes campaign-advance's evidence — it OBSERVES, never runs a tick (ticks self-chain via the driver). Terminators: watching_healthy (no boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop criterion fired → hand off to campaign-complete).",
+    "summary": "Campaign block (async execution surface): a READ-ONLY digest of the running campaign for a health / anomaly brief. Composes campaign-advance's evidence — it OBSERVES, never runs a tick (ticks self-chain via the driver). Terminators: watching_healthy (no boundary) / watching_refill (free pool slot → hand off to campaign-refill, no boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop criterion fired → hand off to campaign-complete).",
     "verb": "workflow"
   },
   {
@@ -1654,6 +2011,21 @@
       "writes-sidecar"
     ],
     "summary": "Apply a resolver-owned FIELD DELTA {field: value} to a run's latest greenlit resolved and RE-RESOLVE, re-deriving job_env/executor/run_id/cmd_sha/sidecar from the delta (proving-run-5 wave 5.1). The patch may name only INPUT fields (cluster, goal, task_generator, walltime_sec, entry_point, …); a derived field (job_env, executor, ssh_target, …) is REFUSED. Returns the amended brief for the human's re-y — it does NOT bypass the append-decision gates.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent settle-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "settle_run.input.json",
+    "name": "settle-run",
+    "output_schema": "settle_run.output.json",
+    "python": "hpc_agent.ops.settle_run.settle_run",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "summary": "Human-directed terminal settle (run-12 finding 25): given directed terminal evidence, journal it as a sign-off, set the terminal status, and run the SAME mark_run + harvest_on_terminal transition the probe path runs — no journal surgery. Refuses a non-terminal status or empty evidence. The harvest fires only on a status TRANSITION (an idempotent re-settle does not re-pull).",
     "verb": "workflow"
   },
   {

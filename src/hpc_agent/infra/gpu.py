@@ -236,7 +236,10 @@ def _run_qstat(ssh_host: str | None = None) -> str | None:
 
         try:
             validate_ssh_target(ssh_host)
-        except ValueError:
+        except errors.SpecInvalid:
+            # A malformed ssh_host routes into the same graceful
+            # qstat-unavailable fallback as a transport failure —
+            # ``pick_gpu`` degrades to the static preferred order.
             return None
         try:
             result = ssh_run("qstat -f -q gpu_*", ssh_target=ssh_host)

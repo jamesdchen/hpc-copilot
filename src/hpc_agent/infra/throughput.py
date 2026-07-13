@@ -54,7 +54,29 @@ class JobBatch:
 
 @dataclasses.dataclass(frozen=True)
 class SubmissionPlan:
-    """Complete plan for submitting a workload."""
+    """Complete plan for submitting a workload.
+
+    ``concurrency_mode`` / ``concurrency_cap`` (#339 item 16) are the
+    code-legible DISCLOSURE of *how* this plan bounds concurrency — a field the
+    submitter and the ``plan-throughput`` envelope read, never re-derived from
+    prose:
+
+    * ``"single-array"`` — one array within the ceiling, no bound needed;
+      ``concurrency_cap`` is ``None``.
+    * ``"native-cap"`` — one array carrying the scheduler-native in-array cap
+      (SLURM ``%N`` / UGE ``-tc N``, = ``concurrency_cap``). The wave split
+      existed ONLY to bound concurrency, so a single capped array replaces it:
+      the scheduler saturates and back-fills the array with no ``afterany`` wave
+      boundary draining to ~zero while stragglers finish.
+    * ``"concurrent-arrays"`` — the array-size ceiling forces >1 array but they
+      all fit in one concurrent wave (<= ``max_concurrent_jobs``), so there is no
+      ``afterany`` chain; ``concurrency_cap`` (when set) is applied WITHIN each
+      array.
+    * ``"afterany-waves"`` — a genuine multi-wave chain: the array-size ceiling
+      forces >1 array AND they span >1 wave (and/or waves carry per-wave
+      semantics), so the ``afterany`` wave chain is kept; ``concurrency_cap``
+      (when set) is additionally applied WITHIN each wave's arrays.
+    """
 
     batches: list[JobBatch]
     total_tasks: int
@@ -62,6 +84,12 @@ class SubmissionPlan:
     max_concurrent: int  # how many batches run in parallel per wave
     est_total_wall_s: int | None  # estimated total wall-clock time
     strategy: str  # human-readable summary
+    # #339 item 16 — the disclosed concurrency-bounding decision (see class doc).
+    # Defaulted so the hand-built plans (submit-flow's trivial ≤cap plan, the
+    # wave-test stubs) that predate item 16 construct unchanged.
+    concurrency_mode: str = "single-array"
+    concurrency_cap: int | None = None
+    concurrency_rationale: str = ""
 
 
 def compute_submission_plan(
@@ -98,6 +126,11 @@ def compute_submission_plan(
         raise errors.SpecInvalid(
             "max_array_size must be >= 1 to build a submission plan; "
             f"got {constraints.max_array_size}."
+        )
+    cap = constraints.max_concurrent_tasks
+    if cap is not None and cap <= 0:
+        raise errors.SpecInvalid(
+            f"max_concurrent_tasks must be >= 1 (or unset) to build a submission plan; got {cap}."
         )
 
     # 1. Batch count
@@ -176,6 +209,61 @@ def compute_submission_plan(
         parts.append(f"~{_fmt_duration(est_total_wall_s)} est.")
     strategy = ", ".join(parts)
 
+    # 7. Concurrency-bounding disclosure (#339 item 16). The single switch is
+    # ``n_batches``: exactly one array means the whole sweep fits under the
+    # index ceiling, so a native in-array cap (SLURM ``%N`` / UGE ``-tc N``)
+    # bounds concurrency with NO ``afterany`` wave boundary (perfect back-fill).
+    # More than one array means the ceiling FORCED the split (a genuine
+    # multi-array chain / semantic waves) — keep the ``afterany`` chain and
+    # optionally cap within each wave.
+    if n_batches == 1:
+        if cap is not None and cap < total:
+            concurrency_mode = "native-cap"
+            concurrency_cap: int | None = cap
+            concurrency_rationale = (
+                f"single array of {total} tasks; concurrency bounded in-array to "
+                f"{cap} via the scheduler-native cap (perfect back-fill, no "
+                "afterany wave boundary)"
+            )
+        else:
+            concurrency_mode = "single-array"
+            concurrency_cap = None
+            concurrency_rationale = (
+                f"single array of {total} tasks within the {constraints.max_array_size}"
+                "-task array ceiling; no concurrency bounding required"
+            )
+    else:
+        # More than one array — the array-size ceiling FORCED the split (a single
+        # native-capped array cannot hold > max_array_size tasks). ``n_waves``
+        # then says whether the batches also chain: >1 wave is the afterany chain
+        # whose boundaries drain to ~zero (the run-#11 76→20 observation); ==1
+        # wave means every array fits in one concurrent wave, no afterany
+        # boundary. Either way a single native-capped array is impossible, so the
+        # native cap (when set) is applied WITHIN each array rather than
+        # replacing the split.
+        concurrency_cap = cap if (cap is not None and cap > 0) else None
+        _within = (
+            f"; native cap {concurrency_cap} additionally applied within each array"
+            if concurrency_cap
+            else ""
+        )
+        if n_waves > 1:
+            concurrency_mode = "afterany-waves"
+            concurrency_rationale = (
+                f"{n_batches} arrays over {n_waves} afterany-chained waves: the "
+                f"{constraints.max_array_size}-task array ceiling forces a "
+                "multi-array split, so the afterany wave chain is kept for "
+                "cross-array concurrency bounding / per-wave semantics" + _within
+            )
+        else:
+            concurrency_mode = "concurrent-arrays"
+            concurrency_rationale = (
+                f"{n_batches} arrays in a single concurrent wave (<= "
+                f"{constraints.max_concurrent_jobs} max_concurrent_jobs): the "
+                f"{constraints.max_array_size}-task array ceiling forces a "
+                "multi-array split but no afterany chain is needed" + _within
+            )
+
     return SubmissionPlan(
         batches=batches,
         total_tasks=total,
@@ -183,6 +271,9 @@ def compute_submission_plan(
         max_concurrent=constraints.max_concurrent_jobs,
         est_total_wall_s=est_total_wall_s,
         strategy=strategy,
+        concurrency_mode=concurrency_mode,
+        concurrency_cap=concurrency_cap,
+        concurrency_rationale=concurrency_rationale,
     )
 
 

@@ -68,6 +68,12 @@ _EVIDENCE_KEEP_EXACT: frozenset[str] = frozenset(
         "ts_missing",
         "section",
         "error",
+        # Class-C2 overnight-finding identity/classification literals (never a
+        # metric value): the cause slug, the heal class, and the report-only
+        # disposition (state/run_story.py::project_c2_findings).
+        "cause",
+        "heal_class",
+        "disposition",
     }
 )
 _EVIDENCE_KEEP_SUFFIXES: tuple[str, ...] = ("_sha", "_digest", "_count", "_root")

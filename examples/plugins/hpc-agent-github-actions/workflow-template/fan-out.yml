@@ -112,11 +112,15 @@ jobs:
           HPC_TASK_ID: ${{ matrix.i }}
         run: |
           python - <<'PY' >> "$GITHUB_ENV"
-          import importlib.util, json, os
+          import importlib.util, os
           spec = importlib.util.spec_from_file_location("tasks", ".hpc/tasks.py")
           tasks = importlib.util.module_from_spec(spec); spec.loader.exec_module(tasks)
+          # str(value), not json.dumps: the cluster dispatcher exports
+          # HPC_KW_* as str(value) and read_kw_env does no decode, so a
+          # JSON-encoded export would hand the executor different values
+          # on GHA than on SLURM/SGE (e.g. quoted strings).
           for key, value in tasks.resolve(int(os.environ["HPC_TASK_ID"])).items():
-              print(f"HPC_KW_{key.upper()}={json.dumps(value)}")
+              print(f"HPC_KW_{key.upper()}={value}")
           PY
       - name: Run the task
         env:

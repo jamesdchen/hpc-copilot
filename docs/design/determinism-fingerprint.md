@@ -1,6 +1,11 @@
+---
+status: shipped
+---
 # Design: the determinism fingerprint — measure, don't ask
 
-Status: **PLANNED (2026-07-07), not yet implemented.** User-co-designed
+Status: **IMPLEMENTED (2026-07-08/09; the fingerprint Waves A–C + the T12
+admission gate + the data-identity amendment landed on main, drift log at
+foot).** User-co-designed
 2026-07-07; the decision center below is SETTLED — treat departures as drift
 to be logged, not re-litigated. This document is the durable hand-off (the
 `docs/design/notebook-audit.md` pattern): settled decisions + rationale,
@@ -761,6 +766,73 @@ edit — that friction is the pin working.
      only implied; *cross-slate sequencing note added* (Phase 3 after the
      registration kernel, per `docs/design/slate-sequencing.md`).
 
+- **LANDED on main 2026-07-08/09 — the capstone (Waves A–C + the T12 admission
+  gate + the data-identity amendment).** The plan shipped as designed; the
+  pre-implementation verifications above held. Deviations folded at landing:
+  1. *The `-canary2` suffix family is ONE tuple, not a re-inlined literal.*
+     `ops/monitor/reconcile.py::_CANARY_SUFFIXES = ("-canary", "-canary2")` is
+     the sole definition; `_sibling_run_ids` returns the whole family and
+     `canary_parent_of` strips the longest suffix first so a `-canary2` id maps
+     to the main run (never `…-canary`→`…2`). Every single-unpack call site was
+     widened to the family return as D-double-canary named —
+     `ops/aggregate_flow.py` (×2), `ops/resolve_submit_inputs.py`, and the
+     reconcile/status loops (T4, commit f43a2dc1; Waves A+B, 19af2e3a).
+  2. *Receipt v2 is opt-in — an empty-ledger comparison stays v1, byte-identical
+     to the historical shape.* `ops/verify_reproduction.py` carries both
+     `RECEIPT_SCHEMA_VERSION = 1` and `RECEIPT_SCHEMA_VERSION_TIERED = 2`; a
+     comparison with no fingerprint evidence and no partiality keeps the
+     byte-preserved v1 comparator (`_compare_metrics`/`_fold_overall`) and the v1
+     schema version, so a pre-fingerprint verify does not move.
+  3. *T12's gate CANONICALIZES the named prefix to the full sha.*
+     `ops/decision/journal.py::_assert_reproduction_verdict_authorship` matches
+     the response's 8+hex prefix against the ledger's candidate `content_sha`s
+     (samples whose second `run_ids` member is the verdict's run) and rewrites
+     `resolved["content_sha"]` to the FULL matched sha, so the store-layer
+     admission join is token-exact on the bind-locked value; a pre-filled
+     `content_sha` that does not extend the named prefix is a structural
+     `errors.SpecInvalid`.
+  4. *The data-identity amendment landed as a DISTINCT sidecar field,
+     `data_manifest_sha`* — deliberately NOT the pre-existing DVC-input `data_sha`
+     (`ops/provenance_manifest.py`, #222): `data_sha` is input-dataset identity
+     (DVC-optional), `data_manifest_sha` is the declared-input-root manifest
+     identity this amendment adds (`ops/submit_flow.py::_provenance`,
+     `ops/submit_and_verify.py`, `ops/reproduce_run.py`; samples are comparable
+     only within one data identity, and the three-dimension drift guard names the
+     moved dimension or discloses "data identity unknown"). The collision is
+     recorded in `docs/design/data-manifest.md`'s drift log. Landed with
+     fingerprint leg-2 (762f9786) and Phase-3-complete (d1254975).
+  5. *The registration `reproduction` `requires` floor is wired here (T9), not
+     stubbed.* `state/determinism.py::evidence_meets` is exported and consumed by
+     registration's R4 address chain, retiring the registration-T4
+     not-yet-available refusal (registration commit 3e87cdb9;
+     `tests/ops/registration/test_prereqs.py::test_reproduction_requires_floor_met`).
+  Enforcement rows landed under `docs/internals/engineering-principles.md`
+  §"The determinism fingerprint: measure, don't ask", held by
+  `tests/contracts/test_determinism_boundary.py` (T10, 7c214b04).
+
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
+
+## Amendment (2026-07-07, user-ruled 0b): the data-identity dimension
+
+The staleness/admission model above is code-identity only (`tasks_py_sha`
+family) — a rebuilt input file would read as nondeterminism, poisoning the
+envelope with a false mismatch. Ruled amendment (full design:
+`docs/design/data-manifest.md`; lands INSIDE Phase 3 per hot-file
+serialization): (1) submit echoes the data-manifest shas of files under
+the declared input roots into the sidecar; (2) samples are comparable
+ONLY within the same data identity — a different-data sample is disclosed
+as data drift, never admitted as nondeterminism evidence; (3)
+`reproduce-run`'s drift guard grows to three dimensions (code, env,
+data), and verify verdicts name the moved dimension, or "data identity
+unknown (no manifest at record time)" — disclosed, never fabricated.
+
+**Amendment 2 (2026-07-07, user-ruled): `needs_verdict` routes on demand,
+not on creation.** A thin-envelope/near-boundary sample parks as a
+leverage-zero standing item; it surfaces as a verdict brief only when a
+consumer blocks on it (registration demand, graduation, an explicit
+verify) — and then decision-ready per attention-queue D8 (named blocker,
+one code-rendered evidence block, pre-drafted y/nudge resolution, at an
+existing decision moment). Restriction rationale: unrestricted routing of
+low-tier verdicts teaches the human to ignore the channel wholesale.

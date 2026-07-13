@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_registration.input.json",
+  "title": "verify-registration input spec",
+  "description": "Input spec for ``verify-registration`` — an either-or address.\n\nEXACTLY ONE of ``registration_id`` / ``run_id`` is supplied:\n\n* ``registration_id`` — verify that one registration directly (the newest\n  record under that id wins; R7).\n* ``run_id`` — find the registration(s) naming that run and report the\n  resolved one.\n\nSupplying both, or neither, is refused. Both are ``RunIdStrict`` — a\ncaller-authored filesystem-safe slug: ``registration_id`` becomes a path\nsegment under ``.hpc/registrations/`` (R9), never core-invented.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "registration_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Verify this registration directly. Mutually exclusive with run_id.",
+      "title": "Registration Id"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Find the registration(s) naming this run. Mutually exclusive with registration_id.",
+      "title": "Run Id"
+    }
+  }
+}

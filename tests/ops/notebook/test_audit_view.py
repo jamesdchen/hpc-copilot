@@ -340,6 +340,34 @@ x = 1
     assert view.dropped_template_slugs == ("model",)
 
 
+def test_dropped_section_draft_composed_at_pass() -> None:
+    # Draft-at-pass: the dropped section's draft is COMPOSED (the template's own
+    # cell source) and disclosed in the markdown footer — never applied to source.
+    source_missing_model = """\
+# %%
+# hpc-audit-section: setup
+import numpy as np
+x = 1
+"""
+    src, tmpl = _mods(source_missing_model)
+    view = build_audit_view(src, tmpl, [])
+    assert [slug for slug, _ in view.dropped_template_drafts] == ["model"]
+    draft = dict(view.dropped_template_drafts)["model"]
+    # The composed draft is the template's model-section source, marker included.
+    assert "hpc-audit-section: model" in draft
+    assert "def train():" in draft
+    md = render_markdown(view)
+    assert "## compose the dropped sections" in md
+    assert "def train():" in md
+
+
+def test_no_dropped_drafts_when_source_complete() -> None:
+    src, tmpl = _mods(SOURCE_INHERITED)
+    view = build_audit_view(src, tmpl, [])
+    assert view.dropped_template_drafts == ()
+    assert "## compose the dropped sections" not in render_markdown(view)
+
+
 # ── markdown render ──────────────────────────────────────────────────────────
 
 
@@ -371,3 +399,201 @@ def test_render_markdown_shows_assertions_and_flags() -> None:
     assert "train() == 42" in md
     assert "### lint flags" in md
     assert "executes-live" in md
+
+
+# ── the next-actions footer (run-#10 hyper-palatable sign-off amendment) ─────
+
+
+def test_footer_lists_pending_sections_with_copy_ready_utterance() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    md = render_markdown(view)
+    pending = [s.slug for s in view.sections if s.tier == "human_required"]
+    assert pending, "fixture must carry at least one human_required section"
+    assert "## next actions" in md
+    footer = md.split("## next actions", 1)[1]
+    for slug in pending:
+        assert slug in footer
+    assert f'"sign {" ".join(pending)}"' in footer
+    assert "token-exactly" in footer  # the gate's ACTUAL bar, code-stated
+
+
+def test_footer_all_auto_cleared_states_no_pending() -> None:
+    src, tmpl = _mods(SOURCE_INHERITED)
+    view = build_audit_view(src, tmpl, [])
+    md = render_markdown(view)
+    assert "## next actions" in md
+    assert "no sections await sign-off" in md
+
+
+def test_footer_never_enters_view_sha_payload() -> None:
+    # The footer is pure presentation: nothing footer-shaped may enter the
+    # hashed payload, so adding/changing it can never move a view_sha.
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    payload_json = json.dumps(view.payload, sort_keys=True)
+    assert "next actions" not in payload_json
+    for s in view.sections:
+        assert "next actions" not in json.dumps(s.payload, sort_keys=True)
+
+
+# ── the section join — runtime-evidence summary (Amendment 16 B3-LEAN) ────────
+
+from hpc_agent.state.data_trace import make_record  # noqa: E402
+
+
+def _model_sha() -> str:
+    """The current ``model`` section_sha (a HUMAN_REQUIRED section in SOURCE_MIXED)."""
+    src, tmpl = _mods(SOURCE_MIXED)
+    sha: str = _section(build_audit_view(src, tmpl, []), "model").section_sha
+    return sha
+
+
+def _rec(
+    stage: str,
+    seq: int,
+    atoms: dict,
+    *,
+    section: str,
+    sha: str | None,
+    source: str = "runner",
+) -> dict:
+    return make_record(
+        stage=stage, seq=seq, atoms=atoms, section=section, section_sha=sha, source=source
+    )
+
+
+def _rows(n: int) -> dict:
+    return {"row_count": {"rows": n, "dropped": 0}}
+
+
+def test_section_join_changed_observable_renders_first_to_last() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    sha = _model_sha()
+    # One observable ('df') measured twice across the 'model' section, value MOVED.
+    traces = [
+        _rec("df", 0, _rows(10), section="model", sha=sha),
+        _rec("df", 1, _rows(7), section="model", sha=sha),
+    ]
+    view = build_audit_view(src, tmpl, [], audit_traces=traces)
+    model = _section(view, "model")
+    assert model.tier == HUMAN_REQUIRED
+    summary = model.trace_summary
+    assert summary is not None and summary["stale"] is False
+    assert summary["changed"] == [{"observable": "df", "first": _rows(10), "last": _rows(7)}]
+    assert isinstance(summary["section_records_sha"], str) and summary["section_records_sha"]
+    # It rode into the hashed payload (signed evidence) and the markdown.
+    assert model.payload["trace_summary"] == summary
+    md = render_markdown(view)
+    assert "### runtime evidence (latest execution)" in md
+    assert "df:" in md
+
+
+def test_section_join_unchanged_observable_renders_nothing() -> None:
+    # MANDATORY guard: an observable whose value did NOT move contributes no line;
+    # with nothing changed the summary is absent and the payload is byte-identical
+    # to a trace-free view (present-only convention).
+    src, tmpl = _mods(SOURCE_MIXED)
+    sha = _model_sha()
+    traces = [
+        _rec("df", 0, _rows(10), section="model", sha=sha),
+        _rec("df", 1, _rows(10), section="model", sha=sha),  # same value → unchanged
+    ]
+    with_trace = build_audit_view(src, tmpl, [], audit_traces=traces)
+    without = build_audit_view(src, tmpl, [])
+    model_with = _section(with_trace, "model")
+    assert model_with.trace_summary is None
+    assert "trace_summary" not in model_with.payload
+    # Byte-identical: unchanged evidence moves no view_sha.
+    assert model_with.view_sha == _section(without, "model").view_sha
+    assert with_trace.view_sha == without.view_sha
+    assert "runtime evidence" not in render_markdown(with_trace)
+
+
+def test_section_join_stale_wrong_sha_is_elided() -> None:
+    # MANDATORY guard: a trace stamped with a DIFFERENT section_sha is stale — the
+    # summary is elided with a disclosed marker, never rendered as if current.
+    src, tmpl = _mods(SOURCE_MIXED)
+    traces = [
+        _rec("df", 0, _rows(10), section="model", sha="0" * 64),
+        _rec("df", 1, _rows(7), section="model", sha="0" * 64),
+    ]
+    view = build_audit_view(src, tmpl, [], audit_traces=traces)
+    model = _section(view, "model")
+    assert model.trace_summary == {"stale": True}
+    md = render_markdown(view)
+    assert "STALE" in md
+    assert "elided" in md
+    # No values leak into a stale render.
+    assert "-> " not in md.split("### runtime evidence", 1)[1].split("##", 1)[0]
+
+
+def test_section_join_missing_sha_is_stale_elided() -> None:
+    # A runner that does NOT stamp section_sha degrades honestly: the reader treats
+    # an unbound record as stale (never rendered as current).
+    src, tmpl = _mods(SOURCE_MIXED)
+    traces = [
+        _rec("df", 0, _rows(10), section="model", sha=None),
+        _rec("df", 1, _rows(7), section="model", sha=None),
+    ]
+    model = _section(build_audit_view(src, tmpl, [], audit_traces=traces), "model")
+    assert model.trace_summary == {"stale": True}
+
+
+def test_section_join_only_human_required_sections() -> None:
+    # An auto_cleared section carries NO summary even when a fresh trace exists —
+    # runtime evidence rides only the sections that route human attention.
+    src, tmpl = _mods(SOURCE_INHERITED)  # both sections auto_cleared
+    setup_sha = _section(build_audit_view(src, tmpl, []), "setup").section_sha
+    traces = [
+        _rec("x", 0, _rows(1), section="setup", sha=setup_sha),
+        _rec("x", 1, _rows(9), section="setup", sha=setup_sha),
+    ]
+    view = build_audit_view(src, tmpl, [], audit_traces=traces)
+    setup = _section(view, "setup")
+    assert setup.tier == AUTO_CLEARED
+    assert setup.trace_summary is None
+    assert "trace_summary" not in setup.payload
+
+
+def test_section_join_ignores_non_runner_tier() -> None:
+    # A10: sign-off consumes RUNNER-tier records only. Draft/engine records for the
+    # section are ignored (they never enter the signed evidence).
+    src, tmpl = _mods(SOURCE_MIXED)
+    sha = _model_sha()
+    traces = [
+        _rec("df", 0, _rows(10), section="model", sha=sha, source="draft"),
+        _rec("df", 1, _rows(7), section="model", sha=sha, source="engine"),
+    ]
+    model = _section(build_audit_view(src, tmpl, [], audit_traces=traces), "model")
+    assert model.trace_summary is None
+
+
+def test_section_join_latest_execution_only() -> None:
+    # Two executions (seq resets to 0). Only the LATEST execution's values render.
+    src, tmpl = _mods(SOURCE_MIXED)
+    sha = _model_sha()
+    traces = [
+        # execution 1
+        _rec("df", 0, _rows(100), section="model", sha=sha),
+        _rec("df", 1, _rows(50), section="model", sha=sha),
+        # execution 2 (seq restarts) — the latest
+        _rec("df", 0, _rows(8), section="model", sha=sha),
+        _rec("df", 1, _rows(3), section="model", sha=sha),
+    ]
+    summary = _section(build_audit_view(src, tmpl, [], audit_traces=traces), "model").trace_summary
+    assert summary is not None
+    assert summary["changed"] == [{"observable": "df", "first": _rows(8), "last": _rows(3)}]
+
+
+def test_section_join_binds_view_sha() -> None:
+    # A changed-observable summary is signed evidence: it moves the section view_sha.
+    src, tmpl = _mods(SOURCE_MIXED)
+    sha = _model_sha()
+    traces = [
+        _rec("df", 0, _rows(10), section="model", sha=sha),
+        _rec("df", 1, _rows(7), section="model", sha=sha),
+    ]
+    base = _section(build_audit_view(src, tmpl, []), "model")
+    joined = _section(build_audit_view(src, tmpl, [], audit_traces=traces), "model")
+    assert joined.view_sha != base.view_sha

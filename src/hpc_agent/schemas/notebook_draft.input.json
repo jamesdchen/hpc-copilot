@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_draft.input.json",
+  "title": "notebook-draft input spec",
+  "description": "Inputs to ``notebook-draft`` — the drafter-attribution seam.\n\nDeliberately carries NO actor field (the enforcement row: the actor is\nresolved server-side from the session env, never on the wire). ``audit_id``\nis the notebook decision-journal scope; ``source`` is the audited source\n``.py`` relpath (parsed on disk — the parse IS the recompute the draft binds\nagainst); ``section`` is the slug being attributed (must exist in the parsed\nsource, else a loud refusal — there is no sha to bind a draft against).",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "source",
+    "section"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug) the draft attestation is appended to (journal at .hpc/notebooks/<audit_id>.decisions.jsonl). Caller-authored.",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format). Parsed on disk; the draft binds the FRESHLY PARSED section sha — a draft can only be recorded against current source.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "section": {
+      "description": "The section slug being attributed. Must exist in the parsed source (else a loud spec_invalid — there is no section sha to bind a draft against). One draft attestation is journaled for it.",
+      "minLength": 1,
+      "title": "Section",
+      "type": "string"
+    }
+  }
+}

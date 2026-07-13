@@ -181,3 +181,16 @@ class NetTriageResult(BaseModel):
     summary: str = Field(
         description="One-line human digest: each host's verdict, or 'no hosts to triage'."
     )
+    active_env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Every framework-relevant HPC_* environment variable currently "
+            "exported in THIS process's environment, verbatim. Pure disclosure "
+            "— triage never judges the values (run-12 finding 24 addendum, B15). "
+            "A stray transport override like HPC_SSH_ENGINE='asyncssh' or "
+            "HPC_SSH_CIRCUIT_OVERRIDE silently reroutes/short-circuits the very "
+            "SSH this differential diagnoses, so the env that shaped the verdict "
+            "is echoed alongside it: an override that shows up here unexpectedly "
+            "IS the finding. Empty when no HPC_* variable is set."
+        ),
+    )

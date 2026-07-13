@@ -1,6 +1,9 @@
+---
+status: shipped
+---
 # MCP elicitation — the bidirectional protocol upgrade (design + implementation plan)
 
-**Status: PLANNED (2026-07-07), not yet implemented.** This plan settles how
+**Status: IMPLEMENTED (2026-07-08; E1–E7 landed, drift log at foot).** This plan settles how
 `src/hpc_agent/_kernel/extension/mcp_server.py` gains the server-initiated
 `elicitation/create` exchange that `docs/internals/harness-contract.md`
 ("MCP elicitation as a second capability-1 channel") already specifies
@@ -334,7 +337,23 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
 - No second firing site. `scope-unlock` and the plain greenlight authorship
   gate keep the hook-tier flow in v1; extending elicitation to them is a
   one-line trigger addition *after* the sign-off path has survived a proving
-  run.
+  run. **Amended 2026-07-09 (see the "E-render amendment" section):** the ONE
+  firing site (the `append-decision` authorship refusal) is PROMOTED from a
+  retry-only fallback to the PRIMARY read-and-sign channel — still one site,
+  still append-decision-or-nothing (D5's channel lock intact), still no new verb;
+  only the ordering/framing changed, orchestrated in the server around an
+  untouched gate. **Corrected 2026-07-12 (philosophy-audit sweep 2, B1): the
+  first sentence's hook-tier carve-out never matched the implementation and is
+  RETIRED.** As coded, the trigger is the `authorship_evidence` marker on any
+  `append-decision` refusal — tool-scoped, block-AGNOSTIC — so every
+  authorship-BAR refusal elicits, `scope-unlock` included (pinned end-to-end
+  against the real gate:
+  `tests/test_mcp_elicitation_firing.py::test_accept_typed_appends_and_retry_succeeds_real_gate`,
+  block=`scope-unlock`). The plain greenlight `y` stays hook-tier only BY
+  CONSTRUCTION: a passing append never refuses, so there is nothing to elicit
+  on — and when a greenlight's `resolved` does trip the authorship bar
+  (a required-caller field with no human-attributed utterance), the popup
+  fires there too. One site means the TOOL, not one block.
 - No SDK, no new dependency, no change to `pyproject.toml`.
 
 ## Task waves (file-disjoint, Opus-sized; tests ride each task)
@@ -443,6 +462,17 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
 
 ## Drift log
 
+- **D6 hook-tier carve-out retired (2026-07-12, philosophy-audit sweep 2,
+  axis B1):** the D6 sentence reserving `scope-unlock` / the plain greenlight
+  for "the hook-tier flow in v1" described a block-scoped trigger that was
+  never built — E2's marker rides EVERY authorship-BAR refusal
+  (`journal.py::_refuse_missing_authorship`) and `_elicitation_applies` keys
+  on tool + marker only, so scope-unlock has elicited since the seam landed
+  (pinned by the real-gate test with block=`scope-unlock`). Prose corrected
+  in place; no code change. This is the audit's target drift class in the
+  inverse direction: the RULING (popup = THE default read-and-sign surface,
+  2026-07-10) was ahead of the prose, not the code.
+
 - **Pre-implementation verification (2026-07-07, adversarial plan review;
   no code had landed):**
   1. *D1 re-shaped* — the original "no threads" + blocking-with-timeout
@@ -467,3 +497,236 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
      store, not a plumbing change); the gate raise sites are
      `errors.SpecInvalid` routed through `_dispatch.py::_err_from_hpc`;
      `_tool_result` copies the full envelope into `structuredContent`.
+
+- **Implementation (2026-07-08, E1–E7 landed; deviations recorded):**
+  1. *E1 defensive branch* — `McpServer._consume_message` handles a malformed
+     non-response dict (no `method`, not response-shaped) with a `-32600`
+     error; the plan enumerated only the three conforming kinds. No behavior
+     change for conforming clients.
+  2. *E2 scoping* — only genuine authorship-BAR refusals carry the
+     `authorship_evidence` marker (via `journal.py::_refuse_missing_authorship`);
+     structural refusals (view_sha mismatch, section-not-found, unresolvable
+     source, bind recompute) are deliberately UNMARKED — a re-elicited
+     utterance cannot cure them, so marking them would make the D4 retry a
+     guaranteed-failing round-trip. The attached block WINS over
+     `_err_from_hpc`'s synthesized default (layering-clean; the misleading
+     `error_class: "code_bug"` drops from human-policy refusals).
+  3. *E2 heads-up* — `_wire/fixtures/failure_features.py::FailureFeatures` is
+     `extra="forbid"`, but the ERROR envelope path never validates against it
+     (only the `_ok` path runs `validate_output`), so the additive key rides.
+     If error envelopes ever gain schema validation, the model must admit the
+     key first.
+  4. *E4 renderer* — `_render_elicitation_prompt` deliberately excludes the
+     refusal envelope's `message` too (not just tool-argument free text): the
+     gate's message can QUOTE the model's response, which would smuggle
+     model-authored words into the trusted prompt.
+  5. *Test rig* — the duplex harness lives at `tests/_mcp_harness.py`
+     (`FakeMcpClient`, `RecordingElicitServer` with its harness-only
+     `elicit-test` tool seam); the conformance kit consumes this rig per the
+     cross-slate reuse ledger.
+  6. *E6* — regen byte-stability verified (all six scripts, zero drift): the
+     phase adds no primitive and no wire model, exactly as planned.
+
+- **E-render (2026-07-09, SHIPPED; the "E-render" section below flipped from
+  NOTED to SHIPPED):** the notebook sign-off popup now carries a code-computed
+  render DIGEST (RULING 1: digest + `view_sha12`, not the full render — reading
+  ergonomics; trust identical) on the EXISTING retry-only firing site (RULING 2:
+  no D6 amendment, no second firing site). `read_render_digest` derives the
+  digest from the on-disk render's own code-authored bytes (reusing the
+  audit-view projections — diff/asserts/lint — never the notebook source);
+  missing/stale/no-`view_sha` degrade to a reason-disclosing fallback line
+  (fail-soft, never a crash, never an unmarked silent omission). Bounded by
+  construction: counts + a capped, per-item-truncated assertion list, never the
+  diff body. No new primitive, no wire-model change (regen debt: none expected —
+  same class as E6; the orchestrator's central regen run confirms byte
+  stability).
+
+- **E-render amendment (2026-07-09, same-day; SUPERSEDES the E-render entry above):**
+  two user rulings landed as one change set. (1) **PRIMARY firing (D6 amendment):**
+  the append-decision popup is promoted from a retry-only fallback to the primary
+  read-and-sign channel — for a human-required notebook sign-off the server elicits
+  FIRST and the append proceeds with the typed utterance, instead of surfacing a
+  refusal. D5's channel lock is intact (append-decision or nothing, no new verb);
+  the reliability guard is hard (declared-but-dark / undeclared / timeout → the
+  byte-for-byte pre-promotion refusal path); a valid utterance appends without a
+  popup. Realized ENTIRELY in the server orchestration
+  (`call_tool`/`_elicit_then_retry`/`_elicitation_applies`) — the authorship gate
+  (`_assert_signoff_authorship`) is untouched and stays one-definition. (2) **DIGEST
+  v2:** the popup is a SIGNING surface — every element serves BIND (identity +
+  freshness; stale → do-not-sign, pointer only), WHY-YOUR-JUDGMENT (tier-trigger
+  headline, declared-assertion table, lint-flag names+locations, per-hunk
+  one-liners — never the diff body), or ROUTE (the on-disk path); the honesty rule
+  refuses to digest (naming counts + pointer) rather than silently drop a
+  judgment-critical item when oversize, and every capped list discloses its
+  elision. Recorded judgment call: the trusted render is static (no per-assertion
+  computed/pass-fail value exists), so the assert table shows declared expressions
+  marked unverified rather than fabricating a computed value — the honest reading
+  of "declared-vs-computed" under the static-audit invariant. No new primitive, no
+  wire-model change (regen debt: none — same class as E6; the orchestrator's central
+  regen run confirms byte stability). Symbols + tests: see the "E-render amendment"
+  section body.
+
+## E-render: the popup carries the render digest (SHIPPED 2026-07-09; AMENDED same-day — see the amendment section)
+
+Run #11 exposed the read/sign channel split: the v1 sign-off popup showed
+identifiers only, so the human had to READ the section render in some
+model-adjacent channel (chat relay, file link, an expanded Read pane) before
+typing into the model-untouched box. E-render closes the loop: when the
+refusal is a notebook sign-off, the SERVER reads the section's
+content-addressed render (`.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`)
+off disk and embeds a code-computed DIGEST of it in the elicitation `message`
+— code-read bytes in, typed utterance out, one channel, model suspended
+throughout.
+
+Compatibility with the D5 identifiers-only rule: the rule's PURPOSE is to bar
+MODEL-authored text from baiting the reply; a disk render is code-authored
+(the trusted-display artifact the T8 gate already binds), so embedding a digest
+of it honors the purpose while widening the letter — which is exactly why this
+was a recorded design change, not a patch.
+
+The initial E-render decisions (2026-07-09, same-day) were: (i) digest not full
+render, and (ii) retry-only, no D6 amendment. **Both the firing and the digest
+were AMENDED the same day by an explicit user ruling** (see "E-render amendment"
+below) — the popup becomes the PRIMARY read-and-sign channel (a promoted D6
+firing site) and the digest is rebuilt as a three-job signing digest (v2). The
+original two decisions are recorded here as superseded; the current design is the
+amendment.
+
+**Superseded same-day decisions (kept for the drift record):** the digest (not
+the full render — reading ergonomics; trust identical) STANDS. What changed is
+(a) the firing FRAMING (retry-only → primary, the D6 amendment) and (b) the
+digest COMPOSITION (v1 counts → v2 three-job signing digest).
+
+### E-render amendment — PRIMARY firing + DIGEST v2 (user-ruled 2026-07-09, superseding the same-day retry-only + v1-digest rulings)
+
+**RULING 1 — the popup is a PROMOTED D6 firing site (the primary read-and-sign
+channel).** D6's original text pinned ONE firing site and framed the popup as a
+retry-only fallback. This amendment PROMOTES it: for a human-required notebook
+sign-off, when `append-decision` is invoked and the authorship gate would refuse
+(no matching human utterance), the server ELICITS FIRST — the popup collects the
+human's typed utterance and the append proceeds with it — instead of surfacing a
+refusal. The pins:
+
+- **(a) D5's channel lock is UNCHANGED.** Append-decision or nothing — no new
+  verb, no skill affordance, no generic ask-the-user surface. This is an ORDERING
+  change inside the one existing seam (`McpServer.call_tool` →
+  `_elicit_then_retry`), not a new channel. It is realized in the SERVER
+  orchestration only: the authorship gate
+  (`ops/decision/journal.py::_assert_signoff_authorship`) stays one-definition and
+  harness-agnostic — the server elicits AROUND it, the gate is never touched. (The
+  existing pump already elicits before any refusal reaches the model, so this was
+  a framing promotion + the reliability pins below, not a rewrite of the seam.)
+- **(b) The reliability guard is HARD.** If the session's elicitation is
+  declared-but-dark (`_client_elicitation_dark`) or the client never declared the
+  capability, the primary elicitation is SKIPPED and behavior is EXACTLY the
+  pre-promotion refusal → hook path, byte-for-byte
+  (`_elicitation_applies` gates all of it). A timeout on the primary path flips
+  the dark flag (item 12's contract) and falls back to the refusal — the popup
+  must NEVER wedge a sign-off flow that used to work.
+- **(c) A valid utterance appends directly.** An `append-decision` that already
+  passes the gate (`ok:true`) returns straight through; the popup fires only when
+  the gate would otherwise refuse. No popup nagging on already-valid appends.
+- **(d) The render relay-due markers are untouched.** The popup SUPPLEMENTS the
+  full-render relay; it never discharges it.
+
+**RULING 2 — DIGEST v2: the popup is a SIGNING surface, every element serves one
+of three jobs.** The v1 digest was a reading summary (classification, diff
+`+/-`, an assertion count, a lint-flag count). v2 rebuilds it so each element
+earns its place:
+
+- **Job 1 — BIND.** `audit_id`, section slug, `view_sha12`, and the FRESHNESS
+  state. A STALE render (the signed `view_sha` no longer addresses a readable
+  on-disk render — since the render is content-addressed by `view_sha`, a drifted
+  source moves the address, so stale ≡ missing here) says **STALE — do NOT sign**
+  and shows nothing but the pointer. No summarizing a render the human is not
+  signing.
+- **Job 2 — WHY YOUR JUDGMENT.** The tier-trigger headline (which of
+  diff / lint / assertions fired, with counts — derived from the render's own
+  `classification` / lint-flag count / assertion count; the D-attention legs); the
+  declared-assertion table; the lint-flag NAMES + locations (`rule @ Lnn` /
+  `rule @ where`, not a bare count); and per-hunk one-liners from the diff (source
+  line range + the first changed line, per-line truncated) — **never the diff
+  body**.
+- **Job 3 — ROUTE.** The on-disk render path, stated plainly.
+
+**THE HONESTY RULE.** When the honest digest exceeds a byte budget
+(`mcp_server._DIGEST_BLOCK_MAX_BYTES`, a last-ditch guard for pathologically many
+hunks/flags), the composer does NOT compress harder — it emits
+`too large to digest honestly: N hunks, M flags — read the render` + identity +
+pointer only. Every capped list (`render_store._DIGEST_MAX_{ASSERTIONS,HUNKS,
+LINT_FLAGS}`) DISCLOSES its elision (`… (K more — read the render)`); a silent
+drop of a judgment-critical item is the misleading-summary class the rule
+forbids, and assertions are the last thing dropped (the composer refuses before
+silently trimming them).
+
+**The static-audit honesty note (a recorded judgment call, not a gap covered
+over).** The ruling asks the assert table to carry "declared-vs-computed values"
+and order "failed asserts first." The trusted render is STATIC by design
+(`audit_view`: "No execution ever happens here") — it carries declared assertion
+EXPRESSIONS only, and no per-assertion pass/fail or computed value exists anywhere
+in the audit path (receipts green a whole SECTION, not an assertion, and are not
+in the render body). So v2 reports each DECLARED assertion and marks it
+**unverified — static audit, no execution**: the declared side is shown, and the
+absent computed side is stated rather than FABRICATED (inventing a computed value
+the render does not hold would itself be the misleading-summary class the honesty
+rule exists to bar). "Failed asserts first" is honored at the granularity the
+data supports: in the static model every declared assertion is unverified and so a
+judgment trigger — the digest surfaces them all as the never-silently-dropped
+class, and the honest-refusal backstop enforces "the last thing dropped." Reusing
+the audit-view producers (diff hunks / assertions / lint flags off the code-written
+render), never a re-derivation from source, is the source-of-truth pin.
+
+Edge cases (all handled + tested): a stale/missing render, an
+unparseable/header-mismatched render, a sign-off with no bound `view_sha` yet, or
+no experiment context on the call ⇒ a single reason-disclosing line (the do-not-sign
+freshness line for a bound-but-absent view; `render digest unavailable: <reason> —
+open the section render in your Read pane before signing.` for the no-context /
+no-`view_sha` cases), never a crash and never an unmarked silent omission.
+`read_render_digest` is fail-soft (`None`) exactly like `read_render_header`.
+
+**Symbols:** `mcp_server._render_elicitation_prompt` (takes `experiment_dir`,
+delegates the notebook block to `_render_digest_block`), `_render_digest_block`
+(the three-job composer + the honesty-rule budget), `_tier_trigger_headline`;
+`ops/notebook/render_store.py::{RenderDigest, read_render_digest}` (v2 fields:
+`tier`, `diff_hunks`/`diff_hunk_count`, `lint_flags`/`lint_flag_count`; re-exported
+through the `ops/notebook_view` facade the T8 gate uses, per the subject-import
+discipline). The firing promotion lives entirely in
+`McpServer.call_tool`/`_elicit_then_retry`/`_elicitation_applies` — the gate is
+untouched. Tests: `tests/ops/notebook/test_render_store_digest.py` (the parser
+pinned against `write_render`, incl. tier + hunk one-liners + flag names),
+`tests/test_mcp_elicitation_render.py` (the three jobs, the honesty-rule oversize
+refusal, disclosed elision, the stale/missing/no-`view_sha` do-not-sign,
+non-notebook unchanged), `tests/test_mcp_elicitation_firing.py`
+(`test_primary_popup_fires_before_any_refusal_for_notebook_signoff`,
+`test_valid_utterance_append_never_pops`, plus the standing dark/timeout/undeclared
+guards that pin the byte-for-byte fallback).
+
+- **RULED (2026-07-10, user): the popup is THE default read-and-sign surface —
+  ONE render mechanism, no mode-switching.** Supersedes both the same-day
+  digest-vs-full framing AND the (never-built) capability-keyed "digest mode vs
+  carrier mode" proposal: the MCP elicitation channel is the harness-agnostic
+  model-untouched surface, so it is the DEFAULT for every harness, Claude Code
+  included — the Read pane demotes to an optional convenience view of the SAME
+  on-disk artifact, never a parallel projection. Unification rule: the popup
+  embeds the content-addressed render file's own bytes (one composer, one
+  artifact — nothing to drift against); if a summary layer survives it becomes
+  the render's OWN header section, computed inside the one composer (the digest
+  v2 three-jobs work folds in there rather than living as a derived-second
+  artifact). Oversized renders chunk into sequential elicitation parts,
+  disclosed, never truncated. NOTES (ergonomics/UX, deliberately NOT design
+  commitments, to be answered later per the user): whether different surfaces
+  ever get different PROJECTIONS of the render; digest-only fast paths;
+  per-client sizing. Build: post-run-#12 batch (touches the live sign-off
+  path).
+
+- **DELIBERATION OPEN (2026-07-10, user) — chunked popups: per-chunk headers,
+  whole-render summary questioned; BUILD PARKED pending MCP research.**
+  Chunking may be a FEATURE (forcing per-chunk engagement instead of one
+  scroll-past), but across-whole-code properties are hard to catch from
+  chunks — the design needs deliberation before build. User direction: a
+  whole-render summary header is of doubtful value; instead EVERY CHUNK gets
+  its own header explaining what that chunk does and how the experiment data
+  passes through it (synergistic with chunked reading). Prerequisite: pin
+  down MCP elicitation's actual capabilities from the spec/documentation
+  (content types, size limits, multi-part semantics, display receipts,
+  client rendering) — research pass ordered 2026-07-10.

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_record_config.output.json",
+  "title": "notebook-record-config output data",
+  "description": "Echo of the journaled configuration, plus the loud late-record disclosure.\n\n``warning`` is non-null when the audit already had journal entries at\nrecord time: recording a config moves every view_sha, so prior sign-offs\nwill read stale — correct, disclosed behavior.",
+  "type": "object",
+  "required": [
+    "audit_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "input_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Roots",
+      "type": "array"
+    },
+    "source_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Roots",
+      "type": "array"
+    },
+    "attention_order": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Attention Order"
+    },
+    "output_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Roots",
+      "type": "array"
+    },
+    "goal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Echo of the recorded audit-open goal utterance (null when none was recorded).",
+      "title": "Goal"
+    },
+    "task_axes": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Echo of the recorded audit-open task-axis utterances (null when none were recorded).",
+      "title": "Task Axes"
+    },
+    "observables": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Observables"
+    },
+    "warning": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Non-null when the audit_id already had journal entries (views signed, receipts recorded, ...) when the config was recorded: the recorded config enters every canonical view recompute, so EVERY view_sha moves and prior sign-offs will read stale against the new canonical view. Disclosed, never silent.",
+      "title": "Warning"
+    }
+  }
+}

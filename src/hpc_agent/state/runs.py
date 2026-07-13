@@ -30,6 +30,7 @@ from hpc_agent.state.code_drift import detect_code_drift
 from hpc_agent.state.wave_map import derive_wave_map
 
 __all__ = [
+    "DEFAULT_SUMMARY_ARTIFACT",
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
     "find_existing_runs",
@@ -37,8 +38,10 @@ __all__ = [
     "is_orphan_sidecar",
     "prune_old_runs",
     "prune_orphan_sidecars",
+    "read_job_task_spans",
     "read_run_sidecar",
     "resolve_node_sha",
+    "resolved_summary_artifact",
     "run_sidecar_path",
     "sidecar_effective_identity",
     "update_run_sidecar_job_ids",
@@ -58,10 +61,48 @@ MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
 # v1 sidecars on disk continue to load via ``read_run_sidecar`` backfill.
 SIDECAR_SCHEMA_VERSION: int = 2
 
+# The per-task summary filename every reducer / per-task completion counter has
+# historically hardcoded. Made a declared sidecar field (``summary_artifact``,
+# F-J) so a run whose executor emits a differently-named summary
+# (e.g. ``results_reduce.json``) is read correctly instead of read incomplete/
+# abandoned. A sidecar WITHOUT the field resolves back to this literal, so
+# nothing existing moves.
+DEFAULT_SUMMARY_ARTIFACT: str = "metrics.json"
+
+
+def resolved_summary_artifact(sidecar: dict[str, Any] | None) -> str:
+    """Return the per-task summary filename declared on *sidecar*, or the default.
+
+    The single reader every completion/reduce consumer routes through so the
+    "which file marks a task's summary?" decision has ONE home (F-J). A sidecar
+    that never declared ``summary_artifact`` (every run written before this
+    field existed, and every run whose executor emits the historical name)
+    resolves to :data:`DEFAULT_SUMMARY_ARTIFACT` (``metrics.json``) — byte-for-byte
+    today's behavior. A ``None``/empty/blank value is treated as absent.
+    """
+    if not isinstance(sidecar, dict):
+        return DEFAULT_SUMMARY_ARTIFACT
+    declared = sidecar.get("summary_artifact")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+    return DEFAULT_SUMMARY_ARTIFACT
+
+
 # A run_id is a timestamp-prefixed identifier produced by the slash command
 # layer. Format: ``YYYYMMDD-HHMMSS-<short_sha>``. We only validate loosely
 # — anything filesystem-safe that doesn't contain a path separator works.
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
+
+# Co-tenant exclusion for the sidecar scan: ``state/block_terminal.py`` stores
+# each detached block's terminal record in this SAME ``.hpc/runs/`` directory
+# as ``<run_id>.<block>.terminal.json`` (see ``block_terminal.terminal_path``).
+# Run_ids may legally contain dots, so a name-shape parse cannot tell the two
+# apart — the exclusion keys on the fixed ``.terminal.json`` suffix instead,
+# the same ``endswith`` idiom ``state/index.py._all_run_files`` uses for its
+# ``.last_status.json`` co-tenant. Pinned against ``terminal_path``'s actual
+# output by ``tests/state/test_runs_terminal_cotenants.py`` so the two modules
+# cannot drift apart.
+_TERMINAL_RECORD_SUFFIX = ".terminal.json"
 
 
 def _runs_dir(experiment_dir: Path) -> Path:
@@ -116,15 +157,19 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "auto_retry",  # dict — per-category retry policy
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
+    "summary_artifact",  # str — per-task summary filename reducer reads (default metrics.json)
     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
     "trial_params",  # list[dict] — opaque per-task resolved params (cmd_sha pre-image; provenance)
     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
     "node_sha",  # str — compose_node_sha(cmd_sha, parents) when parent_run_ids set
     "data_sha",  # str — data identity of the declared input dataset(s) (#222)
+    "data_manifest_sha",  # str — data-manifest identity of declared input roots (amendment 0b)
     "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
     "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
     "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
+    "trace_digests_override",  # str — data-trace T3: exercised digest override, disclosed
     "audited_source",  # dict — opaque caller-owned audit-trail identity; core never interprets it
+    "packs",  # list[dict] — opaque domain-pack echoes; core never interprets them (T10)
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -161,21 +206,34 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "auto_retry": None,
     "aggregate_defaults": None,
     "results": None,
+    "summary_artifact": None,
     "trial_tokens": None,
     "trial_params": None,
     "parent_run_ids": None,
     "node_sha": None,
     "data_sha": None,
+    "data_manifest_sha": None,
     "env_hash": None,
     "scopes": None,
     "reproduces": None,
+    "trace_digests_override": None,
     "audited_source": None,
+    "packs": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
     # `[]`) so the backfill stays distinguishable from a deliberate
     # "no job ids yet" empty list at write time.
     "job_ids": None,
+    # job_task_spans lands with job_ids in the SAME post-qsub stamp when the
+    # main array was submitted as concurrency-bounded waves on an
+    # index-bounded backend (#339): job_id → [first, last] 0-based INCLUSIVE
+    # global task-id window that job's array covers. Consumed by
+    # ``infra.cluster_logs.fetch_task_logs`` so each waved job is probed only
+    # for its own tasks, with the job-LOCAL log index. Default ``None`` — an
+    # old sidecar (or a single ≤cap array, or a resubmit-recorded job) keeps
+    # the global-index probe behaviour.
+    "job_task_spans": None,
 }
 
 # Hardened return-shape defaults. ``read_run_sidecar`` always fills these
@@ -234,16 +292,20 @@ def write_run_sidecar(
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
     results: dict[str, Any] | None = None,
+    summary_artifact: str | None = None,
     trial_tokens: list[Any] | None = None,
     trial_params: list[dict[str, Any]] | None = None,
     parent_run_ids: list[str] | None = None,
     node_sha: str | None = None,
     data_sha: str | None = None,
+    data_manifest_sha: str | None = None,
     env_hash: str | None = None,
     job_ids: list[str] | None = None,
     scopes: list[str] | None = None,
     reproduces: str | None = None,
+    trace_digests_override: str | None = None,
     audited_source: dict[str, Any] | None = None,
+    packs: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -363,11 +425,20 @@ def write_run_sidecar(
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
         "results": results,
+        # Per-task summary filename the reducer + per-task completion counting
+        # read (F-J). Absent → the reader defaults to metrics.json via
+        # resolved_summary_artifact, so an existing sidecar is byte-identical.
+        "summary_artifact": summary_artifact,
         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
         "trial_params": [dict(p) for p in trial_params] if trial_params is not None else None,
         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
         "node_sha": node_sha,
         "data_sha": data_sha,
+        # Data-manifest identity of the declared input ROOTS (Phase-3 amendment,
+        # ruled 0b) — DISTINCT from data_sha (which is the input_datasets/DVC
+        # identity, #222). Same only-write-non-None pattern, so a run with no
+        # minted manifest is byte-identical to a pre-amendment sidecar.
+        "data_manifest_sha": data_manifest_sha,
         "env_hash": env_hash,
         "job_ids": list(job_ids) if job_ids is not None else None,
         # Opaque caller-owned evidence-scope tags. Recorded verbatim, never
@@ -378,12 +449,23 @@ def write_run_sidecar(
         # only-write-non-None pattern; a non-reproduction run's sidecar is
         # byte-identical). find_run_by_cmd_sha's reproduction_of lever reads it.
         "reproduces": reproduces,
+        # data-trace T3: DISCLOSURE of an exercised digest override
+        # (force_on/force_off). Same only-write-non-None pattern — the classifier
+        # decides unaided for the common case, so a non-overridden run's sidecar
+        # is byte-identical. A reader sees the "NO KNOB" policy was overridden.
+        "trace_digests_override": trace_digests_override,
         # Opaque caller-owned audit-trail identity — the sidecar echo of
         # interview.json's audited_source block ({source, template, audit_id};
         # notebook-audit T14). Recorded verbatim, never interpreted by core
         # (same only-write-non-None pattern, so a non-audited run's sidecar is
         # byte-identical). export-dossier reads it back to seal the audit trail.
         "audited_source": audited_source,
+        # Opaque domain-pack echoes — one {pack, version, sha, manifest} per bound
+        # pack the experiment opted into (T10). Recorded verbatim, never interpreted
+        # by core (same only-write-non-None pattern, so a pack-less run's sidecar is
+        # byte-identical). export-dossier reads it back to seal each pack's manifest
+        # bytes + decision journal.
+        "packs": [dict(p) for p in packs] if packs else None,
     }
     for k, v in v2_values.items():
         if v is not None:
@@ -503,8 +585,34 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     return data
 
 
+def read_run_sidecar_or_empty(experiment_dir: Path, run_id: str) -> dict[str, Any]:
+    """Tolerant sibling of :func:`read_run_sidecar`: return ``{}`` for a
+    missing / torn / non-UTF-8 / foreign-schema sidecar instead of raising.
+
+    The ONE present-or-gap reader that dossier / evidence / prune consumers
+    route through, so the "which read failures degrade to a gap" degrade set is
+    defined ONCE (:data:`hpc_agent.errors.TOLERANT_RECORD_READ_ERRORS`) rather
+    than re-enumerated per consumer — the drift that sealed a corrupt sidecar
+    into an uncaught traceback at ``export_dossier`` (#43). A caller that needs
+    the missing-vs-corrupt distinction still calls :func:`read_run_sidecar` and
+    handles the raise itself.
+    """
+    try:
+        return read_run_sidecar(experiment_dir, run_id)
+    except errors.TOLERANT_RECORD_READ_ERRORS:
+        return {}
+
+
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
-    """Return every ``.hpc/runs/<id>.json`` file, newest-first by mtime."""
+    """Return every run-sidecar ``.hpc/runs/<id>.json``, newest-first by mtime.
+
+    Only RUN SIDECARS: the ``<run_id>.<block>.terminal.json`` block-terminal
+    records ``state/block_terminal.py`` co-locates in the same directory are
+    excluded (:data:`_TERMINAL_RECORD_SUFFIX`). Sweeping them up made
+    :func:`prune_orphan_sidecars` delete them (they read back jobless), let
+    :func:`find_run_by_cmd_sha` return one as a dedup target, and burned
+    :data:`MAX_RUNS` retention slots on non-sidecars.
+    """
     runs = _runs_dir(experiment_dir)
     if not runs.exists():
         return []
@@ -516,6 +624,8 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     keyed: list[tuple[float, str, Path]] = []
     for p in runs.iterdir():
         if not (p.is_file() and p.suffix == ".json"):
+            continue
+        if p.name.endswith(_TERMINAL_RECORD_SUFFIX):
             continue
         try:
             mtime = p.stat().st_mtime
@@ -828,8 +938,39 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
       pre-existing v2 sidecars that predate the post-qsub finalize hook;
       we trust the journal and treat the sidecar as committed.
 
+    Two-phase canary gate (#17): during the S2→S3 greenlight window the main
+    run is INTENTIONALLY jobless + journal-less — Phase 1 (``canary_only``)
+    stamps ``job_ids`` only on the ``<run_id>-canary`` sibling and defers the
+    main run's ``submit_and_record`` to Phase 2. That sibling being committed is
+    the exact signature of a live gate mid-review (distinct from a genuinely
+    failed batch's orphan), so a main run whose ``<run_id>-canary`` sibling is
+    committed is itself treated as committed — otherwise a sibling batch's
+    ``prune_orphan_sidecars`` would delete the greenlit main run's sidecar out
+    from under the pending launch.
+
     Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
     detection) and :func:`prune_orphan_sidecars` (delete them).
+    """
+    if _run_committed(experiment_dir, run_id):
+        return False
+    # Canary-gate-pending main run: jobless + journal-less itself, but its
+    # committed canary sibling marks a two-phase gate mid-review, not an
+    # orphan. Guard against recursing on a canary run (never has its own
+    # ``<id>-canary-canary`` sibling).
+    canary_gate_pending = not run_id.endswith("-canary") and _run_committed(
+        experiment_dir, f"{run_id}-canary"
+    )
+    return not canary_gate_pending
+
+
+def _run_committed(experiment_dir: Path, run_id: str) -> bool:
+    """True when *run_id* landed a cluster job (sidecar or journal job_ids).
+
+    The committed signal underneath :func:`is_orphan_sidecar`: a sidecar whose
+    ``finalize_run_sidecar_job_ids`` stamped ``job_ids`` (post-qsub), or a live
+    journal record carrying ``job_ids``. Never raises — a corrupt/unreadable
+    journal record reads as not-committed (the prior fail-loud narrowing is
+    preserved by only catching the routine cases).
     """
     from hpc_agent.state.journal import load_run
 
@@ -841,14 +982,17 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
         raw = sidecar_data.get("job_ids")
         if isinstance(raw, list):
             sidecar_job_ids = [str(j) for j in raw]
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # A non-UTF-8 sidecar (e.g. UTF-16 from a Windows redirect) reads as
+        # no sidecar_job_ids, consistent with the corrupt/torn-file tolerance —
+        # prune-orphan-sidecars must step past a damaged file, not crash on it.
         sidecar_job_ids = None
 
     # Journal-side signal: did submit_and_record run to completion?
     try:
         record = load_run(experiment_dir, run_id)
     except (OSError, errors.JournalCorrupt):
-        # Corrupt/unreadable journal record == treat as orphan. load_run
+        # Corrupt/unreadable journal record == treat as not committed. load_run
         # already returns None for the routine missing/torn-file cases, so
         # narrowing here means a *programming* error propagates (fail loud)
         # rather than silently flipping a live run to "orphan" — which the
@@ -857,10 +1001,16 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
 
     sidecar_committed = bool(sidecar_job_ids)
     journal_committed = record is not None and bool(record.job_ids)
-    return not (sidecar_committed or journal_committed)
+    return sidecar_committed or journal_committed
 
 
-def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[str]) -> Path:
+def update_run_sidecar_job_ids(
+    experiment_dir: Path,
+    run_id: str,
+    job_ids: list[str],
+    *,
+    job_task_spans: dict[str, tuple[int, int]] | None = None,
+) -> Path:
     """Rewrite an existing sidecar with *job_ids* set; return its path.
 
     Called from :func:`runner.submit_and_record` immediately after qsub
@@ -869,6 +1019,17 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     constraints, …) untouched. This is the post-qsub finalize that
     distinguishes a real run from the half-baked sidecar Step 6d wrote
     before rsync.
+
+    *job_task_spans* (optional) rides the same stamp for a WAVED main array
+    on an index-bounded backend (#339): ``job_id`` → 0-based INCLUSIVE
+    ``(first, last)`` global task-id window that job's array covers, derived
+    from the submitted plan's global ``task_range`` per batch. Persisted as
+    ``{job_id: [first, last]}`` so ``fetch_task_logs`` probes each waved job
+    only for its own tasks with the job-LOCAL log index. ``None`` (the
+    default, and what every non-waved caller passes — including the resubmit
+    path, whose arrays replay GLOBAL ids) leaves any existing
+    ``job_task_spans`` untouched, so the journal-side re-stamp inside
+    ``submit_and_record`` never erases the spans the submit pre-stamp wrote.
 
     Idempotent: re-running with the same *job_ids* is a no-op rewrite.
     Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*
@@ -884,6 +1045,11 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     from hpc_agent.infra.io import atomic_locked_update
 
     new_job_ids = [str(j) for j in job_ids]
+    new_spans = (
+        {str(j): [int(first), int(last)] for j, (first, last) in job_task_spans.items()}
+        if job_task_spans is not None
+        else None
+    )
 
     def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
         if existing is None:
@@ -891,10 +1057,44 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
             # preserve the documented FileNotFoundError contract.
             raise FileNotFoundError(f"run sidecar not found: {target}")
         existing["job_ids"] = new_job_ids
+        if new_spans is not None:
+            existing["job_task_spans"] = new_spans
         return existing
 
     atomic_locked_update(target, _mutate)
     return target
+
+
+def read_job_task_spans(experiment_dir: Path, run_id: str) -> dict[str, tuple[int, int]] | None:
+    """The sidecar's recorded per-job task spans, or ``None`` — never raises.
+
+    Read side of the ``job_task_spans`` stamp above, shaped for
+    :func:`hpc_agent.infra.cluster_logs.fetch_task_logs`'s ``job_task_spans``
+    parameter: ``job_id`` → 0-based INCLUSIVE ``(first, last)`` global
+    task-id window. Best-effort by contract — the log-fetching call sites
+    (monitor ``logs``, recover ``failures``, reconcile's evidence gather,
+    verify-canary) must behave exactly as before this field existed when it
+    is unavailable, so a missing sidecar, an old sidecar without the field,
+    or a malformed value all yield ``None`` (the global-index probe).
+    Individual malformed entries are dropped rather than poisoning the map.
+    """
+    try:
+        raw = read_run_sidecar(experiment_dir, run_id).get("job_task_spans")
+    except Exception:  # noqa: BLE001 — best-effort reader; absence must equal pre-field behaviour
+        return None
+    if not isinstance(raw, dict):
+        return None
+    spans: dict[str, tuple[int, int]] = {}
+    for job_id, span in raw.items():
+        if not (isinstance(span, (list, tuple)) and len(span) == 2):
+            continue
+        first, last = span
+        if isinstance(first, bool) or isinstance(last, bool):
+            continue
+        if not (isinstance(first, int) and isinstance(last, int)):
+            continue
+        spans[str(job_id)] = (first, last)
+    return spans or None
 
 
 def backfill_run_sidecar_provenance(
@@ -903,6 +1103,7 @@ def backfill_run_sidecar_provenance(
     *,
     data_sha: str | None,
     env_hash: str | None,
+    data_manifest_sha: str | None = None,
 ) -> Path:
     """Fill *null* provenance fields on an existing sidecar; return its path.
 
@@ -925,7 +1126,11 @@ def backfill_run_sidecar_provenance(
     def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
         if existing is None:
             raise FileNotFoundError(f"run sidecar not found: {target}")
-        for field, value in (("data_sha", data_sha), ("env_hash", env_hash)):
+        for field, value in (
+            ("data_sha", data_sha),
+            ("env_hash", env_hash),
+            ("data_manifest_sha", data_manifest_sha),
+        ):
             if value is not None and existing.get(field) is None:
                 existing[field] = value
         return existing

@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # The attention queue — status-snapshot v2, design + implementation plan
 
 **Status: IMPLEMENTED (2026-07-07).** Landed across Wave A (promotions), Wave B
@@ -244,7 +247,7 @@ digest read at noon is *visibly* a 6am projection, and the remedy is stated
 in the header: re-run the verb (cheap, journal-first, no SSH). There is
 deliberately **no digest file, no cache, no served page**: a persisted
 digest is a second source of truth that drifts from the journal
-(reconcile-is-truth, `docs/design/proving-run-2-hardening.md` Move 4). The
+(reconcile-is-truth, `docs/design/history/proving-run-2-hardening.md` Move 4). The
 queue is recomputed on every read.
 
 Watermark neutrality, decided: the queue moves **no state** — not
@@ -267,6 +270,35 @@ an agent-facing knob for reshaping ages. Result model
 `AttentionQueueResult`: `{computed_at, items: [...], counts: {class: n},
 skipped: [...], render: <markdown>}` — `render` rides the result the way
 `relay` rides `StatusBlockResult`, so the agent relays it verbatim.
+
+### D8 — demand-driven routing + the decision-ready bar (user-ruled 2026-07-07)
+
+Tiering alone relocates fatigue; the channel dies the week the human
+learns that opening an item costs more than ignoring it. Two restrictions,
+binding on EVERY alarm/verdict source that feeds the queue (fingerprint
+`needs_verdict`, manifest drift, claim-check findings, conformance
+verdicts — and all future sources):
+
+1. **Route only what blocks.** An item may INTERRUPT (surface in a brief)
+   only when its unblocks fan-out > 0 or a consumer is demanding it (a
+   gate or verdict something is actually waiting on). Leverage-zero items
+   PARK — pull-only, aging in the standing queue, never pushed. The
+   fingerprint's `needs_verdict` specifically: a thin-envelope sample does
+   NOT route at creation; it routes when registration/graduation/verify
+   blocks on the verdict — **verdict-on-demand** (fingerprint doc,
+   Amendment 2).
+2. **The decision-ready bar.** A routed item must carry ALL FOUR or it
+   may not route: (a) what it blocks, named; (b) ONE code-rendered
+   evidence block sized for the brief (trusted-display class — the LLM
+   points, never composes); (c) a PRE-DRAFTED resolution the human can
+   accept with `y` or redirect with a nudge (the decision-brief shape,
+   generalized to alarms); (d) delivery at an existing decision moment
+   (greenlight, harvest, the morning batch) — never its own session.
+
+Repeats fold (first occurrence per (subject, class) may route; recurrence
+updates the aging standing item — the manifest attention contract's rule,
+promoted to queue-wide). Ignore-rate/ack-latency data is INPUT TO A HUMAN
+RE-RULING of a class's tier, never adaptive self-quieting.
 
 ## Task waves (file-disjoint for parallel Opus dispatch)
 
@@ -318,7 +350,7 @@ on the happy path, per `docs/internals/adding-a-primitive.md`.
   summarizes; the queue's own render is the digest surface). Test: the
   brief carries the field; ordering matches `order_items` byte-for-byte
   (the one-definition seat).
-* **T7** `src/slash_commands/skills/hpc-status/SKILL.md` — one added
+* **T7** `src/hpc_agent/slash_commands/skills/hpc-status/SKILL.md` — one added
   paragraph: the morning read is `attention-queue` (MCP, read-only, direct
   — no spec-file round-trip), relay the returned `render` VERBATIM; the
   snapshot's `attention` field is the same projection in-flow. **Skill-prose
@@ -332,8 +364,8 @@ on the happy path, per `docs/internals/adding-a-primitive.md`.
   `scripts/build_verb_module_map.py`, `scripts/build_primitive_index.py`,
   `scripts/build_primitive_frontmatter.py` (the dev_regen_list lesson: a
   missed bake costs test failures). Inventory tails: `_SPEC_VERBS` in
-  `tests/contract/test_schema_roundtrip.py` and
-  `tests/contract/test_primitive_remediation.py`; the primitive doc page
+  `tests/contracts/test_schema_roundtrip.py` and
+  `tests/contracts/test_primitive_remediation.py`; the primitive doc page
   `docs/primitives/attention-queue.md`
   (`scripts/check_no_pending_primitive_docs.py`); the MCP curated-catalog
   prose in the server instructions if it enumerates query verbs; skill

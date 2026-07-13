@@ -60,7 +60,9 @@ from hpc_agent.cli.setup_actions import find_prior_run
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
+from hpc_agent.ops.evidence_embed import build_evidence_embed
 from hpc_agent.ops.notebook_gate import assert_source_audited, audited_source_echo
+from hpc_agent.ops.pack_gate import assert_pack_receipts_current
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -109,6 +111,60 @@ def _materialized_executor_cmd(experiment_dir: Path) -> str | None:
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
+def _probe_result_dir_contract(executor: str, exp_dir: Path) -> str | None:
+    """Static probe: does the executor's own script ever read $HPC_RESULT_DIR?
+
+    Run-#10 finding F-C: an entry point that writes to a literal output path
+    is silently discarded by the dispatcher's write-isolation gate — surfacing
+    first as a burned canary (30 minutes late). This probe moves the
+    disclosure to S1: find the first ``.py`` token in the executor command
+    that exists under *exp_dir*, read it, and WARN when the text never
+    mentions ``HPC_RESULT_DIR``/``RESULT_DIR``. Purely a disclosure (a wrapper
+    may handle the contract for it — the framework's own ``run-registered``/
+    ``run-module`` dispatchers do); NEVER a refusal, and any surprise degrades
+    to "no warning".
+    """
+    try:
+        script: Path | None = None
+        for tok in executor.split():
+            if tok.endswith(".py"):
+                cand = (exp_dir / tok).resolve()
+                if cand.is_file():
+                    script = cand
+                    break
+        if script is None:
+            return None
+        text = script.read_text(encoding="utf-8", errors="replace")
+        if "RESULT_DIR" in text:
+            return None
+        # One hop through a materialized wrapper (run-#12 finding 15): a
+        # shell_command wrapper subprocess-invokes the real script with env
+        # INHERITED, so the contract lives in the TARGET — the audited source
+        # read HPC_RESULT_DIR all along while the wrapper drew the warning.
+        # Scan every .py the wrapper's text references that exists under the
+        # experiment dir; any of them honoring the contract silences it.
+        import re as _re
+
+        for ref in _re.findall(r"[A-Za-z0-9_./\\-]+\.py", text):
+            cand = (exp_dir / ref).resolve()
+            if cand != script and cand.is_file():
+                try:
+                    if "RESULT_DIR" in cand.read_text(encoding="utf-8", errors="replace"):
+                        return None
+                except OSError:
+                    continue
+        return (
+            "WARNING (output contract): the executor script "
+            f"{script.name!r} never references $HPC_RESULT_DIR — under the "
+            "dispatcher, outputs written to literal paths are DISCARDED by "
+            "write-isolation (the canary then fails with "
+            "failure_kind=output_contract). Redirect outputs into "
+            "$HPC_RESULT_DIR when the dispatcher exports it."
+        )
+    except Exception:  # noqa: BLE001 — disclosure-only seam, never load-bearing
+        return None
+
+
 def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
     """A LIVE canary-only prior attempt for *run_id*, or None — read in CODE.
 
@@ -130,24 +186,114 @@ def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
     from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
     from hpc_agent.ops.supersession import _live_lease
     from hpc_agent.state.journal import load_run
-    from hpc_agent.state.run_record import TERMINAL_STATUSES
+    from hpc_agent.state.run_record import TERMINAL_STATUSES, RunRecord
 
-    # The paired ``<run_id>-canary`` entry via the one #258 suffix definition —
+    # The paired canary FAMILY entries via the one #258 suffix definition —
     # never a second hardcoded ``-canary`` (the `_sibling_run_ids` docstring owns
-    # the pairing convention; supersession's `_supersede_missing_main` uses it too).
-    (canary_id,) = _sibling_run_ids(run_id)
-    canary = load_run(experiment_dir, canary_id)
-    lease = _live_lease(run_id) or _live_lease(canary_id)
-    canary_live = (
-        canary is not None and canary.status not in TERMINAL_STATUSES
-    ) or lease is not None
+    # the pairing convention; supersession's `_supersede_missing_main` uses it
+    # too). The double canary adds ``<run_id>-canary2``, so surface a live attempt
+    # if ANY family member — or a live detached lease for the main or a member —
+    # is non-terminal.
+    canary_ids = _sibling_run_ids(run_id)
+    records = [(cid, load_run(experiment_dir, cid)) for cid in canary_ids]
+    lease = _live_lease(run_id)
+    if lease is None:
+        for cid in canary_ids:
+            lease = _live_lease(cid)
+            if lease is not None:
+                break
+    live = next(
+        ((cid, c) for cid, c in records if c is not None and c.status not in TERMINAL_STATUSES),
+        None,
+    )
+    canary_live = live is not None or lease is not None
     if not canary_live:
         return None
+    # Choose the record to report: a live family member wins; else any existing
+    # family record (an in-flight lease before its record landed); else the first
+    # canary id with no record yet.
+    canary_id: str
+    canary: RunRecord | None
+    if live is not None:
+        canary_id, canary = live
+    else:
+        canary_id, canary = next(
+            ((cid, c) for cid, c in records if c is not None), (canary_ids[0], None)
+        )
     return {
         "prior_run_id": canary_id,
         "status": canary.status if canary is not None else "in_flight",
         "cluster": canary.cluster if canary is not None else None,
     }
+
+
+def _dirty_worktree_disclosure(experiment_dir: Path) -> str | None:
+    """DISCLOSE an uncommitted experiment worktree in the S1 brief — never a blocker.
+
+    Run #11 mechanization item 1 (dirty-worktree disclosure). Provenance
+    (``cmd_sha``, executor identity) is computed from COMMITTED state, so any
+    uncommitted work is INVISIBLE to it — a fact the human should see at the
+    y/nudge before relaunch. NEVER a blocker: hacking on a dirty tree is
+    legitimate; only *invisible*-dirty is the bug this surfaces.
+
+    Detection reuses the ONE bounded, fail-open :func:`~hpc_agent._build_info.git_output`
+    helper (2 s subprocess timeout) — the ``audit-preflight`` style, never an
+    ad-hoc shell-out. ``git_output`` returns ``None`` on BOTH a clean (empty)
+    porcelain read AND a hard failure (no git binary, non-repo cwd, timeout,
+    non-zero exit), so a clean tree, an absent repo, and a timeout all correctly
+    read as "no disclosure". FAIL-OPEN: any surprise degrades to ``None`` (the
+    E-embed precedent — a disclosure seam never mints a submit failure).
+    """
+    try:
+        from hpc_agent._build_info import git_output
+
+        # No git repo backs the experiment dir → the commit model can't be
+        # assessed; disclose nothing (git_output returns None on the non-repo cwd).
+        if git_output(["rev-parse", "--show-toplevel"], cwd=experiment_dir) is None:
+            return None
+        porcelain = git_output(["status", "--porcelain"], cwd=experiment_dir)
+        if porcelain is None or not porcelain.strip():
+            return None  # clean tree (or an unreadable status — fail-open silent)
+        return (
+            "dirty worktree: the experiment repo has uncommitted changes — "
+            "provenance (cmd_sha, executor identity) is derived from COMMITTED "
+            "state, so uncommitted work is INVISIBLE to it. Never a blocker; "
+            "commit before relaunch to capture the changes in provenance."
+        )
+    except Exception:  # noqa: BLE001 — disclosure-only seam, fail-open (E-embed)
+        return None
+
+
+def _audit_currency_disclosure(experiment_dir: Path) -> str | None:
+    """DISCLOSE the opted-in audit's currency in the S1 brief — disclosure only.
+
+    Run #11 mechanization item 1 (audit-currency disclosure). Reuses the ONE
+    notebook-status seam (:func:`hpc_agent.ops.notebook_gate.audit_currency` →
+    ``audit_module``): NEVER re-implements hashing. NOT opted into
+    ``audited_source`` → ``None`` (the D7 silence). Opted in → ``audit <id>:
+    current`` or ``audit <id>: STALE (<n> section(s) moved since sign-off)``.
+
+    Disclosure ONLY — the graduation gate
+    (:func:`~hpc_agent.ops.notebook_gate.assert_source_audited`, step 4b) stays
+    the single refusing seat, unchanged: a STALE audit is already
+    refused there, so on the ``resolved`` path this line confirms currency to the
+    human; the STALE branch is the honest fallback if the gate posture ever
+    changes. FAIL-OPEN (the E-embed precedent): ANY exception — a broken opted-in
+    repo, a currency-check bug — degrades to disclosed-ABSENT (``None``), never an
+    S1 error.
+    """
+    try:
+        from hpc_agent.ops.notebook_gate import audit_currency
+
+        cur = audit_currency(experiment_dir)
+        if cur is None:
+            return None
+        audit_id, moved = cur
+        if moved == 0:
+            return f"audit {audit_id}: current"
+        return f"audit {audit_id}: STALE ({moved} section(s) moved since sign-off)"
+    except Exception:  # noqa: BLE001 — disclosure-only seam, fail-open (E-embed)
+        return None
 
 
 @primitive(
@@ -314,9 +460,16 @@ def resolve_submit_inputs(
     # EXECUTOR's script path and load .hpc/tasks.py against it, not this
     # worker's CWD — the empirical path where the 0.10.11 register_run guard
     # silently no-op'd because Path(script).is_file() was CWD-relative.
+    # data-trace T3: thread ``reproduction_of`` onto the submit SNAPSHOT as
+    # ``reproduces`` so build-submit-spec's digest classifier sees the identity
+    # signal (a reproduction compares stage digests → digests ON). This is the
+    # classifier input; the ``reproduction_of`` dedup lever is injected onto the
+    # built dict below, separately.
     submit_spec = build_submit_spec(
         experiment_dir,
-        spec=spec.submit.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha}),
+        spec=spec.submit.model_copy(
+            update={"run_id": run_id, "cmd_sha": cmd_sha, "reproduces": spec.reproduction_of}
+        ),
     )
     # Thread the reproduction-receipt lever onto the built submit-flow spec so
     # the DETACHED submit-flow worker's submit-time layer-2 cmd_sha dedup pierces
@@ -362,6 +515,18 @@ def resolve_submit_inputs(
     #     pre-SSH — resolve does no cluster work, so this is purely a local read.
     assert_source_audited(experiment_dir)
 
+    # 4c. Domain-pack receipt gate (docs/design/domain-packs.md, ONE definition —
+    #     ops/pack_gate — TWO synchronous seats, beside the notebook gate): this is
+    #     the S1 human-boundary seat. Before the per-run sidecar is committed,
+    #     refuse a submit whose opted-in `packs` block (interview.json, D7) carries
+    #     a required receipt_bindings slot not CURRENT + passed (missing / stale /
+    #     failed — drift = unsigned by construction), so the refusal lands at the
+    #     y/nudge, not buried later in a detached submit-flow worker's log. A broken
+    #     setup (dangling manifest, unbound pack) is a loud SpecInvalid; an
+    #     uncleared receipt is PackReceiptsMissing. Fail-safe: NO packs block →
+    #     byte-identical no-op. Pre-sidecar and pre-SSH — a purely local read.
+    assert_pack_receipts_current(experiment_dir)
+
     # 5. write-run-sidecar: write the per-run sidecar so the #171 write-first
     #    precondition is satisfied BEFORE submit-pipeline runs — the `resolved`
     #    output is fully submit-ready. Same run_id/cmd_sha injection (after the
@@ -397,6 +562,11 @@ def resolve_submit_inputs(
             "trial_params": cr["trial_params"],
             "reproduces": spec.reproduction_of,
             "audited_source": audited_source_echo(experiment_dir),
+            # data-trace T3: DISCLOSE an exercised digest override on the sidecar
+            # (the doc's "its exercise is disclosed"). None (no override) →
+            # omitted on write (byte-identical sidecar); force_on/force_off →
+            # recorded verbatim so a reader sees the classifier was overridden.
+            "trace_digests_override": spec.submit.trace_digests,
         }
     )
     materialized_executor = _materialized_executor_cmd(experiment_dir)
@@ -429,6 +599,40 @@ def resolve_submit_inputs(
                 f"command. — {reason}"
             )
 
+    contract = _probe_result_dir_contract(str(sidecar_spec.executor or ""), experiment_dir)
+    if contract:
+        reason = f"{contract} — {reason}"
+
+    # S1 disclosures (run #11 mechanization queue, item 1) — ADDITIVE brief
+    # content, NEVER blocking. Both fail-open (the E-embed precedent): a crash
+    # degrades to disclosed-absent, never an S1 error, and the decision surface
+    # (stage_reached, needs_decision) is byte-identical whether either fires:
+    #  (a) a DIRTY experiment worktree — uncommitted work is invisible to
+    #      provenance (cmd_sha / executor identity are committed-state only).
+    #  (b) audit CURRENCY when the run opts into audited_source — the SAME
+    #      notebook-status computation, disclosure only (4b stays the refusing
+    #      seat; a STALE audit is already refused there).
+    disclosures = [
+        d
+        for d in (
+            _dirty_worktree_disclosure(experiment_dir),
+            _audit_currency_disclosure(experiment_dir),
+        )
+        if d
+    ]
+    if disclosures:
+        reason = f"{reason} — DISCLOSURES (never blocking): " + "; ".join(disclosures)
+
+    # Evidence-memory embed (E-embed): the ADVISORY point digest for this run's
+    # declared scope tags + its lineage (run_id). ADDITIVE and FAIL-OPEN — the
+    # one helper wraps the whole collect+render in a broad guard, so a collector
+    # bug degrades to a disclosed {unavailable} stub and NEVER becomes a submit
+    # refusal. The decision surface (stage_reached, needs_decision) is byte-
+    # identical whether evidence collected, empty, or failed (the never-blocking
+    # pin; T-NB). Never a private re-collection — the one-collector row.
+    run_tags = [t for t in (sidecar_spec.scopes or []) if isinstance(t, str)]
+    evidence = build_evidence_embed(experiment_dir, tags=run_tags, lineage=run_id)
+
     return ResolveSubmitInputsResult(
         stage_reached="resolved",
         needs_decision=False,
@@ -437,4 +641,5 @@ def resolve_submit_inputs(
         cmd_sha=cmd_sha,
         submit_spec=submit_spec,
         sidecar_path=written.get("path"),
+        evidence=evidence,
     )

@@ -307,8 +307,9 @@ def check_preflight(
     after the 2026-06-04 bare-TCP-probe-passed-but-rsync-failed demo
     surfaced the inert-guard mismatch). When omitted, all three are
     skipped. The SSH round-trip is skipped when the TCP probe fails (no
-    point burning the (HPC_CLUSTER_SSH_TIMEOUT, default 15s) ssh timeout on an
-    unreachable host).
+    point burning the :func:`_cluster_ssh_timeout` budget
+    (``HPC_CLUSTER_SSH_TIMEOUT``, default derived from
+    ``remote.SSH_TIMEOUT_SEC``) on an unreachable host).
 
     Returns ``{"all_ok": bool, "checks": list[dict]}``. The CLI adapter
     maps ``all_ok=False`` to the cluster-error exit code.
@@ -552,9 +553,12 @@ def check_preflight(
                         probe_cache.store(host, key=probe_key, checks=probe_block)
                     checks.extend(probe_block)
 
-            # Reject un-customized placeholders: a clusters.yaml entry still
-            # carrying <your_user> / <your_scratch> / <your_env> would pass
-            # the TCP probe but fail every task at submit time.
+        # Reject un-customized placeholders: a clusters.yaml entry still
+        # carrying <your_user> / <your_scratch> / <your_env> would pass
+        # the TCP probe but fail every task at submit time. Purely local
+        # (no SSH), so it runs for pure-API backends too — a placeholder
+        # config fails their submits just the same.
+        if cluster in clusters:
             placeholders = _placeholder_fields(clusters[cluster])
             if placeholders:
                 checks.append(

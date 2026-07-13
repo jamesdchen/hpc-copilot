@@ -1,6 +1,10 @@
+---
+status: shipped
+---
 # The registration kernel — the deployment-boundary attestation
 
-**Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off
+**Status: IMPLEMENTED (2026-07-08/09; Waves A–C + the toy first consumer
+landed on main, drift log at foot).** The durable hand-off
 for the registration substrate: settled decisions with recorded rationale,
 the prerequisite-chain mechanism, the exact sign-off bar, and the
 file-disjoint task waves for parallel Opus dispatch. Cite `path::symbol`,
@@ -619,6 +623,155 @@ re-register → verify `current` again → revoke with reason → verify
      `ops/provenance_manifest.py`, `state/scopes.py::count_prior_looks` /
      `is_scope_locked`, the `_assert_signoff_authorship` three-lock sibling,
      `_is_bare_ack`, and the dossier-boundary test pins all exist as cited.
+
+- **T4 implementation 2026-07-08 (`ops/registration/prereqs.py` + tests):**
+  1. *`scope-budget` budget key PINNED to `max_looks`.* R3's table said the
+     currency condition is "look count `<=` the caller-declared budget number in
+     `requires`" but never NAMED the key, so a literal implementer had none. T4
+     pins it: `requires: {"max_looks": <int>}`. A `scope-budget` entry with no
+     integer `max_looks` is a loud `errors.SpecInvalid` (structurally
+     un-checkable input, not a failing-slot verdict) — core compares the look
+     count against the caller's number, it never picks a budget. `max_looks` is
+     the sole allowed `requires` key for the kind (the closed-key rule; any other
+     key is the R4 dangling-reference refusal).
+  2. *`attestation` journal address PINNED to `subject_id =
+     "<scope_kind>:<scope_id>"`.* R3's `attestation` row routes through
+     `state/attestation.py::reduce` over a "named journal `{scope_kind,
+     scope_id}`", but the `ChainEntry` carries a single opaque `subject_id`, and
+     a grep found NO existing `<scope_kind>:<scope_id>` convention in the tree. T4
+     pins the address as a `":"`-partitioned `subject_id` (e.g.
+     `"scope:widget-lock"`); a `subject_id` with no `":"` separator is a loud
+     `errors.SpecInvalid`. The checker projects each journal record to an
+     attestation dict (`resolved.attestor` + `resolved.content_sha`; records
+     lacking them are skipped by the kernel's tolerant read), routes the
+     current/stale verdict through `attestation.reduce`, and echoes the newest
+     valid record's `{block, attestor}` VERBATIM into the slot's `evidence_note`
+     (the R3 disclosure sentence).
+  3. *Recompute/currency legs, per kind (matching R3's per-kind `content_sha`
+     rule).* Every checker's CURRENT verdict requires BOTH the kind's currency
+     condition AND `recomputed_sha == entry.content_sha`; a `"stale"` verdict
+     always carries the recorded-vs-recomputed pair, `"absent"` means the
+     substrate/record does not exist (recomputed sha `None`). `notebook-audit`
+     recomputes the module sha (`sha256_normalized` over the interview-echoed
+     source `.py`) and routes the section verdict through `audit_module` + the
+     gate's `_linked_source_drift`/`_winning_record`; `reproduction` recomputes
+     the canonical-JSON sha of the newest receipt and checks code drift via
+     `code_drift.detect_code_drift` (the receipt identity carries no `executor`,
+     so only the `tasks_py_sha` dimension is live) plus the dossier cross-link;
+     `scope-budget` recomputes the canonical-JSON sha of `{prior_looks,
+     distinct_lineages, locked}`.
+  4. *`reproduction` + `requires` is a loud not-yet-available refusal.* The
+     determinism-fingerprint substrate (`state/determinism.py::evidence_meets`)
+     does not exist in this worktree, so ANY `requires` floor on a `reproduction`
+     entry raises `errors.SpecInvalid` naming `docs/design/determinism-fingerprint.md`
+     (reserved-seam posture; never a silent pass). `pack-receipt` is likewise a
+     loud not-yet-available refusal until domain-packs lands.
+  5. *Canonical-JSON sha helper.* No `infra`/`state` helper of the harness-contract
+     form exists to reuse (the `ops/notebook/audit_view` / `ops/story_render`
+     copies are private view-sha helpers), so T4 ships ONE local
+     `_canonical_sha` (`json.dumps(sort_keys=True, separators=(",", ":"),
+     ensure_ascii=False)` → sha256).
+
+- **T6 implementation 2026-07-08 (`state/decision_journal.py` + wire):**
+  1. *The `"registration"` scope kind + path branch landed.* `SCOPE_KINDS` gained
+     a SIXTH member; `decisions_path` branches to
+     `.hpc/registrations/<registration_id>.decisions.jsonl`; the wire `ScopeKind`
+     Literal followed in lockstep. T5's `# T6 seam` glob in
+     `ops/registration/verify_op.py::_all_registration_ids` was RECONCILED to
+     DERIVE the registrations directory from the one `decisions_path` definition
+     (`decisions_path(exp, "registration", "_").parent`) — never a second path
+     constant. **Regen debt (deferred per the Wave-C dispatch — NOT run):** the
+     `ScopeKind` literal + the `verify-registration` verb owe the six regen scripts
+     (`operations.json` registry count, indices, frontmatter). The schema-freshness
+     contract test (`tests/_wire/test_schema_models_roundtrip.py`) is GREEN as
+     landed.
+
+- **T7 implementation 2026-07-08 (`ops/decision/journal.py` + facade):**
+  1. *Registration authorship refusals carry the E2 elicitation marker.* The
+     Lock-3 refusals (bare ack, un-named `registration_id`, missing prerequisite
+     sha-prefix) and the revoke floor's bare-ack / un-named-id refusals route
+     through `_refuse_missing_authorship`, attaching
+     `failure_features={"authorship_evidence": "missing"}`; the SINGLE
+     `append-decision` firing site therefore covers registration sign-offs over
+     MCP too (no new surface). Lock-2 sha / structural refusals (dossier bind
+     mismatch, template sha drift, view_sha mismatch, partial chain, missing
+     field/slot, block-convention, missing reason) stay UNMARKED — a re-elicited
+     utterance cannot fix a moved hash (the E2 scoping).
+  2. *The `view_sha` fourth leg recomputes with `registered_at=None` /
+     `status="current"`.* At append the record has no timestamp yet (the one field
+     no caller asserts), so the gate recomputes the deterministic
+     verify-registration projection over its append-time legs (all `current`) with
+     `registered_at=None`. `verify_op.build_view` was extracted as the ONE renderer
+     both the T5 reporter and the T7 gate call, so a witness the gate recomputes is
+     byte-identical to the one the reporter renders over the same inputs. NOTE the
+     coherence gap for T10 to close: a POST-registration `verify-registration` reads
+     `registered_at=<ts>`, so its view_sha differs from the bound one; the human's
+     binding witness derives from the pre-append projection, not a post-hoc verify.
+  3. *The decision subject reaches the registration subject through a facade.*
+     `ops/decision/journal.py` (subject `decision`) cannot import the
+     `ops/registration` subject directly (the subject-import lint). A top-level
+     facade `ops/registration_view.py` re-exports `check_chain` + `build_view` (the
+     `ops/notebook_view.py` precedent); `compute_dossier_signature` is reached via
+     the `from hpc_agent.ops import export_dossier` facade form. The pre-existing
+     Wave-B cross-subject import reds (`verify_op`/`prereqs` used the direct
+     spelling of `ops.export_dossier` / `ops.verify_reproduction`) were fixed to the
+     facade form at the same time, restoring the lint contract test to green.
+  4. *The dossier cross-link is enforced at append.* The gate passes
+     `dossier_run_ids=set(sig.run_ids)` (the live re-gather's resolved run set) into
+     `check_chain`, so a `reproduction` slot whose receipt names an unrelated run is
+     refused — stronger than the T5 reporter, which passes `None`.
+
+- **T8 implementation 2026-07-08 (`ops/attention_queue.py`):**
+  1. *Two registration item kinds.* `registration-blocked` (a registration whose
+     winning chain has a NON-CURRENT prerequisite → BLOCKED class, "blocks capital,
+     not just a run") and `registration-stale` (a registration whose live dossier
+     signature DRIFTED → VERDICT class, a re-registration verdict is owed). A
+     `revoked` / `absent` id contributes nothing. The collector routes both
+     verdicts through the ONE definitions — `reduce_registration` (dossier drift)
+     and `check_chain` (prerequisite currency) — and re-derives nothing (D6).
+     Fail-open per registration (a torn journal, a moved run whose dossier cannot
+     be re-gathered, or an unparseable chain is skipped, never crashing the read).
+  2. *The audit→registration leverage fan-out.* `_fanout_for` for an
+     `audit-section-unsigned` / `audit-section-stale` item now adds
+     `_count_registrations_naming_audit` to the existing runs-echoing count: an
+     unsigned prerequisite blocking a registration blocks CAPITAL, so the audit
+     section that gates it earns that leverage. A non-creating, fail-open read of
+     the registration journals, winner-selected through `reduce_registration`
+     (never a re-inlined newest-first); a revoked/absent registration no longer
+     depends on the audit and is not counted.
+
+- **LANDED on main 2026-07-08/09 — the capstone (Waves A–C + the T10 toy
+  first consumer; registry 147).** The plan shipped as designed against R1–R9;
+  T1–T3, T5, T9, and T10 landed with no departure, and the T4/T6/T7/T8 entries
+  above already record their per-wave deviations (the `max_looks` `scope-budget`
+  key and the `attestation` kind's `subject_id="<scope_kind>:<scope_id>"`
+  address are both pinned in `ops/registration/prereqs.py` per T4; the T7
+  `view_sha` fourth leg recomputes the pre-append projection with
+  `registered_at=None` and reaches the registration subject through the
+  `ops/registration_view.py` facade per T7). Two additional deviations folded at
+  landing:
+  1. *Wire schema-suffix collision — `FieldsReport` → `FieldsBlock`.* T2's
+     verify-registration `fields` sub-model was renamed to escape the `*Report`
+     schema-file-name collision that left an orphan `fields.output.json`
+     unminted; the rename threads through
+     `_wire/actions/verify_registration.py::FieldsBlock`,
+     `ops/registration/verify_op.py`, `ops/decision/journal.py`, and
+     `schemas/verify_registration.output.json` (one of the six landing-batch
+     suite fixes, 65cd7e95).
+  2. *Docstring-only subject `__init__`.* `ops/registration/__init__.py` carries
+     a module docstring and nothing else — an exporting init trips
+     `scripts/lint_subject_init.py`, so the subject's surface is reached through
+     its modules, not a re-exporting package init (55bc5fa7; the T5-side
+     conflict resolution kept).
+  The T4 stub (reproduction + `requires` = a loud not-yet-available refusal until
+  the fingerprint substrate landed, T4 entry #4) was RETIRED by registration-T9
+  (3e87cdb9), which wires the real R4 address chain — newest receipt →
+  `repro.cmd_sha` → `state/fingerprint_store.py::load_evidence` (admitted,
+  current-identity) → one `state/determinism.py::evidence_meets` call. Enforcement
+  rows landed under `docs/internals/engineering-principles.md` §"The registration
+  kernel: the deployment-boundary attestation is mechanism-only", held by
+  `tests/contracts/test_registration_boundary.py` +
+  `tests/ops/decision/test_registration_authorship.py`.
 
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the

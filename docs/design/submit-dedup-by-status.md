@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: submit dedup vs. resubmit, by journal status
 
 > **Status:** implemented. Tracks

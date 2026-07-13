@@ -56,11 +56,12 @@ _REASON: dict[str, str] = {
     ),
     "failed": (
         "the run reached a terminal failed state; classify the failed tasks' "
-        "stderr (recoverable vs not) and decide resubmit-failed / reconcile-journal."
+        "stderr (recoverable vs not) and decide resubmit-failed / "
+        "`reconcile --run-id <id> --scheduler <backend>`."
     ),
     "abandoned": (
         "the recorded jobs are no longer known to the scheduler; run "
-        "reconcile-journal to confirm before re-submitting."
+        "`reconcile --run-id <id> --scheduler <backend>` to confirm before re-submitting."
     ),
 }
 

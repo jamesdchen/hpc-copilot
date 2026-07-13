@@ -105,6 +105,34 @@ def test_forwards_stdin_pipe() -> None:
     assert "piped-payload" in proc.stdout
 
 
+def test_default_stdin_is_isolated_devnull() -> None:
+    """With no explicit ``stdin=``, the child gets DEVNULL, never the parent's
+    stdin — under ``mcp-serve`` the inherited stdin IS the live JSON-RPC pipe,
+    and a child that reads it steals protocol bytes or blocks forever (run-12
+    finding 4, the ``git_output`` server wedge).
+
+    Fire path: the runner is exercised in a RE-EXEC'd parent whose stdin
+    carries pending bytes (pytest's own fd 0 is already null-like, so calling
+    the runner in-process could never catch an inheritance regression). The
+    grandchild must read 0 bytes (DEVNULL EOF), not the parent's payload."""
+    inner = (
+        "from hpc_agent.infra.bounded_subprocess import run_capture_bounded; "
+        "import sys; "
+        "p = run_capture_bounded([sys.executable, '-c', "
+        "'import sys; print(len(sys.stdin.buffer.read()))'], timeout_sec=30); "
+        "print('CHILD_READ=' + p.stdout.strip())"
+    )
+    outer = subprocess.run(
+        [sys.executable, "-c", inner],
+        input="PROTOCOL-BYTES-THAT-MUST-NOT-LEAK",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert outer.returncode == 0, outer.stderr
+    assert "CHILD_READ=0" in outer.stdout
+
+
 def test_forwards_env() -> None:
     """``env=`` is forwarded to the child — rsync's ``RSYNC_RSH`` ssh-binary pin."""
     child_env = {**os.environ, "HPC_BOUNDED_TEST": "sentinel-value"}

@@ -10,17 +10,23 @@ than silently disabling the feature.
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
+
+if TYPE_CHECKING:
+    from hpc_agent.state.run_record import RunRecord
+
+_log = logging.getLogger(__name__)
 
 # Scheduler families the framework ships golden profiles for. A
 # ``scheduler`` value outside this set is permitted only when the entry
@@ -375,6 +381,114 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
     return result
 
 
+def resolve_ssh_target(record: RunRecord) -> str:
+    """Resolve the LIVE ``user@host`` for *record*'s cluster at USE time.
+
+    run12 finding 23 / upstream-fixes RULING 1 (option b, "resolve at use
+    time"): the journal records the CLUSTER key — that is HISTORY, what the
+    human approved. ``user@host`` is *config*: it is resolved fresh from
+    ``clusters.yaml`` on every transport-consuming call. So a login-node
+    failover (or any host change) is a config edit — change
+    ``clusters.yaml[cluster].host`` (or the record's one ``cluster`` key) and
+    every consumer picks up the new target with NO journal surgery.
+
+    ``record.ssh_target`` is still WRITTEN at submit (honest provenance of what
+    was used then), but consumers no longer TRUST it: this resolver returns the
+    value derived from config and only FALLS BACK to the frozen
+    ``record.ssh_target`` when config can't answer — the cluster key is absent
+    from ``clusters.yaml`` (an ad-hoc cluster, or one removed after submit), the
+    entry yields no derivable ``user@host`` (no ``user``/``host``), the config
+    can't be loaded, or the record predates the ``cluster`` field entirely. That
+    fallback IS the migration shim — no record is ever rewritten.
+
+    The fallback is DISCLOSED on the log (the existing surface — no new wire
+    field): a WARNING names the reason, and a live resolution that DIFFERS from
+    the frozen submit-time value is logged at INFO so a host retarget leaves a
+    trail. Best-effort throughout — a bad/missing ``clusters.yaml`` degrades to
+    the frozen value rather than breaking status / monitor / aggregate.
+    """
+    frozen = str(getattr(record, "ssh_target", "") or "")
+    cluster = str(getattr(record, "cluster", "") or "").strip()
+    if not cluster:
+        # Record predates the cluster field (or it was never populated) — the
+        # frozen submit-time target is the only identity we have.
+        _log.warning(
+            "resolve_ssh_target: record carries no cluster key; using frozen "
+            "submit-time ssh_target %r (retarget by config is unavailable for "
+            "this record)",
+            frozen,
+        )
+        return frozen
+    try:
+        cfg = load_clusters_config().get(cluster)
+    except Exception as exc:  # noqa: BLE001 — a bad/missing config must not break transport
+        _log.warning(
+            "resolve_ssh_target: could not load clusters.yaml for cluster %r "
+            "(%s); using frozen submit-time ssh_target %r",
+            cluster,
+            exc,
+            frozen,
+        )
+        return frozen
+    if not cfg:
+        _log.warning(
+            "resolve_ssh_target: cluster %r absent from clusters.yaml; using "
+            "frozen submit-time ssh_target %r (add the cluster to clusters.yaml "
+            "to retarget its host at use time)",
+            cluster,
+            frozen,
+        )
+        return frozen
+    try:
+        live = ClusterConfig.model_validate(cfg).ssh_target
+    except Exception as exc:  # noqa: BLE001 — a malformed entry must not break transport
+        _log.warning(
+            "resolve_ssh_target: clusters.yaml[%r] failed validation (%s); using "
+            "frozen submit-time ssh_target %r",
+            cluster,
+            exc,
+            frozen,
+        )
+        return frozen
+    if not live:
+        _log.warning(
+            "resolve_ssh_target: clusters.yaml[%r] yields no derivable user@host "
+            "(missing user/host); using frozen submit-time ssh_target %r",
+            cluster,
+            frozen,
+        )
+        return frozen
+    try:
+        # A derivation the transport would refuse is NOT a live resolution —
+        # the packaged clusters.yaml TEMPLATE carries '<your_user>@...'
+        # placeholders, and handing one to ssh_argv turns every consumer into
+        # a SpecInvalid crash (CI has only the template). An unconfigured
+        # entry falls back to the frozen value like every other can't-answer
+        # case. Imported lazily to keep this config module import-light.
+        from hpc_agent.infra.ssh_validation import validate_ssh_target as _validate
+
+        _validate(live)
+    except errors.SpecInvalid:
+        _log.warning(
+            "resolve_ssh_target: clusters.yaml[%r] resolves to %r, which is not "
+            "a usable ssh target (an unconfigured template placeholder?); using "
+            "frozen submit-time ssh_target %r",
+            cluster,
+            live,
+            frozen,
+        )
+        return frozen
+    if live != frozen:
+        _log.info(
+            "resolve_ssh_target: cluster %r now resolves to %r (frozen "
+            "submit-time value was %r) — using the live config target",
+            cluster,
+            live,
+            frozen,
+        )
+    return live
+
+
 def writable_clusters_config_path() -> Path:
     """The clusters.yaml path safe to WRITE (to cache a resolved profile).
 
@@ -581,13 +695,34 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
     bare-python behaviour. *conda_env* (the per-run resolved env from the
     run sidecar) overrides; otherwise the first ``conda_envs`` entry is used.
     The ``<your_env>`` placeholder is treated as unset.
+
+    The ``conda activate`` is emitted whenever a conda env is configured AND
+    conda is EVIDENCED reachable — via an explicit ``source <conda_source>`` OR a
+    conda-NAMING ``module load`` (:func:`_modules_provide_conda`, the
+    module-provided-conda configuration). This is the SAME finding-24 predicate
+    the :class:`Activation` invariant gates *acceptance* on, so accept-at-submit
+    and activate-at-control-plane are ONE definition of "conda reachable" (G6):
+    a non-conda module (``gcc/11``) is not evidence, a spec pairing it with a
+    ``conda_env`` is refused at submit, so the control-plane must not emit a
+    doomed ``conda activate`` for it either. Gating the activate on
+    ``conda_source`` alone had left every control-plane command on a module-conda
+    cluster running under the login node's bare ``python`` (``No module named
+    ...`` / rc 127); a cluster with neither a source nor a conda-naming module
+    has no way to reach conda, so it still emits no (doomed) ``conda activate``.
     """
     parts: list[str] = []
-    for mod in cluster_cfg.get("modules") or []:
+    modules = cluster_cfg.get("modules") or []
+    for mod in modules:
         parts.append(f"module load {shlex.quote(str(mod))}")
     conda_source = cluster_cfg.get("conda_source")
     if conda_source:
         parts.append(f"source {shlex.quote(str(conda_source))}")
+    # "Conda is reachable" is the finding-24 predicate the ``Activation``
+    # invariant shares: an explicit ``conda_source`` OR a conda-naming module.
+    conda_reachable = bool(conda_source) or _modules_provide_conda(
+        " ".join(str(m) for m in modules)
+    )
+    if conda_reachable:
         env = conda_env or next(iter(cluster_cfg.get("conda_envs") or []), None)
         if env and env != "<your_env>":
             parts.append(f"conda activate {shlex.quote(str(env))}")

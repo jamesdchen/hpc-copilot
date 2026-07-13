@@ -1,6 +1,11 @@
+---
+status: shipped
+---
 # Domain packs — bind-as-data design + implementation plan
 
-**Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off
+**Status: IMPLEMENTED (2026-07-08/09; Phase 4 — the bind-as-data substrate,
+all six seams, the receipt gate at both submit seats, the toy-widgets first
+consumer — landed on main, drift log at foot).** The durable hand-off
 for the pack substrate: settled decisions with recorded rationale, the
 per-seam declarative schema, the bind/receipt/gate mechanics, and the
 file-disjoint task waves for parallel Opus dispatch. Cite `path::symbol`,
@@ -515,6 +520,105 @@ maintainers mistake for core knowledge).
     scripts, and registry 141 (`operations.json` length, matching the
     e1e9ab27 baseline claim) all check out.
 
+- **LANDED on main 2026-07-08/09 — the capstone (Phase 4 complete, registry 150;
+  cf408788 + the landing tails bd896235).** The bind-as-data substrate, all six
+  seams (S1–S6), the receipt gate at both synchronous seats, the sidecar echo +
+  the two dossier nouns, the boundary suite, and the toy-widgets first consumer
+  landed as designed against DP1–DP4. Deviations folded at landing:
+  1. *The sidecar packs echo carries `manifest` (the relpath), a no-parse
+     consequence.* `state/pack_declarations.py` copies the opt-in entry's
+     `manifest` relpath verbatim into the echo (`echo["manifest"] = manifest_rel`)
+     — core never opens or parses the manifest to enrich the echo; the relpath
+     alongside `{pack, version, sha}` is identity enough for the dossier to prove
+     which standards gated the run, and parsing it would cross the no-parse
+     boundary.
+  2. *Every pack write re-points at `append_decision`; no second writer.*
+     `pack-bind` and `pack-record-receipt` route their CODE attestation through
+     `state/decision_journal.py::append_decision` under the `"pack"` scope kind
+     (`ops/pack/bind_op.py::_append_pack_record`,
+     `ops/pack/record_receipt_op.py`), landed with the T8 scope kind (282b7050);
+     currency reads route through the ONE
+     `read_decisions(experiment_dir, "pack", name)` reader.
+  3. *The gate refusal is its own error class, `errors.PackReceiptsMissing`*
+     (`precondition_failed`, `for_slots` naming every failing slot + status) —
+     the `SourceUnaudited`/`ScopeLocked` precedent, added to `errors.py`'s public
+     `__all__` and raised by `ops/pack_gate.py::assert_pack_receipts_current`
+     (the public-api pin was one of the landing tails, bd896235).
+  4. *T9 reconciled every consumer onto `read_decisions`.* The gate, the
+     `pack-status` query, and the seam-declaration resolver all reduce through the
+     ONE `read_decisions` reader + `state/attestation.py::reduce`
+     (`ops/pack_gate.py`, `ops/pack/status_op.py`,
+     `state/pack_declarations.py`), never a direct journal-file read or a
+     re-inlined newest-first (the T8 seam reconciliation, 282b7050 / 048b31d1).
+  5. *S6 stayed RESERVED — exactly one seam name, loaded shape-only.*
+     `registration_fields` / `required_receipts` load structure-only in
+     `state/pack.py`; no pack consumer of S6 landed here. The registration
+     kernel's opt-in `receipt_bindings: [{slot, pack}]` (the object-form sibling,
+     disambiguated in the coherence review from S6's manifest list
+     `required_receipts: [<slot slug>]`) is what names WHICH pack fills a slot —
+     exactly the reservation this plan committed to.
+  Enforcement rows landed under `docs/internals/engineering-principles.md`
+  §"Domain packs: bind-as-data, trust content-addressed", held by
+  `tests/contracts/test_pack_boundary.py` (T11, 048b31d1).
+
 (Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
+
+- **RULED (2026-07-10, user, recorded from session): the three-tier pack
+  distribution model — supersedes the v0.2.0 sibling layout (and the never-
+  adopted "quant graduates to its own repo" proposal).** (1) UPSTREAM: domain
+  packs (starting with `quant`) SHIP IN THE HPC-AGENT REPO as distributed
+  CONTENT — the trust lane stays bind-as-data (DP1-DP4 unchanged: core never
+  imports pack code; travelling in core's repo is distribution, not a
+  capability plugin). (2) LAB: every lab's distro of hpc-agent carries its
+  own LAB BINDINGS — the downloaded+modified domain pack (harxhar-clean's
+  `rv` is the working precedent) lives in the lab's repo as the lab's fork
+  of the skeleton. (3) EXPERIMENT: experiment setup creates `.hpc/` and
+  MATERIALIZES the lab pack into it, pinning the audit skeleton's sections
+  at setup — each experiment binds against its OWN pinned copy (relpath+sha
+  within the experiment; drift-revocation local by construction). OPEN
+  sub-rulings (deliberately not invented): pinned content tracked vs
+  gitignored-with-sealed-shas; an upstream-lineage field on the lab pack
+  (which upstream version+sha it forked); the lab-bindings home; which
+  setup verb owns materialization (interview / new-experiment on-ramp is
+  the natural seat). Build: post-run-#12.
+
+- **RULED refinement (2026-07-10, user, same session): program-pack templates
+  are DERIVATIVES of the domain-pack template skeletons.** The skeleton
+  states the contracts; the program template instantiates them; the domain
+  check attests conformance (already live: `check_quant.py` verifies the
+  section inventory over the ACTIVE program template — the quant-audit
+  receipt IS the derivative-conformance attestation, and drift-revocation
+  already fires in both directions across the layer boundary). This settles
+  the lineage sub-ruling at TEMPLATE granularity: the derivative records
+  `derived_from: {pack, seam, version, sha}` naming the skeleton it
+  instantiated, so a skeleton upgrade can mechanically report how far behind
+  a derivative is and diff the contract set to re-conform against. The
+  12-slug swap (post-signature) is the lifecycle precedent: skeleton
+  contract-set grows → derivative re-conforms → both packs rebuild →
+  receipt re-earned.
+
+- **RULED corrections (2026-07-10, user, later same session — supersede the
+  wording of the two entries above where they conflict):**
+  (1) **`rv` is NOT "the lab's fork of the domain pack" — it is a specific,
+  CONSUMED INSTANCE in one of the lab's programs.** The flow: a lab installs
+  hpc-agent (which ships the domain packs); at PROGRAM creation, building
+  out the `.hpc/` dir CONSUMES the domain pack's template skeleton to
+  CREATE the program template (here: rv_template) for experiments run in
+  that program, stamping `derived_from` mechanically at generation. The
+  program carries the pinned copy; **each experiment modifies only the
+  VARIABLE sections** of it (the pinned sections stay pinned — the
+  per-experiment copy is the experiment's audit source, the existing
+  scaffold/draft path). There is no standalone "lab fork" artifact.
+  (2) **The pack gate MAY auto-remedy — latency is to be OBLITERATED.**
+  "The seal is more for the archive than it is for humans trying to build
+  fast": the archive's integrity is the JOURNAL (old shas, the drift event,
+  the new bind — all recorded), not friction. On a drift/missing-receipt
+  refusal the remedy chain runs mechanically: minimal-rebuild (only the
+  manifests actually stale — knowable mechanically, so mechanized),
+  re-seal + rebind journaled with old→new shas, and the caller-side domain
+  check re-run agent-side with zero human turns (DP2 stands: core still
+  never executes pack CHECK logic; manifest re-sealing is generic hashing
+  over the declarative sweep recipe, which is data, not domain logic).
+  Supersedes the "disclosure-first, explicitly invoked" hedge.

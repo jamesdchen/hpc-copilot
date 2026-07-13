@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check ``skills/`` against ``src/slash_commands/commands/``.
+"""Cross-check ``skills/`` against ``src/hpc_agent/slash_commands/commands/``.
 
 Both trees describe the same workflows (submit, monitor, aggregate,
 campaign, build-executor, classify-axis) in different prose: the skill
@@ -27,7 +27,8 @@ of workflows stays in sync.
 Mapping rules
 -------------
 
-* ``src/slash_commands/skills/<id>/SKILL.md``  ↔  ``src/slash_commands/commands/<cmd>.md``
+* ``src/hpc_agent/slash_commands/skills/<id>/SKILL.md``  ↔
+  ``src/hpc_agent/slash_commands/commands/<cmd>.md``
 * The ``<id>`` and ``<cmd>`` may differ (e.g. ``hpc-submit`` vs
   ``submit-hpc``). The mapping below pins which pair represents the
   same workflow.
@@ -46,8 +47,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / "src" / "slash_commands" / "skills"
-COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
+SKILLS_DIR = REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills"
+COMMANDS_DIR = REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
 #
@@ -67,6 +68,11 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
     ("hpc-status", "monitor-hpc"),
     ("hpc-aggregate", "aggregate-hpc"),
     ("hpc-campaign", "campaign-hpc"),
+    # Notebook-audit gained its slash 2026-07-09: run #11 showed the
+    # skill-only surface has no human on-ramp — nothing routes a user
+    # who says "audit my analysis" into the loop, so the agent
+    # freestyles instead. Same interview/relay split as the others.
+    ("hpc-notebook-audit", "new-experiment-hpc"),
 ]
 
 # Workflow-trigger slashes that route directly to the spawn pipeline
@@ -84,11 +90,12 @@ WORKFLOW_TRIGGER_SLASHES: set[str] = set()
 SKILL_ONLY_OK: set[str] = {
     "hpc-build-executor",
     "hpc-classify-axis",
-    # Notebook-audit loop (2026-07-08): agent-only in-session driver
-    # (draft -> lint -> auto-clear -> view -> sign-off -> status); no
-    # paired user-typed slash ships in v1.
-    "hpc-notebook-audit",
     "hpc-wrap-entry-point",
+    # Onboard-by-reproduction (Phase 6.5): agent-only orchestrator for the
+    # arrival with repo + script + claimed result — onboard, run fresh twice
+    # under observation, claim-check compare, relay the code render. No paired
+    # user-typed slash in v1.
+    "hpc-claim-check",
     # Human-run release procedure (tracked here since 2026-07-04 so it lives
     # under the repo lints; formerly an untracked ~/.claude/skills copy that
     # drifted). No paired slash — invoked as /release via install-commands.
@@ -225,6 +232,31 @@ def main() -> int:
 
     declared_skills = {pair[0] for pair in WORKFLOW_PAIRS}
     declared_slashes = {pair[1] for pair in WORKFLOW_PAIRS}
+
+    # SKILL_ONLY_OK / SLASH_ONLY_OK must each be a SUBSET of what is actually
+    # on disk. Otherwise an allow-list entry passes VACUOUSLY for a file that
+    # does not exist — exactly the ``hpc-claim-check`` drift the sweep caught
+    # (an orphaned skill named in SKILL_ONLY_OK but never packaged, invisible
+    # to every prose lint because no file matched). A stale allow-list entry is
+    # an error, not a silent pass. (G10 lockstep: the derived set ⊆ its owning
+    # catalog — here the catalog is "files present".)
+    stale_skill_ok = sorted(SKILL_ONLY_OK - skill_ids_present)
+    if stale_skill_ok:
+        errors.append(
+            "SKILL_ONLY_OK names skill(s) with no SKILL.md on disk: "
+            f"{stale_skill_ok}. A missing skill passes every prose lint "
+            "vacuously (the hpc-claim-check drift). Remove the stale entry "
+            "from scripts/lint_skill_command_sync.py:SKILL_ONLY_OK, or restore "
+            "the skill file."
+        )
+    stale_slash_ok = sorted(SLASH_ONLY_OK - slash_ids_present)
+    if stale_slash_ok:
+        errors.append(
+            "SLASH_ONLY_OK names slash command(s) with no .md on disk: "
+            f"{stale_slash_ok}. Remove the stale entry from "
+            "scripts/lint_skill_command_sync.py:SLASH_ONLY_OK, or restore the "
+            "command file."
+        )
 
     # Every skill on disk gets its frontmatter validated (execution +
     # category agreement), independent of whether it's paired with a

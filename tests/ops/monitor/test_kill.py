@@ -7,6 +7,7 @@ and the verification-failure honesty rule.
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 from pathlib import Path
 
@@ -44,18 +45,25 @@ def _capture_ssh(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return sent
 
 
-def _patch_reconcile(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+def _patch_reconcile(
+    monkeypatch: pytest.MonkeyPatch, *, settle_status: str = "abandoned"
+) -> list[tuple]:
     """Patch the ``reconcile`` primitive kill delegates a FULL kill to.
 
     Records ``(experiment_dir, run_id, scheduler)`` per call so a test can assert
     a full kill routed the settle through reconcile (and a partial kill did not),
-    without a real SSH reconcile round-trip.
+    without a real SSH reconcile round-trip. Returns a reconciled record whose
+    status is *settle_status* — ``kill`` derives ``settled`` from the record's
+    terminal-ness, not from a non-raising return, so a fake that mimics the
+    unable_to_verify path passes a still-``in_flight`` record here.
     """
     calls: list[tuple] = []
 
     def _fake(experiment_dir, run_id, *, scheduler, **_kw):  # type: ignore[no-untyped-def]
         calls.append((experiment_dir, run_id, scheduler))
-        return None
+        rec = load_run(experiment_dir, run_id)
+        assert rec is not None
+        return dataclasses.replace(rec, status=settle_status)
 
     monkeypatch.setattr(kill_mod, "reconcile", _fake)
     return calls
@@ -138,6 +146,33 @@ def test_kill_dispatches_sge_qdel(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     # journal is marked terminal and the terminal harvest fires there (not here).
     assert reconcile_calls == [(tmp_path, "r1", "sge")]
     assert out["settled"] is True
+
+
+def test_kill_not_settled_when_reconcile_cannot_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-raising reconcile that did NOT settle the run → ``settled=False``.
+
+    reconcile's unable_to_verify path (e.g. a transient SSH blip in ITS OWN
+    alive probe) returns without raising while leaving the journal in_flight.
+    ``settled`` must report the actual outcome — the envelope claims "journal
+    marked terminal and the terminal harvest fired", and a caller trusting a
+    false True would skip the re-reconcile the run still needs.
+    """
+    _capture_ssh(monkeypatch)
+    reconcile_calls = _patch_reconcile(monkeypatch, settle_status="in_flight")
+    upsert_run(tmp_path, _record("r1", job_ids=["100", "200"]))
+    monkeypatch.setattr(
+        kill_mod, "_ssh_alive_job_ids", lambda *, ssh_target, job_ids, scheduler: set()
+    )
+
+    out = kill(experiment_dir=tmp_path, spec=KillSpec(run_id="r1", scheduler="slurm"))
+
+    # The FULL kill still routed through reconcile...
+    assert reconcile_calls == [(tmp_path, "r1", "slurm")]
+    assert out["confirmed_count"] == 2
+    # ...but the run did not reach a terminal state, so the envelope says so.
+    assert out["settled"] is False
 
 
 def test_kill_counts_nothing_gone_on_verification_failure(

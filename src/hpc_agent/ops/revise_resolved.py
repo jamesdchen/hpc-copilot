@@ -1,6 +1,6 @@
 """``revise-resolved`` — the nudge becomes a field delta; code re-derives the rest.
 
-Proving-run #5 wave 5.1, the ROOT fix (``docs/design/proving-run-5-hardening.md``
+Proving-run #5 wave 5.1, the ROOT fix (``docs/design/history/proving-run-5-hardening.md``
 §1 thesis, §3, §4). The block-drive loop had one builder affordance left — **the
 nudge**. The skill told the agent to "fold the nudge into the block's inputs,"
 which in practice meant hand-writing a spec JSON, and that is where ``job_env``

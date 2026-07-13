@@ -8,23 +8,25 @@ closed-loop sequence of `ops/submit/` invocations sharing a
 (`campaign-init`, `-list`, `-status`, `-advance`, `-budget`,
 `-converged`, `-health`, `-replay`) plus `load-context` (the
 fresh-context bootstrap that reconstructs the active campaign from
-on-disk state), the headless `hpc-campaign-driver` console script (the
-non-primitive outer loop that walks the campaign one step per
-invocation), and the cursor/dirs/manifest support modules that back
-them. Campaigns are operations *about* operations, so this subject
-lives under `meta/` rather than `ops/`.
+on-disk state), the three human-touchpoint blocks in `blocks.py`
+(`campaign-greenlight` / `campaign-watch` / `campaign-complete`), and
+the cursor/dirs/manifest support modules that back them. Campaigns are
+operations *about* operations, so this subject lives under `meta/`
+rather than `ops/`.
 
-The tick-loop itself is **not** campaign-owned. The generic mechanism —
-read a `delegate` block, plan the next action, dispatch a `cli` verb or
-an `agent` judgement step, one step per invocation — lives in
-`_kernel/lifecycle/drive.py` as neutral substrate. The mechanism owns
-the protocol; the caller owns the policy. `driver.py` is the campaign
-*caller* that configures it: it injects a `StepTable` (the campaign
-`monitor`/`aggregate` → flow-verb map) and a `JudgementResolver` (the
-default `claude -p` path) via `CampaignLoopConfig`, then exposes the
-`hpc-campaign-driver` entry point. `driver.py` re-exports `plan_action`
-from `drive` so importers' paths are unchanged. The dependency points
-`meta/campaign` → `_kernel/lifecycle/drive`, never the reverse.
+The outer loop is **not** campaign-owned and is not in this package.
+Blocks chain in code via the `block-drive` driver
+(`_kernel/lifecycle/block_drive.py`, the `hpc-block-drive` console
+script) over the neutral tick substrate `_kernel/lifecycle/drive.py`;
+the dependency points `meta/campaign` → `_kernel/lifecycle`, never the
+reverse. The autonomous refill actor the greenlit manifest authorizes
+lives in `ops/campaign_refill.py` (`campaign-refill`, reached when
+`campaign-watch` emits `watching_refill`; RFC #362,
+`docs/design/campaign-async-refill.md`). (The former campaign-specific
+`driver.py` shim + `hpc-campaign-driver` console script, which injected a
+`StepTable` / `JudgementResolver` and spawned `claude -p` for judgment
+steps, were **removed in the worker-removal wave** — see
+`docs/internals/campaign-lifecycle.md`.)
 
 ## Invariant
 
@@ -44,11 +46,12 @@ driver is intentionally not a `@primitive`.
   `atoms/health.py`, `atoms/init.py`, `atoms/list_campaigns.py`
   (the name avoids shadowing the `list` builtin),
   `atoms/replay.py`, `atoms/status.py`, `atoms/load_context.py`.
-- **Public non-primitive entry point**: `driver.py:main` —
-  the `hpc-campaign-driver` console script. A thin shim over the neutral
-  loop in `_kernel/lifecycle/drive.py`; it holds `CampaignLoopConfig`
-  (the campaign step map + default resolver) and the entry point, and
-  re-exports `plan_action` from `drive`.
+- **Campaign blocks** (`blocks.py`): the three human-touchpoint blocks
+  `campaign-greenlight` / `campaign-watch` / `campaign-complete`,
+  chained by `block-drive` (`_kernel/lifecycle/block_drive.py`). There is
+  no campaign-owned outer-loop entry point anymore — the former
+  `driver.py:main` / `hpc-campaign-driver` console script was removed in
+  the worker-removal wave.
 - **Support modules** (internal to the subject, imported by the atoms
   above): `cursor.py`, `dirs.py`, `manifest.py`. External callers go
   through the primitive CLI, not these helpers.

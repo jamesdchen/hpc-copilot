@@ -17,8 +17,20 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+# ``run_cli`` defaults to a 30s timeout — a hang guard, not a latency budget.
+# Each case here spawns a cold ``python -m hpc_agent`` interpreter (~4s solo).
+# Under the full suite's ``-n auto`` xdist parallelism, cold-start contention
+# alone pushes a single spawn to ~12s at 24-way, and Windows Defender scanning
+# %TEMP% adds the documented 2-3x wall-clock variance (see pytest.ini) — enough
+# for a tail spawn to breach 30s and raise ``TimeoutExpired``, a false-positive
+# load-flake (the CLI path itself is deterministic and fast). 90s keeps the
+# hang guard intact — a genuinely wedged code path still fails the test — while
+# absorbing cold-start-under-load.
+_SPAWN_TIMEOUT = 90
+
+
 def _run_cli(*args: str) -> tuple[int, str, str]:
-    proc = run_cli(*args)
+    proc = run_cli(*args, timeout=_SPAWN_TIMEOUT)
     return proc.returncode, proc.stdout, proc.stderr
 
 

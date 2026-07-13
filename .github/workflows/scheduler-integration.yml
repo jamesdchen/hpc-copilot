@@ -142,7 +142,11 @@ jobs:
         run: |
           # The driver imports the SAME wheel the container runs (src/ layout,
           # so cwd doesn't shadow it), plus pytest to run the smoke test.
-          python -m pip install dist/*.whl pytest
+          # pytest runs with the repo as rootdir, so pyproject's addopts
+          # apply: pytest-xdist (-n auto) and pytest-timeout (timeout=300)
+          # must be present or pytest exits 4 on the unrecognized -n before
+          # collecting a single test.
+          python -m pip install dist/*.whl pytest pytest-xdist pytest-timeout
 
       - name: Run the scheduler-integration smoke test
         env:

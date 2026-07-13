@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent.cli._helpers import EXIT_OK, _err_from_hpc, _ok
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.aggregate.runner import (
     build_provenance,
@@ -92,7 +93,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     # Precondition: every per-task output must exist before we combine.
     if require_outputs:
         missing = verify_per_task_outputs(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             run_id=args.run_id,
             wave=int(args.wave),
@@ -112,7 +113,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         args.experiment_dir,
         args.run_id,
         wave=int(args.wave),
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         force=args.force,
     )
@@ -120,7 +121,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         # Postcondition: the combiner must have produced the declared file.
         if expect_output:
             artifact_ok, detail = verify_combiner_artifact(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 expect_output=expect_output,
             )
@@ -136,7 +137,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         if expect_output:
             try:
                 sidecar_path = write_remote_provenance(
-                    ssh_target=record.ssh_target,
+                    ssh_target=resolve_ssh_target(record),
                     remote_path=record.remote_path,
                     expect_output=expect_output,
                     provenance=provenance,

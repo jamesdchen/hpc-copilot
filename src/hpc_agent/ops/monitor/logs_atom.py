@@ -10,6 +10,7 @@ this before delegating, so the atom assumes a usable SSH agent.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +18,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.backends import backend_requires_ssh
-from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.clusters import load_clusters_config, resolve_ssh_target
 from hpc_agent.ops.monitor.logs import fetch_task_logs
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import load_run
@@ -164,13 +165,29 @@ def fetch_logs(
     resolved_task_ids: list[int] = []
     note: str | None = None
     if all_failed:
-        # Fresh status poll to enumerate failed tasks.
+        # Fresh status poll to enumerate failed tasks. Seed the run's cluster
+        # env activation exactly as ``record_status`` does — the reporter runs
+        # on the login node via ssh_run and would otherwise hit the bare
+        # login-node python that lacks hpc_agent (rc=127 on conda clusters, the
+        # run-#7/#8 class). The journal record always knows the cluster; backfill
+        # it into the sidecar when the sidecar carries none so the deriver's
+        # cluster-backfill arm fires (#281). Sibling of the record_status seed.
+        from hpc_agent.infra.clusters import remote_activation_for_sidecar
+        from hpc_agent.state.runs import read_run_sidecar
+
+        try:
+            _sidecar = read_run_sidecar(experiment_dir, run_id)
+        except (OSError, json.JSONDecodeError, errors.HpcError):
+            _sidecar = {}
+        if record.cluster and not _sidecar.get("cluster"):
+            _sidecar = {**_sidecar, "cluster": record.cluster}
         report = _ssh_status_report(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             run_id=run_id,
             job_ids=record.job_ids,
             job_name=record.job_name,
+            remote_activation=remote_activation_for_sidecar(_sidecar),
         )
         for tid_str, info in (report.get("tasks") or {}).items():
             if isinstance(info, dict) and info.get("status") == "failed":
@@ -200,14 +217,21 @@ def fetch_logs(
 
     logs: list[dict[str, Any]] = []
     if resolved_task_ids:
+        from hpc_agent.state.runs import read_job_task_spans
+
         logs = fetch_task_logs(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_name=record.job_name,
             job_ids=record.job_ids,
             scheduler=scheduler,
             task_ids=resolved_task_ids,
             lines=int(lines),
+            # Waved runs: the sidecar's per-job global task windows route each
+            # probe to the covering job with the job-LOCAL log index. None
+            # (old sidecar / single array / resubmit job) keeps the global
+            # probe — read_job_task_spans never raises.
+            job_task_spans=read_job_task_spans(experiment_dir, run_id),
         )
 
     data: dict[str, Any] = {

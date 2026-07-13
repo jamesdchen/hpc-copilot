@@ -174,8 +174,8 @@ class StatusSnapshotSpec(BaseModel):
     reconcile: bool = Field(
         default=False,
         description=(
-            "Re-derive ground truth from the cluster (reconcile-journal) before "
-            "digesting — the only path that touches SSH. Requires run_id + "
+            "Re-derive ground truth from the cluster (via the `reconcile` verb) "
+            "before digesting — the only path that touches SSH. Requires run_id + "
             "scheduler."
         ),
     )

@@ -75,6 +75,25 @@ def _one(spec_host: str = HOST) -> Any:
     return out
 
 
+# ─── env-echo disclosure (run-12 finding 24 addendum, B15) ───────────────────
+
+
+def test_net_triage_echoes_hpc_env_overrides(
+    probes: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connectivity differential echoes every exported HPC_* override — a
+    stray transport override (HPC_SSH_ENGINE / HPC_SSH_CIRCUIT_OVERRIDE) is the
+    exact thing that reroutes/short-circuits the SSH this verb diagnoses, so the
+    env that shaped the verdict rides the result. Disclosure only, never judged."""
+    monkeypatch.setenv("HPC_SSH_ENGINE", "asyncssh")
+    monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", HOST)
+    out = _one()
+    echoed = out.active_env_overrides
+    assert echoed["HPC_SSH_ENGINE"] == "asyncssh"
+    assert echoed["HPC_SSH_CIRCUIT_OVERRIDE"] == HOST
+    assert all(k.startswith("HPC_") for k in echoed)
+
+
 # ─── verdict table: one test per enum arm ────────────────────────────────────
 
 

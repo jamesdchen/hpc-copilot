@@ -33,9 +33,12 @@ def _journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _write_lease(*, block: str, run_id: str, pid: int) -> Path:
+def _write_lease(*, block: str, run_id: str, pid: int, experiment_dir: Path) -> Path:
     """Fabricate a `<block>-<run_id>.lease.json` under the journal home's
-    `_detached/` dir, mirroring `_spawn_detached`'s stamped shape."""
+    `_detached/` dir, mirroring `_spawn_detached`'s stamped shape — including
+    the `--experiment-dir` flag `launch_submit_block_detached` always puts in
+    the child argv (the scan reads it back to scope the GLOBAL lease dir to
+    the current experiment)."""
     detached_dir = _current_homedir() / "_detached"
     detached_dir.mkdir(parents=True, exist_ok=True)
     lease_path = detached_dir / f"{block}-{run_id}.lease.json"
@@ -46,7 +49,16 @@ def _write_lease(*, block: str, run_id: str, pid: int) -> Path:
                 "block": block,
                 "pid": pid,
                 "log_path": str(detached_dir / f"{block}-{run_id}.log"),
-                "argv": ["python", "-m", "hpc_agent", block],
+                "argv": [
+                    "python",
+                    "-m",
+                    "hpc_agent",
+                    block,
+                    "--spec",
+                    str(detached_dir / f"{block}-{run_id}.spec.json"),
+                    "--experiment-dir",
+                    str(experiment_dir),
+                ],
             }
         ),
         encoding="utf-8",
@@ -68,7 +80,9 @@ def test_dead_worker_without_terminal_is_surfaced(
 ) -> None:
     """A dead S4 harvest worker with NO recorded terminal → alert + attention."""
     _dead(monkeypatch)
-    _write_lease(block="submit-s4", run_id="pi-train-abc123", pid=999_999_999)
+    _write_lease(
+        block="submit-s4", run_id="pi-train-abc123", pid=999_999_999, experiment_dir=tmp_path
+    )
 
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=_NOW))
 
@@ -90,7 +104,9 @@ def test_dead_worker_with_recorded_terminal_is_skipped(
 ) -> None:
     """A dead pid WITH a recorded block-terminal = normal completion → not surfaced."""
     _dead(monkeypatch)
-    _write_lease(block="submit-s4", run_id="pi-train-done", pid=999_999_999)
+    _write_lease(
+        block="submit-s4", run_id="pi-train-done", pid=999_999_999, experiment_dir=tmp_path
+    )
     record_terminal(
         tmp_path,
         run_id="pi-train-done",
@@ -117,7 +133,7 @@ def test_finished_submit_worker_uses_the_writer_key_and_is_skipped(
     from hpc_agent.state.block_terminal import terminal_block_key
 
     _dead(monkeypatch)
-    _write_lease(block="submit-s4", run_id="pi-train-fin", pid=999_999_999)
+    _write_lease(block="submit-s4", run_id="pi-train-fin", pid=999_999_999, experiment_dir=tmp_path)
     # Record under the EXACT key the submit writer now uses.
     record_terminal(
         tmp_path,
@@ -141,7 +157,9 @@ def test_dead_worker_with_legacy_short_key_terminal_is_skipped(
     the scan reads the verb key then falls back to the short key, so no spurious
     re-invoke fires for a mid-flight run that predates the fix."""
     _dead(monkeypatch)
-    _write_lease(block="submit-s2", run_id="pi-mid-flight", pid=999_999_999)
+    _write_lease(
+        block="submit-s2", run_id="pi-mid-flight", pid=999_999_999, experiment_dir=tmp_path
+    )
     record_terminal(
         tmp_path,
         run_id="pi-mid-flight",
@@ -160,7 +178,7 @@ def test_live_worker_is_not_surfaced(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """A lease still naming a LIVE pid is a running worker — never flagged,
     even with no terminal yet."""
     _alive(monkeypatch)
-    _write_lease(block="submit-s3", run_id="pi-train-running", pid=4242)
+    _write_lease(block="submit-s3", run_id="pi-train-running", pid=4242, experiment_dir=tmp_path)
 
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=_NOW))
 
@@ -173,7 +191,7 @@ def test_mixed_leases_surface_only_the_dead_no_terminal(
 ) -> None:
     """Two dead leases, one with a terminal (skipped) and one without (surfaced)."""
     _dead(monkeypatch)
-    _write_lease(block="submit-s4", run_id="run-finished", pid=999_999_998)
+    _write_lease(block="submit-s4", run_id="run-finished", pid=999_999_998, experiment_dir=tmp_path)
     record_terminal(
         tmp_path,
         run_id="run-finished",
@@ -181,7 +199,7 @@ def test_mixed_leases_surface_only_the_dead_no_terminal(
         cmd_sha="sha",
         result_dump={"ok": True},
     )
-    _write_lease(block="submit-s2", run_id="run-crashed", pid=999_999_999)
+    _write_lease(block="submit-s2", run_id="run-crashed", pid=999_999_999, experiment_dir=tmp_path)
 
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=_NOW))
 
@@ -216,5 +234,114 @@ def test_malformed_lease_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # A pid-less lease can't be probed → skipped; a live pid default would also
     # skip. Neither raises.
+    assert out["needs_attention"] is False
+    assert out["alerts"] == []
+
+
+# ── experiment scoping: the lease dir is GLOBAL, the terminal store is not ─────
+
+
+def test_foreign_experiment_finished_worker_is_not_surfaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NORMALLY-FINISHED worker from ANOTHER experiment must draft nothing.
+
+    The `_detached/` lease dir is global (one journal home serves every
+    experiment) while the block-terminal store is per-experiment, so the other
+    project's terminal is invisible from HERE: unscoped, this dead-pid lease
+    read as dead-with-no-terminal and permanently flipped needs_attention in
+    every other project's doctor run. The scan scopes each lease by the
+    `--experiment-dir` its argv carries, so the foreign worker is skipped."""
+    _dead(monkeypatch)
+    other_exp = tmp_path / "other-project"
+    other_exp.mkdir()
+    _write_lease(block="submit-s4", run_id="foreign-run", pid=999_999_999, experiment_dir=other_exp)
+    # Its terminal IS recorded — under ITS OWN experiment dir, not ours.
+    record_terminal(
+        other_exp,
+        run_id="foreign-run",
+        block="submit-s4",
+        cmd_sha="sha",
+        result_dump={"run_id": "foreign-run", "block": "submit-s4"},
+    )
+
+    our_exp = tmp_path / "this-project"
+    our_exp.mkdir()
+    out = doctor(experiment_dir=our_exp, spec=DoctorSpec(now=_NOW))
+
+    assert out["needs_attention"] is False
+    assert out["alerts"] == []
+
+
+def test_foreign_experiment_dead_worker_is_not_surfaced_here(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even a genuinely-dead foreign worker (no terminal ANYWHERE) belongs to
+    the other experiment's doctor run, not this one's — and it IS surfaced
+    there, so scoping loses no coverage."""
+    _dead(monkeypatch)
+    other_exp = tmp_path / "other-project"
+    other_exp.mkdir()
+    _write_lease(
+        block="submit-s2", run_id="foreign-crashed", pid=999_999_999, experiment_dir=other_exp
+    )
+
+    our_exp = tmp_path / "this-project"
+    our_exp.mkdir()
+    out = doctor(experiment_dir=our_exp, spec=DoctorSpec(now=_NOW))
+    assert out["needs_attention"] is False
+    assert out["alerts"] == []
+
+    # The owning experiment's own doctor run still drafts the proposal.
+    out_theirs = doctor(experiment_dir=other_exp, spec=DoctorSpec(now=_NOW))
+    assert out_theirs["needs_attention"] is True
+    assert any("foreign-crashed" in a["message"] for a in out_theirs["alerts"])
+
+
+def test_own_dead_worker_still_surfaced_alongside_foreign_leases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scoping filters foreign leases only: our own dead-no-terminal worker
+    still drafts its proposal in the same scan."""
+    _dead(monkeypatch)
+    our_exp = tmp_path / "this-project"
+    our_exp.mkdir()
+    other_exp = tmp_path / "other-project"
+    other_exp.mkdir()
+    _write_lease(block="submit-s4", run_id="our-crashed", pid=999_999_999, experiment_dir=our_exp)
+    _write_lease(block="submit-s4", run_id="foreign-run", pid=999_999_998, experiment_dir=other_exp)
+
+    out = doctor(experiment_dir=our_exp, spec=DoctorSpec(now=_NOW))
+
+    assert out["needs_attention"] is True
+    messages = [a["message"] for a in out["alerts"]]
+    assert len(messages) == 1
+    assert "our-crashed" in messages[0]
+
+
+def test_lease_without_experiment_dir_flag_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lease whose argv names no `--experiment-dir` (torn / hand-written —
+    the one writer always stamps it) cannot be scoped to ANY experiment, so it
+    is skipped rather than risking a false NEEDS-ATTENTION."""
+    _dead(monkeypatch)
+    detached_dir = _current_homedir() / "_detached"
+    detached_dir.mkdir(parents=True, exist_ok=True)
+    (detached_dir / "submit-s4-unscoped.lease.json").write_text(
+        json.dumps(
+            {
+                "run_id": "unscoped-run",
+                "block": "submit-s4",
+                "pid": 999_999_999,
+                "log_path": str(detached_dir / "submit-s4-unscoped.log"),
+                "argv": ["python", "-m", "hpc_agent", "submit-s4"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=_NOW))
+
     assert out["needs_attention"] is False
     assert out["alerts"] == []

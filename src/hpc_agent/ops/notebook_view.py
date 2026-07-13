@@ -26,7 +26,12 @@ from hpc_agent.ops.notebook.canonical import (
     build_canonical_view,
     read_recorded_config,
 )
-from hpc_agent.ops.notebook.render_store import read_render_header, render_path
+from hpc_agent.ops.notebook.render_store import (
+    RenderDigest,
+    read_render_digest,
+    read_render_header,
+    render_path,
+)
 
 __all__ = [
     "AUTO_CLEARED",
@@ -34,10 +39,12 @@ __all__ = [
     "SUBJECT_KIND",
     "AuditConfig",
     "AuditView",
+    "RenderDigest",
     "SectionView",
     "build_audit_view",
     "build_canonical_view",
     "read_recorded_config",
     "render_path",
     "read_render_header",
+    "read_render_digest",
 ]

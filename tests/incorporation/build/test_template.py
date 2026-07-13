@@ -10,8 +10,9 @@ import yaml
 
 import hpc_agent
 from hpc_agent import errors
-from hpc_agent.experiment_kit import discover_runs, export_notebook
+from hpc_agent.experiment_kit import discover_runs, export_cells
 from hpc_agent.incorporation.build.template import build_template
+from hpc_agent.state.audit_source import CELL_DELIMITER, parse_percent_source, percent_cell_sources
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,7 +48,7 @@ def test_full_scaffold_on_empty_repo(tmp_path: Path) -> None:
     "shape,rel",
     [
         ("script", "train.py"),
-        ("notebook", "notebooks/experiment.ipynb"),
+        ("notebook", "notebooks/experiment.py"),
     ],
 )
 def test_shape_scaffold_is_a_discoverable_register_run(
@@ -56,8 +57,10 @@ def test_shape_scaffold_is_a_discoverable_register_run(
     """Both shapes produce a discoverable ``@register_run`` function.
 
     The point of the bilingual on-ramp: the framework's contract is the
-    decorated function, not the file format. ``discover_runs`` AST-walks
-    ``.py`` and ``.ipynb`` indifferently, so both scaffolds satisfy it.
+    decorated function, not the file shape. Both shapes are ``.py`` now —
+    the notebook shape is jupytext percent format (``# %%`` cells), and
+    ``discover_runs`` AST-walks it like any Python file (the delimiters
+    are comments).
     """
     data = build_template(repo_dir=tmp_path, shape=shape)
     assert rel in data["written"], rel
@@ -94,7 +97,7 @@ def test_shape_script_is_default(tmp_path: Path) -> None:
     """No --shape flag means train.py — the script shape is the default."""
     data = build_template(repo_dir=tmp_path)
     assert "train.py" in data["written"]
-    assert not (tmp_path / "notebooks" / "experiment.ipynb").exists()
+    assert not (tmp_path / "notebooks" / "experiment.py").exists()
 
 
 def test_invalid_shape_raises_spec_invalid(tmp_path: Path) -> None:
@@ -222,19 +225,77 @@ def test_injected_assets_parse(tmp_path: Path) -> None:
     yaml.safe_load((tmp_path / ".pre-commit-config.yaml").read_text())
 
 
+def test_notebook_seed_is_percent_format(tmp_path: Path) -> None:
+    """The notebook shape emits a jupytext percent-format ``.py`` that the
+    audit substrate's one parser reads — never a raw ``.ipynb`` (the
+    un-auditable format the notebook-audit doctrine forbids as an
+    LLM-drafted source)."""
+    build_template(repo_dir=tmp_path, shape="notebook")
+    seed = tmp_path / "notebooks" / "experiment.py"
+    text = seed.read_text(encoding="utf-8")
+
+    # Valid Python (the delimiters are comments) and genuinely cellular.
+    ast.parse(text)
+    assert CELL_DELIMITER in text
+    # The one percent-format parser accepts it (no sections yet — the seed
+    # carries no audit markers; module_sha still fingerprints the file).
+    mod = parse_percent_source(text)
+    assert mod.module_sha
+    assert mod.sections == ()
+    # Cell segmentation sees the import / def / scratch cells.
+    assert len(percent_cell_sources(text)) >= 3
+
+
 def test_notebook_skeleton_is_a_discoverable_register_run(tmp_path: Path) -> None:
     skeleton = (
-        hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.ipynb.tmpl"
+        hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.py.tmpl"
     )
-    nb = tmp_path / "experiment.ipynb"
+    nb = tmp_path / "notebooks" / "experiment.py"
+    nb.parent.mkdir(parents=True)
     nb.write_text(skeleton.read_text(encoding="utf-8"), encoding="utf-8")
 
-    # discover_runs scans the notebook natively (the exported .py inlines
-    # the runtime and no longer carries the hpc_agent.experiment_kit import).
+    # discover_runs scans the percent .py natively (the delimiters are
+    # ordinary comments to the AST walk).
     runs = discover_runs(nb)
     assert [r.name for r in runs] == ["run"]
 
-    # And it exports to a self-contained executor.
-    out = tmp_path / "experiment.py"
-    export_notebook(nb, out)
-    assert "def register_run(" in out.read_text()
+    # And its cells export to a self-contained executor through the same
+    # strict-AST core the ipynb path uses.
+    out = tmp_path / "exported.py"
+    export_cells(percent_cell_sources(nb.read_text(encoding="utf-8")), out)
+    text = out.read_text()
+    assert "def register_run(" in text  # inlined runtime
+    assert "run(alpha=2.0)" not in text  # scratch cell dropped
+
+
+def test_scaffold_py_new_scaffolds_percent_notebook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The injected ``.hpc/scaffold.py new <name>`` writes a percent-format
+    ``notebooks/executors/<name>.py`` (never an .ipynb) and refuses to
+    overwrite an existing one."""
+    import importlib.util
+
+    build_template(repo_dir=tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    spec = importlib.util.spec_from_file_location(
+        "hpc_scaffold_under_test", tmp_path / ".hpc" / "scaffold.py"
+    )
+    assert spec is not None and spec.loader is not None
+    scaffold = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scaffold)
+
+    assert scaffold.main(["new", "sweep"]) == 0
+    dest = tmp_path / "notebooks" / "executors" / "sweep.py"
+    assert dest.is_file()
+    skeleton = (
+        hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.py.tmpl"
+    )
+    assert dest.read_text(encoding="utf-8") == skeleton.read_text(encoding="utf-8")
+    assert [r.name for r in discover_runs(dest)] == ["run"]
+
+    # Refuses to clobber the user's in-progress notebook.
+    dest.write_text("# my edits\n", encoding="utf-8")
+    assert scaffold.main(["new", "sweep"]) == 1
+    assert dest.read_text(encoding="utf-8") == "# my edits\n"

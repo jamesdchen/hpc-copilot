@@ -340,6 +340,15 @@ def plan_throughput(
         "max_concurrent": plan.max_concurrent,
         "n_waves": len(wave_map),
         "est_total_wall_s": plan.est_total_wall_s,
+        # #339 item 16: the code-legible concurrency-bounding decision. A
+        # ``native-cap`` sweep fits in one array and is bounded by the
+        # scheduler-native in-array cap (SLURM ``%N`` / UGE ``-tc N``) with no
+        # afterany wave boundary; ``afterany-waves`` keeps the wave chain (the
+        # array ceiling forced a multi-array split / waves carry semantics).
+        # ``concurrency_cap`` is the emitted N (``None`` when no native cap).
+        "concurrency_mode": plan.concurrency_mode,
+        "concurrency_cap": plan.concurrency_cap,
+        "concurrency_rationale": plan.concurrency_rationale,
         # JSON object keys must be strings; the combiner reads them back
         # from the per-run sidecar where they are already stringified.
         "wave_map": {str(wave): ids for wave, ids in sorted(wave_map.items())},

@@ -66,6 +66,10 @@ _EXPECTED_SOURCES = frozenset(
         "audited-source",
         "notebook-journal",
         "renders",
+        "determinism-fingerprint",
+        "pack-manifest",
+        "pack-journal",
+        "live-conformance",
     }
 )
 

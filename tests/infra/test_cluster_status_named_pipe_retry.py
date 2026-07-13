@@ -63,7 +63,12 @@ def test_status_poll_recovers_from_getsockname(monkeypatch):
     bad = subprocess.CompletedProcess(
         ["ssh"], 255, stdout="", stderr="getsockname failed: Not a socket\n"
     )
-    good = subprocess.CompletedProcess(["ssh"], 0, stdout='{"summary": {}, "tasks": []}', stderr="")
+    good = subprocess.CompletedProcess(
+        ["ssh"],
+        0,
+        stdout='{"summary": {}, "tasks": []}\n' + cluster_status._STATUS_ACK_PREFIX + "0",
+        stderr="",
+    )
     report, calls = _report(monkeypatch, [bad, good])
 
     assert len(calls) == 2  # failed once, retried, succeeded

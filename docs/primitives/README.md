@@ -87,6 +87,8 @@ The verb partitions primitives into bands the reader can scan independently:
 |---|---|---|---|
 | [apply-safe-defaults](apply-safe-defaults.md) | yes | _none_ | `hpc-agent apply-safe-defaults --spec <path>` |
 | [attention-queue](attention-queue.md) | yes | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` |
+| [audit-handoff](audit-handoff.md) | yes | _none_ | `hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]` |
+| [audit-preflight](audit-preflight.md) | yes | _none_ | `hpc-agent audit-preflight --spec <path> [--experiment-dir <dir>]` |
 | [batch-status](batch-status.md) | yes | ssh: `<cluster>` | `hpc-agent batch-status [--experiment-dir <dir>]` |
 | [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--async-refill] [--max-in-flight <max_in_flight>]` |
 | [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]` |
@@ -96,11 +98,13 @@ The verb partitions primitives into bands the reader can scan independently:
 | [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id> [--last-n <last_n>]` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-agent capabilities [--full]` |
+| [challenge-status](challenge-status.md) | yes | _none_ | `hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]` |
 | [classify-axis-easy](classify-axis-easy.md) | yes | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` |
 | [classify-campaign-path](classify-campaign-path.md) | yes | _none_ | `hpc-agent classify-campaign-path --source-path <source_path>` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name> [--strict]` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
 | [compute-run-id](compute-run-id.md) | yes | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` |
+| [conformance-status](conformance-status.md) | yes | _none_ | `hpc-agent conformance-status --spec <path> [--experiment-dir <dir>]` |
 | [dag-frontier](dag-frontier.md) | yes | _none_ | `hpc-agent dag-frontier [--experiment-dir <dir>]` |
 | [decide-concurrency](decide-concurrency.md) | yes | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
@@ -108,10 +112,13 @@ The verb partitions primitives into bands the reader can scan independently:
 | [decide-resubmit](decide-resubmit.md) | yes | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` |
 | [describe](describe.md) | yes | _none_ | `hpc-agent describe <name>` |
 | [detect-entry-point](detect-entry-point.md) | yes | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` |
+| [dir-digest](dir-digest.md) | yes | ssh: `<cluster>` | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` |
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` |
 | [discover-runs](discover-runs.md) | yes | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` |
 | [doctor](doctor.md) | yes | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` |
+| [evidence-brief](evidence-brief.md) | yes | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` |
+| [evidence-period](evidence-period.md) | yes | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` |
 | [fetch-skill-return](fetch-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` |
 | [find](find.md) | yes | _none_ | `hpc-agent find <query> [--limit <limit>]` |
@@ -124,9 +131,12 @@ The verb partitions primitives into bands the reader can scan independently:
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` |
 | [net-triage](net-triage.md) | yes | _none_ | `hpc-agent net-triage [--spec <path>]` |
-| [notebook-audit-view](notebook-audit-view.md) | yes | file_write: `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
-| [notebook-status](notebook-status.md) | yes | _none_ | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
+| [notebook-audit-view](notebook-audit-view.md) | yes | file_write: `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`; file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
+| [notebook-draft-context](notebook-draft-context.md) | yes | _none_ | `hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]` |
+| [notebook-status](notebook-status.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
+| [pack-status](pack-status.md) | yes | _none_ | `hpc-agent pack-status --spec <path> [--experiment-dir <dir>]` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` |
+| [poll-detached](poll-detached.md) | yes | _none_ | `hpc-agent poll-detached --spec <path> [--experiment-dir <dir>]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` |
 | [read-decisions](read-decisions.md) | yes | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` |
 | [recall](recall.md) | yes | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` |
@@ -137,15 +147,20 @@ The verb partitions primitives into bands the reader can scan independently:
 | [run-story](run-story.md) | yes | _none_ | `hpc-agent run-story --spec <path> [--experiment-dir <dir>]` |
 | [scaffold-spec](scaffold-spec.md) | yes | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` |
 | [scope-status](scope-status.md) | yes | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` |
+| [stray-sweep](stray-sweep.md) | yes | ssh: `<login-node>` | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [trace](trace.md) | yes | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |
+| [trace-diff](trace-diff.md) | yes | _none_ | `hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]` |
+| [trace-render](trace-render.md) | yes | _none_ | `hpc-agent trace-render --spec <path> [--experiment-dir <dir>]` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` |
+| [verify-registration](verify-registration.md) | yes | _none_ | `hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]` |
 | [verify-relay](verify-relay.md) | yes | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` |
-| [verify-reproduction](verify-reproduction.md) | no | filesystem: `<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl` | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` |
+| [verify-reproduction](verify-reproduction.md) | no | filesystem: `<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl`; filesystem: `<experiment>/_aggregated/<repro_run_id>/claim_check_receipts.jsonl`; filesystem: `<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl` | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` |
 | [verify-submitted](verify-submitted.md) | yes | ssh: `<cluster>` | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` |
 | [wait-detached](wait-detached.md) | yes | _none_ | `hpc-agent wait-detached --spec <path>` |
 | [walk-submit-ambiguities](walk-submit-ambiguities.md) | yes | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` |
+| [worker-log-digest](worker-log-digest.md) | yes | _none_ | `hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]` |
 
 ### `validate` primitives
 
@@ -177,20 +192,31 @@ The verb partitions primitives into bands the reader can scan independently:
 | [archive-dossier](archive-dossier.md) | yes | network-upload: `s3://<bucket>/<key>` | `hpc-agent archive-dossier --spec <path>` |
 | [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; sync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]` |
 | [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave> [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]` |
+| [conformance-record](conformance-record.md) | no | file_write: `<experiment>/_aggregated/_conformance/<registration_id>.jsonl` | `hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]` |
+| [data-manifest](data-manifest.md) | no | file_write: `<experiment>/.hpc/data_manifest.json` | `hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]` |
 | [decorate-entry-point](decorate-entry-point.md) | yes | filesystem: `<path>` | `hpc-agent decorate-entry-point --path <path> --function-name <function_name>` |
 | [doctor-install](doctor-install.md) | yes | scheduler: `Windows`; file_write: `~/.claude/hpc/<repo_hash>/doctor.spec.json` | `hpc-agent doctor-install --spec <path> [--experiment-dir <dir>]` |
 | [emit-skill-return](emit-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>` |
+| [export-attestations](export-attestations.md) | yes | file_write: `<output_path>` | `hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]` |
 | [export-dossier](export-dossier.md) | yes | file_write: `<output_path>` | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` |
+| [host-retarget](host-retarget.md) | yes | writes-journal: `<experiment>/.hpc/decisions/run/<run_id>.jsonl` | `hpc-agent host-retarget --spec <path> [--experiment-dir <dir>]` |
 | [kill](kill.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
 | [notebook-auto-clear](notebook-auto-clear.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` |
+| [notebook-draft](notebook-draft.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]` |
+| [notebook-record-config](notebook-record-config.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` |
 | [notebook-record-receipt](notebook-record-receipt.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` |
+| [notebook-scaffold-template](notebook-scaffold-template.md) | no | file_write: `<experiment>/<output_path>` | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` |
+| [pack-bind](pack-bind.md) | no | file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]` |
+| [pack-record-receipt](pack-record-receipt.md) | no | file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]` |
+| [pack-refresh](pack-refresh.md) | no | file_write: `<experiment>/<pack>/manifest.json`; file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-refresh --spec <path> [--experiment-dir <dir>]` |
 | [provenance-manifest](provenance-manifest.md) | yes | file_write: `<experiment>/.hpc/provenance/<campaign_id>.json` | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` |
 | [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` |
+| [reconcile-stale](reconcile-stale.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` |
 | [scope-lock](scope-lock.md) | yes | file_write: `<experiment>/.hpc/scopes/<tag>.decisions.jsonl` | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` |
-| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `(none — Python-only primitive)` |
+| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]` |
 | [watcher-install](watcher-install.md) | yes | ssh: `<cluster>`; scheduler-submit: `<cluster>` | `hpc-agent watcher-install [--experiment-dir <dir>] --run-id <run_id> [--action <action>] --scheduler <scheduler> [--stale-sec <stale_sec>] [--interval-min <interval_min>]` |
 | [write-run-sidecar](write-run-sidecar.md) | yes | file_write: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent write-run-sidecar --spec <path> [--experiment-dir <dir>]` |
 
@@ -215,9 +241,9 @@ The verb partitions primitives into bands the reader can scan independently:
 | [classify-axis-auto](classify-axis-auto.md) | yes | writes-sidecar: `<experiment>/.hpc/axes.yaml` | `hpc-agent classify-axis-auto [--spec <path>] [--experiment-dir <dir>]` |
 | [export-package](export-package.md) | yes | writes-sidecar: `<experiment>/src/*.py`; writes-sidecar: `<experiment>/.hpc/.build-cache.json` | `hpc-agent export-package [--experiment-dir <dir>] [--force]` |
 | [install-commands](install-commands.md) | yes | filesystem: `~/.claude/` | `hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]` |
-| [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json,.claude/settings.json}` | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` |
+| [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` |
 | [prepare-followup-specs](prepare-followup-specs.md) | yes | writes-followup-specs: `<experiment_dir>/monitor_spec.json` | `hpc-agent prepare-followup-specs --experiment-dir <experiment_dir> --run-id <run_id> [--cmd-sha <cmd_sha>] [--profile <profile>]` |
-| [scaffold-strategy](scaffold-strategy.md) | yes | writes-file: `<output_dir>/.hpc/tasks.py` | `hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force] [--async-refill]` |
+| [scaffold-strategy](scaffold-strategy.md) | yes | writes-file: `<output_dir>/.hpc/tasks.py` | `hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]` |
 | [setup](setup.md) | yes | filesystem: `~/.claude/`; ssh: `<cluster>` | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` |
 
 ### `workflow` primitives
@@ -230,6 +256,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [block-drive](block-drive.md) | yes | spawns-subprocess: `hpc-agent`; writes-journal: `<run_id>` | `hpc-agent block-drive --spec <path> [--experiment-dir <dir>]` |
 | [campaign-complete](campaign-complete.md) | yes | _none_ | `hpc-agent campaign-complete --spec <path> [--experiment-dir <dir>]` |
 | [campaign-greenlight](campaign-greenlight.md) | yes | writes-campaign-state: `<experiment_dir>/.hpc/campaigns/<campaign_id>/` | `hpc-agent campaign-greenlight --spec <path> [--experiment-dir <dir>]` |
+| [campaign-refill](campaign-refill.md) | yes | scheduler-submit: `<cluster>`; writes-campaign-state: `<experiment_dir>/.hpc/runs/<run_id>.json` | `hpc-agent campaign-refill --spec <path> [--experiment-dir <dir>]` |
 | [campaign-run](campaign-run.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>`; writes-aggregate-output: `<experiment_dir>/_aggregated/<run_id>/` | `hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]` |
 | [campaign-watch](campaign-watch.md) | yes | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` |
@@ -237,6 +264,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [resolve-submit-inputs](resolve-submit-inputs.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` |
 | [retarget-run](retarget-run.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<new_run_id>.json`; ssh: `<old-cluster>` | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` |
 | [revise-resolved](revise-resolved.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` |
+| [settle-run](settle-run.md) | yes | writes-journal: `<experiment>/.hpc/decisions/run/<run_id>.jsonl`; ssh: `<cluster>` | `hpc-agent settle-run --spec <path> [--experiment-dir <dir>]` |
 | [status-pipeline](status-pipeline.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [status-snapshot](status-snapshot.md) | yes | ssh: `<cluster>` | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` |
 | [status-watch](status-watch.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-watch --spec <path> [--experiment-dir <dir>]` |

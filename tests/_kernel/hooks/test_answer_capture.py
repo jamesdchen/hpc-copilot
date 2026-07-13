@@ -85,6 +85,45 @@ def test_multiselect_composed_of_labels_is_skipped_but_mixed_is_captured(
     assert [r["text"] for r in read_utterances(tmp_path)] == [mixed]
 
 
+def test_comma_containing_label_click_is_not_captured(tmp_path: Path) -> None:
+    """Finding #22: a clicked multi-select whose labels contain commas must be
+    recognised as a click (agent-authored), not laundered as human-typed."""
+    _scaffold_namespace(tmp_path)
+    questions = [
+        {
+            "question": "Which sweeps?",
+            "header": "Sweep",
+            "options": [{"label": "sweep lr=0.1, lr=0.2"}, {"label": "batch=32"}],
+        }
+    ]
+    # The harness joins the two clicked labels with ", " — the join now itself
+    # contains the label's own comma. Structural matching must still see a click.
+    clicked = "sweep lr=0.1, lr=0.2, batch=32"
+    both = _payload(tmp_path, questions=questions, answers={"q": clicked})
+    assert answer_capture.capture(both) == []
+    assert read_utterances(tmp_path) == []
+    # A single comma-containing label clicked alone is also a click.
+    single = _payload(tmp_path, questions=questions, answers={"q": "sweep lr=0.1, lr=0.2"})
+    assert answer_capture.capture(single) == []
+    assert read_utterances(tmp_path) == []
+
+
+def test_typed_text_next_to_comma_label_is_still_captured(tmp_path: Path) -> None:
+    """The complementary direction: genuinely typed residue is still captured
+    even when a comma-containing label is offered."""
+    _scaffold_namespace(tmp_path)
+    questions = [
+        {
+            "question": "Which sweeps?",
+            "header": "Sweep",
+            "options": [{"label": "sweep lr=0.1, lr=0.2"}, {"label": "batch=32"}],
+        }
+    ]
+    typed = "sweep lr=0.1, lr=0.2, and also n_samples=1000000"
+    answer_capture.capture(_payload(tmp_path, questions=questions, answers={"q": typed}))
+    assert [r["text"] for r in read_utterances(tmp_path)] == [typed]
+
+
 def test_annotation_notes_are_captured(tmp_path: Path) -> None:
     _scaffold_namespace(tmp_path)
     payload = _payload(
@@ -138,3 +177,67 @@ def test_main_is_a_clean_noop_on_garbage_stdin(
     monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
     assert answer_capture.main() == 0
     assert capsys.readouterr().out == ""
+
+
+# --- MT4: HPC_ACTOR attribution (seam onto MT1's ``append_utterance(actor=)``) ---
+
+
+def _spy_append(monkeypatch: pytest.MonkeyPatch) -> list[tuple[tuple, dict]]:
+    """Spy over ``append_utterance`` (imported at call time inside ``capture``)."""
+    calls: list[tuple[tuple, dict]] = []
+
+    def _spy(*args: object, **kwargs: object) -> dict:
+        calls.append((args, kwargs))
+        return {"ts": "t", "sha256": "s", "text": str(args[1]) if len(args) > 1 else ""}
+
+    monkeypatch.setattr("hpc_agent.state.utterances.append_utterance", _spy)
+    return calls
+
+
+def test_capture_passes_actor_kwarg_when_hpc_actor_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_ACTOR", "bob")
+    calls = _spy_append(monkeypatch)
+
+    answer_capture.capture(_payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"}))
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs == {"actor": "bob"}
+
+
+def test_capture_omits_actor_kwarg_when_hpc_actor_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HPC_ACTOR", raising=False)
+    calls = _spy_append(monkeypatch)
+
+    answer_capture.capture(_payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"}))
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert "actor" not in kwargs
+
+
+def test_capture_omits_actor_kwarg_when_hpc_actor_invalid_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_ACTOR", "bad/slug here")
+    calls = _spy_append(monkeypatch)
+
+    answer_capture.capture(_payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"}))
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert "actor" not in kwargs
+
+
+def test_capture_unset_env_is_byte_identical_end_to_end(tmp_path: Path) -> None:
+    _scaffold_namespace(tmp_path)
+    records = answer_capture.capture(
+        _payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"})
+    )
+    assert len(records) == 1
+    assert utterances_path(tmp_path).name == "utterances.jsonl"
+    assert read_utterances(tmp_path)[0]["text"] == "typed value 42"

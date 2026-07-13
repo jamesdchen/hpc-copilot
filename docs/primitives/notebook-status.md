@@ -1,7 +1,9 @@
 ---
 name: notebook-status
 verb: query
-side_effects: []
+side_effects:
+- file_write: <experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl (relay-due marker,
+    TERMINAL states only)
 idempotent: true
 idempotency_key: none
 error_codes:
@@ -10,15 +12,20 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.ops.notebook_status.notebook_status
+  python: hpc_agent.ops.notebook.status_op.notebook_status
 ---
 # notebook-status
 
 Report the **per-section audit state** of an audited source `.py` against its
-template inventory and its audit journal. A pure read: it recomputes each
-section's current hash from the source on disk, replays the `audit_id` decision
-journal, and reduces every required (template) section to a T6 status — plus the
-whole-module gate predicate `passed`.
+template inventory and its audit journal. The status itself is a read: it
+recomputes each section's current hash from the source on disk, replays the
+`audit_id` decision journal, and reduces every required (template) section to a
+T6 status — plus the whole-module gate predicate `passed`. One narrow write
+rides the terminal case: a TERMINAL verdict — `passed`, or `failed` via a
+drift-revoked (`signed_stale`) sign-off — journals a **relay-due marker**
+(`block=notebook-relay-due`, key tokens = the state word + the module sha12) so
+the relay-audit Stop hook can enforce that the verdict actually reaches the
+human (the omission gate). Non-terminal runs write nothing.
 
 This is the read-side of the notebook-audit substrate (`docs/design/notebook-audit.md`,
 Wave B / T6). The graduation gate (T9) consumes `passed`; a human/agent driving
@@ -82,9 +89,12 @@ vice versa (the attestation kernel's newest-first rule).
 
 ## Idempotency
 
-A pure query with no side effects and no natural identity key. Derived state:
-recomputed from the `.py` on disk + the journal on every call, so replaying after
-more sign-offs / edits simply reflects the current state.
+No natural identity key. Derived state: recomputed from the `.py` on disk + the
+journal on every call, so replaying after more sign-offs / edits simply reflects
+the current state. The relay-due marker write is deduplicated on its key tokens
+(the same terminal fact at the same module sha appends nothing new), and a
+terminal verdict requires journaled attestations, so the write never scaffolds
+a journal that does not already exist — replays stay idempotent.
 
 ## Usage
 
@@ -95,5 +105,5 @@ hpc-agent notebook-status --spec spec.json --experiment-dir .
 where `spec.json` is `{"audit_id": "<id>", "source": "<py relpath>", "template":
 "<py relpath>"}`. Sign-offs are appended out-of-band via `append-decision`
 (`block=notebook-sign-off`) — there is deliberately no sign-off verb here (the
-no-unlock-verb doctrine); auto-clears are written by the gate/skill wave. This
-verb only reads.
+no-unlock-verb doctrine); auto-clears are written by the gate/skill wave. Apart
+from the terminal relay-due marker, this verb only reads.

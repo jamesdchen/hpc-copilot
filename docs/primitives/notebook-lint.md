@@ -14,14 +14,14 @@ backed_by:
 ---
 # notebook-lint
 
-Run three read-only structural checks over a notebook-audit **source** `.py`
+Run four read-only structural checks over a notebook-audit **source** `.py`
 (jupytext percent format, parsed by `state/audit_source.py`) against its
 **template** and caller-declared, **opaque** path/import roots. The lint
 **reports** findings; it never refuses — the graduation gate (T9) is what
 refuses. A section with zero findings is one auto-clear precondition for the
 tier computation (T5).
 
-The three rules:
+The four rules:
 
 1. **structural completeness** — the template's marker slugs must appear in the
    source's slugs as an **order-preserving subsequence**. Missing and reordered
@@ -39,6 +39,18 @@ The three rules:
    module_sha}`, judging import **origin identity** only. Imports that don't
    resolve under a root (stdlib, site-packages) are simply not linked — never
    findings.
+4. **template_import_shadowed** — a source **section** that defines (`def` /
+   `async def` / `class`) or rebinds (a top-level assignment, or an import with
+   a **different** origin) a name the **template** imports anywhere is reported,
+   with the shadowed `name` and the `template_slug` that imports it
+   (`module-preamble` when the import sits before the first section marker).
+   The shadow list is derived **only** from the template's own import
+   statements — no name lists, no configuration knob, no domain vocabulary: the
+   template's imports are the caller's declared engines, and the finding NAMES
+   a re-derivation hazard at sign-off. An identical verbatim re-import is clean;
+   a name bound inside a function body or an attribute/subscript assignment is
+   never flagged. Findings are sorted by `(slug, name)` (deterministic
+   view_sha downstream).
 
 ## Inputs
 
@@ -56,7 +68,8 @@ The three rules:
 A `NotebookLintResult` object with:
 
 - `findings` (list of `NotebookLintFinding`) — Empty list = clean. Each finding has:
-  - `rule` — `"structural_completeness"`, `"executes_live"`, or `"linked_sources"`.
+  - `rule` — `"structural_completeness"`, `"executes_live"`, `"linked_sources"`,
+    or `"template_import_shadowed"`.
   - `section` — the section slug the finding is about, or `null` (module-level).
   - `detail` — human-readable description.
   - `evidence` — opaque structured payload (slug, path literal, line number, …).

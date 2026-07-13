@@ -83,6 +83,52 @@ def test_build_canonical_view_deterministic(tmp_path: Path) -> None:
     assert [s.view_sha for s in v1.sections] == [s.view_sha for s in v2.sections]
 
 
+def test_build_canonical_view_passes_output_roots_through(tmp_path: Path) -> None:
+    """A recorded output_root exempts a write-target literal from the
+    executes-live flag inside the canonical view (the run-#10 noise fix)."""
+    source = """\
+# %%
+# hpc-audit-section: load
+OUT = "results/out.json"
+"""
+    (tmp_path / "source.py").write_text(source, encoding="utf-8")
+    (tmp_path / "template.py").write_text(source, encoding="utf-8")
+    (tmp_path / "interview.json").write_text(
+        json.dumps(
+            {
+                "audited_source": {
+                    "source": "source.py",
+                    "template": "template.py",
+                    "audit_id": "a1",
+                    "input_roots": ["data"],
+                    "output_roots": ["results"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = read_recorded_config(tmp_path, "a1")
+    assert cfg.output_roots == ["results"]
+    view = build_canonical_view(
+        tmp_path, audit_id="a1", source_relpath="source.py", template_relpath="template.py", cfg=cfg
+    )
+    load = {s.slug: s for s in view.sections}["load"]
+    # The missing output literal does not flag — the inherited section clears.
+    assert load.tier == AUTO_CLEARED
+    assert not load.lint_flags
+
+    # Without the recorded output_root the same literal flags (the pair).
+    rootless = AuditConfig(input_roots=["data"])
+    flagged = build_canonical_view(
+        tmp_path,
+        audit_id="a1",
+        source_relpath="source.py",
+        template_relpath="template.py",
+        cfg=rootless,
+    )
+    assert {s.slug: s.tier for s in flagged.sections}["load"] == HUMAN_REQUIRED
+
+
 def test_build_canonical_view_recomputes_lint(tmp_path: Path) -> None:
     """The lint is REAL: a present data path auto-clears the inherited section; a
     missing one flags it human_required — the caller never supplies findings."""

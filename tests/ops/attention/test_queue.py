@@ -117,7 +117,7 @@ def test_stalled_collector_empty(tmp_path: Path) -> None:
 
 
 def test_parked_vs_greenlight_split(tmp_path: Path) -> None:
-    """find_parked_runs split by is_latest_committed_greenlight (D5 rows 1-2)."""
+    """find_parked_runs split by is_committed_greenlight_for_boundary (D5 rows 1-2)."""
     # Parked, no committed y → run-parked (verdict).
     _mk(tmp_path, "run-parked")
     mark_pending_decision(
@@ -158,7 +158,16 @@ def test_dead_worker_collector_fires(tmp_path: Path, monkeypatch: pytest.MonkeyP
     detached = _current_homedir() / "_detached"
     detached.mkdir(parents=True, exist_ok=True)
     (detached / "submit-s4-run-crashed.lease.json").write_text(
-        json.dumps({"run_id": "run-crashed", "block": "submit-s4", "pid": 999_999_999}),
+        json.dumps(
+            {
+                "run_id": "run-crashed",
+                "block": "submit-s4",
+                "pid": 999_999_999,
+                # The scan scopes the GLOBAL lease dir by the --experiment-dir
+                # flag the one lease writer always stamps into the child argv.
+                "argv": ["hpc-agent", "submit-s4", "--experiment-dir", str(tmp_path)],
+            }
+        ),
         encoding="utf-8",
     )
     items = collect_dead_workers(tmp_path, now=_NOW)
@@ -360,7 +369,10 @@ def test_within_class_rule_not_overridable_by_class_order() -> None:
 
 def test_route_through_source_symbols() -> None:
     checks = {
-        collect_greenlight_and_parked: ["find_parked_runs(", "is_latest_committed_greenlight("],
+        collect_greenlight_and_parked: [
+            "find_parked_runs(",
+            "is_committed_greenlight_for_boundary(",
+        ],
         collect_stalled: ["find_stalled_runs("],
         collect_dead_workers: ["scan_dead_detached_workers("],
         collect_anomalies: ["digest_run(", "ANOMALY_STATUSES", "recommendation_for("],

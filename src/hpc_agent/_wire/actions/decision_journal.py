@@ -27,9 +27,22 @@ from hpc_agent._wire._shared import RunIdStrict
 # ``scope`` journals the lock/unlock touchpoints of a caller-tagged
 # experiment scope (``hpc_agent.state.scopes``); ``notebook`` journals the
 # sign-off touchpoints of an audited source module under a caller-authored
-# ``audit_id`` (``docs/design/notebook-audit.md`` D3). Kept in lockstep with
-# ``state.decision_journal.SCOPE_KINDS`` (schema regen is the integrator's job).
-ScopeKind = Literal["run", "campaign", "scope", "notebook"]
+# ``audit_id`` (``docs/design/notebook-audit.md`` D3); ``registration`` journals
+# the deployment-boundary attestation touchpoints of a caller-authored
+# ``registration_id`` (``docs/design/registration-kernel.md`` R9 — the
+# ``registration`` / ``registration-revoke`` records gated by R6); ``conclusion``
+# journals the human-authored finding touchpoints of evidence memory under a
+# caller-authored ``conclusion_id`` (``docs/design/evidence-memory.md`` E-shape —
+# the ``conclusion`` / ``conclusion-revoke`` records gated by the E-shape locks);
+# ``challenge`` journals the human-authored structured-dissent touchpoints under a
+# caller-authored ``challenge_id`` (``docs/design/challenge-attestation.md``
+# C-shape — the ``challenge`` / ``challenge-verdict`` / ``challenge-withdraw``
+# records gated by the C-gate locks).
+# Kept in lockstep with ``state.decision_journal.SCOPE_KINDS`` (schema regen is the
+# integrator's job; the ScopeKind literal change regenerates schemas).
+ScopeKind = Literal[
+    "run", "campaign", "scope", "notebook", "registration", "pack", "conclusion", "challenge"
+]
 
 # The evidence the proposal was drafted over — an opaque free-text digest
 # OR a structured dict. The journal never interprets it; it round-trips it
@@ -104,6 +117,13 @@ class DecisionRecord(BaseModel):
     proposal: Proposal = ""
     resolved: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
+    # The opaque, harness-asserted multi-human actor slug of the authoring
+    # session (``docs/design/multi-human.md`` MH3/MH4). Additive + optional:
+    # ``None`` (omitted on disk) for every single-actor record — byte-identical
+    # to pre-multi-human. Server-RESOLVED only (never a caller-suppliable input
+    # field on ``AppendDecisionInput`` — the model must not choose its identity);
+    # core compares it by identity and NEVER verifies who set it.
+    attestor_id: str | None = None
 
 
 class AppendDecisionResult(BaseModel):

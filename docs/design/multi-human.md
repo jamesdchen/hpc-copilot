@@ -1,6 +1,9 @@
+---
+status: shipped
+---
 # Multi-human — the trust substrate for a research group
 
-**Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off
+**Status: IMPLEMENTED (2026-07-08, MT1–MT11 landed).** The durable record
 for the multi-actor substrate (the `docs/design/notebook-audit.md` pattern):
 settled decisions with recorded rationale, file-disjoint Opus task waves,
 enforcement rows, boundary-drift flags. Cite `path::symbol`, never line
@@ -587,6 +590,70 @@ recorded in `docs/design/slate-sequencing.md` yet, so treat cross-plan
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
-implementation lands. The `docs/design/notebook-audit.md` drift log is the
-form to follow.)
+MT1–MT11 landed 2026-07-08. Each deviation from the plan-as-written, with its
+recorded reason (the `docs/design/notebook-audit.md` drift log form):
+
+- **MH1 slug class — `RunIdStrict`, not a `validate_tag` call (MT3).** The plan
+  named `state/scopes.py::validate_tag` as the slug authority. The wire
+  `ActorsBlock.ids` / `policy` values instead reuse the `RunIdStrict` Pydantic
+  type — the SAME `^[A-Za-z0-9._\-]+$` character class `validate_tag` pins, so
+  the shape is identical; the wire model wants a declarative field type, not an
+  imperative validator call, and `env_actor` / the utterance locator still route
+  the runtime slug through `validate_tag` proper. One class, two spellings — no
+  drift in what a slug may be.
+
+- **MH8 policy keys are NOT vocabulary-validated (MT3/MT7).** The plan's example
+  keys were existing gated block names (`notebook-sign-off`, `campaign-greenlight`,
+  …). The implementation deliberately does NOT pin those keys to a closed
+  vocabulary: `actors.policy` keys are OPAQUE strings the gate membership-tests
+  against `spec.block` at append time. Pinning a key vocabulary would be core
+  learning which blocks "may" be delegated — a caller-vocabulary crossing. Only
+  the VALUES (actor slugs) are validated (the dangling-reference refusal, MH1).
+  A policy naming a block that never fires is simply inert, never an error.
+
+- **MH5 draft seam — state-layer home + a SUBJECT_KIND split (MT5).** The plan
+  sketched the draft writer in `ops/notebook/draft_op.py`. The writer
+  (`record_draft`) and the MH6 reader (`read_draft_author`) instead live in
+  `state/notebook_audit.py` — the state layer already owns the notebook journal's
+  bind/reduce projections, so the draft attestation is a sibling projection there;
+  `ops/notebook/draft_op.py` is the thin verb wrapper (server-side actor resolve
+  + parse-recompute) over that state writer. And the draft rides a DISTINCT
+  `subject_kind` (`notebook-draft`, `DRAFT_SUBJECT_KIND`) from the sign-off /
+  receipt kinds, so a draft never reaches the sign-off reducer and vice-versa
+  (`_project_draft` filters by block) — the split the D8 stale-on-redraft property
+  needs.
+
+- **MH2 harness-contract sentences (MT8).** Capability 1 became the "attributed
+  utterance log": the one-line capability extension + the additive `§2` locator
+  sentence + the trust-limit paragraph extension + the MH2-consequence-2
+  DEGRADATION sentence (an unattributed v1-conforming writer earns only the
+  friction tier under >1 declared actors), all stated in the contract's
+  degrades-when-absent form and doc-pinned by `test_harness_contract`.
+
+- **MH7 landed HERE, in this task (MT7).** Per the whichever-plan-lands-second
+  rule, multi-human landed after `docs/design/challenge-attestation.md`, so the
+  resolver≠challenger / unattributed-resolution (verdict) and withdrawer==challenger
+  (withdrawal) checks were added as the follow-up extension of the challenge
+  gate's T5 (`ops/decision/journal.py::_assert_challenge_verdict_authorship`),
+  reading the challenger from the filing record's own `attestor_id`
+  (`_challenge_filing_attestor`). The challenge doc's `_assert_challenge_verdict_authorship`
+  docstring was flipped from RESERVED to LANDED in the same commit. Neither plan's
+  Wave C is now incomplete.
+
+- **`attestor_id` persistence seam (MT7).** MH4 spoke of stamping the resolved
+  actor "on the record's attestation projection". In practice the stamp is an
+  additive `attestor_id` field on the DECISION RECORD itself
+  (`state/decision_journal.py::append_decision` gained the optional param, omitted
+  on disk when `None`) — MH7's resolver≠challenger read needs the FILING record's
+  attributed identity persisted, and the record is where a later gate reads it.
+  It is server-resolved only; the `AppendDecisionInput` wire spec gained no field
+  (`DecisionRecord`, the output, surfaces it). Byte-identical when absent.
+
+- **Regen debt at landing (out of MT7/MT10/MT11 scope).** Two pre-existing
+  contract failures inherited from earlier waves remain red on the branch:
+  `test_primitive_remediation::test_spec_verb_inventory_matches_cli`
+  (`notebook-draft` absent from the hard-coded `_SPEC_VERBS` inventory — MT5's
+  new-verb regen) and `test_lint_primitive_doc_templates` (`conformance-record`
+  agent_facing template mismatch — the Phase-8 conformance wave). Neither is
+  caused by the multi-human gate; both are noted here so the next regen pass
+  clears them.
