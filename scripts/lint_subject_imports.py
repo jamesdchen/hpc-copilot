@@ -285,18 +285,13 @@ class DirectionalRule:
 
 
 # infra is the bottom substrate — it must never import an ops slice.
+# No sanctioned exceptions: the former transport→ops.transfer edge was the
+# only one, cleared when the manifest/prune helpers moved into infra/.
 _INFRA_TO_OPS = DirectionalRule(
     source_role="infra",
     target_roles=("ops",),
-    allow=frozenset(
-        {
-            # TEMP: CLEARS once layering-transport lands (the transport→
-            # ops.transfer manifest/prune helpers move out of ops). Remove
-            # this entry and re-run the lint after integrating that lane.
-            ("infra/transport.py", "hpc_agent.ops.transfer"),
-        }
-    ),
-    temporary=True,
+    allow=frozenset(),
+    temporary=False,
 )
 
 # incorporation feeds submit; the reverse edge into ops/meta is a cycle.
@@ -338,8 +333,10 @@ _KERNEL_TO_OPS = DirectionalRule(
                 "hpc_agent.ops.harness_capabilities",
             ),
             ("_kernel/hooks/skill_return_stop_guard.py", "hpc_agent.ops.harness_capabilities"),
-            ("_kernel/hooks/relay_audit_stop.py", "hpc_agent.ops.harness_capabilities"),
-            ("_kernel/hooks/relay_audit_stop.py", "hpc_agent.ops.decision.verify_relay"),
+            # relay_audit_stop is a subpackage; the two sanctioned seams live in
+            # the entry (__init__) and the contradiction audit submodule.
+            ("_kernel/hooks/relay_audit_stop/__init__.py", "hpc_agent.ops.harness_capabilities"),
+            ("_kernel/hooks/relay_audit_stop/_contradiction.py", "hpc_agent.ops.decision.verify_relay"),
         }
     ),
     temporary=False,
