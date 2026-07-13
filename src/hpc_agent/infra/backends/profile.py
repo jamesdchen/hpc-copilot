@@ -309,17 +309,38 @@ SGE_PROFILE = SchedulerProfile(
     scripts={"cpu": SGE_CPU, "gpu": SGE_GPU, "mpi": SGE_MPI},
 )
 
-# PBS family. Job ids are ``<seq>.<server>`` (arrays ``<seq>[].<server>``) —
-# anchor on the ``.server`` suffix (SGE's ``Your job`` phrase and SLURM's
-# bare ``\d+`` both fail on PBS). Finished-state success/failure is NOT in
-# the live token (``F``/``C`` cover both) — it is read from ``Exit_status``
-# via the history query (``query_pbs``), so ``error_states`` stays empty;
-# the engine's pbs classify branch only buckets the live qstat tokens.
+# PBS family. Job ids are ``<seq>.<server>`` (arrays ``<seq>[].<server>``).
+# The regex must do two jobs its SLURM/SGE siblings' phrase anchors already do
+# — plus one PBS-specific one:
+#   * PRESERVE the array ``[]`` in the captured id (#F36). PBS Pro/TORQUE
+#     address an array as ``<seq>[]``; ``qstat -t`` / ``qdel`` on the bare
+#     ``<seq>`` resolve a non-existent id ('Unknown Job Id'), so the captured
+#     id KEEPS the bracket group (``12345[]``). ``parse_alive_output`` /
+#     ``parse_scheduler_states`` normalise BOTH the stored id and the row id to
+#     the bare sequence for MATCHING, but the persisted/dispatched id retains
+#     the bracket so the round-trip addresses the real array.
+#   * LINE-ANCHOR + prefer-last (#F39). qsub prints the id alone on its own
+#     line, but many sites echo informational banners with dotted numbers
+#     (``est. wait 1.5 hours``, ``PBS Pro 2022.1``) BEFORE it — and the submit
+#     path's own ``bash -lc`` login shell can trigger profile.d echoes. Without
+#     an anchor the old shape-only pattern matched ``1`` in ``1.5`` and
+#     journaled a phantom id. ``(?ms)`` makes ``^…$`` match a whole physical
+#     line; the leading greedy ``.*`` makes ``search`` bind the LAST id-shaped
+#     line (mandatory, not optional — SGE/SLURM anchor on a phrase, PBS has no
+#     phrase, so prefer-last is the PBS equivalent). A banner-only stdout with
+#     no id line now yields NO match → ``submit_one`` raises loudly rather than
+#     tracking a phantom.
+# Finished-state success/failure is NOT in the live token (``F``/``C`` cover
+# both) — it is read from ``Exit_status`` via the history query (``query_pbs``),
+# so ``error_states`` stays empty; the engine's pbs classify branch only
+# buckets the live qstat tokens.
+_PBS_JOB_ID_REGEX = r"(?ms).*^(\d+(?:\[\d*\])?)\.[A-Za-z0-9_.-]+\s*$"
+
 PBSPRO_PROFILE = SchedulerProfile(
     name="pbspro",
     family="pbspro",
     submit_bin="qsub",
-    job_id_regex=r"(\d+)(?:\[\d*\])?\.[A-Za-z0-9_.-]+",
+    job_id_regex=_PBS_JOB_ID_REGEX,
     template_ext=".pbs",
     supports_test_only_eta=False,
     error_states=frozenset(),
@@ -330,7 +351,7 @@ TORQUE_PROFILE = SchedulerProfile(
     name="torque",
     family="torque",
     submit_bin="qsub",
-    job_id_regex=r"(\d+)(?:\[\d*\])?\.[A-Za-z0-9_.-]+",
+    job_id_regex=_PBS_JOB_ID_REGEX,
     template_ext=".pbs",
     supports_test_only_eta=False,
     error_states=frozenset(),

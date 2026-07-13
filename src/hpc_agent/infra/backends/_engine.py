@@ -56,6 +56,16 @@ if TYPE_CHECKING:
 # :meth:`ProfileBackend.scheduler_query_ran`.
 _SCHED_ACK_PREFIX = "__HPC_SCHED_ACK__="
 
+# PBS-family FINISHED single-letter states that linger in the LIVE listing
+# (#F38). TORQUE keeps a completed job in plain ``qstat`` as ``C`` for the
+# keep_completed window; PBS Pro ``-x`` surfaces ``F`` (finished) and ``X``
+# (subjob finished/expired). These are terminal, NOT alive — the row parsers
+# skip them for the pbspro/torque families so a finished/qdel'd job reads as
+# ABSENT (the same "gone from the live listing" invariant SLURM/SGE have).
+# ``E`` (exiting) is deliberately NOT here: it is a job still running its
+# epilogue, correctly bucketed alive.
+_PBS_TERMINAL_STATES = frozenset({"C", "F", "X"})
+
 
 def _with_ack(cmd: str) -> str:
     """Suffix *cmd* with the scheduler sentinel-ack echo (see :data:`_SCHED_ACK_PREFIX`).
@@ -684,15 +694,30 @@ class ProfileBackend(HPCBackend):
     # ------------------------------------------------------------------
 
     @classmethod
-    def build_alive_check_cmd(cls, job_ids: list[str]) -> str:
-        """Shell command whose stdout lists the live job ids."""
+    def build_alive_check_cmd(cls, job_ids: list[str], *, cluster: str | None = None) -> str:
+        """Shell command whose stdout lists the live job ids.
+
+        *cluster* (#F37) is the federated-SLURM cluster NAME the jobs were
+        submitted to (the ``slurm_cluster`` value, i.e. the ``sbatch
+        --clusters=`` argument — NOT the hpc-agent clusters.yaml config key).
+        When set it emits ``squeue -M <cluster>`` so the liveness probe queries
+        the SAME federation member ``submit`` routed to; a plain ``squeue``
+        against the login node's default cluster prints nothing for a
+        foreign-cluster job, which ``scheduler_query_ran`` reads as an empty
+        queue and reconcile mis-settles as abandoned. Default ``None`` (the
+        non-federated case, and every current call site until the value is
+        threaded from the run's persisted ``slurm_cluster`` — see the class
+        note) leaves the command byte-identical. Only the slurm family emits
+        ``-M``; PBS/SGE ignore it (they carry no cross-cluster routing here).
+        """
         if not job_ids:
             return "true"
         if cls.profile.family == "slurm":
             # squeue (active states only) so completed/failed jobs don't
             # leak history and make abandoned-run detection useless.
             csv = ",".join(job_ids)
-            return _with_ack(f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null")
+            m = f"-M {shlex.quote(cluster)} " if cluster else ""
+            return _with_ack(f"squeue {m}-j {shlex.quote(csv)} -h -o '%i' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # PBS: query the explicit ids (NOT ``qstat -u``). ``-u`` triggers PBS's
             # *wide* alternate listing where the state column is no longer index 4
@@ -722,11 +747,18 @@ class ProfileBackend(HPCBackend):
             return alive
         # sge (``qstat -u``) / pbs (``qstat -t <ids>``): both print a 2-line
         # header then rows with the job id in column 0.
-        # PBS ids are ``<seq>.<server>`` / ``<seq>[<idx>].<server>`` — strip the
-        # ``.server`` / ``[idx]`` to the bare sequence (a no-op for SGE's pure
-        # numeric ids, so SGE behaviour is unchanged).
+        # PBS ids are ``<seq>.<server>`` / ``<seq>[<idx>].<server>`` — normalise
+        # the row id to the bare sequence for MATCHING (a no-op for SGE's pure
+        # numeric ids, so SGE behaviour is unchanged). #F36: a stored PBS array
+        # id is now ``<seq>[]`` (bracket-preserving regex), so the requested ids
+        # are normalised to the bare sequence too, and the ORIGINAL requested id
+        # — bracketed or bare — is what we return, so the caller's
+        # ``[j for j in job_ids if j not in alive]`` set-membership holds across
+        # mixed old-bare / new-bracketed sidecars.
         alive_sge: set[str] = set()
-        wanted_sge = {str(j) for j in job_ids}
+        wanted_by_base: dict[str, str] = {}
+        for j in job_ids:
+            wanted_by_base.setdefault(str(j).split(".")[0].split("[")[0], str(j))
         for line in stdout.splitlines():
             cols = line.split()
             if not cols:
@@ -734,39 +766,68 @@ class ProfileBackend(HPCBackend):
             jid = cols[0].strip()
             if not jid or not jid[0].isdigit():
                 continue  # header / separator line
+            # #F38: a TORQUE job qdel'd (or normally finished) lingers in plain
+            # ``qstat`` as state 'C' (also 'F'/'X' on PBS Pro ``-x``) for the
+            # keep_completed window. Counting that row as alive made kill
+            # verification report "still alive" after a successful qdel and
+            # blocked reconcile from settling a finished run until the record
+            # aged out. Skip terminal-state rows for the PBS families so a
+            # finished job reads as ABSENT — the same "finished ⇒ gone from the
+            # live listing" invariant SLURM/SGE get for free.
+            if (
+                cls.profile.family in ("pbspro", "torque")
+                and len(cols) >= 5
+                and cols[4].strip() in _PBS_TERMINAL_STATES
+            ):
+                continue
             base = jid.split(".")[0].split("[")[0]
-            if base in wanted_sge:
-                alive_sge.add(base)
+            orig = wanted_by_base.get(base)
+            if orig is not None:
+                alive_sge.add(orig)
         return alive_sge
 
     @classmethod
-    def build_cancel_cmd(cls, job_ids: list[str]) -> str:
+    def build_cancel_cmd(cls, job_ids: list[str], *, cluster: str | None = None) -> str:
         """Shell command that requests cancellation of *job_ids* (kill seam).
 
         SLURM cancels via ``scancel <id> <id> ...``; SGE and the PBS family
         (pbspro / torque) all cancel via ``qdel <id> <id> ...``. Ids are
         quoted individually (mirroring :meth:`build_alive_check_cmd`'s PBS
-        branch). An empty id list short-circuits to a ``true`` no-op — matching
-        the alive/state builders — so no bare ``scancel``/``qdel`` with no args
-        is ever dispatched. The command only *requests* cancellation: gone-ness
-        is confirmed by the alive-check verification, not by its exit code.
+        branch), so a PBS array id ``12345[]`` (#F36) arrives single-quoted and
+        addresses the real array rather than a non-existent bare ``12345``. An
+        empty id list short-circuits to a ``true`` no-op — matching the
+        alive/state builders — so no bare ``scancel``/``qdel`` with no args is
+        ever dispatched. The command only *requests* cancellation: gone-ness is
+        confirmed by the alive-check verification, not by its exit code.
+
+        *cluster* (#F37) mirrors :meth:`build_alive_check_cmd`: a federated
+        ``scancel -M <cluster>`` so the cancel reaches the member ``sbatch
+        --clusters=`` submitted to. Default ``None`` leaves the command
+        byte-identical; only the slurm family emits ``-M``.
         """
         if not job_ids:
             return "true"
         ids = " ".join(shlex.quote(str(j)) for j in job_ids)
         if cls.profile.family == "slurm":
-            return f"scancel {ids}"
+            m = f"-M {shlex.quote(cluster)} " if cluster else ""
+            return f"scancel {m}{ids}"
         # sge / pbspro / torque all cancel via ``qdel <id> <id> ...``.
         return f"qdel {ids}"
 
     @classmethod
-    def build_scheduler_state_cmd(cls, job_ids: list[str]) -> str:
-        """Shell command pairing each live job id with its raw state."""
+    def build_scheduler_state_cmd(cls, job_ids: list[str], *, cluster: str | None = None) -> str:
+        """Shell command pairing each live job id with its raw state.
+
+        *cluster* (#F37) emits ``squeue -M <cluster>`` for a federated SLURM
+        job, same contract as :meth:`build_alive_check_cmd`; default ``None``
+        leaves the command byte-identical and PBS/SGE ignore it.
+        """
         if not job_ids:
             return "true"
         if cls.profile.family == "slurm":
             csv = ",".join(job_ids)
-            return _with_ack(f"squeue -j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null")
+            m = f"-M {shlex.quote(cluster)} " if cluster else ""
+            return _with_ack(f"squeue {m}-j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # See build_alive_check_cmd: explicit ids (+ ``-t`` for arrays) keep
             # PBS in its brief format so the state token stays at column 4.
@@ -797,17 +858,42 @@ class ProfileBackend(HPCBackend):
           ITSELF failing (missing / server down) — exactly the case the old
           ``|| true`` masked into a spurious "no jobs".
         * **Ack present, explicit-id query (SLURM / PBS Pro / TORQUE)** →
-          ``ran_ok=True`` regardless of rc. These families query EXPLICIT ids
-          (``squeue -j`` / ``qstat -t <ids>``) and exit non-zero once a queried
-          id has left the queue (SLURM "invalid job id", PBS "Unknown Job Id" /
-          "job has finished"), indistinguishable from a genuine binary failure
-          by rc alone — so they lean on ack PRESENCE (the channel-silence guard)
-          and defer the completed-vs-failed decision to the reporter's positive
-          task evidence (``ops/monitor/classify.settle``), never to this query's
-          emptiness. Reading a non-zero rc as "query failed" here is the G9 bug
+          ``ran_ok=True`` EXCEPT for rc ``126``/``127``. These families query
+          EXPLICIT ids (``squeue -j`` / ``qstat -t <ids>``) and exit non-zero
+          once a queried id has left the queue (SLURM "invalid job id", PBS
+          "Unknown Job Id" / "job has finished"), indistinguishable from a
+          genuine binary failure by rc alone — so they lean on ack PRESENCE (the
+          channel-silence guard) and defer the completed-vs-failed decision to
+          the reporter's positive task evidence
+          (``ops/monitor/classify.settle``), never to this query's emptiness.
+          Reading a *finished-id* non-zero rc as "query failed" is the G9 bug
           that pinned every finished PBS run at UNKNOWN (#5): once one job leaves
-          the queue the rc-0 rule can never settle the run terminal. The family
-          capability is read off :class:`FamilyDialect`
+          the queue the rc-0 rule can never settle the run terminal — so the
+          finished-id rcs (1 / 35 / 153) MUST stay ``ran_ok=True``.
+
+          BUT rc ``127`` (command not found) and ``126`` (found, not
+          executable) are the shell's OWN "the scheduler binary never ran"
+          codes — a finished/absent job id never produces them (its rc is
+          1/35/153). This is the exact "``squeue`` missing / non-login shell
+          lacks the module" class the ack header (:data:`_SCHED_ACK_PREFIX`)
+          claims to kill but, for the explicit-id families, could not: a missing
+          binary echoed the ack with rc 127 and empty stdout, read as "queue
+          empty", and a healthy campaign settled abandoned (#F35, reproduced
+          in-sandbox at rc 127). Excluding 126/127 restores that guard's fire
+          path without touching the finished-id rcs the #5 fix depends on.
+
+          NOT covered here (deliberately deferred, gated on the live-cluster
+          check in ``critic-gaps.json``): the daemon-down rc=1 case (a live
+          ``squeue`` against a down slurmctld returns rc 1 with a FATAL stderr,
+          not 127). Distinguishing it from a benign finished-id rc=1 needs
+          stderr capture with a known-FATAL allowlist — and, per the Fable
+          panel, a stderr rule MUST default ``ran_ok=True`` on unrecognised
+          messages (allowlist FATAL daemon-down strings, never benign ones) or
+          it re-opens the G9/#5 UNKNOWN-forever regression. That arm changes the
+          query command shape and rests on a per-scheduler stderr convention not
+          verifiable in this sandbox, so it is left for the live-cluster follow-up.
+
+          The family capability is read off :class:`FamilyDialect`
           (``explicit_id_liveness_query``), not hardcoded per branch, so a family
           the dev loop doesn't exercise can't inherit SGE's whole-queue rule.
 
@@ -819,7 +905,11 @@ class ProfileBackend(HPCBackend):
         if rc is None:
             return clean, False
         if dialect_for(cls.profile.family).explicit_id_liveness_query:
-            return clean, True
+            # rc 126/127 = the shell could not run the scheduler binary at all
+            # (missing / not executable); a finished-or-absent id never yields
+            # those (1/35/153), so this cleanly flips the missing-binary case to
+            # UNKNOWN without re-breaking the finished-id rule (#5 / #F35).
+            return clean, rc not in (126, 127)
         return clean, rc == 0
 
     @classmethod
@@ -838,10 +928,15 @@ class ProfileBackend(HPCBackend):
             return states
         # sge (``qstat -u``) / pbs (``qstat -t <ids>``, brief format): state is the
         # 5th column (index 4); rows guarded on a digit id. PBS ids
-        # (``<seq>.<server>`` / ``<seq>[<idx>]...``) are stripped to the bare
-        # sequence (no-op for SGE), so this serves both families.
+        # (``<seq>.<server>`` / ``<seq>[<idx>]...``) are normalised to the bare
+        # sequence for MATCHING (no-op for SGE), so this serves both families;
+        # the ORIGINAL requested id — bracketed ``12345[]`` (#F36) or bare — is
+        # the dict key so callers keying off ``job_ids`` line up across mixed
+        # old-bare / new-bracketed sidecars.
         states_sge: dict[str, str] = {}
-        wanted_sge = {str(j) for j in job_ids}
+        wanted_by_base: dict[str, str] = {}
+        for j in job_ids:
+            wanted_by_base.setdefault(str(j).split(".")[0].split("[")[0], str(j))
         for line in stdout.splitlines():
             cols = line.split()
             if len(cols) < 5:
@@ -849,10 +944,18 @@ class ProfileBackend(HPCBackend):
             jid = cols[0].strip()
             if not jid or not jid[0].isdigit():
                 continue
-            base = jid.split(".")[0].split("[")[0]
-            if base not in wanted_sge:
+            state_tok = cols[4].strip()
+            # #F38: skip a TORQUE 'C' (or PBS Pro 'F'/'X') finished row — it
+            # lingers in the live listing for keep_completed but is terminal, so
+            # it must be ABSENT from the live-state map (else batch_status maps
+            # it RUNNING and reconcile can't settle the finished run).
+            if cls.profile.family in ("pbspro", "torque") and state_tok in _PBS_TERMINAL_STATES:
                 continue
-            states_sge[base] = cols[4].strip()
+            base = jid.split(".")[0].split("[")[0]
+            orig = wanted_by_base.get(base)
+            if orig is None:
+                continue
+            states_sge[orig] = state_tok
         return states_sge
 
     @classmethod
@@ -873,10 +976,17 @@ class ProfileBackend(HPCBackend):
             return "alive"
         if cls.profile.family in ("pbspro", "torque"):
             # PBS live qstat single-letter states. H/S/U are not progressing
-            # -> held; everything else live (Q R E B T W M) -> alive. Finished
-            # tokens (F/C/X) don't appear in the live ``qstat -u`` listing, and
-            # success-vs-failure is read from Exit_status in the history path,
-            # not the live token (so there is no live 'error' bucket here).
+            # -> held; everything else live (Q R E B T W M) -> alive.
+            # Finished tokens (F/C/X) are TERMINAL and are dropped UPSTREAM by
+            # the row parsers (:meth:`parse_alive_output` /
+            # :meth:`parse_scheduler_states`) for the PBS families (#F38) — a
+            # TORQUE job lingers as 'C' for keep_completed but must read as
+            # ABSENT, matching the "gone from the live listing ⇒ complete"
+            # contract SLURM/SGE get for free — so classify never receives one
+            # here (no inert F/C/X branch: this bucketer's only callers consume
+            # the already-filtered parser output). Success-vs-failure is read
+            # from Exit_status in the history path, not the live token (so there
+            # is no live 'error' bucket here).
             s = state.strip()
             if s in {"H", "S", "U"}:
                 return "held"
@@ -885,6 +995,14 @@ class ProfileBackend(HPCBackend):
         s = state.strip()
         if "E" in s:
             return "error"
+        # #F40: SUSPENDED tokens (routine under subordinate-queue preemption:
+        # 's'/'ts' user-suspend, 'S'/'tS' queue-suspend, 'T'/'tT' threshold
+        # suspend) are NOT progressing — bucket held so batch_status reports
+        # PENDING, matching the SLURM branch's SUSPENDED/STOPPED -> held. Checked
+        # on membership of s/S/T so lowercase 't' (transferring — a RUNNING
+        # substate) stays alive. Placed before the 'h' check; both return held.
+        if any(c in s for c in ("s", "S", "T")):
+            return "held"
         if "h" in s:
             return "held"
         return "alive"

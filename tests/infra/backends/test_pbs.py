@@ -34,9 +34,11 @@ def test_metadata(family):
     assert cls.scheduler_name == family
     assert cls.template_ext == ".pbs"
     assert cls.supports_test_only_eta is False
-    # job-id regex captures the numeric sequence from <seq>.<server> / <seq>[].<server>
+    # job-id regex captures the sequence from <seq>.<server>; an ARRAY id keeps
+    # its ``[]`` (#F36) — PBS addresses an array as ``<seq>[]``, so dropping the
+    # bracket at capture made every later qstat/qdel target a non-existent id.
     assert cls.JOB_ID_REGEX.search("12345.pbsserver").group(1) == "12345"
-    assert cls.JOB_ID_REGEX.search("12346[].hpcnode0").group(1) == "12346"
+    assert cls.JOB_ID_REGEX.search("12346[].hpcnode0").group(1) == "12346[]"
 
 
 # --- submit command shape (the canonical fork split) -----------------------
@@ -161,6 +163,79 @@ def test_pbs_build_cancel_cmd_uses_qdel(family):
     cls = get_backend_class(family)
     assert cls.build_cancel_cmd(["12345", "12346"]) == "qdel 12345 12346"
     assert cls.build_cancel_cmd([]) == "true"
+
+
+# --- #F36: PBS array ids keep their ``[]`` through the whole round-trip ------
+
+
+@pytest.mark.parametrize("family", ["pbspro", "torque"])
+def test_pbs_array_id_survives_regex_and_builders(family):
+    # The submit banner ``12345[].pbs01`` is captured as ``12345[]`` (not the
+    # bare ``12345`` that addresses a non-existent non-array job), and each
+    # builder quotes the bracket so the shell delivers it verbatim to
+    # qstat/qdel — the bug where a live 500-task array read as gone on the first
+    # reconcile and qdel false-confirmed.
+    cls = get_backend_class(family)
+    array_id = cls.JOB_ID_REGEX.search("12345[].pbs01\n").group(1)
+    assert array_id == "12345[]"
+    assert "'12345[]'" in cls.build_alive_check_cmd([array_id])
+    assert "'12345[]'" in cls.build_scheduler_state_cmd([array_id])
+    assert cls.build_cancel_cmd([array_id]) == "qdel '12345[]'"
+
+
+@pytest.mark.parametrize("family", ["pbspro", "torque"])
+def test_pbs_parse_matches_bracketed_sidecar_id(family):
+    # A stored array id ``12345[]`` matches the qstat row ``12345[<idx>].server``
+    # and — critically — the ORIGINAL bracketed id is what comes back, so the
+    # caller's ``[j for j in job_ids if j not in alive]`` complement holds.
+    cls = get_backend_class(family)
+    out = (
+        "Job id            Name  User Time Use S Queue\n"
+        "----------------  ----  ---- -------- - -----\n"
+        "12345[1].pbsserver arr  a    01:00:00 R workq\n"
+    )
+    assert cls.parse_alive_output(out, ["12345[]"]) == {"12345[]"}
+    assert cls.parse_scheduler_states(out, ["12345[]"]) == {"12345[]": "R"}
+
+
+# --- #F38: TORQUE 'C' (PBS Pro 'F'/'X') finished rows read as ABSENT ---------
+
+
+@pytest.mark.parametrize("family", ["pbspro", "torque"])
+@pytest.mark.parametrize("term_state", ["C", "F", "X"])
+def test_pbs_finished_rows_not_counted_alive(family, term_state):
+    # A qdel'd/finished job lingers in the live listing for keep_completed; it
+    # must NOT count as alive (else kill verification reports 'still alive' after
+    # a successful qdel and reconcile can't settle the finished run). 'E'
+    # (exiting) stays alive — it is a job still running its epilogue.
+    cls = get_backend_class(family)
+    out = (
+        "Job id           Name  User Time Use S Queue\n"
+        "---------------  ----  ---- -------- - -----\n"
+        f"12345.pbsserver  job   a    01:00:00 {term_state} workq\n"
+        "12346.pbsserver  job   a    01:00:00 E workq\n"
+    )
+    assert cls.parse_alive_output(out, ["12345", "12346"]) == {"12346"}
+    assert cls.parse_scheduler_states(out, ["12345", "12346"]) == {"12346": "E"}
+
+
+# --- #F39: a digit-bearing banner before the id line can't poison the parse --
+
+
+@pytest.mark.parametrize("family", ["pbspro", "torque"])
+def test_pbs_job_id_regex_ignores_banner_dotted_numbers(family):
+    cls = get_backend_class(family)
+    poisoned = (
+        "estimated start in 1.5 hours\n"
+        "PBS Pro Version 2022.1.3\n"
+        "12345[].pbs01\n"
+    )
+    # The old shape-only pattern matched '1' in '1.5' (first match); the
+    # line-anchored prefer-last pattern binds the real id line.
+    assert cls.JOB_ID_REGEX.search(poisoned).group(1) == "12345[]"
+    # A banner-only stdout with NO id line yields no match → submit_one raises
+    # loudly rather than journaling a phantom id.
+    assert cls.JOB_ID_REGEX.search("estimated start in 1.5 hours\n") is None
 
 
 # --- qstat -t parsing (brief format; id is <seq>.<server>[<idx>]) ----------

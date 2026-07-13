@@ -24,7 +24,7 @@
     "requested_job_ids": {
       "description": "The job IDs the kill was requested against.",
       "items": {
-        "pattern": "^\\d[A-Za-z0-9._+\\-]*$",
+        "pattern": "^\\d[A-Za-z0-9._+\\[\\]\\-]*$",
         "type": "string"
       },
       "title": "Requested Job Ids",
@@ -33,7 +33,7 @@
     "confirmed_gone_job_ids": {
       "description": "Subset verified no longer known to the scheduler after the request.",
       "items": {
-        "pattern": "^\\d[A-Za-z0-9._+\\-]*$",
+        "pattern": "^\\d[A-Za-z0-9._+\\[\\]\\-]*$",
         "type": "string"
       },
       "title": "Confirmed Gone Job Ids",
@@ -42,7 +42,7 @@
     "still_alive_job_ids": {
       "description": "Subset still known to the scheduler (e.g. no cancel affordance, or a verification failure — counted honestly as NOT gone).",
       "items": {
-        "pattern": "^\\d[A-Za-z0-9._+\\-]*$",
+        "pattern": "^\\d[A-Za-z0-9._+\\[\\]\\-]*$",
         "type": "string"
       },
       "title": "Still Alive Job Ids",
