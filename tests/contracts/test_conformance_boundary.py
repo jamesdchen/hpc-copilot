@@ -118,20 +118,54 @@ def test_conformance_modules_reach_no_external_system() -> None:
     assert not offenders, f"a conformance module reaches an external system: {offenders}"
 
 
+_CREDENTIAL_BANNED = ("password", "api_key", "apikey", "secret", "credential", "access_token")
+
+
+def _credential_hits(text: str, banned: tuple[str, ...]) -> list[str]:
+    """Return ``"<lineno>: <word>"`` per banned credential word on a LIVE code line.
+
+    Comment lines and rule-STATEMENT ("never …") lines are excluded — they name the
+    boundary, they do not cross it. Extracted so the fire-path test can feed synthetic
+    source (the "verify a guard can fire" discipline) rather than reimplement the rule.
+    """
+    hits: list[str] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        low = line.lower()
+        if low.lstrip().startswith("#") or "never" in low:  # rule-statement / comment lines
+            continue
+        for word in banned:
+            if word in low:
+                hits.append(f"{lineno}: {word}")
+    return hits
+
+
 def test_no_credential_field_in_conformance_modules() -> None:
     """No conformance module names a credential field — core holds no secret to any
     external system (the emitter owns all domain I/O, arms-length forever)."""
-    banned = ("password", "api_key", "apikey", "secret", "credential", "access_token")
     offenders: list[str] = []
     for path in _CONFORMANCE_MODULES:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            low = line.lower()
-            if low.lstrip().startswith("#") or "never" in low:  # rule-statement / comment lines
-                continue
-            for word in banned:
-                if word in low:
-                    offenders.append(f"{path.name}:{lineno}: {word}")
+        for hit in _credential_hits(path.read_text(encoding="utf-8"), _CREDENTIAL_BANNED):
+            offenders.append(f"{path.name}:{hit}")
     assert not offenders, f"a credential field appeared in a conformance module: {offenders}"
+
+
+def test_credential_scan_fires() -> None:
+    """Fire path: the credential scan flags a planted secret field on a live code
+    line, while the comment-line and "never …" rule-statement exclusions suppress
+    ONLY those lines — the same word on a live line is not over-suppressed.
+    """
+    # A planted credential field on a live code line is caught …
+    assert _credential_hits("broker_password = load_env()\n", _CREDENTIAL_BANNED), (
+        "the scan must flag a planted credential field"
+    )
+    # … a comment line naming the word is exempt (as production honors) …
+    assert not _credential_hits("# the api_key belongs to the emitter\n", _CREDENTIAL_BANNED)
+    # … a "never …" rule-statement line is exempt …
+    assert not _credential_hits("secret = ...  # never: core holds no secret\n", _CREDENTIAL_BANNED)
+    # … yet the SAME word on a live, non-exempt line still fires.
+    assert _credential_hits("access_token = fetch()\n", _CREDENTIAL_BANNED), (
+        "the exclusions must not suppress a real violation on a live line"
+    )
 
 
 def test_nonconforming_window_leaves_registration_journal_byte_identical(tmp_path: Path) -> None:
@@ -275,36 +309,73 @@ def test_record_verb_is_not_agent_facing() -> None:
 # ── (7) no market vocabulary anywhere ─────────────────────────────────────────
 
 
-def test_fixtures_use_no_market_vocabulary() -> None:
-    """No market/trading word lands in the conformance FIXTURE — the instrument-QC toy
-    (``sensor-7`` calibration) is the ONLY fixture domain. Field-NAME vocabulary in the
-    wire schemas is pinned separately by tests/_wire/test_conformance_wire.py (where
-    ``baseline`` is a PERMITTED SPC mechanism noun); core-source English/math words
-    like "order statistics" are not market vocabulary and are not scanned here."""
-    banned = (
-        "fill",
-        "order",
-        "position",
-        "pnl",
-        "trade",
-        "venue",
-        "ticker",
-        "price",
-        "portfolio",
-        "harxhar",
-        "quant",
-    )
-    path = Path(inspect.getfile(tc))
-    offenders: list[str] = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+_MARKET_BANNED = (
+    "fill",
+    "order",
+    "position",
+    "pnl",
+    "trade",
+    "venue",
+    "ticker",
+    "price",
+    "portfolio",
+    "harxhar",
+    "quant",
+)
+
+
+def _market_vocab_hits(text: str, banned: tuple[str, ...]) -> list[str]:
+    """Return ``"<lineno>: <word>"`` per banned market word matched as a whole TOKEN.
+
+    Comments are stripped and ``_``/``.`` are split so field paths tokenize; a
+    rule-STATEMENT ("never …") line names the boundary and is excluded. Whole-token
+    matching keeps English/math words ("order statistics") from false-firing.
+    Extracted so the fire-path test can feed synthetic source, not reimplement it.
+    """
+    hits: list[str] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
         low = line.lower()
         if "never" in low:  # a rule-statement line names the boundary, never crosses it
             continue
         tokens = set(low.split("#")[0].replace("_", " ").replace(".", " ").split())
         for word in banned:
             if word in tokens:
-                offenders.append(f"{path.name}:{lineno}: {word}")
+                hits.append(f"{lineno}: {word}")
+    return hits
+
+
+def test_fixtures_use_no_market_vocabulary() -> None:
+    """No market/trading word lands in the conformance FIXTURE — the instrument-QC toy
+    (``sensor-7`` calibration) is the ONLY fixture domain. Field-NAME vocabulary in the
+    wire schemas is pinned separately by tests/_wire/test_conformance_wire.py (where
+    ``baseline`` is a PERMITTED SPC mechanism noun); core-source English/math words
+    like "order statistics" are not market vocabulary and are not scanned here."""
+    path = Path(inspect.getfile(tc))
+    offenders: list[str] = []
+    for hit in _market_vocab_hits(path.read_text(encoding="utf-8"), _MARKET_BANNED):
+        offenders.append(f"{path.name}:{hit}")
     assert not offenders, f"a market word landed in the conformance fixture: {offenders}"
+
+
+def test_market_vocab_scan_fires() -> None:
+    """Fire path: the market-vocab scan flags a planted trading token, honors the
+    "never …" rule-statement exclusion, does NOT over-suppress the same token on a
+    live line, and does NOT false-fire on an English word that merely contains it.
+    """
+    # A planted market token (via a field path) is caught …
+    assert _market_vocab_hits("qty = ledger.order_fill\n", _MARKET_BANNED), (
+        "the scan must flag a planted market token"
+    )
+    # … a "never …" rule-statement line naming the word is exempt …
+    assert not _market_vocab_hits("# never name an order in a fixture\n", _MARKET_BANNED)
+    # … the SAME token on a live, non-exempt line still fires …
+    assert _market_vocab_hits("value = order\n", _MARKET_BANNED), (
+        "the 'never' exclusion must not suppress a real violation on another line"
+    )
+    # … but whole-token matching keeps English words from false-firing.
+    assert not _market_vocab_hits("reading = filled_bucket\n", _MARKET_BANNED), (
+        "'fill' must match as a token, not as a substring of 'filled'"
+    )
 
 
 # ── (8) the horizon is a timestamp comparison — no duration arithmetic ────────
