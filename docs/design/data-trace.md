@@ -143,7 +143,8 @@ Stage digests are fingerprint-admissible evidence from day one: the
 envelope accrues per-stage, and a reproduction mismatch localizes to a
 NAMED STAGE ("diverges at scaling") instead of "the runs differ". A
 Phase-3 amendment (the sample-admission model gains per-stage keys); the
-projections below are freestanding and do not wait for it.
+projections below are freestanding and do not wait for it. **LANDED —
+Amendment 15 records the implemented shape.**
 
 ## Consumers (both kinds) and projections
 
@@ -683,3 +684,271 @@ Hamilton lineage
 Drift-log line: 2026-07-08 — T0 gate discharged; all candidates refused as
 dependencies, OpenLineage facet field names adopted as a courtesy mapping
 recorded in the atom registry (Waves 1–3 unblocked).
+
+Drift-log line: 2026-07-08 — T5 `trace-render` landed (Wave 3, registry +1;
+regen deferred to a serial rebake). RECORDED ANSWER on the reference lookups
+(the `profile` under-specification the task flagged): `cmd_sha` resolves via
+`find_run_by_cmd_sha` (the T1/runs parameter-identity join, newest-first). The
+`profile` selector is IMPLEMENTED as a mechanical latest-by over the sidecar's
+LITERAL `profile` field (`find_existing_runs` yields sidecars newest-first, so
+the first match is the freshest exemplar) — NOT deferred, because the join is
+well-defined at the core layer: the sidecar carries a `profile` key and
+"latest-by-profile via sidecar keys" (A7 Class B) is exactly that scan. Core
+stays agnostic to WHICH profile string is the exemplar (pack/program naming) —
+the caller names it, core joins. Both reference lookups resolve to the matched
+run's `("run", run_id)` trace scope. Absence (no run matched, or a resolved
+scope with no recorded trace) is an honest `present=false` + `skipped` result,
+never an error. The four views + the self-describing header render as
+deterministic markdown carrying no verdict vocabulary (the never-judgment pin,
+grep-tested over the render output).
+
+## Amendment 14 (2026-07-09): G-a RULED — the observation plan lives in the audit configuration
+
+**User-ruled (2026-07-09): candidate 1.** The audit configuration gains
+`observables: [names]` on the audited_source / notebook-record-config seam —
+inside the signed surface automatically, versioned with the roots, read by
+the ONE recorded-config reader. Candidate 2 (a template marker) was rejected
+on the altitude test: observable names are PROGRAM bindings (the
+`endbartime` class), while templates are the shareable standard — baking
+names into a template would force per-program template forks; and a second
+in-file parsing convention beside `# hpc-audit-section:` is a new lint/canon
+surface. Precedent: `attention_order` faced the same choice and landed in
+the config. Authoring visibility is a RENDER concern (draft-context / the
+audit view display the declared observables), not a storage one. T-R
+unblocks.
+
+**T-R LANDED (salvaged 2026-07-09, reviewed).** The runner between-cell
+observation loop shipped: the `observables: list[str] | None` config field
+rides the audited_source / notebook-record-config seam (absent → the loop is
+OFF and interview.json is byte-identical — the `attention_order` precedent,
+pinned by `test_audited_source_config_absent_is_byte_identical`); core's
+frame-blind `stdlib_measure` + the `Measurer` protocol land in
+`state/data_trace.py` (no pandas — the AST import pin holds); the plugin's
+`_observe.observe_source` execs the audited source cell-by-cell, measures each
+declared observable, and ingests **runner-tier** records into the audit scope
+(`traces/audit/<audit_id>/`). Reviewed adversarially against A10/A12/A14; one
+follow-up hardening applied over the salvaged commit: the `source` trust tier
+now rides the RECORD MODEL — `make_record(..., source=)` stamps it and
+`validate_record` enforces the closed T2-contract tier set
+(`TRACE_SOURCE_TIERS`), replacing the plugin's external post-stamp so an
+off-vocabulary tier can never enter the trust chain.
+
+Drift-log line: 2026-07-09 — T-R salvaged from the orphaned data-trace branch,
+reviewed, landed. **Section-join blockers B1 + B2 now CLOSED** (see the
+"Audit-view section join — EVALUATED, STOPPED" evaluation): **B1 (no
+producer)** — `observe_source` is the audit-scope trace producer that
+evaluation named missing; **B2 (record model carries no `source` tier)** —
+`make_record`/`validate_record` now carry and validate `source` against the
+closed tier set, so a receipt/sign-off consumer has a runner-tier field to
+filter on. The section join now waits **only on B3** (the per-section summary
++ freshness semantics ruling) and its payload-shape rebake. Wire/regen debt
+(deferred to the serial rebake): the new `observables` field on the
+`interview` `_AuditedSource` + `NotebookRecordConfigSpec`/`Result` schemas, and
+the source-tier field is additive on the trace record (no `TRACE_SCHEMA_VERSION`
+bump — readers tolerate the new key).
+
+## Amendment 15 (2026-07-09): the fingerprint interlock LANDED (the Phase-3 amendment)
+
+Implemented in `ops/verify_reproduction.py`, riding the landed
+determinism-fingerprint substrate. Shape choices, each recorded:
+
+- **Key naming**: when folded, per-stage atoms enter the compared payloads as
+  `stage:<stage>.digest` and `stage:<stage>.row_count` — the `stage:` prefix
+  namespaces honestly (a stage receipt, not a metric), the `.`-join matches
+  the existing flatten convention (`flatten_metrics`), and the atom name is
+  kept verbatim from the atom catalog. Digests are shas (str) and row counts
+  ints, so both are EXACT-CLASS under the existing static classifier — no
+  envelope needed, no tolerance ever applies, and they ride the SAME per-key
+  sample + envelope machinery (identical→exact, differing→the
+  mismatch/verdict flow). **NO new admission rule** — the existing D-consume
+  admission governs the whole sample; the interlock adds keys, never policy.
+- **Fold condition**: keys fold only when BOTH runs carry an ingested
+  `("run", run_id)` trace (`read_trace`). One-side/neither-traced → NOTHING
+  folded and the presence DISCLOSED on the v2 receipt's `stage_interlock`
+  block (`{original_trace_present, repro_trace_present, compared,
+  stage_keys}`) — the digest-policy degradation posture (disclosed, never
+  fabricated, never blocking). A fully untraced pair emits a receipt
+  BYTE-IDENTICAL to a pre-interlock one (pinned by test).
+- **Stage-localized mismatch**: on a routed verdict (mismatch / needs_verdict
+  / incomparable) of a both-traced pair, the FIRST diverging stage by
+  pipeline order (the trace's `seq`; min across sides for shared stages; a
+  one-side-only stage counts as divergence) surfaces as the machine field
+  `diverged_stage` on the receipt AND the result, and is appended to the
+  code-rendered `reason` ("diverges at stage 'scaling'") — never
+  prose-invented. Null on match/auto_cleared.
+- **Recorded scope answers**: v1 reads task-0 of the run scope only
+  (multi-task trace enumeration is a deferred refinement); a PARTIAL
+  reproduction skips the interlock entirely (it already namespaces per task —
+  folding whole-run stage keys under a subset comparison would be dishonest);
+  a stage seen twice keeps its LAST record (append order); a stage missing a
+  digest still folds its row_count (an off-digest-policy run contributes
+  counts); a digest recorded on only ONE side of a shared stage is a degraded
+  observation, NOT a divergence.
+- **Wire debt (regen deferred)**: `ReproductionReceipt` gains
+  `stage_interlock` + `diverged_stage` (optional, default-absent — v1/v2
+  pre-interlock lines parse unchanged); `VerifyReproductionResult` gains
+  `diverged_stage`. Schema regen NOT run here (serial-regen discipline) —
+  rebake at merge.
+
+## Drift-log evaluations (2026-07-09): the two deferred-by-design leftovers
+
+Both items from the "Deferred by design" list were re-evaluated in the
+run-#11→#12 between-campaigns window. One stays deferred pending rulings; one
+stays deferred for want of a consumer. NO code changed and NO view_sha moved —
+recorded here so the next session does not re-derive.
+
+**(1) Audit-view section join — EVALUATED, STOPPED. AMENDED same day: B1 and
+B2 below are CLOSED by the T-R salvage (see the T-R drift-log entry above —
+the runner now produces audit-scope runner-tier records and the `source` tier
+rides the record model, `validate_record`-enforced). The join now waits ONLY
+on the B3 ruling.**
+The recorded intent (Amendment 9: each `human_required` section renders "its
+latest execution summary — rows/drops/labels/flags + the trace sha, cited in
+the trusted render") CANNOT be implemented now without inventing join
+semantics. Three independent hard blockers, each sufficient on its own:
+
+- **B1 — no producer.** Nothing emits audit-scope traces
+  (`.hpc/traces/audit/<audit_id>/`). The only trace producer in the tree is
+  the run-scope harvest ingest (`ops/aggregate_flow.py`). The T-R runner (the
+  notebook-render plugin's between-cell observation loop, A10/A12) that would
+  observe cell boundaries × declared observables and emit `source:runner`
+  records is NOT built (G-a was ruled in A14 "T-R unblocks", but the runner
+  itself was never implemented). A section join today renders EMPTY for every
+  real audit — the dead-display class.
+- **B2 — the record model carries no `source` tier.** A10 is doctrine:
+  "receipts/sign-off surfaces consume runner-tier only … draft-emitted never
+  enters receipts." The tier vocabulary exists ONLY in the T2 contract
+  (`execution/mapreduce/data_trace_contract.py`: `TRACE_SOURCE_{RUNNER,ENGINE,
+  DRAFT}`, `RECEIPT_GRADE_SOURCES`) and is consumed by nothing.
+  `state/data_trace.py` `make_record`/`validate_record` neither carry nor
+  validate a `source` field. A join that reads `read_trace(…,"audit",
+  audit_id,…)` and renders records unfiltered would put untrusted (draft/
+  engine) evidence into the SIGNED view — a direct A10 violation. There is no
+  runner-tier filter to apply because the field is not on the record.
+- **B3 — the per-section summary semantics are unspecified.** "One section :
+  many stages" (atom catalog). A9 names the fields to show but not: which of a
+  section's many stages supplies `rows/drops` (first / last / net
+  conservation?); what "the trace sha" means at SECTION granularity (sha of
+  the section's record subset, or the task's whole journaled `trace_sha`?);
+  and there is NO section-level freshness binding — trace records carry a
+  `section` slug but not a `section_sha`, so (unlike render receipts, which
+  bind `section_sha` and refuse drift in `_assertions_green`) a stale trace
+  would render as if current in a trusted view. Choosing any of these is
+  inventing semantics, which this task forbids.
+
+Framing correction for the implementer: the task presumed "a versioned
+canonicalization constant — find how the last bump was done." There is NONE in
+the audit-view path. `view_sha` is a pure content hash (`_sha_json` over the
+payload dict in `ops/notebook/audit_view.py`); the two prior payload-shape
+changes (T12 `attention_order`; the full-view-recompute) added payload FIELDS
+and rebaked fixtures with NO integer version bump. `TRACE_SCHEMA_VERSION`
+(`state/data_trace.py`) versions the TRACE record, not the audit view, and is
+"bump only on a breaking record-shape change." So there is no canon-version
+seam to turn — the join, when it lands, is a payload-shape change + fixture
+rebake, gated behind the three rulings below.
+
+RULINGS NEEDED before this can land (each a drift-log answer, not a redesign):
+(a) does the section join wait on T-R + the `source` tier landing on the
+record model (recommended — otherwise it renders dead/untrusted evidence), or
+is a v1 that reads whatever exists acceptable?; (b) the per-section summary
+reduction (which stage supplies rows/drops; the section-level trace-sha
+definition); (c) section-level freshness — bind a `section_sha` onto
+audit-scope records (mirroring receipts) so a drifted trace is refused, or
+render unbound with a disclosed "as-of" stamp.
+
+**(2) Temporal-scan index — EVALUATED, no consumer, stays deferred (correct
+by the doc's own gate).** Swept the tree for a would-be consumer of the
+"stage-drift-over-time / many runs" scan (the only scan-shaped consumer in the
+table). The COMPLETE trace-store consumer set is: `trace-render` (point lookup
++ Class-B latest-by-reference), `trace-diff` (two point lookups),
+`verify_reproduction` (run-scope task-0), and `aggregate_flow` (ingest). NONE
+walks many runs' traces linearly to compute drift over time. Per the storage
+ruling ("a DERIVED, disposable, content-keyed index when it becomes real —
+never a scan-optimized store for a consumer that does not yet exist") the index
+is NOT built. An index with no consumer is the dead-code class; it stays
+deferred until a stage-drift consumer is authored.
+
+## Amendment 16 (2026-07-09 user ruling, recorded from session 2026-07-10): B3 RESOLVED as B3-LEAN
+
+The per-section summary + freshness semantics B3 named unspecified are ruled,
+LEAN shape (the section join is now unblocked; build = post-run-#12 batch
+item 7):
+
+- **Which stages supply rows/drops**: FIRST→LAST **per CHANGED observable**
+  (not per stage) — a summary line exists only for an observable whose value
+  moved across the section, showing its first and last values; unchanged
+  observables render nothing.
+- **Which execution**: the LATEST execution only.
+- **The section-level sha**: the SET-sha of the section's record subset,
+  cited in the render (never the task's whole `trace_sha`).
+- **Freshness binding**: the runner stamps `section_sha` on the records it
+  emits (the render-receipt precedent); a stale section's summary is ELIDED
+  with a disclosed stale marker, never rendered as if current.
+- **Scope split**: comprehension ≠ attestation — the signed view carries only
+  the above; interactive brainstorm/comprehension rides `trace-render` +
+  verify-relay once the trace corpus joins the relay corpus (NOT the signed
+  join).
+
+Drift-log line: 2026-07-10 — **B3-LEAN section join LANDED** (post-run-#12
+batch item 7, user-ordered mechanize-now). What shipped vs Amendment 16:
+
+- **Freshness binding (core record model).** `state/data_trace.py`
+  `make_record(..., section_sha=)` stamps an additive `section_sha`;
+  `validate_record` enforces "non-empty string when present", absent = valid
+  (byte-identical to a pre-B3 record — a runner that does not stamp degrades to
+  stale-elide). NO `TRACE_SCHEMA_VERSION` bump (additive key; readers tolerate
+  it — the A14/A15 additive-field precedent).
+- **The reducer + render (core, `ops/notebook/audit_view.py`).**
+  `build_audit_view(..., audit_traces=)` takes the audit-scope trace records;
+  `_section_trace_summary` reduces them EXACTLY per A16: runner-tier ONLY
+  (`RECEIPT_GRADE_SOURCES`, A10), LATEST execution (`_latest_execution`
+  segments the runner stream on a `seq` reset), this section's subset, freshness
+  = the subset's stamped `section_sha` set must equal `{current_section_sha}`
+  (any missing/mismatched → `{"stale": True}`, elided with a disclosed marker),
+  then first→last per CHANGED observable (`_changed_observables`; unchanged →
+  nothing), citing `records_sha(subset)` as the SET-sha. `render_markdown` grew
+  a "runtime evidence (latest execution)" block; verdict-free (no
+  good/bad/wrong/suspicious/should).
+- **Signed, one-definition.** The summary is bound into the section's `view_sha`
+  (signed evidence, unlike the presentation-only next-actions footer) and is
+  read through `build_canonical_view` (`read_trace(experiment_dir, "audit",
+  audit_id, 0)`) — the ONE definition the T8 gate, the `notebook-audit-view`
+  verb, and the render plugin all recompute against, so their shas agree. The
+  preview path reads the same on-disk trace. Gated to `human_required` sections.
+- **Plugin (`examples/plugins/hpc-agent-notebook-render/_observe.py`).**
+  `observe_source` now derives `slug → section_sha` from
+  `parse_percent_source(source_text)` and threads it through
+  `run_observation`/`observe_cell` → `make_record(section_sha=)`, so each
+  runner-tier record carries the SAME normalized-section hash the audit view
+  computes (end-to-end freshness). This is the full plugin side the existing
+  observation loop allows.
+
+**Deviations from A16 (each with reason):**
+
+1. **No fixture rebake was needed** (the task anticipated one). `trace_summary`
+   is PRESENT-ONLY on the payload (added iff a `human_required` section has
+   non-stale changed evidence OR is stale), so a trace-free view — every
+   existing fixture, which carries no audit trace — is byte-identical. This
+   follows the `make_record` section/source present-only convention rather than
+   an always-present key; it is the cleaner house pattern and keeps view_sha
+   stable for the common (no-observable) section. The payload-shape change is
+   real (new key when evidence exists) and moves view_sha for exactly those
+   sections — the intended signed-evidence behaviour.
+2. **The structured wire result carries no `trace_summary` mirror.** The signed
+   surface is the `markdown` render (relayed verbatim) + the `view_sha` the
+   payload binds — both carry the summary. A `NotebookSectionView.trace_summary`
+   field would be a schema move (regen); like the `observables` wire field
+   (A14) and the `stage_interlock` fields (A15) it is deferred wire debt for the
+   serial rebake. Regen `--check` is GREEN (registry unchanged at 164; 209
+   schema models) precisely because nothing wire-facing moved.
+3. **Scope split honoured** — only the LEAN signed summary landed; no
+   interactive/comprehension features (those ride `trace-render` + verify-relay,
+   A16 scope split).
+
+Tests: `tests/ops/notebook/test_audit_view.py` +8 (changed-renders-first→last,
+the MANDATORY unchanged-renders-nothing + stale-wrong-sha-elided guards,
+missing-sha-stale, human_required-only, runner-tier-only, latest-execution-only,
+view_sha-binds); `tests/state/test_data_trace.py` +3 (stamp/validate/absent);
+`test_observe.py` +1 (stamped shas equal `parse_percent_source`'s). Targeted
+suites green (data_trace, audit_view, canonical, multi_human_gate, relay_due,
+data_trace_acceptance, flow_trace_ingest, trace_render, trace_diff, observe).

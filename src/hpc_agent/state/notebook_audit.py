@@ -94,10 +94,13 @@ __all__ = [
     "SIGN_OFF_BLOCK",
     "AUTO_CLEAR_BLOCK",
     "RENDER_RECEIPT_BLOCK",
+    "DRAFT_BLOCK",
     "AUDIT_CONFIG_BLOCK",
     "SUBJECT_KIND",
+    "DRAFT_SUBJECT_KIND",
     "AUTO_CLEAR_RESPONSE",
     "RENDER_RECEIPT_RESPONSE",
+    "DRAFT_RESPONSE",
     "AUDIT_CONFIG_RESPONSE",
     "SIGNED_CURRENT",
     "AUTO_CLEARED",
@@ -112,16 +115,25 @@ __all__ = [
     "record_auto_clear",
     "record_render_receipt",
     "read_render_receipts",
+    "record_draft",
+    "read_draft_author",
     "record_audit_config",
     "read_audit_config",
+    "read_audit_intent",
     "RELAY_DUE_BLOCK",
     "RELAY_DUE_RESPONSE",
     "RELAY_DUE_RECORD_KIND",
+    "RENDER_RELAY_DUE_RECORD_KIND",
     "RELAY_DISCHARGE_BLOCK",
     "RELAY_DISCHARGE_RESPONSE",
+    "DISCHARGED_BY_RELAY",
+    "DISCHARGED_BY_COMPLETER",
     "record_relay_due",
     "record_relay_discharge",
     "read_undischarged_relay_markers",
+    "ECHO_PROVENANCE_BLOCK",
+    "ECHO_PROVENANCE_RESPONSE",
+    "record_echo_provenance",
 ]
 
 #: The human sign-off block (D3). A ``notebook-sign-off`` append-decision record
@@ -148,6 +160,24 @@ RENDER_RECEIPT_BLOCK = "notebook-render-receipt"
 #: a clearance token (not ``"auto_cleared"``): a receipt is evidence, not a
 #: sign-off class.
 RENDER_RECEIPT_RESPONSE = "rendered"
+
+#: The DRAFT-attestation block (multi-human MH5). A block class riding the SAME
+#: notebook journal: a CODE attestation that a section's source was DRAFTED by
+#: the actor whose session recorded it, bound to the section sha it was drafted
+#: at. Distinct block so a reader never confuses drafter-authorship with a
+#: clearance (auto-clear), execution evidence (receipt), or a human ack
+#: (sign-off). It is the SECTION AUTHOR the reviewer!=author gate (MH6) resolves.
+DRAFT_BLOCK = "notebook-draft"
+
+#: The honest, mechanical ``response`` a draft attestation carries — a draft was
+#: recorded, nothing was approved and nothing executed. NEVER a human-ack token.
+DRAFT_RESPONSE = "drafted"
+
+#: The opaque attestation ``subject_kind`` a draft attestation rides (MH5 — a
+#: DISTINCT kind from :data:`SUBJECT_KIND`, so a draft never enters the sign-off /
+#: auto-clear reduction and can never green a section). The kernel never
+#: interprets it.
+DRAFT_SUBJECT_KIND = "notebook-draft"
 
 #: The audit-CONFIG record block (run-#10 standalone-audit seat). A FOURTH block
 #: class riding the same notebook journal: the audit configuration
@@ -571,6 +601,142 @@ def read_render_receipts(
     return out
 
 
+# --- draft attestations (multi-human MH5) ------------------------------------
+# A block class riding the same journal, READ SEPARATELY from the sign-off /
+# auto-clear reduction: its projection is NOT registered in :data:`_BLOCK_ATTESTOR`,
+# so a draft can never enter :func:`audit_section` and can never change the T6
+# status vocabulary (a draft is authorship provenance, not a clearance). It rides
+# a DISTINCT :data:`DRAFT_SUBJECT_KIND` and carries the drafting session's actor
+# as the attestation's ``attestor_id`` (WHICH actor — opaque, harness-asserted,
+# never verified). The reviewer!=author gate (MH6) resolves the section AUTHOR by
+# reducing these draft records at the current sha (:func:`read_draft_author`).
+
+
+def _project_draft(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Project a journal record to a DRAFT attestation dict, or ``None``.
+
+    The draft attestation binds/reduces on the SECTION sha
+    (``content_sha == section_sha``) — this is what makes an OLD draft read STALE
+    the moment its section is redrafted, so authorship follows the CURRENT content
+    (the D8 no-state-machine property). The drafting session's actor rides
+    ``attestor_id`` (opaque, absent when the draft was unattributed — zero/one
+    declared actor). Returns ``None`` for any block other than :data:`DRAFT_BLOCK`,
+    so a sign-off / auto-clear / receipt record is filtered out before the kernel
+    sees it (and, symmetrically, a draft never reaches the sign-off reducer).
+    """
+    if record.get("block") != DRAFT_BLOCK:
+        return None
+    resolved = record.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    projected: dict[str, Any] = {
+        "attestor": "code",
+        "subject_kind": DRAFT_SUBJECT_KIND,
+        "subject_id": resolved.get("section"),
+        "content_sha": resolved.get("section_sha"),
+    }
+    actor = resolved.get("actor")
+    if actor:
+        # WHICH actor drafted — opaque slug, stamped only when the session was
+        # attributed. An unattributed draft (zero/one declared actor) carries no
+        # attestor_id, so it validates byte-compatibly as a single-actor record.
+        projected["attestor_id"] = actor
+    return projected
+
+
+def record_draft(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    section: str,
+    section_sha: str,
+    recompute: Callable[[], str] | str,
+    actor: str | None,
+) -> dict[str, Any]:
+    """Journal a CODE draft attestation for *section*, bound to its sha, un-fakeably.
+
+    A draft attestation records "the actor whose SESSION recorded this draft, at
+    this section sha" — the SECTION AUTHOR the reviewer!=author gate (MH6) needs,
+    recorded at DRAFT time by the drafting session, never reconstructed at review
+    time. It is NOT a clearance and NOT a sign-off; it carries the honest
+    mechanical response :data:`DRAFT_RESPONSE` (``"drafted"``), never a human-ack
+    token.
+
+    Un-fakeable + fresh-by-construction: the draft is bound through the ONE
+    attestation kernel (:func:`~hpc_agent.state.attestation.bind`) against the
+    SECTION sha, so a caller can no more assert a draft for a sha the ``.py`` does
+    not currently carry than a human can assert a sign-off (D5 lock 2). Because
+    the record binds the section sha, a REDRAFT (which moves the sha) leaves the
+    old draft STALE via the ONE reducer (:func:`read_draft_author`) — authorship
+    follows the current content with no state machine. The *actor* is
+    harness-asserted from outside the model's tool surface (``HPC_ACTOR``), never
+    caller-asserted on the wire; ``None`` records an unattributed draft (zero/one
+    declared actor) with no ``attestor_id`` — comparisons stay off.
+
+    The record: ``block="notebook-draft"``, ``response="drafted"``,
+    ``resolved={audit_id, section, section_sha, actor?}`` (``actor`` present only
+    when attributed).
+
+    Returns the appended record. Raises :class:`errors.SpecInvalid` (via ``bind``)
+    on a sha that does not match the recompute, or (via ``append_decision``) on a
+    bad ``audit_id`` scope.
+    """
+    resolved: dict[str, Any] = {
+        "audit_id": audit_id,
+        "section": section,
+        "section_sha": section_sha,
+    }
+    if actor is not None:
+        resolved["actor"] = actor
+    # Bind on the SECTION sha (routes through the ONE kernel; never re-inlined):
+    # the draft is stale-by-construction when the section moves, and can only be
+    # recorded against the sha the source currently carries.
+    projected = _project_draft({"block": DRAFT_BLOCK, "resolved": resolved}) or {}
+    attestation.bind(projected, recompute=recompute)
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=DRAFT_BLOCK,
+        response=DRAFT_RESPONSE,
+        resolved=resolved,
+    )
+
+
+def read_draft_author(
+    experiment_dir: Path, audit_id: str, section: str, *, current_sha: str
+) -> str | None:
+    """The actor who drafted *section* at *current_sha*, or ``None``.
+
+    Reads *audit_id*'s notebook journal, projects the draft records, and returns
+    the ``attestor_id`` (drafting actor) of the newest VALID draft for *section*
+    — but ONLY when that draft is CURRENT at *current_sha*. A redrafted section
+    whose newest draft binds an older sha reads STALE and yields ``None`` (no
+    author at the current content), exactly the property MH6 relies on: a stale
+    draft attribution is no attribution. Both the newest-valid selection and the
+    current/stale verdict route through the SAME kernel machinery every other
+    attestation reader uses (:func:`_newest_valid` + :func:`reduce`), never a
+    re-inlined newest-first / sha-compare. Malformed draft records are skipped,
+    never fatal.
+
+    Returns ``None`` when there is no current draft OR when the current draft was
+    unattributed (no ``attestor_id`` — a zero/one-actor draft). The MH6 gate
+    distinguishes "no draft" from "unattributed draft" by whether ``>1`` actor is
+    declared; both read ``None`` here.
+    """
+    records = read_decisions(experiment_dir, "notebook", audit_id)
+    projected = [p for p in (_project_draft(r) for r in records) if p is not None]
+    newest = _newest_valid(projected, section)
+    if newest is None:
+        return None
+    verdict = attestation.reduce(projected, current_sha=current_sha, subject_id=section)
+    if verdict != attestation.CURRENT:
+        return None
+    # attestor_id (MH3) is the drafting actor; getattr keeps this readable against
+    # a mypy env pinned to a pre-multi-human Attestation shape (installed-pkg skew).
+    author: str | None = getattr(newest, "attestor_id", None)
+    return author
+
+
 # --- audit config record (run-#10 standalone-audit seat) ---------------------
 # A FOURTH block class riding the same journal. It is NOT an attestation (no
 # section, no content_sha) and never enters the sign-off / receipt reductions:
@@ -590,16 +756,34 @@ def record_audit_config(
     source_roots: Sequence[str],
     attention_order: Sequence[str] | None = None,
     output_roots: Sequence[str] = (),
+    goal: str | None = None,
+    task_axes: Sequence[str] | None = None,
+    observables: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Journal the audit configuration for a STANDALONE audit.
+    """Journal the audit-OPEN seat for a STANDALONE audit: config + intent.
 
     Appends the ``notebook-audit-config`` record —
-    ``resolved={audit_id, input_roots, source_roots, attention_order, output_roots}``,
-    ``response="config_recorded"`` — to *audit_id*'s notebook journal. Roots are
-    OPAQUE relpath strings (core attaches no meaning). This writer does NOT
-    check for a prior config record or an interview ``audited_source`` block —
-    the ``notebook-record-config`` verb owns those refusals (one source of
-    truth; immutable-per-audit).
+    ``resolved={audit_id, input_roots, source_roots, attention_order,
+    output_roots, observables, goal?, task_axes?}``,
+    ``response="config_recorded"`` — to *audit_id*'s notebook journal. Roots
+    are OPAQUE relpath strings and ``observables`` are opaque
+    declared-observable names (the A14 observation plan) — core attaches no
+    meaning. This writer does NOT check for a prior config record or an
+    interview ``audited_source`` block — the ``notebook-record-config`` verb
+    owns those refusals (one source of truth; immutable-per-audit).
+
+    ``goal`` and ``task_axes`` are the audit-OPEN INTENT utterances the human
+    typed (the free-text campaign goal and the free-text names of what varies
+    across tasks — e.g. ``["bucket", "chunk"]``). They are the durable seat the
+    ``audit-handoff`` projection reads to draft an ``InterviewSpec`` — the
+    prerequisite the ``docs/design/notebook-audit.md`` audit-handoff note names
+    (before this, the intent lived only in chat). They ride the SAME config
+    record (one audit-open seat, immutable-per-audit) and are recorded VERBATIM
+    — never interpreted, never invented (an omitted answer stays omitted, the
+    projection discloses the gap and emits a placeholder). Both are appended
+    ONLY when supplied, so a config record written WITHOUT them is byte-identical
+    to a pre-intent record (the D7 fail-safe: an audit that never opts into the
+    handoff seat is unchanged).
 
     Returns the appended record. Raises :class:`errors.SpecInvalid` (via
     ``append_decision``) on a bad ``audit_id`` scope.
@@ -610,7 +794,15 @@ def record_audit_config(
         "source_roots": list(source_roots),
         "attention_order": list(attention_order) if attention_order is not None else None,
         "output_roots": list(output_roots),
+        "observables": list(observables) if observables is not None else None,
     }
+    # Intent utterances ride the same audit-open seat, appended only when the
+    # human supplied them — an omitted field stays absent so a config-only record
+    # is byte-identical to a pre-intent one (never a fabricated empty goal).
+    if goal is not None:
+        resolved["goal"] = goal
+    if task_axes is not None:
+        resolved["task_axes"] = list(task_axes)
     return append_decision(
         experiment_dir,
         scope_kind="notebook",
@@ -619,6 +811,27 @@ def record_audit_config(
         response=AUDIT_CONFIG_RESPONSE,
         resolved=resolved,
     )
+
+
+def read_audit_intent(experiment_dir: Path, audit_id: str) -> tuple[str | None, list[str]]:
+    """The audit-OPEN intent utterances ``(goal, task_axes)`` for *audit_id*.
+
+    Reads the FIRST valid ``notebook-audit-config`` record (the immutable seat
+    :func:`read_audit_config` reads) and projects its intent fields: ``goal``
+    (the free-text campaign goal, or ``None`` when the audit-open seat recorded
+    no goal) and ``task_axes`` (the free-text compute-shape axis names, ``[]``
+    when none were recorded). Both are OPAQUE — never interpreted by core. A
+    record with no intent fields, or no config record at all, reads ``(None,
+    [])`` — the projection discloses the gap rather than guessing.
+    """
+    resolved = read_audit_config(experiment_dir, audit_id)
+    if resolved is None:
+        return None, []
+    goal = resolved.get("goal")
+    goal = goal if isinstance(goal, str) and goal else None
+    raw_axes = resolved.get("task_axes")
+    task_axes = [str(a) for a in raw_axes if str(a)] if isinstance(raw_axes, list) else []
+    return goal, task_axes
 
 
 def read_audit_config(experiment_dir: Path, audit_id: str) -> dict[str, Any] | None:
@@ -662,6 +875,15 @@ RELAY_DUE_RESPONSE = "relay_due"
 #: (the narrow set is deliberate: marking everything relay-due recreates alarm
 #: fatigue inside the enforcement itself).
 RELAY_DUE_RECORD_KIND = "notebook-status"
+
+#: The SECOND ``record_kind`` (run-#11 item 3, "a link is not a relay"). The
+#: ``notebook-audit-view`` verb arms a per-section marker when it builds the
+#: CANONICAL view of a HUMAN-REQUIRED section: its single key token is the
+#: section's ``view_sha12`` (the hash embedded in the trusted render filename),
+#: so the marker discharges only when that sha12 actually appears in the turn —
+#: the render reached the human as content, not as an unread file link. Still
+#: the narrow set: preview views and auto_cleared sections arm nothing.
+RENDER_RELAY_DUE_RECORD_KIND = "notebook-audit-view"
 
 #: The discharge block — "the final assistant text carried a key token of the
 #: named marker". Written by the relay-audit Stop hook, never by hand.
@@ -820,6 +1042,17 @@ def read_undischarged_relay_markers(
     return [m for m in markers if _marker_key(m) not in discharged]
 
 
+#: The two discharge provenances (D3, ``docs/design/stop-hook-completer.md``).
+#: ``"relay"`` — the model's final text carried the marker's key token, so the
+#: human saw a MODEL relay. ``"completer"`` — the Stop-hook COMPLETER appended
+#: the owed artifact itself (a code-untouched render/verdict), so the human saw
+#: CODE-AUTHORED text. The journal-derived count of ``completer`` vs ``relay``
+#: discharges is the automatability metric: how much extra-model-turn latency the
+#: completer killed. Records written before D3 carry no field and read ``"relay"``.
+DISCHARGED_BY_RELAY = "relay"
+DISCHARGED_BY_COMPLETER = "completer"
+
+
 def record_relay_discharge(
     experiment_dir: Path,
     *,
@@ -827,12 +1060,18 @@ def record_relay_discharge(
     marker: Mapping[str, Any],
     discharged_at: str | None = None,
     scope_kind: str = "notebook",
+    discharged_by: str = DISCHARGED_BY_RELAY,
 ) -> dict[str, Any]:
     """Journal the discharge of one relay-due *marker* (append-only, no mutate).
 
     ``resolved`` echoes the marker's identity fields verbatim (``record_kind``,
     ``audit_id``, ``key_tokens``, ``created_at``) plus ``discharged_at`` — the
-    marker key + the discharge stamp, exactly. Raises
+    marker key + the discharge stamp, exactly — and ``discharged_by`` (D3): the
+    provenance of the discharge, ``"relay"`` (the model relayed the token) or
+    ``"completer"`` (the Stop-hook completer code-appended the owed artifact).
+    The field is additive; a discharge written before D3 reads ``"relay"``, and
+    ``discharged_by`` is NOT part of the marker identity (``_marker_key``), so it
+    never changes which marker a discharge closes. Raises
     :class:`~hpc_agent.errors.SpecInvalid` on a malformed *marker* (a discharge
     must name a real marker identity, never a hand-rolled shape).
     """
@@ -850,6 +1089,7 @@ def record_relay_discharge(
         "key_tokens": list(marker["key_tokens"]),
         "created_at": marker["created_at"],
         "discharged_at": discharged_at or _utcnow_iso(),
+        "discharged_by": discharged_by,
     }
     return append_decision(
         experiment_dir,
@@ -858,6 +1098,58 @@ def record_relay_discharge(
         block=RELAY_DISCHARGE_BLOCK,
         response=RELAY_DISCHARGE_RESPONSE,
         resolved=resolved,
+    )
+
+
+#: Sign-off echo PROVENANCE (2026-07-10 user ruling: the surfaced nag is
+#: REMOVED — "the LLM suggesting stuff is helpful for human amplification";
+#: the hazard is y-ack ease, guarded by the digest-read/tiered sign-off gates,
+#: not wording originality). Echo detection survives as a JOURNAL-ONLY record:
+#: honest provenance that a sign-off's wording matched a prior model-drafted
+#: line — never surfaced to the human, never blocking. Like the marker /
+#: discharge pair, deliberately ABSENT from :data:`_BLOCK_ATTESTOR` and
+#: :func:`_project_receipt` — provenance never enters the attestation
+#: reduction. Written by the relay-audit Stop hook, never by hand.
+ECHO_PROVENANCE_BLOCK = "notebook-echo-provenance"
+
+#: The honest, mechanical ``response`` an echo-provenance record carries.
+ECHO_PROVENANCE_RESPONSE = "echo_provenance"
+
+
+def record_echo_provenance(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    response_sha12: str,
+    detail: str,
+    scope_kind: str = "notebook",
+) -> dict[str, Any] | None:
+    """Journal echo provenance for ONE sign-off response (append-only, deduped).
+
+    Idempotent per ``(audit_id, response_sha12)``: the hook re-runs at every
+    stop, so a second identical provenance line would be noise — an existing
+    record for the same normalized-response sha returns ``None`` and writes
+    nothing. ``detail`` carries the human-readable finding text (the
+    matched-prefix summary) for the archive.
+    """
+    for rec in read_decisions(experiment_dir, scope_kind, audit_id):
+        if str(rec.get("block") or "") != ECHO_PROVENANCE_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("response_sha12") == response_sha12:
+            return None
+    return append_decision(
+        experiment_dir,
+        scope_kind=scope_kind,
+        scope_id=audit_id,
+        block=ECHO_PROVENANCE_BLOCK,
+        response=ECHO_PROVENANCE_RESPONSE,
+        resolved={
+            "audit_id": audit_id,
+            "response_sha12": response_sha12,
+            "detail": detail,
+            "recorded_at": _utcnow_iso(),
+        },
     )
 
 

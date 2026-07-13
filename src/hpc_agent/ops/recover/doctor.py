@@ -18,6 +18,7 @@ version-skew check's bounded (2 s timeout, fail-open) local ``git rev-parse``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -36,13 +37,15 @@ from hpc_agent._wire.queries.doctor import (
     VersionSkew,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.block_terminal import read_terminal_with_fallback
 from hpc_agent.state.decision_journal import (
-    is_latest_committed_greenlight,
+    is_committed_greenlight_for_boundary,
     latest_decision,
 )
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
+from hpc_agent.state.journal import read_pending_decision
 from hpc_agent.state.run_record import _current_homedir
 
 __all__ = ["doctor", "scan_dead_detached_workers"]
@@ -269,6 +272,15 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     per-experiment ``.hpc/runs/`` terminal store. No SSH. Fail-open: an absent
     dir, an unreadable/pid-less/foreign-experiment lease, or a lease still
     naming a LIVE pid yields nothing surfaced.
+
+    FUTURE (not implemented): this scan only catches a worker whose pid is DEAD.
+    A worker that is ALIVE but wedged mid-flight is invisible here. Each lease has
+    a sibling ``_detached/*.log`` into which
+    :func:`hpc_agent._kernel.lifecycle.heartbeat.detached_heartbeat` appends an
+    ``[hb] alive Ns …`` line every ~30s; reading that log's last ``[hb]`` line
+    beside a LIVE lease — a stale elapsed stamp, or a ``frozen-at-birth suspect``
+    flag — would extend this scan from "dead pid, no terminal" to "alive but
+    frozen", the finding-16 signature. Left as a note so the seam is discoverable.
     """
     detached_dir = _current_homedir() / "_detached"
     if not detached_dir.is_dir():
@@ -370,6 +382,39 @@ def _attention_summary(
     return needs_attention, line
 
 
+def _transport_drift_routing(now: str) -> list[AlertRecord]:
+    """Route live transport-env drift to its heal class (detection + routing ONLY).
+
+    The classifier front-end's doctor-seat wiring (overnight-repair.md §8 item 3).
+    Reads ONLY local state — the live healable transport overrides
+    (:func:`infra.env_flags.active_transport_overrides`) — and, for each live
+    override, asks the classifier (:func:`ops.recover.heal_taxonomy.classify_crash_cause`)
+    for its route. Surfaces each as a routing alert. It NEVER opens SSH and NEVER
+    unsets a var — a drifted transport var is C1 (elicit-then-mint the env-pin anchor)
+    or, once an anchor exists, B; the ENACTMENT is a spawned detached child, never the
+    doctor process. Returns ``[]`` when no transport override is live.
+    """
+    from hpc_agent.infra.env_flags import active_transport_overrides
+    from hpc_agent.ops.recover.heal_taxonomy import classify_crash_cause
+
+    live = active_transport_overrides()
+    if not live:
+        return []
+    routing = classify_crash_cause("env-drift", context={"anchored": False})
+    names = ", ".join(sorted(live))
+    return [
+        AlertRecord(
+            ts=now,
+            message=(
+                f"transport-env drift routed to Class {routing.heal_class} "
+                f"({routing.arm}): live healable transport override(s) [{names}]. "
+                f"{routing.reason} doctor ROUTES only — it never unsets a var; the "
+                "heal is enacted by a spawned detached child on the human's `y`."
+            ),
+        )
+    ]
+
+
 @primitive(
     name="doctor",
     verb="query",
@@ -440,10 +485,14 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # them, so a parked run can never appear in the stalled list.
     #
     # But a parked run splits into two sub-states (§5 Phase-5): a run is only
-    # genuinely *awaiting the human* while its latest committed decision is NOT a
-    # `y` greenlight. Once the human commits `y` (marker still set, driver dead —
-    # no OS scheduler consumed it), it is a STALLED driver that must be re-armed.
-    # is_latest_committed_greenlight is the same rule the in-session Stop guard
+    # genuinely *awaiting the human* while its latest committed decision is NOT
+    # the greenlight for THIS parked boundary. Once the human commits that `y`
+    # (marker still set, driver dead — no OS scheduler consumed it), it is a
+    # STALLED driver that must be re-armed. BOUNDARY-SCOPED (bug-sweep #1/#23,
+    # run-12 finding 21): a consumed `y` stays the journal's latest record after
+    # the driver re-parks, so the bare latest-is-y read would re-arm a driver
+    # that is genuinely waiting — is_committed_greenlight_for_boundary is the
+    # same shared rule the in-session Stop guard
     # (decision_rendezvous_stop_guard.find_committed_unadvanced) keys on, so the
     # hook and the doctor agree on "committed-but-unadvanced".
     parked_hits = find_parked_runs(now, experiment_dir=experiment_dir)
@@ -451,7 +500,16 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     advance_proposals: list[AdvanceRunProposal] = []
     for hit in parked_hits:
         run_id = hit["run_id"]
-        if is_latest_committed_greenlight(experiment_dir, "run", run_id):
+        marker = read_pending_decision(run_id, experiment_dir=experiment_dir) or {}
+        cursor = marker.get("resume_cursor") or {}
+        next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+        if is_committed_greenlight_for_boundary(
+            experiment_dir,
+            "run",
+            run_id,
+            next_verb=next_verb,
+            awaiting_since=marker.get("awaiting_since") or hit.get("awaiting_since"),
+        ):
             decision = latest_decision(experiment_dir, "run", run_id)
             advance_proposals.append(_draft_advance_proposal(hit, decision=decision, now=now))
         else:
@@ -474,11 +532,44 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     dead_worker_findings = scan_dead_detached_workers(experiment_dir, now=now)
     dead_worker_alerts = [AlertRecord(ts=now, message=f["proposal"]) for f in dead_worker_findings]
 
+    # Overnight self-heal (item 8 ruling, 2026-07-09): the OS-scheduled scan is the
+    # ONE failure domain that survives when every in-session process died, so it is
+    # the seat that can revive a campaign reconcile chain nobody is left to re-arm.
+    # Opt-in (spec.self_heal, mirroring spec.notify's opt-in side effect) so the
+    # plain in-session detection verb is byte-unchanged. Under a LIVE standing
+    # consent it respawns the sanctioned WATCHER (never the scheduler) and, on
+    # exhaustion, flips the consent dead + fires the fail-loud alert. Reads only
+    # local state — no SSH. Fail-open: a heal-scan error never breaks detection.
+    heal_alerts: list[AlertRecord] = []
+    if spec.self_heal:
+        try:
+            from hpc_agent.ops.overnight import self_heal_scan
+
+            for outcome in self_heal_scan(experiment_dir, now_iso=now):
+                if outcome.status in {"exhausted", "structurally-impossible"}:
+                    line = outcome.attempt_line if isinstance(outcome.attempt_line, dict) else {}
+                    raw_detail = line.get("detail")
+                    detail: dict[str, Any] = raw_detail if isinstance(raw_detail, dict) else {}
+                    msg = detail.get("text") or f"overnight self-heal failed: {outcome.reason}"
+                    heal_alerts.append(AlertRecord(ts=now, message=str(msg)))
+        except Exception:  # noqa: BLE001 — self-heal must never break the watchdog scan
+            heal_alerts = []
+        # Classifier front-end on the doctor seat (overnight-repair.md §8 item 3,
+        # §10 doctor-seat row): crash-cause → class ROUTING only. Detection +
+        # routing, NEVER actuation — the doctor process opens no SSH; a heal is
+        # enacted by a spawned detached child (the stray reaper / watcher re-arm).
+        # The one cause the doctor can classify from pure LOCAL state is transport
+        # ENV DRIFT (a live healable transport override, finding 24d) — routed to
+        # C1 (elicit-then-mint) or, once an env-pin anchor exists, B. Surfaced as a
+        # routing alert; the doctor never unsets a var.
+        with contextlib.suppress(Exception):
+            heal_alerts.extend(_transport_drift_routing(now))
+
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the
     # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
     # not log lines), while the dead workers get their own attention part.
-    alerts = log_alerts + dead_worker_alerts
+    alerts = log_alerts + dead_worker_alerts + heal_alerts
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,
@@ -507,6 +598,7 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         awaiting_advance_count=len(advance_proposals),
         awaiting_advance=advance_proposals,
         version_skew=_detect_version_skew(experiment_dir),
+        active_env_overrides=active_env_overrides(),
     )
     dumped: dict[str, Any] = result.model_dump(mode="json")
 

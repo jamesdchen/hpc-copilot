@@ -15,7 +15,9 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 from hpc_agent.infra.backends import backend_requires_ssh
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.ops.monitor.announce import read_announcements
 from hpc_agent.ops.monitor.classify import settle
 from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
 from hpc_agent.ops.monitor.status import _ssh_status_report
@@ -61,6 +63,16 @@ class OrphanedReconcile:
     run_id: str
 
 
+# Sentinel-ack for the combined-wave listing (docs/design/connection-broker.md,
+# 2026-07-10). The listing is a POSITIVE success-marker scan: an empty result
+# must mean "the shell reached the remote dir and found no wave files", never
+# "the cd silently failed / the channel returned nothing". Echoed right after a
+# successful ``cd`` so its PRESENCE proves the query ran; its ABSENCE (a failed
+# cd, or a truncated read) is UNKNOWN → reconcile keeps the journal's
+# combined_waves rather than blanking them.
+_WAVE_ACK = "__HPC_WAVE_ACK__"
+
+
 def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     """Derive ``combined_waves`` from cluster artifacts.
 
@@ -68,18 +80,35 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     (see ``hpc_agent/execution/mapreduce/combiner.py``). We use the
     presence of that file as the success marker.
     """
-    cmd = f"cd {shlex.quote(remote_path)} && ls _combiner/wave_*.json 2>/dev/null || true"
+    # cd (&&) → ack echo, THEN the listing (a bare ``;`` so an empty glob's
+    # non-zero ``ls`` never masks the ack); trailing ``true`` keeps the remote
+    # rc 0 so the ``rc != 0`` guard stays a pure SSH-transport (rc 255) check.
+    cmd = (
+        f"cd {shlex.quote(remote_path)} && printf '%s\\n' {shlex.quote(_WAVE_ACK)}; "
+        f"ls _combiner/wave_*.json 2>/dev/null; true"
+    )
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
-        # SSH transport failure (rc 255) — not "no waves combined yet",
-        # which returns rc 0 thanks to the trailing ``|| true``. Raise so
-        # reconcile keeps the journal's combined_waves instead of
-        # overwriting it with an empty list on a connectivity blip.
+        # SSH transport failure (rc 255) — not "no waves combined yet". Raise so
+        # reconcile keeps the journal's combined_waves instead of overwriting it
+        # with an empty list on a connectivity blip.
         raise errors.RemoteCommandFailed(
             f"combined-wave list failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
+    lines = proc.stdout.splitlines()
+    if _WAVE_ACK not in {ln.strip() for ln in lines}:
+        # Positive-evidence transport verdict: no affirmative ack means the
+        # ``cd`` into remote_path failed (bad path / not yet deployed) or the
+        # read was silently truncated — UNKNOWN, not "zero waves combined".
+        # Raise so reconcile preserves the journal's combined_waves rather than
+        # blanking a run's combine history on a silent blip.
+        raise errors.RemoteCommandFailed(
+            "combined-wave list returned no positive-evidence ack (cd into "
+            f"{remote_path!r} failed, or a silent/truncated read); refusing to "
+            "read absence as 'zero waves combined'."
+        )
     waves: set[int] = set()
-    for line in proc.stdout.splitlines():
+    for line in lines:
         name = Path(line.strip()).name  # wave_<N>.json
         if not (name.startswith("wave_") and name.endswith(".json")):
             continue
@@ -112,15 +141,28 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
     cmd = backend_cls.build_alive_check_cmd(job_ids)
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
-        # SSH transport failure (rc 255), not "scheduler ran, found
-        # nothing alive" — the alive-check commands append ``|| true``
-        # so a reachable cluster always returns rc 0. Raise so
-        # reconcile's guard sets alive_check_failed and does NOT mark a
-        # healthy run abandoned on a connectivity blip.
+        # SSH transport failure (rc 255), not "scheduler ran, found nothing
+        # alive". Raise so reconcile's guard sets alive_check_failed and does
+        # NOT mark a healthy run abandoned on a connectivity blip.
         raise errors.RemoteCommandFailed(
             f"alive check failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
-    return backend_cls.parse_alive_output(proc.stdout, job_ids)
+    # Positive-evidence transport verdict (docs/design/connection-broker.md,
+    # sentinel-ack ruling): the alive query proves it RAN by echoing an
+    # affirmative ack token. An empty read WITHOUT it is a silently truncated /
+    # never-run channel (or, on SGE/PBS, the scheduler binary itself failed) —
+    # UNKNOWN, not "no jobs alive". Reading absence as "not alive" is exactly
+    # what routes a healthy run to `abandoned`; raise so the guard sets
+    # alive_check_failed → unable_to_verify instead. (A genuinely empty queue
+    # still carries the ack, so it returns an empty set as before.)
+    clean, ran_ok = backend_cls.scheduler_query_ran(proc.stdout)
+    if not ran_ok:
+        raise errors.RemoteCommandFailed(
+            "alive check returned no positive-evidence ack (silent/empty read — "
+            "the query did not run to completion, or the scheduler binary itself "
+            "failed); refusing to read absence as 'no jobs alive'."
+        )
+    return backend_cls.parse_alive_output(clean, job_ids)
 
 
 # The settle-path completion/failure predicates and their precedence now live
@@ -201,6 +243,8 @@ def _gather_failure_features(
 
     stderr_tail = ""
     log_path: str | None = None
+    failed_task_id: int | None = None
+    failed_job_id: str | None = None
     try:
         logs = fetch_task_logs(
             ssh_target=ssh_target,
@@ -216,6 +260,12 @@ def _gather_failure_features(
             stderr_tail = str(logs[0].get("content") or "")
             raw_path = logs[0].get("path")
             log_path = raw_path if isinstance(raw_path, str) else None
+            # Node identity (item 15): surface WHICH task+job the evidence tail
+            # came from — the fetch already resolved these, so it's free here.
+            raw_tid = logs[0].get("task_id")
+            failed_task_id = raw_tid if isinstance(raw_tid, int) else None
+            raw_jid = logs[0].get("job_id")
+            failed_job_id = raw_jid if isinstance(raw_jid, str) else None
     except Exception:  # noqa: BLE001 — log fetch is best-effort, never gates the verdict
         stderr_tail = ""
         log_path = None
@@ -231,7 +281,99 @@ def _gather_failure_features(
         "cluster_log_tail": stderr_tail,
         "log_path": log_path,
         "classified_error": classified_error,
+        # Node identity (notebook-audit Addendum 10, item 15): the contentless
+        # ``cluster_env_init`` shape ("Unable to initialize environment") is a
+        # per-task/per-node flake that is only diagnosable when the envelope
+        # names WHICH scheduler + task the failure landed on. ``scheduler`` is a
+        # parameter and ``task_id`` / ``job_id`` are already resolved by the log
+        # fetch, so they are surfaced here for free. The remote HOST/node is the
+        # remaining leg: it is not cleanly in scope at reconcile time (the job
+        # has left the scheduler, and ``fetch_task_logs`` tails the LAST lines,
+        # which for Grid Engine do not carry the exec-node header) — recovering
+        # it needs a dedicated ``qstat -j`` / ``sacct --format=NodeList`` probe
+        # or a GE ``.o`` header parse, so ``node`` is an explicit ``None``
+        # placeholder until that probe is plumbed rather than a silent omission.
+        "scheduler": scheduler,
+        "task_id": failed_task_id,
+        "job_id": failed_job_id,
+        "node": None,
     }
+
+
+def _settle_from_announcements(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    scheduler: str,
+    record: RunRecord,
+    announce: dict[str, int],
+    pre_reconcile_status: str,
+) -> RunRecord | None:
+    """Settle a run terminal from a FULL per-task announcement, or return None.
+
+    Crash-only-monitoring Phase-1 fast path (``docs/design/crash-only-monitoring.md``).
+    When every task has announced its terminal state
+    (``announce["announced"] == record.total_tasks``), build the canonical
+    5-key count summary the shared :func:`settle` classifier consumes and route
+    the verdict through the SAME ``mark_run`` + transition-gated
+    ``harvest_on_terminal`` the reporter-backed settle arm uses — so the same
+    counts settle to the same lifecycle state whether the evidence came from the
+    dispatcher's announcements or the status reporter's walk. The announcements
+    replace the reporter walk for the LIFECYCLE verdict ONLY; the aggregate
+    integrity gate still verifies every output independently.
+
+    Returns the reconciled record on a terminal settle; returns ``None`` for a
+    PARTIAL announcement (caller keeps probing) or a zero-task run — a partial
+    announcement must NEVER settle terminal.
+    """
+    total = record.total_tasks
+    if total <= 0 or int(announce["announced"]) != total:
+        return None
+    summary: dict[str, Any] = {
+        "complete": int(announce["complete"]),
+        "failed": int(announce["failed"]),
+        "running": 0,
+        "pending": 0,
+        "unknown": 0,
+        "checked_at": utcnow_iso(),
+        "verdict_source": "task_announcements",
+    }
+    decision = settle(summary, total)
+    recorded = {**summary, "verdict_reason": decision.reason}
+    if decision.verdict == LifecycleState.FAILED:
+        # Positive failure evidence — attach the classified error like the
+        # reporter-backed arm. Without a reporter report to name the failed
+        # task, tail the lowest-id task's log (the ``_failed_evidence_task_ids``
+        # fallback); the fetch is best-effort and never gates the verdict.
+        from hpc_agent.state.runs import read_job_task_spans
+
+        features = _gather_failure_features(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            job_name=record.job_name,
+            job_ids=list(record.job_ids),
+            scheduler=scheduler,
+            task_ids=[0],
+            job_task_spans=read_job_task_spans(experiment_dir, run_id),
+        )
+        update_run_status(
+            experiment_dir, run_id, last_status={**recorded, "failure_features": features}
+        )
+        updated = mark_run(experiment_dir, run_id, status="failed")
+    else:
+        update_run_status(experiment_dir, run_id, last_status=recorded)
+        updated = mark_run(experiment_dir, run_id, status=str(decision.verdict))
+    # Guaranteed harvest (§5), gated on a verdict TRANSITION — identical to the
+    # reporter-backed settle arm: an idempotent re-reconcile of an already-terminal
+    # run does NOT re-fire (each fire pays an rsync pull + reduce + a ledger append).
+    if str(decision.verdict) != pre_reconcile_status:
+        harvest_on_terminal(
+            experiment_dir,
+            run_id,
+            terminal_cause=str(decision.verdict),
+            record=updated,
+        )
+    return updated
 
 
 def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]:
@@ -564,6 +706,10 @@ def _reconcile_one(
     report: dict[str, Any] = {}
     summary: dict[str, Any]
     alive: list[str] | set[str]
+    # Crash-only Phase-1 progress evidence from a PARTIAL announcement (set in
+    # the ssh branch below); threaded into the persisted ``last_status`` after
+    # the probe builds ``summary`` so it survives the probe's own write.
+    announce_progress: dict[str, int] | None = None
     if not backend_requires_ssh(scheduler):
         # Pure-API path (#337 Increment 4): no login node, no shared
         # ``_combiner/`` dir. Liveness comes from the backend's ``alive_job_ids``
@@ -571,22 +717,92 @@ def _reconcile_one(
         # there is no SSH status reporter and no wave-listing to do, so the
         # combiner waves stay as the journal recorded them.
         from hpc_agent.infra.backends.remote_factory import backend_for_record
+        from hpc_agent.ops.monitor.status import _pure_api_status_summary
 
-        summary = {"checked_at": utcnow_iso()}
         reporter_failed = False
         combined = list(record.combined_waves)
+        backend = backend_for_record(record, scheduler=scheduler)
         try:
-            alive = backend_for_record(record, scheduler=scheduler).alive_job_ids(record.job_ids)
+            alive = backend.alive_job_ids(record.job_ids)
             alive_check_failed = False
         except Exception as exc:
             alive = list(record.job_ids)  # treat as still alive on error
             warnings.append(f"alive check: {exc}")
             alive_check_failed = True
+        # #44: settle on REAL per-task counts, not a count-less summary. A
+        # finished pure-API run whose jobs aged out of the live queue
+        # (``alive == []``) would otherwise hit the settle guard below with a
+        # ``{"checked_at": ...}`` summary — where ``all_tasks_complete`` is False
+        # by construction — and be flipped ``abandoned`` (the #351 "finished run
+        # read as abandoned" class, re-opened on the pure-API path). Mirror
+        # ``record_status``'s pure-API branch: pull ``task_statuses`` and build
+        # the SAME summary shape (``_pure_api_status_summary``), so ``settle``
+        # sees the completion/failure evidence the backend can prove.
+        try:
+            per_task = backend.task_statuses(record.job_ids, total_tasks=record.total_tasks)
+        except NotImplementedError:
+            # Liveness-only backend: no per-task counts exist. Keep the
+            # count-less summary — ``settle`` then yields the pinned ``abandoned``
+            # for a genuinely evidence-less record (the liveness-only contract).
+            summary = {"checked_at": utcnow_iso()}
+        except Exception as exc:  # noqa: BLE001 — a real query failure is UNKNOWN, not abandon
+            # A task_statuses failure (auth/network) is not evidence of
+            # abandonment — route through ``unable_to_verify`` (reporter_failed)
+            # exactly like an ssh reporter failure, never silent abandon.
+            summary = {"checked_at": utcnow_iso()}
+            warnings.append(f"task statuses: {exc}")
+            reporter_failed = True
+        else:
+            summary = _pure_api_status_summary(per_task)
     else:
+        # --- Crash-only Phase-1 announce fast path (docs/design/crash-only-monitoring.md) ---
+        # The dispatcher writes ONE per-task marker file on its terminal
+        # bookkeeping; read them in a SINGLE bounded ssh exec BEFORE the heavy
+        # 3-way probe. Presence of ANY marker is the capability signal — zero
+        # markers (a pre-announce wheel/run) falls through to the probe path
+        # BYTE-IDENTICALLY. A FULL announcement (announced == total_tasks)
+        # settles the lifecycle exactly as the reporter-backed settle arm does
+        # for the same counts, WITHOUT the 20-25 min reporter walk (run-12
+        # findings 20/24); a PARTIAL one is progress evidence only and NEVER
+        # settles terminal. A kill-confirmed run is left to the
+        # reporter-independent kill arm below (a deliberate kill's verdict does
+        # not come from task announcements). Best-effort: any failure (ssh blip,
+        # truncated read) falls through to the probes unchanged.
+        if not is_kill_confirmed(record):
+            try:
+                _announce = read_announcements(
+                    ssh_target=resolve_ssh_target(record),
+                    remote_path=record.remote_path,
+                    run_id=run_id,
+                    task_count=record.total_tasks,
+                )
+            except Exception:  # noqa: BLE001 — fast path is best-effort; fall through to probes
+                _announce = None
+            if _announce is not None and _announce["announced"] > 0:
+                terminal = _settle_from_announcements(
+                    experiment_dir,
+                    run_id,
+                    scheduler=scheduler,
+                    record=record,
+                    announce=_announce,
+                    pre_reconcile_status=pre_reconcile_status,
+                )
+                if terminal is not None:
+                    # Full announcement settled the run terminal — done, no probe.
+                    return terminal, False
+                # Partial announcement: surface the counts as progress evidence
+                # and continue to the existing probes (never settle from partial).
+                announce_progress = {
+                    "announced": int(_announce["announced"]),
+                    "complete": int(_announce["complete"]),
+                    "failed": int(_announce["failed"]),
+                    "missing": int(_announce["missing"]),
+                }
         with ThreadPoolExecutor(max_workers=3) as pool:
+            _resolved_ssh_target = resolve_ssh_target(record)
             fut_status = pool.submit(
                 _ssh_status_report,
-                ssh_target=record.ssh_target,
+                ssh_target=_resolved_ssh_target,
                 remote_path=record.remote_path,
                 run_id=run_id,
                 job_ids=record.job_ids,
@@ -598,12 +814,12 @@ def _reconcile_one(
             )
             fut_waves = pool.submit(
                 _ssh_list_combined_waves,
-                ssh_target=record.ssh_target,
+                ssh_target=_resolved_ssh_target,
                 remote_path=record.remote_path,
             )
             fut_alive = pool.submit(
                 _ssh_alive_job_ids,
-                ssh_target=record.ssh_target,
+                ssh_target=_resolved_ssh_target,
                 job_ids=record.job_ids,
                 scheduler=scheduler,
             )
@@ -640,6 +856,13 @@ def _reconcile_one(
                 alive = list(record.job_ids)  # treat as still alive on error
                 warnings.append(f"alive check: {exc}")
                 alive_check_failed = True
+
+    # Crash-only Phase-1: a PARTIAL announcement is progress evidence. Threaded
+    # in here (after the probe built ``summary``) so it rides the SAME persisted
+    # ``last_status`` — the ``{**summary, ...}`` spreads in the settle/kill arms
+    # and the main ``update_run_status`` below all carry it out to the envelope.
+    if announce_progress is not None:
+        summary["task_announcements"] = announce_progress
 
     if warnings:
         summary["warnings"] = warnings
@@ -756,7 +979,7 @@ def _reconcile_one(
             from hpc_agent.state.runs import read_job_task_spans
 
             features = _gather_failure_features(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 job_name=record.job_name,
                 job_ids=list(record.job_ids),

@@ -142,12 +142,26 @@ repos:
         language: python
         pass_filenames: false
 
+      - id: lint-remote-read-ack
+        name: ssh stdout reads route through the ack sentinel (or are cited advisory)
+        entry: python scripts/lint_remote_read_ack.py
+        language: python
+        pass_filenames: false
+
+      - id: lint-atomic-durable-writes
+        name: durable artifacts are written atomically (no truncating write_text / ZipFile w)
+        entry: python scripts/lint_atomic_durable_writes.py
+        language: python
+        pass_filenames: false
+
       - id: lint-no-raw-ssh
         name: agent-facing prose routes cluster access through throttled verbs, never raw ssh
         entry: python scripts/lint_no_raw_ssh.py
         language: python
         pass_filenames: false
-        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_raw_ssh\.py)$'
+        # Trigger only (the lint re-derives its own targets from
+        # scripts/_agent_prose_targets.py — the one scan-root definition).
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|scripts/(lint_no_raw_ssh|_agent_prose_targets)\.py)$'
 
       - id: lint-telemetry-labels
         name: every emitted telemetry field declares cumulative vs per-tick delta
@@ -161,7 +175,9 @@ repos:
         entry: python scripts/lint_no_blocklisted_commands.py
         language: python
         pass_filenames: false
-        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_blocklisted_commands\.py)$'
+        # Trigger only (the lint re-derives its own targets from
+        # scripts/_agent_prose_targets.py — the one scan-root definition).
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|scripts/(lint_no_blocklisted_commands|_agent_prose_targets)\.py)$'
 
       - id: lint-plugin-manifests
         name: every loaded plugin's MANIFEST reconciles with runtime reality

@@ -49,6 +49,9 @@ def _campaign_spec() -> CampaignRunSpec:
         status=StatusPipelineSpec(monitor=MonitorFlowSpec(run_id="ml-abcd1234")),
         aggregate=AggregateFlowSpec(run_id="ml-abcd1234"),
         campaign_id="camp-iter-7",
+        # These exercise the SYNCHRONOUS iteration spine; the detach-by-contract
+        # path (default ON) is pinned separately in test_campaign_run_detach.py.
+        detach=False,
     )
 
 
@@ -137,6 +140,30 @@ def test_verify_submitted_failed_stops_before_monitor(tmp_path: Path) -> None:
     m_agg.assert_not_called()
 
 
+# ── env-echo disclosure (run-12 finding 24 addendum, B15) ────────────────────
+
+
+def test_campaign_brief_echoes_hpc_env_overrides(tmp_path: Path, monkeypatch: Any) -> None:
+    """Every campaign iteration brief carries the live HPC_* overrides — an
+    iteration submits/polls/pulls over SSH, so a stray transport override
+    reshapes every cluster call while the durable record says otherwise.
+    Echoed on the decision brief; pure disclosure, never judged."""
+    from hpc_agent.ops.campaign_run import campaign_run
+
+    monkeypatch.setenv("HPC_SSH_ENGINE", "asyncssh")
+
+    with (
+        mock.patch(f"{_SEAM}.submit_pipeline", return_value=_sp_result("complete")),
+        mock.patch(f"{_SEAM}.status_pipeline", return_value=_st_result("complete")),
+        mock.patch(f"{_SEAM}.aggregate_flow", return_value=_agg_result()),
+    ):
+        res = campaign_run(tmp_path, spec=_campaign_spec())
+
+    assert res.stage_reached == "complete"
+    assert res.active_env_overrides["HPC_SSH_ENGINE"] == "asyncssh"
+    assert all(k.startswith("HPC_") for k in res.active_env_overrides)
+
+
 # ── deduped proceeds to monitor ──────────────────────────────────────────────
 
 
@@ -214,7 +241,9 @@ def test_run_abandoned_stops_before_aggregate(tmp_path: Path) -> None:
     assert res.stage_reached == "run_abandoned"
     assert res.needs_decision is True
     assert res.lifecycle_state == "abandoned"
-    assert "reconcile-journal" in res.reason
+    # Guidance speaks the CLI verb (`reconcile`), never the registry name
+    # `reconcile-journal` (run-#12 finding 22).
+    assert "reconcile " in res.reason and "reconcile-journal" not in res.reason
     m_agg.assert_not_called()
 
 

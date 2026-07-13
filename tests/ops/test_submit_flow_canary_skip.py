@@ -224,3 +224,44 @@ def test_record_acquires_lock_around_write(monkeypatch):
     )
     assert len(calls) == 1
     assert calls[0].endswith(".lock")
+
+
+# --- fallback-inventory S1/S2: a skipped canary NAMES its reason --------------
+
+
+def test_skip_reasons_are_disclosed_and_distinct():
+    """canary_done=False alone cannot distinguish opt-out / tiny-batch /
+    cache-hit — the decision returns a code-rendered reason per skip class."""
+    run, reason = sf._canary_decision(_spec(canary=False, total_tasks=1000))
+    assert run is False and "opt-out" in reason
+
+    run, reason = sf._canary_decision(_spec(total_tasks=4))
+    assert run is False and "#263" in reason and "threshold" in reason
+
+    from hpc_agent import __version__ as ver
+
+    key = canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "", cluster="c")
+    canary_cache.record_canary_validated(key)
+    run, reason = sf._canary_decision(_spec(total_tasks=100))
+    assert run is False
+    # The cache-hit line must name its blind spot (key excludes env state) and
+    # the operator escape hatches — the S1 zombie was exactly this silence.
+    assert "#249" in reason and "sha-abc"[:12] in reason
+    assert "env state" in reason and "HPC_AGENT_ALWAYS_CANARY" in reason
+
+
+def test_no_skip_reason_when_canary_runs():
+    run, reason = sf._canary_decision(_spec(total_tasks=100))
+    assert run is True and reason is None
+
+
+def test_skip_reason_rides_the_result_envelope():
+    res = sf.SubmitFlowResult(
+        run_id="r",
+        job_ids=[],
+        total_tasks=9,
+        deduped=False,
+        canary_done=False,
+        canary_skip_reason="canary skipped: explicit opt-out (spec canary=false)",
+    )
+    assert res.to_envelope_data()["canary_skip_reason"] == res.canary_skip_reason

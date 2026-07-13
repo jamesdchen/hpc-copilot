@@ -87,6 +87,19 @@ def _verb_from_schema_path(path: Path) -> str:
 # updates the inventory.
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
+        "notebook-draft",
+        "challenge-status",
+        "dir-digest",
+        "conformance-record",
+        "conformance-status",
+        "evidence-brief",
+        "evidence-period",
+        "trace-diff",
+        "trace-render",
+        "pack-bind",
+        "pack-record-receipt",
+        "pack-refresh",
+        "pack-status",
         "audit-preflight",
         "data-manifest",
         "notebook-draft-context",
@@ -99,6 +112,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "block-drive",
         "campaign-complete",
         "campaign-greenlight",
+        "campaign-refill",
         "campaign-watch",
         "doctor",
         # doctor-install accepts an all-optional spec, so it IS a live --spec
@@ -108,6 +122,17 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "doctor-install",
         "kill",
         "net-triage",
+        # stray-sweep (run-12 finding 20 LAYER 2): the login-node process-hygiene
+        # probe. Spec-taking query with a REQUIRED ssh_target, so {} is invalid and
+        # it appears in the schema-file-parametrized remediation probes.
+        "stray-sweep",
+        # The G2 mechanization wave (RULING 6, 2026-07-12): directed-evidence
+        # twins of the probe paths — host-retarget (finding 23) and settle-run
+        # (finding 25) — plus update-run-constraints, which gained its CLI
+        # surface with the B9 side-effects fix the same night.
+        "host-retarget",
+        "settle-run",
+        "update-run-constraints",
         # notebook-lint (notebook-audit substrate, T4): a read-only validate verb
         # over an audit source .py. Gains a --spec CLI surface, so the inventory
         # tracks it here. Its input schema (notebook_lint.input.json) is baked by
@@ -125,6 +150,12 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "reproduce-run",
         "verify-reproduction",
         "export-dossier",
+        # export-attestations (conformance-kit K3): the in-toto/DSSE portability
+        # projection over the sealed dossier. Spec-taking mutate; its input
+        # schema (export_attestations.input.json) is baked in the same commit,
+        # so it also appears in the schema-file-parametrized remediation probes
+        # ({} is invalid — run_id is required).
+        "export-attestations",
         "archive-dossier",
         "status-snapshot",
         "status-watch",
@@ -140,6 +171,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # Spec-taking query; failure_features attaches at the shared dispatch
         # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
         "notebook-status",
+        # worker-log-digest (run-#10 G2): code-rendered digest of a local worker
+        # log. Spec-taking query; failure_features attaches at the shared dispatch
+        # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
+        "worker-log-digest",
         # attention-queue (attention-queue T4): the fleet-wide read-only digest
         # ordered by needs-your-verdict-first. Spec-taking query; failure_features
         # attaches at the shared dispatch seam (so it stays OUT of
@@ -198,8 +233,26 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # remediation probes ({} is invalid — slugs/output_path are required —
         # so the probe refuses at model validation, before any file write).
         "notebook-scaffold-template",
+        # audit-handoff (run-#11 audit->interview bridge): the read-only projection
+        # of the durable audit records into a DRAFT InterviewSpec. Spec-taking
+        # query; failure_features attaches at the shared dispatch seam (so it stays
+        # OUT of XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (audit_handoff.input.json) is baked by the orchestrator AFTER this wave —
+        # until then it is absent, so the verb does not appear in the
+        # schema-file-parametrized remediation tests (_verb_targets), only in this
+        # inventory-vs-CLI drift check.
+        "audit-handoff",
         "verify-relay",
         "wait-detached",
+        # poll-detached (packages swarm, memo §2): the instant, non-blocking
+        # snapshot of a detached worker — the MCP-safe sibling of wait-detached.
+        # Spec-taking query; failure_features attaches at the shared dispatch
+        # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (poll_detached.input.json) is baked in the same wave, so it also
+        # appears in the schema-file-parametrized remediation probes ({} is
+        # invalid — run_id and block are required — so the probe refuses at
+        # model validation, before any read).
+        "poll-detached",
         "submit-s1",
         "submit-s2",
         "submit-s3",
@@ -314,6 +367,12 @@ _BOGUS_KEY_SPEC: dict = {"contract-probe-bogus-key": 1}
 
 EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     "apply-safe-defaults": _BOGUS_KEY_SPEC,
+    # pack-status's spec is all-optional ({} = every opted-in pack) — probe
+    # with the bogus key so the wire model rejects it.
+    "pack-status": _BOGUS_KEY_SPEC,
+    # pack-refresh's spec is all-optional ({} = refresh every opted-in pack) —
+    # probe with the bogus key so the wire model rejects it.
+    "pack-refresh": _BOGUS_KEY_SPEC,
     # attention-queue's spec is all-optional ({} is a valid experiment-scope
     # read) — probe with the bogus key so the wire model rejects it.
     "attention-queue": _BOGUS_KEY_SPEC,
@@ -350,6 +409,7 @@ XFAIL_NEEDS_FIXTURE: set[str] = set()
 NEEDS_EXTRA_CLI_ARGS: set[str] = {
     "interview",  # --campaign-dir
     "resubmit",  # --run-id + --task-ids
+    "stray-sweep",  # --ssh-target (required; argparse rejects before the spec gate)
 }
 
 

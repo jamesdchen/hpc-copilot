@@ -135,6 +135,55 @@ def test_utterance_log_namespace_present(
     assert r1.capabilities["utterance_log"].evidence["log_present_for_repo"] is True
 
 
+def test_actor_suffixed_log_alone_detects_capability_one(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MT4b (MH2 consequence 1): under an actor-only capture regime the
+    unsuffixed ``utterances.jsonl`` never exists, but an attributed
+    ``utterances.<actor>.jsonl`` sits beside it — the presence probe must still
+    detect capability 1."""
+    from hpc_agent.state.utterances import utterances_path
+
+    journal = tmp_path / "journal"
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(journal))
+    _write_settings(claude_dir, {})
+
+    exp_dir = tmp_path / "repo"
+    exp_dir.mkdir()
+
+    # Materialize ONLY the actor-suffixed log; the unsuffixed one never exists.
+    base = utterances_path(exp_dir)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    (base.parent / "utterances.alice.jsonl").write_text("", encoding="utf-8")
+    assert not base.exists()  # unsuffixed absent by construction
+
+    result = harness_capabilities(experiment_dir=exp_dir, spec=HarnessCapabilitiesSpec())
+    assert result.capabilities["utterance_log"].evidence["log_present_for_repo"] is True
+
+
+def test_empty_namespace_reads_absent_and_creates_no_directory(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No log of either shape -> capability absent, and the probe is
+    non-creating: no namespace directory is scaffolded by the glob."""
+    from hpc_agent.state.utterances import utterances_path
+
+    journal = tmp_path / "journal"
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(journal))
+    _write_settings(claude_dir, {})
+
+    exp_dir = tmp_path / "repo"
+    exp_dir.mkdir()
+
+    namespace = utterances_path(exp_dir).parent
+    assert not namespace.exists()  # nothing materialized
+
+    result = harness_capabilities(experiment_dir=exp_dir, spec=HarnessCapabilitiesSpec())
+    assert result.capabilities["utterance_log"].evidence["log_present_for_repo"] is False
+    # The glob over the missing namespace must not have scaffolded it.
+    assert not namespace.exists()
+
+
 def test_elicitation_flag_reported(claude_dir: Path, tmp_path: Path) -> None:
     # The server bit is identity with the imported flag (which flips as the pump
     # lands — assert identity, never a literal). The client bit is "per-session":
@@ -157,6 +206,17 @@ def test_tier_consequences_present_for_every_capability(claude_dir: Path, tmp_pa
     assert result.tier_consequences["relay_enforcement"]
 
 
+def test_result_stamps_harness_contract_version(claude_dir: Path, tmp_path: Path) -> None:
+    # The E3-a-reserved additive field (conformance-kit K10): the verb reports the
+    # ONE constant beside it, never a re-typed literal. The three-way agreement
+    # (doc line == constant == kit stamp) is pinned in test_harness_contract.py.
+    from hpc_agent.ops.harness_capabilities import HARNESS_CONTRACT_VERSION
+
+    _write_settings(claude_dir, {})
+    result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
+    assert result.harness_contract_version == HARNESS_CONTRACT_VERSION
+
+
 def test_spec_accepts_empty_rejects_bogus_key() -> None:
     # {} is the valid empty spec (all-optional).
     HarnessCapabilitiesSpec.model_validate({})
@@ -170,3 +230,58 @@ def test_spec_none_defaults_to_empty(claude_dir: Path, tmp_path: Path) -> None:
     _write_settings(claude_dir, {})
     result = harness_capabilities(experiment_dir=tmp_path, spec=None)
     assert "utterance_log" in result.capabilities
+
+
+# ─── capability 5: the Stop-hook append channel (stop-hook completer D1) ──────
+
+
+def test_stop_hook_append_unknown_by_default(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No passive install seam (like trusted_display): absent env markers ->
+    "unknown", and the completer degrades to the rejector. This is the safe
+    landing — the completer stays dark until a conformance probe activates it."""
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", raising=False)
+    _write_settings(claude_dir, {})
+    result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
+    cap = result.capabilities["stop_hook_append"]
+    assert cap.present == "unknown"
+    assert cap.evidence["append_on_proceeding"] == "unknown"
+    assert cap.evidence["append_on_block"] == "unknown"
+    # the tier consequence names the rejector degrade, and every cap has one.
+    assert set(result.tier_consequences) == set(result.capabilities)
+    assert "REJECTOR" in result.tier_consequences["stop_hook_append"]
+
+
+def test_stop_hook_append_activates_via_env(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conformance-proven harness activates BOTH output-shape bits explicitly."""
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "1")
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", "true")
+    _write_settings(claude_dir, {})
+    result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
+    cap = result.capabilities["stop_hook_append"]
+    assert cap.present is True
+    assert cap.evidence["append_on_proceeding"] is True
+    assert cap.evidence["append_on_block"] is True
+
+
+def test_stop_hook_append_detection_tri_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The detection seam the Stop hook gates on: truthy True, falsey False,
+    unset "unknown" — the honest non-answer distinguishes "declared absent"
+    from "never probed"."""
+    from hpc_agent.ops.harness_capabilities import (
+        detect_stop_hook_append,
+        detect_stop_hook_append_on_block,
+    )
+
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    assert detect_stop_hook_append() == "unknown"
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "yes")
+    assert detect_stop_hook_append() is True
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "off")
+    assert detect_stop_hook_append() is False
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", raising=False)
+    assert detect_stop_hook_append_on_block() == "unknown"

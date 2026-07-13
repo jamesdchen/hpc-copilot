@@ -62,8 +62,12 @@ _EVENT_KEYS = frozenset({"ts", "stream", "actor", "kind", "subject_id", "evidenc
 
 # The closed stream vocabulary — the dossier's source stores MINUS the two opaque
 # ones the story excludes (D1): ``aggregated`` (opaque bytes; parsing it names
-# metrics) and ``sidecar`` (identity, not events; feeds the header). Equality (not
-# subset) so a new stream noun lands here as a reviewed vocabulary change.
+# metrics) and ``sidecar`` (identity, not events; feeds the header) — PLUS the one
+# story source that is not (yet) a dossier store: ``overnight-ledger``, added by the
+# overnight-repair taxonomy so a Class-C2 finding lands in the run story as science
+# (``docs/design/overnight-repair.md`` §4.4/§7.4/§10; the ``--from-dossier`` recompute
+# in run-story.md D5 owes sealing this ledger when that deferred mode ships). Equality
+# (not subset) so a new stream noun lands here as a reviewed vocabulary change.
 _EXPECTED_STREAMS = frozenset(
     {
         "decision-journal",
@@ -73,6 +77,7 @@ _EXPECTED_STREAMS = frozenset(
         "scope-journal",
         "look-ledger",
         "notebook-journal",
+        "overnight-ledger",
     }
 )
 
@@ -179,12 +184,15 @@ def test_event_dict_construction_is_exactly_the_d3_key_set() -> None:
 
 
 def test_stream_vocabulary_is_dossier_sources_minus_the_opaque_stores() -> None:
-    """``STREAMS`` equals the dossier's stores MINUS ``aggregated`` / ``sidecar``.
+    """``STREAMS`` equals the dossier's stores MINUS the opaque ones, PLUS ``overnight-ledger``.
 
     The story's sources can never disagree with the dossier's sealed stores about
     what a run's trail IS, and the two opaque stores are excluded BY CONSTRUCTION:
     ``aggregated`` (parsing it names metrics) and ``sidecar`` (identity, not
-    events). Equality so a new stream is a reviewed vocabulary change.
+    events). The one story source that is NOT a dossier store — ``overnight-ledger``,
+    the ratified home of Class-C2 findings routed into the story as science
+    (overnight-repair.md §7.4) — is enumerated in ``_EXPECTED_STREAMS`` as the
+    reviewed exception. Equality so a new stream is a reviewed vocabulary change.
     """
     from hpc_agent.state.run_story import STREAMS
 

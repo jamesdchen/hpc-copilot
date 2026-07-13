@@ -76,7 +76,13 @@ def capture(payload: Any) -> dict[str, Any] | None:
     harness-injection tag (:func:`hpc_agent.state.utterances.is_harness_injected`
     — not human-typed), or the cwd repo has no journal namespace
     (no-scaffold rule) — all clean no-ops.
+
+    When the hook process env sets a valid ``HPC_ACTOR`` slug
+    (:func:`hpc_agent.infra.env_flags.env_actor`, MH2/MH4), the prompt is
+    attributed — appended to the actor-suffixed locator. Unset or an invalid
+    slug → the unsuffixed path, byte-identical to the single-actor world.
     """
+    from hpc_agent.infra.env_flags import env_actor
     from hpc_agent.state.utterances import append_utterance, is_harness_injected
 
     if not isinstance(payload, dict):
@@ -88,7 +94,13 @@ def capture(payload: Any) -> dict[str, Any] | None:
         return None
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
-    return append_utterance(cwd_dir, prompt)
+    # The actor kwarg is passed only when a declared actor resolves (the tests
+    # pin the omitted-when-unset call shape). Annotated dict[str, Any]: a bare
+    # dict[str, str] splat maps onto the keyword-only ``bound`` param under
+    # mypy's invariance and broke CI's whole-tree check.
+    actor = env_actor()
+    kwargs: dict[str, Any] = {"actor": actor} if actor else {}
+    return append_utterance(cwd_dir, prompt, **kwargs)
 
 
 def main(argv: list[str] | None = None) -> int:

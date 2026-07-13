@@ -167,6 +167,27 @@ def _locate_symbol(tree: ast.Module, symbol: str) -> tuple[int, str | None, str 
     return None
 
 
+def _resolve_declared_engine(
+    experiment_dir: Path, source_root_dirs: list[Path], entry: str
+) -> ResolvedEngine:
+    """Resolve one caller-declared dotted engine name (the spec's ``engines`` list).
+
+    ``M.sub.name`` is tried as a whole MODULE first, then as ``module.symbol``
+    (prefix module + trailing symbol) — the same both-candidates posture the
+    import scan takes for ``from M import name``. A single-component entry can
+    only be a module. The result carries ``declared=True`` (provenance only).
+    """
+    parts = entry.split(".")
+    bound = parts[-1]
+    if len(parts) == 1 or resolve_module_file(entry, source_root_dirs) is not None:
+        engine = _resolve_engine(experiment_dir, source_root_dirs, bound, entry, None)
+    else:
+        engine = _resolve_engine(
+            experiment_dir, source_root_dirs, bound, ".".join(parts[:-1]), parts[-1]
+        )
+    return engine.model_copy(update={"declared": True})
+
+
 def _resolve_engine(
     experiment_dir: Path,
     source_root_dirs: list[Path],
@@ -358,14 +379,16 @@ def _render_markdown(result: NotebookDraftContextResult) -> str:
         lines.append("(the template imports nothing)")
         lines.append("")
     for eng in result.resolved_engines:
+        tag = " [declared]" if eng.declared else ""
         if not eng.resolved:
             lines.append(
-                f"- {eng.name} ({eng.module}) — unresolved under source_roots (external/stdlib)"
+                f"- {eng.name} ({eng.module}){tag} — unresolved under source_roots "
+                "(external/stdlib)"
             )
             continue
         loc = f"{eng.file}:{eng.symbol_lineno}" if eng.symbol_lineno is not None else eng.file
         sig = f"  `{eng.signature}`" if eng.signature else ""
-        lines.append(f"- {eng.name} ({eng.module}) -> {loc}{sig}")
+        lines.append(f"- {eng.name} ({eng.module}){tag} -> {loc}{sig}")
         if eng.doc:
             lines.append(f"  - {eng.doc}")
         lines.append(f"  - module_sha: {eng.module_sha}")
@@ -415,6 +438,7 @@ def _compute(
     source_roots: list[str],
     input_roots: list[str],
     inventory_roots: list[str],
+    declared_engines: list[str],
 ) -> NotebookDraftContextResult:
     """Build the projection from scratch (cache miss path)."""
     template_text = _read_text(experiment_dir, template_relpath, kind="template")
@@ -427,6 +451,16 @@ def _compute(
     if template_tree is not None:
         for bound, module, symbol in _template_engine_imports(template_tree):
             engines.append(_resolve_engine(experiment_dir, source_root_dirs, bound, module, symbol))
+    # Caller-declared engines (finding 6b: the variable sections' planned
+    # callables are not template imports). Deduped against the template's own
+    # imports by (module, symbol) origin; declaration order preserved.
+    seen_origins = {(e.module, e.symbol) for e in engines}
+    for entry in declared_engines:
+        eng = _resolve_declared_engine(experiment_dir, source_root_dirs, entry)
+        if (eng.module, eng.symbol) in seen_origins:
+            continue
+        seen_origins.add((eng.module, eng.symbol))
+        engines.append(eng)
 
     sites_by_name = _collect_call_sites(experiment_dir, source_root_dirs)
     call_sites = _engine_call_sites(engines, sites_by_name)
@@ -537,6 +571,7 @@ def notebook_draft_context(
         "input_roots": input_roots,
         "inventory_roots": inventory_roots,
         "audit_id": spec.audit_id,
+        "engines": list(spec.engines),
     }
     stat_files = _stat_files(
         experiment_dir, spec.template, source_roots, input_roots, inventory_roots
@@ -549,6 +584,13 @@ def notebook_draft_context(
         except Exception:  # noqa: BLE001 — a stale/incompatible payload just recomputes
             pass
 
-    result = _compute(experiment_dir, spec.template, source_roots, input_roots, inventory_roots)
+    result = _compute(
+        experiment_dir,
+        spec.template,
+        source_roots,
+        input_roots,
+        inventory_roots,
+        list(spec.engines),
+    )
     draft_context_cache.store(key, result.model_dump(mode="json"))
     return result

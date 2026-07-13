@@ -60,6 +60,14 @@ __all__ = [
     "launch_submit_block_detached",
 ]
 
+#: Bounded wait for the ``(run_id, block)`` decide→spawn→stamp lease lock
+#: (run-#12 finding 16: a timeout-less acquire froze a successor worker 15 min
+#: at 0 CPU behind a wedged holder). Sized well above the critical section
+#: (a liveness read + one Popen), so a legitimate holder always releases first;
+#: expiry means the holder is wedged/leaked and the refusal names its pid.
+#: Module-level so tests can shrink it.
+_LEASE_LOCK_TIMEOUT_SEC = 60.0
+
 # The human-amplification block verbs whose wall-clock is cluster-bound and so
 # detach-by-contract (docs/design/human-amplification-blocks.md §3, "Blocks never
 # block the chat"): the S2 canary-wait, the S3 main-array watch, the speculative
@@ -83,8 +91,25 @@ __all__ = [
 # spawn-and-return and no unattended path dials inline. The child polls the SAME
 # ``monitor-flow`` body with ``detach`` OFF; ``ops/status_blocks.py`` records its
 # terminal so a re-invoke replays instead of re-dialing.
+# ``aggregate-run`` / ``aggregate-flow`` / ``campaign-run`` joined on 2026-07-08
+# (run-#10 finding F-K): each is a cluster-bound harvest/iteration whose
+# wall-clock is minutes-to-hours (per-wave combine SSH + rsync pull + the
+# breaker-deadline wait-and-retry; a full submit→monitor→aggregate iteration for
+# ``campaign-run``), yet each still ran SYNCHRONOUSLY over the single-threaded
+# MCP server — a live ``aggregate-run`` call wedged the chat for 20+ minutes with
+# zero observability. Detaching them gives each its own lease + spec + log under
+# ``_detached/`` and a journal-polled handle, exactly like the submit blocks.
 SUPPORTED_DETACHED_BLOCK_VERBS = frozenset(
-    {"submit-s2", "submit-s3", "submit-s4", "submit-speculate", "status-watch"}
+    {
+        "submit-s2",
+        "submit-s3",
+        "submit-s4",
+        "submit-speculate",
+        "status-watch",
+        "aggregate-run",
+        "aggregate-flow",
+        "campaign-run",
+    }
 )
 
 
@@ -309,6 +334,19 @@ def _guard_single_lease(detached_dir: Path, block: str, run_id: str) -> Path:
     return lease_path
 
 
+def _read_lease_holder_pid(detached_dir: Path, block: str, run_id: str) -> int | None:
+    """The pid recorded in the sibling ``.lease.json``, or ``None`` if it is
+    absent/unreadable/malformed — the holder named in a lock-acquire refusal
+    (run-#12 finding 16)."""
+    lease_path = detached_dir / f"{block}-{run_id}.lease.json"
+    try:
+        prior = json.loads(lease_path.read_text(encoding="utf-8"))
+        pid = int(prior.get("pid", -1))
+    except (OSError, ValueError, TypeError):
+        return None
+    return pid if pid > 0 else None
+
+
 def _spawn_detached(
     *, run_id: str, block: str, argv: list[str], log_path: Path, cwd: str
 ) -> DetachedLaunch:
@@ -333,7 +371,29 @@ def _spawn_detached(
 
     detached_dir = log_path.parent
     lock_path = detached_dir / f"{block}-{run_id}.lease.lock"
-    with io.advisory_flock(lock_path):
+    # Bounded acquire (run-#12 finding 16: a successor worker sat 15 min at 0 CPU
+    # behind a wedged holder's timeout-less lock, invisible). advisory_flock
+    # raises a path-naming TimeoutError at expiry; we NAME THE HOLDER by reading
+    # the sibling lease.json so the refusal points at a pid to inspect, not just
+    # a lock file.
+    try:
+        lock_cm = io.advisory_flock(lock_path, timeout_sec=_LEASE_LOCK_TIMEOUT_SEC)
+        lock_cm.__enter__()
+    except TimeoutError as exc:
+        holder = _read_lease_holder_pid(detached_dir, block, run_id)
+        who = (
+            f"the holder is pid {holder}"
+            if holder is not None
+            else "the holder pid is unrecorded (lease.json absent/unreadable)"
+        )
+        raise DetachedLeaseHeld(
+            f"could not acquire the ({run_id!r}, {block!r}) detach lease lock at "
+            f"{lock_path} within {_LEASE_LOCK_TIMEOUT_SEC:.0f}s — {who}. A live "
+            "holder means a launch for this key is already in flight; poll the "
+            "journal instead of spawning again. If that pid is dead the lock "
+            "leaked — delete the .lease.lock only after confirming it."
+        ) from exc
+    try:
         lease_path = _guard_single_lease(detached_dir, block, run_id)
 
         log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
@@ -344,7 +404,16 @@ def _spawn_detached(
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 cwd=cwd,
-                env={**os.environ},
+                # The worker self-identifies (run-#12 finding 17 leg 3): on ANY
+                # non-zero exit — refusals included — the CLI records a failure
+                # terminal for (run_id, block), so a dead worker is never
+                # silent (six refusal-deaths with no terminal manufactured the
+                # run-#12 dead-worker hunt).
+                env={
+                    **os.environ,
+                    "HPC_DETACHED_RUN_ID": run_id,
+                    "HPC_DETACHED_BLOCK": block,
+                },
             )
         finally:
             # The child inherits its own dup'd fd; this process closes its copy
@@ -366,6 +435,8 @@ def _spawn_detached(
             ),
             encoding="utf-8",
         )
+    finally:
+        lock_cm.__exit__(None, None, None)
 
     return DetachedLaunch(
         run_id=run_id,
@@ -379,17 +450,19 @@ def _block_spec_run_id(spec: dict[str, Any]) -> str:
     """Dig the run_id out of a detach-supported block spec dict (for the handle).
 
     S2 / S3 / speculate embed the submit-and-verify spec under ``submit.submit``
-    with the ``run_id`` on the inner submit-flow spec; S4 (harvest) carries it on
-    its embedded aggregate-flow spec at ``aggregate.run_id``; ``status-watch``
-    carries it on its embedded monitor-flow spec at ``monitor.run_id``. The
-    run_id is what the parent hands back as the journal-poll key, so it must be
-    present before the detach. Raises :class:`DriveModeError` when it can't be
+    with the ``run_id`` on the inner submit-flow spec; S4 (harvest),
+    ``aggregate-run``, and ``campaign-run`` carry it on their embedded
+    aggregate-flow spec at ``aggregate.run_id``; ``status-watch`` carries it on
+    its embedded monitor-flow spec at ``monitor.run_id``; ``aggregate-flow``
+    carries it FLAT at ``run_id`` (it IS the aggregate spec, not an embedder).
+    The run_id is what the parent hands back as the journal-poll key, so it must
+    be present before the detach. Raises :class:`DriveModeError` when it can't be
     found — a detached block that can't name its run can't be polled.
 
-    The submit shapes are checked FIRST and unchanged; the ``monitor`` fallback is
-    additive (a submit spec resolves its run_id before the fallback is reached, so
-    the submit paths stay byte-identical — pinned by
-    ``tests/integration/test_spec_contract.py``).
+    The submit shapes are checked FIRST and unchanged; the ``aggregate`` /
+    ``monitor`` / flat ``run_id`` fallbacks are additive (a submit spec resolves
+    its run_id before the fallbacks are reached, so the submit paths stay
+    byte-identical — pinned by ``tests/integration/test_spec_contract.py``).
     """
     submit = spec.get("submit")
     inner = submit.get("submit") if isinstance(submit, dict) else None
@@ -401,10 +474,15 @@ def _block_spec_run_id(spec: dict[str, Any]) -> str:
         monitor = spec.get("monitor")
         run_id = monitor.get("run_id") if isinstance(monitor, dict) else None
     if not isinstance(run_id, str) or not run_id:
+        # aggregate-flow is itself the aggregate spec — run_id sits FLAT.
+        flat = spec.get("run_id")
+        run_id = flat if isinstance(flat, str) else None
+    if not isinstance(run_id, str) or not run_id:
         raise DriveModeError(
             "detached block drive requires a string run_id at "
             f"spec.submit.submit.run_id (S2/S3/speculate), spec.aggregate.run_id "
-            f"(S4), or spec.monitor.run_id (status-watch); got {run_id!r}. The "
+            f"(S4/aggregate-run/campaign-run), spec.monitor.run_id (status-watch), "
+            f"or spec.run_id (aggregate-flow); got {run_id!r}. The "
             "detached worker polls the journal by run_id, so it must be resolved "
             "before the detach."
         )
@@ -419,8 +497,9 @@ def launch_submit_block_detached(
     hpc_agent_bin: str | None = None,
 ) -> DetachedLaunch:
     """Launch a detach-by-contract block (``submit-s2`` / ``submit-s3`` /
-    ``submit-s4`` / ``submit-speculate`` / ``status-watch``) as a DETACHED
-    ``hpc-agent <verb>`` subprocess (design §3, detach-by-contract).
+    ``submit-s4`` / ``submit-speculate`` / ``status-watch`` / ``aggregate-run`` /
+    ``aggregate-flow`` / ``campaign-run``) as a DETACHED ``hpc-agent <verb>``
+    subprocess (design §3, detach-by-contract).
 
     Generalized 2026-07-07 to cover ``status-watch`` (connection-broker.md): the
     launcher is block-family-agnostic — the run_id extractor

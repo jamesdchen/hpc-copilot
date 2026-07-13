@@ -222,6 +222,41 @@ class TestInterviewScaffold:
         # And the whole skeleton still validates.
         InterviewSpec.model_validate(spec)
 
+    def test_shell_command_sanitizes_non_identifier_run_name(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hyphen/dot-bearing run name must NOT hard-fail the shell_command
+        skeleton (bug-sweep #49): the pattern-constrained run_name degrades to a
+        placeholder (flagged unresolved) instead of raising SpecInvalid."""
+        import hpc_agent.ops.scaffold_spec as ss
+
+        monkeypatch.setattr(
+            ss,
+            "_detect_entry_point_candidates",
+            lambda *_a, **_k: ("shell_command", [{"argv_kind": "shell", "path": "run.sh"}]),
+        )
+        acc = _Acc()
+        spec = _scaffold_interview(
+            _Context(
+                cluster_name=None,
+                cluster_cfg=None,
+                run_name="causal-tune.v2",  # not ^[a-zA-Z_][a-zA-Z0-9_]*$
+                latest_run={},
+                run_id=None,
+                cmd_sha=None,
+                experiment_dir=tmp_path,
+            ),
+            acc,
+        )
+        ep = spec["entry_point"]
+        assert ep["kind"] == "shell_command"
+        # The invalid run name was replaced by the placeholder, not inserted verbatim.
+        assert ep["run_name"] == "placeholder_run"
+        assert "entry_point.run_name" in acc.unresolved
+        assert any("not identifier-shaped" in w for w in acc.warnings)
+        # The #287 guarantee holds: the whole skeleton still validates.
+        InterviewSpec.model_validate(spec)
+
     def test_supported_verbs_list_includes_interview(self, tmp_path: Any) -> None:
         res = scaffold_spec(experiment_dir=tmp_path, verb="build-submit-spec")
         assert sorted(res.supported_verbs) == _SUPPORTED

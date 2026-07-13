@@ -211,6 +211,45 @@ def test_single_transient_does_not_abort_poll(
     assert harvested == ["complete"]
 
 
+def test_ssh_circuit_open_is_transient_survives_to_complete(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding #15: a transient network blip that opens the per-host SSH circuit
+    breaker raises ``SshCircuitOpen`` — an ``HpcError``, NOT a
+    ``RemoteCommandFailed`` / ``OSError`` — so the original poll-tolerance clause
+    let it propagate and kill the detached multi-hour watch (run #7: a 3×60s
+    hoffman2 latency spike). It must be classed transient: the loop waits out the
+    breaker cooldown (≪ the watch budget) and rides on, so a blip that clears
+    reaches COMPLETE with the guaranteed harvest."""
+    _seed_record(experiment)
+    breaker = errors.SshCircuitOpen("circuit open for host — cooldown until ...")
+    breaker.host = "host"
+    breaker.deadline = 0.0  # already past → _circuit_wait_sec returns the slack floor
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "record_status",
+        _record_status_sequence(experiment, [breaker, _COMPLETE_STATUS]),
+    )
+    monkeypatch.setattr(monitor_flow_module, "_ingest_runtime_at_terminal", lambda *a, **k: 0)
+    harvested: list[str] = []
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "harvest_on_terminal",
+        lambda *a, **k: harvested.append(k.get("terminal_cause", "?")),
+    )
+
+    spec = MonitorFlowSpec(
+        run_id=_RUN_ID,
+        poll_interval_seconds=5,
+        wall_clock_budget_seconds=10_000,
+        auto_combine_waves=False,
+    )
+    result = monitor_flow(experiment, spec=spec, _sleep=lambda s: None, _now=lambda: 0.0)
+
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+    assert harvested == ["complete"]
+
+
 def test_repeated_transient_terminates_to_timeout(
     journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

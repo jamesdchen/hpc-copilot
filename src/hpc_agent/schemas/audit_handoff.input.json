@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/audit_handoff.input.json",
+  "title": "audit-handoff input spec",
+  "description": "Inputs to ``audit-handoff``.\n\nAll relpaths / the ``audit_id`` are resolved against ``--experiment-dir``.\nThe verb reads the ``audit_id``'s ``notebook-audit-config`` record (the\naudit-open seat: intent + roots) and AST-scans the ``source`` ``.py``.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "source",
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug) whose audit-open config/intent record is projected. Caller-authored.",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format) — AST-scanned for @register_run entry points and $HPC_RESULT_DIR write candidates.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "template": {
+      "description": "Experiment-relative path to the template .py the source was drafted from — carried verbatim into the draft audited_source block.",
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    }
+  }
+}

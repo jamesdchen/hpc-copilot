@@ -377,18 +377,17 @@ def build_submit_spec(
     # A Path-B strategy tasks.py reads its knobs from os.environ["HPC_KW_*"];
     # the manifest stores them under strategy.params but nothing wired them
     # together, so the LOCAL enumeration (which imports tasks.py to compute the
-    # task list / cmd_sha) and the CLUSTER job ran under default knobs. Export
-    # them into BOTH (a) the PROCESS env now — BEFORE the local enumeration's
-    # load_tasks_module runs (_resolve_kwargs_keys, below) — AND (b) the job_env
-    # (assembled below), so the cluster job carries them too. The cluster
+    # task list / cmd_sha) and the CLUSTER job ran under default knobs. Carry
+    # them into BOTH (a) the PROCESS env — but only TRANSIENTLY, around the local
+    # enumeration that reads them (``_resolve_kwargs_keys``, below), restored in
+    # a ``finally`` — AND (b) the job_env (assembled below), so the cluster job
+    # carries them too. A previous version mutated ``os.environ`` permanently
+    # here, leaking one campaign's knobs into every LATER enumeration in the same
+    # process; the mutation is now scoped to its sole consumer. The cluster
     # dispatcher already exports resolve()-kwargs as HPC_KW_* (dispatch.py:815);
     # this is the symmetric missing half for STRATEGY params. No-op for a
     # non-campaign submit (empty dict → no env writes, no job_env additions).
     _campaign_kw_env = _campaign_strategy_kw_env(experiment_dir, campaign_id)
-    if _campaign_kw_env:
-        import os as _os
-
-        _os.environ.update(_campaign_kw_env)
     canary = bool(spec.canary) if spec.canary is not None else True
     partial_ok = bool(spec.partial_ok) if spec.partial_ok is not None else False
     # #275: ``skip_preflight`` is no longer emitted onto the submit_flow spec —
@@ -537,6 +536,33 @@ def build_submit_spec(
     if extra_env:
         job_env.update({str(k): str(v) for k, v in extra_env.items()})
 
+    # data-trace T3: the digest classifier decides — NO KNOB. Export
+    # ``HPC_TRACE_DIGESTS`` AFTER the extra_env merge so the sidecar-derived
+    # classification is authoritative (a caller cannot smuggle the flag in via
+    # extra_env; the ONLY lever is the typed ``trace_digests`` override). The
+    # dispatcher stays dumb — it reads this env var and pays for the ``digest``
+    # atom or not; the POLICY lives here, in the submit path (the HPC_TASK_INCLUDE
+    # threading precedent). ``is_local=False``: build-submit-spec assembles a
+    # CLUSTER submit; the local-runner path classifies its own context.
+    from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_DIGEST_ENV_VAR
+    from hpc_agent.state.data_trace_classifier import DigestContext, classify_digests
+
+    # ``is_canary=False``: build-submit-spec assembles the MAIN array's job_env.
+    # ``spec.canary`` is "gate the main array with a 1-task canary first", NOT
+    # "this run IS a canary". The canary reuses this job_env with HPC_TASK_COUNT=1
+    # and forces digests ON at its own seam (submit_flow._submit_fresh_canary), so
+    # the canary flag is applied where the canary env is built, not here.
+    _digest_decision = classify_digests(
+        DigestContext(
+            is_canary=False,
+            reproduces=spec.reproduces is not None,
+            is_local=False,
+            task_count=int(total_tasks),
+            override=spec.trace_digests,
+        )
+    )
+    job_env[TRACE_DIGEST_ENV_VAR] = "1" if _digest_decision.digests_on else "0"
+
     # S5 / incident 6: REPO_DIR ↔ deploy-target invariant. ``REPO_DIR`` was set
     # from ``deploy_target_for(remote_path)`` — the SAME derivation rsync_push /
     # deploy_runtime / the backend's ``remote_repo`` use — so it equals the rsync
@@ -597,10 +623,27 @@ def build_submit_spec(
     # command has no braces, so the common path no-ops).
     _check_executor_format_placeholders(_effective_executor)
     if "$" in _effective_executor:
+        # ``_resolve_kwargs_keys`` imports the user's tasks.py and calls
+        # resolve(0), which — for a Path-B strategy — reads its knobs from
+        # os.environ["HPC_KW_*"]. Set the campaign's strategy params on the
+        # process env ONLY for the duration of that enumeration, then restore, so
+        # a campaign's knobs never leak into a later build in the same process.
+        import os as _os
+
+        _saved_env = {k: _os.environ.get(k) for k in _campaign_kw_env}
+        _os.environ.update(_campaign_kw_env)
+        try:
+            _kwargs_keys = _resolve_kwargs_keys(experiment_dir)
+        finally:
+            for _k, _v in _saved_env.items():
+                if _v is None:
+                    _os.environ.pop(_k, None)
+                else:
+                    _os.environ[_k] = _v
         _check_executor_var_references(
             _effective_executor,
             job_env_keys=set(job_env),
-            kwargs_keys=_resolve_kwargs_keys(experiment_dir),
+            kwargs_keys=_kwargs_keys,
         )
 
     out: dict[str, Any] = {

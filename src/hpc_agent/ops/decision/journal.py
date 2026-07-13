@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
@@ -50,11 +51,15 @@ from hpc_agent._wire.queries.decision_journal import (
     ReadDecisionsResult,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.env_flags import env_actor
 from hpc_agent.state.decision_journal import append_decision as _append_decision
 from hpc_agent.state.decision_journal import decisions_path as _decisions_path
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
 from hpc_agent.state.registration import (
+    CONFORMANCE_VERDICT_BLOCK,
+    REGISTRATION_BLOCK,
     REGISTRATION_BLOCK_FAMILY,
+    REGISTRATION_REVIEW_BLOCK,
     REVOKE_BLOCK,
     SUBJECT_KIND,
 )
@@ -93,6 +98,292 @@ def _refuse_missing_authorship(message: str) -> NoReturn:
     exc = errors.SpecInvalid(message)
     exc.failure_features = dict(_AUTHORSHIP_EVIDENCE_MISSING)  # type: ignore[attr-defined]
     raise exc
+
+
+# ── multi-human actor substrate (docs/design/multi-human.md MH1/MH4/MH6/MH8) ──
+#
+# Every helper here is a NO-OP under the single-actor world (zero or one declared
+# actor): the identity comparisons and policy consultation only mean something in
+# a group, and the byte-identity pin (enforcement rows) requires that a session
+# with fewer than two declared actors behaves byte-for-byte as before multi-human
+# — no new refusal, no attestor_id stamp, no policy read. The guard is ALWAYS the
+# ``len(ids) > 1`` census: the plumbing may resolve a session actor for stamping,
+# but no COMPARISON fires without the >1 declaration.
+
+
+def _read_interview_actors(experiment_dir: Path) -> tuple[list[str], dict[str, list[str]]]:
+    """The interview.json ``actors`` block as ``(ids, policy)`` — or ``([], {})``.
+
+    Reads the same interview.json the sign-off / audit gates already read
+    (``_read_interview_audited_source`` posture: campaign-dir root first,
+    ``.hpc/interview.json`` defensively; a corrupt / non-object file, or an absent
+    / malformed ``actors`` block, is tolerated as "no actors declared" → the
+    single-actor world, byte-identical). ``ids`` is the declared actor slugs;
+    ``policy`` is the optional ``{block: [slug, ...]}`` delegation mapping (MH8),
+    ``{}`` when absent. Core never interprets the slugs — it compares identity.
+    """
+    for rel in ("interview.json", ".hpc/interview.json"):
+        path = experiment_dir / rel
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        block = doc.get("actors")
+        if not isinstance(block, dict):
+            return [], {}
+        raw_ids = block.get("ids")
+        ids = [str(i) for i in raw_ids if isinstance(i, str)] if isinstance(raw_ids, list) else []
+        raw_policy = block.get("policy")
+        policy: dict[str, list[str]] = {}
+        if isinstance(raw_policy, dict):
+            for key, allowed in raw_policy.items():
+                if isinstance(key, str) and isinstance(allowed, list):
+                    policy[key] = [str(a) for a in allowed if isinstance(a, str)]
+        return ids, policy
+    return [], {}
+
+
+def _session_actor(experiment_dir: Path, ids: list[str] | None = None) -> str | None:
+    """The resolved session actor slug, or ``None`` when unattributed (MH4).
+
+    Reads ``HPC_ACTOR`` out-of-band (``infra/env_flags.py::env_actor`` — the slug
+    arrives from OUTSIDE the model's tool surface, exactly like the utterance
+    text, and is validated as a filesystem-safe slug there). The resolved slug is
+    accepted ONLY when it is one of the *declared* ``actors.ids`` — an
+    ``HPC_ACTOR`` naming an undeclared actor is UNRESOLVABLE (``None``), never a
+    silently-trusted identity. ``None`` also when the env is unset/blank/invalid,
+    or when no actors are declared. Core NEVER verifies who set the env var (the
+    harness-asserted attribution tier); it only compares the opaque slug.
+    """
+    if ids is None:
+        ids, _ = _read_interview_actors(experiment_dir)
+    actor = env_actor()
+    if actor is not None and actor in set(ids):
+        return actor
+    return None
+
+
+def _actor_scoped_human_texts(experiment_dir: Path, ids: list[str]) -> list[str] | None:
+    """The harness-captured evidence pool, actor-scoped under >1 declared actors (MH4).
+
+    * Zero/one declared actor → the union read (``_harness_human_texts`` with no
+      actor), byte-identical to the pre-multi-human evidence tier.
+    * >1 declared, session actor resolves → the SESSION ACTOR'S suffixed log ONLY
+      (``read_utterances(actor=<slug>)`` via ``_harness_human_texts`` — the
+      anti-laundering exclusion: actor A's agent cannot commit a value only actor
+      B ever typed, and the unsuffixed anonymous log never satisfies a scoped
+      check).
+    * >1 declared, session UNATTRIBUTED (no resolvable actor) → ``None`` so the
+      gate falls to the journal-response FRICTION tier: anonymous text must never
+      satisfy an actor-specific evidence check (the MT8 contract sentence, now
+      enforced). It does NOT fall back to the union — that would re-open
+      laundering.
+    """
+    if len(ids) > 1:
+        actor = _session_actor(experiment_dir, ids)
+        if actor is None:
+            return None
+        return _harness_human_texts(experiment_dir, actor=actor)
+    return _harness_human_texts(experiment_dir)
+
+
+# ── B4 ts>=anchor fix-wave: ONE shared utterance-freshness filter ─────────────
+#
+# The finding-10 pattern (``_signoff_fresh_human_texts``) generalized: every
+# authorship gate whose evidence is NAMING over the utterance log — scope-unlock
+# and the four naming-only revoke/verdict floors — bounds the harness-utterance
+# pool to records logged AT OR AFTER the target's own timestamp. Without the
+# bound the naming leg is permanently satisfied by the very utterance that
+# CREATED the target (the human named every id at creation), so a later
+# agent-composed revoke/verdict/unlock rides through (the B4 exposure, philosophy
+# audit 2026-07 sweep log). The sha-prefix-bound FILING gates need no anchor (an
+# 8-hex prefix cannot pre-exist the artifact it fingerprints — temporal binding
+# by vocabulary impossibility). The overnight-consent gate RETIRED its unbounded
+# reader entirely (USER RULING 3, 2026-07-12): it reads only BOUND consent records
+# (:func:`_bound_consent_records`) captured at a surface that named exactly what
+# they cover, so the chat pool it once word-overlapped is never consulted — the
+# same vocabulary-impossibility class as the sha-prefix gates (a chat hook cannot
+# forge a ``bound`` binding), documented in the route-through exemption.
+
+
+def _fresh_human_texts(
+    experiment_dir: Path, *, actor_ids: list[str], anchor: float | None
+) -> list[str] | None:
+    """Actor-scoped harness utterances filtered to ``ts >= anchor`` (finding-10, generalized).
+
+    THE shared temporal filter every naming-over-the-log authorship gate routes
+    through — scope-unlock and the four revoke/verdict floors (the B4 fix-wave),
+    plus :func:`_signoff_fresh_human_texts`, which supplies the render mtime as
+    *anchor*. A human can only attest a target that EXISTED when they typed, so an
+    utterance older than the target's own timestamp is not attestation.
+
+    Tiering mirrors :func:`_actor_scoped_human_texts`:
+
+    * ``None`` — no log at all, or an unattributed >1-actor session — signals the
+      caller to fall to the journal-response FRICTION tier (byte-identical to the
+      unfiltered scoped read's ``None``).
+    * *anchor* ``None`` — the anchor could not be determined — returns the
+      UNFILTERED pool: the missing-anchor case a re-elicited utterance cannot fix
+      (each gate's own existence refusal owns a never-created target), mirroring
+      :func:`_signoff_fresh_human_texts`'s absent-render posture.
+    * otherwise — only utterances with a parseable ``ts`` at or after
+      ``int(anchor)`` (utterance ``ts`` is seconds-resolution). An EMPTY list —
+      the log exists but nothing fresh names the target — makes the gate refuse
+      (the authorship marker / popup cue). A record with no parseable ``ts`` is
+      EXCLUDED (conservative).
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+    from hpc_agent.state.utterances import read_utterances
+
+    if len(actor_ids) > 1:
+        actor = _session_actor(experiment_dir, actor_ids)
+        if actor is None:
+            return None
+        records = read_utterances(experiment_dir, actor=actor)
+    else:
+        records = read_utterances(experiment_dir)
+    if not records:
+        return None
+    if anchor is None:
+        return [str(r.get("text") or "") for r in records]
+    floor = int(anchor)
+    fresh: list[str] = []
+    for rec in records:
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if when >= floor:
+            fresh.append(str(rec.get("text") or ""))
+    return fresh
+
+
+def _fresh_authored_text(experiment_dir: Path, response: str, *, anchor: float | None) -> str:
+    """The human-authored text a NAMING-only revoke/verdict gate reads, ts-bound.
+
+    The :func:`_registration_authored_text` posture with the B4 ``ts >= anchor``
+    filter layered in: with the harness utterance log present the naming token
+    must derive from an utterance logged at or after *anchor* (the target
+    record's own ts — a revoke/verdict must post-date what it resolves). Absent
+    the log, or an unattributed >1-actor session, the agent-relayed ``response``
+    is the friction tier (byte-identical to the pre-B4 fallback). An *anchor* of
+    ``None`` (no parseable target ts) leaves the pool unfiltered; the gate's own
+    existence check owns the never-created case.
+    """
+    actor_ids, _ = _read_interview_actors(experiment_dir)
+    fresh = _fresh_human_texts(experiment_dir, actor_ids=actor_ids, anchor=anchor)
+    if fresh is not None:
+        return "\n".join(fresh)
+    return response
+
+
+def _target_record_ts(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    filing_block: str,
+    id_field: str,
+    target_id: str,
+) -> float | None:
+    """Epoch-seconds ts of the NEWEST filing that created *target_id*, or ``None``.
+
+    The B4 anchor for a revoke/verdict gate: the record it resolves must already
+    exist, so that filing's own ``ts`` bounds the utterance pool the naming leg
+    reads (a revoke authored before the filing existed is the creation utterance
+    re-read, not attestation). Scans *target_id*'s journal thread for the newest
+    record on *filing_block* whose ``resolved[id_field] == target_id`` and parses
+    its ``ts``. ``None`` when no such parseable filing exists — the caller then
+    leaves the pool unfiltered (a re-elicit cannot conjure a filing that was never
+    made; each floor's existence refusal owns that case).
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+
+    newest: float | None = None
+    for rec in _read_decisions(experiment_dir, scope_kind, scope_id):
+        if rec.get("block") != filing_block:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get(id_field) != target_id:
+            continue
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if newest is None or when > newest:
+            newest = when
+    return newest
+
+
+def _newest_lock_ts(experiment_dir: Path, scope_id: str) -> float | None:
+    """Epoch-seconds ts of the scope's NEWEST lock record, or ``None`` (B4 anchor).
+
+    An unlock re-opens a scope, so its rationale must post-date the LOCK it
+    re-opens: the newest ``scope-lock`` record whose ``resolved.scope_action`` is
+    ``lock`` is the anchor. ``None`` when the scope has no lock record on file —
+    the pool is then unfiltered (nothing yet to have post-dated; the unlock's
+    bare-ack + overlap legs still gate it).
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+    from hpc_agent.state.scopes import _SCOPE_LOCK_BLOCK
+
+    newest: float | None = None
+    for rec in _read_decisions(experiment_dir, "scope", scope_id):
+        if rec.get("block") != _SCOPE_LOCK_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get("scope_action") != "lock":
+            continue
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if newest is None or when > newest:
+            newest = when
+    return newest
+
+
+def _assert_actor_policy(
+    ids: list[str], policy: dict[str, list[str]], block: str, actor: str | None
+) -> None:
+    """MH8 delegation gate: refuse a policy-restricted block by a non-member actor.
+
+    Pure lists+mappings core COMPARES, never evaluates (the domain-packs pattern
+    applied to people). Silent unless >1 actor is declared AND ``policy`` maps
+    *block* to a member list: then the session *actor* must be ``in`` that list —
+    a non-member (including an unresolvable ``None`` session actor) is refused,
+    naming the block and the allowed set. A block absent from the policy is
+    unrestricted (policy is opt-in per block); no ``actors`` / ``policy`` at all
+    is silent (byte-identical). IDENTITY + COUNTING only — core never learns WHY
+    the lab granted a block to an actor.
+    """
+    if len(ids) <= 1:
+        return
+    allowed = policy.get(block)
+    if not allowed:
+        return  # no policy entry for this block → unrestricted
+    if actor is None or actor not in set(allowed):
+        raise errors.SpecInvalid(
+            f"actor-policy gate (MH8): block {block!r} is delegated by "
+            f"actors.policy to {sorted(allowed)!r}; the session actor "
+            f"{actor!r} is not a member and may not author it. Configure "
+            "HPC_ACTOR to a delegated actor, or amend actors.policy in "
+            "interview.json (a policy entry is caller-declared delegation, "
+            "never a role core interprets)."
+        )
 
 
 @primitive(
@@ -144,6 +435,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     """
     experiment_dir = Path(experiment_dir)
     resolved = _default_next_block(experiment_dir, spec)
+    resolved = _compose_overnight_consent(experiment_dir, spec, resolved)
     _assert_no_code_derived_fields(resolved)
     _assert_brief_provenance(experiment_dir, spec, resolved)
     _assert_human_authorship(experiment_dir, spec, resolved)
@@ -151,6 +443,18 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_signoff_authorship(experiment_dir, spec, resolved)
     _assert_registration_authorship(experiment_dir, spec, resolved)
     _assert_reproduction_verdict_authorship(experiment_dir, spec, resolved)
+    _assert_conclusion_authorship(experiment_dir, spec, resolved)
+    _assert_challenge_authorship(experiment_dir, spec, resolved)
+    _assert_overnight_consent_authorship(experiment_dir, spec, resolved)
+    # Multi-human (docs/design/multi-human.md MH4/MH8): resolve the session actor
+    # server-side (NEVER a caller-suppliable spec field — the model must not choose
+    # its identity), enforce the MH8 delegation policy for this block, and stamp the
+    # resolved actor as the record's ``attestor_id``. All three are NO-OPS under
+    # zero/one declared actor (``_session_actor`` → None, ``_assert_actor_policy``
+    # returns silently, ``attestor_id=None`` is omitted on disk) — byte-identical.
+    _actor_ids, _actor_policy = _read_interview_actors(experiment_dir)
+    attestor_id = _session_actor(experiment_dir, _actor_ids) if len(_actor_ids) > 1 else None
+    _assert_actor_policy(_actor_ids, _actor_policy, spec.block, attestor_id)
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -161,6 +465,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
         proposal=spec.proposal,
         resolved=resolved,
         provenance=spec.provenance,
+        attestor_id=attestor_id,
     )
     count = len(_read_decisions(experiment_dir, spec.scope_kind, spec.scope_id))
     path = _decisions_path(experiment_dir, spec.scope_kind, spec.scope_id)
@@ -457,7 +762,7 @@ def _ha_word_tokens(text: str) -> set[str]:
     return {m.group(0).lower() for m in _HA_WORD_RE.finditer(text or "")}
 
 
-def _harness_human_texts(experiment_dir: Path) -> list[str] | None:
+def _harness_human_texts(experiment_dir: Path, actor: str | None = None) -> list[str] | None:
     """The logged human utterances' texts, or ``None`` when none were captured.
 
     The harness-captured evidence tier BOTH authorship gates share
@@ -468,10 +773,17 @@ def _harness_human_texts(experiment_dir: Path) -> list[str] | None:
     agent-authored journal ``response``. ``None`` (no log / older session)
     signals the caller to fall back to the journal-response friction tier;
     a present-but-empty case reads the same.
+
+    *actor* (MH4): ``None`` → the UNION of every log (today's identity-less read,
+    byte-identical). An actor slug → that actor's suffixed log ONLY — the
+    anti-laundering scoped read the >1-actor authorship tier uses
+    (:func:`_actor_scoped_human_texts` is the caller that decides which). The
+    unsuffixed anonymous log is EXCLUDED from a scoped read by
+    ``read_utterances`` itself.
     """
     from hpc_agent.state.utterances import read_utterances
 
-    utterances = read_utterances(experiment_dir)
+    utterances = read_utterances(experiment_dir, actor=actor)
     if not utterances:
         return None
     return [str(u.get("text") or "") for u in utterances]
@@ -725,8 +1037,12 @@ def _assert_human_authorship(
     prior = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
 
     # Tiered evidence source: prefer the harness-captured utterance log (the
-    # lock) over agent-authored journal responses (the friction fallback).
-    harness_texts = _harness_human_texts(experiment_dir)
+    # lock) over agent-authored journal responses (the friction fallback). Under
+    # >1 declared actors the pool is the SESSION ACTOR'S log only (MH4 — actor A's
+    # agent cannot commit a value only actor B ever typed); an unattributed
+    # >1-actor session falls to the friction tier (never the anonymous union).
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
     harness_captured = harness_texts is not None
 
     if not harness_captured and prior and not any("response" in rec for rec in prior):
@@ -891,7 +1207,14 @@ def _assert_unlock_authorship(
             "re-opening the scope."
         )
 
-    harness_texts = _harness_human_texts(experiment_dir)
+    # B4 ts>=anchor: the rationale must derive from an utterance logged AT OR
+    # AFTER the LOCK it re-opens — a standing prompt that happened to share a word
+    # with the unlock, typed before the scope was ever locked, is not a decision
+    # to re-open it (the philosophy-audit B4 exposure). Anchor = the scope's
+    # newest lock record ts (None → unfiltered: no lock on file yet).
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    anchor = _newest_lock_ts(experiment_dir, spec.scope_id)
+    harness_texts = _fresh_human_texts(experiment_dir, actor_ids=_actor_ids, anchor=anchor)
     if harness_texts is not None:
         human_words: set[str] = set()
         for text in harness_texts:
@@ -901,9 +1224,11 @@ def _assert_unlock_authorship(
             _refuse_missing_authorship(
                 "scope-unlock authorship gate: with the harness utterance log "
                 "installed, the unlock rationale must derive from a logged human "
-                "utterance (harness-captured), not the agent-relayed response "
-                f"{spec.response!r}. Have the human state why the scope is being "
-                "re-opened in a prompt."
+                "utterance (harness-captured) dated AT OR AFTER the lock it re-opens "
+                f"(B4 ts>=anchor), not the agent-relayed response {spec.response!r}. "
+                "Have the human state why the scope is being re-opened in a prompt. "
+                "(Under >1 declared actors the pool is the SESSION ACTOR'S log only "
+                "— MH4.)"
             )
 
 
@@ -943,6 +1268,53 @@ def _names_slug(response: str, slug: str) -> bool:
         return False
     pattern = re.compile(r"(?<![A-Za-z0-9._-])" + re.escape(slug) + r"(?![A-Za-z0-9._-])")
     return bool(pattern.search(response or ""))
+
+
+def _signoff_fresh_human_texts(
+    experiment_dir: Path,
+    *,
+    actor_ids: list[str],
+    audit_id: str,
+    section: str,
+    view_sha: str,
+) -> list[str] | None:
+    """The utterance-log evidence pool for ONE sign-off, TEMPORALLY BOUND.
+
+    The actor-scoped log read (:func:`_actor_scoped_human_texts` semantics)
+    plus the run-#12 finding-10 filter: a human can only attest a view that
+    existed when they typed, so a candidate utterance must be logged at or
+    after the signed view's render file was written (its mtime, floored to
+    whole seconds — utterance ``ts`` is seconds-resolution). This kills the
+    standing-sign-off class: a kickoff / resume prompt that happened to name
+    the slug and a diff identifier minutes before the render existed is not
+    attestation, and letting it pass is what kept the sign-off popup from
+    ever firing (the gate passed instead of refusing).
+
+    ``None`` — no log at all, or an unattributed >1-actor session — falls to
+    the friction tier exactly like the unscoped read. An EMPTY list is
+    different: the log exists but nothing fresh names this sign-off, so the
+    gate refuses with the authorship marker (the popup's cue). An absent /
+    unstatable render SKIPS the filter (returns the unfiltered pool): the
+    missing-render refusal belongs to the UNMARKED trusted-display lock,
+    where re-eliciting an utterance cannot fix it. A record with no
+    parseable ``ts`` is excluded — conservative; the popup remedies.
+
+    The temporal filter itself is the ONE shared :func:`_fresh_human_texts`
+    helper (the B4 fix-wave generalized this finding-10 pattern); this function
+    only computes the render-mtime *anchor* and delegates. An absent /
+    unstatable render yields ``anchor=None`` → the unfiltered pool, exactly the
+    original missing-render posture.
+    """
+    from hpc_agent.ops import notebook_view as _notebook_view
+
+    render = _notebook_view.render_path(
+        experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
+    )
+    try:
+        anchor: float | None = int(render.stat().st_mtime)
+    except OSError:
+        anchor = None
+    return _fresh_human_texts(experiment_dir, actor_ids=actor_ids, anchor=anchor)
 
 
 def _section_specific_tokens(section_view: Any) -> set[str]:
@@ -1061,21 +1433,26 @@ def _resolve_signoff_audit_config(
         if block is not None:
             src_rel = src_rel or block.get("source")
             tmpl_rel = tmpl_rel or block.get("template")
-    if not isinstance(src_rel, str) or not src_rel:
+    # ONE-SHOT refusal (run-#12 latency exhibit: agents discovered source and
+    # template one bounce at a time, three appends per sign-off): name EVERY
+    # unresolvable ingredient in a single refusal, with the complete resolved
+    # skeleton the retry needs.
+    unresolved = [
+        name
+        for name, value in (("source", src_rel), ("template", tmpl_rel))
+        if not isinstance(value, str) or not value
+    ]
+    if unresolved:
         raise errors.SpecInvalid(
-            "notebook sign-off gate: could not resolve the audited .py source for "
-            f"audit_id={audit_id!r} — no resolved['source'] and no matching "
-            "interview.json audited_source block. A sign-off must recompute the "
-            "section hash from the source on disk; an unresolvable source is refused."
+            f"notebook sign-off gate: could not resolve {' + '.join(unresolved)} for "
+            f"audit_id={audit_id!r} — not in resolved{{...}} and no matching "
+            "interview.json audited_source block. The gate recomputes the section "
+            "hash from the source and rebuilds the canonical view against the "
+            "template, so both are required. Retry with the COMPLETE resolved "
+            "skeleton: {audit_id, section, section_sha, view_sha, "
+            "source: <audited .py relpath>, template: <template .py relpath>}."
         )
-    if not isinstance(tmpl_rel, str) or not tmpl_rel:
-        raise errors.SpecInvalid(
-            "notebook sign-off gate: could not resolve the audited .py TEMPLATE for "
-            f"audit_id={audit_id!r} — no resolved['template'] and no matching "
-            "interview.json audited_source block. The full-view recompute rebuilds "
-            "the canonical view_sha (a diff-from-template projection), so the "
-            "template is a required ingredient; an unresolvable template is refused."
-        )
+    assert isinstance(src_rel, str) and isinstance(tmpl_rel, str)  # narrowed above
     cfg = _notebook_view.read_recorded_config(experiment_dir, audit_id)
     return src_rel, tmpl_rel, cfg
 
@@ -1150,6 +1527,64 @@ def _assert_signoff_render_current(
         )
 
 
+def _assert_signoff_reviewer_not_author(
+    experiment_dir: Path, *, audit_id: str, section: str, section_sha: str
+) -> None:
+    """MH6 reviewer≠author gate — refuse a self-sign under >1 declared actors.
+
+    Active ONLY when interview.json declares >1 actor (MH1); otherwise the gate
+    does not exist and this returns silently, byte-identical to today (no draft
+    lookup, no actor resolution, no new refusal). Under >1 actor, three refusals,
+    all the loud/dangling-reference posture (NOT D7 silence, NOT the E2
+    authorship-missing marker — a re-elicited utterance cannot fix a config /
+    attribution gap; the remedy is a config or a recorded draft, not a sentence):
+
+    * **No resolvable session actor** — an anonymous sign-off in a
+      declared-multi-actor experiment is the laundering channel (sign as nobody,
+      be everybody). Refused naming ``HPC_ACTOR``.
+    * **No current draft attribution** — the author is the ``attestor_id`` of the
+      newest ``notebook-draft`` attestation whose ``content_sha`` equals the
+      FRESHLY RECOMPUTED *section_sha* (:func:`state.notebook_audit.read_draft_author`
+      — routed through the ONE reducer, so a redrafted section's stale draft is no
+      attribution). A missing attribution is REFUSED, not skipped: an unattributed
+      section makes self-review undetectable by omission (draft, skip the draft
+      record, self-sign). The refusal names the remedy (record the draft).
+    * **signer == author** — the drafter's actor cannot sign their own section.
+      Pure identity over opaque slugs (Q1-clean); core never knows WHY the lab
+      wants this, it compares ids.
+    """
+    ids, _ = _read_interview_actors(experiment_dir)
+    if len(ids) <= 1:
+        return  # the gate does not exist under zero/one declared actor
+    from hpc_agent.state.notebook_audit import read_draft_author
+
+    signer = _session_actor(experiment_dir, ids)
+    if signer is None:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (MH6 reviewer≠author): >1 actor is declared "
+            f"but this session has no resolvable actor, so section {section!r} would "
+            "be signed by nobody — an anonymous act in a declared-multi-actor "
+            "experiment is the laundering channel. Configure HPC_ACTOR to a declared "
+            "actor before signing."
+        )
+    author = read_draft_author(experiment_dir, audit_id, section, current_sha=section_sha)
+    if author is None:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (MH6 reviewer≠author): section "
+            f"{section!r} has NO current draft attribution at its recomputed sha "
+            "(no `notebook-draft` record for this content), so an unattributed "
+            "section could be self-reviewed by omission. Record the draft (the "
+            "notebook-draft verb, part of the audit prelude) before signing."
+        )
+    if signer == author:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (MH6 reviewer≠author): the drafter's actor "
+            f"({author!r}) cannot sign off their own section {section!r} — a sign-off "
+            "by the drafting actor is self-review wearing a review's clothes. A "
+            "DIFFERENT declared actor must review and sign."
+        )
+
+
 def _assert_signoff_authorship(
     experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
 ) -> None:
@@ -1179,8 +1614,18 @@ def _assert_signoff_authorship(
     REFUSED loudly, never skipped.
 
     **Lock 3 (authorship bar, D-attention tiered)** — bare acks are refused
-    (:func:`_is_bare_ack`); the response must NAME the section slug (token-exact,
-    the #26 precedent). The tier is RECOMPUTED here over the CANONICAL view
+    (:func:`_is_bare_ack`); the sign-off must NAME the section slug (token-exact,
+    the #26 precedent). EVIDENCE IS TIERED like the unlock gate (run-#12
+    finding 9, closing the run-#11 composed-response laundering hole): with a
+    harness utterance log present the naming/engagement legs run over LOGGED
+    HUMAN UTTERANCES — chat (capture hook) or the sign-off popup (the E4
+    elicitation handler appends to the same log, which is what lets the MCP
+    retry-once land) — and the agent-relayed ``response`` carries no authorship
+    weight; absent a log the non-bare ``response`` is the friction tier
+    (byte-identical v1). Log-tier candidates are TEMPORALLY BOUND (finding 10):
+    only utterances logged after the signed view's render was written count —
+    a prior prompt that happened to name the slug is not attestation
+    (:func:`_signoff_fresh_human_texts`). The tier is RECOMPUTED here over the CANONICAL view
     (:func:`~hpc_agent.ops.notebook.canonical.build_canonical_view`) — with the
     REAL lint findings (recomputed server-side from the recorded roots), the
     journaled fresh receipts, and the recorded attention order. The v1 "statically
@@ -1273,20 +1718,55 @@ def _assert_signoff_authorship(
     assert isinstance(section, str) and isinstance(section_sha, str)
     assert isinstance(audit_id, str) and isinstance(view_sha, str)
 
-    # Base authorship floor (applies to every tier).
+    # Base authorship floor — TIERED exactly like the unlock gate (the shared
+    # lock tier, extended to T8): with a harness utterance log present the legs
+    # run over LOGGED HUMAN UTTERANCES — text a human verifiably typed, in chat
+    # (the UserPromptSubmit capture hook) or in the sign-off POPUP (the E4
+    # elicitation handler appends to the SAME log, which is what lets the
+    # retry-once land on the human's words) — and the agent-relayed ``response``
+    # carries no authorship weight (the run-#11 laundering finding: a composed
+    # response passes the token checks mechanically but attests nothing).
+    # Absent a log (older harness / no capture hook), the non-bare ``response``
+    # is the human's typed sign-off — the v1 friction tier, byte-identical.
+    # MH4: >1 declared actors scope the read to the session actor's log only;
+    # an unattributed session falls to the friction tier, never the union.
     response = str(spec.response or "")
-    if _is_bare_ack(response):
-        _refuse_missing_authorship(
-            "notebook sign-off gate: signing off a section is a HUMAN act — a bare "
-            f"{spec.response!r} (a 'y' / click) cannot sign off. Name the section "
-            f"({section!r}) and state what you reviewed."
-        )
-    if not _names_slug(response, section):
-        _refuse_missing_authorship(
-            "notebook sign-off gate: the sign-off response must NAME the section "
-            f"slug {section!r} (token-exact, the #26 precedent) — a generic ack "
-            "cannot attest a specific section. Restate, naming the section."
-        )
+    _signoff_actor_ids, _signoff_policy = _read_interview_actors(experiment_dir)
+    _signoff_harness_texts = _signoff_fresh_human_texts(
+        experiment_dir,
+        actor_ids=_signoff_actor_ids,
+        audit_id=audit_id,
+        section=section,
+        view_sha=view_sha,
+    )
+    if _signoff_harness_texts is None:
+        if _is_bare_ack(response):
+            _refuse_missing_authorship(
+                "notebook sign-off gate: signing off a section is a HUMAN act — a bare "
+                f"{spec.response!r} (a 'y' / click) cannot sign off. Name the section "
+                f"({section!r}) and state what you reviewed."
+            )
+        if not _names_slug(response, section):
+            _refuse_missing_authorship(
+                "notebook sign-off gate: the sign-off response must NAME the section "
+                f"slug {section!r} (token-exact, the #26 precedent) — a generic ack "
+                "cannot attest a specific section. Restate, naming the section."
+            )
+        signoff_candidates = [response]
+    else:
+        signoff_candidates = [
+            text
+            for text in _signoff_harness_texts
+            if not _is_bare_ack(text) and _names_slug(text, section)
+        ]
+        if not signoff_candidates:
+            _refuse_missing_authorship(
+                "notebook sign-off gate: signing off a section is a HUMAN act — no "
+                f"logged human utterance NAMES the section slug {section!r} "
+                "(token-exact, the #26 precedent). The human types the sign-off in "
+                "their own words (in chat, or in the sign-off popup when it opens); "
+                "an agent-relayed response carries no authorship weight here."
+            )
 
     # Lazy, subject-lint-safe imports (state.* is allowed substrate; the ops
     # notebook subject is reached through the top-level ``notebook_view`` facade).
@@ -1368,6 +1848,15 @@ def _assert_signoff_authorship(
             "attention order changed. Re-run notebook-audit-view for section "
             f"{section!r}, re-inspect the fresh view, and sign THAT view_sha."
         )
+    # MH6 (reviewer ≠ author): under >1 declared actors a sign-off may not be
+    # authored by the SECTION'S DRAFTER — self-review wearing a review's clothes.
+    # Applied BEFORE the tier branch so it covers the redundant (auto-cleared)
+    # path too: a redundant self-review is still recorded self-review. Silent under
+    # zero/one declared actor (the gate does not exist there — byte-identical).
+    _assert_signoff_reviewer_not_author(
+        experiment_dir, audit_id=audit_id, section=section, section_sha=sect.section_sha
+    )
+
     # The tier is now REAL — recomputed with the REAL lint flags (the recorded
     # conservative-floor gap is closed). A section made human-required SOLELY by a
     # lint flag is now distinguished here.
@@ -1388,7 +1877,12 @@ def _assert_signoff_authorship(
     slug_tokens = _signoff_token_names(section)
     raw_specifics = _section_specific_tokens(section_view) if section_view is not None else set()
     specifics = raw_specifics - slug_tokens
-    engaged = (_signoff_token_names(response) - slug_tokens) & specifics
+    # The engaging text must be one that ALSO names the slug (the tiered
+    # candidates): a slug-naming utterance and a separate token-dropping one
+    # cannot combine into an attestation neither made alone.
+    engaged = any(
+        (_signoff_token_names(text) - slug_tokens) & specifics for text in signoff_candidates
+    )
     if specifics and not engaged:
         _refuse_missing_authorship(
             f"notebook sign-off gate: section {section!r} is HUMAN-REQUIRED "
@@ -1445,8 +1939,13 @@ def _registration_authored_text(experiment_dir: Path, response: str) -> str:
     the agent-relayed ``response`` is the human's typed sign-off (the friction
     tier, honestly weaker). There is NO auto-clear / redundant tier here — the
     registration attestor is ALWAYS human (R6).
+
+    Actor-scoped under >1 declared actors (MH4): the pool is the SESSION ACTOR'S
+    log only (:func:`_actor_scoped_human_texts`); an unattributed >1-actor session
+    falls to the friction tier (the ``response``), never the anonymous union.
     """
-    harness_texts = _harness_human_texts(experiment_dir)
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
     if harness_texts is not None:
         return "\n".join(harness_texts)
     return response
@@ -1499,13 +1998,71 @@ def _assert_revoke_floor(
             f"{spec.response!r} (a 'y' / click) cannot revoke it. State why you are revoking "
             f"the registration ({registration_id!r})."
         )
-    authored = _registration_authored_text(experiment_dir, response)
+    # B4 ts>=anchor: the naming leg reads only utterances logged at or after the
+    # target registration's ts — the human named the id at CREATION, so an
+    # unbounded read is permanently satisfied and an agent-composed revoke rides
+    # through. Anchor = the registration filing record's ts (None → unfiltered,
+    # the existence checks above / below own the never-registered case).
+    anchor = _target_record_ts(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        filing_block=REGISTRATION_BLOCK,
+        id_field="registration_id",
+        target_id=registration_id,
+    )
+    authored = _fresh_authored_text(experiment_dir, response, anchor=anchor)
     if not _names_slug(authored, registration_id):
         _refuse_missing_authorship(
             "registration-revoke gate: the revoke must NAME the registration_id "
-            f"{registration_id!r} token-exact (the #26 floor). Restate, naming the "
-            "registration being overturned."
+            f"{registration_id!r} token-exact (the #26 floor), in an utterance logged "
+            "AT OR AFTER the registration it overturns (B4 ts>=anchor). Restate, naming "
+            "the registration being overturned."
         )
+
+
+def _assert_conformance_baseline_membership(resolved: dict[str, Any], sig: Any) -> None:
+    """Refuse a ``conformance`` declaration whose baseline is NOT in the sealed dossier.
+
+    The live-conformance C-declare append leg (moved here from registration T6 by
+    pre-implementation verification — the state substrate imports no ``ops`` and
+    ``compute_dossier_signature`` is an ``ops`` seam). When the registration's
+    ``resolved`` carries an optional ``conformance`` block, it is validated
+    STRUCTURE-only through the ONE declaration validator
+    (:func:`~hpc_agent.state.registration.parse_conformance_declaration` →
+    ``state/conformance.py::validate_declaration``; unknown keys refused there),
+    and its declared baseline ``{path, sha256}`` must be a MEMBER of *sig*'s
+    dry-gathered manifest entries (identity against the ``{path, sha256}`` pairs
+    the dossier seals). So the control limits derive from evidence INSIDE the
+    sealed dossier by construction — never from a file the caller can swap after
+    sign-off. An absent block is a no-op (conformance is opt-in, byte-identical).
+
+    Structural refusal (UNMARKED): a non-member baseline is a moved/absent
+    artifact a re-elicited utterance cannot fix.
+    """
+    from hpc_agent.state.registration import parse_conformance_declaration
+
+    declaration = parse_conformance_declaration(resolved)
+    if declaration is None:
+        return  # conformance is opt-in — no block, no machinery (byte-identical)
+    path = declaration.baseline.path
+    sha256 = declaration.baseline.sha256
+    # Membership is by the sealed-bytes SHA — the integrity identity. The declared
+    # ``path`` is the caller's EXPERIMENT-RELATIVE locator the read-side (T5/T8)
+    # resolves; the dossier's manifest entries carry ARCHIVE paths (the ``_aggregated``
+    # → ``aggregated`` rename means the two path spellings differ by construction), so
+    # the sha is the ONE stable identity across both. A declared sha that is a sealed
+    # entry's sha proves the control limits derive from evidence INSIDE the sealed
+    # dossier — never a file swapped after sign-off (C-declare; recorded in the drift log).
+    if any(entry.get("sha256") == sha256 for entry in sig.entries):
+        return
+    raise errors.SpecInvalid(
+        "registration gate (lock 2, conformance): the declared conformance baseline "
+        f"{{path={path!r}, sha256={sha256[:12]}...}} is NOT sealed in the dossier — no manifest "
+        "entry carries that sha256. The control limits must derive from evidence INSIDE the "
+        "sealed dossier by construction (C-declare), never a file swapped after sign-off. "
+        "Declare a baseline artifact the dossier seals."
+    )
 
 
 def _assert_registration_full(
@@ -1626,6 +2183,13 @@ def _assert_registration_full(
         recompute=sig.bundle_sha256,
     )
 
+    # ── Lock 2a': conformance baseline membership (live-conformance C-declare) ──
+    # When the registration opts into live conformance, the declared baseline
+    # {path, sha256} must be a MEMBER of the dossier's dry-gathered manifest
+    # entries — the control limits derive from evidence INSIDE the sealed dossier
+    # by construction, never from a file swapped after sign-off.
+    _assert_conformance_baseline_membership(resolved, sig)
+
     # ── Lock 2b: template raw-bytes sha on disk + completeness by counting ──
     try:
         tmpl_bytes = (Path(experiment_dir) / template_rel).read_bytes()
@@ -1740,9 +2304,12 @@ def _assert_registration_authorship(
     ``notebook-sign-off``): a registration-family block
     (:data:`REGISTRATION_BLOCK_FAMILY`) is refused for any ``scope_kind`` other
     than ``"registration"``; and the ``"registration"`` scope accepts ONLY the
-    block family (``registration`` / ``registration-revoke``). Every other record
-    passes untouched. Dispatches a ``registration-revoke`` to the revoke floor (R7)
-    and a ``registration`` to the full three locks (R6).
+    block family (``registration`` / ``registration-revoke`` /
+    ``registration-review`` / ``conformance-verdict``). Every other record passes
+    untouched. Dispatches a ``registration-revoke`` to the revoke floor (R7), a
+    ``registration-review`` to the C-horizon re-affirmation floor, a
+    ``conformance-verdict`` to the C-verdict drift-verdict gate, and a
+    ``registration`` to the full three locks (R6).
 
     Raises :class:`errors.SpecInvalid` on any refusal (authorship-bar refusals
     carry the E2 marker so the single append firing site covers registration
@@ -1772,8 +2339,272 @@ def _assert_registration_authorship(
     if block == REVOKE_BLOCK:
         _assert_revoke_floor(experiment_dir, spec, resolved)
         return
+    if block == REGISTRATION_REVIEW_BLOCK:
+        _assert_registration_review_floor(experiment_dir, spec, resolved)
+        return
+    if block == CONFORMANCE_VERDICT_BLOCK:
+        _assert_conformance_verdict_authorship(experiment_dir, spec, resolved)
+        return
     # block == REGISTRATION_BLOCK — the maximal human ceremony (R6 three locks).
     _assert_registration_full(experiment_dir, spec, resolved)
+
+
+# ── registration-review floor + conformance-verdict gate (live-conformance T7) ─
+
+
+def _names_any_sha_prefix(text: str, shas: Sequence[str]) -> bool:
+    """True iff a hex run in *text* is an 8+ hex prefix of ANY sha in *shas*.
+
+    The R6 sha-prefix bar (:data:`_HEX_RUN_RE`) applied to a bare list of shas
+    (the conformance-verdict ``cites`` are raw ``content_sha`` strings, not
+    ``.sha``-bearing citation objects like :func:`_names_citation_sha_prefix`).
+    Case-insensitive prefix match — a token that can only derive from the
+    presented evidence brief.
+    """
+    for run in (m.group(0).lower() for m in _HEX_RUN_RE.finditer(text or "")):
+        for sha in shas:
+            if str(sha).lower().startswith(run):
+                return True
+    return False
+
+
+def _valid_review_horizon(review_horizon: str) -> None:
+    """Refuse a ``registration-review`` horizon that is not ISO-8601 (T7 append check).
+
+    C-horizon: core names no period and computes no cadence — it only compares a
+    caller-computed timestamp. The reduction's :func:`state.registration._horizon_lapsed`
+    is deliberately tolerant (an unparseable horizon yields "not lapsed"), so the
+    *append* gate is where a malformed horizon is caught loudly (its docstring
+    names this gate). A trailing ``Z`` normalizes to ``+00:00`` before
+    :func:`datetime.fromisoformat`.
+    """
+    from datetime import datetime
+
+    raw = review_horizon[:-1] + "+00:00" if review_horizon.endswith("Z") else review_horizon
+    try:
+        datetime.fromisoformat(raw)
+    except (ValueError, TypeError) as exc:
+        raise errors.SpecInvalid(
+            "registration-review gate: resolved['review_horizon'] must be an ISO-8601 "
+            f"timestamp (the caller computes the date; core compares timestamps); got "
+            f"{review_horizon!r} ({exc})."
+        ) from exc
+
+
+def _assert_registration_review_floor(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """The C-horizon re-affirmation floor for a ``registration-review`` record.
+
+    A review EXTENDS a current registration's ``review_horizon`` WITHOUT
+    re-registration, when nothing has drifted — the cheaper tier that answers
+    "does a human still stand behind this, today?" (recorded rationale: forcing a
+    full re-registration for an unchanged dossier would train horizon inflation).
+
+    ``resolved = {registration_id, dossier_sha, review_horizon}`` — all three
+    non-empty; ``review_horizon`` a valid ISO timestamp (:func:`_valid_review_horizon`).
+
+    The authorship floor (the R6 form, tiered on the harness utterance log via
+    :func:`_registration_authored_text`): a bare ack cannot re-affirm; the response
+    must NAME the ``registration_id`` token-exact AND the dossier sha by an 8+ hex
+    prefix (:func:`_names_target_sha_prefix`).
+
+    **The recompute leg — you cannot re-affirm a DRIFTED registration (C-horizon).**
+    The gate reduces the id's registration journal to the WINNER, RECOMPUTES the
+    live dossier signature via the ONE seam
+    (:func:`~hpc_agent.ops.export_dossier.compute_dossier_signature`), and refuses
+    when it no longer equals the winner's recorded ``dossier_sha`` — the remedy for
+    a moved dossier is re-registration, not review. The review's own asserted
+    ``dossier_sha`` must name that SAME sealed dossier.
+
+    Authorship-bar refusals carry the E2 marker (a freshly typed re-affirmation
+    resolves them); the shape / drift / missing-winner refusals raise plain
+    :class:`errors.SpecInvalid` UNMARKED (a re-elicit cannot un-drift a dossier).
+    """
+    from hpc_agent.ops import export_dossier
+    from hpc_agent.state.registration import ABSENT as REG_ABSENT
+    from hpc_agent.state.registration import REVOKED as REG_REVOKED
+    from hpc_agent.state.registration import reduce_registration
+
+    registration_id = resolved.get("registration_id")
+    if not isinstance(registration_id, str) or not registration_id:
+        raise errors.SpecInvalid(
+            "registration-review gate: resolved must name a non-empty registration_id "
+            "(the registration being re-affirmed)."
+        )
+    dossier_sha = resolved.get("dossier_sha")
+    if not isinstance(dossier_sha, str) or not dossier_sha:
+        raise errors.SpecInvalid(
+            "registration-review gate: resolved must carry a non-empty dossier_sha (the sealed "
+            "dossier being re-affirmed — the review recomputes the live signature against it)."
+        )
+    review_horizon = resolved.get("review_horizon")
+    if not isinstance(review_horizon, str) or not review_horizon:
+        raise errors.SpecInvalid(
+            "registration-review gate: resolved must carry a non-empty review_horizon (the new "
+            "ISO horizon the re-affirmation extends to)."
+        )
+    _valid_review_horizon(review_horizon)
+
+    # ── authorship floor (part 1): non-bare + names the id ──
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "registration-review gate: re-affirming a registration is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot re-affirm it. Name the registration "
+            f"({registration_id!r}) and the dossier sha prefix you reviewed."
+        )
+    authored = _registration_authored_text(experiment_dir, response)
+    if not _names_slug(authored, registration_id):
+        _refuse_missing_authorship(
+            "registration-review gate: the re-affirmation must NAME the registration_id "
+            f"{registration_id!r} token-exact (the #26 floor). Restate, naming the registration."
+        )
+
+    # ── recompute leg: reduce to the winner; the live dossier must NOT have drifted ──
+    records = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
+    peek = reduce_registration(records, registration_id=registration_id, live_dossier_sha=None)
+    winner = peek.winner
+    if winner is None or peek.status in (REG_ABSENT, REG_REVOKED):
+        raise errors.SpecInvalid(
+            f"registration-review gate: no current registration named {registration_id!r} to "
+            f"re-affirm (status {peek.status!r}). A review extends a LIVE registration's horizon; "
+            "there is nothing to re-affirm — re-register the subject."
+        )
+    run_id = winner.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise errors.SpecInvalid(
+            f"registration-review gate: the winning registration for {registration_id!r} carries "
+            "no run_id, so the live dossier signature cannot be recomputed to confirm nothing "
+            "drifted."
+        )
+    recorded_sha = winner.get("dossier_sha")
+    sig = export_dossier.compute_dossier_signature(
+        experiment_dir, run_id, include_lineage=bool(winner.get("include_lineage", False))
+    )
+    if sig.bundle_sha256 != recorded_sha:
+        raise errors.SpecInvalid(
+            "registration-review gate: the live dossier signature "
+            f"({sig.bundle_sha256[:12]}...) does not match the registration's recorded "
+            f"dossier_sha ({str(recorded_sha)[:12]}...). You CANNOT re-affirm a registration whose "
+            "sealed stores have DRIFTED (C-horizon) — the remedy is re-registration, not review."
+        )
+    if dossier_sha != recorded_sha:
+        raise errors.SpecInvalid(
+            "registration-review gate: resolved['dossier_sha'] "
+            f"({dossier_sha[:12]}...) does not name the registration's sealed dossier "
+            f"({str(recorded_sha)[:12]}...). A review re-affirms the EXISTING dossier; name "
+            "its sha."
+        )
+
+    # ── authorship floor (part 2): name the dossier sha by an 8+ hex prefix ──
+    if not _names_target_sha_prefix(authored, str(recorded_sha)):
+        _refuse_missing_authorship(
+            "registration-review gate: the re-affirmation must NAME the dossier sha by an 8+ "
+            "hex-character prefix (a token that can only derive from the presented "
+            "verify-registration brief). Quote the dossier sha prefix you reviewed."
+        )
+
+
+def _assert_conformance_verdict_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """The live-conformance drift-verdict gate (C-verdict) — a DATED CONCLUSION.
+
+    A human's resolution of a ``needs_verdict`` / ``nonconforming`` FINDING is an
+    ordinary ``append-decision`` (block ``conformance-verdict`` on scope kind
+    ``registration`` — no verdict verb, the no-unlock-verb doctrine), citing the
+    offending receipts by sha. ``resolved = {registration_id, cites: [<receipt
+    content_sha>, ...], note}`` — ``cites`` NON-EMPTY, ``note`` a free-text opaque
+    dated conclusion. The verdict binds NO dossier (it is dated evidence, never a
+    re-registration) and never mutates the registration's status.
+
+    **Lock 2 (recompute — the E-shape citation posture).** Every cited sha is
+    resolved SERVER-SIDE against the registration's conformance ledger
+    (:func:`~hpc_agent.state.conformance_store.read_observations`): a sha the ledger
+    does NOT carry is refused (a caller-asserted sha is never trusted-then-recorded).
+
+    **Lock 3 (authorship, the R6 bar reused, tiered on the harness log via
+    :func:`_registration_authored_text`).** A bare ack cannot resolve a finding;
+    the response must NAME the ``registration_id`` token-exact AND at least one
+    cited receipt sha by an 8+ hex prefix (:func:`_names_any_sha_prefix`).
+
+    Authorship-bar refusals carry the E2 marker (a freshly typed verdict resolves
+    them); the shape / citation refusals raise plain :class:`errors.SpecInvalid`
+    UNMARKED (a re-elicit cannot conjure a receipt the ledger never carried).
+    """
+    from hpc_agent.state.conformance_store import read_observations
+
+    # ── Lock 2 shape: id + non-empty cites + a dated note ──
+    registration_id = resolved.get("registration_id")
+    if not isinstance(registration_id, str) or not registration_id:
+        raise errors.SpecInvalid(
+            "conformance-verdict gate: resolved must name a non-empty registration_id (the "
+            "registration whose drift this verdict resolves)."
+        )
+    cites = resolved.get("cites")
+    if not isinstance(cites, list) or not cites:
+        raise errors.SpecInvalid(
+            "conformance-verdict gate: resolved['cites'] must be a NON-EMPTY list of the "
+            "offending receipt content_shas the verdict resolves (C-verdict — a drift verdict "
+            "cites the receipts it judges)."
+        )
+    cite_shas: list[str] = []
+    for c in cites:
+        if not isinstance(c, str) or not c:
+            raise errors.SpecInvalid(
+                f"conformance-verdict gate: each cite must be a non-empty content_sha string; "
+                f"got {c!r}."
+            )
+        cite_shas.append(c)
+    note = resolved.get("note")
+    if not isinstance(note, str) or not note.strip():
+        raise errors.SpecInvalid(
+            "conformance-verdict gate: resolved must carry a free-text 'note' — the human's "
+            "dated conclusion over the cited drift (opaque to core, but a verdict is a dated "
+            "CONCLUSION, never a bare citation)."
+        )
+
+    # ── Lock 3 (part 1): non-bare + names the id ──
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "conformance-verdict gate: judging a drift FINDING is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot resolve it. Name the registration "
+            f"({registration_id!r}) and a cited receipt sha you reviewed."
+        )
+    authored = _registration_authored_text(experiment_dir, response)
+    if not _names_slug(authored, registration_id):
+        _refuse_missing_authorship(
+            "conformance-verdict gate: the verdict must NAME the registration_id "
+            f"{registration_id!r} token-exact (the #26 floor). Restate, naming the registration."
+        )
+
+    # ── Lock 2 (recompute): every cited sha must be CARRIED by the ledger ──
+    ledger_records, _skipped = read_observations(experiment_dir, registration_id)
+    ledger_shas = {
+        str(r.get("content_sha"))
+        for r in ledger_records
+        if isinstance(r.get("content_sha"), str) and r.get("content_sha")
+    }
+    unknown = [c for c in cite_shas if c not in ledger_shas]
+    if unknown:
+        raise errors.SpecInvalid(
+            "conformance-verdict gate: cited content_sha(s) "
+            f"{[c[:12] + '...' for c in unknown]} are NOT carried by registration "
+            f"{registration_id!r}'s conformance ledger — a verdict may only cite receipts that "
+            "EXIST on record (the E-shape citation posture; a caller-asserted sha is never "
+            "trusted-then-recorded). Quote the offending receipts' shas from the "
+            "conformance-status brief."
+        )
+
+    # ── Lock 3 (part 2): name at least one cited receipt sha by an 8+ hex prefix ──
+    if not _names_any_sha_prefix(authored, cite_shas):
+        _refuse_missing_authorship(
+            "conformance-verdict gate: the verdict must NAME at least one cited receipt sha by an "
+            "8+ hex-character prefix (a token that can only derive from the presented evidence "
+            "brief). Quote an offending receipt's content_sha prefix."
+        )
 
 
 # ── reproduction-verdict authorship gate (D-consume admission, T12) ───────────
@@ -1982,6 +2813,927 @@ def _assert_reproduction_verdict_authorship(
             "canonicalize it to the full sha."
         )
     resolved["content_sha"] = full_sha
+
+
+# ── conclusion authorship gate (E-shape's three locks + the revoke floor, T8) ──
+
+
+def _names_citation_sha_prefix(text: str, citations: Sequence[Any]) -> str | None:
+    """The first citation ``sha`` a hex run in *text* prefixes, or None.
+
+    E-shape lock 3 (the R6 sha-prefix bar reused VERBATIM): a finding's response
+    must NAME at least one CITED sha by an 8+ hex-character prefix — a token that
+    exists nowhere in a human's prior vocabulary and can only derive from the
+    presented evidence (the rendered evidence-brief). Case-insensitive prefix
+    match against the citations the gate just verified.
+    """
+    for run in (m.group(0).lower() for m in _HEX_RUN_RE.finditer(text or "")):
+        for cit in citations:
+            if str(cit.sha).lower().startswith(run):
+                return str(cit.sha)
+    return None
+
+
+def _conclusion_dossier_resolver(experiment_dir: Path) -> Callable[[str], str | None]:
+    """The INJECTED dossier resolver for citation dispatch (drift-log item 2).
+
+    ``state/evidence.py`` never imports ``ops``; the dossier resolver
+    (``compute_dossier_signature``) lives in ``ops/export_dossier.py`` and is
+    passed IN here — reached through the top-level ``export_dossier`` facade via
+    the package-alias form the subject-import lint permits from inside the
+    ``decision`` subject (the ``_assert_registration_full`` precedent). A dossier
+    ``ref`` is a ``run_id``; the resolved answer is that run's dossier
+    ``bundle_sha256``. An unresolvable dossier (no such run, a store gone) returns
+    ``None`` → :func:`state.evidence.resolve_citation` reports it unresolvable →
+    the append refuses loudly (verification at append is load-bearing).
+    """
+    from hpc_agent.ops import export_dossier
+
+    def _resolve(ref: str) -> str | None:
+        try:
+            sig = export_dossier.compute_dossier_signature(experiment_dir, ref)
+        except Exception:  # noqa: BLE001 — any resolution failure is "unresolvable here"
+            return None
+        return sig.bundle_sha256
+
+    return _resolve
+
+
+def _assert_conclusion_revoke_floor(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """The E-shape revoke floor (the R7 form) for a ``conclusion-revoke`` record.
+
+    A human withdrawal: non-bare, NAMES the ``conclusion_id``, and its free-text
+    ``reason`` is MANDATORY. It binds no new sha (it withdraws — a conclusion is
+    dated evidence, never re-verified at withdrawal), so there is NO recompute
+    leg; but it is journaled, attributed, and permanent like everything else. The
+    bare-ack and id-naming refusals carry the E2 authorship marker (a freshly
+    typed human rationale resolves them); the missing-reason refusal is structural
+    (the agent must add ``resolved['reason']``), left UNMARKED.
+    """
+    conclusion_id = resolved.get("conclusion_id")
+    if not isinstance(conclusion_id, str) or not conclusion_id:
+        raise errors.SpecInvalid(
+            "conclusion-revoke gate: resolved must name a non-empty conclusion_id "
+            "(the finding being withdrawn)."
+        )
+    reason = resolved.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise errors.SpecInvalid(
+            "conclusion-revoke gate: a revoke MUST carry a free-text resolved['reason'] "
+            "(why the finding no longer holds). It binds no new sha, but it is journaled, "
+            "attributed, and permanent."
+        )
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "conclusion-revoke gate: withdrawing a conclusion is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot revoke it. State why you are "
+            f"withdrawing the conclusion ({conclusion_id!r})."
+        )
+    # B4 ts>=anchor: name the conclusion in an utterance logged AT OR AFTER the
+    # conclusion it withdraws — the creation utterance (which named the id) no
+    # longer self-satisfies the naming leg. Anchor = the conclusion filing ts.
+    from hpc_agent.state.evidence import CONCLUSION_BLOCK
+
+    anchor = _target_record_ts(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        filing_block=CONCLUSION_BLOCK,
+        id_field="conclusion_id",
+        target_id=conclusion_id,
+    )
+    authored = _fresh_authored_text(experiment_dir, response, anchor=anchor)
+    if not _names_slug(authored, conclusion_id):
+        _refuse_missing_authorship(
+            "conclusion-revoke gate: the revoke must NAME the conclusion_id "
+            f"{conclusion_id!r} token-exact (the #26 floor), in an utterance logged "
+            "AT OR AFTER the conclusion it withdraws (B4 ts>=anchor). Restate, naming "
+            "the conclusion being withdrawn."
+        )
+
+
+def _assert_conclusion_full(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """E-shape's three locks for a ``conclusion`` record — a human-authored finding.
+
+    A conclusion is an ordinary ``append-decision`` whose ``scope_kind=="conclusion"``,
+    ``block=="conclusion"``, and ``resolved={conclusion_id, tags, concludes?,
+    citations, finding}`` (E-shape). It records a dated, sha-linked finding over
+    sealed evidence — a HUMAN attestation, so it faces both the un-fakeable
+    citation-verification lock and the tiered authorship bar.
+
+    **Lock 1 (no affordance)** is organizational: there is no conclusion verb /
+    chain / next_block / skill — append-decision under this block is the only write
+    path (pinned by the T11 contract test; no primitive is named conclude).
+
+    **Lock 2 (recompute, un-fakeable)** — the ``resolved`` shape is validated
+    server-side (:func:`state.evidence.validate_conclusion_resolved` — slug-validated
+    ``conclusion_id``, shape-validated ``tags``, a NON-EMPTY ``citations`` list). Then
+    EVERY citation is resolved against the LIVE stores through its kind's ONE resolver
+    (:func:`state.evidence.resolve_citation`, the ``dossier`` slot fed the injected
+    :func:`_conclusion_dossier_resolver`): an unresolvable or mismatched citation
+    REFUSES with the recorded-vs-live pair — you cannot conclude about evidence the
+    machine cannot find on this namespace at write time (the receipt-laundering hole,
+    closed at the memory boundary). The whole verified set is then hash-locked: its
+    canonical ``content_sha`` (:func:`state.evidence.citations_content_sha`) binds
+    through the ONE attestation kernel (:func:`state.attestation.bind`) and is persisted
+    into ``resolved`` so the reduction's stored-sha fallback agrees.
+
+    **Lock 3 (authorship, the R6 bar reused)** — bare acks refused
+    (:func:`_is_bare_ack`); the response must NAME the ``conclusion_id`` token-exact
+    AND name at least one CITED sha by an 8+ hex prefix
+    (:func:`_names_citation_sha_prefix`) matched against the citations just verified.
+    Tiered on the harness utterance log (:func:`_registration_authored_text` — the
+    LOCK when present, the agent-relayed ``response`` FRICTION tier otherwise). There
+    is NO auto-clear / redundant tier: a conclusion's attestor is ALWAYS human (a
+    machine has no findings, only measurements, and the measurements are already
+    attested elsewhere).
+
+    The authorship-bar refusals (bare ack, missing id, missing sha-prefix) carry the
+    E2 marker via :func:`_refuse_missing_authorship`; the Lock-2 shape / citation
+    refusals raise plain :class:`errors.SpecInvalid` UNMARKED (a re-elicit cannot fix
+    a moved or absent evidence sha — the E2 scoping).
+    """
+    from hpc_agent.state import attestation
+    from hpc_agent.state.evidence import (
+        SUBJECT_KIND as CONCLUSION_SUBJECT_KIND,
+    )
+    from hpc_agent.state.evidence import (
+        citations_content_sha,
+        resolve_citation,
+        validate_conclusion_resolved,
+    )
+
+    # ── Lock 2 shape: slug-validated id + non-empty shape-validated citations ──
+    parsed = validate_conclusion_resolved(resolved)
+
+    # ── Base authorship floor (Lock 3, part 1): non-bare + names the id ──
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "conclusion gate: recording a finding is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot conclude. Name the conclusion "
+            f"({parsed.conclusion_id!r}) and a cited sha prefix you reviewed."
+        )
+    authored = _registration_authored_text(experiment_dir, response)
+    if not _names_slug(authored, parsed.conclusion_id):
+        _refuse_missing_authorship(
+            "conclusion gate: the finding must NAME the conclusion_id "
+            f"{parsed.conclusion_id!r} token-exact (the #26 floor). Restate, naming the "
+            "conclusion."
+        )
+
+    # ── Lock 2 (recompute — the load-bearing verification): every citation must
+    # resolve AND match against the LIVE stores or the append is refused. ──
+    dossier_resolver = _conclusion_dossier_resolver(experiment_dir)
+    for cit in parsed.citations:
+        res = resolve_citation(experiment_dir, cit, dossier_resolver=dossier_resolver)
+        if not res.resolved:
+            raise errors.SpecInvalid(
+                f"conclusion gate (lock 2): citation {cit.kind}:{cit.ref!r} is UNRESOLVABLE "
+                f"on this namespace ({res.detail}) — a conclusion may only cite evidence the "
+                "machine can find at write time. Cite evidence that exists on this namespace."
+            )
+        if not res.matches:
+            raise errors.SpecInvalid(
+                f"conclusion gate (lock 2): citation {cit.kind}:{cit.ref!r} sha MISMATCH "
+                f"({res.detail}) — the asserted sha {cit.sha!r} is not what the live store "
+                "carries. A caller-asserted sha is never trusted-then-recorded (the "
+                "receipt-laundering hole). Quote the live sha."
+            )
+
+    # ── content_sha bound via the ONE kernel against the re-canonicalized set ──
+    content_sha = citations_content_sha(parsed.citations)
+    attestation.bind(
+        {
+            "attestor": "human",
+            "subject_kind": CONCLUSION_SUBJECT_KIND,
+            "subject_id": parsed.conclusion_id,
+            "content_sha": content_sha,
+        },
+        recompute=lambda: citations_content_sha(parsed.citations),
+    )
+    # Persist the hash-lock so reduce_conclusion's stored-sha fallback agrees.
+    resolved["content_sha"] = content_sha
+
+    # ── Lock 3, part 2: the raised bar — name a CITED sha by an 8+ hex prefix ──
+    if _names_citation_sha_prefix(authored, parsed.citations) is None:
+        _refuse_missing_authorship(
+            "conclusion gate (lock 3): the finding must NAME at least one cited sha by an "
+            "8+ hex-character prefix (the diff-token pattern at its strongest — a token that "
+            "exists nowhere in a human's prior vocabulary and can only derive from the "
+            "presented evidence). Quote a cited sha prefix from the evidence-brief."
+        )
+
+
+def _assert_conclusion_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """The E-shape conclusion gate — evidence memory's one new attested record (T8).
+
+    Block convention, enforced BOTH directions (mirrors ``registration`` /
+    ``notebook-sign-off``): a conclusion-family block
+    (:data:`state.evidence.CONCLUSION_BLOCK_FAMILY`) is refused for any
+    ``scope_kind`` other than ``"conclusion"``; and the ``"conclusion"`` scope
+    accepts ONLY the block family (``conclusion`` / ``conclusion-revoke``). Every
+    other record passes untouched. Dispatches a ``conclusion-revoke`` to the revoke
+    floor and a ``conclusion`` to the full three locks.
+
+    Raises :class:`errors.SpecInvalid` on any refusal (authorship-bar refusals carry
+    the E2 marker so the single append firing site covers conclusions over MCP too;
+    shape / citation refusals stay unmarked).
+    """
+    from hpc_agent.state.evidence import (
+        CONCLUSION_BLOCK_FAMILY,
+        CONCLUSION_REVOKE_BLOCK,
+    )
+
+    block = spec.block
+    in_family = block in CONCLUSION_BLOCK_FAMILY
+    # A conclusion-family block is conclusion-scope-only.
+    if in_family and spec.scope_kind != "conclusion":
+        raise errors.SpecInvalid(
+            f"block {block!r} is a conclusion-family block, only valid for "
+            f"scope_kind='conclusion'; got scope_kind={spec.scope_kind!r}."
+        )
+    if spec.scope_kind != "conclusion":
+        return  # not a conclusion record — nothing to gate
+    # The conclusion scope accepts ONLY its block family.
+    if not in_family:
+        raise errors.SpecInvalid(
+            f"scope_kind='conclusion' accepts only its block family "
+            f"{sorted(CONCLUSION_BLOCK_FAMILY)}; got block={block!r} — a conclusion scope "
+            "records ONLY conclusion / conclusion-revoke (E-shape)."
+        )
+    if not isinstance(resolved, dict):
+        raise errors.SpecInvalid(
+            "conclusion gate: resolved must be a mapping carrying the conclusion fields "
+            "{conclusion_id, tags, citations, finding}."
+        )
+    if block == CONCLUSION_REVOKE_BLOCK:
+        _assert_conclusion_revoke_floor(experiment_dir, spec, resolved)
+        return
+    # block == CONCLUSION_BLOCK — the human finding (E-shape three locks).
+    _assert_conclusion_full(experiment_dir, spec, resolved)
+
+
+# ── challenge authorship gate (C-gate: three locks + the verdict/withdraw floors, T5) ──
+
+
+def _names_target_sha_prefix(text: str, sha: str) -> bool:
+    """True iff a hex run in *text* is an 8+ hex prefix of *sha* (the R6 form).
+
+    C-gate lock 3, the "name what you attack" leg: the challenge response must name
+    the TARGET's ``content_sha`` by an 8+ hex-character prefix — a token that exists
+    nowhere in a human's prior vocabulary and can only derive from the presented
+    record. Case-insensitive prefix match (:data:`_HEX_RUN_RE`).
+    """
+    lowered = str(sha).lower()
+    for run in (m.group(0).lower() for m in _HEX_RUN_RE.finditer(text or "")):
+        if lowered.startswith(run):
+            return True
+    return False
+
+
+def _challenge_filing_citations(experiment_dir: Path, challenge_id: str) -> Sequence[Any]:
+    """The verified citations of *challenge_id*'s FILING record, or ``()``.
+
+    Reads the challenge's own journal (the C-shape per-id thread), finds the
+    newest ``challenge`` filing record, and returns its validated
+    :class:`~hpc_agent.state.evidence.Citation` list — the shas a DISMISSAL must
+    engage (C-gate: dismissing evidence requires naming it). ``()`` when no
+    parseable filing exists (the caller then refuses the resolution — you cannot
+    resolve a challenge that was never filed).
+    """
+    from hpc_agent.state.challenges import CHALLENGE_BLOCK, validate_challenge_resolved
+
+    citations: Sequence[Any] = ()
+    for rec in _read_decisions(experiment_dir, "challenge", challenge_id):
+        if rec.get("block") != CHALLENGE_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get("challenge_id") != challenge_id:
+            continue
+        try:
+            citations = validate_challenge_resolved(resolved).citations
+        except errors.SpecInvalid:
+            continue
+    return citations
+
+
+def _challenge_filing_attestor(experiment_dir: Path, challenge_id: str) -> str | None:
+    """The ``attestor_id`` (challenger) of *challenge_id*'s newest FILING, or ``None``.
+
+    MH7: the resolver≠challenger / withdrawer==challenger comparisons read WHO
+    filed the challenge from the filing record's own ``attestor_id`` — the opaque
+    actor slug the ops append stamped at filing time (server-resolved, never
+    caller-suppliable). ``None`` when no parseable filing exists OR the filing was
+    unattributed (a zero/one-actor filing, or a >1-actor filing with no resolvable
+    session actor) — the caller's >1-actor guard then decides the refusal.
+    """
+    from hpc_agent.state.challenges import CHALLENGE_BLOCK
+
+    attestor: str | None = None
+    for rec in _read_decisions(experiment_dir, "challenge", challenge_id):
+        if rec.get("block") != CHALLENGE_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get("challenge_id") != challenge_id:
+            continue
+        raw = rec.get("attestor_id")
+        attestor = raw if isinstance(raw, str) and raw else None
+    return attestor
+
+
+def _recompute_challenge_view_sha(
+    experiment_dir: Path, challenge_id: str, carried_view_sha: str
+) -> None:
+    """RECOMPUTE a carried ``view_sha`` against the challenge-status render (C-verb).
+
+    The ``challenge-status`` brief is a PURE FUNCTION of the projection (no
+    wall-clock, no fleet accounting — ``ops/challenge_status_op.py``), so a
+    ``view_sha`` a human bound after reading the thread is recomputable: the gate
+    re-invokes the ONE render (never a second inlined projection — the v1.6
+    recomputable-render precedent) and refuses a mismatch. Reached through the
+    top-level ``challenge_status_op`` role-root module (the subject-import lint
+    permits the ops-facade form from inside the ``decision`` subject — the
+    ``export_dossier`` precedent).
+
+    Structural refusal (UNMARKED): a stale ``view_sha`` names a view that no longer
+    renders — a re-elicited utterance cannot fix it, so it carries no E2 marker.
+
+    Runtime note (drift log): the render routes through
+    ``state/challenges.py::standing_challenges`` — the ONE collector; the op⇄state
+    (T1) and op⇄wire (T2) entry-shape reconciliation is the Wave-A/B integrator's
+    step, so this recompute is exercised under the same collector monkeypatch the
+    op's own tests use until that lands. The op is reached via
+    :func:`importlib.import_module` (not a static ``from ... import``) precisely
+    because the op module is PRE-INTEGRATION and carries the placeholder-vs-real
+    T2/T1 type divergence: a followed import would drag those known-transient
+    errors into this subject's type-check. ``view_sha`` is OPTIONAL, so a verdict
+    that carries none never reaches here.
+    """
+    import importlib
+
+    op = importlib.import_module("hpc_agent.ops.challenge_status_op")
+    result = op.challenge_status(
+        experiment_dir=experiment_dir,
+        spec=op.ChallengeStatusSpec(challenge_id=challenge_id),
+    )
+    if result.view_sha != carried_view_sha:
+        raise errors.SpecInvalid(
+            "challenge resolution gate (view_sha recompute): the carried view_sha "
+            f"{carried_view_sha!r} does not match the challenge-status render for "
+            f"{challenge_id!r} (recomputed {result.view_sha!r}). The view moved after "
+            "the human signed it — re-read `challenge-status` and bind the current view_sha."
+        )
+
+
+def _assert_challenge_filing_full(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """The C-gate three locks for a ``challenge`` FILING — human-authored dissent.
+
+    A challenge is an ordinary ``append-decision`` whose ``scope_kind=="challenge"``,
+    ``block=="challenge"``, ``resolved={challenge_id, target, citations, grounds}``
+    (C-shape). It records a dated, sha-targeted, evidence-bound attestation of
+    DISSENT — a HUMAN act (C3: code never files dissent), so it faces both the
+    un-fakeable target/citation-verification lock and the raised authorship bar.
+
+    **Lock 1 (no affordance)** — append-decision under this block is the ONLY write
+    path; no challenge/contest/dispute/refute verb, chain, or next_block (pinned by
+    the T9 contract test).
+
+    **Lock 2 (recompute, un-fakeable)** — ``resolved`` validated server-side
+    (:func:`state.challenges.validate_challenge_resolved`: slug ``challenge_id``, a
+    full-address ``target``, a NON-EMPTY ``citations`` list, non-empty ``grounds``).
+    Then the TARGET is resolved server-side and confirmed committed at the asserted
+    ``content_sha`` (:func:`state.challenges.resolve_target_existence` — the
+    ``attestation`` kind SCANS the named journal so a non-newest record is findable,
+    C2); every CITATION is resolved against the LIVE stores
+    (:func:`state.evidence.resolve_citation`) and refused on unresolvable/mismatch —
+    you cannot contest what the machine cannot find, nor rest on evidence it cannot
+    resolve (the receipt-laundering hole at the dissent boundary). The verified
+    ``{target, citations}`` set is then hash-locked: its canonical ``content_sha``
+    (:func:`state.challenges.challenge_content_sha`) binds through the ONE kernel
+    (:func:`state.attestation.bind`) and persists into ``resolved``.
+
+    **Lock 3 (authorship, the R6 bar reused)** — bare acks refused
+    (:func:`_is_bare_ack`); the response must NAME the ``challenge_id`` token-exact
+    AND the TARGET's ``content_sha`` by an 8+ hex prefix (:func:`_names_sha_prefix` —
+    you must name what you attack) AND at least one CITED sha by an 8+ hex prefix
+    (:func:`_names_citation_sha_prefix` — you must name what you rest on). Tiered on
+    the harness utterance log (:func:`_registration_authored_text`). NO auto-clear
+    tier: a challenge's attestor is ALWAYS human (C3).
+
+    Authorship-bar refusals carry the E2 marker (:func:`_refuse_missing_authorship`);
+    Lock-2 shape/target/citation refusals raise plain :class:`errors.SpecInvalid`
+    UNMARKED (a re-elicit cannot conjure a moved or absent sha — the E2 scoping).
+    """
+    from hpc_agent.state import attestation
+    from hpc_agent.state.challenges import (
+        SUBJECT_KIND as CHALLENGE_SUBJECT_KIND,
+    )
+    from hpc_agent.state.challenges import (
+        challenge_content_sha,
+        resolve_target_existence,
+        validate_challenge_resolved,
+    )
+    from hpc_agent.state.evidence import resolve_citation
+
+    # ── Lock 2 shape: slug id + full-address target + non-empty citations/grounds ──
+    parsed = validate_challenge_resolved(resolved)
+
+    # ── Base authorship floor (Lock 3, part 1): non-bare + names the id ──
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "challenge gate: filing structured dissent is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot challenge. Name the challenge "
+            f"({parsed.challenge_id!r}), the target sha you attack, and a cited sha you rest on."
+        )
+    authored = _registration_authored_text(experiment_dir, response)
+    if not _names_slug(authored, parsed.challenge_id):
+        _refuse_missing_authorship(
+            "challenge gate: the filing must NAME the challenge_id "
+            f"{parsed.challenge_id!r} token-exact (the #26 floor). Restate, naming the challenge."
+        )
+
+    # ── Lock 2 (recompute): the target must exist committed at the asserted sha ──
+    dossier_resolver = _conclusion_dossier_resolver(experiment_dir)
+    target_res = resolve_target_existence(
+        experiment_dir, parsed.target, dossier_resolver=dossier_resolver
+    )
+    if not target_res.resolved:
+        raise errors.SpecInvalid(
+            f"challenge gate (lock 2): the target "
+            f"{parsed.target.kind}:{parsed.target.subject_kind}/{parsed.target.subject_id} "
+            f"is UNRESOLVABLE on this namespace ({target_res.detail}) — you cannot contest a "
+            "record the machine cannot find. Address a committed record that exists here."
+        )
+    if not target_res.matches:
+        raise errors.SpecInvalid(
+            f"challenge gate (lock 2): the target subject exists but carries NO committed "
+            f"record at the asserted content_sha {parsed.target.content_sha!r} "
+            f"({target_res.detail}). A challenge binds to an exact committed sha (R3); quote "
+            "the sha of a record that exists on record."
+        )
+
+    # ── Lock 2 (recompute): every citation must resolve AND match the live store ──
+    for cit in parsed.citations:
+        res = resolve_citation(experiment_dir, cit, dossier_resolver=dossier_resolver)
+        if not res.resolved:
+            raise errors.SpecInvalid(
+                f"challenge gate (lock 2): citation {cit.kind}:{cit.ref!r} is UNRESOLVABLE on "
+                f"this namespace ({res.detail}) — a challenge may only rest on evidence the "
+                "machine can find at write time. Cite evidence that exists on this namespace."
+            )
+        if not res.matches:
+            raise errors.SpecInvalid(
+                f"challenge gate (lock 2): citation {cit.kind}:{cit.ref!r} sha MISMATCH "
+                f"({res.detail}) — the asserted sha {cit.sha!r} is not what the live store "
+                "carries. A caller-asserted sha is never trusted-then-recorded (the "
+                "receipt-laundering hole). Quote the live sha."
+            )
+
+    # ── content_sha bound via the ONE kernel against the re-canonicalized set ──
+    content_sha = challenge_content_sha(parsed.target, parsed.citations)
+    attestation.bind(
+        {
+            "attestor": "human",
+            "subject_kind": CHALLENGE_SUBJECT_KIND,
+            "subject_id": parsed.challenge_id,
+            "content_sha": content_sha,
+        },
+        recompute=lambda: challenge_content_sha(parsed.target, parsed.citations),
+    )
+    resolved["content_sha"] = content_sha
+
+    # ── Lock 3, part 2: name the TARGET sha AND a CITED sha by 8+ hex prefix ──
+    if not _names_target_sha_prefix(authored, parsed.target.content_sha):
+        _refuse_missing_authorship(
+            "challenge gate (lock 3): the filing must NAME the TARGET's content_sha by an "
+            "8+ hex-character prefix (you must name what you attack — a token that can only "
+            "derive from the presented record). Quote the target sha prefix from the "
+            "challenge-status / verify-registration brief."
+        )
+    if _names_citation_sha_prefix(authored, parsed.citations) is None:
+        _refuse_missing_authorship(
+            "challenge gate (lock 3): the filing must NAME at least one CITED sha by an "
+            "8+ hex-character prefix (you must name what you rest on). Quote a cited sha "
+            "prefix from the evidence you are standing on."
+        )
+
+
+def _assert_challenge_verdict_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """The C-gate verdict/withdraw FLOOR — resolving standing dissent (C4).
+
+    A verdict (``challenge-verdict``) or withdrawal (``challenge-withdraw``) is a
+    SEPARATE record from the filing (C-gate: so the resolver≠challenger constraint is
+    expressible later without a record-shape change — see the resolver-identity note
+    below). Both face the same floor: non-bare, ``challenge_id`` token-exact, and a
+    mandatory free-text ``reasoning``/``reason`` (waving dissent away with a bare ack
+    is exactly the asymmetry violation the nudge machinery exists to prevent, C4).
+
+    A DISMISSAL additionally must NAME one of the CHALLENGE's cited shas by an 8+ hex
+    prefix (:func:`_challenge_filing_citations` — dismissing evidence requires
+    engaging it; dismissal is effortful by construction, C4). An UPHELD verdict needs
+    no extra sha (upholding agrees with evidence already bound into the record it
+    resolves). A carried ``view_sha`` is RECOMPUTED against the challenge-status
+    render (:func:`_recompute_challenge_view_sha`, C-verb).
+
+    **Resolver-identity extension (MH7 — LANDED HERE as the multi-human follow-up).**
+    ``docs/design/multi-human.md`` MH7 owns attributed authorship and reserved this
+    identity comparison to the challenge gate as "a follow-up task executed by
+    whichever plan lands second". Multi-human landed second, so it lands here now:
+    under >1 declared actors (MH1), the VERDICT gate refuses ``resolver ==
+    challenger`` (you may not adjudicate your own objection — the challenger is the
+    filing record's ``attestor_id``, :func:`_challenge_filing_attestor`; the resolver
+    is the session actor) and refuses an UNATTRIBUTED resolution; the WITHDRAWAL gate
+    refuses ``withdrawer != challenger`` (a second actor silencing another's standing
+    dissent is the suppression channel) AND refuses withdrawing an UNATTRIBUTED filing
+    outright (challenger is ``None`` — RULING 4, bug-sweep #37: no one owns it, so no
+    one may withdraw it; ``None != None`` is False, so the compare alone would leave
+    the anonymous-suppression channel open — the refusal routes to challenge-verdict,
+    which records WHO resolved it, e.g. the cheap "withdrawn-as-stale" shape). Pure
+    identity over opaque slugs — Q1-clean.
+    Zero/one actor declared → silent, byte-identical (a solo researcher legitimately
+    resolves their own past challenge). These identity refusals are the loud/dangling
+    posture (NOT the E2 marker — a re-elicited utterance cannot fix WHO the session
+    is). The verdict/withdraw being a SEPARATE record from the filing is what kept the
+    constraint expressible without a record-shape change.
+
+    Authorship-bar refusals carry the E2 marker; the missing-reason / stale-view /
+    MH7-identity structural refusals raise plain :class:`errors.SpecInvalid` UNMARKED.
+    """
+    from hpc_agent.state.challenges import (
+        CHALLENGE_VERDICT_BLOCK,
+        DISMISSED,
+        validate_verdict_resolved,
+        validate_withdraw_resolved,
+    )
+
+    is_verdict = spec.block == CHALLENGE_VERDICT_BLOCK
+    if is_verdict:
+        parsed_v = validate_verdict_resolved(resolved)
+        challenge_id = parsed_v.challenge_id
+    else:  # CHALLENGE_WITHDRAW_BLOCK
+        parsed_w = validate_withdraw_resolved(resolved)
+        challenge_id = parsed_w.challenge_id
+
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            f"challenge-{'verdict' if is_verdict else 'withdraw'} gate: resolving a challenge "
+            f"is a HUMAN act — a bare {spec.response!r} (a 'y' / click) cannot resolve it. "
+            f"Name the challenge ({challenge_id!r}) and state your reasoning."
+        )
+    # B4 ts>=anchor: name the challenge in an utterance logged AT OR AFTER the
+    # filing it resolves — the challenger named the id when FILING, so an
+    # unbounded read lets an agent-composed verdict/withdraw ride the creation
+    # utterance. Anchor = the challenge filing ts (the thread is keyed by
+    # challenge_id; None → unfiltered, the filing-existence checks own that case).
+    from hpc_agent.state.challenges import CHALLENGE_BLOCK
+
+    anchor = _target_record_ts(
+        experiment_dir,
+        scope_kind="challenge",
+        scope_id=challenge_id,
+        filing_block=CHALLENGE_BLOCK,
+        id_field="challenge_id",
+        target_id=challenge_id,
+    )
+    authored = _fresh_authored_text(experiment_dir, response, anchor=anchor)
+    if not _names_slug(authored, challenge_id):
+        _refuse_missing_authorship(
+            f"challenge-{'verdict' if is_verdict else 'withdraw'} gate: the resolution must "
+            f"NAME the challenge_id {challenge_id!r} token-exact (the #26 floor), in an "
+            "utterance logged AT OR AFTER the filing it resolves (B4 ts>=anchor). Restate, "
+            "naming the challenge being resolved."
+        )
+
+    # A DISMISSAL must engage the challenge's evidence by naming a cited sha prefix.
+    if is_verdict and parsed_v.verdict == DISMISSED:
+        citations = _challenge_filing_citations(experiment_dir, challenge_id)
+        if not citations:
+            raise errors.SpecInvalid(
+                "challenge-verdict gate: no parseable filing found for challenge "
+                f"{challenge_id!r} — a verdict resolves a challenge that was filed. File the "
+                "challenge before dismissing it."
+            )
+        if _names_citation_sha_prefix(authored, citations) is None:
+            _refuse_missing_authorship(
+                "challenge-verdict gate: a DISMISSAL must NAME one of the challenge's cited "
+                "shas by an 8+ hex prefix — dismissing evidence requires engaging it (dismissal "
+                "is effortful by construction, C4). Quote a cited sha prefix you are dismissing."
+            )
+
+    # A carried view_sha is recomputed against the challenge-status render (C-verb).
+    view_sha = resolved.get("view_sha")
+    if isinstance(view_sha, str) and view_sha:
+        _recompute_challenge_view_sha(experiment_dir, challenge_id, view_sha)
+
+    # ── MH7: resolver ≠ challenger (verdict) / withdrawer == challenger (withdraw) ──
+    # Silent under zero/one declared actor (byte-identical — a solo researcher
+    # legitimately resolves their own past challenge).
+    ids, _policy = _read_interview_actors(experiment_dir)
+    if len(ids) > 1:
+        session_actor = _session_actor(experiment_dir, ids)
+        challenger = _challenge_filing_attestor(experiment_dir, challenge_id)
+        if is_verdict:
+            if session_actor is None:
+                raise errors.SpecInvalid(
+                    "challenge-verdict gate (MH7): >1 actor is declared but this "
+                    f"session has no resolvable actor, so challenge {challenge_id!r} "
+                    "would be resolved anonymously — an unattributed adjudication is "
+                    "the laundering channel. Configure HPC_ACTOR to a declared actor."
+                )
+            if challenger is not None and session_actor == challenger:
+                raise errors.SpecInvalid(
+                    "challenge-verdict gate (MH7): the resolver "
+                    f"({session_actor!r}) is the CHALLENGER who filed "
+                    f"{challenge_id!r} — you may not adjudicate your own objection. A "
+                    "DIFFERENT declared actor must resolve it."
+                )
+        else:  # CHALLENGE_WITHDRAW_BLOCK
+            if challenger is None:
+                # RULING 4 (2026-07-12, bug-sweep #37): an UNATTRIBUTED filing
+                # (no HPC_ACTOR at filing time, or filed before actors were
+                # declared → attestor_id is None) has NO owner, so NO ONE may
+                # withdraw it — a withdrawal is the challenger's own private
+                # retraction, and an unowned filing has no challenger to retract.
+                # This check MUST precede the identity compare: ``None != None`` is
+                # False, so without it an anonymous session (the driving agent that
+                # forgot HPC_ACTOR) would silence unowned dissent (the exact #37
+                # anonymous-suppression hole), and an attributed actor would hit the
+                # confusing "session actor is someone else than None" path. Closure
+                # stays possible without erasure: route to challenge-verdict, which
+                # RECORDS who resolved it and why (the cheap "withdrawn-as-stale"
+                # verdict shape) — no one may withdraw what no one owns.
+                raise errors.SpecInvalid(
+                    "challenge-withdraw gate (MH7 / RULING 4): challenge "
+                    f"{challenge_id!r} was filed WITHOUT actor attribution — no one "
+                    "owns it, so no one may withdraw it (a withdrawal is the "
+                    "challenger's own retraction, and an unowned filing has no "
+                    "challenger to retract). Resolve it via a challenge-verdict "
+                    "instead (e.g. reasoning 'withdrawn-as-stale') — that RECORDS "
+                    "who resolved it and why. Closure stays possible; erasure does not."
+                )
+            if session_actor != challenger:
+                raise errors.SpecInvalid(
+                    "challenge-withdraw gate (MH7): only the CHALLENGER who filed "
+                    f"{challenge_id!r} (actor {challenger!r}) may withdraw it — the "
+                    f"session actor {session_actor!r} is someone else, and a second "
+                    "actor silencing another's standing dissent is the suppression "
+                    "channel. The challenger must withdraw their own challenge."
+                )
+
+
+def _assert_challenge_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """The challenge gate — structured dissent's family of attested records (T5).
+
+    Block convention, enforced BOTH directions (mirrors ``conclusion`` /
+    ``registration``): a challenge-family block
+    (:data:`state.challenges.CHALLENGE_BLOCK_FAMILY`) is refused for any
+    ``scope_kind`` other than ``"challenge"``; and the ``"challenge"`` scope accepts
+    ONLY the block family (``challenge`` / ``challenge-verdict`` /
+    ``challenge-withdraw``). Every other record passes untouched. Dispatches a
+    ``challenge`` FILING to the three locks (:func:`_assert_challenge_filing_full`)
+    and a ``challenge-verdict`` / ``challenge-withdraw`` to the resolution floor
+    (:func:`_assert_challenge_verdict_authorship`).
+
+    Raises :class:`errors.SpecInvalid` on any refusal (authorship-bar refusals carry
+    the E2 marker so the single append firing site covers challenges over MCP too;
+    shape / target / citation refusals stay unmarked).
+    """
+    from hpc_agent.state.challenges import (
+        CHALLENGE_BLOCK,
+        CHALLENGE_BLOCK_FAMILY,
+    )
+
+    block = spec.block
+    in_family = block in CHALLENGE_BLOCK_FAMILY
+    # A challenge-family block is challenge-scope-only.
+    if in_family and spec.scope_kind != "challenge":
+        raise errors.SpecInvalid(
+            f"block {block!r} is a challenge-family block, only valid for "
+            f"scope_kind='challenge'; got scope_kind={spec.scope_kind!r}."
+        )
+    if spec.scope_kind != "challenge":
+        return  # not a challenge record — nothing to gate
+    # The challenge scope accepts ONLY its block family.
+    if not in_family:
+        raise errors.SpecInvalid(
+            f"scope_kind='challenge' accepts only its block family "
+            f"{sorted(CHALLENGE_BLOCK_FAMILY)}; got block={block!r} — a challenge scope "
+            "records ONLY challenge / challenge-verdict / challenge-withdraw (C-shape)."
+        )
+    if not isinstance(resolved, dict):
+        raise errors.SpecInvalid(
+            "challenge gate: resolved must be a mapping carrying the challenge fields "
+            "{challenge_id, target, citations, grounds}."
+        )
+    if block == CHALLENGE_BLOCK:
+        _assert_challenge_filing_full(experiment_dir, spec, resolved)
+        return
+    # block ∈ {challenge-verdict, challenge-withdraw} — the resolution floor.
+    _assert_challenge_verdict_authorship(experiment_dir, spec, resolved)
+
+
+# ── overnight standing-consent authorship gate (notebook-audit.md item 8) ─────
+
+
+def _compose_overnight_consent(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Poka-yoke seat: compose the wake + cap defaults for a standing consent.
+
+    The item-8 conversions (notebook-audit.md ruling, 2026-07-10) run HERE, before
+    the gates, so a composed block satisfies the caps + wake assertions rather than
+    tripping their refusals — the human is handed a complete, editable ``resolved``
+    (with every composed field disclosed in ``composed_defaults``) instead of a
+    NO-GO. A non-``overnight-consent`` record passes untouched; off a run/campaign
+    scope nothing is composed (the authorship gate raises on the bad scope). Never
+    composes ``cmd_sha`` — its absence still refuses at
+    :func:`hpc_agent.ops.overnight.assert_consent_hard_caps` (the identity binding
+    is not a default). Reached through the top-level ``hpc_agent.ops.overnight``
+    role-root sibling, exactly as the authorship gate below imports it.
+    """
+    from hpc_agent.ops import overnight as _overnight
+
+    if spec.block != _overnight.OVERNIGHT_CONSENT_BLOCK:
+        return resolved
+    if spec.scope_kind not in _overnight.CONSENT_SCOPE_KINDS:
+        return resolved
+    return _overnight.compose_overnight_consent(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        resolved=resolved if isinstance(resolved, dict) else {},
+    )
+
+
+def _bound_consent_records(
+    experiment_dir: Path, *, scope_kind: str, scope_id: str, block: str
+) -> list[dict[str, Any]]:
+    """Utterance records whose ``bound`` names EXACTLY this scope + block.
+
+    THE bound-capture reader (``docs/design/bound-capture.md``): selects only the
+    utterances a view-aware surface (the MCP elicitation popup) captured BOUND to
+    ``(scope_kind, scope_id, block)`` — a chat-hook prompt never carries ``bound``,
+    so it can never appear here. This reads the utterance store but is NOT the
+    "unbounded naming pool" the B4 ts>=anchor filter guards: the B4 exploit is that
+    the utterance which CREATED a target permanently satisfies a NAMING leg, and it
+    cannot apply to an EXACT binding the chat hook is structurally unable to forge
+    (the same "temporal binding by vocabulary impossibility" class as the
+    sha-prefix FILING gates). Documented as such in the B4 route-through exemption.
+    """
+    from hpc_agent.state.utterances import read_utterances
+
+    out: list[dict[str, Any]] = []
+    for rec in read_utterances(experiment_dir):
+        bound = rec.get("bound")
+        if not isinstance(bound, dict):
+            continue
+        if bound.get("scope_kind") != scope_kind:
+            continue
+        if bound.get("scope_id") != scope_id:
+            continue
+        if bound.get("block") != block:
+            continue
+        out.append(rec)
+    return out
+
+
+def _assert_overnight_consent_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """Overnight standing-consent gate — the human's BOUND acceptance of fallout.
+
+    A STANDING CONSENT (``docs/design/notebook-audit.md`` item 8) lets named
+    boundaries auto-advance while the human sleeps. It is journaled as an
+    ``append-decision`` under the distinct block
+    :data:`hpc_agent.ops.overnight.OVERNIGHT_CONSENT_BLOCK` (there is no consent
+    verb — this gate is the only choke point), so it cannot be laundered around.
+    Three legs:
+
+    * **block convention** — the ``overnight-consent`` block is valid only for a
+      ``run`` / ``campaign`` scope (a boundary the human sleeps through), refused
+      for any other ``scope_kind``.
+    * **bound authorship** (USER RULING 3, 2026-07-12 — bound-capture ONLY) — a
+      BOUND consent record (``docs/design/bound-capture.md``) captured at a surface
+      that named EXACTLY what it covers must exist, matching this append's
+      ``(scope_kind, scope_id, block)`` AND its coverage: the ``cmd_sha``
+      spec-identity, the ``heal_classes`` the consent declares (the record must
+      cover at least them), a non-expired coverage window, and non-bare text. The
+      FORENSIC word-overlap tier (an agent-relayed ``response`` word-matched over
+      the unbounded chat log) is DELETED: overnight consent is valid ONLY when
+      captured through a binding surface, never reconstructed from the stream. The
+      missing-bound refusal carries the E2 authorship-missing marker so the MCP
+      popup fires, captures the typed consent BOUND to this coverage
+      (``mcp_server._overnight_consent_binding``), and the retry finds it.
+    * **hard caps + spec identity + the wake** (pins b + c + the wake amendment) —
+      :func:`hpc_agent.ops.overnight.assert_consent_hard_caps` and
+      :func:`hpc_agent.ops.overnight.assert_wake_armed`. STRUCTURAL refusals (a
+      fresh utterance cannot supply a cap or arm a watch), so deliberately NOT
+      marked with the authorship-missing marker.
+
+    Every non-``overnight-consent`` record passes untouched. Reached through the
+    top-level ``hpc_agent.ops.overnight`` module (a role-root sibling, allowed
+    from inside the ``decision`` subject exactly like the ``field_ownership``
+    facade import).
+    """
+    from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
+    from hpc_agent.ops import overnight as _overnight
+
+    if spec.block != _overnight.OVERNIGHT_CONSENT_BLOCK:
+        return  # not a standing consent — nothing to gate
+    if spec.scope_kind not in _overnight.CONSENT_SCOPE_KINDS:
+        raise errors.SpecInvalid(
+            f"block {_overnight.OVERNIGHT_CONSENT_BLOCK!r} is a standing consent, only "
+            f"valid for scope_kind in {sorted(_overnight.CONSENT_SCOPE_KINDS)} (a run "
+            f"or campaign boundary the human sleeps through); got "
+            f"scope_kind={spec.scope_kind!r}."
+        )
+
+    # Leg 1 — BOUND authorship (bound-capture ONLY, USER RULING 3): a consent is
+    # valid only when captured at a surface that named exactly what it covers.
+    res = resolved if isinstance(resolved, dict) else {}
+    declared_classes = res.get("heal_classes")
+    consent_classes = (
+        {str(c) for c in declared_classes if isinstance(c, str)}
+        if isinstance(declared_classes, list)
+        else set()
+    )
+    bound_cmd_sha = res.get("cmd_sha") if isinstance(res.get("cmd_sha"), str) else None
+    now = utcnow()
+
+    covered = False
+    for rec in _bound_consent_records(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        block=_overnight.OVERNIGHT_CONSENT_BLOCK,
+    ):
+        if _is_bare_ack(str(rec.get("text") or "")):
+            continue  # a typed 'y' bound to the coverage is still a bare ack
+        subject = rec["bound"].get("subject")
+        subject = subject if isinstance(subject, dict) else {}
+        # Spec identity: the bound record must name THIS consent's cmd_sha (a
+        # consent binds to a spec; both-absent falls through to the caps refusal).
+        subj_sha = subject.get("cmd_sha") if isinstance(subject.get("cmd_sha"), str) else None
+        if subj_sha != bound_cmd_sha:
+            continue
+        # Repair-class coverage: the human's bound consent must cover at least the
+        # classes this consent declares (it can cover more — a superset is fine).
+        subj_classes_raw = subject.get("heal_classes")
+        subj_classes = (
+            {str(c) for c in subj_classes_raw if isinstance(c, str)}
+            if isinstance(subj_classes_raw, list)
+            else set()
+        )
+        if not consent_classes <= subj_classes:
+            continue
+        # Coverage window: a bound consent whose window has passed no longer covers.
+        subj_expires = subject.get("expires_at")
+        expires = parse_iso_utc_or_none(subj_expires if isinstance(subj_expires, str) else None)
+        if expires is not None and now >= expires:
+            continue
+        covered = True
+        break
+
+    if not covered:
+        _refuse_missing_authorship(
+            "overnight-consent bound-authorship gate: a standing consent accepts the "
+            "fallout of unattended overnight advances and is valid ONLY when captured "
+            "at a binding surface that names exactly what it covers (bound-capture, "
+            "USER RULING 3) — there is no bound consent record covering this boundary "
+            f"({spec.scope_kind} {spec.scope_id!r}), its cmd_sha, its declared "
+            f"heal_classes {sorted(consent_classes)}, and a live coverage window. A "
+            "free-text chat utterance (however it names the boundaries) can NEVER "
+            "satisfy it — the chat channel captures no binding. To GRANT: run under an "
+            "elicitation-capable harness so the overnight-consent popup fires and "
+            "captures your typed consent BOUND to this coverage; type the consent "
+            "there (a bare 'y' cannot stand in for it)."
+        )
+
+    # Legs 2 + 3 — structural (never the authorship marker): hard caps + spec
+    # identity, then the armed wake.
+    _overnight.assert_consent_hard_caps(resolved)
+    _overnight.assert_wake_armed(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        resolved=resolved,
+    )
 
 
 def _chain_successor(block: str) -> str | None:

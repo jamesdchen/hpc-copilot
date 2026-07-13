@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
     from hpc_agent.state.audit_source import ParsedModule
 
-__all__ = ["assert_source_audited", "audited_source_echo"]
+__all__ = ["assert_source_audited", "audit_currency", "audited_source_echo"]
 
 #: The two notebook-attestation blocks a sign-off/auto-clear record can carry —
 #: used to locate the winning record for a passing section's linked-source check.
@@ -196,7 +196,74 @@ def audited_source_echo(experiment_dir: Path) -> dict[str, Any] | None:
     block = _read_audited_source(experiment_dir)
     if block is None:
         return None
-    return {key: block.get(key) for key in ("source", "template", "audit_id")}
+    echo: dict[str, Any] = {key: block.get(key) for key in ("source", "template", "audit_id")}
+
+    # S4 domain-pack echo (docs/design/domain-packs.md, T9d): when the audited
+    # TEMPLATE .py is itself a file in a CURRENT-bound pack's manifest, additively
+    # stamp the opaque {pack, version, sha} echo so export-dossier can prove WHICH
+    # pack's template gated the audit. FAIL-OPEN + cheap (the gate's read posture):
+    # no packs opt-in, a template in no bound pack, or any dangling/drifted pack
+    # reference → NO ``pack`` key → a byte-identical echo (the D7 silence). Core
+    # copies the echo verbatim; it never reads it back for meaning.
+    template = echo.get("template")
+    if isinstance(template, str) and template:
+        from hpc_agent.state.pack_declarations import resolve_template_pack_echo
+
+        pack_echo = resolve_template_pack_echo(experiment_dir, template)
+        if pack_echo is not None:
+            echo["pack"] = pack_echo
+    return echo
+
+
+def audit_currency(experiment_dir: Path) -> tuple[str, int] | None:
+    """The opted-in audit's currency for the S1 DISCLOSURE — ``(audit_id, moved)``.
+
+    Run #11 mechanization item 1 (audit-currency disclosure). Reuses the SAME
+    computation ``notebook-status`` uses — :func:`~hpc_agent.state.notebook_audit.audit_module`
+    reducing every REQUIRED (template) section against the ``audit_id`` journal —
+    so nothing here re-implements hashing. Reads ``interview.json``'s
+    ``audited_source`` block through the ONE definition (:func:`_read_audited_source`);
+    NOT opted in → ``None`` (the D7 silence). Opted in → returns ``(audit_id,
+    moved)`` where ``moved`` counts the required sections NOT signed-current
+    (:data:`~hpc_agent.state.notebook_audit.PASSING_STATUSES`) — ``moved == 0`` ⇔
+    the audit is current.
+
+    DISCLOSURE seam only — it mirrors the notebook-status verdict, NOT the
+    graduation refusal: it deliberately does NOT apply the gate's extra
+    linked-source drift revocation (:func:`_linked_source_drift`), exactly as
+    ``notebook-status`` does not. :func:`assert_source_audited` stays the single
+    refusing seat. Like that gate it raises LOUDLY on a BROKEN opted-in repo
+    (missing / unreadable / unparseable ``.py``); the disclosure caller
+    (``ops/resolve_submit_inputs``) wraps this in a fail-open guard, so a crash
+    degrades to disclosed-absent rather than an S1 error.
+
+    Pure local reads — no SSH.
+    """
+    block = _read_audited_source(experiment_dir)
+    if block is None:
+        return None  # D7 silence — not opted in
+
+    audit_id = block.get("audit_id")
+    source_text = _read_required_py(
+        experiment_dir, block.get("source"), kind="source", audit_id=audit_id
+    )
+    template_text = _read_required_py(
+        experiment_dir, block.get("template"), kind="template", audit_id=audit_id
+    )
+    parsed_source = _parse_required(
+        str(block.get("source")), source_text, kind="source", audit_id=audit_id
+    )
+    parsed_template = _parse_required(
+        str(block.get("template")), template_text, kind="template", audit_id=audit_id
+    )
+    audit = audit_module(
+        experiment_dir,
+        str(audit_id),
+        source=parsed_source,
+        required_slugs=parsed_template.slugs,
+    )
+    moved = sum(1 for sect in audit.sections if sect.status not in PASSING_STATUSES)
+    return str(audit_id), moved
 
 
 def assert_source_audited(experiment_dir: Path) -> None:

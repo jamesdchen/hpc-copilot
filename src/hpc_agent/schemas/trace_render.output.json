@@ -1,0 +1,385 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace_render.output.json",
+  "title": "trace-render output data",
+  "description": "The four structured views + the self-describing header + the render string.\n\n``present`` is False (and ``skipped`` carries the disclosure) when the\nresolved scope has no recorded trace — an honest result, never an error.\n``trace_sha`` is a FINGERPRINT over the records (the identity the trace joins\nthe trust chain by), ``\"\"`` when absent.",
+  "type": "object",
+  "required": [
+    "scope_kind",
+    "scope_id",
+    "task",
+    "resolved_from",
+    "present"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope_kind": {
+      "description": "The resolved trace store scope kind.",
+      "title": "Scope Kind",
+      "type": "string"
+    },
+    "scope_id": {
+      "description": "The resolved trace store scope id ('' when unresolved).",
+      "title": "Scope Id",
+      "type": "string"
+    },
+    "task": {
+      "description": "The per-task index rendered.",
+      "title": "Task",
+      "type": "integer"
+    },
+    "resolved_from": {
+      "description": "How the scope was resolved: 'spec' | 'cmd_sha' | 'profile'.",
+      "title": "Resolved From",
+      "type": "string"
+    },
+    "present": {
+      "description": "Whether a trace was found for the resolved scope.",
+      "title": "Present",
+      "type": "boolean"
+    },
+    "skipped": {
+      "default": "",
+      "description": "Absence disclosure ('' when a trace is present).",
+      "title": "Skipped",
+      "type": "string"
+    },
+    "stage_count": {
+      "default": 0,
+      "description": "Number of records in the trace.",
+      "title": "Stage Count",
+      "type": "integer"
+    },
+    "trace_sha": {
+      "default": "",
+      "description": "Canonical sha over the records ('' when absent).",
+      "title": "Trace Sha",
+      "type": "string"
+    },
+    "header": {
+      "additionalProperties": true,
+      "description": "Self-describing run/config identity from the sidecar join.",
+      "title": "Header",
+      "type": "object"
+    },
+    "waterfall": {
+      "description": "View (a): stage-by-stage row waterfall.",
+      "items": {
+        "$ref": "#/$defs/TraceWaterfallRow"
+      },
+      "title": "Waterfall",
+      "type": "array"
+    },
+    "label_chains": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "description": "View (b): per tracked label, its 'stage=value' chain across stages.",
+      "title": "Label Chains",
+      "type": "object"
+    },
+    "feature_lineage": {
+      "description": "View (c): per-stage col_set add/drop deltas.",
+      "items": {
+        "$ref": "#/$defs/TraceFeatureRow"
+      },
+      "title": "Feature Lineage",
+      "type": "array"
+    },
+    "feature_births": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "View (c): each column mapped to its birth stage.",
+      "title": "Feature Births",
+      "type": "object"
+    },
+    "sketch": {
+      "description": "View (d): per (stage, column) sketch + null_count.",
+      "items": {
+        "$ref": "#/$defs/TraceSketchRow"
+      },
+      "title": "Sketch",
+      "type": "array"
+    },
+    "flags": {
+      "description": "All flags (generic invariants + record-carried), rendered verbatim.",
+      "items": {
+        "$ref": "#/$defs/TraceFlag"
+      },
+      "title": "Flags",
+      "type": "array"
+    },
+    "render": {
+      "default": "",
+      "description": "The code-rendered markdown views ('' when not requested).",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "TraceFeatureRow": {
+      "additionalProperties": false,
+      "description": "One feature-lineage stage: the col_set delta versus the predecessor.",
+      "properties": {
+        "stage": {
+          "description": "The stage name.",
+          "title": "Stage",
+          "type": "string"
+        },
+        "added": {
+          "description": "Columns present here, absent in the predecessor col_set.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Added",
+          "type": "array"
+        },
+        "dropped": {
+          "description": "Columns present in the predecessor col_set, absent here.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Dropped",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "title": "trace feature-lineage row",
+      "type": "object"
+    },
+    "TraceFlag": {
+      "additionalProperties": false,
+      "description": "One flag in the canonical finding shape (rendered verbatim, never interpreted).",
+      "properties": {
+        "rule": {
+          "description": "The flag rule name (the record's OWN word).",
+          "title": "Rule",
+          "type": "string"
+        },
+        "detail": {
+          "description": "The flag detail (the record's OWN word).",
+          "title": "Detail",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "Opaque pointers/counts the flag carries.",
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "rule",
+        "detail"
+      ],
+      "title": "trace flag",
+      "type": "object"
+    },
+    "TraceSketchRow": {
+      "additionalProperties": false,
+      "description": "One (stage, column) sketch cell: null_count + the fixed value_sketch fields.",
+      "properties": {
+        "stage": {
+          "description": "The stage name.",
+          "title": "Stage",
+          "type": "string"
+        },
+        "column": {
+          "description": "The column the sketch/null_count is for.",
+          "title": "Column",
+          "type": "string"
+        },
+        "null_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Missing values for this column.",
+          "title": "Null Count"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch min, or null.",
+          "title": "Min"
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch mean, or null.",
+          "title": "Mean"
+        },
+        "std": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch std, or null.",
+          "title": "Std"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch max, or null.",
+          "title": "Max"
+        },
+        "q05": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch q05, or null.",
+          "title": "Q05"
+        },
+        "q50": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch q50, or null.",
+          "title": "Q50"
+        },
+        "q95": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch q95, or null.",
+          "title": "Q95"
+        }
+      },
+      "required": [
+        "stage",
+        "column"
+      ],
+      "title": "trace sketch row",
+      "type": "object"
+    },
+    "TraceWaterfallRow": {
+      "additionalProperties": false,
+      "description": "One row-waterfall stage: rows in/out + declared drops + conservation arithmetic.",
+      "properties": {
+        "stage": {
+          "description": "The stage name (fine-grained emit).",
+          "title": "Stage",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The stage's emission sequence number.",
+          "title": "Seq",
+          "type": "integer"
+        },
+        "rows_in": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Predecessor stage's row_count.rows, or null at the head.",
+          "title": "Rows In"
+        },
+        "dropped": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rows this stage declared dropped.",
+          "title": "Dropped"
+        },
+        "rows_out": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rows at this stage's exit.",
+          "title": "Rows Out"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "rows_in - dropped (the conservation pre-image), or null.",
+          "title": "Expected"
+        }
+      },
+      "required": [
+        "stage",
+        "seq"
+      ],
+      "title": "trace waterfall row",
+      "type": "object"
+    }
+  }
+}

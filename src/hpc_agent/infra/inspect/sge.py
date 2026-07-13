@@ -40,6 +40,17 @@ __all__ = [
 ]
 
 
+def _short_host(name: str) -> str:
+    """Normalize a node/host name to its short (leading-label) form.
+
+    qhost may report fully-qualified node names (``compute-001.hpc.example``)
+    while qstat's ``queue@host`` view is often already short — so the co-tenant
+    join keys must be normalized on BOTH sides through this ONE helper, or an
+    FQDN cluster misses every node in the lookup (#63).
+    """
+    return name.split(".", 1)[0]
+
+
 def _classify_pe(allocation_rule: str) -> str:
     """Classify an SGE parallel environment by its ``allocation_rule``.
 
@@ -178,7 +189,11 @@ def _sge_inspect(
     if rc2 == 0:
         tenants_by_node = _parse_qstat_full(out2)
         for n in snap.nodes:
-            n.co_tenants = tenants_by_node.get(n.name, [])
+            # Normalize the lookup key with the SAME helper the qstat parse uses
+            # for its host keys, so an FQDN qhost node name still joins to the
+            # short-name co-tenant bucket (#63). ``n.name`` keeps its reported
+            # (possibly FQDN) form for display.
+            n.co_tenants = tenants_by_node.get(_short_host(n.name), [])
     else:
         errors.append({"code": "qstat_failed", "detail": err2.strip()[:500]})
 
@@ -266,7 +281,7 @@ def _parse_qstat_full(text: str) -> dict[str, list[dict[str, Any]]]:
         # Queue-instance header lines look like:
         # all.q@compute-001.local             BIP   0/4/16         1.23     ...
         if "@" in first_token:
-            current_host = first_token.split("@", 1)[1].split(".", 1)[0]
+            current_host = _short_host(first_token.split("@", 1)[1])
             seen_jobs_per_host.setdefault(current_host, set())
             continue
         # Job lines look like (after the queue-instance header):

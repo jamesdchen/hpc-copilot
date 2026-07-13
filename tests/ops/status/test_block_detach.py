@@ -319,6 +319,43 @@ def test_guard_single_lease_keys_the_watch(tmp_path: Path, monkeypatch: pytest.M
     assert detached._guard_single_lease(detached_dir, "status-watch", "somerun") == lease
 
 
+def test_spawn_detached_lock_acquire_is_bounded_and_names_the_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run-#12 finding 16 (G4): the decide→spawn→stamp lease LOCK acquire is
+    bounded, and on expiry the refusal NAMES the wedged holder's pid (read from
+    the sibling lease.json) instead of freezing a successor worker silently."""
+    from hpc_agent._kernel.lifecycle import detached
+    from hpc_agent.infra import io
+
+    detached_dir = tmp_path / "_detached"
+    detached_dir.mkdir(parents=True, exist_ok=True)
+    log_path = detached_dir / "status-watch-wedged.log"
+    lock_path = detached_dir / "status-watch-wedged.lease.lock"
+    lease_path = detached_dir / "status-watch-wedged.lease.json"
+    lease_path.write_text(json.dumps({"pid": 31337}), encoding="utf-8")
+
+    # Shrink the bound so the test does not actually wait a minute.
+    monkeypatch.setattr(detached, "_LEASE_LOCK_TIMEOUT_SEC", 0.2)
+
+    # A concurrent holder wedged inside the critical section: hold the lock for
+    # the whole attempt (a fresh FileLock instance contends cross-/same-process).
+    with (
+        io.advisory_flock(lock_path),
+        pytest.raises(detached.DetachedLeaseHeld) as excinfo,
+    ):
+        detached._spawn_detached(
+            run_id="wedged",
+            block="status-watch",
+            argv=["hpc-agent", "status-watch"],
+            log_path=log_path,
+            cwd=str(tmp_path),
+        )
+    msg = str(excinfo.value)
+    assert "31337" in msg  # the holder pid is named
+    assert "0s" in msg or "0.2" in msg or "within" in msg  # bounded, named window
+
+
 # ── terminal recording: final states recorded, timeout is NOT ─────────────────
 
 

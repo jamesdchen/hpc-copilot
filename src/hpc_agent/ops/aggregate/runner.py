@@ -15,11 +15,19 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent.errors import RemoteCommandFailed
 from hpc_agent.infra import remote
-from hpc_agent.infra.ssh_validation import parse_remote_json
+from hpc_agent.infra.ssh_validation import parse_remote_json, split_ack, wrap_with_ack
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
+
+# Sentinel-ack for the per-task output existence check (the positive-evidence
+# transport rule, docs/design/connection-broker.md). The check's success signal
+# is the ABSENCE of ``MISSING:`` lines, so a severed/truncated rc-0 channel that
+# delivered nothing used to read as "all outputs present" — silence-as-success
+# at the aggregate PRECONDITION gate. The ack proves the remote loop ran to
+# completion; its absence is UNKNOWN and must never green the gate.
+_OUTPUTS_ACK_PREFIX = "__HPC_OUTPUTS_ACK__="
 
 
 def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> dict[str, Any]:
@@ -89,14 +97,28 @@ def verify_per_task_outputs(
         f'[ -f "$f" ] || echo "MISSING:$f"; '
         f"done"
     )
-    proc = remote.ssh_run(script, ssh_target=ssh_target)
+    proc = remote.ssh_run(wrap_with_ack(script, _OUTPUTS_ACK_PREFIX), ssh_target=ssh_target)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
             f"per-task output existence check failed: {proc.stderr.strip()[:500]}"
         )
+    clean, ack_rc = split_ack(proc.stdout or "", _OUTPUTS_ACK_PREFIX)
+    if ack_rc is None:
+        raise RemoteCommandFailed(
+            "per-task output existence check returned no positive-evidence ack "
+            "(channel severed / output truncated); refusing to read silence as "
+            "'all outputs present'."
+        )
+    if ack_rc != 0:
+        # The ack rides a ``;`` so the remote rc lands here, not on the ssh
+        # returncode: a failed ``cd`` (bad remote_path) must stay loud.
+        raise RemoteCommandFailed(
+            f"per-task output existence check failed (remote rc={ack_rc}): "
+            f"{proc.stderr.strip()[:500]}"
+        )
     return [
         line[len("MISSING:") :].strip()
-        for line in proc.stdout.splitlines()
+        for line in clean.splitlines()
         if line.startswith("MISSING:")
     ]
 

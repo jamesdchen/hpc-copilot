@@ -158,6 +158,23 @@ def test_posix_install_idempotent_and_uninstall(
     assert r4.status == "not_installed"
 
 
+def test_posix_install_without_crontab_binary_is_spec_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host with no ``crontab`` binary must reject as a structured SpecInvalid,
+    not crash with an uncaught FileNotFoundError surfaced as error_code='internal'
+    (bug-sweep #41)."""
+    from hpc_agent import errors
+
+    def _no_crontab(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
+        raise FileNotFoundError(2, "No such file or directory: 'crontab'")
+
+    monkeypatch.setattr(di, "_platform", lambda: "posix")
+    monkeypatch.setattr(di, "_run", _no_crontab)
+    with pytest.raises(errors.SpecInvalid):
+        doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
+
+
 def test_posix_install_preserves_other_cron_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

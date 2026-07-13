@@ -111,6 +111,27 @@ def test_v2_write_omits_none_keys_to_keep_sidecar_compact(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# trace_digests_override: data-trace T3 digest-override disclosure
+# ---------------------------------------------------------------------------
+
+
+def test_trace_digests_override_roundtrips(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs(), trace_digests_override="force_off")
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trace_digests_override"] == "force_off"
+
+
+def test_trace_digests_override_none_omitted_and_backfilled(tmp_path: Path) -> None:
+    """No override → the key is absent on disk (byte-compact) but read_run_sidecar
+    backfills it to None so callers can read it unconditionally."""
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    raw = json.loads(run_sidecar_path(tmp_path, _common_required_kwargs()["run_id"]).read_text())
+    assert "trace_digests_override" not in raw
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trace_digests_override"] is None
+
+
+# ---------------------------------------------------------------------------
 # scopes: opaque caller-owned evidence-scope tags
 # ---------------------------------------------------------------------------
 
@@ -645,6 +666,22 @@ def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path:
     assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
 
 
+def test_is_orphan_tolerates_non_utf8_sidecar(_journal_home: Path, tmp_path: Path) -> None:
+    """#73: a non-UTF-8 sidecar (e.g. UTF-16 from a Windows redirect) must be
+    tolerant-read, not crash ``is_orphan_sidecar`` / ``prune_orphan_sidecars``.
+    The undecodable file yields no ``sidecar_job_ids`` (consistent with the
+    corrupt/torn-file posture) → jobless + journal-less → treated as orphan."""
+    from hpc_agent.state.runs import is_orphan_sidecar, run_sidecar_path
+
+    kwargs = _common_required_kwargs(run_id="20260101-000000-badutf08")
+    write_run_sidecar(tmp_path, **kwargs)
+    # Clobber with UTF-16 bytes (invalid as UTF-8) — must not raise.
+    run_sidecar_path(tmp_path, kwargs["run_id"]).write_bytes(
+        '{"job_ids": ["1"], "x": "ÿ"}'.encode("utf-16")
+    )
+    assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
+
+
 def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
 
@@ -700,6 +737,45 @@ def test_prune_orphan_sidecars_skips_excluded_runs(_journal_home: Path, tmp_path
     assert run_sidecar_path(tmp_path, current["run_id"]).is_file()
     assert run_sidecar_path(tmp_path, canary["run_id"]).is_file()
     assert not run_sidecar_path(tmp_path, stale["run_id"]).is_file()
+
+
+def test_canary_gate_pending_main_is_not_orphan(_journal_home: Path, tmp_path: Path) -> None:
+    """#17: during the S2->S3 greenlight window a two-phase ``canary_only``
+    Phase 1 leaves the main run jobless + journal-less on purpose (job_ids land
+    only on the ``<id>-canary`` sibling). A committed canary sibling marks that
+    live gate — the main run must NOT read as an orphan."""
+    from hpc_agent.state.runs import is_orphan_sidecar
+
+    main = _common_required_kwargs(run_id="20260101-000000-mainrun0")
+    canary = _common_required_kwargs(run_id="20260101-000000-mainrun0-canary")
+    write_run_sidecar(tmp_path, **main)  # jobless main, no journal record
+    write_run_sidecar(tmp_path, **canary, job_ids=["9001"])  # committed canary
+
+    assert is_orphan_sidecar(tmp_path, main["run_id"]) is False
+    # The canary itself is committed, hence also not an orphan.
+    assert is_orphan_sidecar(tmp_path, canary["run_id"]) is False
+
+
+def test_prune_spares_canary_gate_pending_main_run(_journal_home: Path, tmp_path: Path) -> None:
+    """#17 end to end: a SIBLING batch's ``prune_orphan_sidecars`` (min_age=0,
+    exclude={B, B-canary}) must not delete run A's greenlit main sidecar while
+    A's canary sibling is committed — deleting it bricks the S3 launch."""
+    from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
+
+    a_main = _common_required_kwargs(run_id="20260101-000000-Arun0000")
+    a_canary = _common_required_kwargs(run_id="20260101-000000-Arun0000-canary")
+    write_run_sidecar(tmp_path, **a_main)  # jobless main under human review
+    write_run_sidecar(tmp_path, **a_canary, job_ids=["7001"])  # committed canary
+
+    deleted = prune_orphan_sidecars(
+        tmp_path,
+        min_age_seconds=0,
+        exclude={"20260101-000000-Brun0000", "20260101-000000-Brun0000-canary"},
+    )
+
+    assert a_main["run_id"] not in deleted
+    assert run_sidecar_path(tmp_path, a_main["run_id"]).is_file()
+    assert run_sidecar_path(tmp_path, a_canary["run_id"]).is_file()
 
 
 def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(

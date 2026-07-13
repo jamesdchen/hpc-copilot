@@ -1,9 +1,9 @@
 ---
-status: plan
+status: shipped
 ---
 # The draft-context projection — mechanizing the drafting brief
 
-**Status: PLANNED (2026-07-07, written during run #10's audit prelude — the
+**Status: IMPLEMENTED (landed in the slate merge train, 2026-07-09; written 2026-07-07 during run #10's audit prelude — the
 run IS the motivating evidence).** Registry: +1 (`notebook-draft-context`),
 updating the cross-slate arithmetic in `slate-sequencing.md`. Subsumes the
 V-LINK render item; carries V-ANSI as a sibling projection note.
@@ -92,6 +92,8 @@ embed serializes with the next view-touching phase and its canon bump.
 Registry: 148 → **149** expected post-slate.
 
 ## Drift log
+- **Status flip lag (2026-07-09):** the implementation landed in the slate merge train but this doc's status stayed PLANNED; caught by the anti-vendor-lockout plan's inventory sweep (same class as the conformance-kit flip lag). Verified against src before flipping.
+
 
 - 2026-07-07: written mid-run-#10 (Fable, pre-deadline); user directive
   "the repo should be faster out of the box — no hand-rolled drafting

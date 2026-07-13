@@ -151,12 +151,7 @@ def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
 
 
 def test_meta_json_only_written_when_intent_supplies_relevant_fields(tmp_path: Path) -> None:
-    """No cluster_target and no budget → no meta.json update.
-
-    (``.claude/settings.json`` IS always written for the bare-worker allow rule
-    — #190 — so assert meta.json's absence specifically rather than pin the
-    whole artifacts list.)
-    """
+    """No cluster_target and no budget → no meta.json update."""
     _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     data = record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
     assert "meta.json" not in data["artifacts"]
@@ -240,6 +235,29 @@ def test_generator_enumerated(tmp_path: Path) -> None:
     assert ".hpc/tasks.py" in data["artifacts"]
     assert (tmp_path / ".hpc" / "tasks.py").is_file()
     assert data["preview"]["first"] == {"model": "opus-4.7", "dataset": "mmlu-pro"}
+
+
+def test_generator_records_interview_materialized_origin(tmp_path: Path) -> None:
+    """Run-#12 finding 14: a tasks.py the interview wrote from a typed recipe is
+    recorded as ``interview_materialized`` — so the submit walk never mislabels
+    the sweep ``hand_written``."""
+    intent = _minimal_intent(
+        3,
+        task_generator={"kind": "cartesian_product", "params": {"axes": {"seed": [0, 1, 2]}}},
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["tasks_py_origin"] == "interview_materialized"
+
+
+def test_validate_mode_records_hand_written_origin(tmp_path: Path) -> None:
+    """Validate mode (the interview agent authored tasks.py) is recorded as
+    ``hand_written`` — the genuine hand-written path keeps its label."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3)  # no task_generator → validate mode
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["tasks_py_origin"] == "hand_written"
 
 
 def test_generator_cartesian_product(tmp_path: Path) -> None:
@@ -442,6 +460,141 @@ def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     second = (tmp_path / ".hpc" / "tasks.py").read_bytes()
     assert first == second
+
+
+# ─── chunked_series: bucket x chunk series tiling (run #11) ──────────────────
+
+# (series_length, chunks, halo, start) — a grid mixing exact division and
+# remainder (last-chunk absorb), halo=0 and halo>0, start=0 and start>0. Run
+# #11's failure class was an off-by-one in halo / last-chunk-end that only the
+# COUNT cross-checked; these assert the BOUNDS contract on every case.
+_CHUNKED_GRID = [
+    (100, 4, 0, 0),  # exact: 25/25/25/25
+    (100, 3, 0, 0),  # remainder: 33/33/34 (last absorbs)
+    (100, 7, 5, 0),  # halo shifts emit-lo to 5; 95 span over 7 (last absorbs)
+    (100, 4, 10, 20),  # start>0 and halo>0: emit-lo=30, span=70
+    (50, 1, 3, 0),  # single chunk == whole scoring space
+    (13, 5, 1, 0),  # tight: span 12 over 5 → 2/2/2/2/4
+    (1000, 9, 48, 0),  # bounded-halo shape (train_window*48-ish)
+]
+
+
+@pytest.mark.parametrize(
+    "series_length,chunks,halo,start",
+    _CHUNKED_GRID,
+    ids=[f"L{a}-c{b}-h{c}-s{d}" for a, b, c, d in _CHUNKED_GRID],
+)
+def test_chunked_series_bounds_contract(
+    series_length: int, chunks: int, halo: int, start: int
+) -> None:
+    """The union of [chunk_start, chunk_end) over all chunks == [start+halo,
+    series_length) with no gaps/overlaps; last end == series_length; every
+    chunk_start-halo >= start (halo never underflows). The property that a
+    hand-scripted enumerated list had no seat for."""
+    from hpc_agent.ops.memory.interview import _chunked_series_tasks
+
+    tasks = _chunked_series_tasks(
+        {"series_length": series_length, "chunks": chunks, "halo": halo, "start": start}
+    )
+    assert len(tasks) == chunks
+    emit_lo = start + halo
+    # Contiguity + coverage.
+    assert tasks[0]["chunk_start"] == emit_lo
+    assert tasks[-1]["chunk_end"] == series_length  # last end EXACTLY series_length
+    for i, t in enumerate(tasks):
+        assert t["halo"] == halo
+        assert t["chunk_end"] > t["chunk_start"]  # width >= 1
+        assert t["chunk_start"] - halo >= start  # halo never underflows
+        if i + 1 < len(tasks):
+            assert t["chunk_end"] == tasks[i + 1]["chunk_start"]  # no gap/overlap
+
+
+def test_chunked_series_extra_axes_multiply_grid(tmp_path: Path) -> None:
+    """Each extra_axes value multiplies the chunk grid (bucket x chunk), and
+    _expected_count equals chunks x product(axis lens). Round-trips through the
+    materialized tasks.py resolve()."""
+    from hpc_agent import load_tasks_module
+    from hpc_agent.ops.memory.interview import _chunked_series_tasks, _expected_count
+
+    params = {
+        "series_length": 100,
+        "chunks": 3,
+        "halo": 4,
+        "start": 0,
+        "extra_axes": {"symbol": ["AAPL", "MSFT"], "seed": [0, 1]},
+    }
+    generator = {"kind": "chunked_series", "params": params}
+    # 3 chunks x 2 symbols x 2 seeds = 12, by the independent formula.
+    assert _expected_count(generator) == 12
+    expected_tasks = _chunked_series_tasks(params)
+    assert len(expected_tasks) == 12
+    # Bucket outer, chunk inner: first 3 share the first bucket.
+    assert expected_tasks[0]["symbol"] == "AAPL" and expected_tasks[0]["seed"] == 0
+    assert expected_tasks[3]["symbol"] == "AAPL" and expected_tasks[3]["seed"] == 1
+
+    intent = _minimal_intent(12, task_generator=generator)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["total_tasks"] == 12
+    # Materialized tasks.py round-trips to the same ordered task dicts.
+    tasks_mod = load_tasks_module(tmp_path / ".hpc" / "tasks.py")
+    assert tasks_mod.total() == 12
+    assert [tasks_mod.resolve(i) for i in range(12)] == expected_tasks
+
+
+def test_chunked_series_round_trip_through_interview(tmp_path: Path) -> None:
+    """No-extra-axes case materializes + previews the chunk bounds."""
+    intent = _minimal_intent(
+        4,
+        task_generator={
+            "kind": "chunked_series",
+            "params": {"series_length": 100, "chunks": 4, "halo": 5, "start": 0},
+        },
+    )
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["total_tasks"] == 4
+    assert data["preview"]["first"] == {"chunk_start": 5, "chunk_end": 28, "halo": 5}
+    assert data["preview"]["last"]["chunk_end"] == 100
+
+
+@pytest.mark.parametrize(
+    "params,match",
+    [
+        ({"series_length": 100, "chunks": 0, "halo": 0}, "chunks >= 1"),
+        ({"series_length": 100, "chunks": 4, "halo": -1}, "halo >= 0"),
+        (
+            {"series_length": 10, "chunks": 2, "halo": 5, "start": 5},
+            "start \\+ halo < series_length",
+        ),
+        ({"series_length": 10, "chunks": 20, "halo": 0}, "chunk width < 1"),
+        (
+            {"series_length": 100, "chunks": 2, "halo": 0, "extra_axes": {"s": []}},
+            "extra_axes must each have",
+        ),
+    ],
+    ids=["chunks<1", "halo<0", "start+halo>=len", "width<1", "empty-axis"],
+)
+def test_chunked_series_validation_fires(params: dict, match: str) -> None:
+    """Each SpecInvalid condition raises from the core validation (called on a
+    raw dict, before the pydantic boundary re-checks it)."""
+    from hpc_agent.ops.memory.interview import _validate_chunked_series
+
+    with pytest.raises(errors.SpecInvalid, match=match):
+        _validate_chunked_series(params)
+
+
+def test_chunked_series_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
+    """Generator mode stays idempotent for the chunked_series kind."""
+    intent = _minimal_intent(
+        3,
+        task_generator={
+            "kind": "chunked_series",
+            "params": {"series_length": 90, "chunks": 3, "halo": 2, "start": 0},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    first = (tmp_path / ".hpc" / "tasks.py").read_bytes()
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert first == (tmp_path / ".hpc" / "tasks.py").read_bytes()
 
 
 # ─── entry_point: shell_command wrapper materialization ──────────────────
@@ -1122,67 +1275,20 @@ def test_python_module_entry_still_rejects_genuinely_absent(tmp_path: Path) -> N
         _validate_python_module_entry({"module": "executors.nope", "function": "main"}, tmp_path)
 
 
-# ─── #190: project-scoped Claude permissions for the bare worker ────────────
+# ─── AVL T9 (2026-07-09, user-ruled REMOVE): the #190 bare-worker allow-rule
+# writer and its three tests were excised with `_maybe_write_claude_permissions`
+# — the spawned `claude -p` worker transport it served was deleted, and writing
+# harness-specific config from a core primitive is the vendor-lockout class
+# (docs/design/anti-vendor-lockout.md T9).
 
 
-def _read_settings(campaign_dir: Path) -> dict:
-    doc = json.loads((campaign_dir / ".claude" / "settings.json").read_text(encoding="utf-8"))
-    assert isinstance(doc, dict)
-    return doc
-
-
-def test_interview_writes_claude_allow_rule(tmp_path: Path) -> None:
-    """Onboarding grants the experiment dir the Bash(hpc-agent:*) allow rule so
-    a spawned bare worker can drive the CLI headlessly (#190)."""
+def test_interview_does_not_write_claude_settings(tmp_path: Path) -> None:
+    """Onboarding writes NO harness-specific config: the experiment dir gets no
+    .claude/settings.json and the artifacts list never names one (AVL T9)."""
     _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     data = record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
-
-    settings = _read_settings(tmp_path)
-    assert settings["permissions"]["allow"] == ["Bash(hpc-agent:*)"]
-    # The new artifact is reported the first time it's written.
-    assert ".claude/settings.json" in data["artifacts"]
-
-
-def test_interview_merges_into_existing_settings_without_clobber(tmp_path: Path) -> None:
-    """An existing .claude/settings.json is preserved — other keys and other
-    allow entries survive; our rule is appended (deduped), never overwriting."""
-    claude_dir = tmp_path / ".claude"
-    claude_dir.mkdir()
-    (claude_dir / "settings.json").write_text(
-        json.dumps(
-            {
-                "model": "opus",
-                "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm:*)"]},
-            }
-        ),
-        encoding="utf-8",
-    )
-    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
-    record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
-
-    settings = _read_settings(tmp_path)
-    # Pre-existing keys/entries survive.
-    assert settings["model"] == "opus"
-    assert settings["permissions"]["deny"] == ["Bash(rm:*)"]
-    assert "Bash(ls:*)" in settings["permissions"]["allow"]
-    # Our rule is appended.
-    assert "Bash(hpc-agent:*)" in settings["permissions"]["allow"]
-
-
-def test_interview_permissions_write_is_idempotent(tmp_path: Path) -> None:
-    """Re-running onboarding does not duplicate the rule, and a no-op re-run
-    does not re-report the settings file as a fresh artifact."""
-    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
-    record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
-    data2 = record_interview(
-        InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path
-    )
-
-    settings = _read_settings(tmp_path)
-    # Exactly one occurrence — no dupes on the second pass.
-    assert settings["permissions"]["allow"].count("Bash(hpc-agent:*)") == 1
-    # Second run was a no-op for the allow rule → not re-listed as an artifact.
-    assert ".claude/settings.json" not in data2["artifacts"]
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert ".claude/settings.json" not in data["artifacts"]
 
 
 # ─── entry_point.solver: PETSc checkpoint-instrumented wrapper ─────────────
@@ -1637,5 +1743,403 @@ def test_audited_source_config_absent_is_byte_identical(tmp_path: Path) -> None:
     assert "source_roots" not in raw
     assert "attention_order" not in raw
     assert "output_roots" not in raw
+    assert "observables" not in raw
     persisted = json.loads(raw)
     assert persisted["audited_source"] == audited
+
+
+def test_audited_source_observables_round_trips_and_reads(tmp_path: Path) -> None:
+    """A14: the observation plan (``observables``) rides the signed audited_source
+    block verbatim, and read_recorded_config surfaces it (the runner's read seam)."""
+    from hpc_agent.ops.notebook.canonical import read_recorded_config
+
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    audited = {
+        "source": "src/experiment.py",
+        "audit_id": "pi-audit-7f3a",
+        "template": ".hpc/templates/monte_carlo.py",
+        "observables": ["frame", "totals"],
+    }
+    intent = _minimal_intent(3, audited_source=audited)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["audited_source"] == audited
+    cfg = read_recorded_config(tmp_path, "pi-audit-7f3a")
+    assert cfg.observables == ["frame", "totals"]
+
+
+def test_audited_source_observables_empty_string_refused(tmp_path: Path) -> None:
+    """Opaque names, but non-empty strings (a blank observable binds nothing)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        audited_source={
+            "source": "s.py",
+            "audit_id": "x",
+            "template": "t.py",
+            "observables": ["ok", ""],
+        },
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+# ─── domain-pack opt-in (bind-as-data, T8a) ────────────────────────────────
+#
+# The ``packs`` block is the sibling of ``audited_source``: a caller-referenced
+# opt-in persisted VERBATIM into interview.json, and — the load-bearing
+# invariant — ABSENT → interview.json is byte-identical to a repo that never
+# opted in (the D7 fail-safe). The two Wave-B raw readers
+# (``ops/pack/status_op._read_packs_optin`` and
+# ``state/pack_declarations._read_packs_optin``) must parse the typed-written
+# block, proving the typed shape and the raw readers agree on ONE shape.
+
+
+def test_packs_persisted_verbatim_when_present(tmp_path: Path) -> None:
+    """Present → the whole ``packs`` list round-trips into interview.json
+    unchanged, including nested receipt_bindings slot→pack objects."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    packs = [
+        {
+            "pack": "toy-widgets",
+            "manifest": "packs/toy-widgets/manifest.json",
+            "receipt_bindings": [
+                {"slot": "data-audit", "pack": "toy-widgets"},
+                {"slot": "stats-check", "pack": "toy-stats"},
+            ],
+        },
+        {
+            "pack": "toy-stats",
+            "manifest": "packs/toy-stats/manifest.json",
+            "receipt_bindings": [],
+        },
+    ]
+    intent = _minimal_intent(3, packs=packs)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["packs"] == packs
+
+
+def test_packs_empty_receipt_bindings_defaults_to_list(tmp_path: Path) -> None:
+    """receipt_bindings is optional (default []); a pack that omits it persists
+    with an empty list — seam-data-only, gates on no receipt."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    packs = [{"pack": "toy-widgets", "manifest": "packs/toy-widgets/manifest.json"}]
+    intent = _minimal_intent(3, packs=packs)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["packs"] == [
+        {
+            "pack": "toy-widgets",
+            "manifest": "packs/toy-widgets/manifest.json",
+            "receipt_bindings": [],
+        }
+    ]
+
+
+def test_absent_packs_is_byte_identical(tmp_path: Path) -> None:
+    """CRITICAL GUARD (D7 fail-safe): with no ``packs`` block, interview.json is
+    byte-identical to the pre-change output — the field name never appears, and
+    the serialized model view carries no ``packs`` key (exclude_none path)."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    raw = (tmp_path / "interview.json").read_text()
+    assert "packs" not in raw
+    dumped = InterviewSpec.model_validate(intent).model_dump(exclude_none=True, mode="json")
+    assert "packs" not in dumped
+
+
+def test_packs_rejects_non_slug_pack_name(tmp_path: Path) -> None:
+    """The pack slug uses the shared RunIdStrict character class — a name with
+    a path separator (or other non-slug char) is refused before any disk write."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        packs=[{"pack": "toy/widgets", "manifest": "m.json"}],
+    )
+    with pytest.raises(ValidationError, match="pack"):
+        InterviewSpec.model_validate(intent)
+
+
+def test_packs_rejects_non_slug_slot(tmp_path: Path) -> None:
+    """A receipt_binding slot slug is likewise RunIdStrict — a non-slug slot is
+    refused (the caller-authored-slug discipline, DP4)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        packs=[
+            {
+                "pack": "toy-widgets",
+                "manifest": "m.json",
+                "receipt_bindings": [{"slot": "bad slot", "pack": "toy-widgets"}],
+            }
+        ],
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_packs_rejects_extra_keys(tmp_path: Path) -> None:
+    """extra='forbid' on the opt-in models: an unexpected key is refused (no
+    silent meaning-bearing field smuggled onto the wire)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        packs=[{"pack": "toy-widgets", "manifest": "m.json", "version": "1.2.0"}],
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_packs_typed_write_read_by_wave_b_readers(tmp_path: Path) -> None:
+    """Integration: the block written through interview persistence is parsed by
+    BOTH Wave-B raw readers — proving the typed shape and the shape-tolerant
+    readers agree on ONE documented shape (the reconciliation invariant)."""
+    from hpc_agent.ops.pack.status_op import _read_packs_optin as read_status
+    from hpc_agent.state.pack_declarations import _read_packs_optin as read_decl
+
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    packs = [
+        {
+            "pack": "toy-widgets",
+            "manifest": "packs/toy-widgets/manifest.json",
+            "receipt_bindings": [{"slot": "data-audit", "pack": "toy-widgets"}],
+        }
+    ]
+    intent = _minimal_intent(3, packs=packs)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    # status_op reads campaign-dir-root interview.json → the same list of dicts.
+    assert read_status(tmp_path) == packs
+    # pack_declarations reads it identically (its raw opt-in probe).
+    assert read_decl(tmp_path) == packs
+
+
+# ─── multi-human actors opt-in (MH1, MT3) ──────────────────────────────────
+#
+# The ``actors`` block is the sibling of ``packs`` / ``audited_source``: a
+# caller-declared opt-in persisted VERBATIM into interview.json, and — the
+# load-bearing invariant — ABSENT → interview.json is byte-identical to a repo
+# that never declared actors (the D7 fail-safe, ``exclude_none``). ``ids`` are
+# opaque filesystem-safe slugs (the shared tag class); an optional ``policy``
+# mapping delegates gated blocks to actor subsets, with a dangling policy slug
+# (naming an id not in ``ids``) refused LOUDLY at validation time.
+
+
+def test_actors_persisted_verbatim_when_present(tmp_path: Path) -> None:
+    """Present → the whole ``actors`` block round-trips into interview.json
+    unchanged, including the nested ``policy`` block→[slug] mapping."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    actors = {
+        "ids": ["alice", "bob"],
+        "policy": {
+            "registration": ["alice"],
+            "campaign-greenlight": ["alice", "bob"],
+        },
+    }
+    intent = _minimal_intent(3, actors=actors)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["actors"] == actors
+
+
+def test_actors_absent_policy_omitted_via_exclude_none(tmp_path: Path) -> None:
+    """``policy`` is optional (default None); a block that omits it persists as
+    just ``{"ids": [...]}`` — the exclude_none path drops the absent key, so no
+    policy gating is declared."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, actors={"ids": ["alice", "bob"]})
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["actors"] == {"ids": ["alice", "bob"]}
+
+
+def test_actors_empty_ids_allowed(tmp_path: Path) -> None:
+    """Zero declared actors is not an error (MH1): an empty ``ids`` is today's
+    single-actor system, and it round-trips as an empty list."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, actors={"ids": []})
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["actors"] == {"ids": []}
+
+
+def test_absent_actors_is_byte_identical(tmp_path: Path) -> None:
+    """CRITICAL GUARD (D7 fail-safe): with no ``actors`` block, interview.json is
+    byte-identical to the pre-change output — the field name never appears, and
+    the serialized model view carries no ``actors`` key (exclude_none path)."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    raw = (tmp_path / "interview.json").read_text()
+    assert "actors" not in raw
+    dumped = InterviewSpec.model_validate(intent).model_dump(exclude_none=True, mode="json")
+    assert "actors" not in dumped
+
+
+def test_actors_dangling_policy_slug_refused(tmp_path: Path) -> None:
+    """A ``policy`` value naming an actor NOT in ``ids`` is a LOUD refusal at
+    validation time (the dangling-reference posture, MH1) — never a silent
+    pass, and before any disk write."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        actors={
+            "ids": ["alice", "bob"],
+            "policy": {"registration": ["carol"]},  # carol is undeclared
+        },
+    )
+    with pytest.raises(ValidationError, match="not in actors.ids"):
+        InterviewSpec.model_validate(intent)
+
+
+def test_actors_rejects_non_slug_id(tmp_path: Path) -> None:
+    """An actor id uses the shared RunIdStrict character class — a slug with a
+    path separator (it becomes a path segment in the MH2 locator) is refused."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(3, actors={"ids": ["alice", "bad/slug"]})
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_actors_rejects_non_slug_policy_value(tmp_path: Path) -> None:
+    """A policy value slug is likewise RunIdStrict — a non-slug actor slug is
+    refused (before the dangling check even needs to run)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        actors={"ids": ["alice"], "policy": {"registration": ["not a slug"]}},
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_actors_rejects_extra_keys(tmp_path: Path) -> None:
+    """extra='forbid' on the actors block: an unexpected key is refused (no
+    silent meaning-bearing field — e.g. a role vocabulary — smuggled on)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(3, actors={"ids": ["alice"], "roles": {"alice": "pi"}})
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+# ─── CONVERSION 2: composed audit-template default from the bound pack seam ──
+#
+# 2026-07-10 evening ruling ("prose cannot be load-bearing"): when a pack is
+# bound and the caller supplied no template, the interview COMPOSES the
+# audit-template default from the pack's ``audit_template`` seam IN CODE —
+# silently, disclosed in the persisted record, never brought to human attention
+# (supersedes the on-ramp's pack-status confirm-default).
+
+
+def _seal_pack_with_seam(campaign_dir, name: str) -> str:
+    """Seal a minimal pack manifest (an ``audit_template`` seam); return manifest rel."""
+    from hpc_agent.state.pack_sweep import reseal_manifest
+
+    pack_root = campaign_dir / "packs" / name
+    (pack_root / "templates").mkdir(parents=True, exist_ok=True)
+    (pack_root / "templates" / "audit.py").write_text(f"# %% {name} audit\n", encoding="utf-8")
+    recipe = {
+        "name": name,
+        "version": "1.0.0",
+        "seams": {"audit_template": "templates/audit.py"},
+        "fills_slots": [f"{name}-audit"],
+        "pack_files": ["templates/audit.py"],
+        "sweep": [],
+    }
+    (pack_root / "sweep.json").write_text(json.dumps(recipe), encoding="utf-8")
+    manifest_rel = f"packs/{name}/manifest.json"
+    reseal_manifest(campaign_dir / manifest_rel, pack_root / "sweep.json")
+    return manifest_rel
+
+
+def _generator_intent(**overrides) -> dict:
+    intent = _minimal_intent(1, task_generator={"kind": "enumerated", "params": {"items": [{}]}})
+    intent.update(overrides)
+    return intent
+
+
+def _composed_defaults(campaign_dir) -> list:
+    doc = json.loads((campaign_dir / "interview.json").read_text(encoding="utf-8"))
+    return doc.get("_materialized", {}).get("composed_defaults", [])
+
+
+def test_composes_audit_template_default_when_pack_bound_no_template(tmp_path: Path) -> None:
+    manifest_rel = _seal_pack_with_seam(tmp_path, "toy")
+    intent = _generator_intent(
+        packs=[{"pack": "toy", "manifest": manifest_rel, "receipt_bindings": []}]
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    defaults = _composed_defaults(tmp_path)
+    assert len(defaults) == 1
+    d = defaults[0]
+    assert d["field"] == "audit_template"
+    assert d["value"] == "packs/toy/templates/audit.py"
+    assert d["pack"] == "toy"
+    assert d["source"] == "pack_audit_template_seam"
+
+
+def test_prefers_program_pack_seam_over_domain_skeleton(tmp_path: Path) -> None:
+    """rv-over-quant: the pack a receipt_binding references wins over the skeleton."""
+    quant_rel = _seal_pack_with_seam(tmp_path, "quant")
+    rv_rel = _seal_pack_with_seam(tmp_path, "rv")
+    intent = _generator_intent(
+        packs=[
+            {"pack": "quant", "manifest": quant_rel, "receipt_bindings": []},
+            {
+                "pack": "rv",
+                "manifest": rv_rel,
+                "receipt_bindings": [{"slot": "rv-audit", "pack": "rv"}],
+            },
+        ]
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    defaults = _composed_defaults(tmp_path)
+    assert len(defaults) == 1
+    assert defaults[0]["pack"] == "rv"
+    assert defaults[0]["value"] == "packs/rv/templates/audit.py"
+
+
+def test_template_explicitly_supplied_leaves_record_untouched(tmp_path: Path) -> None:
+    manifest_rel = _seal_pack_with_seam(tmp_path, "toy")
+    intent = _generator_intent(
+        packs=[{"pack": "toy", "manifest": manifest_rel, "receipt_bindings": []}],
+        audited_source={
+            "source": "analysis.py",
+            "audit_id": "my-audit",
+            "template": "my/own/template.py",
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert _composed_defaults(tmp_path) == []
+
+
+def test_no_pack_no_composed_default(tmp_path: Path) -> None:
+    record_interview(InterviewSpec.model_validate(_generator_intent()), campaign_dir=tmp_path)
+    assert _composed_defaults(tmp_path) == []

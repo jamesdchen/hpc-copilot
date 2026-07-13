@@ -78,6 +78,29 @@ _EXIT_NO_RUNNER = 3
 # for N. Kept in lock-step with HPC_DISPATCH_EXIT_NO_OUTPUT in hpc_preamble.sh.
 _EXIT_NO_OUTPUT = 4
 
+# The data-trace emission contract (T2). Kept in LOCK-STEP with
+# ``hpc_agent.execution.mapreduce.data_trace_contract`` — this standalone
+# dispatcher is scp'd to the compute node without ``hpc_agent`` on the path,
+# so (like ``_EXIT_NO_OUTPUT`` ↔ ``HPC_DISPATCH_EXIT_NO_OUTPUT`` above) it
+# hardcodes a copy of the two constants the emitter and the (T3) digest
+# export need. ``test_data_trace_contract`` pins these equal to the canonical
+# module. The env-var EXPORT itself is wired by T3, not here.
+_TRACE_TRANSPORT_FILENAME = "_trace.jsonl"
+_TRACE_DIGEST_ENV_VAR = "HPC_TRACE_DIGESTS"
+
+# Framework-written files an executor may drop into ``$RESULT_DIR`` that do NOT
+# by themselves constitute a produced result. The data-trace transport file
+# ``_trace.jsonl`` is emitted beside outputs (T2), so a trace-emitting but
+# output-less executor would otherwise make ``promote_pairs`` non-empty and
+# sail past the finding-16 empty-output guard — the exact FALSE GREEN the guard
+# exists to prevent. Kept in LOCK-STEP with the status reporter's
+# ``_FRAMEWORK_ARTIFACT_NAMES`` (``reduce/status.py``): that module rides the
+# installed-package import surface, while this standalone dispatcher is scp'd to
+# the compute node without ``hpc_agent`` on the path, so the two sets are
+# deliberately duplicated — the standalone-boundary carve-out in
+# ``docs/internals/engineering-principles.md``.
+_FRAMEWORK_ARTIFACT_NAMES = frozenset({_TRACE_TRANSPORT_FILENAME})
+
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_agent/state/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
@@ -133,6 +156,71 @@ def _atomic_write_json(path, data):
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
+
+
+# Per-task terminal announcement (crash-only-monitoring Phase 1,
+# docs/design/crash-only-monitoring.md). On its terminal bookkeeping the
+# dispatcher writes ONE small marker file per task under
+# ``.hpc/announce/<run_id>/`` whose FILENAME encodes the verdict —
+# ``task_<id>.complete`` or ``task_<id>.failed`` — so the client counts
+# per-state outcomes with a pure ``ls`` (no shared-file append → no Lustre/NFS
+# contention, no per-file ``cat``). The state MIRRORS the promote/failure
+# decision this dispatcher just committed (the finding-16 empty-output guard's
+# remapped ``returncode``, NOT the raw executor rc), so a marker can never
+# disagree with what the task actually did.
+#
+# TRUST BOUNDARY: a marker settles run LIFECYCLE only; it is NOT an integrity
+# claim about the task's OUTPUT — the aggregate integrity gate still verifies
+# every result independently. Best-effort throughout: a marker write failure
+# NEVER changes the dispatcher's exit code (the task stands on its own merits).
+#
+# Kept in LOCK-STEP with the client reader
+# ``hpc_agent.ops.monitor.announce`` (``ANNOUNCE_SUBPATH`` / the two state
+# names): that module rides the installed-package import surface while this
+# dispatcher is scp'd to the compute node without ``hpc_agent`` on the path, so
+# the vocabulary is deliberately duplicated (the standalone-boundary carve-out
+# in docs/internals/engineering-principles.md). Pinned equal by
+# tests/ops/monitor/test_announce.py.
+_ANNOUNCE_DIRNAME = "announce"
+_ANNOUNCE_STATE_COMPLETE = "complete"
+_ANNOUNCE_STATE_FAILED = "failed"
+
+
+def _write_announcement(announce_root, run_id, task_id, *, state, exit_code, finished_at):
+    """Best-effort per-task terminal marker under ``<announce_root>/<run_id>/``.
+
+    Writes ``task_<task_id>.<state>`` atomically (tmp + rename) with a compact
+    JSON body ``{task_id, state, exit_code, finished_at}``, and removes the
+    opposite-state marker from a prior attempt if present — a resubmit that
+    flips ``failed`` -> ``complete`` (or vice versa) must leave exactly ONE file
+    per task so the client's pure-``ls`` per-state count stays exact.
+
+    Never raises: a failure here is logged to stderr and swallowed so the
+    task's own exit code is never disturbed by the announcement.
+    """
+    try:
+        run_dir = Path(announce_root) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "task_id": int(task_id),
+            "state": state,
+            "exit_code": int(exit_code),
+            "finished_at": finished_at,
+        }
+        _atomic_write_json(run_dir / f"task_{task_id}.{state}", payload)
+        # Drop a stale opposite-state marker so the per-state count stays exact.
+        other = (
+            _ANNOUNCE_STATE_FAILED
+            if state == _ANNOUNCE_STATE_COMPLETE
+            else _ANNOUNCE_STATE_COMPLETE
+        )
+        with contextlib.suppress(OSError):
+            (run_dir / f"task_{task_id}.{other}").unlink()
+    except Exception as exc:  # noqa: BLE001 — announcement is best-effort
+        print(
+            f"[dispatch] WARN: failed to write terminal announcement for task {task_id}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
@@ -622,6 +710,18 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Per-task summary filename the run declared (F-J) — the per-task completion
+    # marker this dispatcher keys its idempotency skip on AND promotes LAST for
+    # crash-safety. Absent → the historical metrics.json literal, so an existing
+    # run is byte-identical. Resolved inline (deployed cluster-side standalone,
+    # no hpc_agent import) but in lock-step with state.runs.resolved_summary_artifact.
+    _declared_summary = sidecar.get("summary_artifact")
+    summary_name = (
+        _declared_summary.strip()
+        if isinstance(_declared_summary, str) and _declared_summary.strip()
+        else "metrics.json"
+    )
+
     # --- Fail loud on a self-referential per-task runner ---
     # The per-task command must NOT be the dispatcher itself. When a submit
     # ships a run sidecar whose ``executor`` was synthesized from the job
@@ -804,7 +904,7 @@ def main() -> None:
         if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
             cmd_sha_changed = True
 
-    metrics_path = Path(result_dir) / "metrics.json"
+    metrics_path = Path(result_dir) / summary_name
     already_complete = False
     if metrics_path.is_file():
         try:
@@ -814,7 +914,7 @@ def main() -> None:
             already_complete = False
     if already_complete and not force_rerun and not cmd_sha_changed:
         print(
-            f"[hpc-agent] task {task_id} already complete (metrics.json found); skipping",
+            f"[hpc-agent] task {task_id} already complete ({summary_name} found); skipping",
             file=sys.stderr,
         )
         sys.exit(0)
@@ -1066,10 +1166,20 @@ def main() -> None:
                 src = os.path.join(root, fname)
                 rel = os.path.relpath(src, wip_dir)
                 promote_pairs.append((src, rel))
-        # Sort: metrics.json at the top level last (it's the
-        # idempotency marker); everything else alphabetically.
-        promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
-        if not promote_pairs:
+        # Sort: the declared per-task summary file at the top level last (it's
+        # the idempotency marker); everything else alphabetically.
+        promote_pairs.sort(key=lambda pair: (pair[1] == summary_name, pair[1]))
+        # Framework transport/telemetry files (currently just ``_trace.jsonl``)
+        # are NOT a produced result: an executor that emits a trace but writes
+        # no real output must still be caught by the empty-output guard below,
+        # not promoted green. They are still promoted alongside real outputs
+        # when any exist (the ``else`` branch moves every pair, trace included).
+        real_output_pairs = [
+            pair
+            for pair in promote_pairs
+            if os.path.basename(pair[1]) not in _FRAMEWORK_ARTIFACT_NAMES
+        ]
+        if not real_output_pairs:
             # #16 (proving run #5): exit 0 but the WIP result dir is EMPTY —
             # the executor produced NO files. Under WIP/atomic-promote
             # semantics "produced a result" == "wrote at least one file to
@@ -1207,6 +1317,22 @@ def main() -> None:
             f"[dispatch] WARN: failed to write _runtime.json for task {task_id}: {exc}",
             file=sys.stderr,
         )
+
+    # --- Announce terminal state (crash-only-monitoring Phase 1) ---
+    # ONE marker per task under ``.hpc/announce/<run_id>/`` whose filename
+    # encodes the FINAL verdict (``returncode`` here is already the finding-16
+    # empty-output guard's remapped code, not the raw executor rc), so the
+    # client settles the run's lifecycle from a pure ``ls`` without the
+    # 20-25 min status-reporter walk (run-12 findings 20/24). Best-effort:
+    # a write failure NEVER changes the task's exit code.
+    _write_announcement(
+        here / _ANNOUNCE_DIRNAME,
+        run_id,
+        task_id,
+        state=(_ANNOUNCE_STATE_COMPLETE if returncode == 0 else _ANNOUNCE_STATE_FAILED),
+        exit_code=returncode,
+        finished_at=ended_at_iso,
+    )
 
     sys.exit(returncode)
 

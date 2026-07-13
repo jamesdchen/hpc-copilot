@@ -115,6 +115,12 @@
       "default": null,
       "description": "Optional caller-supplied section-slug ordering for the presented sections + markdown (T12). Default (null) is source order. Listed slugs are shown FIRST in the given order; unknown slugs are ignored; source slugs the order omits keep source order after the listed ones. It changes what the human saw, so it participates in the module view_sha; per-section view_shas are unaffected.",
       "title": "Attention Order"
+    },
+    "full": {
+      "default": false,
+      "description": "Payload selector (run-#12 finding 12, B1). Default (false) returns the DIGEST `markdown` — the per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), the render-file pointers, and the next-actions footer — with NO diff/assertion/flag body bytes. Under popup-primary the bodies live in the content-addressed render files (`render_path`) and the sign-off popup, so the agent needs the digest + pointers only. Pass `full: true` to get the whole-body `markdown` render (~11k tokens) for a harness that still MODEL-RELAYS the audit. The per-section view_shas and `render_path`s are identical either way — `full` selects only how much of the render the RESPONSE carries, never what the human signs.",
+      "title": "Full",
+      "type": "boolean"
     }
   }
 }

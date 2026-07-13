@@ -140,6 +140,17 @@ hpc_agent = [
     # (Phase 2 / Option C). Only the shared preambles ship statically.
     "execution/mapreduce/templates/runtime/common/*.sh",
     "_kernel/extension/worker_prompts/*.md",
+    # The harness-conformance kit ships in the wheel (D-K1): a conforming
+    # harness runs it via ``pytest --pyargs hpc_agent.conformance``, so its
+    # committed fixture VECTORS (canonicalization digests, relay triples, the
+    # stub worker) must travel as package data. These are test vectors, NOT
+    # config — the clusters.yaml package-data hazard (a dev's real creds
+    # shipping in the wheel) does not apply here; nothing under
+    # ``conformance/fixtures/`` is machine-specific.
+    "conformance/fixtures/**/*",
+    # Conformance-kit vectors ship as package data so `pytest --pyargs
+    # hpc_agent.conformance` runs against a stranger's harness from the wheel.
+    "conformance/fixtures/**/*.json",
     "py.typed",
     "slash_commands/commands/*.md",
     "slash_commands/skills/*/SKILL.md",

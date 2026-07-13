@@ -33,6 +33,7 @@ from hpc_agent._wire.workflows.submit_and_verify import (
 )
 from hpc_agent._wire.workflows.verify_canary import VerifyCanaryResult
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.ops.submit_flow import SubmitFlowResult, fire_second_canary, submit_flow
 from hpc_agent.ops.verify_canary import verify_canary
 
@@ -93,37 +94,60 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
     from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.fingerprint_store import pulls_dir
     from hpc_agent.state.journal import load_run
-    from hpc_agent.state.runs import read_run_sidecar
+    from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
     record = load_run(experiment_dir, canary_run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for canary {canary_run_id!r}")
     sidecar = read_run_sidecar(experiment_dir, canary_run_id)
+    # The canary's declared per-task summary filename (F-J). The canary is
+    # submitted through the same pipeline as the main run, so its sidecar
+    # carries the SAME summary_artifact — resolve it here (absent/blank →
+    # metrics.json) so the pull filter + rglob key on the real file instead of
+    # the metrics.json hardcode that missed a non-default emitter (run #10).
+    summary_name = resolved_summary_artifact(sidecar)
     template = sidecar.get("result_dir_template")
     if not isinstance(template, str) or not template:
         raise errors.SpecInvalid(
             f"canary {canary_run_id!r} sidecar carries no result_dir_template to render task 0"
         )
-    # Task 0 result dir (relative to remote_path). A template that references a
-    # per-task kwarg cannot render locally — treated as "cannot pull" (raises).
-    result_subdir = template.format(task_id=0, run_id=canary_run_id)
+    # Task 0 result dir (relative to remote_path), rendered with task 0's REAL
+    # kwargs when the sidecar recorded them (``trial_params`` — the canary IS
+    # task 0), so a sweep-axis template ({estimator}/{chunk_start}/…) renders.
+    # A field the record cannot supply is the documented "cannot pull" raise —
+    # NEVER a bare KeyError, which escapes the callers' best-effort catch and
+    # killed the whole S2 worker post-submit (run-#12 finding 18).
+    trial_params = sidecar.get("trial_params")
+    fields: dict[str, object] = {}
+    if isinstance(trial_params, list) and trial_params and isinstance(trial_params[0], dict):
+        fields = dict(trial_params[0])  # the sidecar shape: list[dict], task 0 first
+    elif isinstance(trial_params, dict):
+        fields = dict(trial_params)
+    fields.update(task_id=0, run_id=canary_run_id)
+    try:
+        result_subdir = template.format(**fields)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise errors.SpecInvalid(
+            f"canary {canary_run_id!r} result_dir_template {template!r} references "
+            f"a field the sidecar cannot supply ({exc!r}) — cannot render task 0 locally"
+        ) from exc
     local = pulls_dir(experiment_dir, canary_run_id)
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=result_subdir,
         local_dir=str(local),
-        include=["metrics.json"],
+        include=[summary_name],
     )
     if pull.returncode != 0:
         raise errors.RemoteCommandFailed(
-            f"pull of {canary_run_id!r} task-0 metrics.json failed (exit {pull.returncode}): "
+            f"pull of {canary_run_id!r} task-0 {summary_name} failed (exit {pull.returncode}): "
             f"{(pull.stderr or '').strip()[:200]}"
         )
-    hits = sorted(p for p in local.rglob("metrics.json") if p.is_file())
+    hits = sorted(p for p in local.rglob(summary_name) if p.is_file())
     if not hits:
         raise errors.RemoteCommandFailed(
-            f"no metrics.json pulled for canary {canary_run_id!r} under {result_subdir!r}"
+            f"no {summary_name} pulled for canary {canary_run_id!r} under {result_subdir!r}"
         )
     return hits[0]
 

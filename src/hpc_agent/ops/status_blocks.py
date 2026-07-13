@@ -45,12 +45,14 @@ from hpc_agent._wire.workflows.status_blocks import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
+from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.ops.attention_queue import collect_queue
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
 from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, reconcile
 from hpc_agent.ops.monitor_flow import monitor_flow
+from hpc_agent.ops.overnight import morning_brief_if_any
 from hpc_agent.ops.recover.notify import acknowledge_alerts, read_unacknowledged_alerts
 from hpc_agent.ops.relay_render import render_relay
 from hpc_agent.state.block_terminal import terminal_block_key
@@ -323,6 +325,20 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         if alerts:
             acknowledge_alerts(experiment_dir, up_to_ts=max(a["ts"] for a in alerts))
 
+    # Overnight morning brief (item 8 seams 2+3): fold each digested run's overnight
+    # disclosure into the snapshot when a standing consent OR any consumption exists
+    # for it. Journal-first (no new SSH): the brief reads the decision journal + the
+    # per-scope consumption ledger. The section surfaces failed_at vs surfaced_at
+    # latency and — critically — SURVIVES consent expiry: a consent that lapsed
+    # overnight still discloses what it consumed, so the disclosure outlives the
+    # grant. Appears once, code-rendered; an empty result yields ``[]`` (byte-stable).
+    overnight = [
+        b
+        for r in records
+        if (b := morning_brief_if_any(experiment_dir, scope_kind="run", scope_id=r.run_id))
+        is not None
+    ]
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -332,6 +348,13 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         "alerts": alerts,
         "open_ssh_circuits": open_ssh_circuits,
         "attention": attention,
+        "overnight": overnight,
+        # Env-vs-record drift disclosure (run-12 finding 24 addendum, B15): echo
+        # every exported HPC_* override verbatim on the surface an agent already
+        # reads at the top of a session. The seat that let HPC_SSH_ENGINE sit
+        # exported for days contradicting the durable record — pure disclosure,
+        # never judged. Rides the brief dict (no wire contract). Empty when unset.
+        "active_env_overrides": active_env_overrides(),
     }
 
     needs_decision = bool(stalled or anomalies)

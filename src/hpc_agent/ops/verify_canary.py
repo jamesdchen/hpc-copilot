@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.clusters import resolve_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -117,7 +118,7 @@ def _classify_poll_failure(exc: BaseException) -> str:
     class belongs to the connection breaker). The returncode is read off the
     exception attribute, never string-parsed from the message.
     """
-    if isinstance(exc, errors.RemoteCommandFailed) and exc.returncode in (126, 127):
+    if errors.is_deterministic_env_failure(exc):
         return "deterministic_env"
     return "transient"
 
@@ -881,7 +882,7 @@ def verify_canary(
             last_watchdog_stamp = now
         try:
             report = ssh_status_report(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 run_id=canary_run_id,
                 job_ids=list(record.job_ids),
@@ -890,7 +891,16 @@ def verify_canary(
                 file_glob=file_glob,
                 remote_activation=remote_activation,
             )
-        except (errors.RemoteCommandFailed, OSError) as exc:
+        except errors.TRANSIENT_TRANSPORT_ERRORS as exc:
+            # SshCircuitOpen (an HpcError, NOT an OSError) is raised when a
+            # transient blip trips the per-host breaker; without it here the
+            # canary gate crashes with an undeclared exception instead of riding
+            # the wait budget. _classify_poll_failure returns "transient" for
+            # everything that is not RemoteCommandFailed rc 126/127, so an
+            # open-circuit poll is recorded as last_poll_error and the loop rides
+            # the budget until the breaker heals or the budget elapses (then the
+            # got_report/last_poll_error arm returns reporter_unreachable). This
+            # also makes the docstring's "SshUnreachable is transient" limb live.
             last_poll_error = exc
             failure_class = _classify_poll_failure(exc)
             rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
@@ -923,7 +933,7 @@ def verify_canary(
 
                 try:
                     scan = ssh_marker_scan(
-                        ssh_target=record.ssh_target,
+                        ssh_target=resolve_ssh_target(record),
                         remote_path=record.remote_path,
                         run_id=canary_run_id,
                     )
@@ -961,19 +971,34 @@ def verify_canary(
         failed = int(last_summary.get("failed") or 0)
         running = int(last_summary.get("running") or 0)
         pending = int(last_summary.get("pending") or 0)
-        unknown = int(last_summary.get("unknown") or 0)
         # Terminal: complete == total OR (failed > 0 and no running/pending).
         if complete >= int(record.total_tasks) and record.total_tasks > 0:
             break
         if failed > 0 and running == 0 and pending == 0:
             break
-        # Job absent from the scheduler's live view: nothing complete, nothing
-        # failed, nothing queued/running, nothing in the unknown bucket. Count
-        # consecutive such polls; once it persists, the canary finished (or
-        # died) and left the queue — break fast as ``completed_unknown`` rather
-        # than time out. The stderr scan below still runs, so a real failure
-        # marker (OOM, traceback) is preferred over the bland unknown verdict.
-        if complete == 0 and failed == 0 and running == 0 and pending == 0 and unknown == 0:
+        # Job absent from the scheduler's live view: no task is complete, failed,
+        # running, or pending — every remaining task sits in the reporter's
+        # ``unknown`` bucket. Count consecutive such polls; once they persist
+        # past the registration grace, the canary finished (or died) and left the
+        # queue — break fast as ``completed_unknown`` rather than time out. The
+        # stderr scan below still runs, so a real failure marker (OOM, traceback)
+        # is preferred over the bland unknown verdict.
+        #
+        # F-L (run #10): this guard previously ALSO required ``unknown == 0``,
+        # but a gone 1-task canary is bucketed ``unknown == 1`` by the status
+        # reporter (a task that is neither complete, in a scheduler-FAILED
+        # accounting state, nor live in qstat lands in ``unknown`` —
+        # reduce/status.py). The five buckets sum to ``total_tasks``, so with the
+        # four active/terminal buckets at zero the remainder is ``unknown >= 1``
+        # for any ``total_tasks >= 1`` — making the all-zero condition
+        # unsatisfiable and the fast arm dead. A job dead on the scheduler in
+        # ~20s therefore rode the full 1800s budget to ``timeout`` (qacct
+        # evidence: job 13956468, exit_status 1). Dropping the ``unknown == 0``
+        # clause makes "all quiet ⇒ every task unknown" the signal; the
+        # registration grace still distinguishes the pre-qstat startup window
+        # (which reads unknown too, but resets the moment a task shows
+        # running/pending) from a job that truly left the queue.
+        if complete == 0 and failed == 0 and running == 0 and pending == 0:
             vanished_polls += 1
             if first_vanished_at is None:
                 first_vanished_at = time.monotonic()
@@ -1012,7 +1037,7 @@ def verify_canary(
     from hpc_agent.state.runs import read_job_task_spans
 
     logs = fetch_task_logs(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         job_name=record.job_name,
         job_ids=list(record.job_ids),
@@ -1045,7 +1070,7 @@ def verify_canary(
             _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
         )
         probe = _verify_remote_checkpoint(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             ckpt_result_dir=ckpt_dir,
             remote_activation=remote_activation,
@@ -1166,7 +1191,7 @@ def verify_canary(
     # Optional output verification.
     if expect_output:
         output_ok, output_detail = verify_combiner_artifact(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             expect_output=expect_output,
         )
@@ -1221,7 +1246,7 @@ def verify_canary(
         _result_dir = None
     if _result_dir is not None:
         runtime = _read_canary_exit_code(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             result_dir=_result_dir,
         )
@@ -1263,7 +1288,7 @@ def verify_canary(
         try:
             sha = ssh_run(
                 f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'",
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
             )
             if sha.returncode == 0:
                 metrics_fingerprint = sha.stdout.strip() or None

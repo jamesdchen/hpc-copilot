@@ -24,6 +24,11 @@ def _fake_reporter_stdout() -> str:
     )
 
 
+def _ack(rc: int = 0) -> str:
+    """The positive-evidence ack line the reporter echoes LAST (after any trailer)."""
+    return f"{cluster_status._STATUS_ACK_PREFIX}{rc}\n"
+
+
 def test_status_command_stamps_last_read_and_reads_alarm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -38,6 +43,7 @@ def test_status_command_stamps_last_read_and_reads_alarm(
             + cluster_status._WATCHER_ALARM_SENTINEL
             + "\n"
             + "client has not read status since 2026-07-03T00:00:00+00:00 (4000 s ago)\n"
+            + _ack()  # positive-evidence ack, echoed AFTER the alarm trailer
         )
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
 
@@ -66,7 +72,9 @@ def test_status_command_stamps_last_read_and_reads_alarm(
 
 def test_status_no_alarm_surfaces_none(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake(cmd: str, *, ssh_target: str, **_kw: object) -> subprocess.CompletedProcess[str]:
-        stdout = _fake_reporter_stdout() + "\n" + cluster_status._WATCHER_ALARM_SENTINEL + "\n"
+        stdout = (
+            _fake_reporter_stdout() + "\n" + cluster_status._WATCHER_ALARM_SENTINEL + "\n" + _ack()
+        )
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(remote_mod, "ssh_run", _fake)
@@ -82,15 +90,19 @@ def test_status_no_alarm_surfaces_none(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report["watcher_alarm"] is None
 
 
-def test_status_without_watcher_dir_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A caller that omits watcher_run_dir gets the byte-identical command and
-    no watcher_alarm key (all the non-monitor callers)."""
+def test_status_without_watcher_dir_carries_ack_but_no_watcher_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller that omits watcher_run_dir gets NO watcher probe (no last_read
+    touch / alarm cat) and no watcher_alarm key — but STILL carries the
+    positive-evidence ack + rc-preserving exit (the non-monitor callers:
+    aggregate-flow, failures-atom, canary)."""
     captured: dict[str, str] = {}
 
     def _fake(cmd: str, *, ssh_target: str, **_kw: object) -> subprocess.CompletedProcess[str]:
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(
-            args=cmd, returncode=0, stdout=_fake_reporter_stdout(), stderr=""
+            args=cmd, returncode=0, stdout=_fake_reporter_stdout() + "\n" + _ack(), stderr=""
         )
 
     monkeypatch.setattr(remote_mod, "ssh_run", _fake)
@@ -102,6 +114,10 @@ def test_status_without_watcher_dir_is_unchanged(monkeypatch: pytest.MonkeyPatch
         job_ids=["100"],
         job_name="jobx",
     )
-    assert "hpc_last_read" not in captured["cmd"]
-    assert "exit $__hpc_rc" not in captured["cmd"]
+    cmd = captured["cmd"]
+    assert "hpc_last_read" not in cmd
+    assert cluster_status._WATCHER_ALARM_SENTINEL not in cmd
+    # the ack + rc-preserving exit ride every reporter read, watcher or not.
+    assert cluster_status._STATUS_ACK_PREFIX in cmd
+    assert "exit $__hpc_rc" in cmd
     assert "watcher_alarm" not in report

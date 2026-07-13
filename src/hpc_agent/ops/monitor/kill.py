@@ -31,6 +31,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.kill import KillResult, KillSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids, reconcile
 from hpc_agent.state.journal import load_run, record_kill_confirmed, record_kill_request
@@ -119,14 +120,14 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
 
     # 2. Attempt cancellation through the backend seam (no-op today; flagged).
     cancel_attempted, cancel_available = _attempt_backend_cancel(
-        scheduler=spec.scheduler, ssh_target=record.ssh_target, job_ids=job_ids
+        scheduler=spec.scheduler, ssh_target=resolve_ssh_target(record), job_ids=job_ids
     )
 
     # 3. Verify against the scheduler: which requested ids are still alive?
     if job_ids:
         try:
             alive = _ssh_alive_job_ids(
-                ssh_target=record.ssh_target, job_ids=job_ids, scheduler=spec.scheduler
+                ssh_target=resolve_ssh_target(record), job_ids=job_ids, scheduler=spec.scheduler
             )
         except errors.RemoteCommandFailed:
             # Cannot verify — count NOTHING as gone rather than assume success.

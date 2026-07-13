@@ -208,13 +208,32 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
                 continue
             # tail may be "7", "7.batch", "7.extern"; take the leading integer.
             tail = tail.split(".", 1)[0]
-            # Ingest edge: the JobId_N index is a 1-based ArrayIndex; convert to
-            # 0-based HpcTaskId so ``task_info`` is keyed in the domain space.
-            try:
-                tid = int(to_task_id(ArrayIndex(int(tail))))
-            except (ValueError, _SpecInvalid):
-                errors.append({"code": "malformed_row", "detail": f"non-integer task id: {line!r}"})
-                continue
+            if tail.startswith("["):
+                # Pending-aggregate row: sacct collapses not-yet-started array
+                # elements into a single "<jobid>_[<spec>]" row (optionally
+                # "%<limit>"-throttled), State=PENDING. Expand the bracketed
+                # spec into one task per queued index so queued work is
+                # visible as pending instead of dropped as malformed.
+                inner = tail[1:]
+                if inner.endswith("]"):
+                    inner = inner[:-1]
+                inner = inner.split("%", 1)[0]  # drop the %N concurrency throttle
+                tids = _expand_bracket_indices(inner)
+                if not tids:
+                    errors.append(
+                        {"code": "malformed_row", "detail": f"non-integer task id: {line!r}"}
+                    )
+                    continue
+            else:
+                # Ingest edge: the JobId_N index is a 1-based ArrayIndex; convert
+                # to 0-based HpcTaskId so ``task_info`` is keyed in domain space.
+                try:
+                    tids = [int(to_task_id(ArrayIndex(int(tail))))]
+                except (ValueError, _SpecInvalid):
+                    errors.append(
+                        {"code": "malformed_row", "detail": f"non-integer task id: {line!r}"}
+                    )
+                    continue
         else:
             # Non-array submission (#293, ``array=False`` MPI jobs): sacct
             # reports a plain "12345" main row plus "12345.batch"/".extern"
@@ -225,35 +244,37 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
             if base_job not in job_id_set:
                 # sacct may return unrelated rows (shouldn't, but be defensive).
                 continue
-            tid = 0
-        # Dedup rule:
+            tids = [0]
+        elapsed_s = _to_int(elapsed_raw)
+        cpus = _to_int(req_cpus)
+        gpus = parse_gpu_count_from_tres(alloc_tres)
+        # Dedup rule (applied per task id — a pending-aggregate row expands to
+        # many):
         #   * Within ONE array: first occurrence wins (main record comes
         #     before .batch/.extern steps for the same job_id).
         #   * Across MULTIPLE arrays for the same task_id (resubmit case):
         #     the row whose base_job appears later in the input job_ids
         #     list wins — that's the most recent attempt.
-        existing = task_info.get(tid)
-        if existing is not None:
-            existing_pos = job_id_order.get(existing["job_id"], -1)
-            new_pos = job_id_order.get(base_job, -1)
-            if new_pos < existing_pos:
-                # Older array's row arrived after the newer one's; keep newer.
-                continue
-            if new_pos == existing_pos:
-                # Same array — first occurrence (main record) already kept.
-                continue
-            # new_pos > existing_pos — newer array, overwrite.
-        elapsed_s = _to_int(elapsed_raw)
-        cpus = _to_int(req_cpus)
-        gpus = parse_gpu_count_from_tres(alloc_tres)
-        task_info[tid] = {
-            "state": state,
-            "exit_code": exit_code,
-            "job_id": base_job,
-            "elapsed_s": elapsed_s,
-            "cpu_s": cpus * elapsed_s,
-            "gpu_s": gpus * elapsed_s,
-        }
+        for tid in tids:
+            existing = task_info.get(tid)
+            if existing is not None:
+                existing_pos = job_id_order.get(existing["job_id"], -1)
+                new_pos = job_id_order.get(base_job, -1)
+                if new_pos < existing_pos:
+                    # Older array's row arrived after the newer one's; keep newer.
+                    continue
+                if new_pos == existing_pos:
+                    # Same array — first occurrence (main record) already kept.
+                    continue
+                # new_pos > existing_pos — newer array, overwrite.
+            task_info[tid] = {
+                "state": state,
+                "exit_code": exit_code,
+                "job_id": base_job,
+                "elapsed_s": elapsed_s,
+                "cpu_s": cpus * elapsed_s,
+                "gpu_s": gpus * elapsed_s,
+            }
 
     return {"tasks": task_info, "errors": errors}
 
@@ -469,6 +490,31 @@ _SGE_STATE_MAP: dict[str, str] = {
     "dS": "CANCELLED",
     "dT": "CANCELLED",
 }
+
+
+def _expand_bracket_indices(inner: str) -> list[int]:
+    """Expand a sacct pending-aggregate bracket body into 0-based task ids.
+
+    *inner* is the content of a ``<jobid>_[<spec>]`` row's brackets, already
+    stripped of the ``%<limit>`` throttle suffix — a comma list of ``a`` /
+    ``a-b`` / ``a-b:step`` tokens (1-based ArrayIndex space, like every other
+    scheduler ingest here). Each expanded index is routed through
+    :func:`to_task_id` to the 0-based :data:`HpcTaskId` domain space. Returns
+    ``[]`` when the spec is empty or any token is unparseable, so the caller
+    can record ONE ``malformed_row`` for a genuinely bad bracket rather than
+    silently dropping queued work (#7).
+    """
+    tids: list[int] = []
+    for token in inner.split(","):
+        expanded = _expand_task_range(token)
+        if not expanded:
+            return []
+        for idx in expanded:
+            try:
+                tids.append(int(to_task_id(ArrayIndex(idx))))
+            except (ValueError, _SpecInvalid):
+                return []
+    return tids
 
 
 def _expand_task_range(spec: str) -> list[int]:

@@ -4,6 +4,7 @@ description: "Release hpc-agent SAFELY. Does every reversible local step — bum
 allowed-tools: Bash Read Edit Write
 execution: inline
 category: agent-autonomous
+internal: true
 ---
 
 `/release [VERSION | major | minor | patch]` — bump type defaults to `patch`.

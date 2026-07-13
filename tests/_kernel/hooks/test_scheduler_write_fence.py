@@ -30,6 +30,21 @@ BLOCKED = [
     "stdbuf -oL sbatch job.sh",
     "timeout -k 5 60 qdel 123",
     "(qdel 123)",
+    # Finding #24: exec/command wrappers, eval/xargs indirection, command
+    # substitution, and a leading redirection all EXECUTE the fenced verb.
+    "exec qsub job.sh",
+    "exec sbatch job.sh",
+    "command sbatch job.sh",
+    "command qsub job.sh",
+    'eval "qsub job.sh"',
+    "eval 'sbatch job.slurm'",
+    "xargs qsub < list",
+    "xargs sbatch",
+    "echo $(qsub job.sh)",
+    "latest=$(sbatch job.slurm)",
+    ">log qsub job.sh",
+    ">out sbatch job.sh",
+    "2>err qsub job.sh",
 ]
 
 ALLOWED = [
@@ -50,6 +65,13 @@ ALLOWED = [
     "timeout -k 5 60 qstat -u me",
     "stdbuf -oL squeue --me",
     "(grep qsub cluster.log)",
+    # Finding #24: the new unwrap paths must not over-block benign prose /
+    # read-only indirection that merely MENTIONS a fenced verb.
+    'echo "run sbatch later"',
+    "echo $(grep qsub cluster.log)",
+    "exec python train.py",
+    'eval "qstat -u me"',
+    ">out echo done",
 ]
 
 

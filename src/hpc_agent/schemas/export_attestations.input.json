@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/export_attestations.input.json",
+  "title": "export-attestations input spec",
+  "description": "Inputs to ``export-attestations``.\n\n``run_id`` names the run whose sealed dossier evidence is projected into\nin-toto Statements (``RunIdStrict`` — the same filesystem-safe slug every\nrun_id field carries). ``include_lineage`` widens the projection from the\nsingle run to its whole supersession chain, exactly as ``export-dossier``\ndoes (the resolved set and its order are reported in\n:class:`ExportAttestationsResult.run_ids`). ``output_path`` overrides the\nderived ``<experiment>/_dossier/<run_id>.attestations.jsonl`` landing path.",
+  "type": "object",
+  "required": [
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "output_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Destination path for the attestations bundle (one DSSE envelope per line, JSONL). Omit to let the verb derive a conventional path; the resolved location is echoed back as output_path.",
+      "title": "Output Path"
+    },
+    "include_lineage": {
+      "default": false,
+      "description": "When true, project the run's whole supersession lineage (the run plus every run it superseded, to the lineage root) instead of the single run. The projected set and its lineage order are reported in run_ids.",
+      "title": "Include Lineage",
+      "type": "boolean"
+    }
+  }
+}

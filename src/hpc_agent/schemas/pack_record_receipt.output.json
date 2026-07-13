@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_record_receipt.output.json",
+  "title": "pack-record-receipt output data",
+  "description": "Echo of the journaled receipt — every sha server-recomputed.\n\n``content_sha`` is the canonical-JSON sha the verb built server-side from\n``{manifest_sha, checked: {relpath: sha, ...}}`` — the freshness key a gate\nrecomputes at read time. ``passed`` echoes the recorded outcome.",
+  "type": "object",
+  "required": [
+    "pack",
+    "version",
+    "manifest_sha",
+    "slot",
+    "content_sha",
+    "passed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "pack": {
+      "title": "Pack",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "manifest_sha": {
+      "title": "Manifest Sha",
+      "type": "string"
+    },
+    "slot": {
+      "title": "Slot",
+      "type": "string"
+    },
+    "content_sha": {
+      "title": "Content Sha",
+      "type": "string"
+    },
+    "passed": {
+      "title": "Passed",
+      "type": "boolean"
+    }
+  }
+}

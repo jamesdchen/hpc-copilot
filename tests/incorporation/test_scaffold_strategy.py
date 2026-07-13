@@ -318,3 +318,103 @@ def test_async_propose_tells_finished_trials_out_of_order(
     assert study.trials[0].state == "running"
     assert study.trials[1].state == "running"
     assert [t.number for t in study.trials] == [0, 1, 2, 3]
+
+
+# ─── grid shape (--shape grid): fixed non-adaptive sweep skeleton ────────────
+
+_TASKS_TEXT = (_SCAFFOLDS / "grid_strategy.py").read_text(encoding="utf-8")
+
+
+def test_grid_materializes_tasks_and_config_stubs(tmp_path: Path) -> None:
+    """--shape grid writes .hpc/tasks.py (byte-faithful skeleton) + N config stubs."""
+    result = scaffold_strategy(output_dir=tmp_path, shape="grid", arms=3)
+
+    dest = tmp_path / _DEST_REL
+    assert dest.is_file()
+    assert dest.read_text(encoding="utf-8") == _TASKS_TEXT
+
+    config_dir = tmp_path / "configs"
+    stubs = sorted(p.name for p in config_dir.glob("*.yaml"))
+    assert stubs == ["arm_00.yaml", "arm_01.yaml", "arm_02.yaml"]
+
+    assert result["shape"] == "grid"
+    assert result["arms"] == 3
+    assert result["name"] is None
+    assert result["async_refill"] is False
+    assert len(result["config_paths"]) == 3
+    assert Path(result["path"]) == dest.resolve()
+    assert Path(result["source"]).name == "grid_strategy.py"
+
+
+def test_grid_config_stub_marks_the_knob_as_a_hole_not_filled(tmp_path: Path) -> None:
+    """The varied knob is a MARKED HOLE — structure only, never a nominated key."""
+    scaffold_strategy(output_dir=tmp_path, shape="grid", arms=2)
+    stub = (tmp_path / "configs" / "arm_00.yaml").read_text(encoding="utf-8")
+    assert "HOLE:" in stub
+    # The stem is the arm id; no domain-specific knob is invented for the caller.
+    assert "arm_00" in stub
+
+
+def test_grid_tasks_importable_with_total_and_resolve(tmp_path: Path) -> None:
+    """The grid skeleton imports (no yaml needed) and total()/resolve() work:
+    total() == arm count; resolve(i) returns the arm id keyed as ``arm``."""
+    scaffold_strategy(output_dir=tmp_path, shape="grid", arms=2)
+    module = _load(tmp_path / _DEST_REL)
+    assert callable(module.total)
+    assert callable(module.resolve)
+    assert isinstance(module.FLAGS, dict) and module.FLAGS
+    assert module.total() == 2
+    assert module.resolve(0) == {"arm": "arm_00"}
+    assert module.resolve(1) == {"arm": "arm_01"}
+
+
+def test_grid_arm_stems_zero_padded_for_stable_sort(tmp_path: Path) -> None:
+    """Ten+ arms are zero-padded so a lexical sort stays a numeric sort
+    (arm_09 < arm_10) — task_id ↔ arm never drifts."""
+    scaffold_strategy(output_dir=tmp_path, shape="grid", arms=11)
+    module = _load(tmp_path / _DEST_REL)
+    assert module.total() == 11
+    # arm 9 then 10 in numeric order (would be 1,10,11,...,9 without padding).
+    assert module.resolve(9) == {"arm": "arm_09"}
+    assert module.resolve(10) == {"arm": "arm_10"}
+
+
+def test_grid_refuses_fewer_than_two_arms(tmp_path: Path) -> None:
+    """A one-arm 'grid' is just a single run — refused with SpecInvalid, no write."""
+    with pytest.raises(errors.SpecInvalid):
+        scaffold_strategy(output_dir=tmp_path, shape="grid", arms=1)
+    assert not (tmp_path / _DEST_REL).exists()
+    assert not (tmp_path / "configs").exists()
+
+
+def test_grid_refuses_overwrite_without_force_all_or_nothing(tmp_path: Path) -> None:
+    """A collision on ANY destination refuses the whole materialization (no
+    partial write); --force re-materializes byte-faithfully."""
+    scaffold_strategy(output_dir=tmp_path, shape="grid", arms=2)
+    dest = tmp_path / _DEST_REL
+    dest.write_text("# customized grid\n", encoding="utf-8")
+
+    with pytest.raises(errors.SpecInvalid):
+        scaffold_strategy(output_dir=tmp_path, shape="grid", arms=2)
+    assert dest.read_text(encoding="utf-8") == "# customized grid\n"
+
+    result = scaffold_strategy(output_dir=tmp_path, shape="grid", arms=2, force=True)
+    assert dest.read_text(encoding="utf-8") == _TASKS_TEXT
+    assert result["shape"] == "grid"
+
+
+def test_unknown_shape_refused(tmp_path: Path) -> None:
+    with pytest.raises(errors.SpecInvalid):
+        scaffold_strategy(output_dir=tmp_path, shape="lattice")
+
+
+def test_strategy_shape_still_defaults_and_requires_name(tmp_path: Path) -> None:
+    """The default shape is 'strategy'; it still requires --name (byte-faithful
+    with the pre-feature behaviour) and the return now carries shape='strategy'."""
+    result = scaffold_strategy(output_dir=tmp_path, name="optuna")
+    assert result["shape"] == "strategy"
+    assert (tmp_path / _DEST_REL).read_text(encoding="utf-8") == _template_text("optuna")
+
+    # --shape strategy with no --name (dir exists, so it reaches the name check).
+    with pytest.raises(errors.SpecInvalid):
+        scaffold_strategy(output_dir=tmp_path, shape="strategy")

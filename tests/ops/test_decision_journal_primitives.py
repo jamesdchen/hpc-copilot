@@ -1130,6 +1130,90 @@ def test_signoff_human_required_generic_praise_refused(tmp_path: Path) -> None:
         )
 
 
+def test_signoff_logged_utterance_lands_when_response_is_mechanical(tmp_path: Path) -> None:
+    """The tiered evidence leg (run-#12 finding 9): with the capture hook / popup
+    log present, a logged human utterance that names the slug and engages the
+    diff lands the sign-off — the agent-relayed response is only the record.
+    This is the leg that lets the E4 elicitation retry succeed. Render written
+    FIRST: only an utterance that post-dates the render counts (finding 10)."""
+    _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    _log_utterance(
+        tmp_path, "sign model-fit — the regularization=0.5 term is intentional, converged asserted"
+    )
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="sign-off requested: model-fit",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+
+
+def test_signoff_composed_response_refused_when_log_lacks_signoff(tmp_path: Path) -> None:
+    """The run-#11 laundering closure: with a live utterance log, an agent-composed
+    response that would pass every token check attests nothing — the human never
+    typed a sign-off."""
+    _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_logged_generic_praise_still_refused(tmp_path: Path) -> None:
+    """The raised HUMAN_REQUIRED bar applies to the logged utterance too — naming
+    the slug with generic praise engages nothing."""
+    _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    _log_utterance(tmp_path, "model-fit looks great, nice work")
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="sign-off requested: model-fit",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_stale_utterance_refused_temporal_binding(tmp_path: Path) -> None:
+    """Run-#12 finding 10 (the live false-pass): a prior prompt that happens to
+    name the slug + diff identifiers is NOT attestation — candidates must
+    post-date the render the human signs. The render's mtime is pushed forward
+    to make the pre-existing utterance unambiguously stale."""
+    import os as _os
+    import time as _time
+
+    _write_notebook_fixture(tmp_path)
+    _log_utterance(
+        tmp_path,
+        "resume the run: model-fit uses regularization=0.5, converged asserted — popup expected",
+    )
+    render = _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    future = _time.time() + 300
+    _os.utime(render, times=(future, future))
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="sign-off requested: model-fit",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
 def test_signoff_auto_cleared_accepted_and_marked_redundant(tmp_path: Path) -> None:
     """An AUTO_CLEARED section accepts a voluntary human sign-off but marks it
     redundant (the recorded accept-vs-refuse decision)."""
@@ -1164,7 +1248,7 @@ def test_signoff_unresolvable_source_refused(tmp_path: Path) -> None:
     """No interview.json audited_source and no resolved['source'] → the source
     cannot be recomputed → REFUSED loudly (never silently skipped)."""
     section_sha, view_sha = _nb_shas("model-fit")  # a sha the gate can never confirm
-    with pytest.raises(errors.SpecInvalid, match="could not resolve the audited"):
+    with pytest.raises(errors.SpecInvalid, match="could not resolve"):
         _signoff(
             tmp_path,
             section="model-fit",
@@ -1198,7 +1282,7 @@ def test_signoff_no_template_refused(tmp_path: Path) -> None:
     template."""
     (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
     section_sha, view_sha = _nb_shas("load-data")
-    with pytest.raises(errors.SpecInvalid, match="could not resolve the audited .py TEMPLATE"):
+    with pytest.raises(errors.SpecInvalid, match="could not resolve"):
         _signoff(
             tmp_path,
             section="load-data",
@@ -1265,6 +1349,25 @@ def test_no_signoff_affordance_in_registry(tmp_path: Path) -> None:
 
     offenders = [name for name in core_only_registry() if "sign-off" in name or "signoff" in name]
     assert offenders == [], f"a sign-off verb affordance leaked into the registry: {offenders}"
+
+
+def test_no_unlock_affordance_in_registry_or_chains(tmp_path: Path) -> None:
+    """The no-unlock-verb doctrine's affordance leg (enforcement map: 'a
+    scope-unlock verb / chain-reachable unlock step appears' fires the row): NO
+    primitive is named like an unlock/relax verb, and NO chain table step carries
+    one — a scope unlock is an append-decision record under the gated block or
+    nothing (mirrors ``test_no_signoff_affordance_in_registry``)."""
+    from hpc_agent.infra.block_chain import ORDER
+    from tests._registry_helpers import core_only_registry
+
+    offenders = [name for name in core_only_registry() if "unlock" in name or "relax" in name]
+    assert offenders == [], f"an unlock verb affordance leaked into the registry: {offenders}"
+    chain_offenders = [
+        step for chain in ORDER.values() for step in chain if "unlock" in step or "relax" in step
+    ]
+    assert chain_offenders == [], (
+        f"a chain-reachable unlock step leaked into a chain table: {chain_offenders}"
+    )
 
 
 # ---------------------------------------------------------------------------

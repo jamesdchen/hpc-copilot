@@ -55,6 +55,8 @@ from hpc_agent.state.decision_journal import read_decisions
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from hpc_agent.ops.overnight import ConsumptionOutcome
+
 # The sentinel a greenlight decision records to name the block it greenlit. The
 # predecessor block computes ``next_block = {"verb": ..., ...}``; the
 # append-decision that journals the human's ``y`` stores the greenlit verb under
@@ -144,3 +146,57 @@ def assert_greenlit_target(
         f"greenlit, or re-surface the {predecessor} brief and record a "
         f"greenlight naming {verb}."
     )
+
+
+def assert_greenlit_or_consented(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    verb: str,
+    predecessor: str,
+    current_cmd_sha: str,
+    scope_kind: str = "run",
+    scope_id: str | None = None,
+) -> ConsumptionOutcome | None:
+    """Pass *verb* on a journaled greenlight OR a live standing consent (overnight).
+
+    The consent-aware gate for the overnight-consumable boundaries (item 8 seam 1).
+    Tries the human-greenlight path first (:func:`assert_greenlit_target`); on its
+    refusal, consults the scope's STANDING CONSENT via the substrate
+    (:func:`hpc_agent.ops.overnight.consume_boundary_under_consent`, the one
+    definition of "live consent" — never re-derived here) and, when a live consent
+    covers *verb*, RECORDS the auto-advance to the consumption ledger in the SAME
+    breath (an unrecorded consumption is the laundering class) and passes.
+
+    Returns:
+
+    * ``None`` — a human greenlight authorized *verb* (the normal path).
+    * a :class:`ConsumptionOutcome` with ``consumed=True`` — a live standing consent
+      authorized *verb*; the auto-advance was ledgered (or was already ledgered for
+      this identity — idempotent).
+
+    Raises :class:`errors.SpecInvalid` when NEITHER holds — the original greenlight
+    diagnosis, augmented with the consent's failing leg so the park brief names why
+    the overnight consent did not carry (expired / over-cap / spec-changed / none /
+    a boundary the consent does not name).
+    """
+    try:
+        assert_greenlit_target(experiment_dir, run_id=run_id, verb=verb, predecessor=predecessor)
+        return None
+    except errors.SpecInvalid as greenlight_err:
+        from hpc_agent.ops.overnight import consume_boundary_under_consent
+
+        outcome = consume_boundary_under_consent(
+            experiment_dir,
+            scope_kind=scope_kind,
+            scope_id=scope_id or run_id,
+            boundary_block=verb,
+            current_cmd_sha=current_cmd_sha,
+        )
+        if outcome.consumed:
+            return outcome
+        raise errors.SpecInvalid(
+            f"{greenlight_err} — and no live standing consent covers {verb} "
+            f"({outcome.decision.reason}): surface the {predecessor} brief for a "
+            "human decision."
+        ) from greenlight_err

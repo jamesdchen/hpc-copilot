@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._wire.workflows.block_drive import BlockDriveResult
 from hpc_agent.infra import block_chain
+from hpc_agent.infra.time import parse_iso_utc_or_none
 from hpc_agent.ops import field_ownership
 from hpc_agent.state.journal import (
     clear_pending_decision,
@@ -57,10 +58,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from hpc_agent.ops.overnight import ConsumptionOutcome
+
 __all__ = [
     "plan_block_action",
     "run_tick",
     "block_drive_once",
+    "greenlight_targets_boundary",
     "main",
 ]
 
@@ -491,13 +495,35 @@ def run_tick(
     committed_resolved: dict[str, Any] | None = None
     last_run_inputs: dict[str, Any] | None = None
     if run_id:
-        # Read the latest committed greenlight even with NO pending marker: an
-        # interview-driven chain starts by direct invocation (nothing ever
-        # parked), so the committed ``resolved`` is the only durable cursor the
-        # planner has for its journal-derived resume (run #9).
         scope_wf = (pending.get("workflow") if pending else None) or workflow
         scope_kind = "campaign" if scope_wf == "campaign" else "run"
-        committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
+        if pending:
+            # RESUME path — BOUNDARY-SCOPED (bug-sweep #1 / run-12 finding 21).
+            # The approval of a parked boundary is ONLY the greenlight that targets
+            # THIS boundary. A prior boundary's already-consumed ``y`` (its
+            # ``resolved`` names an earlier verb) or a same-boundary re-park's stale
+            # ``y`` (older than the new ``awaiting_since``) must NOT be replayed as
+            # this decision's approval: doing so either re-runs the block every tick
+            # or force-advances into the gated successor whose gate then refuses —
+            # a spurious "block failed" masking the true "awaiting the human" state.
+            # When nothing targets the boundary the reader returns ``None`` →
+            # :func:`plan_block_action` returns ``awaiting_decision`` (exit 0).
+            cursor = pending.get("resume_cursor") or {}
+            next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+            committed_resolved = _boundary_scoped_committed_resolved(
+                experiment_dir,
+                scope_kind,
+                run_id,
+                next_verb=next_verb,
+                awaiting_since=pending.get("awaiting_since"),
+            )
+        else:
+            # NO-MARKER journal-derived resume (run #9): an interview-driven chain
+            # starts by direct invocation (nothing ever parked), so the latest
+            # committed greenlight's own ``next_block`` is the only durable cursor.
+            # There is no parked boundary to scope to → the UNSCOPED latest-``y``
+            # scan is correct here (that path must not regress).
+            committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
     if pending:
         cursor = pending.get("resume_cursor", {})
         last_run_inputs = cursor.get("input_spec") if isinstance(cursor, dict) else None
@@ -761,7 +787,26 @@ def _chain(
         # a resume cursor whose ``next_verb`` is the gated block, and exit. A later
         # tick advances into it once the human's greenlight is journaled and its
         # gate finds it (design: needs_decision + gate agree, zero gate re-scoping).
+        #
+        # OVERNIGHT AUTO-ADVANCE (item 8 seam 1): before parking, consult the run's
+        # standing consent. A LIVE consent covering this named boundary consumes the
+        # greenlight — the auto-advance is recorded to the consumption ledger in the
+        # same breath (:func:`_consume_overnight`), and the driver chains into the
+        # gated block (whose own consent-aware gate re-verifies the same consent). A
+        # not-live / not-named boundary parks exactly as today, carrying the refusal
+        # reason so the park brief says WHY the overnight consent did not carry.
         if block_chain.is_gated(successor):
+            overnight = _consume_overnight(experiment_dir, run_id, successor)
+            if overnight is not None and overnight.consumed:
+                _log.info(
+                    "overnight consent for %s consumed the %s greenlight — auto-advancing",
+                    run_id,
+                    successor,
+                )
+                last_action = "chained"
+                spec = _next_spec_hint(result)
+                verb = successor
+                continue
             _park(
                 experiment_dir,
                 run_id=run_id,
@@ -772,6 +817,14 @@ def _chain(
                 spec=spec,
                 result=result,
             )
+            park_reason = result.get("reason") or (
+                f"{verb} complete; greenlight required before {successor} — parked."
+            )
+            if overnight is not None and not overnight.consumed:
+                park_reason = (
+                    f"{park_reason} (no live standing consent to auto-advance overnight: "
+                    f"{overnight.decision.reason})"
+                )
             return (
                 BlockDriveResult(
                     action="awaiting_decision",
@@ -781,10 +834,7 @@ def _chain(
                     next_verb=successor,
                     stage_reached=stage,
                     brief=result.get("brief") if isinstance(result.get("brief"), dict) else None,
-                    reason=(
-                        result.get("reason")
-                        or f"{verb} complete; greenlight required before {successor} — parked."
-                    ),
+                    reason=park_reason,
                 ),
                 0,
             )
@@ -806,6 +856,41 @@ def _chain(
             reason="no block verb to run",
         ),
         0,
+    )
+
+
+def _consume_overnight(
+    experiment_dir: Path, run_id: str, successor: str
+) -> ConsumptionOutcome | None:
+    """Consult the run's standing consent at a gated boundary (item 8 seam 1).
+
+    Returns ``None`` when there is no run to key on (a bare tick) — the caller then
+    parks as usual. Otherwise returns the substrate's :class:`ConsumptionOutcome`:
+    ``consumed=True`` means a LIVE consent covered this named boundary and the
+    auto-advance was ledgered in the same breath, so the driver may chain into
+    ``successor``; ``consumed=False`` carries the refusal leg for the park brief.
+
+    ``current_cmd_sha`` is the run's sidecar tree fingerprint — the identity a spec
+    change moves — read here so the consent's spec-identity binding is checked against
+    the SAME token the S3 gate uses. A fail-safe read: any sidecar surprise yields an
+    empty identity, which the substrate treats as a spec mismatch (not live) → parks.
+    """
+    if not run_id:
+        return None
+    from hpc_agent.ops.overnight import consume_boundary_under_consent
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+        current_cmd_sha = str((sidecar or {}).get("cmd_sha") or "")
+    except Exception:  # noqa: BLE001 — a bad sidecar must not crash the tick; park instead
+        current_cmd_sha = ""
+    return consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=run_id,
+        boundary_block=successor,
+        current_cmd_sha=current_cmd_sha,
     )
 
 
@@ -847,16 +932,41 @@ def _park(
         "next_spec_hint": _next_spec_hint(result),
     }
     brief = result.get("brief")
-    mark_pending_decision(
-        run_id,
-        block=verb,
-        workflow=wf or "",
-        brief=brief if isinstance(brief, dict) else {},
-        resume_cursor=resume_cursor,
-        awaiting_since=utcnow_iso(),
-        cmd_sha=_spec_sha(spec),
-        experiment_dir=experiment_dir,
-    )
+    # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
+    # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
+    # submit-s2 (the qsub) — S1's resolve leg writes only the per-run sidecar.
+    # So the FIRST park (the S1→S2 greenlight gate) is reached before any record
+    # exists, and ``mark_pending_decision`` → ``update_run_status`` raises
+    # FileNotFoundError for a sidecar-only run. That crashed the driver tick at
+    # the rendezvous for BOTH of run #11's runs, pushing the agent off-pipeline
+    # to per-block CLI (notebook-audit.md Addendum 13.0). The BlockDriveResult
+    # the caller returns already carries the brief to the human, so the human
+    # still sees the decision; only the DURABLE journal marker (the §5 "parked ≠
+    # stalled" flag + resume_cursor) is skipped here — and the §5 watchdog keys
+    # off journal records anyway, so a record-less run is unwatched regardless.
+    # Warn + continue, mirroring ``_repark_marker``'s OSError guard and
+    # ``_stamp_driver_tick``'s "warn, don't vanish" philosophy (drive.py).
+    try:
+        mark_pending_decision(
+            run_id,
+            block=verb,
+            workflow=wf or "",
+            brief=brief if isinstance(brief, dict) else {},
+            resume_cursor=resume_cursor,
+            awaiting_since=utcnow_iso(),
+            cmd_sha=_spec_sha(spec),
+            experiment_dir=experiment_dir,
+        )
+    except FileNotFoundError:
+        _log.warning(
+            "no run record for %s at park (%s → %s) — the sidecar-only run has "
+            "no journal record yet (minted at submit-s2/qsub); the decision brief "
+            "is still disclosed to the human but the durable pending-decision "
+            "marker is skipped until the record is minted",
+            run_id,
+            verb,
+            successor,
+        )
 
 
 def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> None:
@@ -907,6 +1017,89 @@ def _latest_committed_resolved(
         return None
     for record in reversed(records):
         if record.get("response") == "y":
+            resolved = record.get("resolved")
+            return dict(resolved) if isinstance(resolved, dict) else {}
+    return None
+
+
+def greenlight_targets_boundary(
+    record: dict[str, Any],
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> bool:
+    """True iff a committed decision *record* is the greenlight for THIS parked boundary.
+
+    The SINGLE predicate the driver (:func:`run_tick` via
+    :func:`_boundary_scoped_committed_resolved`) and the ``block-drive`` Stop guard
+    (:func:`hpc_agent._kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced`)
+    both key on, so a CONSUMED greenlight can never masquerade as a fresh one and
+    the two surfaces cannot drift. A committed ``y`` counts as the approval of the
+    boundary a marker is parked at only when it:
+
+    * is a greenlight (``response == "y"`` — never a nudge), AND
+    * NAMES the parked successor — ``resolved["next_block"]`` (block_gate
+      ``_journaled_target`` semantics: the verb string or the ``{"verb": ...}``
+      hint) equals the marker's ``resume_cursor["next_verb"]``. This rejects a
+      PREVIOUS boundary's already-consumed greenlight, whose target names an
+      earlier verb: nothing is appended when a ``y`` is consumed, so a shared run
+      journal's latest ``y`` may belong to a prior boundary (the exact pitfall
+      ``ops/block_gate.py`` documents), AND
+    * was journaled AT OR AFTER the marker was (re-)parked
+      (``ts >= awaiting_since``). This rejects a SAME-boundary re-park's stale
+      ``y`` — a greenlight that DID name this boundary but was already consumed by
+      a tick that ran the block and re-parked, stamping a newer ``awaiting_since``
+      (run-12 finding 21). The 2026-06-10 stall class stays closed: a genuinely
+      unconsumed ``y`` is always newer than the marker it answers, so it passes.
+
+    The timestamp leg only REFUSES when both stamps parse and ``ts`` is strictly
+    older than ``awaiting_since``; a missing/unparseable stamp falls back to the
+    boundary-name test alone (fail toward the pre-fix behavior rather than
+    over-refusing a live greenlight).
+    """
+    from hpc_agent.ops.block_gate import _journaled_target
+
+    if str(record.get("response") or "") != "y":
+        return False
+    if _journaled_target(record.get("resolved")) != next_verb:
+        return False
+    parked_at = parse_iso_utc_or_none(awaiting_since)
+    ts = record.get("ts")
+    recorded_at = parse_iso_utc_or_none(ts if isinstance(ts, str) else None)
+    consumed_before_park = (
+        parked_at is not None and recorded_at is not None and recorded_at < parked_at
+    )
+    return not consumed_before_park
+
+
+def _boundary_scoped_committed_resolved(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> dict[str, Any] | None:
+    """The ``resolved`` of the latest greenlight that TARGETS the parked boundary.
+
+    The boundary-scoped counterpart of :func:`_latest_committed_resolved`, used on
+    the RESUME path (a pending marker exists). Scans the decision journal
+    newest-first — exactly as ``block_gate.assert_greenlit_target`` does — and
+    returns the ``resolved`` of the first record for which
+    :func:`greenlight_targets_boundary` holds, else ``None``. ``None`` means no
+    committed greenlight answers THIS boundary yet: the tick is still awaiting the
+    human (a valid parked stop, exit 0), never a spurious advance/rerun.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    if not scope_id:
+        return None
+    try:
+        records = read_decisions(experiment_dir, scope_kind, scope_id)
+    except Exception:  # noqa: BLE001 — a bad scope must not crash the tick
+        return None
+    for record in reversed(records):
+        if greenlight_targets_boundary(record, next_verb=next_verb, awaiting_since=awaiting_since):
             resolved = record.get("resolved")
             return dict(resolved) if isinstance(resolved, dict) else {}
     return None

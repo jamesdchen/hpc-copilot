@@ -111,6 +111,7 @@
           "discriminator": {
             "mapping": {
               "cartesian_product": "#/$defs/_CartesianProduct",
+              "chunked_series": "#/$defs/_ChunkedSeries",
               "enumerated": "#/$defs/_Enumerated",
               "items_x_seeds": "#/$defs/_ItemsXSeeds",
               "numeric_linspace": "#/$defs/_NumericLinspace",
@@ -133,6 +134,9 @@
             },
             {
               "$ref": "#/$defs/_NumericLinspace"
+            },
+            {
+              "$ref": "#/$defs/_ChunkedSeries"
             }
           ]
         },
@@ -141,7 +145,7 @@
         }
       ],
       "default": null,
-      "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The five shapes cover common ground without locking out exotic campaigns. Materializer cross-checks the produced task count against intent.task_count before any disk writes.",
+      "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The six shapes cover common ground without locking out exotic campaigns. Materializer cross-checks the produced task count against intent.task_count before any disk writes.",
       "title": "Task Generator"
     },
     "entry_point": {
@@ -186,9 +190,146 @@
       ],
       "default": null,
       "description": "Opt-in link to an audited ``.py`` source and its audit trail (D7). When present, the graduation gate refuses an entry point not hash-linked to a current audit; when ABSENT every notebook-audit gate passes silently and interview.json is byte-identical to the pre-audit output. The caller authors the ``audit_id`` slug — core never invents or defaults it (the fabrication class)."
+    },
+    "packs": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/PackOptIn"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opt-in domain-pack bindings (bind-as-data). Sibling to ``audited_source``: when present, each entry references a pack manifest (relpath core reads + hashes) and the caller-authored receipt-binding slots a gate requires; when ABSENT every pack gate returns silently and interview.json is byte-identical to a repo that never opted in (the D7 fail-safe). Core copies the opaque ``{pack, version, sha}`` echo verbatim and never reads a declared pack value for meaning.",
+      "title": "Packs"
+    },
+    "actors": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActorsBlock"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opt-in multi-human actor declaration (MH1). Sibling to ``packs`` / ``audited_source``: when present, ``ids`` names the shared repo's actor slugs and optional ``policy`` delegates gated blocks to actor subsets; when ABSENT (or with fewer than two ids) every identity comparison and policy consultation returns silently and interview.json is byte-identical to today's single-actor system (the D7 fail-safe). Slugs are opaque to core — never a role vocabulary; the attribution tier is harness-asserted, never verified. A session's own actor arrives via the HPC_ACTOR harness config, never this spec (the model must not choose its identity)."
     }
   },
   "$defs": {
+    "ActorsBlock": {
+      "additionalProperties": false,
+      "description": "The multi-human ``actors`` opt-in on the InterviewSpec (MH1).\n\nSibling to ``packs`` / ``audited_source``: a caller-declared block,\npersisted verbatim in interview.json, absent → byte-identical (the D7\nfail-safe, ``exclude_none``). Makes today's IMPLICIT single-actor identity\nEXPLICIT — an opaque slug the harness stamps and gates COMPARE, without core\never verifying who anyone is (the honest tier is *harness-asserted*, never\nverified).\n\n``ids`` — the declared actor slugs. Each uses the shared filesystem-safe\ntag class (``RunIdStrict`` — the same ``^[A-Za-z0-9._\\-]+$`` class\n``state/scopes.py::validate_tag`` pins), because a slug becomes a PATH\nSEGMENT in the per-actor utterance-log locator (MH2): the shape is\nload-bearing, not stylistic. Opaque to core — NEVER a role vocabulary: core\nhas no idea what a \"PI\", \"postdoc\", or \"reviewer\" is and no field may ever\ncarry those words (the caller-vocabulary rule).\n\n**Default-single-actor semantics (the D7 posture, exactly):** an absent\nblock, or ``ids`` with fewer than two entries, means every identity\ncomparison and policy consultation in every gate returns silently,\nbyte-identical to today. Zero declared actors is not an error, not a\nwarning — it is today's system; so ``ids`` may be empty.\n\n``policy`` — optional delegation mapping (MH8): ``{<gated block name>:\n[<actor slug>, ...]}``. Keys are existing gated block names core already\nowns (``\"notebook-sign-off\"``, ``\"campaign-greenlight\"``, ``\"scope-unlock\"``,\n``\"registration\"`` when the sibling kernel lands) — opaque strings core\nmembership-tests, never a closed vocabulary pinned here. Values are subsets\nof ``ids``. Absent → no policy gating. A policy entry naming an actor NOT in\n``ids`` is a LOUD refusal at validation time (the dangling-reference\nposture: an opted-in reference core cannot resolve must never silently\npass) — deliberately NOT D7 silence, which belongs to the un-opted-in world.\n\n**How a session knows its actor is harness configuration** (``HPC_ACTOR``),\nNOT a spec field: an agent-suppliable actor would let the model choose its\nidentity. The actor arrives from outside the model's tool surface, exactly\nlike the utterance text itself.",
+      "properties": {
+        "ids": {
+          "description": "Declared actor slugs (the shared filesystem-safe tag class — each becomes a path segment in the per-actor utterance-log locator). Opaque to core; never a role vocabulary. Fewer than two entries → single-actor semantics (comparisons stay off), byte-identical to today. May be empty (zero declared actors is not an error).",
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "title": "Ids",
+          "type": "array"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9._\\-]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional delegation mapping {<gated block name>: [<actor slug>, ...]} (MH8). Keys are existing gated block names core membership-tests (opaque strings, never a closed vocabulary); values are subsets of ``ids``. Absent → no policy gating. A value slug not in ``ids`` is refused at validation (the dangling-reference posture). Pure lists+mappings core COMPARES, never evaluates — never a predicate, a role vocabulary, or a quorum scheme.",
+          "title": "Policy"
+        }
+      },
+      "title": "ActorsBlock",
+      "type": "object"
+    },
+    "PackOptIn": {
+      "additionalProperties": false,
+      "description": "One domain-pack opt-in entry on the InterviewSpec ``packs`` block (bind-as-data).\n\nSibling to ``audited_source``: a caller-referenced pack, persisted verbatim\nin interview.json, absent → byte-identical. ``pack`` is the pack slug (it\nkeys the pack decision journal, so it is filesystem-safe); ``manifest`` is a\ncampaign-dir-relative path to the pack manifest core reads and hashes (the\n``_AuditedSource`` relpath precedent — never a blessed dir, never a search\npath, DP1). ``receipt_bindings`` lists the caller-authored slot→pack\nobligations the gate requires; empty means the pack contributes seam data\n(vocabularies, patterns) but gates on no receipt.\n\nCore copies the ``{pack, version, sha}`` echo verbatim onto every record\nthat consumed pack content and never reads a declared value for meaning —\nidentity only.",
+      "properties": {
+        "pack": {
+          "description": "Pack slug — keys the pack decision journal (``.hpc/packs/<pack>.decisions.jsonl``), so it must be filesystem-safe. Opaque to core; never a core vocabulary.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Pack",
+          "type": "string"
+        },
+        "manifest": {
+          "description": "Campaign-dir-relative path to the pack manifest core reads and hashes (the ``_AuditedSource`` relpath precedent). Core never asks how the bytes got there (DP3: distribution invisible).",
+          "minLength": 1,
+          "title": "Manifest",
+          "type": "string"
+        },
+        "receipt_bindings": {
+          "description": "Caller-authored slot→pack receipt obligations the gate requires (DP4). Empty → the pack contributes seam data but gates on no receipt. Renamed from ``required_receipts`` (coherence review) to disambiguate from the S6 manifest slug list.",
+          "items": {
+            "$ref": "#/$defs/ReceiptBinding"
+          },
+          "title": "Receipt Bindings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pack",
+        "manifest"
+      ],
+      "title": "PackOptIn",
+      "type": "object"
+    },
+    "ReceiptBinding": {
+      "additionalProperties": false,
+      "description": "One caller-authored receipt obligation inside a ``packs`` opt-in entry.\n\nBinds a caller-named *slot* (the obligation, e.g. ``\"data-audit\"``) to the\n*pack* whose current receipt fills it. Both are opaque slugs core never\ninterprets — the slot is the caller's name for the requirement (DP4: a\nrequirement always originates with the caller, never the pack), the pack is\nthe name a bound pack manifest declares. Cross-pack is legal: the slot's\n``pack`` need not equal the enclosing entry's ``pack``.\n\n``receipt_bindings`` is the object form, renamed from ``required_receipts``\nin the coherence review (2026-07-07) to disambiguate it from the S6 manifest\nlist ``required_receipts: [<slot slug>]`` — that list is a plain slug list on\nthe pack side; this is the caller-side slot→pack binding.",
+      "properties": {
+        "slot": {
+          "description": "Caller-authored slot slug — the caller's name for one receipt obligation a gate requires (opaque to core; the fabrication class forbids core inventing or defaulting one).",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Slot",
+          "type": "string"
+        },
+        "pack": {
+          "description": "The pack whose current receipt fills this slot (a bound-pack slug). Need not equal the enclosing entry's pack — a slot may bind cross-pack.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Pack",
+          "type": "string"
+        },
+        "check": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OPTIONAL caller-authored check command that RE-EARNS this slot's receipt — the caller-side domain check (run entirely outside core, DP2) whose run emits a `pack-record-receipt` for the slot. Core echoes it VERBATIM as the remedy when the slot drifts (the pack-refresh report / the gate's auto-remedy refusal envelope) and NEVER runs or interprets it — an opaque string, the receipt/check association the caller records alongside the obligation (DP4). Absent → the generic `pack-record-receipt` guidance applies.",
+          "title": "Check"
+        }
+      },
+      "required": [
+        "slot",
+        "pack"
+      ],
+      "title": "ReceiptBinding",
+      "type": "object"
+    },
     "_AbortIfSpec": {
       "additionalProperties": true,
       "properties": {
@@ -309,6 +450,22 @@
           "default": null,
           "description": "Opaque WRITE-target roots: a path literal under one is a declared output, exempt from the executes-live not-exists flag (reported in declared_outputs, never flagged — the run-#10 output-literal noise fix). Absent → [].",
           "title": "Output Roots"
+        },
+        "observables": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The OBSERVATION PLAN (A14, G-a ruled): opaque declared-observable names the sanctioned runner (the notebook-render plugin's between-cell loop, T-R) looks up in the exec namespace and measures into runner-tier trace records. Rides the signed audit surface, so the human's sign-off covers the observation plan; versioned with the roots. Absent → no plan (the loop is OFF; execution byte-identical).",
+          "title": "Observables"
         }
       },
       "required": [
@@ -376,6 +533,79 @@
         "axes"
       ],
       "title": "_CartesianProductParams",
+      "type": "object"
+    },
+    "_ChunkedSeries": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "chunked_series",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_ChunkedSeriesParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_ChunkedSeries",
+      "type": "object"
+    },
+    "_ChunkedSeriesParams": {
+      "additionalProperties": false,
+      "description": "Tile a series ``[start + halo, series_length)`` into contiguous chunks.\n\nMaterializes one task per chunk (crossed with ``extra_axes``), each\ncarrying its ``chunk_start`` / ``chunk_end`` / ``halo`` bounds. The\nscoring space is tiled into ``chunks`` contiguous chunks; the LAST chunk\nabsorbs the remainder so the final ``chunk_end`` equals ``series_length``\nexactly (no gaps, no overlaps). A run-#11-style executor replays ``halo``\nbars before each ``chunk_start`` (reading from ``chunk_start - halo``,\nwhich stays >= ``start``). Adds a code seat for the bounds arithmetic that\na hand-written ``enumerated`` list only ever cross-checked by COUNT — the\noff-by-one in halo / last-chunk-end otherwise sails through.",
+      "properties": {
+        "series_length": {
+          "description": "Length of the full series; the tiled space is [start + halo, series_length).",
+          "minimum": 1,
+          "title": "Series Length",
+          "type": "integer"
+        },
+        "chunks": {
+          "description": "Number of contiguous chunks; the last absorbs the remainder.",
+          "minimum": 1,
+          "title": "Chunks",
+          "type": "integer"
+        },
+        "halo": {
+          "description": "Bars each task replays before its chunk_start (so it reads from chunk_start - halo).",
+          "minimum": 0,
+          "title": "Halo",
+          "type": "integer"
+        },
+        "start": {
+          "default": 0,
+          "description": "First index of the series (default 0).",
+          "title": "Start",
+          "type": "integer"
+        },
+        "extra_axes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {},
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional named axes multiplied against the chunk grid (bucket x chunk). Each must have >=1 value.",
+          "title": "Extra Axes"
+        }
+      },
+      "required": [
+        "series_length",
+        "chunks",
+        "halo"
+      ],
+      "title": "_ChunkedSeriesParams",
       "type": "object"
     },
     "_ClusterTargetSpec": {

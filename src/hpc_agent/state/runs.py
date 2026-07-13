@@ -30,6 +30,7 @@ from hpc_agent.state.code_drift import detect_code_drift
 from hpc_agent.state.wave_map import derive_wave_map
 
 __all__ = [
+    "DEFAULT_SUMMARY_ARTIFACT",
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
     "find_existing_runs",
@@ -40,6 +41,7 @@ __all__ = [
     "read_job_task_spans",
     "read_run_sidecar",
     "resolve_node_sha",
+    "resolved_summary_artifact",
     "run_sidecar_path",
     "sidecar_effective_identity",
     "update_run_sidecar_job_ids",
@@ -58,6 +60,33 @@ MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
 # subsequent commands have no need for a separate experiment-config file.
 # v1 sidecars on disk continue to load via ``read_run_sidecar`` backfill.
 SIDECAR_SCHEMA_VERSION: int = 2
+
+# The per-task summary filename every reducer / per-task completion counter has
+# historically hardcoded. Made a declared sidecar field (``summary_artifact``,
+# F-J) so a run whose executor emits a differently-named summary
+# (e.g. ``results_reduce.json``) is read correctly instead of read incomplete/
+# abandoned. A sidecar WITHOUT the field resolves back to this literal, so
+# nothing existing moves.
+DEFAULT_SUMMARY_ARTIFACT: str = "metrics.json"
+
+
+def resolved_summary_artifact(sidecar: dict[str, Any] | None) -> str:
+    """Return the per-task summary filename declared on *sidecar*, or the default.
+
+    The single reader every completion/reduce consumer routes through so the
+    "which file marks a task's summary?" decision has ONE home (F-J). A sidecar
+    that never declared ``summary_artifact`` (every run written before this
+    field existed, and every run whose executor emits the historical name)
+    resolves to :data:`DEFAULT_SUMMARY_ARTIFACT` (``metrics.json``) — byte-for-byte
+    today's behavior. A ``None``/empty/blank value is treated as absent.
+    """
+    if not isinstance(sidecar, dict):
+        return DEFAULT_SUMMARY_ARTIFACT
+    declared = sidecar.get("summary_artifact")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+    return DEFAULT_SUMMARY_ARTIFACT
+
 
 # A run_id is a timestamp-prefixed identifier produced by the slash command
 # layer. Format: ``YYYYMMDD-HHMMSS-<short_sha>``. We only validate loosely
@@ -128,6 +157,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "auto_retry",  # dict — per-category retry policy
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
+    "summary_artifact",  # str — per-task summary filename reducer reads (default metrics.json)
     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
     "trial_params",  # list[dict] — opaque per-task resolved params (cmd_sha pre-image; provenance)
     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
@@ -137,7 +167,9 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
     "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
     "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
+    "trace_digests_override",  # str — data-trace T3: exercised digest override, disclosed
     "audited_source",  # dict — opaque caller-owned audit-trail identity; core never interprets it
+    "packs",  # list[dict] — opaque domain-pack echoes; core never interprets them (T10)
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -174,6 +206,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "auto_retry": None,
     "aggregate_defaults": None,
     "results": None,
+    "summary_artifact": None,
     "trial_tokens": None,
     "trial_params": None,
     "parent_run_ids": None,
@@ -183,7 +216,9 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "env_hash": None,
     "scopes": None,
     "reproduces": None,
+    "trace_digests_override": None,
     "audited_source": None,
+    "packs": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -257,6 +292,7 @@ def write_run_sidecar(
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
     results: dict[str, Any] | None = None,
+    summary_artifact: str | None = None,
     trial_tokens: list[Any] | None = None,
     trial_params: list[dict[str, Any]] | None = None,
     parent_run_ids: list[str] | None = None,
@@ -267,7 +303,9 @@ def write_run_sidecar(
     job_ids: list[str] | None = None,
     scopes: list[str] | None = None,
     reproduces: str | None = None,
+    trace_digests_override: str | None = None,
     audited_source: dict[str, Any] | None = None,
+    packs: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -387,6 +425,10 @@ def write_run_sidecar(
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
         "results": results,
+        # Per-task summary filename the reducer + per-task completion counting
+        # read (F-J). Absent → the reader defaults to metrics.json via
+        # resolved_summary_artifact, so an existing sidecar is byte-identical.
+        "summary_artifact": summary_artifact,
         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
         "trial_params": [dict(p) for p in trial_params] if trial_params is not None else None,
         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
@@ -407,12 +449,23 @@ def write_run_sidecar(
         # only-write-non-None pattern; a non-reproduction run's sidecar is
         # byte-identical). find_run_by_cmd_sha's reproduction_of lever reads it.
         "reproduces": reproduces,
+        # data-trace T3: DISCLOSURE of an exercised digest override
+        # (force_on/force_off). Same only-write-non-None pattern — the classifier
+        # decides unaided for the common case, so a non-overridden run's sidecar
+        # is byte-identical. A reader sees the "NO KNOB" policy was overridden.
+        "trace_digests_override": trace_digests_override,
         # Opaque caller-owned audit-trail identity — the sidecar echo of
         # interview.json's audited_source block ({source, template, audit_id};
         # notebook-audit T14). Recorded verbatim, never interpreted by core
         # (same only-write-non-None pattern, so a non-audited run's sidecar is
         # byte-identical). export-dossier reads it back to seal the audit trail.
         "audited_source": audited_source,
+        # Opaque domain-pack echoes — one {pack, version, sha, manifest} per bound
+        # pack the experiment opted into (T10). Recorded verbatim, never interpreted
+        # by core (same only-write-non-None pattern, so a pack-less run's sidecar is
+        # byte-identical). export-dossier reads it back to seal each pack's manifest
+        # bytes + decision journal.
+        "packs": [dict(p) for p in packs] if packs else None,
     }
     for k, v in v2_values.items():
         if v is not None:
@@ -530,6 +583,24 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
                 # evicted while rarely-seen ones stay.
                 _warned_version_mismatch.move_to_end(key)
     return data
+
+
+def read_run_sidecar_or_empty(experiment_dir: Path, run_id: str) -> dict[str, Any]:
+    """Tolerant sibling of :func:`read_run_sidecar`: return ``{}`` for a
+    missing / torn / non-UTF-8 / foreign-schema sidecar instead of raising.
+
+    The ONE present-or-gap reader that dossier / evidence / prune consumers
+    route through, so the "which read failures degrade to a gap" degrade set is
+    defined ONCE (:data:`hpc_agent.errors.TOLERANT_RECORD_READ_ERRORS`) rather
+    than re-enumerated per consumer — the drift that sealed a corrupt sidecar
+    into an uncaught traceback at ``export_dossier`` (#43). A caller that needs
+    the missing-vs-corrupt distinction still calls :func:`read_run_sidecar` and
+    handles the raise itself.
+    """
+    try:
+        return read_run_sidecar(experiment_dir, run_id)
+    except errors.TOLERANT_RECORD_READ_ERRORS:
+        return {}
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
@@ -867,8 +938,39 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
       pre-existing v2 sidecars that predate the post-qsub finalize hook;
       we trust the journal and treat the sidecar as committed.
 
+    Two-phase canary gate (#17): during the S2→S3 greenlight window the main
+    run is INTENTIONALLY jobless + journal-less — Phase 1 (``canary_only``)
+    stamps ``job_ids`` only on the ``<run_id>-canary`` sibling and defers the
+    main run's ``submit_and_record`` to Phase 2. That sibling being committed is
+    the exact signature of a live gate mid-review (distinct from a genuinely
+    failed batch's orphan), so a main run whose ``<run_id>-canary`` sibling is
+    committed is itself treated as committed — otherwise a sibling batch's
+    ``prune_orphan_sidecars`` would delete the greenlit main run's sidecar out
+    from under the pending launch.
+
     Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
     detection) and :func:`prune_orphan_sidecars` (delete them).
+    """
+    if _run_committed(experiment_dir, run_id):
+        return False
+    # Canary-gate-pending main run: jobless + journal-less itself, but its
+    # committed canary sibling marks a two-phase gate mid-review, not an
+    # orphan. Guard against recursing on a canary run (never has its own
+    # ``<id>-canary-canary`` sibling).
+    canary_gate_pending = not run_id.endswith("-canary") and _run_committed(
+        experiment_dir, f"{run_id}-canary"
+    )
+    return not canary_gate_pending
+
+
+def _run_committed(experiment_dir: Path, run_id: str) -> bool:
+    """True when *run_id* landed a cluster job (sidecar or journal job_ids).
+
+    The committed signal underneath :func:`is_orphan_sidecar`: a sidecar whose
+    ``finalize_run_sidecar_job_ids`` stamped ``job_ids`` (post-qsub), or a live
+    journal record carrying ``job_ids``. Never raises — a corrupt/unreadable
+    journal record reads as not-committed (the prior fail-loud narrowing is
+    preserved by only catching the routine cases).
     """
     from hpc_agent.state.journal import load_run
 
@@ -880,14 +982,17 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
         raw = sidecar_data.get("job_ids")
         if isinstance(raw, list):
             sidecar_job_ids = [str(j) for j in raw]
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # A non-UTF-8 sidecar (e.g. UTF-16 from a Windows redirect) reads as
+        # no sidecar_job_ids, consistent with the corrupt/torn-file tolerance —
+        # prune-orphan-sidecars must step past a damaged file, not crash on it.
         sidecar_job_ids = None
 
     # Journal-side signal: did submit_and_record run to completion?
     try:
         record = load_run(experiment_dir, run_id)
     except (OSError, errors.JournalCorrupt):
-        # Corrupt/unreadable journal record == treat as orphan. load_run
+        # Corrupt/unreadable journal record == treat as not committed. load_run
         # already returns None for the routine missing/torn-file cases, so
         # narrowing here means a *programming* error propagates (fail loud)
         # rather than silently flipping a live run to "orphan" — which the
@@ -896,7 +1001,7 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
 
     sidecar_committed = bool(sidecar_job_ids)
     journal_committed = record is not None and bool(record.job_ids)
-    return not (sidecar_committed or journal_committed)
+    return sidecar_committed or journal_committed
 
 
 def update_run_sidecar_job_ids(

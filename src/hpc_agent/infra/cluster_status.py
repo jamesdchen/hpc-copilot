@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from hpc_agent.errors import RemoteCommandFailed, SshUnreachable
 from hpc_agent.infra import remote
-from hpc_agent.infra.ssh_validation import parse_remote_json
+from hpc_agent.infra.ssh_validation import parse_remote_json, split_ack
 
 if TYPE_CHECKING:
     from hpc_agent.infra.backends import HPCBackend
@@ -68,28 +68,50 @@ def _reporter_error_from_stdout(stdout: str) -> str | None:
 # collide with the reporter's JSON body.
 _WATCHER_ALARM_SENTINEL = "<<<HPC_WATCHER_ALARM>>>"
 
+# Positive-evidence sentinel-ack for the status reporter read (run-12 finding 24;
+# docs/design/connection-broker.md sentinel-ack ruling). Echoed as the LAST line
+# of the remote command, carrying the reporter's exit code. Its PRESENCE proves
+# the remote shell ran the reporter to completion; a rc-0 read that does NOT
+# carry it is a channel severed / truncated mid-stream (NAT idle-drop, the
+# asyncssh idle reaper, an expired remote deadline) — UNKNOWN, never "the
+# reporter emitted nothing". Parsed back with
+# :func:`hpc_agent.infra.ssh_validation.split_ack`.
+_STATUS_ACK_PREFIX = "__HPC_STATUS_ACK__="
 
-def _wrap_with_watcher_probe(base_cmd: str, watcher_run_dir: str) -> str:
-    """Fold the hybrid-monitor client half into the reporter command (zero round-trip).
 
-    Design §5: on every status read the laptop client (a) stamps a
-    ``.hpc_last_read`` marker cluster-side so the watcher can tell the client is
-    alive, and (b) surfaces the watcher's ``.hpc_watcher_ALARM`` if one exists.
-    Both ride the SAME ssh call as the reporter — no extra round-trip.
+def _wrap_reporter_command(base_cmd: str, watcher_run_dir: str | None) -> str:
+    """Append the sentinel-ack (+ optional watcher probe) to the reporter command.
 
-    The reporter's exit code is preserved (``exit $__hpc_rc``) so the trailing
-    ``touch`` / ``cat`` (a missing ALARM ``cat`` exits non-zero) cannot flip a
-    healthy report into a spurious failure. The ALARM contents follow a sentinel
-    line so :func:`ssh_status_report` can split them off before JSON parsing.
+    The reporter's exit code is captured into ``__hpc_rc`` immediately, so the
+    trailing ack ``echo`` (always rc 0) and the optional watcher ``touch`` / ``cat``
+    (a missing ALARM ``cat`` exits non-zero) cannot flip a healthy report into a
+    spurious failure — the closing ``exit $__hpc_rc`` re-surfaces the reporter's
+    own rc as the ssh returncode (unchanged contract).
+
+    Sequencing (run-12 findings 5/20/24): the ack is echoed LAST — after the
+    watcher-ALARM trailer — so ANY mid-stream truncation loses it. It rides INSIDE
+    ``ssh_run``'s ``timeout … bash -c '<cmd>'`` wrapper, so a remote-deadline
+    expiry (rc 124) or a severed channel kills the shell before the echo → no ack.
+    Client-side, :func:`ssh_status_report` reads the ack's ABSENCE with a rc-0 read
+    as the positive proof the channel died, and raises rather than parse-and-trust
+    a truncated stream. The ALARM contents still follow the
+    :data:`_WATCHER_ALARM_SENTINEL` line so the reader can split them off first.
+
+    Design §5 (hybrid monitor): when *watcher_run_dir* is set the SAME ssh call
+    also stamps ``<dir>/.hpc_last_read`` (client-alive marker) and reads back
+    ``<dir>/.hpc_watcher_ALARM``; ``None`` leaves those off (byte-identical command
+    apart from the always-present ack).
     """
-    d = shlex.quote(watcher_run_dir.rstrip("/"))
-    return (
-        f"{base_cmd}; __hpc_rc=$?; "
-        f"touch {d}/.hpc_last_read 2>/dev/null; "
-        f"printf '\\n%s\\n' {shlex.quote(_WATCHER_ALARM_SENTINEL)}; "
-        f"cat {d}/.hpc_watcher_ALARM 2>/dev/null; "
-        f"exit $__hpc_rc"
-    )
+    parts = [f"{base_cmd}; __hpc_rc=$?"]
+    if watcher_run_dir is not None:
+        d = shlex.quote(watcher_run_dir.rstrip("/"))
+        parts.append(f"touch {d}/.hpc_last_read 2>/dev/null")
+        parts.append(f"printf '\\n%s\\n' {shlex.quote(_WATCHER_ALARM_SENTINEL)}")
+        parts.append(f"cat {d}/.hpc_watcher_ALARM 2>/dev/null")
+    # Affirmative token LAST, carrying the reporter's own rc; then re-exit with it.
+    parts.append(f'echo "{_STATUS_ACK_PREFIX}$__hpc_rc"')
+    parts.append("exit $__hpc_rc")
+    return "; ".join(parts)
 
 
 def ssh_status_report(
@@ -146,20 +168,25 @@ def ssh_status_report(
         f"--file-glob {shlex.quote(file_glob)} "
         f"--min-rows {shlex.quote(str(int(min_rows)))}"
     )
-    if watcher_run_dir is not None:
-        cmd = _wrap_with_watcher_probe(cmd, watcher_run_dir)
+    cmd = _wrap_reporter_command(cmd, watcher_run_dir)
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
-    # Split the watcher-ALARM trailer off before touching the JSON (only present
-    # when ``watcher_run_dir`` was set; the sentinel can't occur in reporter JSON).
-    json_stdout = proc.stdout
+    # Strip the positive-evidence ack line FIRST (it is the last echo, so it
+    # survives only a complete read); ``ack_rc is None`` ⇒ the channel was severed
+    # / truncated mid-stream. Then split the watcher-ALARM trailer off the
+    # remaining bytes before touching the JSON (present only when
+    # ``watcher_run_dir`` was set; neither sentinel can occur in reporter JSON).
+    clean, ack_rc = split_ack(proc.stdout or "", _STATUS_ACK_PREFIX)
+    json_stdout = clean
     watcher_alarm: str | None = None
-    if watcher_run_dir is not None and _WATCHER_ALARM_SENTINEL in (proc.stdout or ""):
-        head, _, tail = proc.stdout.partition(f"\n{_WATCHER_ALARM_SENTINEL}\n")
+    if watcher_run_dir is not None and _WATCHER_ALARM_SENTINEL in clean:
+        head, _, tail = clean.partition(f"\n{_WATCHER_ALARM_SENTINEL}\n")
         json_stdout = head
         watcher_alarm = tail.strip() or None
     if proc.returncode != 0:
         # Prefer the reporter's own structured error (on stdout) over the stderr
-        # noise (Lmod reload notices) that otherwise masks the real cause.
+        # noise (Lmod reload notices) that otherwise masks the real cause. rc!=0
+        # (incl. the import-guard's 127 and a remote-deadline's 124) surfaces the
+        # real returncode regardless of the ack.
         structured = _reporter_error_from_stdout(json_stdout)
         stderr = proc.stderr.strip()[:200]
         if structured and stderr:
@@ -168,6 +195,19 @@ def ssh_status_report(
             detail = structured or stderr or "(no output)"
         raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {detail}",
+            returncode=proc.returncode,
+        )
+    # rc 0 but NO affirmative ack: a severed / truncated channel delivered a
+    # clean-looking rc-0 read that never carried the reporter to completion
+    # (run-12 finding 24 — NAT idle-drop / asyncssh idle reaper). Refuse to
+    # parse-and-trust a truncated stream; raise transient so every consumer
+    # routes it to UNKNOWN (unable_to_verify / reporter_unreachable), never a
+    # settled "the reporter emitted nothing" verdict.
+    if ack_rc is None:
+        raise RemoteCommandFailed(
+            "status reporter channel severed / output truncated: rc 0 but no "
+            "positive-evidence ack (__HPC_STATUS_ACK__) — the remote command did "
+            "not run to completion; refusing to parse a truncated stream.",
             returncode=proc.returncode,
         )
     report = parse_remote_json(json_stdout, source_label="status reporter")
@@ -230,8 +270,11 @@ def ssh_batch_scheduler_states(
     runs ``backend_cls.batch_status`` to fold tokens into ``TaskStatus``
     values. Job ids absent from the scheduler output are omitted (they have
     left the queue — terminal). Raises :class:`SshUnreachable` on an SSH
-    transport failure (the state commands append ``|| true`` so a reachable
-    cluster always returns rc 0; a non-zero rc is transport, not "no jobs").
+    transport failure (non-zero rc) AND on a MISSING sentinel-ack: the
+    positive-evidence rule (docs/design/connection-broker.md) — an empty read
+    that does not carry the query's affirmative ack token is a silently
+    truncated / never-run channel (UNKNOWN), and reading it as "every job left
+    the queue" would flip a fleet of live runs to terminal on one silent blip.
     """
     if not job_ids:
         return {}
@@ -242,4 +285,12 @@ def ssh_batch_scheduler_states(
             f"batch scheduler-state query failed (rc={proc.returncode}): "
             f"{proc.stderr.strip()[:200]}"
         )
-    return backend_cls.parse_scheduler_states(proc.stdout, job_ids)
+    clean, ran_ok = backend_cls.scheduler_query_ran(proc.stdout)
+    if not ran_ok:
+        raise SshUnreachable(
+            "batch scheduler-state query returned no positive-evidence ack "
+            "(silent/empty read — the query did not run to completion, or the "
+            "scheduler binary itself failed); refusing to read absence as "
+            "'all jobs terminal'."
+        )
+    return backend_cls.parse_scheduler_states(clean, job_ids)

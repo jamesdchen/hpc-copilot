@@ -71,6 +71,73 @@ def test_mirror_canary_sidecar_copies_executor_with_task_count_1(tmp_path) -> No
     assert csc["task_count"] == 1
 
 
+def test_mirror_canary_copies_task0_trial_params_from_main_manifest(tmp_path) -> None:
+    """When the main sidecar carries a frozen manifest, the canary (== task 0)
+    copies its task-0 kwargs verbatim into a one-element trial_params list."""
+    from hpc_agent.ops.submit_flow import _mirror_canary_sidecar
+    from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1",
+        cmd_sha="c",
+        hpc_agent_version="v",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{estimator}/chunk_{chunk_start}",
+        task_count=4,
+        tasks_py_sha="",
+        trial_params=[
+            {"estimator": "ols", "chunk_start": 0},
+            {"estimator": "lasso", "chunk_start": 10},
+        ],
+    )
+    _mirror_canary_sidecar(tmp_path, "r1", "r1-canary")
+    csc = read_run_sidecar(tmp_path, "r1-canary")
+    assert csc["trial_params"] == [{"estimator": "ols", "chunk_start": 0}]
+
+
+def test_mirror_canary_mints_task0_trial_params_when_main_manifest_absent(tmp_path) -> None:
+    """Run-#12 finding-18 follow-up seat: a manifest-less main sidecar (synthesized,
+    trial_params: null) must NOT leave the canary sidecar's trial_params null for a
+    sweep-axis template — the mirror MINTS task 0's real kwargs from tasks.resolve(0)
+    locally (frozen-manifest doctrine: freeze once on the control plane, cluster never
+    re-executes tasks.py) so the determinism-fingerprint sample can render + mint."""
+    from hpc_agent.ops.submit_flow import _mirror_canary_sidecar
+    from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+    tasks_py = tmp_path / ".hpc" / "tasks.py"
+    tasks_py.parent.mkdir(parents=True, exist_ok=True)
+    tasks_py.write_text(
+        "_ESTIMATORS = ['ols', 'lasso', 'ridge', 'en']\n"
+        "def total():\n    return 4\n"
+        "def resolve(i):\n"
+        "    return {'estimator': _ESTIMATORS[i], 'chunk_start': i * 10}\n",
+        encoding="utf-8",
+    )
+    # Main sidecar carries a sweep-axis template but NO frozen manifest.
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1",
+        cmd_sha="c",
+        hpc_agent_version="v",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{estimator}/chunk_{chunk_start}",
+        task_count=4,
+        tasks_py_sha="",
+    )
+    assert read_run_sidecar(tmp_path, "r1").get("trial_params") is None
+    _mirror_canary_sidecar(tmp_path, "r1", "r1-canary")
+    csc = read_run_sidecar(tmp_path, "r1-canary")
+    # Task 0's real kwargs, minted locally — a one-element manifest.
+    assert csc["trial_params"] == [{"estimator": "ols", "chunk_start": 0}]
+    # And it renders the sweep-axis template that a null manifest could not.
+    fields = dict(csc["trial_params"][0])
+    fields.update(task_id=0, run_id="r1-canary")
+    assert csc["result_dir_template"].format(**fields) == "results/ols/chunk_0"
+
+
 def test_mirror_canary_sidecar_remirrors_on_divergent_main(tmp_path) -> None:
     """Run #6 F1 follow-up: a corrected/re-resolved MAIN sidecar must propagate.
 

@@ -11,7 +11,7 @@
   "additionalProperties": false,
   "properties": {
     "results": {
-      "description": "Per-spec submit-flow result, in input order. Each entry has the shape of submit_flow.output.json (run_id, job_ids, total_tasks, deduped, canary_done, canary_run_id, canary_job_ids).",
+      "description": "Per-spec submit-flow result, in input order. Each entry has the shape of submit_flow.output.json (run_id, job_ids, total_tasks, deduped, canary_done, canary_run_id, canary_job_ids, canary_skip_reason).",
       "items": {
         "$ref": "#/$defs/_SubmitFlowResultEntry"
       },
@@ -87,6 +87,18 @@
           "default": true,
           "title": "Main Launched",
           "type": "boolean"
+        },
+        "canary_skip_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canary Skip Reason"
         }
       },
       "required": [

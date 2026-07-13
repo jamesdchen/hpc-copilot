@@ -93,6 +93,10 @@ class SubmitFlowResult:
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
     main_launched: bool = True
+    # Fallback-inventory S1/S2: a skipped canary must SAY why — canary_done=False
+    # alone cannot distinguish an opt-out, a tiny-batch skip, and the #249
+    # cache-hit (whose key excludes env state). None when a canary ran.
+    canary_skip_reason: str | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         """Render to the shape pinned by ``schemas/submit_flow.output.json``."""
@@ -105,6 +109,7 @@ class SubmitFlowResult:
             "canary_run_id": self.canary_run_id,
             "canary_job_ids": list(self.canary_job_ids) if self.canary_job_ids else None,
             "main_launched": self.main_launched,
+            "canary_skip_reason": self.canary_skip_reason,
         }
 
 
@@ -237,8 +242,14 @@ def _always_canary() -> bool:
     return env_flag(_ALWAYS_CANARY_ENV)
 
 
-def _should_run_canary(spec: SubmitFlowSpec) -> bool:
-    """Decide whether to fire a canary for *spec* (#263 + #249).
+def _canary_decision(spec: SubmitFlowSpec) -> tuple[bool, str | None]:
+    """Decide whether to fire a canary for *spec* (#263 + #249) — with the reason.
+
+    Returns ``(run_canary, skip_reason)``. ``skip_reason`` is a code-rendered
+    disclosure line naming WHY no canary fires (fallback-inventory S1/S2: a
+    skipped canary must be distinguishable from an opted-out one, and the
+    cache-hit skip must name its blind spot — the key excludes env state, so
+    env drift inside the TTL is NOT re-proven). ``None`` when a canary runs.
 
     Order:
 
@@ -257,14 +268,18 @@ def _should_run_canary(spec: SubmitFlowSpec) -> bool:
     Otherwise → canary.
     """
     if _always_canary():
-        return True
+        return True, None
     if not spec.canary:
-        return False
+        return False, "canary skipped: explicit opt-out (spec canary=false)"
     if spec.canary_only or getattr(spec, "force_canary", False):
-        return True
+        return True, None
     # #263: tiny-batch auto-skip.
-    if spec.total_tasks <= _canary_skip_threshold(spec):
-        return False
+    threshold = _canary_skip_threshold(spec)
+    if spec.total_tasks <= threshold:
+        return False, (
+            f"canary skipped (#263 tiny-batch): total_tasks {spec.total_tasks} <= "
+            f"threshold {threshold} — the main array's first tasks are the probe"
+        )
     # #249: skip when this cmd_sha was canary-validated within the TTL.
     from hpc_agent import __version__ as _pkg_version
     from hpc_agent.state import canary_cache
@@ -275,8 +290,19 @@ def _should_run_canary(spec: SubmitFlowSpec) -> bool:
             cmd_sha=cmd_sha, version=_pkg_version or "", cluster=spec.cluster
         )
         if canary_cache.is_canary_validated_fresh(key):
-            return False
-    return True
+            return False, (
+                f"canary skipped (#249 cache-hit): cmd_sha {cmd_sha[:12]} was "
+                f"canary-validated on {spec.cluster} within the TTL "
+                f"({canary_cache._ttl_sec()}s) — CAUTION: the cache key excludes "
+                "env state, so cluster-env drift inside the TTL is NOT re-proven; "
+                "set HPC_AGENT_ALWAYS_CANARY=1 or HPC_NO_CANARY_SKIP=1 to force"
+            )
+    return True, None
+
+
+def _should_run_canary(spec: SubmitFlowSpec) -> bool:
+    """Bool view of :func:`_canary_decision` (the one definition of the order)."""
+    return _canary_decision(spec)[0]
 
 
 def _run_uv_preflight_for_batch(
@@ -547,6 +573,173 @@ def _run_executor_existence_preflight(
             executor=executor,
             ssh_run=ssh_run,
         )
+
+
+# Default hard wall-clock cap on the pre-stage local task-0 smoke (item 7),
+# mirroring DryRunLocalSpec.smoke_timeout_sec. A spec's
+# ``pre_stage_smoke_timeout_sec`` overrides per-submission.
+_PRE_STAGE_SMOKE_TIMEOUT_DEFAULT = 60
+
+
+def _disclose_smoke(message: str) -> None:
+    """Surface a NON-blocking pre-stage-smoke disclosure to the operator.
+
+    An inconclusive (timeout) or fail-open (smoke-infra error) outcome is not a
+    refusal — it must be VISIBLE (the run #11 lesson is 'disclose, don't hide')
+    yet never abort the submit. Written to both the module logger and stderr so
+    it rides the same progress-legibility surface as the staging lines.
+    """
+    logging.getLogger(__name__).warning(message)
+    print(message, file=sys.stderr, flush=True)
+
+
+def _pre_stage_smoke_gate(
+    experiment_dir: Path,
+    specs: list[SubmitFlowSpec],
+    fresh_indices: list[int],
+) -> None:
+    """Bounded LOCAL task-0 dry-run of each executor BEFORE transport (item 7).
+
+    notebook-audit Addendum 4 item 7: run #11's units bug (executor
+    ``train_window`` in DAYS) survived the audit, the interview, and S1, and was
+    first caught by the REMOTE canary — after an hours-long 8.4 GB staging. It
+    would have crashed a LOCAL task-0 run in seconds. This gate wires the
+    existing ``ops/validate/dry_run_local`` smoke seam in HERE, before any rsync/
+    deploy, so a broken executor never pays for the stage first.
+
+    Per fresh spec (opt-out ``pre_stage_smoke=false``), read the just-written
+    sidecar for the REAL per-task executor + result_dir_template and smoke task
+    0 once per DISTINCT executor string (dedup keeps a campaign fan-out bounded).
+    Interpretation of the smoke findings lives here, not in core's smoke runner —
+    core relays the executor's own stderr and never interprets the failure:
+
+    * ``smoke_nonzero_exit`` → REFUSE the stage; the executor's stderr tail is
+      relayed VERBATIM in the raised message.
+    * ``smoke_import_error`` → REFUSE, but the message states it MAY be a
+      local-env artifact (a cluster-only dependency) and names ``pre_stage_smoke``
+      as the skip.
+    * ``smoke_timeout`` → NOT a failure (long tasks are normal); disclose
+      "smoke inconclusive (timeout after Ns)" and PROCEED.
+    * any other smoke code (spawn error, misconfig) → fail-open: disclose and
+      PROCEED, never block on a smoke-infrastructure issue.
+
+    The whole per-spec smoke is wrapped so an exception in the smoke runner
+    itself is fail-open too (disclose + proceed) — the gate can never be the
+    thing that blocks a submit.
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    seen: set[str] = set()
+    for i in fresh_indices:
+        spec = specs[i]
+        if not getattr(spec, "pre_stage_smoke", True):
+            continue
+        try:
+            sidecar = read_run_sidecar(experiment_dir, spec.run_id)
+        except Exception:  # noqa: BLE001 — best-effort read; a missing sidecar is fail-open
+            continue
+        if not isinstance(sidecar, dict):
+            continue
+        executor = sidecar.get("executor")
+        result_dir_template = sidecar.get("result_dir_template")
+        # The sidecar guards (_ensure_run_sidecar / _is_runnable_executor) already
+        # own the "must carry a real executor" refusal; here a non-runnable or
+        # template-less sidecar simply contributes no smoke (the smoke is
+        # best-effort defense-in-depth, never the owner of that contract).
+        if not _is_runnable_executor(executor) or not result_dir_template:
+            continue
+        if str(executor) in seen:
+            continue
+        seen.add(str(executor))
+        _smoke_one_executor(
+            experiment_dir,
+            spec=spec,
+            executor=str(executor),
+            result_dir_template=str(result_dir_template),
+        )
+
+
+def _smoke_one_executor(
+    experiment_dir: Path,
+    *,
+    spec: SubmitFlowSpec,
+    executor: str,
+    result_dir_template: str,
+) -> None:
+    """Smoke ONE executor's task 0 via the dry_run_local seam; raise to refuse.
+
+    Reuses the ``dry-run-local`` primitive (``smoke=true``) rather than
+    duplicating the dispatch-env / subprocess machinery — that atom already
+    exports the ``HPC_KW_*`` env, a temp ``HPC_RESULT_DIR``, and captures the
+    stderr tail. This function only INTERPRETS the returned findings per item 7
+    (refuse / disclose-and-proceed) and does the fail-open wrap.
+    """
+    from hpc_agent._wire.validators.dry_run_local import DryRunLocalSpec
+    from hpc_agent.ops.validate.dry_run_local import dry_run_local
+
+    timeout = int(getattr(spec, "pre_stage_smoke_timeout_sec", _PRE_STAGE_SMOKE_TIMEOUT_DEFAULT))
+    try:
+        result = dry_run_local(
+            experiment_dir,
+            spec=DryRunLocalSpec(
+                result_dir_template=result_dir_template,
+                run_id=spec.run_id,
+                smoke=True,
+                executor=executor,
+                smoke_task_id=0,
+                smoke_timeout_sec=timeout,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-open: a smoke-runner bug never blocks a submit
+        _disclose_smoke(
+            f"pre-stage smoke runner errored for run {spec.run_id!r} "
+            f"({type(exc).__name__}: {exc}); proceeding to stage without a local "
+            "smoke result."
+        )
+        return
+
+    # Only the smoke layer's findings are this gate's concern; the template-render
+    # layer (collision / unfilled-field) has its own gate (validate-campaign) and
+    # is not a reason to refuse the stage here.
+    smoke_findings = [f for f in result.findings if f.code.startswith("smoke_")]
+
+    # Refuse first (a hard failure wins over any co-emitted disclosure). A single
+    # smoke run emits at most one finding, so order is not load-bearing.
+    for f in smoke_findings:
+        tail = (f.evidence or {}).get("stderr_tail") or ""
+        if f.code == "smoke_nonzero_exit":
+            rc = (f.evidence or {}).get("returncode")
+            raise errors.SpecInvalid(
+                f"pre-stage local smoke of run {spec.run_id!r} task 0 exited {rc} "
+                "BEFORE any transport ran — refusing to stage a broken executor "
+                "(notebook-audit item 7). The cluster would fail identically after "
+                "an expensive stage. Executor stderr (verbatim):\n"
+                f"{tail}\n"
+                "Fix the executor so a local task-0 run exits 0, or set "
+                "pre_stage_smoke=false on the submit spec to skip this gate."
+            )
+        if f.code == "smoke_import_error":
+            raise errors.SpecInvalid(
+                f"pre-stage local smoke of run {spec.run_id!r} task 0 failed to "
+                "import a module BEFORE any transport ran (notebook-audit item 7). "
+                "This MAY be a local-env artifact — a dependency present only in the "
+                "cluster env, not a real bug; if so, set pre_stage_smoke=false on the "
+                "submit spec to skip this gate. Executor stderr (verbatim):\n"
+                f"{tail}"
+            )
+
+    # Non-fatal smoke outcomes: disclose and proceed.
+    for f in smoke_findings:
+        if f.code == "smoke_timeout":
+            _disclose_smoke(
+                f"pre-stage smoke inconclusive (timeout after {timeout}s) for run "
+                f"{spec.run_id!r} — long tasks are normal; proceeding to stage."
+            )
+        else:
+            _disclose_smoke(
+                f"pre-stage smoke could not run ({f.code}) for run {spec.run_id!r}; "
+                f"proceeding to stage. Detail: {f.message}"
+            )
 
 
 # Paths a scaffolded ``.gitignore`` marks as generated but the cluster
@@ -974,6 +1167,8 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         )
         cap_wave_map = {str(w): ids for w, ids in build_wave_map(plan).items()}
 
+    from hpc_agent.state.pack_declarations import resolve_pack_echoes
+
     write_run_sidecar(
         experiment_dir,
         run_id=spec.run_id,
@@ -1012,6 +1207,14 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         # covers the bare submit-flow path where no resolve leg ran). Lets a
         # later reproduction of the same original skip this derived run too.
         reproduces=spec.reproduction_of,
+        # Domain-pack echoes (T10): one opaque {pack, version, sha, manifest} per
+        # bound pack the experiment opted into, so export-dossier can seal each
+        # pack's manifest + decision journal. FAIL-OPEN + additive — resolve_pack_
+        # echoes returns [] when not opted in (or on any dangling/drift), so the
+        # `or None` omits the field entirely and a pack-less run's sidecar stays
+        # byte-identical. The gate at the pre-staging seat above already verified
+        # every opted-in pack is current before this point.
+        packs=resolve_pack_echoes(experiment_dir) or None,
     )
 
 
@@ -1031,8 +1234,80 @@ _CANARY_MIRROR_ESSENTIALS: tuple[str, ...] = (
 )
 
 
-def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id: str) -> None:
+def _canary_trial_params(
+    experiment_dir: Path, main: dict[str, Any], task_index: int = 0
+) -> list[dict[str, Any]] | None:
+    """One-element frozen manifest of task ``task_index``'s kwargs for a canary sidecar.
+
+    The canary IS one of the main run's tasks, so its sidecar must carry that
+    task's REAL resolved kwargs in ``trial_params`` — otherwise a sweep-axis
+    ``result_dir_template`` (``{estimator}/chunk_{chunk_start}/…``) cannot render
+    downstream and the determinism-fingerprint sample never mints (run-#12
+    finding 18: ``causal_tune_linear`` canary sidecar carried ``trial_params:
+    null``, so the sample never minted for ANY sweep-templated run).
+
+    ``task_index`` defaults to 0 — the ordinary canary IS the main run's task 0,
+    so the default is byte-identical to the historical behaviour. A Class-B heal's
+    re-verify (docs/design/overnight-repair.md §7.1) passes a BOUNDARY index (the
+    first/last affected task of a repaired range) so the fresh canary exercises
+    the edge kwargs, not just index 0 — run-#10's harvest-gap class showed edge
+    indices are where repairs go wrong.
+
+    Two sources, in order:
+
+    * The main sidecar's already-frozen manifest (``trial_params[task_index]``) —
+      copy it verbatim when present (an ordinary submit through compute-run-id).
+    * A local MINT via ``tasks.resolve(task_index)`` when the main sidecar carries
+      no manifest (a synthesized / manifest-less main sidecar) — this is the
+      frozen-manifest doctrine applied at its source: freeze the manifest ONCE
+      on the control plane so the cluster never re-executes ``tasks.py``
+      (the ``dispatch.py`` / ``combiner.py`` precedent, one directory up).
+
+    Best-effort: an unimportable / mis-shaped ``tasks.py``, or an out-of-range
+    ``task_index``, yields ``None`` (the prior behaviour), so a repo without a
+    resolvable task list is never a hard failure of the mirror.
+    """
+    main_tp = main.get("trial_params")
+    if isinstance(main_tp, list) and 0 <= task_index < len(main_tp):
+        entry = main_tp[task_index]
+        if isinstance(entry, dict):
+            return [dict(entry)]
+    try:
+        from hpc_agent import load_tasks_module
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        tasks = load_tasks_module(RepoLayout(experiment_dir).tasks)
+        resolved = tasks.resolve(task_index)
+    except (
+        FileNotFoundError,
+        AttributeError,
+        TypeError,
+        ValueError,
+        ImportError,
+        SyntaxError,
+        OSError,
+    ):
+        return None
+    if isinstance(resolved, dict) and resolved:
+        return [dict(resolved)]
+    return None
+
+
+def _mirror_canary_sidecar(
+    experiment_dir: Path,
+    main_run_id: str,
+    canary_run_id: str,
+    *,
+    boundary_index: int = 0,
+) -> None:
     """Ensure the canary's per-run sidecar exists AND matches the main run's.
+
+    ``boundary_index`` (default 0 — byte-identical to the historical task-0
+    canary) selects WHICH main-run task's frozen kwargs the canary dispatches:
+    a Class-B heal's re-verify (docs/design/overnight-repair.md §7.1) passes a
+    BOUNDARY index so the fresh canary exercises the first/last affected task of a
+    repaired range rather than always index 0. Only the mirrored ``trial_params``
+    changes — the canary is still a 1-task probe under its own run_id.
 
     The dispatcher hard-requires ``.hpc/runs/<run_id>.json``; the canary uses
     run_id ``<main>-canary``, which Step 6d never writes and
@@ -1107,6 +1382,15 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
         # so it shares the main run's ancestry and composed identity.
         parent_run_ids=main.get("parent_run_ids") or None,
         node_sha=main.get("node_sha") or None,
+        # The canary carries the boundary task's resolved params (default index 0
+        # = the main run's task 0; run-#12 finding-18 follow-up: the canary
+        # metrics pull renders result_dir_template from sidecar trial_params,
+        # which was null here, so the determinism-fingerprint sample never minted
+        # for sweep-templated runs). Copy the main manifest's task at
+        # ``boundary_index`` when frozen; otherwise MINT it locally from
+        # tasks.resolve(boundary_index) so a manifest-less main sidecar still
+        # yields real kwargs (the sidecar-writer follow-up seat the finding named).
+        trial_params=_canary_trial_params(experiment_dir, main, boundary_index),
     )
 
 
@@ -1325,6 +1609,7 @@ def _make_single_array_submission(
     resources: object = None,
     extra_flags: list[str] | None = None,
     setup_log_dir: bool = True,
+    concurrency_cap: int | None = None,
 ) -> list[str]:
     """Submit a ``<=cap`` sweep and return the job IDs (#339 increment 3).
 
@@ -1353,6 +1638,13 @@ def _make_single_array_submission(
     ``SubmissionPlan`` — it stays on the shared per-batch primitive
     (:meth:`HPCBackend.submit_one`) with ``array=False``, byte-identical to
     before.
+
+    *concurrency_cap* (#339 item 16) is the scheduler-native in-array cap
+    (SLURM ``%N`` / UGE ``-tc N``) applied to the single array. It reaches the
+    submit only when the cluster declares ``constraints.max_concurrent_tasks``
+    and it is below the sweep size — the pure-concurrency case the disclosed
+    ``concurrency_mode == "native-cap"`` names. ``None`` (the default, and every
+    cluster that has not opted in) is byte-identical to the pre-item-16 array.
     """
     from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
 
@@ -1396,6 +1688,8 @@ def _make_single_array_submission(
             max_concurrent=1,
             est_total_wall_s=None,
             strategy="single array (<=cap)",
+            concurrency_mode="native-cap" if concurrency_cap else "single-array",
+            concurrency_cap=concurrency_cap,
         )
         submissions = backend.submit_plan(
             plan,
@@ -1404,6 +1698,7 @@ def _make_single_array_submission(
             cwd=cwd,
             per_wave_extra_flags=flags,
             setup_log_dir=setup_log_dir,
+            concurrency_cap=concurrency_cap,
         )
     except RuntimeError as exc:
         # Map the backend submitter's RuntimeError (non-zero exit / unparseable
@@ -1569,6 +1864,26 @@ def _effective_cap_for_backend_name(backend_name: str, cluster: str | None) -> i
     return min(caps) if caps else None
 
 
+def _single_array_concurrency_cap(cluster: str | None, total_tasks: int) -> int | None:
+    """The scheduler-native in-array concurrency cap for a ≤cap single array (#339 item 16).
+
+    Returns ``constraints.max_concurrent_tasks`` only when the cluster declares
+    it AND it bounds below *total_tasks* (a cap ≥ the sweep size would not
+    restrict anything, so emitting ``%N`` / ``-tc N`` there would only diverge
+    from today's byte-identical uncapped array for no effect). A cluster that
+    has not opted in — the default — returns ``None``, leaving the single array
+    exactly as before. This is the code path that realises the item-16 ruling:
+    for pure concurrency bounding of a sweep that fits in one array, cap the
+    array natively instead of chaining ``afterany`` waves that drain to ~zero at
+    each boundary.
+    """
+    constraints = _load_cluster_constraints(cluster)
+    cap = getattr(constraints, "max_concurrent_tasks", None)
+    if cap is not None and 0 < int(cap) < int(total_tasks):
+        return int(cap)
+    return None
+
+
 def _is_multiwave_sweep(*, backend_name: str, total_tasks: int, cluster: str | None) -> bool:
     """Whether *total_tasks* exceeds the effective cap → a multi-wave sweep.
 
@@ -1699,6 +2014,12 @@ def _submit_main_array(
             if gate_job_ids
             else []
         )
+        # #339 item 16: a ≤cap sweep is exactly the single-array (n_batches == 1)
+        # case, so this is where the scheduler-native concurrency cap replaces
+        # any wave chain. The cap is emitted ONLY when the cluster declares
+        # ``constraints.max_concurrent_tasks`` AND it bounds below the sweep size
+        # — otherwise ``None`` keeps the array byte-identical to before.
+        native_cap = _single_array_concurrency_cap(cluster, total_tasks)
         return (
             _make_single_array_submission(
                 backend,
@@ -1709,6 +2030,7 @@ def _submit_main_array(
                 resources=resources,
                 extra_flags=afterok_flags,
                 setup_log_dir=setup_log_dir,
+                concurrency_cap=native_cap,
             ),
             None,
         )
@@ -1728,6 +2050,11 @@ def _submit_main_array(
             per_wave_extra_flags=backend.resource_flags(resources),
             gate_job_ids=gate_job_ids,
             setup_log_dir=setup_log_dir,
+            # #339 item 16: a multi-array (semantic/ceiling-forced) plan keeps its
+            # afterany wave chain; the native cap (when the cluster opted in via
+            # ``max_concurrent_tasks``) additionally bounds concurrency WITHIN each
+            # wave's arrays. ``None`` when unset — byte-identical to before.
+            concurrency_cap=getattr(plan, "concurrency_cap", None),
         )
     except RuntimeError as exc:
         # Carry submit_plan's partial accounting (the wave ids that DID land
@@ -1914,8 +2241,14 @@ def _fire_canary(
     canary_run_id: str,
     backend_obj: HPCBackend,
     job_env_full: dict[str, str],
+    boundary_index: int = 0,
 ) -> list[str]:
     """Mirror sidecar + qsub the 1-task canary + record it — the canary leg.
+
+    ``boundary_index`` (default 0 — byte-identical to today's task-0 canary)
+    selects which main-run task the fresh canary dispatches: a Class-B heal's
+    re-verify (docs/design/overnight-repair.md §7.1) passes a BOUNDARY index so
+    the probe exercises the first/last affected task of a repaired range.
 
     Extracted VERBATIM from :func:`_submit_one_spec`'s fresh-canary branch so a
     SECOND canary (the determinism fingerprint's ``<run_id>-canary2``, fired from
@@ -1930,10 +2263,21 @@ def _fire_canary(
     # Mirror the main sidecar to <canary_run_id>.json so the canary dispatches
     # the SAME per-task executor (#162a) — otherwise it errors 'sidecar not
     # found' and the canary gate is a no-op (#160).
-    _mirror_canary_sidecar(experiment_dir, spec.run_id, canary_run_id)
+    _mirror_canary_sidecar(
+        experiment_dir, spec.run_id, canary_run_id, boundary_index=boundary_index
+    )
     canary_env = dict(job_env_full)
     canary_env["HPC_RUN_ID"] = canary_run_id
     canary_env["HPC_TASK_COUNT"] = "1"
+    # data-trace T3: the canary IS an identity run by construction —
+    # canary-vs-local trace-diff catches deploy/data divergence in one glance,
+    # which needs the digest atom. The canary inherits main's job_env (which the
+    # classifier may have set to "0" for a large main array), so force digests ON
+    # here at the canary seam — the "canary flag" classifier input applied where
+    # the canary env is actually built (the main-array classification stays off).
+    from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_DIGEST_ENV_VAR
+
+    canary_env[TRACE_DIGEST_ENV_VAR] = "1"
     # #294 PR4: a run that opted into auto_resume_on_kill must prove its
     # checkpoint format round-trips BEFORE the long main array launches —
     # otherwise it discovers an unreloadable checkpoint only at resume, hours in.
@@ -1993,6 +2337,7 @@ def fire_second_canary(
     *,
     spec: SubmitFlowSpec,
     canary_run_id: str,
+    boundary_index: int = 0,
 ) -> list[str]:
     """Fire a SECOND 1-task canary for the determinism-fingerprint double canary.
 
@@ -2003,6 +2348,14 @@ def fire_second_canary(
     and dispatches the SAME command as the first. rsync/deploy already ran in the
     two-phase gate's Phase 1, so this only mirrors + qsubs + records (no
     transport). Returns the parsed canary job ids for provenance.
+
+    ``boundary_index`` (default 0 — the ordinary task-0 canary, byte-identical to
+    the double-canary caller which passes nothing) selects which main-run task the
+    fresh canary dispatches. This is the seam a Class-B heal's re-verify uses to
+    request a BOUNDARY-index canary (docs/design/overnight-repair.md §7.1): one
+    ``fire_second_canary`` call per sampled edge index, each under its own
+    ``<run_id>-canary-b<idx>`` id, so the repaired path re-earns its greenlight at
+    the first/last affected task rather than only index 0.
 
     A naive second ``submit_flow`` call could NOT do this: its canary leg
     hardcodes ``<run_id>-canary`` and its replay branch would reuse the just
@@ -2032,6 +2385,7 @@ def fire_second_canary(
         canary_run_id=canary_run_id,
         backend_obj=backend_obj,
         job_env_full=job_env_full,
+        boundary_index=boundary_index,
     )
 
 
@@ -2088,8 +2442,10 @@ def _submit_one_spec(
     canary_done = False
     # #263/#249: a tiny batch (total_tasks <= threshold) or a cmd_sha already
     # canary-validated within the TTL skips the canary and goes straight to
-    # main; canary_only / force_canary always canary. See _should_run_canary.
-    if _should_run_canary(spec):
+    # main; canary_only / force_canary always canary. The skip REASON rides the
+    # result (fallback-inventory S1/S2 — a silent skip is the zombie class).
+    run_canary, canary_skip_reason = _canary_decision(spec)
+    if run_canary:
         canary_run_id = f"{spec.run_id}-canary"
         existing_canary = load_run(experiment_dir, canary_run_id)
         if existing_canary is not None and not is_resubmittable_terminal(existing_canary):
@@ -2133,6 +2489,7 @@ def _submit_one_spec(
             canary_run_id=canary_run_id,
             canary_job_ids=canary_job_ids,
             main_launched=False,
+            canary_skip_reason=canary_skip_reason,
         )
 
     # #250: gate the main array on the canary SUCCEEDING via a scheduler-level
@@ -2302,6 +2659,7 @@ def _submit_one_spec(
         canary_done=canary_done,
         canary_run_id=canary_run_id,
         canary_job_ids=canary_job_ids,
+        canary_skip_reason=canary_skip_reason,
     )
 
 
@@ -2473,6 +2831,14 @@ def _submit_flow_batch_locked(
     # lock). The default min_age_seconds guard is for ad-hoc invocations
     # that don't hold the lock and could race a concurrent submit.
     #
+    # NB (#17): a PRIOR batch can also leave a two-phase canary gate mid-
+    # review — a ``canary_only`` Phase 1 completes its batch while
+    # INTENTIONALLY leaving the main run jobless + journal-less (job_ids land
+    # only on the canary sibling; the main run's submit_and_record is Phase 2).
+    # is_orphan_sidecar recognises that pairing (a committed ``<id>-canary``
+    # sibling ⇒ the main run is committed) so the prune never eats the
+    # greenlit main run's sidecar out from under the pending S3 launch.
+    #
     # ``exclude`` protects the run_ids in THIS batch: the slash flow
     # writes each run's sidecar jobless at Step 6d *before* calling
     # submit_flow_batch, so those sidecars are present inside the lock
@@ -2520,6 +2886,20 @@ def _submit_flow_batch_locked(
 
     assert_source_audited(experiment_dir)
 
+    # Domain-pack receipt gate (docs/design/domain-packs.md, ONE definition —
+    # ops/pack_gate — TWO synchronous seats, beside the notebook gate): the
+    # PRE-STAGING seat. Before any rsync/SSH, refuse a submit whose opted-in
+    # `packs` block (interview.json, D7) carries a required receipt_bindings slot
+    # not CURRENT + passed (missing / stale / failed). Defense in depth with the
+    # resolve-submit-inputs pre-sidecar (S1) seat: covers the bare submit-flow path
+    # AND a pack file edited (drift) between S1 and here. Per experiment, not per
+    # spec — ONE call before the fresh-spec loops, after the fully-deduped
+    # short-circuit so a no-cluster-traffic batch stays a byte-identical no-op.
+    # Fail-safe: NO packs block → byte-identical no-op. Local reads — no SSH.
+    from hpc_agent.ops.pack_gate import assert_pack_receipts_current
+
+    assert_pack_receipts_current(experiment_dir)
+
     # Supersession conduct (proving run #4, findings e/g/h): a NEW run_id
     # submitted while a SIBLING prior run_id with the SAME code identity
     # (cmd_sha/node_sha) still has live state must either be refused (the
@@ -2560,9 +2940,26 @@ def _submit_flow_batch_locked(
         # rsync as the main sidecar. ``_submit_one_spec`` keeps its own
         # ``_mirror_canary_sidecar`` call as an idempotent guard — that one
         # runs post-rsync (too late to reach the cluster) and early-returns
-        # once this sidecar exists. (``canary_only`` requires ``canary``.)
-        if specs[i].canary:
+        # once this sidecar exists. Gate on the canary DECISION, not the raw
+        # ``spec.canary`` field (#18): an HPC_AGENT_ALWAYS_CANARY-forced canary
+        # over an agent ``canary=false`` opt-out still fires in _submit_one_spec,
+        # so the pre-rsync mirror must fire in exactly the cases the canary runs
+        # — otherwise the forced-canary sidecar never ships and dies
+        # ``sidecar_not_found`` on the cluster.
+        if _should_run_canary(specs[i]):
             _mirror_canary_sidecar(experiment_dir, specs[i].run_id, f"{specs[i].run_id}-canary")
+
+    # notebook-audit Addendum 4 item 7: bounded LOCAL task-0 dry-run BEFORE any
+    # transport/staging. A units/arg/import bug that would crash every task is
+    # caught here in seconds rather than first at the REMOTE canary after an
+    # expensive stage (run #11: 8.4 GB). Refuses the stage on a genuine nonzero
+    # exit (executor stderr relayed verbatim); a timeout is inconclusive (long
+    # tasks are normal) and proceeds; fail-open on any smoke-infra error. Skipped
+    # on a Phase-2 re-entry that already staged + canaried (skip_rsync_deploy),
+    # where the executor was already validated on the cluster. Opt-out per spec:
+    # pre_stage_smoke=false.
+    if not skip_rsync_deploy:
+        _pre_stage_smoke_gate(experiment_dir, specs, fresh_indices)
 
     # Shared prelude (#280): one connectivity gate, then rsync+deploy run
     # CONCURRENT with the independent ``command -v uv`` probe. Still 1 ×

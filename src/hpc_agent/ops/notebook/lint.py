@@ -10,8 +10,7 @@ template and caller-declared, OPAQUE path/import roots. Four rules:
    slugs are reported. Slugs are OPAQUE — no content-meaning check (Q1 flag).
 2. **executes-live** — path-shaped STRING LITERALS (defined purely
    syntactically: a ``str`` constant that contains a path separator, or that
-   resolves under a declared ``input_root`` — NEVER a reader-function vocabulary
-   like ``read_csv``, which the Q1 flags ban) are checked to exist under the
+   resolves under a declared ``input_root``) are checked to exist under the
    caller-declared ``input_roots``; a missing one is a finding. A COMPUTED path
    expression (an f-string / a ``+``-concatenation carrying a separator) cannot
    be verified and is recorded in ``unverifiable_paths`` — an honest gap, never
@@ -20,6 +19,21 @@ template and caller-declared, OPAQUE path/import roots. Four rules:
    exempt from the not-exists flag and reported in ``declared_outputs`` instead
    (path + section — reported, never flagged; the run-#10 output-literal noise
    fix). A literal under NO root keeps the flagging behavior.
+
+   Core hard-codes NO reader-function vocabulary of its own — a bare
+   ``read_csv`` name is invisible to this rule, and the module docstring's Q1
+   ban stands: core never learns what a reader *does*. The ONLY reader knowledge
+   is a CALLER-DECLARED opaque list, ``reader_calls`` (S1 of
+   ``docs/design/domain-packs.md``): dotted callable names the caller (the audit
+   skill / notebook machinery, resolving pack declarations via
+   ``state/pack_declarations.py``) passes in exactly as it passes
+   ``input_roots``. An ``ast.Call`` whose reconstructed dotted name EQUALS a
+   declared reader (NAME IDENTITY — same opacity as ``input_roots``; a
+   similarly-named or differently-rooted call does NOT match, and an attribute
+   access that is not a call is ignored) has the SAME exists-under-roots check
+   applied to its FIRST string-literal argument; a non-literal first argument is
+   disclosed in ``unverifiable_paths``. No argument-semantics rule, nothing
+   beyond name identity + the existing path check.
 3. **linked_sources** — ``ast.Import`` / ``ast.ImportFrom`` that resolve to a
    file under a caller ``source_root`` are reported as
    ``{module, file, module_sha}`` (``module_sha`` via
@@ -204,10 +218,38 @@ def _is_path_shaped(experiment_dir: Path, root_dirs: list[Path], literal: str) -
     a declared ``input_root`` (a bare filename that exists under a root). The
     second clause only ever fires on an EXISTING file, so it can never manufacture
     a missing-path finding — it just widens what counts as a checked path.
+
+    A literal spanning lines is never a path: no filesystem path carries a
+    newline, and multi-line prose routinely carries ``/`` (``"qlike / mse"`` —
+    the run-#12 docstring false-positive class).
     """
+    if "\n" in literal:
+        return False
     if any(sep in literal for sep in _PATH_SEPARATORS):
         return True
     return any((root / literal).exists() for root in root_dirs)
+
+
+def _docstring_const_ids(tree: ast.Module) -> set[int]:
+    """``id``s of every docstring Constant — statement-position prose, never a path.
+
+    A docstring is the string Expr opening a module/class/function body; its
+    content is documentation, so it is exempt from the path-shape check no matter
+    what separators it carries (run-#12: an executor docstring full of
+    ``a / b`` prose was flagged as a missing path literal).
+    """
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                ids.add(id(body[0].value))
+    return ids
 
 
 def _joinedstr_has_separator(node: ast.JoinedStr) -> bool:
@@ -249,32 +291,166 @@ def _under_output_root(experiment_dir: Path, output_root_dirs: list[Path], liter
     return any(resolved.is_relative_to(root.resolve()) for root in output_root_dirs)
 
 
+def _call_dotted_name(func: ast.expr) -> str | None:
+    """Reconstruct the dotted name of an ``ast.Call`` target, or ``None``.
+
+    ``load_widget`` → ``"load_widget"``; ``widgets.load_widget`` →
+    ``"widgets.load_widget"``; ``a.b.c`` → ``"a.b.c"``. A call whose target is
+    not a pure ``Name``/``Attribute`` chain (a subscript, a call result, a
+    literal method — ``"x".join(…)``) has no static dotted name → ``None`` (it
+    can never match a declared reader; identity is over the WHOLE chain).
+    """
+    parts: list[str] = []
+    node: ast.expr = func
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _check_literal_path(
+    literal: str,
+    node: ast.AST,
+    experiment_dir: Path,
+    root_dirs: list[Path],
+    output_root_dirs: list[Path],
+    sections: list[tuple[int, int, str]],
+    findings: list[NotebookLintFinding],
+    declared: list[DeclaredOutput],
+    *,
+    reader_call: str | None,
+) -> bool:
+    """Apply the exists-under-roots check to one path *literal*.
+
+    The ONE existence check both the standalone-literal pass and the
+    reader-call pass call: a literal under a declared output root is a
+    ``declared_output`` (write target, never flagged); one that resolves under a
+    root is clean; otherwise a finding attributed to *node*'s section. Returns
+    ``True`` iff the check SURFACED a record (a finding or a declared output) —
+    the reader pass uses this to decide whether to carry the pack echo.
+    ``reader_call`` (when set) is stamped onto the finding evidence as provenance
+    and tweaks the detail wording; core never reads it back.
+    """
+    section = _section_slug_for_line(sections, getattr(node, "lineno", 0))
+    if _under_output_root(experiment_dir, output_root_dirs, literal):
+        declared.append(DeclaredOutput(path=literal, section=section))
+        return True
+    candidates = _resolve_candidates(experiment_dir, root_dirs, literal)
+    if any(c.exists() for c in candidates):
+        return False
+    if reader_call is not None:
+        detail = (
+            f"reader call {reader_call!r} first argument {literal!r} does not "
+            "exist under the declared input_roots"
+        )
+        evidence: dict[str, object] = {
+            "path": literal,
+            "line": getattr(node, "lineno", None),
+            "input_roots": [str(r) for r in root_dirs],
+            "reader_call": reader_call,
+        }
+    else:
+        detail = f"path literal {literal!r} does not exist under the declared input_roots"
+        evidence = {
+            "path": literal,
+            "line": getattr(node, "lineno", None),
+            "input_roots": [str(r) for r in root_dirs],
+        }
+    findings.append(
+        NotebookLintFinding(
+            rule="executes_live",
+            section=section,
+            detail=detail,
+            evidence=evidence,
+        )
+    )
+    return True
+
+
 def _check_executes_live(
     tree: ast.Module,
     experiment_dir: Path,
     root_dirs: list[Path],
     output_root_dirs: list[Path],
     sections: list[tuple[int, int, str]],
-) -> tuple[list[NotebookLintFinding], list[str], list[DeclaredOutput]]:
+    reader_calls: list[str],
+) -> tuple[list[NotebookLintFinding], list[str], list[DeclaredOutput], bool]:
     """Check path-shaped literals exist; record computed paths as unverifiable.
 
-    Returns ``(findings, unverifiable_paths, declared_outputs)``. A literal path
-    that does not resolve under any declared root is a finding attributed to its
-    section; a computed path expression (f-string / ``+`` with a separator) is
-    appended to ``unverifiable_paths`` (the honest gap). A literal UNDER a
-    declared output root is a DECLARED OUTPUT — exempt from the not-exists flag
-    (an output does not exist before the run) and reported in
+    Returns ``(findings, unverifiable_paths, declared_outputs, reader_surfaced)``.
+    A literal path that does not resolve under any declared root is a finding
+    attributed to its section; a computed path expression (f-string / ``+`` with
+    a separator) is appended to ``unverifiable_paths`` (the honest gap). A literal
+    UNDER a declared output root is a DECLARED OUTPUT — exempt from the not-exists
+    flag (an output does not exist before the run) and reported in
     ``declared_outputs`` instead: reported, never flagged.
+
+    ``reader_calls`` is the caller-declared OPAQUE reader vocabulary (S1): an
+    ``ast.Call`` whose dotted name matches one (NAME IDENTITY) has the SAME
+    existence check applied to its first string-literal argument; a non-literal
+    first argument is disclosed in ``unverifiable_paths``. ``reader_surfaced`` is
+    ``True`` iff a matched reader call produced any surfaced record (a finding, a
+    declared output, or an unverifiable gap) — the caller uses it to decide
+    whether to stamp the pack echo.
     """
     findings: list[NotebookLintFinding] = []
     unverifiable: list[str] = []
     declared: list[DeclaredOutput] = []
+    # Docstrings start consumed: statement-position prose, never a path operand.
+    consumed_const_ids: set[int] = _docstring_const_ids(tree)
+    reader_surfaced = False
+
+    # Reader-call pass (S1): NAME-IDENTITY match over ``ast.Call`` targets. Runs
+    # FIRST so a matched call's argument is attributed to the reader vocabulary
+    # (and its constants consumed) before the standalone-literal / computed
+    # passes see them — no double counting. Nodes handled here are recorded so
+    # the computed pass skips them.
+    reader_names = set(reader_calls)
+    reader_handled_ids: set[int] = set()
+    if reader_names:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            dotted = _call_dotted_name(node.func)
+            if dotted is None or dotted not in reader_names:
+                continue
+            first = node.args[0]
+            reader_handled_ids.add(id(first))
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                consumed_const_ids.add(id(first))
+                if _check_literal_path(
+                    first.value,
+                    first,
+                    experiment_dir,
+                    root_dirs,
+                    output_root_dirs,
+                    sections,
+                    findings,
+                    declared,
+                    reader_call=dotted,
+                ):
+                    reader_surfaced = True
+            else:
+                # A non-literal first argument cannot be verified — the honest
+                # gap. Mark its constants consumed so the later passes do not
+                # re-report a separator-bearing chunk inside it.
+                unverifiable.append(ast.unparse(first))
+                for child in ast.walk(first):
+                    if isinstance(child, ast.Constant):
+                        consumed_const_ids.add(id(child))
+                reader_surfaced = True
+
     # First pass: flag computed path expressions and mark their constant chunks
     # as consumed, so a separator-bearing string INSIDE an f-string / concat
     # (e.g. the ``"inputs/"`` in ``f"inputs/{x}"``) is not re-counted as a
-    # standalone literal path.
-    consumed_const_ids: set[int] = set()
+    # standalone literal path. A node already handled by the reader pass is
+    # skipped (it is a reader argument, disclosed there).
     for node in ast.walk(tree):
+        if id(node) in reader_handled_ids:
+            continue
         is_computed_path = (isinstance(node, ast.JoinedStr) and _joinedstr_has_separator(node)) or (
             isinstance(node, ast.BinOp) and _binop_has_separator_constant(node)
         )
@@ -283,7 +459,10 @@ def _check_executes_live(
             for child in ast.walk(node):
                 if isinstance(child, ast.Constant):
                     consumed_const_ids.add(id(child))
-    # Second pass: literal string paths (skipping consumed chunks).
+    # Second pass: standalone literal string paths (skipping consumed chunks).
+    # Only path-SHAPED literals are checked here — the reader pass already
+    # verified reader arguments (whose name-identity match IS the path-shape
+    # assertion), so they never reach this gate.
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if id(node) in consumed_const_ids:
@@ -291,35 +470,18 @@ def _check_executes_live(
             literal = node.value
             if not _is_path_shaped(experiment_dir, root_dirs, literal):
                 continue
-            if _under_output_root(experiment_dir, output_root_dirs, literal):
-                # A declared OUTPUT: where the source writes. It does not exist
-                # before the run, so the not-exists check is exempt — reported
-                # in declared_outputs, never flagged.
-                declared.append(
-                    DeclaredOutput(
-                        path=literal,
-                        section=_section_slug_for_line(sections, getattr(node, "lineno", 0)),
-                    )
-                )
-                continue
-            candidates = _resolve_candidates(experiment_dir, root_dirs, literal)
-            if any(c.exists() for c in candidates):
-                continue
-            findings.append(
-                NotebookLintFinding(
-                    rule="executes_live",
-                    section=_section_slug_for_line(sections, getattr(node, "lineno", 0)),
-                    detail=(
-                        f"path literal {literal!r} does not exist under the declared input_roots"
-                    ),
-                    evidence={
-                        "path": literal,
-                        "line": getattr(node, "lineno", None),
-                        "input_roots": [str(r) for r in root_dirs],
-                    },
-                )
+            _check_literal_path(
+                literal,
+                node,
+                experiment_dir,
+                root_dirs,
+                output_root_dirs,
+                sections,
+                findings,
+                declared,
+                reader_call=None,
             )
-    return findings, unverifiable, declared
+    return findings, unverifiable, declared, reader_surfaced
 
 
 # ── rule 3: linked_sources ───────────────────────────────────────────────────
@@ -577,8 +739,8 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
 
     findings: list[NotebookLintFinding] = []
     findings.extend(_check_structural_completeness(template_module.slugs, source_module.slugs))
-    live_findings, unverifiable, declared_outputs = _check_executes_live(
-        tree, experiment_dir, input_root_dirs, output_root_dirs, section_spans
+    live_findings, unverifiable, declared_outputs, reader_surfaced = _check_executes_live(
+        tree, experiment_dir, input_root_dirs, output_root_dirs, section_spans, spec.reader_calls
     )
     findings.extend(live_findings)
     findings.extend(
@@ -590,9 +752,18 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
     )
     linked = resolve_linked_sources(tree, experiment_dir, source_root_dirs)
 
+    # Carry the caller-supplied pack echo verbatim ONLY when a matched reader
+    # call surfaced a record — the provenance of the pack whose vocabulary drove
+    # it. No reader match (or no echo) → None, so the not-opted-in path stays
+    # byte-identical. Core copies the echo; it never reads it for meaning.
+    reader_call_echo = (
+        spec.reader_calls_echo if (reader_surfaced and spec.reader_calls_echo) else None
+    )
+
     return NotebookLintResult(
         findings=findings,
         unverifiable_paths=unverifiable,
         linked_sources=linked,
         declared_outputs=declared_outputs,
+        reader_call_echo=reader_call_echo,
     )

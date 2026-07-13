@@ -86,6 +86,31 @@ def _run(
     )
 
 
+def _run_mutating(
+    argv: list[str], *, input_text: str | None = None, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Run a scheduler-mutating command, converting an absent scheduler binary
+    into a structured :class:`errors.SpecInvalid`.
+
+    The read-only probes (``_win_task_exists`` / ``_cron_read_lines``) treat a
+    missing scheduler binary as "not installed" (fail-safe ``False``). The
+    mutating paths cannot silently no-op, but they must NOT crash the envelope as
+    an internal error either: on a host without a crontab/schtasks binary the
+    spawn raises ``FileNotFoundError`` (an ``OSError``), which is reported here as
+    a declared ``SpecInvalid`` (the primitive's only declared error_code) naming
+    the absent scheduler — instead of an uncaught ``FileNotFoundError`` surfaced
+    as error_code='internal'.
+    """
+    try:
+        return _run(argv, input_text=input_text, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise errors.SpecInvalid(
+            f"doctor-install: scheduler binary {argv[0]!r} not found on this host "
+            f"({exc}); the OS scheduler ({argv[0]}) is required to (un)install the "
+            "out-of-session doctor scan."
+        ) from exc
+
+
 def watchdog_installed(experiment_dir: Path) -> bool:
     """Pure probe: is the §5 doctor watchdog scheduled for *experiment_dir*?
 
@@ -121,7 +146,7 @@ def _win_task_exists(task_name: str) -> bool:
 def _win_install(task_name: str, command: str, interval: int) -> str:
     if _win_task_exists(task_name):
         return "already_installed"
-    proc = _run(
+    proc = _run_mutating(
         [
             "schtasks",
             "/Create",
@@ -148,7 +173,9 @@ def _win_install(task_name: str, command: str, interval: int) -> str:
 def _win_uninstall(task_name: str) -> str:
     if not _win_task_exists(task_name):
         return "not_installed"
-    proc = _run(["schtasks", "/Delete", "/TN", task_name, "/F"], timeout=_SCHTASKS_TIMEOUT_SEC)
+    proc = _run_mutating(
+        ["schtasks", "/Delete", "/TN", task_name, "/F"], timeout=_SCHTASKS_TIMEOUT_SEC
+    )
     if proc.returncode != 0:
         raise errors.SpecInvalid(
             f"doctor-install: schtasks /Delete failed (rc={proc.returncode}): "
@@ -176,7 +203,7 @@ def _cron_write(lines: list[str]) -> None:
     payload = "\n".join(lines)
     if payload:
         payload += "\n"
-    proc = _run(["crontab", "-"], input_text=payload, timeout=_CRONTAB_TIMEOUT_SEC)
+    proc = _run_mutating(["crontab", "-"], input_text=payload, timeout=_CRONTAB_TIMEOUT_SEC)
     if proc.returncode != 0:
         raise errors.SpecInvalid(
             f"doctor-install: `crontab -` failed (rc={proc.returncode}): "

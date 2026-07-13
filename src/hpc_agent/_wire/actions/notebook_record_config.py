@@ -28,7 +28,7 @@ behavior, never a silent re-key.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class NotebookRecordConfigSpec(BaseModel):
@@ -80,6 +80,45 @@ class NotebookRecordConfigSpec(BaseModel):
             "declared_outputs, never flagged)."
         ),
     )
+    goal: str | None = Field(
+        default=None,
+        description=(
+            "Optional audit-OPEN intent: the free-text campaign goal the human "
+            "typed (~one sentence). Recorded VERBATIM as a durable seat the "
+            "audit-handoff projection reads to draft the interview goal — never "
+            "interpreted, never invented. Absent (the default) → no goal seat; "
+            "the config record is byte-identical to a pre-intent one and "
+            "audit-handoff emits a goal placeholder the caller must fill."
+        ),
+    )
+    task_axes: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional audit-OPEN intent: the human's free-text names for what "
+            "varies across tasks (the compute shape, e.g. ['bucket', 'chunk']). "
+            "Recorded VERBATIM — OPAQUE to core, never a search-space encoding. "
+            "audit-handoff surfaces these as guidance for the caller's "
+            "task_generator (which stays a placeholder — the axis names are not a "
+            "materializer). Absent (the default) → no axes seat; byte-identical to "
+            "a pre-intent record."
+        ),
+    )
+    observables: list[str] | None = Field(
+        default=None,
+        description=(
+            "The OBSERVATION PLAN (A14): opaque declared-observable names the "
+            "sanctioned runner (the notebook-render between-cell loop, T-R) looks "
+            "up in the exec namespace and measures into runner-tier trace records. "
+            "null = no plan (the loop is OFF; execution byte-identical)."
+        ),
+    )
+
+    @field_validator("observables")
+    @classmethod
+    def _observables_nonempty(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and any(not name.strip() for name in value):
+            raise ValueError("observables entries must be non-empty strings")
+        return value
 
 
 class NotebookRecordConfigResult(BaseModel):
@@ -97,6 +136,15 @@ class NotebookRecordConfigResult(BaseModel):
     source_roots: list[str] = Field(default_factory=list)
     attention_order: list[str] | None = None
     output_roots: list[str] = Field(default_factory=list)
+    goal: str | None = Field(
+        default=None,
+        description="Echo of the recorded audit-open goal utterance (null when none was recorded).",
+    )
+    task_axes: list[str] | None = Field(
+        default=None,
+        description="Echo of the recorded audit-open task-axis utterances (null when none were recorded).",
+    )
+    observables: list[str] | None = None
     warning: str | None = Field(
         default=None,
         description=(

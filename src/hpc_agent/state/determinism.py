@@ -87,6 +87,7 @@ __all__ = [
     "build_sample_record",
     "validate_sample",
     "filter_current_identity",
+    "order_statistics_envelope",
     "reduce_envelope",
     "classify",
     "evidence_meets",
@@ -699,6 +700,25 @@ class Envelope:
     data_identity_unknown: int
 
 
+def order_statistics_envelope(values: Sequence[float]) -> tuple[float, float, float]:
+    """The ONE order-statistics leg: ``(lo, hi, rel_spread)`` over non-empty values.
+
+    ``lo = min``, ``hi = max``, ``rel_spread = (hi - lo) / max(|lo|, |hi|)`` (0.0
+    when the magnitude scale is 0). Order statistics ONLY — no mean, no stddev, no
+    fitted anything (the D-envelope no-invented-tolerance rule). This is the ONE
+    envelope definition (enforcement row): the fingerprint reduction
+    (:func:`_reduce_key`) and registration conformance's ``judge_window``
+    (``state/conformance.py``, the plan's T1a re-point) both route through this —
+    never a second min/max/spread implementation. ``values`` must be non-empty;
+    the caller filters to comparable finite numbers upstream.
+    """
+    lo = min(values)
+    hi = max(values)
+    denom = max(abs(lo), abs(hi))
+    rel_spread = (hi - lo) / denom if denom else 0.0
+    return float(lo), float(hi), rel_spread
+
+
 def _reduce_key(key: str, samples: Sequence[Sample], admitted: Sequence[bool]) -> KeyEnvelope:
     """Reduce ONE key to its observed range + evidence over ADMITTED samples only.
 
@@ -740,12 +760,10 @@ def _reduce_key(key: str, samples: Sequence[Sample], admitted: Sequence[bool]) -
     hi: float | None
     rel_spread: float | None
     if values:
-        lo_val = min(values)
-        hi_val = max(values)
-        denom = max(abs(lo_val), abs(hi_val))
-        lo, hi = lo_val, hi_val
-        rel_spread = (hi_val - lo_val) / denom if denom else 0.0
-        is_stochastic = saw_float and hi_val > lo_val
+        # Route through the ONE order-statistics leg (T1a) — never a re-inlined
+        # min/max/spread. Byte-identical to the prior inline reduction.
+        lo, hi, rel_spread = order_statistics_envelope(values)
+        is_stochastic = saw_float and hi > lo
     else:
         lo = hi = rel_spread = None
         is_stochastic = False
@@ -999,6 +1017,28 @@ def evidence_meets(
             f"determinism.evidence_meets: unknown demand key(s) {sorted(unknown)}; "
             f"allowed: {sorted(_ALLOWED_DEMAND_KEYS)}"
         )
+    # The loud-named-refusal covers VALUES too, not only key names (bug-sweep
+    # #72). ``demand`` arrives verbatim from a caller-authored ``requires`` (JSON)
+    # whose value types are unvalidated upstream; a non-int ``min_n`` used to
+    # crash with a raw ``TypeError`` at the ``n < min_n`` compare, and a string
+    # ``scales`` was iterated character-by-character into a nonsense shortfall.
+    # Refuse both with the same declared SpecInvalid the unknown-key branch uses.
+    for _key in ("min_n", "min_n_full"):
+        _val = demand.get(_key)
+        if _val is not None and (not isinstance(_val, int) or isinstance(_val, bool)):
+            raise errors.SpecInvalid(
+                f"determinism.evidence_meets: demand key {_key!r} must be an int; "
+                f"got {type(_val).__name__} {_val!r}"
+            )
+    for _key in ("scales", "clusters"):
+        _val = demand.get(_key)
+        if _val is not None and (
+            not isinstance(_val, list) or not all(isinstance(_s, str) for _s in _val)
+        ):
+            raise errors.SpecInvalid(
+                f"determinism.evidence_meets: demand key {_key!r} must be a list of "
+                f"strings; got {type(_val).__name__} {_val!r}"
+            )
     filtered = filter_current_identity(
         samples, admitted, identity=identity, data_identity=data_identity
     )

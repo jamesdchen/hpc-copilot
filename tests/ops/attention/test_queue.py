@@ -117,7 +117,7 @@ def test_stalled_collector_empty(tmp_path: Path) -> None:
 
 
 def test_parked_vs_greenlight_split(tmp_path: Path) -> None:
-    """find_parked_runs split by is_latest_committed_greenlight (D5 rows 1-2)."""
+    """find_parked_runs split by is_committed_greenlight_for_boundary (D5 rows 1-2)."""
     # Parked, no committed y → run-parked (verdict).
     _mk(tmp_path, "run-parked")
     mark_pending_decision(
@@ -369,7 +369,10 @@ def test_within_class_rule_not_overridable_by_class_order() -> None:
 
 def test_route_through_source_symbols() -> None:
     checks = {
-        collect_greenlight_and_parked: ["find_parked_runs(", "is_latest_committed_greenlight("],
+        collect_greenlight_and_parked: [
+            "find_parked_runs(",
+            "is_committed_greenlight_for_boundary(",
+        ],
         collect_stalled: ["find_stalled_runs("],
         collect_dead_workers: ["scan_dead_detached_workers("],
         collect_anomalies: ["digest_run(", "ANOMALY_STATUSES", "recommendation_for("],

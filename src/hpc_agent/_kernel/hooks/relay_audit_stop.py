@@ -68,8 +68,13 @@ be said (tonight's proving run: ``notebook-status`` computed ``passed`` and
 the agent never relayed it). So the same stop also runs the discharge pass —
 the omission-side complement:
 
-* ``notebook-status`` journals a relay-due MARKER on a TERMINAL verdict
-  (:mod:`hpc_agent.state.notebook_audit` — v1's deliberately narrow set);
+* ``notebook-status`` journals a relay-due MARKER on a TERMINAL verdict, and
+  ``notebook-audit-view`` journals a per-section MARKER (key token: the
+  section's ``view_sha12``) when it builds the CANONICAL view of a
+  human-required section (run-#11 item 3 — a render that reached the human as
+  an unread file link is not a relay) (:mod:`hpc_agent.state.notebook_audit` —
+  the deliberately narrow set: preview views and auto_cleared sections arm
+  nothing);
 * at stop, the hook loads the UNDISCHARGED markers of every audit journal in
   the SAME ``.hpc/notebooks`` dir the mention scan uses (the identical
   experiment-dir resolution — payload ``cwd`` → no-scaffold raw path). Unlike
@@ -87,16 +92,53 @@ the omission-side complement:
 * the whole pass is fail-open: ANY exception in marker load/parse/check/
   discharge degrades to no-omission-findings (a hook that can wedge a session
   on one bad record is the failure class this posture exists to prevent).
+
+Sign-off echo detection — laundered authorship (run-#11 queue item 2)
+---------------------------------------------------------------------
+The audit skill's "never compose the sign-off utterance" ban is conduct prose
+with no code seat: a driving agent can DRAFT the very words the human then
+pastes as their typed attestation, and the journaled ``notebook-sign-off``
+record then reads as human-authored review it never was (the F-R number-word
+class in reverse — F-R catches the model restating REJECTED content; this
+catches the human restating MODEL-DRAFTED attestation). The same stop already
+has both halves on disk, so :func:`_sign_off_echo_findings` flags a journaled
+sign-off whose ``response`` echoes a *prior* assistant-authored line —
+verbatim (whitespace-normalized substring) or near (conservative token
+containment). Deliberate limits, all biased against a false block (a wrongly
+laundered flag on an honest human is worse than a miss):
+
+* only the LATEST sign-off per audit is checked (the freshest attestation is
+  the one that could just have been laundered; this also bounds re-firing);
+* the FINAL relay message is excluded from the corpus — a stop that legitimately
+  QUOTES the response back while relaying it is not laundering (only a *prior*,
+  pre-sign-off assistant line is);
+* a minimum length (chars AND tokens) floors out short responses ("y", "ok",
+  "looks good") that collide by chance; near-match needs high token containment.
+
+Decision-state claims — an unjournaled decision EVENT (run-#11 queue item 5)
+---------------------------------------------------------------------------
+verify-relay audits the run's *numbers/status*; nothing audited a claim about a
+DECISION EVENT — "revoked", "superseded", "greenlit", "journaled" (run #11: the
+relay "your y is revoked and nothing has advanced" with ZERO journal record of
+any revocation). :func:`_decision_state_findings` mirrors the rule-10 matching:
+a decision-state verb is only attributable to a scope the relay NAMES, and must
+be supported by that scope's decision journal — a positive verb needs a committed
+greenlight, a revocation/supersession verb needs the journal to actually show the
+greenlight no longer standing. An unsupported claim joins the rule-10 findings so
+it carries the standard correct-the-relay remedy. Conservative by construction:
+the verb and the scope id must share a LINE (so "the token was revoked" next to
+an unrelated run id does not fire), and a scope-less claim is a deliberate miss.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 __all__ = [
     "build_hook_output",
@@ -124,6 +166,52 @@ _MAX_RELAY_DUE_FINDINGS = 5
 # wire-enum / schema change): the semantics stay coherent (a status IS a
 # lifecycle-family claim; a sha is a value claim).
 _CONTRADICTION_KINDS = frozenset({"number", "state", "run_id"})
+
+# ─── the completer (rejector → completer; docs/design/stop-hook-completer.md) ──
+#
+# The completer path is CAPABILITY-GATED (D1): it is active only when the harness
+# declares the ``stop-hook-append`` capability (a hook ``systemMessage`` it
+# DISPLAYS). Absent/unknown — the default, since no harness declares it yet — the
+# whole module degrades to today's REJECTOR EXACTLY (the block-once bounce). So
+# every structure below is fully built but DARK until the capability reads true.
+
+# Append caps (D4, the ``_MAX_*`` posture): a code-appended render is bounded so
+# one pathological render cannot flood the turn; over-cap content degrades to the
+# token-level floor plus a file reference.
+_MAX_APPEND_ARTIFACT_BYTES = 8_000
+_MAX_APPEND_RENDER_FILES_SCANNED = 40
+
+
+class _AbsentMarker(NamedTuple):
+    """An undischarged relay-due marker whose key tokens the relay never carried.
+
+    Rejector: :attr:`omission_text` is the verbatim-ready block reason (today's
+    string). Completer: :attr:`marker` is the resolved dict from which the owed
+    artifact is composed (D4) and the completer-discharge is recorded (D3).
+    """
+
+    scope_kind: str
+    scope_id: str
+    marker: dict[str, Any]
+    omission_text: str
+
+
+class _Violation(NamedTuple):
+    """A relayed claim that contradicts the durable record (violation class §2).
+
+    Rejector: :attr:`text` is today's finding line. Completer: appended as a
+    code-authored correction UNDER the claim, EXCEPT when the poisoned-decision
+    test fires (a run/campaign scope with a still-pending brief whose content the
+    claim tokens intersect), where it bounces instead. ``claim``/``journal_value``
+    drive the correction and the poisoned intersection; an empty ``claim`` (a
+    paraphrase / audit-scope finding) is append-only by construction.
+    """
+
+    scope_kind: str
+    scope_id: str
+    claim: str
+    journal_value: str | None
+    text: str
 
 
 def _journal_runs_dir(experiment_dir: Path) -> Path:
@@ -232,18 +320,24 @@ def mentioned_audit_ids(relay_text: str, notebooks_dir: Path) -> list[str]:
 
 def _relay_due_discharge_pass(
     experiment_dir: Path, notebooks_dir: Path, relay_text: str
-) -> list[str]:
-    """Discharge relayed markers; return the verbatim-ready omission findings.
+) -> list[_AbsentMarker]:
+    """Discharge relayed markers (as ``relay``); return the UNDISCHARGED ones.
 
     For every audit journal in *notebooks_dir* (the same no-scaffold dir the
     mention scan globs — capped at :data:`_MAX_RELAY_DUE_AUDITS`), load the
     UNDISCHARGED relay-due markers and check the final text for ANY of each
     marker's ``key_tokens`` (plain substring, case-insensitive):
 
-    * found → append a discharge record (append-only; the marker is never
-      mutated) and surface nothing;
-    * absent → an omission finding, phrased verbatim-ready so the block reason
-      hands the agent exactly the tokens whose relay will discharge it.
+    * found → append a discharge record with ``discharged_by="relay"`` (the model
+      relayed the token — append-only; the marker is never mutated) and surface
+      nothing;
+    * absent → an :class:`_AbsentMarker`, carrying both the verbatim-ready
+      rejector text AND the resolved marker (the completer sources its owed
+      artifact + records the completer-discharge from it).
+
+    Absent markers are NOT discharged here — the completer discharges them (D3,
+    ``discharged_by="completer"``) only once it has actually appended the owed
+    artifact, and the rejector never discharges an omission at all.
 
     Fail-open at every grain: a filesystem error, an unreadable journal, a
     malformed marker, or a failed discharge append is skipped, never raised —
@@ -258,6 +352,7 @@ def _relay_due_discharge_pass(
         return []
 
     from hpc_agent.state.notebook_audit import (
+        DISCHARGED_BY_RELAY,
         read_undischarged_relay_markers,
         record_relay_discharge,
     )
@@ -279,7 +374,7 @@ def _relay_due_discharge_pass(
         pass
 
     lowered = relay_text.lower()
-    omissions: list[str] = []
+    absent: list[_AbsentMarker] = []
     for scope_kind, scope_id in scopes:
         try:
             markers = read_undischarged_relay_markers(
@@ -298,18 +393,31 @@ def _relay_due_discharge_pass(
                         audit_id=scope_id,
                         marker=marker,
                         scope_kind=scope_kind,
+                        discharged_by=DISCHARGED_BY_RELAY,
                     )
-                elif len(omissions) < _MAX_RELAY_DUE_FINDINGS:
+                elif len(absent) < _MAX_RELAY_DUE_FINDINGS:
                     kind = str(marker.get("record_kind") or "notebook-status")
                     state = tokens[0]
-                    sha12 = tokens[1] if len(tokens) > 1 else "?"
-                    omissions.append(
-                        f"unrelayed terminal state: {kind} = {state} @ "
-                        f"{sha12} — relay it verbatim before closing."
+                    # A two-token marker (notebook-status: state @ module sha12)
+                    # names both; a one-token marker (notebook-audit-view: a
+                    # section's view_sha12) names just the sha to relay. The
+                    # record_kind already disambiguates, so the suffix is added
+                    # only when a second token exists — no dangling "@ ?".
+                    at = f" @ {tokens[1]}" if len(tokens) > 1 else ""
+                    absent.append(
+                        _AbsentMarker(
+                            scope_kind=scope_kind,
+                            scope_id=scope_id,
+                            marker=marker,
+                            omission_text=(
+                                f"unrelayed terminal state: {kind} = {state}{at}"
+                                " — relay it verbatim before closing."
+                            ),
+                        )
                     )
             except Exception:
                 continue  # a marker we cannot check/discharge is a silent pass
-    return omissions
+    return absent
 
 
 #: Paraphrase-pass bounds (G1): cap the render corpus and the checked lines so
@@ -387,26 +495,664 @@ def _paraphrase_findings(experiment_dir: Path, relay_text: str, audit_ids: list[
     return findings
 
 
+# ─── Sign-off echo detection (laundered authorship — queue item 2) ───────────
+#
+# Conservative thresholds, all biased against a false block. A response shorter
+# than _MIN_ECHO_CHARS (or fewer than _MIN_ECHO_TOKENS words) is never matched —
+# short attestations ("y", "ok", "looks good") collide by chance. A near-match
+# needs the response's tokens to be almost wholly contained in an assistant line
+# (_ECHO_TOKEN_OVERLAP), so a minor human edit still flags but two unrelated
+# sentences sharing a few words do not.
+_MAX_ECHO_AUDITS = 10
+_MIN_ECHO_CHARS = 16
+_MIN_ECHO_TOKENS = 3
+_ECHO_TOKEN_OVERLAP = 0.9
+_MAX_PRIOR_ASSISTANT_BYTES = 2_000_000
+_MAX_ECHO_FINDINGS = 5
+
+# ─── Decision-state claims (an unjournaled decision EVENT — queue item 5) ─────
+#
+# A small, conservative lexicon of PAST-TENSE assertions that a decision event
+# happened. Word-boundary matched (so "unjournaled" does not read as a
+# "journaled" claim). Positive verbs assert a decision was recorded/approved;
+# the revocation verbs assert a prior decision no longer stands.
+_DECISION_STATE_POSITIVE_RE = re.compile(r"\b(?:greenlit|greenlighted|journaled)\b", re.IGNORECASE)
+_DECISION_STATE_NEGATIVE_RE = re.compile(r"\b(?:revoked|superseded)\b", re.IGNORECASE)
+_MAX_STATE_CLAIM_FINDINGS = 5
+
+
+def _norm(text: str) -> str:
+    """Whitespace-normalized, lowercased — the echo comparison key."""
+    return " ".join(text.split()).lower()
+
+
+def _entry_text(entry: dict[str, Any]) -> str:
+    """Join the text blocks of one transcript entry's message (str or list)."""
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            block_text = block.get("text")
+            if isinstance(block_text, str) and block_text:
+                parts.append(block_text)
+    return "\n".join(parts)
+
+
+def _prior_assistant_texts(transcript_path: Path) -> list[str]:
+    """Assistant texts BEFORE the final trailing assistant run, in order.
+
+    The echo check compares a journaled sign-off against a *prior* assistant
+    line — the drafting turn — so the final relay (which may legitimately QUOTE
+    the response back while relaying it) is excluded. Capped and tolerant:
+    unreadable file / corrupt lines yield ``[]`` / skip the line.
+    """
+    try:
+        text = transcript_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            entries.append(obj)
+
+    # The trailing run of assistant entries is the final relay — exclude it.
+    trailing_start = len(entries)
+    for idx in range(len(entries) - 1, -1, -1):
+        if entries[idx].get("type") == "assistant":
+            trailing_start = idx
+            continue
+        break
+
+    texts: list[str] = []
+    total = 0
+    for entry in entries[:trailing_start]:
+        if entry.get("type") != "assistant":
+            continue
+        entry_text = _entry_text(entry)
+        if not entry_text:
+            continue
+        texts.append(entry_text)
+        total += len(entry_text)
+        if total >= _MAX_PRIOR_ASSISTANT_BYTES:
+            break
+    return texts
+
+
+def _sign_off_echo_findings(
+    experiment_dir: Path, notebooks_dir: Path, prior_texts: list[str]
+) -> list[tuple[str, str, str]]:
+    """Detect sign-offs whose response echoes a prior assistant line.
+
+    Returns ``(audit_id, response_sha12, detail_text)`` triples — JOURNAL-ONLY
+    provenance input (2026-07-10 user ruling: the surfaced nag is REMOVED; echo
+    detection never blocks and never appends — see
+    ``state/notebook_audit.py::record_echo_provenance``).
+
+    For each discoverable audit (capped), the LATEST ``notebook-sign-off``
+    record's ``response`` is compared against the prior-assistant corpus:
+    whitespace-normalized substring (the human pasted the model's sentence) or
+    high token containment (a minor edit). Both gated by a minimum length so a
+    short attestation never collides. Fail-open at every grain; capped findings.
+    """
+    if not prior_texts:
+        return []
+    try:
+        audit_ids = sorted(
+            p.name[: -len(".decisions.jsonl")] for p in notebooks_dir.glob("*.decisions.jsonl")
+        )
+    except OSError:
+        return []
+
+    blob_parts: list[str] = []
+    lines: list[str] = []
+    for raw in prior_texts:
+        normalized = _norm(raw)
+        if normalized:
+            blob_parts.append(normalized)
+        for segment in raw.splitlines():
+            norm_line = _norm(segment)
+            if len(norm_line) >= _MIN_ECHO_CHARS:
+                lines.append(norm_line)
+    blob = " \n ".join(blob_parts)
+    if not blob:
+        return []
+
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import read_decisions
+
+    findings: list[tuple[str, str, str]] = []
+    for audit_id in audit_ids[:_MAX_ECHO_AUDITS]:
+        if len(findings) >= _MAX_ECHO_FINDINGS:
+            break
+        try:
+            records = read_decisions(experiment_dir, "notebook", audit_id)
+        except Exception:
+            continue  # a journal we cannot read is a silent pass for that audit
+        sign_offs = [r for r in records if r.get("block") == nb.SIGN_OFF_BLOCK]
+        if not sign_offs:
+            continue
+        record = sign_offs[-1]  # only the latest attestation (conservative)
+        response = record.get("response")
+        if not isinstance(response, str):
+            continue
+        norm_resp = _norm(response)
+        resp_tokens = norm_resp.split()
+        if len(norm_resp) < _MIN_ECHO_CHARS or len(resp_tokens) < _MIN_ECHO_TOKENS:
+            continue  # too short to attribute — never flag
+
+        matched: str | None = None
+        if norm_resp in blob:
+            matched = norm_resp
+        else:
+            token_set = set(resp_tokens)
+            for candidate in lines:
+                cand_tokens = set(candidate.split())
+                if not cand_tokens:
+                    continue
+                if len(token_set & cand_tokens) / len(token_set) >= _ECHO_TOKEN_OVERLAP:
+                    matched = candidate
+                    break
+        if matched is None:
+            continue
+
+        resolved = record.get("resolved")
+        section = resolved.get("section") if isinstance(resolved, dict) else None
+        where = f" section {section}" if section else ""
+        import hashlib
+
+        response_sha12 = hashlib.sha256(norm_resp.encode("utf-8")).hexdigest()[:12]
+        findings.append(
+            (
+                audit_id,
+                response_sha12,
+                f"[{audit_id}]{where}: the journaled sign-off response {response[:80]!r} "
+                f"matches a prior assistant-authored line ({matched[:80]!r}) — "
+                "model-composed wording (provenance record; drafting help is "
+                "sanctioned, this is the archive's honesty about authorship).",
+            )
+        )
+    return findings
+
+
+def _journal_echo_provenance(experiment_dir: Path, echoes: list[tuple[str, str, str]]) -> None:
+    """Journal echo provenance (JOURNAL-ONLY — never surfaced, never blocks).
+
+    The 2026-07-10 user ruling: LLM drafting help is desired human
+    amplification; the y-ack-ease hazard is guarded by the digest-read /
+    tiered sign-off gates, not by wording originality. Each detection becomes
+    one deduped ``notebook-echo-provenance`` record
+    (:func:`hpc_agent.state.notebook_audit.record_echo_provenance`). Fail-open
+    per record — provenance must never wedge a stop.
+    """
+    from hpc_agent.state.notebook_audit import record_echo_provenance
+
+    for audit_id, response_sha12, detail in echoes:
+        try:
+            record_echo_provenance(
+                experiment_dir,
+                audit_id=audit_id,
+                response_sha12=response_sha12,
+                detail=detail,
+            )
+        except Exception:
+            continue
+
+
+def _decision_state_findings(
+    experiment_dir: Path, relay_text: str, run_ids: list[str]
+) -> list[_Violation]:
+    """Flag decision-state claims no journal record supports (queue item 5).
+
+    A decision-state verb is only attributable to a scope the relay NAMES (the
+    rule-10 discipline): candidate scopes are the mentioned runs plus any
+    mentioned campaign. The verb and the scope id must share a LINE, and the
+    scope's decision journal must support the claim — a positive verb needs a
+    committed ``y`` greenlight; a revocation/supersession verb needs the journal
+    to show that greenlight no longer standing (or nothing to revoke at all).
+    Fail-open per scope; capped; a scope-less claim is a deliberate miss.
+
+    Returns :class:`_Violation`s: the ``claim`` carries the matched verb category
+    (so the completer's poisoned-decision intersection can test it against a
+    pending brief), ``text`` the verbatim rejector line.
+    """
+    has_pos = _DECISION_STATE_POSITIVE_RE.search(relay_text)
+    has_neg = _DECISION_STATE_NEGATIVE_RE.search(relay_text)
+    if not has_pos and not has_neg:
+        return []  # fast path: no decision-state vocabulary anywhere
+
+    scopes: list[tuple[str, str]] = [("run", rid) for rid in run_ids]
+    try:
+        campaign_ids = sorted(
+            p.parent.name
+            for p in (Path(experiment_dir) / ".hpc" / "campaigns").glob("*/decisions.jsonl")
+        )
+        scopes += [("campaign", c) for c in campaign_ids if c and c in relay_text]
+    except OSError:
+        pass
+    if not scopes:
+        return []  # attributable to no journaled scope — conservative miss
+
+    from hpc_agent.state.decision_journal import is_latest_committed_greenlight, read_decisions
+
+    relay_lines = relay_text.splitlines()
+    findings: list[_Violation] = []
+    for scope_kind, scope_id in scopes:
+        if len(findings) >= _MAX_STATE_CLAIM_FINDINGS:
+            break
+        pos_here = False
+        neg_here = False
+        for line in relay_lines:
+            if scope_id not in line:
+                continue  # proximity: the verb must share the scope id's line
+            if _DECISION_STATE_POSITIVE_RE.search(line):
+                pos_here = True
+            if _DECISION_STATE_NEGATIVE_RE.search(line):
+                neg_here = True
+        if not pos_here and not neg_here:
+            continue
+        try:
+            records = read_decisions(experiment_dir, scope_kind, scope_id)
+            standing = is_latest_committed_greenlight(experiment_dir, scope_kind, scope_id)
+        except Exception:
+            continue  # a scope we cannot read is a silent pass
+        has_greenlight = any(r.get("response") == "y" for r in records)
+        # A genuine supersession is journaled on the RUN RECORD (ops/supersession
+        # stamps ``superseded_by`` — the durable evidence), NOT as a decision
+        # record, so a truthful "run X was superseded" must read as supported:
+        # the decision journal's standing greenlight is the launch approval, not
+        # a contradiction of the later closure.
+        superseded_evidence = False
+        if scope_kind == "run":
+            try:
+                from hpc_agent.state.journal import load_run
+
+                rec = load_run(experiment_dir, scope_id)
+                superseded_evidence = bool(rec is not None and rec.superseded_by)
+            except Exception:
+                superseded_evidence = False
+        if pos_here and not has_greenlight and len(findings) < _MAX_STATE_CLAIM_FINDINGS:
+            findings.append(
+                _Violation(
+                    scope_kind=scope_kind,
+                    scope_id=scope_id,
+                    claim="greenlit journaled",
+                    journal_value=None,
+                    text=(
+                        f"[{scope_id}] decision-state claim (greenlit/journaled) has no "
+                        "committed greenlight in the decision journal"
+                    ),
+                )
+            )
+        if (
+            neg_here
+            and not superseded_evidence
+            and (not records or standing)
+            and len(findings) < _MAX_STATE_CLAIM_FINDINGS
+        ):
+            detail = (
+                "the latest decision is a standing greenlight, not a revocation"
+                if standing
+                else "there is no decision record at all"
+            )
+            findings.append(
+                _Violation(
+                    scope_kind=scope_kind,
+                    scope_id=scope_id,
+                    claim="revoked superseded",
+                    journal_value=None,
+                    text=(
+                        f"[{scope_id}] decision-state claim (revoked/superseded) has no "
+                        f"supporting journal record — {detail}"
+                    ),
+                )
+            )
+    return findings
+
+
+def _gather_violations(
+    experiment_dir: Path, relay_text: str, run_ids: list[str], audit_ids: list[str]
+) -> list[_Violation]:
+    """Every violation-class finding (rule-10 + paraphrase + decision-state).
+
+    The order is preserved from the pre-completer rejector: run rule-10, then
+    notebook rule-10, then the paraphrase pass, then decision-state. Each helper
+    is fail-open; the whole gather is additionally wrapped by the caller.
+    """
+    violations: list[_Violation] = []
+
+    if run_ids:
+        from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
+        from hpc_agent.ops.decision.verify_relay import verify_relay
+
+        for run_id in run_ids[:_MAX_RUNS_AUDITED]:
+            try:
+                result = verify_relay(
+                    experiment_dir=experiment_dir,
+                    spec=VerifyRelayInput(run_id=run_id, relay_text=relay_text),
+                )
+            except Exception:
+                continue  # a run we cannot audit is a silent pass for that run
+            for m in result.mismatches:
+                if m.kind not in _CONTRADICTION_KINDS:
+                    continue
+                nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
+                violations.append(
+                    _Violation(
+                        scope_kind="run",
+                        scope_id=run_id,
+                        claim=m.claim,
+                        journal_value=m.nearest_source_value,
+                        text=f"[{run_id}] {m.claim!r}: {m.detail}{nearest}",
+                    )
+                )
+
+    if audit_ids:
+        from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
+
+        for audit_id in audit_ids[:_MAX_AUDITS_AUDITED]:
+            try:
+                nb_result = verify_notebook_relay(experiment_dir, audit_id, relay_text)
+            except Exception:
+                continue  # an audit we cannot check is a silent pass for that audit
+            for m in nb_result.mismatches:
+                if m.kind not in _CONTRADICTION_KINDS:
+                    continue
+                nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
+                violations.append(
+                    _Violation(
+                        scope_kind="notebook",
+                        scope_id=audit_id,
+                        claim=m.claim,
+                        journal_value=m.nearest_source_value,
+                        text=f"[{audit_id}] {m.claim!r}: {m.detail}{nearest}",
+                    )
+                )
+
+        # G1 — the paraphrase pass: relayed diff blocks in audit context must be
+        # verbatim render content. Audit-scope with no per-claim value → an empty
+        # ``claim`` (append-only by construction; never poisons a decision — the
+        # sign-off boundary has its own gates).
+        paraphrase = _paraphrase_findings(
+            experiment_dir, relay_text, audit_ids[:_MAX_AUDITS_AUDITED]
+        )
+        for text in paraphrase:
+            violations.append(
+                _Violation(
+                    scope_kind="notebook", scope_id="", claim="", journal_value=None, text=text
+                )
+            )
+
+    # Decision-state claims — an unjournaled decision EVENT contradicts the record.
+    with contextlib.suppress(Exception):
+        violations.extend(_decision_state_findings(experiment_dir, relay_text, run_ids))
+    return violations
+
+
+def _rejector_output(
+    violations: list[_Violation], absent_markers: list[_AbsentMarker]
+) -> dict[str, Any] | None:
+    """Today's REJECTOR shape — the capability-absent (dark) default (D1).
+
+    The pre-completer behavior minus the echo segment (RE-RULED 2026-07-10:
+    echo is journal-only provenance, never surfaced in EITHER mode):
+    violation-class findings + omission findings are itemized into ONE block
+    reason, or ``None`` when there is nothing to say. This is what the
+    completer degrades to wherever the ``stop-hook-append`` capability is
+    absent/unknown.
+    """
+    findings = [v.text for v in violations]
+    omissions = [am.omission_text for am in absent_markers]
+    if not findings and not omissions:
+        return None
+
+    segments: list[str] = []
+    if findings:
+        segments.append(
+            "hpc-agent relay audit (conduct rule 10): the final message contradicts "
+            f"the durable records — {len(findings)} mismatch(es): "
+            + "; ".join(findings)
+            + ". Correct the relay to match the journal (verify with "
+            "`hpc-agent verify-relay`) before ending the turn — never relay "
+            "numbers or state the journal does not support."
+        )
+    if omissions:
+        segments.append("hpc-agent relay-due discharge (the omission gate): " + " ".join(omissions))
+    return {"decision": "block", "reason": " ".join(segments)}
+
+
+def _render_by_view_sha(experiment_dir: Path, audit_id: str, view_sha12: str) -> str | None:
+    """The trusted render file selected BY *view_sha12* in its filename (D4).
+
+    ``.hpc/renders/<audit_id>/*.md`` — the ONE file whose name carries the sha
+    (never a glob-all — the sha embedded in the filename IS the addressing). A
+    filesystem error / no match / unreadable file yields ``None`` (the completer
+    degrades to the token-level floor). Capped scan.
+    """
+    rdir = Path(experiment_dir) / ".hpc" / "renders" / audit_id
+    try:
+        if not rdir.is_dir():
+            return None
+        for scanned, f in enumerate(sorted(rdir.glob("*.md"))):
+            if scanned >= _MAX_APPEND_RENDER_FILES_SCANNED:
+                break
+            if view_sha12 in f.name:
+                try:
+                    return f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    return None
+    except OSError:
+        return None
+    return None
+
+
+def _compose_owed_artifact(experiment_dir: Path, am: _AbsentMarker) -> str:
+    """The owed artifact for an omission, sourced from FILES only (D4).
+
+    A render view-marker → the trusted render's own content, selected by
+    ``view_sha12`` (the ONE composer, verbatim-by-construction — the G1
+    paraphrase class cannot exist for appended content). Over the append cap →
+    the token floor plus a file reference. Every other marker → the token floor:
+    the journal record's ``record_kind`` + ``key_tokens`` verbatim (a
+    ``notebook-status`` terminal has no render file). NEVER quotes model text.
+    """
+    from hpc_agent.state.notebook_audit import RENDER_RELAY_DUE_RECORD_KIND
+
+    marker = am.marker
+    tokens = [t for t in marker.get("key_tokens", []) if isinstance(t, str) and t]
+    kind = str(marker.get("record_kind") or "notebook-status")
+
+    if kind == RENDER_RELAY_DUE_RECORD_KIND and tokens:
+        view_sha12 = tokens[0]
+        body: str | None = None
+        try:
+            body = _render_by_view_sha(experiment_dir, am.scope_id, view_sha12)
+        except Exception:
+            body = None
+        if body is not None:
+            if len(body.encode("utf-8", errors="ignore")) <= _MAX_APPEND_ARTIFACT_BYTES:
+                return (
+                    f"hpc-agent relay-due — code-appended render (audit {am.scope_id}, "
+                    f"view_sha {view_sha12}; model-untouched):\n{body}"
+                )
+            # Over-cap → token floor + a reference to the render file (D4).
+            return (
+                f"hpc-agent relay-due — the render for view_sha {view_sha12} exceeds the "
+                f"append cap; see .hpc/renders/{am.scope_id}/*{view_sha12}*.md. "
+                f"notebook-audit-view = {view_sha12}."
+            )
+
+    state = tokens[0] if tokens else "?"
+    at = f" @ {tokens[1]}" if len(tokens) > 1 else ""
+    return (
+        "hpc-agent relay-due — code-appended terminal verdict (model-untouched): "
+        f"{kind} = {state}{at}."
+    )
+
+
+def _compose_correction(v: _Violation) -> str:
+    """A code-authored correction UNDER a contradicted claim (§2 violation class).
+
+    Quotes the claim (the model's error, visible but neutralized) and the
+    journal's actual value — the same ``nearest_source_value`` the rejector
+    reason carries — so the human reads the correct value in the same turn.
+    """
+    return (
+        "hpc-agent relay correction — code-appended, model-untouched (conduct rule 10; "
+        "the model's claim is quoted, the journal value is authoritative):\n  " + v.text
+    )
+
+
+def _is_poisoned_decision(experiment_dir: Path, v: _Violation) -> bool:
+    """The poisoned-decision test (§2): does *v* contradict a PENDING proposal?
+
+    Keyed on the brief store (``state/decision_briefs.py::read_briefs`` — persists
+    in BOTH driving modes), NEVER on the block-drive-only ``pending_decision``
+    marker and NEVER on ``is_latest_committed_greenlight``. Poisoned iff: the
+    scope's LATEST persisted brief has NO subsequent committed ``y`` in the
+    decision journal (still pending), AND the claim's tokens intersect that
+    brief's content. Fail-open (any error → not poisoned — bias to the append
+    path, since an append is always safe and a bounce is the cost this design
+    kills). A campaign scope has no run-brief store, so it never poisons here.
+    """
+    if not v.claim:
+        return False  # no value token to intersect (paraphrase / audit-scope)
+    try:
+        from hpc_agent.state.decision_briefs import read_briefs
+
+        briefs = read_briefs(experiment_dir, v.scope_id)
+    except Exception:
+        return False
+    if not briefs:
+        return False
+    latest = briefs[-1]
+    latest_ts = str(latest.get("ts") or "")
+    try:
+        from hpc_agent.state.decision_journal import read_decisions
+
+        decisions = read_decisions(experiment_dir, v.scope_kind, v.scope_id)
+    except Exception:
+        decisions = []
+    for d in decisions:
+        if d.get("response") == "y" and str(d.get("ts") or "") >= latest_ts:
+            return False  # the pending brief was greenlit → not poisoned
+    try:
+        brief_blob = json.dumps(latest.get("brief") or {}, sort_keys=True, default=str).lower()
+    except (TypeError, ValueError):
+        return False
+    claim_tokens = [t for t in re.split(r"\W+", v.claim.lower()) if len(t) >= 2]
+    return any(t in brief_blob for t in claim_tokens)
+
+
+def _poison_reason(poisoned: list[_Violation]) -> str:
+    """The bounce reason for poisoned-decision violations (the surviving bounce)."""
+    return (
+        "hpc-agent relay audit (poisoned decision — conduct rule 10): the final message "
+        f"contradicts the durable records AND feeds a PENDING decision — {len(poisoned)} "
+        "finding(s): " + "; ".join(v.text for v in poisoned) + ". A code-appended footnote "
+        "is not enough under a pending proposal — re-relay the corrected proposal (verify "
+        "with `hpc-agent verify-relay`) before ending the turn."
+    )
+
+
+def _completer_output(
+    experiment_dir: Path,
+    forced: bool,
+    append_on_block_ok: bool,
+    violations: list[_Violation],
+    absent_markers: list[_AbsentMarker],
+) -> dict[str, Any] | None:
+    """The COMPLETER shape (D1–D4): APPEND what code holds, bounce only on poison.
+
+    * Omissions → append the owed artifact (D4) and record a completer-discharge
+      (D3, ``discharged_by="completer"``); no bounce.
+    * Violations → append a code-authored correction UNDER the claim, EXCEPT a
+      poisoned-decision violation, which BOUNCES (the surviving block).
+    * Echoes are NOT handled here (RE-RULED 2026-07-10): journal-only
+      provenance, recorded upstream in ``build_hook_output`` in both modes.
+
+    Composition (D2): completions/corrections ride ONE ``systemMessage``; a
+    poisoned bounce ALSO carries ``{"decision":"block","reason":...}`` for those
+    findings ONLY (the appended findings are NOT re-stated). On a
+    ``stop_hook_active`` forced continuation, completions still run and NOTHING
+    bounces (loop-safe by construction). Discharge is gated on confirmed display
+    (D2): where a bounce exists and the harness has NOT confirmed it displays a
+    ``systemMessage`` on a BLOCKED stop, completions DEFER to the (never-blocked)
+    post-continuation stop rather than riding a possibly-swallowed message.
+    """
+    from hpc_agent.state.notebook_audit import DISCHARGED_BY_COMPLETER, record_relay_discharge
+
+    corrections: list[_Violation] = []
+    poisoned: list[_Violation] = []
+    for v in violations:
+        # The poisoned bounce is itself block-once: on a forced continuation it
+        # never fires (a swallowed correction still beats a re-bounce loop).
+        if (
+            (not forced)
+            and v.scope_kind in ("run", "campaign")
+            and _is_poisoned_decision(experiment_dir, v)
+        ):
+            poisoned.append(v)
+        else:
+            corrections.append(v)
+
+    # The judgment class (unanswered question / abandoned continuation) has NO
+    # members in THIS hook — the sibling Stop guards own those bounces — so the
+    # only surviving bounce here is the poisoned-decision one.
+    will_block = bool(poisoned)
+    defer = will_block and not append_on_block_ok
+
+    append_parts: list[str] = []
+    if not defer:
+        for am in absent_markers:
+            artifact = _compose_owed_artifact(experiment_dir, am)
+            try:
+                record_relay_discharge(
+                    experiment_dir,
+                    audit_id=am.scope_id,
+                    marker=am.marker,
+                    scope_kind=am.scope_kind,
+                    discharged_by=DISCHARGED_BY_COMPLETER,
+                )
+            except Exception:
+                continue  # cannot record the discharge → do not claim it; leave owed
+            append_parts.append(artifact)
+        append_parts.extend(_compose_correction(v) for v in corrections)
+
+    out: dict[str, Any] = {}
+    if append_parts:
+        out["systemMessage"] = "\n\n".join(append_parts)
+    if poisoned:
+        out["decision"] = "block"
+        out["reason"] = _poison_reason(poisoned)
+    return out or None
+
+
 def build_hook_output(payload: Any) -> dict[str, Any] | None:
-    """Pure core: map a Stop *payload* to a block decision, or ``None``.
+    """Map a Stop *payload* to the hook-output shape (rejector OR completer), or ``None``.
 
-    Returns ``None`` (→ caller prints nothing, the stop proceeds) when:
+    Capability-gated (D1): when the harness declares the ``stop-hook-append``
+    capability (``ops/harness_capabilities.py::detect_stop_hook_append`` is
+    ``True``) the COMPLETER runs — code appends owed artifacts / corrections via
+    ``systemMessage`` and the stop PROCEEDS, bouncing only on a poisoned decision.
+    Absent/unknown (the default, since no harness declares it yet) it degrades to
+    the REJECTOR EXACTLY (today's block-once). See
+    ``docs/design/stop-hook-completer.md``.
 
-    * *payload* is not a mapping, or ``stop_hook_active`` is truthy (this
-      stop is already a hook-forced continuation; blocking again would loop —
-      the relay-due discharge pass still records discharges first, so a
-      corrected relay closes its marker, but a forced stop is NEVER blocked);
-    * the cwd repo has no journal namespace (not an hpc repo — no-scaffold);
-    * the transcript yields no final assistant text, or that text names no
-      journaled run id AND no undischarged relay-due marker exists (nothing
-      attributable to audit, nothing owed);
-    * every audited claim is clean (or merely unverifiable) and every
-      relay-due marker is discharged.
-
-    Otherwise returns the Claude Code Stop hook-output shape with the
-    itemized contradiction summary::
-
-        {"decision": "block", "reason": "<mismatch summary + fix instruction>"}
+    Returns ``None`` (the stop proceeds, nothing printed) when the payload is not
+    a mapping, the cwd repo has no journal namespace (no-scaffold), the transcript
+    yields no final assistant text, or there is nothing owed / contradicted.
     """
     if not isinstance(payload, dict):
         return None
@@ -430,86 +1176,65 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     if not relay_text:
         return None
 
+    # D1 capability gate — read via the ONE detection home. Fail-open: any error
+    # reading the capability degrades to the rejector (never the completer).
+    try:
+        from hpc_agent.ops.harness_capabilities import (
+            detect_stop_hook_append,
+            detect_stop_hook_append_on_block,
+        )
+
+        completer_active = detect_stop_hook_append() is True
+        append_on_block_ok = detect_stop_hook_append_on_block() is True
+    except Exception:
+        completer_active = False
+        append_on_block_ok = False
+
     # The relay-due discharge pass (the omission gate) runs on EVERY stop with
-    # final text — including a stop_hook_active forced continuation, so the
-    # corrected relay discharges its own marker at the stop that carries it —
-    # and is fail-open in full: any exception degrades to no omission findings.
-    omissions: list[str] = []
+    # final text — including a forced continuation — discharging FOUND tokens as
+    # ``relay`` and returning the still-undischarged (absent) markers. Fail-open
+    # in full: any exception degrades to no omission findings.
+    absent_markers: list[_AbsentMarker] = []
     if notebooks_dir.is_dir():
         try:
-            omissions = _relay_due_discharge_pass(cwd_dir, notebooks_dir, relay_text)
+            absent_markers = _relay_due_discharge_pass(cwd_dir, notebooks_dir, relay_text)
         except Exception:
-            omissions = []
+            absent_markers = []
 
-    if forced:
-        # Block-once (the sibling Stop guards' seam, reused exactly): this stop
-        # is already a hook-forced continuation — never block again, even when
-        # a marker's tokens are still absent. Discharges above still landed.
+    if not completer_active and forced:
+        # REJECTOR block-once (verbatim today): a hook-forced continuation is
+        # never re-blocked; the FOUND-token discharges above still landed.
         return None
 
     run_ids = mentioned_run_ids(relay_text, runs_dir) if runs_dir.is_dir() else []
     audit_ids = mentioned_audit_ids(relay_text, notebooks_dir) if notebooks_dir.is_dir() else []
-    if not run_ids and not audit_ids and not omissions:
+
+    # Sign-off echo detection (queue item 2, RE-RULED 2026-07-10): JOURNAL-ONLY
+    # provenance — never surfaced, never blocks (drafting help is sanctioned
+    # amplification; the y-ack-ease hazard lives at the sign-off gates). The
+    # detection scans the audit journals directly and each finding becomes one
+    # deduped notebook-echo-provenance record. Fail-open in full.
+    if notebooks_dir.is_dir():
+        with contextlib.suppress(Exception):
+            _journal_echo_provenance(
+                cwd_dir,
+                _sign_off_echo_findings(
+                    cwd_dir, notebooks_dir, _prior_assistant_texts(Path(transcript))
+                ),
+            )
+
+    # Violation-class findings (rule-10 + paraphrase + decision-state). Fail-open.
+    try:
+        violations = _gather_violations(cwd_dir, relay_text, run_ids, audit_ids)
+    except Exception:
+        violations = []
+
+    if not run_ids and not audit_ids and not absent_markers and not violations:
         return None  # nothing attributable to audit — the run path stays untouched
 
-    findings: list[str] = []
-
-    if run_ids:
-        from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
-        from hpc_agent.ops.decision.verify_relay import verify_relay
-
-        for run_id in run_ids[:_MAX_RUNS_AUDITED]:
-            try:
-                result = verify_relay(
-                    experiment_dir=cwd_dir,
-                    spec=VerifyRelayInput(run_id=run_id, relay_text=relay_text),
-                )
-            except Exception:
-                continue  # a run we cannot audit is a silent pass for that run
-            for m in result.mismatches:
-                if m.kind not in _CONTRADICTION_KINDS:
-                    continue
-                nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
-                findings.append(f"[{run_id}] {m.claim!r}: {m.detail}{nearest}")
-
-    if audit_ids:
-        from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
-
-        for audit_id in audit_ids[:_MAX_AUDITS_AUDITED]:
-            try:
-                nb_result = verify_notebook_relay(cwd_dir, audit_id, relay_text)
-            except Exception:
-                continue  # an audit we cannot check is a silent pass for that audit
-            for m in nb_result.mismatches:
-                if m.kind not in _CONTRADICTION_KINDS:
-                    continue
-                nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
-                findings.append(f"[{audit_id}] {m.claim!r}: {m.detail}{nearest}")
-
-        # G1 — the paraphrase pass: relayed diff blocks in audit context must
-        # be verbatim render content (verify-relay = wrong tokens; relay-due =
-        # silence; this = re-typed content). Helper is fail-open and capped.
-        findings.extend(_paraphrase_findings(cwd_dir, relay_text, audit_ids[:_MAX_AUDITS_AUDITED]))
-
-    if not findings and not omissions:
-        return None
-
-    segments: list[str] = []
-    if findings:
-        segments.append(
-            "hpc-agent relay audit (conduct rule 10): the final message contradicts "
-            f"the durable records — {len(findings)} mismatch(es): "
-            + "; ".join(findings)
-            + ". Correct the relay to match the journal (verify with "
-            "`hpc-agent verify-relay`) before ending the turn — never relay "
-            "numbers or state the journal does not support."
-        )
-    if omissions:
-        # The omission side of the same boundary: a computed terminal verdict
-        # the human never saw. Each finding is verbatim-ready — relaying the
-        # named state/sha12 tokens is exactly what discharges the marker.
-        segments.append("hpc-agent relay-due discharge (the omission gate): " + " ".join(omissions))
-    return {"decision": "block", "reason": " ".join(segments)}
+    if not completer_active:
+        return _rejector_output(violations, absent_markers)
+    return _completer_output(cwd_dir, forced, append_on_block_ok, violations, absent_markers)
 
 
 def main(argv: list[str] | None = None) -> int:

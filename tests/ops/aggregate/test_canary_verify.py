@@ -237,6 +237,27 @@ def test_reporter_unreachable_when_every_poll_fails(
     assert "reporter never returned" in result["details"]
 
 
+def test_open_circuit_rides_budget_to_reporter_unreachable(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ``SshCircuitOpen`` (an HpcError, NOT an OSError) tripped by a transient
+    breaker must be classified transient and ride the wait budget to
+    ``reporter_unreachable`` — never crash the canary gate with an undeclared
+    exception (bug-sweep #50)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    ticks = iter([0.0, 1.0, 1e9, 1e9, 1e9])
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(ticks))
+    with mock.patch(
+        "hpc_agent.infra.cluster_status.ssh_status_report",
+        side_effect=errors.SshCircuitOpen("breaker open for user@h until deadline"),
+    ):
+        result = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=30)
+    assert result["ok"] is False
+    assert result["failure_kind"] == "reporter_unreachable"
+
+
 def test_vanished_canary_resolves_completed_unknown_fast(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -273,6 +294,90 @@ def test_vanished_canary_resolves_completed_unknown_fast(
     assert out["ok"] is False
     assert out["failure_kind"] == "completed_unknown"
     assert "left the scheduler queue" in out["details"]
+
+
+def test_vanished_canary_bucketed_unknown_resolves_completed_unknown_fast(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-L (run #10): tonight's qacct evidence — canary job 13956468 was dead on
+    the scheduler in ~19s (single attempt, exit_status 1), yet verify_canary
+    burned the full 1800s budget and returned ``timeout``. The mechanism: the
+    status reporter buckets a 1-task job that left the queue with NO result file
+    as ``unknown == 1`` (a task that is neither complete, in a scheduler-FAILED
+    accounting state, nor live in qstat lands in ``unknown``) — NOT the all-zero
+    ``unknown == 0`` the fast-arm's guard required. So the completed_unknown arm
+    never fired. This reproduces the REAL reporter summary (unknown=1); the
+    verdict must arrive fast as ``completed_unknown``, NEVER ``timeout``."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    # Clock advances 100s per read (spans the 30s registration grace by the 2nd
+    # poll, far under the 1800s deadline) so reaching a verdict proves the fast
+    # break, not a timeout.
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            # The REAL reporter output for a gone 1-task canary: the vanished
+            # task sits in the ``unknown`` bucket, not an all-zero summary.
+            return_value={
+                "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 1}
+            },
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            # No stderr marker / no completion artifact — the bland "left the
+            # queue too fast to observe" case.
+            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "completed_unknown", out
+    assert "left the scheduler queue" in out["details"]
+
+
+def test_transient_unknown_then_progress_does_not_false_trigger(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The startup-window counterpart to the F-L fix: a fresh canary not yet
+    registered in qstat ALSO reads ``unknown == 1`` (same bucket as a gone job).
+    A single such poll must NOT be read as vanished — the counter resets the
+    moment a task shows running/pending, and the canary completes normally. The
+    registration grace, not the bucket value, distinguishes startup from gone."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+    summaries = iter(
+        [
+            # poll 1: pre-registration — the task is bucketed unknown
+            {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 1},
+            # poll 2: now running — resets the vanished counter
+            {"complete": 0, "running": 1, "pending": 0, "failed": 0, "unknown": 0},
+            # poll 3: complete → normal terminal
+            {"complete": 1, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+        ]
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=lambda **_: {"summary": next(summaries)},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
 
 
 def test_transient_all_zero_then_progress_does_not_false_trigger(

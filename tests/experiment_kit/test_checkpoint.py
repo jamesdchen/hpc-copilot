@@ -159,6 +159,28 @@ def test_run_iterations_resumes_and_skips_done_work(tmp_path: Path) -> None:
     assert calls == [5, 6, 7, 8, 9]  # 0..4 skipped
 
 
+def test_run_iterations_resumes_from_pickled_none_state(tmp_path: Path) -> None:
+    # A checkpoint may legitimately pickle ``None`` as its state. That must resume
+    # at the RECORDED iteration (5, from a checkpoint at 4), not silently restart
+    # from 0 as a fresh run — the bug when ``state is None`` alone gated re-init.
+    ck.write_checkpoint(None, iteration=4, result_dir=tmp_path)
+    calls: list[int] = []
+    init_calls: list[int] = []
+
+    def init() -> None:
+        init_calls.append(1)
+
+    def step(state: object, i: int) -> None:
+        calls.append(i)
+        assert state is None  # the pickled-None state survived, was not re-init'd
+        return None
+
+    final = ck.run_iterations(step, init=init, n=10, result_dir=tmp_path, checkpoint_every=1)
+    assert calls == [5, 6, 7, 8, 9]  # resumed at 5, NOT restarted from 0
+    assert init_calls == []  # a resume, not a fresh run — init never called
+    assert final is None
+
+
 def test_run_iterations_init_callable_lazy_on_resume(tmp_path: Path) -> None:
     ck.write_checkpoint(3, iteration=0, result_dir=tmp_path)  # resume → state 3, iter 1
     called: list[int] = []

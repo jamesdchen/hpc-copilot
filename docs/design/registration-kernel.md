@@ -1,9 +1,10 @@
 ---
-status: plan
+status: shipped
 ---
 # The registration kernel — the deployment-boundary attestation
 
-**Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off
+**Status: IMPLEMENTED (2026-07-08/09; Waves A–C + the toy first consumer
+landed on main, drift log at foot).** The durable hand-off
 for the registration substrate: settled decisions with recorded rationale,
 the prerequisite-chain mechanism, the exact sign-off bar, and the
 file-disjoint task waves for parallel Opus dispatch. Cite `path::symbol`,
@@ -738,6 +739,39 @@ re-register → verify `current` again → revoke with reason → verify
      the registration journals, winner-selected through `reduce_registration`
      (never a re-inlined newest-first); a revoked/absent registration no longer
      depends on the audit and is not counted.
+
+- **LANDED on main 2026-07-08/09 — the capstone (Waves A–C + the T10 toy
+  first consumer; registry 147).** The plan shipped as designed against R1–R9;
+  T1–T3, T5, T9, and T10 landed with no departure, and the T4/T6/T7/T8 entries
+  above already record their per-wave deviations (the `max_looks` `scope-budget`
+  key and the `attestation` kind's `subject_id="<scope_kind>:<scope_id>"`
+  address are both pinned in `ops/registration/prereqs.py` per T4; the T7
+  `view_sha` fourth leg recomputes the pre-append projection with
+  `registered_at=None` and reaches the registration subject through the
+  `ops/registration_view.py` facade per T7). Two additional deviations folded at
+  landing:
+  1. *Wire schema-suffix collision — `FieldsReport` → `FieldsBlock`.* T2's
+     verify-registration `fields` sub-model was renamed to escape the `*Report`
+     schema-file-name collision that left an orphan `fields.output.json`
+     unminted; the rename threads through
+     `_wire/actions/verify_registration.py::FieldsBlock`,
+     `ops/registration/verify_op.py`, `ops/decision/journal.py`, and
+     `schemas/verify_registration.output.json` (one of the six landing-batch
+     suite fixes, 65cd7e95).
+  2. *Docstring-only subject `__init__`.* `ops/registration/__init__.py` carries
+     a module docstring and nothing else — an exporting init trips
+     `scripts/lint_subject_init.py`, so the subject's surface is reached through
+     its modules, not a re-exporting package init (55bc5fa7; the T5-side
+     conflict resolution kept).
+  The T4 stub (reproduction + `requires` = a loud not-yet-available refusal until
+  the fingerprint substrate landed, T4 entry #4) was RETIRED by registration-T9
+  (3e87cdb9), which wires the real R4 address chain — newest receipt →
+  `repro.cmd_sha` → `state/fingerprint_store.py::load_evidence` (admitted,
+  current-identity) → one `state/determinism.py::evidence_meets` call. Enforcement
+  rows landed under `docs/internals/engineering-principles.md` §"The registration
+  kernel: the deployment-boundary attestation is mechanism-only", held by
+  `tests/contracts/test_registration_boundary.py` +
+  `tests/ops/decision/test_registration_authorship.py`.
 
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the

@@ -46,22 +46,25 @@ the same run_id is safe and cheap.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_TRANSPORT_FILENAME
 from hpc_agent.execution.mapreduce.reduce.metrics import (
     collect_wave_errors,
     reduce_metrics,
     reduce_partials,
 )
 from hpc_agent.infra.backends import backend_requires_ssh
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.io import atomic_write_json
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.time import utcnow_iso
@@ -71,11 +74,29 @@ from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.monitor.terminal import _is_terminal
 from hpc_agent.ops.scope_gate import assert_scopes_unlocked
+from hpc_agent.state.block_terminal import terminal_block_key
+from hpc_agent.state.data_trace import ingest_trace, trace_store_path
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
-from hpc_agent.state.runs import read_run_sidecar
+from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
-__all__ = ["aggregate_flow", "AggregateFlowResult"]
+__all__ = ["aggregate_flow", "AggregateFlowResult", "per_task_fallback_reducible"]
+
+
+def per_task_fallback_reducible(summary_name: str) -> bool:
+    """Whether the no-combiner per-task weighted-mean fallback CAN reduce a run
+    whose declared summary artifact is *summary_name*.
+
+    The fallback (:func:`_per_task_metrics_reduce` → :func:`reduce_metrics`) is a
+    JSON weighted-mean: it ``json.load``s each per-task sidecar. A non-JSON
+    artifact (run #12's pack-reduced ``causal_tune_linear/metrics_table.csv``) has
+    NO path through it. This is the ONE definition of that limit — the run-path
+    refusal (BEFORE the 40+ min pull, in ``_per_task_metrics_reduce``) and the
+    aggregate-CHECK readiness surface (BEFORE the greenlight, in
+    ``ops.aggregate_blocks``) both key on it, so the two can never disagree
+    (run #12 finding 28).
+    """
+    return summary_name.lower().endswith(".json")
 
 
 @dataclass(frozen=True)
@@ -99,6 +120,13 @@ class AggregateFlowResult:
     #: for a scope-less run (existing consumers untouched). Two plain integers
     #: per tag; no metric is ever consulted (rigor-primitives T3).
     scope_looks: dict[str, dict[str, int]] | None = None
+    #: Detach-by-contract handle (design §3; run-#10 F-K). Set only on the handle
+    #: a DIRECT ``detach=true`` aggregate-flow invocation returns — the harvest
+    #: runs in a durable detached worker and the data fields above are empty. Every
+    #: synchronous / composed path leaves these at their defaults.
+    started: bool = False
+    watch: str | None = None
+    detached_pid: int | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         return {
@@ -115,6 +143,9 @@ class AggregateFlowResult:
             "columns_checked": self.columns_checked,
             "column_violations": list(self.column_violations or []),
             "scope_looks": self.scope_looks,
+            "started": self.started,
+            "watch": self.watch,
+            "detached_pid": self.detached_pid,
         }
 
 
@@ -201,6 +232,7 @@ def _nonempty_failing_task_ids(
     job_ids: list[str],
     job_name: str,
     min_rows: int,
+    remote_activation: str = "",
 ) -> list[int]:
     """Return task ids whose CSV result has fewer than *min_rows* data rows.
 
@@ -210,6 +242,11 @@ def _nonempty_failing_task_ids(
     A task that is ``complete`` at min_rows=0 but NOT at min_rows=N wrote a
     result file with too few real data rows: that is the precise
     "wrote something, but no real data" signal Check 1 gates on.
+
+    *remote_activation* seeds the run's conda/module env exactly as every other
+    reporter consumer does — without it the login-node reporter falls to bare
+    ``python`` (rc=127 on conda clusters, the run-#7/#8 class); this Check-1
+    reporter was an unseeded consumer (G6).
 
     Pure read-only: two SSH round-trips, no cluster-side or local writes.
     """
@@ -223,6 +260,7 @@ def _nonempty_failing_task_ids(
             job_ids=job_ids,
             job_name=job_name,
             min_rows=rows,
+            remote_activation=remote_activation,
         )
         out: set[int] = set()
         for tid_str, entry in (report.get("tasks") or {}).items():
@@ -273,14 +311,55 @@ def _combine_missing(
     return combined_now, failures
 
 
+def _run_scoped_results_subdir(
+    experiment_dir: Path, run_id: str, record: Any, results_subdir: str
+) -> str:
+    """The run's OWN results subtree — the static prefix of its result_dir_template.
+
+    Finding 19 (run #12): pulling the whole ``results/`` root drags every
+    prior run's outputs through the transfer — the scp fallback cannot
+    include-filter — turning a small metrics pull into an 1800s timeout. The
+    template's static prefix (``results/causal_tune_linear/{estimator}/…`` →
+    ``results/causal_tune_linear``) scopes the pull to this run. Falls back
+    to *results_subdir* when the template is absent, carries no directory,
+    or would escape the configured root. Canary siblings render under the
+    same prefix, so the downstream canary exclusion is unchanged.
+    """
+    template = getattr(record, "result_dir_template", None)
+    if not (isinstance(template, str) and template):
+        try:
+            from hpc_agent.state.runs import read_run_sidecar
+
+            template = read_run_sidecar(experiment_dir, run_id).get("result_dir_template")
+        except Exception:  # noqa: BLE001 — scoping is an optimization, never a gate
+            template = None
+    if not (isinstance(template, str) and template):
+        return results_subdir
+    head = template.split("{", 1)[0]
+    scoped = head.rsplit("/", 1)[0] if "{" in template else head.rstrip("/")
+    root = results_subdir.rstrip("/")
+    if scoped and (scoped == root or scoped.startswith(root + "/")):
+        return scoped
+    return results_subdir
+
+
 def _per_task_metrics_reduce(
+    experiment_dir: Path,
     run_id: str,
     *,
     record: Any,
     out: Path,
     results_subdir: str,
+    summary_name: str,
 ) -> dict[str, Any]:
-    """Weighted-mean the per-task ``metrics.json`` over SSH — the no-combiner default.
+    """Weighted-mean the per-task summary file over SSH — the no-combiner default.
+
+    ``summary_name`` is the run's declared per-task summary filename (F-J),
+    resolved by the caller at the seam via ``resolved_summary_artifact`` — the
+    pull filter, the local rglob, and :func:`reduce_metrics` all key on it, so a
+    run whose executor emits e.g. ``results_reduce.json`` is reduced instead of
+    read as a harvest gap (run #10). An undeclared run resolves to
+    ``metrics.json`` upstream, keeping this path byte-identical.
 
     The SSH analogue of the LOCAL / pure-API ``reduce_metrics`` fallback
     (#342). When a run was submitted with NO reducer (``aggregate_cmd``) and
@@ -304,13 +383,30 @@ def _per_task_metrics_reduce(
     case there is no numeric input, and fabricating a mean is exactly the
     failure mode being closed.
     """
+    # Refuse BEFORE the (potentially 40+ minute) pull when this fallback can
+    # never succeed: reduce_metrics parses JSON sidecars only, so a run whose
+    # declared summary artifact isn't JSON (run #12: the pack-reduced
+    # `causal_tune_linear/metrics_table.csv`) has no path through here — the
+    # old behavior paid the full results/ mirror twice and then blamed the
+    # tasks ("likely never wrote") for a reducer-side format limit.
+    if not per_task_fallback_reducible(summary_name):
+        raise errors.RemoteCommandFailed(
+            f"no cluster-side _combiner/ for run_id {run_id!r} and the run "
+            f"declares a non-JSON summary artifact ({summary_name!r}) — the "
+            f"no-combiner per-task fallback is a JSON weighted-mean "
+            f"(reduce_metrics) and can NEVER reduce it, so refusing before "
+            f"pulling {results_subdir}/. Reduce this run with its own reducer "
+            f"(an aggregate_cmd / pack reducer that understands the artifact), "
+            f"or re-submit declaring a JSON summary artifact."
+        )
     results_local = out / "_per_task_results"
+    scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
-        remote_subdir=results_subdir,
+        remote_subdir=scoped_subdir,
         local_dir=str(results_local),
-        include=["metrics.json"],
+        include=[summary_name],
     )
     if pull.returncode != 0:
         stderr_tail = (pull.stderr or "").strip()
@@ -319,16 +415,30 @@ def _per_task_metrics_reduce(
             f"{results_subdir}/ fallback pull failed (exit {pull.returncode}). "
             f"There is no deterministic numeric input to reduce — refusing to "
             f"fabricate an aggregate. Check that the run actually wrote per-task "
-            f"metrics.json sidecars under {record.remote_path}/{results_subdir}/. "
+            f"{summary_name} sidecars under {record.remote_path}/{results_subdir}/. "
             f"rsync_pull stderr: {stderr_tail[:300]}"
         )
 
-    # Every directory under the pulled tree that carries a metrics.json is a
-    # per-task result dir. reduce_metrics scans each for that sidecar and
-    # weighted-means across tasks — identical reduce semantics to the
+    # Every directory under the pulled tree that carries the declared summary
+    # file is a per-task result dir. reduce_metrics scans each for that sidecar
+    # and weighted-means across tasks — identical reduce semantics to the
     # combiner, run on the locally-pulled per-task sidecars.
+    #
+    # A summary artifact may be PATH-shaped (`sub/metrics.json`): the task dir
+    # is the match minus ALL of the artifact's components, not `p.parent` —
+    # `p.parent` keeps the artifact's own subdir, and reduce_metrics rejoining
+    # `dir / summary_name` then doubles it (`.../sub/sub/metrics.json`) so
+    # every sidecar reads as missing (run #12's "found no readable sidecars"
+    # against 2700 mirrored files).
+    summary_depth = len(PurePosixPath(summary_name).parts)
+
+    def _task_dir(match: Path) -> Path:
+        for _ in range(summary_depth):
+            match = match.parent
+        return match
+
     result_dirs = sorted(
-        {str(p.parent) for p in results_local.rglob("metrics.json") if p.is_file()}
+        {str(_task_dir(p)) for p in results_local.rglob(summary_name) if p.is_file()}
     )
     # Canary anti-contamination (run #6 harvest): the ``<run_id>-canary``
     # sibling writes its metrics.json under the SAME results/ subtree (its
@@ -352,7 +462,7 @@ def _per_task_metrics_reduce(
     if total > 0 and len(result_dirs) > total:
         raise errors.RemoteCommandFailed(
             f"per-task reduce for run_id {run_id!r} found {len(result_dirs)} "
-            f"result dirs with metrics.json but the run has only {total} tasks "
+            f"result dirs with {summary_name} but the run has only {total} tasks "
             f"— the {results_subdir}/ subtree carries FOREIGN rows (another "
             "run's results sharing the tree), and averaging them would corrupt "
             f"the aggregate. Contributing dirs: {result_dirs}. Remove or "
@@ -360,17 +470,187 @@ def _per_task_metrics_reduce(
             "result_dir_template like 'results/{run_id}/task_{task_id}'), then "
             "re-aggregate."
         )
-    aggregated = reduce_metrics(result_dirs)
+    aggregated = reduce_metrics(result_dirs, filename=summary_name)
     if not aggregated:
+        # Say what was actually observed: "no files matched" and "files
+        # matched but none parsed" are different failures with different
+        # remediations — the old single message blamed the tasks either way.
+        if result_dirs:
+            detail = (
+                f"the pull mirrored {len(result_dirs)} {summary_name} sidecars "
+                f"but NONE parsed as JSON (corrupt or non-JSON content) — "
+                f"inspect one, e.g. under {results_local}."
+            )
+        else:
+            detail = (
+                f"the tasks likely never wrote {summary_name}; inspect "
+                f"per-task stderr under {record.remote_path}/{run_id}/logs/."
+            )
         raise errors.RemoteCommandFailed(
             f"no cluster-side _combiner/ for run_id {run_id!r} and the per-task "
-            f"{results_subdir}/ fallback found no readable metrics.json sidecars "
+            f"{results_subdir}/ fallback found no readable {summary_name} sidecars "
             f"under {record.remote_path}/{results_subdir}/. There is no numeric "
-            f"input to reduce — refusing to fabricate an aggregate. The tasks "
-            f"likely never wrote metrics.json; inspect per-task stderr under "
-            f"{record.remote_path}/{run_id}/logs/."
+            f"input to reduce — refusing to fabricate an aggregate. {detail}"
         )
+
+    # T4 ingestion-at-harvest (docs/design/data-trace.md §"Storage: emission
+    # is transport"): pull + ingest each task's ``_trace.jsonl`` beside the
+    # metrics harvest. Fires AFTER the metrics pull and NEVER blocks it — a
+    # trace pull/parse failure is disclosed, never a harvest failure.
+    _ingest_task_traces(
+        experiment_dir,
+        run_id,
+        record=record,
+        out=out,
+        results_subdir=results_subdir,
+    )
     return {run_id: aggregated}
+
+
+_TASK_DIR_RE = re.compile(r"\d+(?!.*\d)")  # the LAST run of digits in a name
+
+
+def _task_id_from_dir(result_dir: Path) -> int | None:
+    """Extract the integer task id from a per-task result dir (``task-<n>``).
+
+    The ``result_dir_template`` renders ``task-{task_id}`` / ``task_{task_id}``;
+    the trailing integer is the key the trace store files a task by
+    (``task-<n>.jsonl``). Returns ``None`` when the dir name carries no integer
+    — an unkeyable trace is a DISCLOSED skip, never a fabricated key.
+    """
+    m = _TASK_DIR_RE.search(result_dir.name)
+    return int(m.group(0)) if m else None
+
+
+def _ingest_task_traces(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: Any,
+    out: Path,
+    results_subdir: str,
+) -> dict[str, int]:
+    """Pull each task's ``_trace.jsonl`` and ingest it — data-trace **T4**.
+
+    Ingestion-at-harvest: the trace transport files the tasks emitted beside
+    their outputs are pulled (one extra rsync on the already-flowing per-task
+    seam) and moved into the one canonical store via :func:`ingest_trace`,
+    scope ``("run", run_id)``. Absence is the NORMAL shape for a non-emitting
+    run — silent, harvest identical.
+
+    NEVER blocks the harvest — the trace is EVIDENCE, not a gate. Every failure
+    mode is DISCLOSED (skip-counted + logged), never raised:
+
+    * the trace pull failing (cluster hiccup / no ``_trace.jsonl`` anywhere —
+      rsync 404s the include) — the metrics harvest already succeeded, log+return;
+    * an absent trace for a task — silent (the task simply emitted none);
+    * a torn / schema-invalid trace — :func:`ingest_trace` refuses it (T1 is
+      strict; an invalid record never enters the trust chain), counted as a
+      disclosed skip.
+
+    DOUBLE-INGEST GUARD (re-harvest safety): the cluster ``_trace.jsonl``
+    persists and is re-pulled every harvest, so a naive re-ingest would append
+    a second copy to the store. Before ingesting a task we check the store — if
+    ``task-<n>.jsonl`` already exists the task was ingested on a prior harvest
+    and is skipped. (Local runs never reach this seam; they ingest at emission
+    per T2's fallback rule, so there is no double-ingest there either.)
+
+    Canary-family siblings are excluded exactly as the metrics reduce excludes
+    them — their ``_trace.jsonl`` shares the same ``results/`` subtree. Returns
+    a counts dict (the disclosure surface for tests/callers; no run gate).
+    """
+    log = logging.getLogger(__name__)
+    counts = {"pulled": 0, "ingested": 0, "skipped_existing": 0, "skipped_invalid": 0}
+
+    traces_local = out / "_per_task_traces"
+    scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
+    try:
+        pull = rsync_pull(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            remote_subdir=scoped_subdir,
+            local_dir=str(traces_local),
+            include=[TRACE_TRANSPORT_FILENAME],
+        )
+    except OSError as exc:  # a transport-layer explosion is still just evidence
+        log.warning(
+            "data-trace T4: trace pull for run_id %r raised %s — harvest "
+            "unaffected, traces skipped",
+            run_id,
+            exc,
+        )
+        return counts
+    if pull.returncode != 0:
+        # Absence is NORMAL for a non-emitting run (the subtree carries no
+        # _trace.jsonl, rsync's include matches nothing) — DISCLOSE, never fail.
+        log.info(
+            "data-trace T4: no per-task _trace.jsonl pulled for run_id %r "
+            "(rsync exit %d) — traces skipped, harvest unaffected",
+            run_id,
+            pull.returncode,
+        )
+        return counts
+
+    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+
+    canary_ids = set(_sibling_run_ids(run_id))
+    trace_files = sorted(
+        p
+        for p in traces_local.rglob(TRACE_TRANSPORT_FILENAME)
+        if p.is_file() and canary_ids.isdisjoint(p.parts)
+    )
+    for trace_path in trace_files:
+        counts["pulled"] += 1
+        task = _task_id_from_dir(trace_path.parent)
+        if task is None:
+            log.warning(
+                "data-trace T4: cannot key task for trace %s (no task-<n> "
+                "component in %r) — disclosed skip",
+                trace_path,
+                trace_path.parent.name,
+            )
+            counts["skipped_invalid"] += 1
+            continue
+        # Double-ingest guard: a prior harvest already moved this task's trace
+        # into the store; re-pulling the persistent cluster copy must not append
+        # a second time.
+        if trace_store_path(experiment_dir, "run", run_id, task).exists():
+            counts["skipped_existing"] += 1
+            continue
+        try:
+            ingest_trace(experiment_dir, "run", run_id, task, trace_path)
+        except errors.SpecInvalid as exc:
+            log.warning(
+                "data-trace T4: task %d trace for run_id %r is invalid (%s) — "
+                "disclosed skip, harvest unaffected",
+                task,
+                run_id,
+                exc,
+            )
+            counts["skipped_invalid"] += 1
+        except OSError as exc:
+            log.warning(
+                "data-trace T4: task %d trace for run_id %r failed to ingest "
+                "(%s) — disclosed skip, harvest unaffected",
+                task,
+                run_id,
+                exc,
+            )
+            counts["skipped_invalid"] += 1
+        else:
+            counts["ingested"] += 1
+
+    if counts["pulled"]:
+        log.info(
+            "data-trace T4: run_id %r traces — %d ingested, %d already-present, "
+            "%d skipped-invalid (of %d pulled)",
+            run_id,
+            counts["ingested"],
+            counts["skipped_existing"],
+            counts["skipped_invalid"],
+            counts["pulled"],
+        )
+    return counts
 
 
 def _combiner_only_reduce(
@@ -379,6 +659,7 @@ def _combiner_only_reduce(
     *,
     record: Any,
     combiner_local: Path,
+    summary_name: str,
     results_subdir: str = "results",
     out: Path | None = None,
 ) -> tuple[dict[str, Any], list[int], str]:
@@ -411,7 +692,7 @@ def _combiner_only_reduce(
     """
     include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir="_combiner",
         local_dir=str(combiner_local),
@@ -451,10 +732,12 @@ def _combiner_only_reduce(
                 # metrics.json the LOCAL / pure-API path uses, so reduction is
                 # ALWAYS code, never the model improvising a mean by hand.
                 aggregated = _per_task_metrics_reduce(
+                    experiment_dir,
                     run_id,
                     record=record,
                     out=(out if out is not None else combiner_local.parent),
                     results_subdir=results_subdir,
+                    summary_name=summary_name,
                 )
                 # No wave partials → no per-wave incomplete-task signal to
                 # surface; the per-task fallback either reduced over readable
@@ -615,7 +898,7 @@ def _cluster_final_reduce(
     )
 
     proc = run_final_reduce(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         run_id=run_id,
         force=True,  # idempotent: aggregate_flow may be re-run; always refresh
@@ -637,7 +920,7 @@ def _cluster_final_reduce(
     # cluster-side ``_aggregated/<run_id>`` source dir; only the LOCAL sink flattens.
     agg_local = out
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=f"_aggregated/{run_id}",
         local_dir=str(agg_local),
@@ -796,6 +1079,107 @@ def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
     return {}
 
 
+# ── aggregate-flow detach-by-contract helpers (design §3; run-#10 F-K) ────────
+#
+# aggregate-flow is a COMPOSED atom (default detach OFF) — the detach seat only
+# fires for a DIRECT top-level invocation that opts in. The block-terminal store,
+# the detached lease, and the doctor dead-worker scan all key it under its VERB
+# ("aggregate-flow") — the SAME string ``_spawn_detached`` stamps into the lease.
+_AGG_FLOW_BLOCK_KEY = terminal_block_key("aggregate-flow")
+
+
+def _agg_flow_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The identity a terminal replay is keyed on (mirrors the submit-block /
+    status-watch recorders): a moved/absent ``cmd_sha`` → the replay refuses
+    (re-execute), never a false hit.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def _detached_agg_flow_spec_dict(spec: AggregateFlowSpec) -> dict[str, Any]:
+    """Serialize *spec* with ``detach`` forced OFF for the detached child.
+
+    The child runs the SAME aggregate-flow body synchronously (its harvest IS the
+    point), so its spec must carry ``detach=False`` — a truthy detach would fork
+    forever.
+    """
+    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
+
+
+def _replay_agg_flow_terminal(experiment_dir: Path, run_id: str) -> AggregateFlowResult | None:
+    """Return a finished aggregate-flow worker's recorded terminal for the CURRENT
+    tree, else ``None`` (run #7 idempotent re-invoke).
+
+    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
+    the terminal. A moved/absent ``cmd_sha``, an absent record, or a corrupt record
+    all return ``None`` so the caller re-executes.
+    """
+    from hpc_agent.state.block_terminal import read_terminal
+
+    record = read_terminal(experiment_dir, run_id, _AGG_FLOW_BLOCK_KEY)
+    if record is None:
+        return None
+    current_sha = _agg_flow_cmd_sha(experiment_dir, run_id)
+    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
+        return None
+    stored = record.get("result")
+    if not isinstance(stored, dict):
+        return None
+    try:
+        return AggregateFlowResult(**stored)
+    except TypeError:
+        return None
+
+
+def _record_agg_flow_terminal(experiment_dir: Path, result: AggregateFlowResult) -> None:
+    """Record a genuine aggregate-flow terminal so a re-invoke replays it.
+
+    Runs on the SYNCHRONOUS path — which is exactly what the detached child
+    executes — so the parent's replay finds it. A run with no run_id carries
+    nothing to key on; the detached HANDLE (``started``) is not terminal and is
+    skipped.
+    """
+    if not result.run_id or result.started:
+        return
+    from hpc_agent.state.block_terminal import record_terminal
+
+    record_terminal(
+        experiment_dir,
+        run_id=result.run_id,
+        block=_AGG_FLOW_BLOCK_KEY,
+        cmd_sha=_agg_flow_cmd_sha(experiment_dir, result.run_id),
+        result_dump=result.to_envelope_data(),
+    )
+
+
+def _detached_agg_flow_result(
+    *, run_id: str, pid: int, log_path: str | None
+) -> AggregateFlowResult:
+    """The immediate-return handle for a detached aggregate-flow (design §3).
+
+    The data fields are empty (the reduced metrics arrive on completion, read from
+    the journal); ``started`` / ``watch`` / ``detached_pid`` carry the handle that
+    ``_is_detached`` / ``wait-detached`` key on.
+    """
+    return AggregateFlowResult(
+        run_id=run_id,
+        combined_waves=[],
+        failed_waves=[],
+        waves_combined_this_call=[],
+        combiner_dir_local=str(log_path or ""),
+        aggregated_metrics={},
+        started=True,
+        watch="journal",
+        detached_pid=pid,
+    )
+
+
 @primitive(
     name="aggregate-flow",
     verb="workflow",
@@ -851,6 +1235,64 @@ def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
     agent_facing=True,
 )
 def aggregate_flow(
+    experiment_dir: Path,
+    *,
+    spec: AggregateFlowSpec,
+    mode: str | None = None,
+    aggregate_cmd: str | None = None,
+    aggregate_output_path: str | None = None,
+) -> AggregateFlowResult:
+    """Finalize a run's aggregation; return paths + reduced metrics.
+
+    Detach-by-contract (design §3; run-#10 F-K) is handled HERE, in the thin
+    wrapper; the reduce itself is :func:`_aggregate_flow_impl`. aggregate-flow is a
+    COMPOSED atom (harvest-guard's §5 guaranteed harvest, submit-s4, aggregate-run,
+    campaign-run all call it SYNCHRONOUSLY and consume its metrics inline), so
+    ``detach`` defaults OFF and the wrapper is a pass-through on every composed
+    path. Only a DIRECT top-level invocation that opts in (``detach=true`` — the
+    MCP seam forces an agent to) detaches: the sync gates (no journal record →
+    ``JournalCorrupt``; a locked evidence scope → ``ScopeLocked``) fire in the
+    PARENT before the spawn, then a durable detached worker owns the combine +
+    rsync harvest and the wrapper returns a ``{started, watch: journal,
+    detached_pid}`` handle. A re-invoke after the worker finished REPLAYS the
+    recorded terminal. On the synchronous path the wrapper records the terminal so
+    the parent's replay finds it.
+    """
+    if spec.detach:
+        # gate → detach ordering PROOF: the fail-fast sync gates run in the parent.
+        record = load_run(experiment_dir, spec.run_id)
+        if record is None:
+            raise errors.JournalCorrupt(
+                f"no journal record for {spec.run_id!r}; submit the run first"
+            )
+        assert_scopes_unlocked(experiment_dir, spec.run_id)
+        replay = _replay_agg_flow_terminal(experiment_dir, spec.run_id)
+        if replay is not None:
+            return replay
+
+        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
+
+        launch = launch_submit_block_detached(
+            verb="aggregate-flow",
+            experiment_dir=str(experiment_dir),
+            spec=_detached_agg_flow_spec_dict(spec),
+        )
+        return _detached_agg_flow_result(
+            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
+        )
+
+    result = _aggregate_flow_impl(
+        experiment_dir,
+        spec=spec,
+        mode=mode,
+        aggregate_cmd=aggregate_cmd,
+        aggregate_output_path=aggregate_output_path,
+    )
+    _record_agg_flow_terminal(experiment_dir, result)
+    return result
+
+
+def _aggregate_flow_impl(
     experiment_dir: Path,
     *,
     spec: AggregateFlowSpec,
@@ -930,7 +1372,7 @@ def aggregate_flow(
         refreshed = record_status(
             experiment_dir,
             run_id,
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_ids=record.job_ids,
             job_name=record.job_name,
@@ -1008,7 +1450,7 @@ def aggregate_flow(
             scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
-    _validate_ssh_target(record.ssh_target)
+    _validate_ssh_target(resolve_ssh_target(record))
 
     # Mode resolution + cluster-reduce short-circuit. The cluster-reduce
     # path runs the user's reducer on the cluster and pulls only its
@@ -1031,7 +1473,7 @@ def aggregate_flow(
         try:
             sidecar_for_cmd = (
                 _read_remote_sidecar(
-                    ssh_target=record.ssh_target,
+                    ssh_target=resolve_ssh_target(record),
                     remote_path=record.remote_path,
                     run_id=run_id,
                 )
@@ -1110,7 +1552,7 @@ def aggregate_flow(
             waves_combined_this_call, combiner_failures = _combine_missing(
                 experiment_dir,
                 run_id,
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 waves=missing,
                 max_retries=combiner_max_retries,
@@ -1140,6 +1582,12 @@ def aggregate_flow(
             combiner_local=combiner_local,
             results_subdir=results_subdir,
             out=out,
+            # The run's declared per-task summary filename (F-J), resolved ONCE
+            # at this seam from the sidecar already read above; threaded down so
+            # the per-task fallback pull/rglob/reduce key on the real file (e.g.
+            # results_reduce.json) instead of the metrics.json hardcode that read
+            # run #10 as a harvest gap. Absent/blank sidecar → metrics.json.
+            summary_name=resolved_summary_artifact(sidecar_for_cmd),
         )
         # Persist a durable local aggregate artifact on the DEFAULT path. The
         # combiner-only reduce (and its per-task fallback) return
@@ -1199,22 +1647,27 @@ def aggregate_flow(
 
     # Optionally pull summaries.
     summaries_local: str | None = None
+    summary_pull_error: str | None = None
     if pull_summaries:
         sl = out / "summaries"
         sp = rsync_pull(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=results_subdir,
             local_dir=str(sl),
             include=[summary_glob] if summary_glob else None,
         )
         if sp.returncode != 0:
-            # Non-fatal — caller may have asked for a glob that matches
-            # nothing yet. Surface via escalation_reason so they see it.
-            combiner_failures.append(
-                (-1, f"summary rsync failed: {(sp.stderr or '').strip()[:300]}")
-            )
-        summaries_local = str(sl)
+            # Non-fatal — an unreachable host / wrong results_subdir / permission
+            # error (a glob matching nothing exits 0, so this is a genuine
+            # transport failure). Carry the real stderr in its OWN escalation
+            # token — never overload combiner_failures with a sentinel wave -1
+            # that both renders "combiner exhausted retries on wave -1" AND drops
+            # the stderr on the floor. Leave summaries_local None so the column
+            # check below does not silently validate an empty/partial dir.
+            summary_pull_error = (sp.stderr or "").strip()[:300]
+        else:
+            summaries_local = str(sl)
 
     # Check 1 — non-empty rows. `aggregate-flow` returning ok only means
     # every task wrote *a file*; it does not mean the file has real data.
@@ -1224,13 +1677,18 @@ def aggregate_flow(
     nonempty_rows_checked = False
     nonempty_failing: list[int] = []
     if spec.min_rows > 0:
+        from hpc_agent.infra.clusters import remote_activation_for_sidecar
+
         nonempty_failing = _nonempty_failing_task_ids(
             run_id,
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_ids=list(record.job_ids),
             job_name=record.job_name,
             min_rows=spec.min_rows,
+            remote_activation=remote_activation_for_sidecar(
+                sidecar_for_cmd or {}, fallback_cluster=record.cluster
+            ),
         )
         nonempty_rows_checked = True
 
@@ -1289,6 +1747,8 @@ def aggregate_flow(
         )
     if column_violations:
         escalation_parts.append(f"column_violations:files={len(column_violations)}")
+    if summary_pull_error is not None:
+        escalation_parts.append(f"summary_rsync_failed:{summary_pull_error}")
     escalation: str | None = "; ".join(escalation_parts) if escalation_parts else None
 
     return AggregateFlowResult(

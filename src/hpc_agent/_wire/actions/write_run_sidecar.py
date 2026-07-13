@@ -10,7 +10,7 @@ Python call (#200).
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -127,6 +127,11 @@ class WriteRunSidecarInput(BaseModel):
     auto_retry: dict[str, Any] | None = None
     aggregate_defaults: dict[str, Any] | None = None
     results: dict[str, Any] | None = None
+    # Per-task summary filename the reducer + per-task completion counting read
+    # (F-J). Declared by the caller when the executor emits a non-default name
+    # (e.g. results_reduce.json); absent → readers default to metrics.json via
+    # state.runs.resolved_summary_artifact, so an existing sidecar is unchanged.
+    summary_artifact: str | None = None
     # Opaque per-task reconciliation tokens a closed-loop strategy round-trips
     # (task-ordered; e.g. an Optuna trial number per task). Recorded verbatim
     # and re-surfaced by prior_records(); never interpreted by the framework.
@@ -172,6 +177,21 @@ class WriteRunSidecarInput(BaseModel):
             "the sidecar; a later reproduction of the same original reads it "
             "back (find-prior-run / submit's reproduction_of lever) to skip "
             "this derived run too. Null = ordinary (non-reproduction) run."
+        ),
+    )
+    # data-trace T3: DISCLOSURE of an exercised digest override. Recorded
+    # verbatim on the sidecar when the spec-level ``trace_digests``
+    # (force_on/force_off) was exercised, so a reader sees the "NO KNOB"
+    # classifier was overridden. Stamped in CODE by resolve-submit-inputs; null
+    # = the classifier decided unaided (the common case, omitted on write).
+    trace_digests_override: Literal["force_on", "force_off"] | None = Field(
+        default=None,
+        description=(
+            "DISCLOSURE of an exercised digest override (data-trace T3). "
+            "force_on/force_off when the spec-level trace_digests lever overrode "
+            "the digest classifier's sidecar-derived decision; recorded verbatim "
+            "so the override is visible. Null = the classifier decided unaided "
+            "(NO KNOB); omitted on write."
         ),
     )
     # OPAQUE caller-owned audit-trail identity — the sidecar echo of

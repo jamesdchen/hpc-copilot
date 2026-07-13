@@ -48,7 +48,7 @@
       "type": "string"
     },
     "markdown": {
-      "description": "The code-rendered markdown projection of the same fields, for VERBATIM relay. Same view → byte-identical markdown.",
+      "description": "The code-rendered markdown projection for VERBATIM relay. By DEFAULT (spec `full: false`) this is the DIGEST — per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), render-file pointers, and the next-actions footer, with NO diff/assertion/flag body bytes (run-#12 finding 12, B1: the bodies live in the render files + sign-off popup under popup-primary). Pass spec `full: true` for the whole-body render. Same view + same `full` → byte-identical markdown.",
       "title": "Markdown",
       "type": "string"
     }
@@ -56,7 +56,7 @@
   "$defs": {
     "NotebookSectionView": {
       "additionalProperties": false,
-      "description": "The deterministic projection of one SOURCE section (the primary object).\n\n``view_sha`` is the per-section sha a sign-off binds (D5). ``diff`` is the\nstdlib unified diff of the normalized template → source section (empty ⇔\n``inherited``). ``lint_flags`` embeds the caller's findings for this section\nOPAQUELY.",
+      "description": "The deterministic projection of one SOURCE section (the primary object).\n\n``view_sha`` is the per-section sha a sign-off binds (D5). ``lint_flags``\nembeds the caller's findings for this section OPAQUELY.\n\nThe unified diff-from-template is NOT carried on the wire (run-#12 finding 12,\nB1): it was a pure duplicate of the diff already inside the ``markdown`` render\nand the content-addressed render file (``render_path``). It stays derivable —\nthe render file and the ``full: true`` markdown both carry it — so the wire\nshape ships the diff bytes zero times, never twice.",
       "properties": {
         "slug": {
           "title": "Slug",
@@ -85,13 +85,6 @@
           ],
           "default": null,
           "title": "Template Section Sha"
-        },
-        "diff": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Diff",
-          "type": "array"
         },
         "assertions": {
           "items": {

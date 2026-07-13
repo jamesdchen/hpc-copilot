@@ -120,15 +120,34 @@ def _strip_verb_group(argv: list[str]) -> list[str]:
 
 
 def _fast_dispatch_enabled() -> bool:
-    """Whether the single-verb fast path may run (opt-out + plugin gate).
+    """Whether the single-verb fast path may run (opt-out + CLI-shaping gate).
 
     Disabled by ``HPC_AGENT_NO_FAST_CLI=1`` (a field kill switch for the
-    central path) and whenever any ``hpc_agent.plugins`` entry point is
-    installed — a plugin may override or extend a core verb via
-    ``register_cli``, which only the full :func:`build_parser` walk honours, so
-    a plugin's mere presence forces every verb onto the full path. The
-    entry-point scan is cheap and short-circuits under
-    ``HPC_AGENT_DISABLE_PLUGINS=1``.
+    central path). Otherwise the fast path serves any verb present in
+    ``VERB_MODULE_MAP`` UNLESS an installed plugin can reshape a core verb's
+    CLI — in which case every verb must take the full :func:`build_parser`
+    walk that honours the reshaping.
+
+    Guard-can-fire analysis — WHY the earlier wholesale "any plugin installed →
+    full path" disable was safe to narrow. The plugin contract
+    (``_kernel/registry/plugins.py``) has exactly ONE hook handed the argparse
+    subparsers, ``register_cli`` (see
+    ``plugins.register_plugin_cli`` — the sole seam that can override or extend
+    a core verb's parser). A plugin that implements only the
+    primitive-registration hook (``primitive_modules``) contributes NEW verbs;
+    those are absent from ``VERB_MODULE_MAP``, so they miss the fast path and
+    fall through to the full walk on their own — such a plugin cannot alter a
+    core verb the fast path already serves. The remaining hooks
+    (``slash_command_assets`` / ``schema_assets`` / ``worker_prompt_assets`` /
+    ``run_setup_actions`` / ``MANIFEST``) never touch the parser. So the guard
+    that mattered — "a plugin may reshape a core verb's CLI" — fires ONLY for a
+    ``register_cli``-implementing plugin, and the fast path stays byte-identical
+    to the full path for core verbs as long as no such plugin is installed.
+
+    ``HPC_AGENT_DISABLE_PLUGINS=1`` short-circuits to allow — with plugins
+    disabled none can reshape anything (``load_plugins`` honours the same var
+    and returns ``()``). Any metadata/load error → full path (``False``): the
+    byte-identical fallback is preserved by construction.
     """
     import os
 
@@ -136,10 +155,15 @@ def _fast_dispatch_enabled() -> bool:
         return False
     if os.environ.get("HPC_AGENT_DISABLE_PLUGINS") == "1":
         return True
-    from importlib.metadata import entry_points
-
     try:
-        return not list(entry_points(group="hpc_agent.plugins"))
+        from hpc_agent._kernel.registry.plugins import load_plugins
+
+        # Mirror register_plugin_cli's hook selection exactly: a plugin can
+        # reshape the CLI iff it exposes a callable ``register_cli``.
+        reshapes_cli = any(
+            callable(getattr(plugin, "register_cli", None)) for plugin in load_plugins()
+        )
+        return not reshapes_cli
     except Exception:  # noqa: BLE001 — a metadata hiccup must not break the CLI
         return False
 
@@ -152,8 +176,9 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     path. Falls back (returns ``None``) for: an empty argv, a leading global
     flag (``--version`` / top-level ``--help``), a verb absent from the
     generated map (grouped verbs, Tier-3 ``run`` / ``mcp-serve``, unknown
-    verbs), an installed plugin, or any stale-map miss. Every fallback path
-    yields byte-identical behaviour to before — only speed differs.
+    verbs), an installed CLI-shaping (``register_cli``) plugin, or any
+    stale-map miss. Every fallback path yields byte-identical behaviour to
+    before — only speed differs.
     """
     if not argv or argv[0].startswith("-"):
         return None
@@ -169,8 +194,18 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     from hpc_agent._kernel.registry.primitive import register_single_module
     from hpc_agent.cli.parser import build_single_verb_parser
 
-    register_single_module(module_name)
-    parser = build_single_verb_parser(primitive_name)
+    try:
+        register_single_module(module_name)
+        parser = build_single_verb_parser(primitive_name)
+    except ImportError:
+        # The OTHER staleness mode (docstring: "any stale-map miss falls back"):
+        # the verb's defining module was renamed/deleted while the verb still
+        # exists elsewhere, so register_single_module's bare import_module raises
+        # ModuleNotFoundError. Degrade to the full registry walk (which discovers
+        # modules by package walk, not the map) instead of letting the traceback
+        # escape main() as a non-envelope crash for a verb the walk dispatches
+        # fine (#59).
+        return None
     if parser is None:
         # Stale map (module no longer defines the verb / shape changed): fall
         # back. register_single_module already imported the module, which the
@@ -215,12 +250,83 @@ def _invoke_parsed(args: argparse.Namespace) -> int:
         return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
 
 
+def _record_detached_failure_terminal(exit_code: int) -> None:
+    """A detached worker that exits non-zero leaves a terminal record.
+
+    Run-#12 finding 17 leg 3: six workers died on a local refusal with NO
+    recorded terminal — the driver saw silence, the doctor could only alert,
+    and diagnosis took an hour. The spawn env self-identifies the worker
+    (``HPC_DETACHED_RUN_ID``/``_BLOCK``, set by ``_spawn_detached``; the
+    worker's cwd is the experiment dir by the same contract). Best-effort:
+    fires only in a marked worker, never overwrites a terminal the block
+    already recorded (that one carries the real result), never raises.
+    """
+    import os
+
+    run_id = os.environ.get("HPC_DETACHED_RUN_ID")
+    block = os.environ.get("HPC_DETACHED_BLOCK")
+    if not run_id or not block:
+        return
+    try:
+        from pathlib import Path
+
+        from hpc_agent.state.block_terminal import read_terminal, record_terminal
+
+        experiment_dir = Path.cwd()
+        if read_terminal(experiment_dir, run_id, block) is not None:
+            return
+        record_terminal(
+            experiment_dir,
+            run_id=run_id,
+            block=block,
+            cmd_sha="",
+            result_dump={
+                "ok": False,
+                "detached_failure": True,
+                "error_code": "detached_worker_exit",
+                "exit_code": exit_code,
+                "message": (
+                    f"detached {block} worker for run {run_id} exited "
+                    f"{exit_code} before recording a terminal — the worker "
+                    "log carries the disclosed failure; re-invoke the block "
+                    "(recorded-terminal replay keeps it idempotent)"
+                ),
+            },
+        )
+    except Exception:  # noqa: BLE001 — the exit path must never gain a new crash
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    # A DETACHED worker heartbeats liveness into its captured log while the verb
+    # runs (run-#12 findings 3/16/27, the >10s-progress discipline): a 0-byte log
+    # for minutes of legitimate scp/rsync work is indistinguishable from a
+    # frozen-at-birth freeze without it. No-op unless this process is a detached
+    # worker (HPC_DETACHED_RUN_ID set) and HPC_DETACH_HEARTBEAT_SEC > 0. Started
+    # before the verb runs, stopped in the CM's finally AFTER the verb returns —
+    # so the wait-first loop never emits a line after the final envelope.
+    from hpc_agent._kernel.lifecycle.heartbeat import detached_heartbeat
+
+    with detached_heartbeat():
+        try:
+            rc = _dispatch_main(argv)
+        except Exception:
+            _record_detached_failure_terminal(3)
+            raise
+        if rc != 0:
+            _record_detached_failure_terminal(rc)
+        return rc
+
+
+def _dispatch_main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy code page (cp1252) whose codec
     # cannot encode the ``→`` and box-drawing characters in our --help
     # text and catalog tables, raising UnicodeEncodeError on print_help().
-    # Force UTF-8 on the std streams up front.
-    for _stream in (sys.stdout, sys.stderr):
+    # Force UTF-8 on the std streams up front — INCLUDING stdin: mcp-serve
+    # reads JSON-RPC lines from it, and a cp1252-decoded UTF-8 em-dash
+    # corrupts human text INSIDE the server before any file is written
+    # (run-#12 finding 13: the journaled goal's "â€"" mojibake).
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _reconfigure = getattr(_stream, "reconfigure", None)
         if _reconfigure is not None:
             with contextlib.suppress(ValueError, OSError):
@@ -233,8 +339,9 @@ def main(argv: list[str] | None = None) -> int:
     # Single-verb fast path: import ONLY the module that defines a known
     # ungrouped verb instead of the full ~100-module registry walk (~half the
     # cold-start cost). Returns None — falling through to the full path — for
-    # help/version, grouped/Tier-3/unknown verbs, an installed plugin, or any
-    # stale-map miss, so behaviour is byte-identical and only speed differs.
+    # help/version, grouped/Tier-3/unknown verbs, an installed CLI-shaping
+    # plugin, or any stale-map miss, so behaviour is byte-identical and only
+    # speed differs.
     fast = _try_fast_dispatch(argv)
     if fast is not None:
         return fast

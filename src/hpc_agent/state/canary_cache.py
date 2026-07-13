@@ -161,7 +161,7 @@ def record_canary_validated(key: str) -> None:
         # (state/journal.py, state/decision_journal.py → advisory_flock). A
         # lock-acquire or write failure degrades gracefully — the record is an
         # optimisation, never a correctness gate.
-        with advisory_flock(_lock_path(path)):
+        with advisory_flock(_lock_path(path), timeout_sec=120.0):
             cache = _read_cache()
             cache[key] = {"validated_at": utcnow_iso(), "ttl_sec": _ttl_sec()}
             atomic_write_json(path, cache)

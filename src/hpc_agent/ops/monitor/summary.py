@@ -2,8 +2,12 @@
 
 Replaces the slash-command prose that walked the agent through framing
 the per-tick / terminal report. Reads the run journal + the most
-recent tick from ``.hpc/runs/<run_id>.monitor.jsonl`` and renders one
-human-readable summary string the slash command prints verbatim.
+recent tick from the **journal** runs dir
+(``~/.claude/hpc/<repo_hash>/runs/<run_id>.monitor.jsonl`` — the same
+path the tick writers append to, resolved via
+``ops/monitor/tick_log._tick_log_path``), NOT the cluster sidecar
+``<experiment_dir>/.hpc/runs/`` path, and renders one human-readable
+summary string the slash command prints verbatim.
 
 Eliminates the failure mode where the agent's framing drifts from the
 spec (different wording each tick, missed counts, inconsistent
@@ -214,8 +218,9 @@ def _format_diff(diff: dict[str, Any]) -> str | None:
     cli=CliShape(
         help=(
             "Render the canonical user-facing tick summary for a run. "
-            "Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal "
-            "and returns {lifecycle_state, headline, body, armed_hint}. "
+            "Reads the journal runs dir's <run_id>.monitor.jsonl (the tick "
+            "writers' path) + the run journal and returns "
+            "{lifecycle_state, headline, body, armed_hint}. "
             "Slash command prints these verbatim."
         ),
         experiment_dir_arg=True,
@@ -252,8 +257,11 @@ def monitor_summary(
       schedule the next monitor tick (e.g. via a cron running
       ``hpc-campaign-driver`` or a re-invocation of ``/monitor-hpc``).
 
-    Reads ``<experiment>/.hpc/runs/<run_id>.monitor.jsonl`` for the
-    most recent tick. If the file is absent / empty, returns a minimal
+    Reads the journal runs dir's ``<run_id>.monitor.jsonl`` (resolved via
+    ``ops/monitor/tick_log._tick_log_path`` — the SAME path the tick
+    writers append to, under ``~/.claude/hpc/<repo_hash>/runs/``; NOT the
+    cluster sidecar ``<experiment_dir>/.hpc/runs/`` path) for the most
+    recent tick. If the file is absent / empty, returns a minimal
     "no ticks yet" report rather than raising — the slash command may
     invoke this on the very first tick before any record landed.
     """
@@ -276,7 +284,14 @@ def monitor_summary(
             "journal_missing": True,
         }
 
-    jsonl = experiment_dir / ".hpc" / "runs" / f"{run_id}.monitor.jsonl"
+    # Read the tick log from the SAME journal-runs-dir path the writers use
+    # (ops/monitor/tick_log._tick_log_path). The old manual
+    # ``<experiment>/.hpc/runs/`` (cluster sidecar) path never met a real
+    # writer, so a terminal run summarized as in_flight with a "schedule the
+    # next tick" hint — the run-#8 arm-a-cron-on-a-finished-run class.
+    from hpc_agent.ops.monitor.tick_log import _tick_log_path
+
+    jsonl = _tick_log_path(experiment_dir, run_id)
     last_tick = _read_last_tick(jsonl)
 
     summary = (last_tick or {}).get("summary") or {}

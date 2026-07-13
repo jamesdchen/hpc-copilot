@@ -1,11 +1,14 @@
 ---
-status: plan
+status: shipped
 ---
 # Evidence memory — the lab notebook that writes itself, with provenance
 
-**Status: PLANNED (2026-07-07), not yet implemented — implementation
-sequenced AFTER proving run #10 and the slate phases (see
-docs/design/slate-sequencing.md).** This document is the durable hand-off
+**Status: IMPLEMENTED (2026-07-08). Waves A/B/C landed on branch `br-ev-c`
+(the substrate T1–T6, then T7 the conclusion scope kind, T8 the authorship
+gate, T9 the fail-open greenlight/S1 embed, T-NB the never-blocking pin, T10
+the campaign-unconcluded queue collector, T11 the enforcement rows, T12 the
+skill prose + this flip).** Implementation drift is recorded in the drift log
+at the foot of this document. This document is the durable hand-off
 (the `docs/design/notebook-audit.md` pattern): settled decisions with
 recorded rationale, file-disjoint task waves for parallel Opus dispatch,
 enforcement rows, and boundary-drift flags. Cite `path::symbol`, never line
@@ -697,6 +700,66 @@ push → CI green. Every task lands with a fires+passes test pair.
     fingerprint-ledger path and evidence-label vocabulary quoted here match
     `docs/design/determinism-fingerprint.md` verbatim. `st_mtime_ns` is
     available on win32 (`os.stat`), so the E-cache key is cross-platform.
+
+- **2026-07-08 (Wave A/B/C implementation — deviations recorded as they landed):**
+  1. **Run tags ride the sidecar's existing `scopes` key (E2), not a new
+     `tags` field.** The collector reads a run's declared tags from the run
+     sidecar's `scopes` list (`state/runs.py` write model; `state/evidence.py::
+     collect_evidence` step 4) — the E2 vocabulary needed NO new sidecar field,
+     confirming the pre-implementation verification. The two greenlight/S1 embed
+     seats likewise source tags from `scopes` (the campaign manifest's
+     `scopes`/`tags`, defensively; the sidecar's `scopes` at S1).
+  2. **The collector RE-DERIVES three predicates inline (non-creating), rather
+     than calling the state helpers.** `collect_evidence` re-implements the
+     scope-lock scan, the fingerprint admission rule (`_sample_admitted`), and
+     the decision-journal path build — because the canonical helpers
+     (`is_scope_locked`, `fingerprint_store.compute_admitted_flags`,
+     `decision_journal.decisions_path`) reach through `RepoLayout`, whose `.hpc`
+     / `.runs` properties `mkdir` on access, incompatible with the collector's
+     non-creating pin. `lineage_chain`/`read_samples` (which touch the
+     journal-home store, not this namespace's `.hpc`) are still routed through.
+     **Unification debt:** the re-derived admission rule and the store's
+     `_is_admitted` are two copies of one predicate — a future refactor should
+     give `fingerprint_store` a non-creating admission reader both call.
+  3. **The canonical citations sha reuses `determinism.canonical_sha`.**
+     `citations_content_sha` routes through the ONE harness-contract
+     canonicalization already in `state/determinism.py` rather than a fourth
+     local copy. **Canonical-sha unification debt — RESOLVED (2026-07-09, P-S1):**
+     the sibling copies are gone. `data_manifest.manifest_doc_sha` now routes
+     through `determinism.canonical_sha` and
+     `fingerprint_store.content_sha_over_payloads` through
+     `determinism.compute_content_sha` (their `_canonical_json` copies deleted),
+     pinned byte-for-byte by unit tests. See the `data-manifest.md` drift log for
+     the left-out lanes (`run_sha`, `provenance_manifest`, the `conformance*`
+     copy — a later pass).
+  4. **T5/T6 verbs re-render rather than routing through `render_brief` (T4).**
+     `ops/evidence_brief_op.py` / `ops/evidence_period_op.py` carry their OWN
+     `_render` / line-builder helpers instead of calling
+     `ops/evidence_render.py::render_brief`/`render_period`. Both verbs DO route
+     through the ONE `collect_evidence` (the one-collector row holds, T11-pinned);
+     the duplication is only in the pure string RENDER. **T5/T6
+     shared-projection-helper debt — PARTIALLY RESOLVED (2026-07-09):** the
+     genuinely byte-identical collection→WIRE projection subset now lives in
+     `ops/evidence_project.py` — `project_envelope_lines` (the envelope-line loop,
+     formatter injected) and `apply_evidence_order` (the fleet total-order sort).
+     Both verbs route through it; behavior byte-identical (full test files pass
+     unchanged). The genuinely-different pieces stay local (`_conclusion_lines`
+     sha truncation, `_activity_lines` roll-up, `_citation_lines` verified
+     predicate). STILL OPEN: collapsing the verbs' markdown RENDER helpers with
+     `ops/evidence_render.py` (a separate `list[str]` renderer) — a later pass.
+  5. **T9 embed centralized into `ops/evidence_embed.py` (a new module).** The
+     plan named two seats each wrapping the embed; both now call ONE shared
+     helper `build_evidence_embed` that owns the broad fail-open guard (the
+     never-blocking pin lives in one auditable place — T-NB scans it). The two
+     seats (`meta/campaign/blocks.py::_digest_spec`,
+     `ops/resolve_submit_inputs.py`) call it; no dossier resolver is injected at
+     the read seats (a dossier citation DISCLOSES at read, never raises).
+  6. **Regen deferred (Wave rule: note debts, no regen).** The `ScopeKind` +1
+     kind (`conclusion`) and the new `ResolveSubmitInputsResult.evidence` field
+     both want a schema regen: `schemas/append_decision.input.json` (its
+     `scope_kind` enum already omitted `pack` — a PRE-EXISTING deferred debt —
+     and now also `conclusion`) and `schemas/resolve_submit_inputs.output.json`.
+     Run the six regen scripts (`[[dev-regen-list]]`) before release.
 
 (Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.clusters import resolve_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -90,17 +91,31 @@ def verify_submitted(experiment_dir: Path, *, run_id: str) -> dict[str, Any]:
 
     backend_cls = get_backend_class(scheduler)
     cmd = backend_cls.build_scheduler_state_cmd(job_ids)
-    proc = remote.ssh_run(cmd, ssh_target=record.ssh_target)
+    proc = remote.ssh_run(cmd, ssh_target=resolve_ssh_target(record))
     if proc.returncode != 0:
-        # The state commands append ``|| true`` so a reachable cluster always
-        # returns rc 0; a non-zero rc is an SSH transport failure, not "no
-        # jobs found" — surface it as such rather than reporting all gone.
+        # A non-zero rc is an SSH transport failure, not "no jobs found" —
+        # surface it as such rather than reporting all gone.
         raise errors.SshUnreachable(
             f"scheduler-state query for {run_id!r} failed (rc={proc.returncode}): "
             f"{proc.stderr.strip()[:200]}"
         )
 
-    states = backend_cls.parse_scheduler_states(proc.stdout, job_ids)
+    # Positive-evidence transport verdict (docs/design/connection-broker.md):
+    # the query proves it RAN by echoing an affirmative ack token. An empty read
+    # without it is a silently truncated / never-run channel (or the scheduler
+    # binary failed) — UNKNOWN, not "every submitted job already left the queue".
+    # Reading absence as terminal here would report a freshly-landed array as
+    # entirely `missing` (never landed) on one silent blip.
+    clean, ran_ok = backend_cls.scheduler_query_ran(proc.stdout)
+    if not ran_ok:
+        raise errors.SshUnreachable(
+            f"scheduler-state query for {run_id!r} returned no positive-evidence "
+            "ack (silent/empty read — the query did not run to completion, or the "
+            "scheduler binary itself failed); refusing to read absence as "
+            "'all submitted jobs already terminal'."
+        )
+
+    states = backend_cls.parse_scheduler_states(clean, job_ids)
     healthy: list[str] = []
     error: list[str] = []
     held: list[str] = []

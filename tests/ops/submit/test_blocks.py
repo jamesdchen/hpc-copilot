@@ -131,6 +131,64 @@ def test_s1_surfaces_safe_default_as_recommendation_not_applied(tmp_path: Path) 
     assert "cluster" not in result.brief["resolved"]
 
 
+def test_s1_cluster_default_gpu_rides_brief_as_disclosure(tmp_path: Path) -> None:
+    """Run-#12 finding 14: a gpu_type injected via ``cluster_default`` (not asked
+    for by the workload) surfaces a workload-shaped sanity line in the S1 brief —
+    a disclosure, never a block. Run #12 shipped ``gpu_type: a100`` into a pure-CPU
+    brief with no note."""
+    from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesResult
+
+    fake = WalkSubmitAmbiguitiesResult(
+        resolved={"cluster": "carc", "gpu_type": "a100"},
+        ambiguities=[],
+        provenance={"resources": {"gpu_type": "cluster_default"}},
+    )
+    walk = WalkSubmitAmbiguitiesInput.model_validate(
+        {
+            "cluster": "carc",
+            "goal": "g",
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "data_axis_resolved": True,
+            "homogeneous_axes_resolved": True,
+        }
+    )
+    with mock.patch.object(blocks, "walk_submit_ambiguities", return_value=fake):
+        result = blocks.submit_s1(tmp_path, spec=SubmitS1Spec(walk=walk, run_preflight=False))
+
+    notes = result.brief["resource_default_notes"]
+    gpu_note = next(n for n in notes if n["field"] == "gpu_type")
+    assert gpu_note["value"] == "a100"
+    assert gpu_note["provenance"] == "cluster_default"
+    assert "a100" in gpu_note["sanity"] and "CPU-only" in gpu_note["sanity"]
+
+
+def test_s1_no_resource_notes_when_gpu_is_caller_supplied(tmp_path: Path) -> None:
+    """No disclosure when gpu_type wasn't a cluster_default (caller/none) — the
+    note fires only on an injected default."""
+    from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesResult
+
+    fake = WalkSubmitAmbiguitiesResult(
+        resolved={"cluster": "carc", "gpu_type": "a100"},
+        ambiguities=[],
+        provenance={"resources": {"gpu_type": "caller"}},
+    )
+    walk = WalkSubmitAmbiguitiesInput.model_validate(
+        {
+            "cluster": "carc",
+            "goal": "g",
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "data_axis_resolved": True,
+            "homogeneous_axes_resolved": True,
+        }
+    )
+    with mock.patch.object(blocks, "walk_submit_ambiguities", return_value=fake):
+        result = blocks.submit_s1(tmp_path, spec=SubmitS1Spec(walk=walk, run_preflight=False))
+
+    assert "resource_default_notes" not in result.brief
+
+
 def test_s1_runs_preflight_and_folds_into_brief(tmp_path: Path) -> None:
     walk = WalkSubmitAmbiguitiesInput.model_validate(
         {

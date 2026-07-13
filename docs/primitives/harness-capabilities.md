@@ -49,9 +49,17 @@ The harness config it reads is `<CLAUDE_CONFIG_DIR or ~/.claude>/settings.json`
   },
   "tier_consequences": {
     "<name>": "<the named tier its absence degrades to>"
-  }
+  },
+  "harness_contract_version": "1.0.0"
 }
 ```
+
+`harness_contract_version` is the SemVer of the harness contract this verb
+negotiates against — the ONE `HARNESS_CONTRACT_VERSION` constant beside the verb
+(`ops/harness_capabilities.py`), pinned equal to the
+`docs/internals/harness-contract.md` "Contract version" line and the conformance
+kit's stamped verdict by `tests/contracts/test_harness_contract.py`. Within major
+1 the contract is additive-only.
 
 The four capabilities, and the exact seam each `present` bit is detected from:
 

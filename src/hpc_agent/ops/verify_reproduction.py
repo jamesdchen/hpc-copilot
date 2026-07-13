@@ -61,6 +61,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.queries.determinism import DeterminismSampleRecord
 from hpc_agent._wire.queries.verify_reproduction import (
+    ExternalBaseline,
     ReproTolerance,
     VerifyReproductionResult,
     VerifyReproductionSpec,
@@ -68,6 +69,7 @@ from hpc_agent._wire.queries.verify_reproduction import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_partials
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state.data_trace import read_trace
 from hpc_agent.state.determinism import (
     Sample,
     build_sample_record,
@@ -83,7 +85,7 @@ from hpc_agent.state.fingerprint_store import (
     load_evidence,
     pulls_dir,
 )
-from hpc_agent.state.runs import read_run_sidecar
+from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -242,18 +244,25 @@ def _pull_partial_task_metrics(
 
 
 def _load_partial_side(
-    experiment_dir: Path, run_id: str, indices: Sequence[int]
+    experiment_dir: Path, run_id: str, indices: Sequence[int], *, filename: str
 ) -> tuple[dict[str, Any], list[int]]:
     """Load one side's per-task metrics for *indices* → (flat_metrics, present).
 
     Each present task's leaves are prefixed ``task<idx>.`` so the comparator sees
     per-task keys. ``present`` is the subset of *indices* that yielded a readable
-    ``metrics.json`` (local, else the remote seam) — the rest are UNCOMPARED.
+    summary file (local, else the remote seam) — the rest are UNCOMPARED.
+
+    ``filename`` is the side's declared per-task summary filename (F-J),
+    resolved by the caller at the seam from that run's sidecar via
+    ``resolved_summary_artifact`` (absent/blank → ``metrics.json``). Each side is
+    resolved independently, so an original written before the field existed still
+    reads ``metrics.json`` while its reproduction can key on e.g.
+    ``results_reduce.json``.
     """
     flat: dict[str, Any] = {}
     present: list[int] = []
     for idx in indices:
-        path = _partial_dir(experiment_dir, run_id) / str(idx) / "metrics.json"
+        path = _partial_dir(experiment_dir, run_id) / str(idx) / filename
         payload: Any = None
         if path.is_file():
             try:
@@ -268,6 +277,120 @@ def _load_partial_side(
         for key, value in flatten_metrics(payload).items():
             flat[f"task{idx}.{key}"] = value
     return flat, present
+
+
+# --- the data-trace fingerprint interlock (docs/design/data-trace.md) --------
+#
+# "The fingerprint interlock": stage digests are fingerprint-admissible
+# evidence. When BOTH compared runs carry ingested traces, the per-stage
+# ``digest`` + ``row_count`` atoms fold into the compared metrics payloads as
+# EXACT-CLASS keys (``stage:<stage>.digest`` / ``stage:<stage>.row_count``), so
+# they ride the SAME per-key envelope + sample machinery with NO new admission
+# rule — and a reproduction mismatch LOCALIZES to a named stage. Absent traces
+# on either side → nothing folded, disclosed (never fabricated): the
+# degradation-path posture.
+
+#: The flattened-key prefix for a folded per-stage atom (flatten convention: a
+#: ``.`` joins the stage-namespaced key to the atom name).
+_STAGE_KEY_PREFIX = "stage:"
+
+
+def _read_run_trace(experiment_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """The run's task-0 stage trace — the interlock's localization unit.
+
+    v1 reads the ``("run", run_id)`` task-0 trace (the canonical single-/first-
+    task trace the design's "diverges at <stage>" example names); multi-task
+    enumeration is a deferred refinement (drift-logged). Returns ``[]`` when the
+    run has no ingested trace — the degradation path (no trace → nothing folded,
+    disclosed).
+    """
+    return read_trace(experiment_dir, "run", run_id, 0)
+
+
+def _stage_atoms(records: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Reduce a trace to ``{stage: {seq, digest, rows}}`` — the interlock evidence.
+
+    Only the two fingerprint-admissible atoms (the ``digest`` sha + the
+    ``row_count`` row total) are lifted; a stage seen more than once keeps its
+    LAST record (append order). A malformed/absent atom degrades to ``None``
+    (disclosed, never fabricated) so an off-digest-policy run still folds its
+    row counts.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        stage = rec.get("stage")
+        if not isinstance(stage, str) or not stage:
+            continue
+        atoms = rec.get("atoms")
+        atoms = atoms if isinstance(atoms, dict) else {}
+        digest = atoms.get("digest")
+        digest = digest if isinstance(digest, str) and digest else None
+        rc = atoms.get("row_count")
+        rows_raw = rc.get("rows") if isinstance(rc, dict) else None
+        rows = rows_raw if isinstance(rows_raw, int) and not isinstance(rows_raw, bool) else None
+        seq = rec.get("seq")
+        out[stage] = {
+            "seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
+            "digest": digest,
+            "rows": rows,
+        }
+    return out
+
+
+def _stage_overlay(stage_atoms: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Flatten stage atoms into ``stage:<stage>.{digest,row_count}`` metric keys.
+
+    The namespaced, flatten-convention-consistent keys the interlock folds into
+    the compared payloads. Exact-class by construction: a digest is a sha (str),
+    a row_count is an int — both always compare exactly (no envelope needed).
+    """
+    overlay: dict[str, Any] = {}
+    for stage, a in stage_atoms.items():
+        if a.get("digest") is not None:
+            overlay[f"{_STAGE_KEY_PREFIX}{stage}.digest"] = a["digest"]
+        if a.get("rows") is not None:
+            overlay[f"{_STAGE_KEY_PREFIX}{stage}.row_count"] = a["rows"]
+    return overlay
+
+
+def _first_diverged_stage(
+    orig_stages: Mapping[str, Mapping[str, Any]],
+    repro_stages: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    """The FIRST stage (by pipeline order = trace ``seq``) whose atoms diverge.
+
+    A stage present on ONE side only is a structural divergence; otherwise a
+    ``digest`` that moved (recorded on both) or a ``row_count`` that moved. A
+    digest recorded on only one side is NOT called a divergence — that is a
+    degraded observation, not proven drift. Returns ``None`` when every shared
+    stage agrees.
+    """
+    names = set(orig_stages) | set(repro_stages)
+
+    def _order(name: str) -> tuple[int, str]:
+        seqs = [
+            s["seq"]
+            for s in (orig_stages.get(name), repro_stages.get(name))
+            if s is not None and isinstance(s.get("seq"), int)
+        ]
+        return (min(seqs) if seqs else 2**63, name)
+
+    for name in sorted(names, key=_order):
+        o = orig_stages.get(name)
+        r = repro_stages.get(name)
+        if o is None or r is None:
+            return name
+        digest_div = (
+            o.get("digest") is not None
+            and r.get("digest") is not None
+            and o["digest"] != r["digest"]
+        )
+        rows_div = (
+            o.get("rows") is not None and r.get("rows") is not None and o["rows"] != r["rows"]
+        )
+        if digest_div or rows_div:
+            return name
+    return None
 
 
 # --- the byte-preserved v1 comparator (NO metric vocabulary) -----------------
@@ -487,11 +610,16 @@ def _validate_receipt_partiality(receipt: Mapping[str, Any]) -> None:
     and what it did NOT compare (uncompared key/task counts) — a subset receipt
     that prints like a full one is the silent-caps failure this pins. Raises
     :class:`errors.SpecInvalid` naming the missing field.
+
+    An EMPTY ``task_indices`` list is a valid full disclosure ("nothing compared,
+    accounted for via uncompared_tasks") for an incomparable partial pair
+    (bug-sweep #51) — distinct from ``None``, which is undisclosed and stays
+    refused.
     """
     if receipt.get("partial") is not True:
         return
     task_indices = receipt.get("task_indices")
-    if not isinstance(task_indices, (list, tuple)) or not task_indices:
+    if not isinstance(task_indices, (list, tuple)):
         raise errors.SpecInvalid(
             "verify-reproduction: a partial receipt must record the exact task_indices "
             f"it compared (no-silent-caps); got {task_indices!r}"
@@ -630,6 +758,184 @@ def _append_fingerprint_sample(
         return None
 
 
+# --- the claim-check (external-baseline) mode (onboard-by-reproduction 6.5) ---
+#
+# The onboard-by-reproduction front door: the scientist arrives with a CLAIMED
+# result and no recorded original. The claim is the baseline; the comparison runs
+# the SAME caller-tolerance comparator; the receipt kind is `claim-check`, NEVER a
+# reproduction (ruling 6b, the anti-laundering naming lock). NO fingerprint sample
+# is minted — the fingerprint history starts from OBSERVED runs only.
+
+#: The CODE-emitted consistency sentence on a claim-check match. Rendered by code
+#: into the receipt and the result reason, relayed VERBATIM by the LLM — the
+#: consistency determination is the comparator's (trusted code, caller tolerance
+#: as data), never LLM-composed (ruling 6b, user-pinned 2026-07-07).
+CLAIM_CONSISTENT_SENTENCE = (
+    "the claim is consistent with a fresh observed run (within caller tolerance)"
+)
+
+
+def _assert_receipt_kind_matches_baseline(*, receipt_kind: str, external_baseline: bool) -> None:
+    """The anti-laundering seam at the receipt-write boundary (ruling 6b).
+
+    NO code path may write a reproduction-kind receipt with an external baseline:
+    a reproduction requires two OBSERVED runs, and labeling a claim-match a
+    "reproduction" would launder unattested history into the trust chain (the F1
+    class, at the front door). Both the recorded-original path (``reproduction``,
+    no external baseline) and the claim-check path (``claim-check``, external
+    baseline) route through here, so the violating combination is refused by
+    construction. Raises :class:`errors.SpecInvalid` on either incoherent pairing.
+    """
+    if external_baseline and receipt_kind != "claim-check":
+        raise errors.SpecInvalid(
+            "verify-reproduction: an external-baseline comparison may write only a "
+            f"'claim-check' receipt, never a {receipt_kind!r} receipt — an external "
+            "claim was never observed, and calling a claim-match a reproduction would "
+            "launder unattested history into the trust chain (onboard-by-reproduction "
+            "ruling 6b, the naming lock)."
+        )
+    if receipt_kind == "claim-check" and not external_baseline:
+        raise errors.SpecInvalid(
+            "verify-reproduction: a 'claim-check' receipt requires an external "
+            "baseline (the human's claim); a recorded-original comparison writes a "
+            "'reproduction' receipt."
+        )
+
+
+def _claim_check_receipt_path(experiment_dir: Path, repro_run_id: str) -> Path:
+    """Append-only claim-check ledger, beside the fresh run's metrics — NEVER the
+    reproduction ledger (the naming lock is enforced at the storage layer too)."""
+    return experiment_dir / "_aggregated" / repro_run_id / "claim_check_receipts.jsonl"
+
+
+def _claim_drift_disclosure(claimed_data_sha: str | None, observed_data_sha: Any) -> str:
+    """Code-rendered drift-dimension disclosure for a claim-check non-match.
+
+    Surfaces which identity dimension moved. The rung-0 data coupling: WITH a
+    manifest at claim time the brief can name the data dimension; WITHOUT one it
+    discloses that result decay and data drift cannot be distinguished.
+    """
+    if not claimed_data_sha:
+        return "cannot distinguish result decay from data drift — no manifest at claim time"
+    observed = str(observed_data_sha) if observed_data_sha else ""
+    if observed and observed != claimed_data_sha:
+        return (
+            f"the data changed since the claim (claimed data {claimed_data_sha[:12]}, "
+            f"observed {observed[:12]})"
+        )
+    return (
+        f"the data is unchanged since the claim (data {claimed_data_sha[:12]}); the "
+        "divergence is in code/env or result decay"
+    )
+
+
+def _render_claim_reason(overall: str, verdicts: list[dict[str, Any]], drift: str | None) -> str:
+    """Code-rendered one-line summary of a claim-check comparison (non-match).
+
+    A match's reason is the fixed consistency sentence; a non-match's reason names
+    the verdict + the per-key counts + the drift disclosure.
+    """
+    n_match = sum(1 for e in verdicts if e["verdict"] == "match")
+    n_mismatch = sum(1 for e in verdicts if e["verdict"] == "mismatch")
+    n_incomparable = sum(1 for e in verdicts if e["verdict"] == "incomparable")
+    total = len(verdicts)
+    counts = (
+        f"{n_match} matched, {n_mismatch} mismatched, {n_incomparable} incomparable of "
+        f"{total} claimed key{'s' if total != 1 else ''}"
+        if total
+        else "no comparable claimed keys"
+    )
+    tail = f"; {drift}" if drift else ""
+    return f"claim-check finding: {overall} — {counts}{tail}"
+
+
+def _run_claim_check(
+    experiment_dir: Path, *, repro_run_id: str, baseline: ExternalBaseline
+) -> VerifyReproductionResult:
+    """External-baseline (claim-check) comparison — the onboard-by-reproduction mode.
+
+    Compares a FRESH observed run's reduced metrics against the human-authored
+    CLAIM under the claim's own caller tolerance. Emits a ``claim-check`` receipt
+    that embeds the claim verbatim; mints NO fingerprint sample (observed-runs-only
+    lock). A mismatch/incomparable is a dated FINDING (``needs_decision``, exit-0),
+    never blocking; a match carries the code-emitted consistency sentence.
+    """
+    try:
+        repro_sidecar = read_run_sidecar(experiment_dir, repro_run_id)
+    except FileNotFoundError as exc:
+        raise errors.SpecInvalid(
+            f"fresh run {repro_run_id!r} has no sidecar under "
+            f"{experiment_dir}/.hpc/runs/ — a claim-check compares the claim against "
+            "an OBSERVED run that was actually submitted."
+        ) from exc
+
+    repro_metrics, repro_source = _load_run_metrics(experiment_dir, repro_run_id)
+
+    consistency: str | None = None
+    drift: str | None = None
+    if repro_metrics is None:
+        # No fresh metrics yet — an incomparable FINDING, not an error.
+        per_key: list[dict[str, Any]] = []
+        overall = "incomparable"
+        reason = (
+            "claim-check verdict: incomparable — missing metrics artifact for the "
+            f"fresh run [{repro_source}]"
+        )
+    else:
+        claim = flatten_metrics(baseline.claimed_values)
+        per_key = _compare_metrics(claim, repro_metrics, baseline.tolerance)
+        overall = _fold_overall(per_key)
+        if overall == "match":
+            consistency = CLAIM_CONSISTENT_SENTENCE
+            reason = CLAIM_CONSISTENT_SENTENCE
+        else:
+            drift = _claim_drift_disclosure(
+                baseline.claimed_data_sha, repro_sidecar.get("data_sha")
+            )
+            reason = _render_claim_reason(overall, per_key, drift)
+
+    receipt: dict[str, Any] = {
+        "ts": utcnow_iso(),
+        "receipt_kind": "claim-check",
+        "schema_version": 1,
+        # The claim, embedded VERBATIM (ruling 6a — the claim lives in the receipt).
+        "claim": {
+            "claimed_values": dict(baseline.claimed_values),
+            "tolerance": (
+                baseline.tolerance.model_dump(mode="json")
+                if baseline.tolerance is not None
+                else None
+            ),
+            "claimed_data_sha": baseline.claimed_data_sha,
+        },
+        "repro": _identity(repro_sidecar, repro_run_id),
+        "per_key": per_key,
+        "overall": overall,
+        "consistency": consistency,
+        "drift_disclosure": drift,
+        "sources": {"repro_artifact": repro_source},
+    }
+
+    # Anti-laundering: a claim-check receipt is the ONLY receipt an external
+    # baseline may write (and it requires one). Refuses the launder by construction.
+    _assert_receipt_kind_matches_baseline(receipt_kind="claim-check", external_baseline=True)
+
+    path = _claim_check_receipt_path(experiment_dir, repro_run_id)
+    _append_receipt(path, receipt)
+
+    return VerifyReproductionResult.model_validate(
+        {
+            "stage_reached": overall,
+            "needs_decision": overall != "match",
+            "reason": reason,
+            "receipt": receipt,
+            "receipt_path": str(path),
+            # No fingerprint sample — the observed-runs-only lock (ruling 6b).
+            "appended_sample": None,
+        }
+    )
+
+
 @primitive(
     name="verify-reproduction",
     verb="query",
@@ -637,6 +943,11 @@ def _append_fingerprint_sample(
         SideEffect(
             "filesystem",
             "<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl (append-only)",
+        ),
+        SideEffect(
+            "filesystem",
+            "<experiment>/_aggregated/<repro_run_id>/claim_check_receipts.jsonl "
+            "(append-only; external-baseline mode)",
         ),
         SideEffect(
             "filesystem",
@@ -672,7 +983,21 @@ def verify_reproduction(
     — or when either run's identity sidecar is missing. Otherwise it always
     succeeds (exit-0): a mismatch, incomparable, or needs_verdict is a
     ``needs_decision`` finding, never an error.
+
+    In external-baseline mode (``spec.external_baseline`` set) the comparison rides
+    the SAME spec but the baseline is a human-authored CLAIM, not a recorded run:
+    it emits a ``claim-check`` receipt (never a reproduction) and mints no
+    fingerprint sample (onboard-by-reproduction, rulings 6a/6b).
     """
+    if spec.external_baseline is not None:
+        return _run_claim_check(
+            experiment_dir,
+            repro_run_id=spec.repro_run_id,
+            baseline=spec.external_baseline,
+        )
+
+    # Recorded-original mode: the validator guarantees original_run_id is present.
+    assert spec.original_run_id is not None
     original_run_id = spec.original_run_id
     repro_run_id = spec.repro_run_id
 
@@ -718,11 +1043,31 @@ def verify_reproduction(
     # tiered path (an envelope exists to have applied the data leg); stays None on
     # the incomparable / empty-ledger paths.
     data_identity_disclosure: dict[str, Any] | None = None
+    # The data-trace interlock disclosure (both/one/neither side traced) and the
+    # localized stage — populated only on the full metrics-present path below;
+    # stay None on the incomparable / partial paths (nothing folded, nothing to
+    # disclose).
+    stage_interlock: dict[str, Any] | None = None
+    diverged_stage: str | None = None
 
     if partial:
         assert indices is not None
-        orig_flat, orig_present = _load_partial_side(experiment_dir, original_run_id, indices)
-        repro_flat, repro_present = _load_partial_side(experiment_dir, repro_run_id, indices)
+        # Resolve each side's declared per-task summary filename (F-J) ONCE from
+        # the sidecars already read above, and thread it down — the original and
+        # its reproduction are resolved independently (an undeclared original
+        # stays on metrics.json while a reproduction can key on results_reduce.json).
+        orig_flat, orig_present = _load_partial_side(
+            experiment_dir,
+            original_run_id,
+            indices,
+            filename=resolved_summary_artifact(original_sidecar),
+        )
+        repro_flat, repro_present = _load_partial_side(
+            experiment_dir,
+            repro_run_id,
+            indices,
+            filename=resolved_summary_artifact(repro_sidecar),
+        )
         orig_source = str(_partial_dir(experiment_dir, original_run_id))
         repro_source = str(_partial_dir(experiment_dir, repro_run_id))
         orig_metrics: dict[str, Any] | None = orig_flat if orig_present else None
@@ -732,7 +1077,13 @@ def verify_reproduction(
         orig_metrics, orig_source = _load_run_metrics(experiment_dir, original_run_id)
         repro_metrics, repro_source = _load_run_metrics(experiment_dir, repro_run_id)
 
-    if orig_metrics is None or repro_metrics is None:
+    # An empty compared set (disjoint present tasks, or metrics missing on either
+    # side) is an incomparable FINDING, never a raised guard (bug-sweep #51). Both
+    # variants route here: a partial pair whose per-task intersection is empty is
+    # as incomparable as a missing artifact — comparing zero overlapping tasks is
+    # not a reproduction.
+    empty_partial = partial and not compared_indices
+    if orig_metrics is None or repro_metrics is None or empty_partial:
         # A missing metrics artifact is an incomparable FINDING (not an error):
         # the run may simply not have been aggregated yet. No envelope, no sample.
         per_key: list[dict[str, Any]] = []
@@ -742,13 +1093,58 @@ def verify_reproduction(
             missing.append(f"original [{orig_source}]")
         if repro_metrics is None:
             missing.append(f"repro [{repro_source}]")
-        reason = (
-            "reproduction verdict: incomparable — missing metrics artifact for "
-            + " and ".join(missing)
-        )
+        if missing:
+            reason = (
+                "reproduction verdict: incomparable — missing metrics artifact for "
+                + " and ".join(missing)
+            )
+        else:
+            # Both sides present but no per-task overlap (disjoint task samples).
+            reason = (
+                "reproduction verdict: incomparable — no per-task overlap between "
+                f"the two runs (compared 0 of {len(indices or [])} requested indices)"
+            )
+        # Partial receipts MUST disclose the partiality accounting even when
+        # nothing was compared: [] task_indices is a full disclosure (via
+        # uncompared_tasks), distinct from an undisclosed None. Without this the
+        # no-silent-caps guard raised SpecInvalid instead of emitting the finding.
+        if partial:
+            assert indices is not None
+            compared_indices = compared_indices or []
+            uncompared_tasks = len(indices) - len(compared_indices)
+            uncompared_keys = 0
         schema_version = RECEIPT_SCHEMA_VERSION_TIERED if partial else RECEIPT_SCHEMA_VERSION
         appended_record = None
     else:
+        # The data-trace fingerprint interlock (full path only — a partial
+        # reproduction already namespaces per task). When BOTH runs carry an
+        # ingested trace, fold the per-stage digest/row_count atoms into the
+        # compared payloads as EXACT-CLASS keys so they ride the same envelope +
+        # sample machinery, and localize the first diverging stage. One side or
+        # neither → nothing folded; the presence is disclosed (never fabricated).
+        stage_diverged: str | None = None
+        if not partial:
+            orig_stages = _stage_atoms(_read_run_trace(experiment_dir, original_run_id))
+            repro_stages = _stage_atoms(_read_run_trace(experiment_dir, repro_run_id))
+            orig_traced = bool(orig_stages)
+            repro_traced = bool(repro_stages)
+            if orig_traced or repro_traced:
+                both_traced = orig_traced and repro_traced
+                stage_keys: list[str] = []
+                if both_traced:
+                    overlay_o = _stage_overlay(orig_stages)
+                    overlay_r = _stage_overlay(repro_stages)
+                    orig_metrics = {**orig_metrics, **overlay_o}
+                    repro_metrics = {**repro_metrics, **overlay_r}
+                    stage_keys = sorted(set(overlay_o) | set(overlay_r))
+                    stage_diverged = _first_diverged_stage(orig_stages, repro_stages)
+                stage_interlock = {
+                    "original_trace_present": orig_traced,
+                    "repro_trace_present": repro_traced,
+                    "compared": both_traced,
+                    "stage_keys": stage_keys,
+                }
+
         # v1 comparator (BYTE-PRESERVED, no metric vocabulary) — the base per-key
         # observation + verdict every path starts from.
         per_key_v1 = _compare_metrics(orig_metrics, repro_metrics, spec.tolerance)
@@ -816,10 +1212,14 @@ def verify_reproduction(
         # data_moved forces v2 even on an empty envelope: when ALL priors were
         # excluded as data drift the envelope is empty (untiered), yet the
         # exclusion is exactly what must be disclosed (a rebuilt input).
+        # An active interlock (at least one side traced) FORCES v2 so its
+        # stage_interlock disclosure + diverged_stage ride the receipt; an
+        # untraced comparison never forces it (byte-identical to a pre-interlock
+        # receipt — nothing folded, nothing disclosed).
         tiered = bool(envelope.per_key)
         schema_version = (
             RECEIPT_SCHEMA_VERSION_TIERED
-            if (tiered or partial or data_moved)
+            if (tiered or partial or data_moved or stage_interlock is not None)
             else RECEIPT_SCHEMA_VERSION
         )
 
@@ -857,6 +1257,15 @@ def verify_reproduction(
             stage = overall_v1
             reason = _render_reason(per_key_v1, overall_v1) + data_phrase
 
+        # Stage-localized mismatch: surface the first diverging stage ONLY when
+        # the overall verdict routes to the human (mismatch / needs_verdict /
+        # incomparable) — an auto-cleared / exact-match comparison never diverges
+        # at a stage (its stage keys matched). Never prose-invented.
+        if stage_diverged is not None and stage not in ("match", "auto_cleared"):
+            diverged_stage = stage_diverged
+            # Code-rendered off the machine field — never prose-invented.
+            reason += f"; diverges at stage {diverged_stage!r} (data-trace interlock)"
+
         appended_record = _append_fingerprint_sample(
             experiment_dir,
             original_run_id=original_run_id,
@@ -872,6 +1281,7 @@ def verify_reproduction(
 
     receipt: dict[str, Any] = {
         "ts": utcnow_iso(),
+        "receipt_kind": "reproduction",
         "schema_version": schema_version,
         "original": _identity(original_sidecar, original_run_id),
         "repro": _identity(repro_sidecar, repro_run_id),
@@ -893,9 +1303,20 @@ def verify_reproduction(
         # + what the data leg did to the prior evidence. None on an empty-ledger v2
         # (partial-but-untiered) receipt — no envelope applied the data leg.
         receipt["data_identity"] = data_identity_disclosure
+        # v2 data-trace interlock (docs/design/data-trace.md): only present when a
+        # trace exists on at least one side (else the receipt is byte-identical to
+        # a pre-interlock one). ``diverged_stage`` names the first stage a routed
+        # verdict localizes to; null otherwise.
+        if stage_interlock is not None:
+            receipt["stage_interlock"] = stage_interlock
+            receipt["diverged_stage"] = diverged_stage
 
     # No-silent-caps: refuse a partial receipt missing any partiality field.
     _validate_receipt_partiality(receipt)
+
+    # Anti-laundering: the recorded-original path writes a REPRODUCTION receipt and
+    # never an external baseline — the guard refuses the launder by construction.
+    _assert_receipt_kind_matches_baseline(receipt_kind="reproduction", external_baseline=False)
 
     path = _receipt_path(experiment_dir, repro_run_id)
     _append_receipt(path, receipt)
@@ -921,5 +1342,6 @@ def verify_reproduction(
         "receipt": receipt,
         "receipt_path": str(path),
         "appended_sample": sample_echo,
+        "diverged_stage": diverged_stage,
     }
     return VerifyReproductionResult.model_validate(result_payload)

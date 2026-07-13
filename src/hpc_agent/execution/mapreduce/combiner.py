@@ -403,6 +403,17 @@ def main(max_workers=None, argv=None):
         print("[combiner] ERROR: sidecar missing result_dir_template", file=sys.stderr)
         sys.exit(1)
 
+    # Per-task summary filename the run declared (F-J). Absent → the historical
+    # metrics.json literal, so an existing run is byte-identical. Resolved inline
+    # (this module is deployed cluster-side standalone, no hpc_agent import) but
+    # kept in lock-step with state.runs.resolved_summary_artifact.
+    _declared_summary = sidecar.get("summary_artifact")
+    summary_name = (
+        _declared_summary.strip()
+        if isinstance(_declared_summary, str) and _declared_summary.strip()
+        else "metrics.json"
+    )
+
     # --- Resolve the per-task kwargs source (frozen manifest first) ---
     # Mirrors dispatch.py's fast path: ``trial_params`` is serialized into the
     # sidecar at submit time and is the ground truth the tasks were hashed
@@ -478,9 +489,9 @@ def main(max_workers=None, argv=None):
         except KeyError as exc:
             errors.append(f"task {tid}: result_dir_template missing key {exc.args[0]!r}")
             continue
-        metrics_path = os.path.join(result_dir, "metrics.json")
+        metrics_path = os.path.join(result_dir, summary_name)
         if not os.path.isfile(metrics_path):
-            errors.append(f"task {tid}: metrics.json not found")
+            errors.append(f"task {tid}: {summary_name} not found")
             continue
         # Per-task runtime sidecar (timing + axis_bindings) is optional —
         # the dispatcher writes it best-effort. Missing → no warm-picker
@@ -507,7 +518,7 @@ def main(max_workers=None, argv=None):
                 try:
                     metrics = future.result()
                 except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
-                    errors.append(f"task {tid}: failed to read metrics.json: {exc}")
+                    errors.append(f"task {tid}: failed to read {summary_name}: {exc}")
                     continue
                 groups.setdefault(grid_key, []).append(metrics)
                 # Best-effort runtime row. A malformed _runtime.json is

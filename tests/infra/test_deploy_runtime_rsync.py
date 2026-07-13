@@ -8,6 +8,7 @@ invocation and that a failed transfer surfaces.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -81,6 +82,29 @@ def test_deploy_falls_back_to_tar_when_rsync_absent():
     assert captured["delete"] is False
     assert captured["ssh_target"] == "u@c"
     assert captured["remote_path"] == "/p"
+
+
+def test_rsync_deploy_translates_win32_local_src(monkeypatch):
+    # _rsync_deploy ships from a tempfile.TemporaryDirectory staging path; on
+    # win32 that is a C:\...\Temp\tmpXXXX dir whose drive colon MSYS rsync
+    # mis-parses as remote host "C" ("source and destination cannot both be
+    # remote") — the exact break #10 fixes. The local src must reach argv in
+    # the /c/... form.
+    monkeypatch.setattr(transport.sys, "platform", "win32")
+    with patch(
+        "hpc_agent.infra.transport.run_capture_bounded",
+        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ) as run_mock:
+        transport._rsync_deploy(
+            ssh_target="u@c",
+            remote_path="/p",
+            staging=Path("D:\\Temp\\tmpABC"),
+        )
+    cmd = run_mock.call_args[0][0]
+    assert cmd[0] == "rsync"
+    # argv = ["rsync", "-az", "--inplace", src, dst] → src is second-to-last.
+    assert cmd[-2] == "/d/Temp/tmpABC/"
+    assert cmd[-1] == "u@c:/p/"
 
 
 def test_rsync_nonzero_exit_raises():

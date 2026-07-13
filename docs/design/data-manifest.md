@@ -1,9 +1,9 @@
 ---
-status: plan
+status: shipped
 ---
 # The data manifest — rung 0 of the onboarding map
 
-**Status: PLANNED, USER-RULED (2026-07-07, ruling 0a/0b).** Companion to
+**Status: IMPLEMENTED (landed in the slate merge train, 2026-07-09; originally USER-RULED 2026-07-07, ruling 0a/0b).** Companion to
 `docs/design/onboarding-map.md` (rung 0) and an AMENDMENT INPUT to
 `docs/design/determinism-fingerprint.md` (the data-identity dimension).
 Registry: +1 (`data-manifest`), from the 142 @ `326a9124` baseline.
@@ -38,7 +38,8 @@ nothing fails — only an identity record sees it.
   `interview.json`/`axes.yaml` as a copilot-consumed caller record,
   git-trackable, machine-minted.
 - **Record shape**: `{relpath: {sha256, size, built_by?}}` + a manifest-doc
-  sha computed via the canonical-JSON helper (P-S1; file-content shas are
+  sha computed via the ONE canonical-sha definition (P-S1 UNIFIED — see the
+  drift log; `state.determinism.canonical_sha`; file-content shas are
   raw-byte hashes — two hash disciplines, each in its lane, allowlisted in
   the grep lint). `built_by` is OPTIONAL caller-authored free text, carried
   opaquely (the scope-tag pattern) — the build audit itself is out of
@@ -189,7 +190,31 @@ commons, the catalog to the quant pack, bindings to program specs.**
 - The `manifest-current` prerequisite: Phase 2's vocabulary, one row.
 
 ## Drift log
+- **Status flip lag (2026-07-09):** the implementation landed in the slate merge train but this doc's status stayed PLANNED; caught by the anti-vendor-lockout plan's inventory sweep (same class as the conformance-kit flip lag). Verified against src before flipping.
 
+
+- 2026-07-09: **P-S1 canonical-JSON sha UNIFIED — one definition.** The debt was
+  three sibling copies of the harness-contract canonicalization. The definition
+  is now `state/determinism.py::canonical_sha` (the pure kernel;
+  `compute_content_sha(a, b) = canonical_sha([a, b])`). Re-pointed:
+  `state/data_manifest.py::manifest_doc_sha` (the `_canonical_json` copy DELETED
+  → `determinism.canonical_sha(records)`) and
+  `state/fingerprint_store.py::content_sha_over_payloads` (its `_canonical_json`
+  copy DELETED → `determinism.compute_content_sha`). `state/evidence.py::
+  citations_content_sha` already routed. Byte-for-byte pins:
+  `tests/state/test_data_manifest.py::test_manifest_doc_sha_routes_to_canonical_sha_byte_for_byte`
+  and `tests/state/test_fingerprint_store.py::test_content_sha_over_payloads_routes_to_kernel_byte_for_byte`.
+  Note: `data_manifest`'s old copy lacked `ensure_ascii=False`; adopting the
+  canonical form is byte-identical for ASCII records (relpaths/`built_by`) and,
+  for the rare non-ASCII case, converges on the ONE harness-contract form (a
+  strict move toward the single definition, not a regression). Left as-is (a
+  DIFFERENT canonicalization lane or a different subject, out of this debt's
+  scope): `state/run_sha.py` (the run-IDENTITY discipline — cmd_sha/node_sha
+  dedup keys; no `ensure_ascii=False`; changing its bytes would bust dedup +
+  journal keys), `ops/provenance_manifest.py::manifest_signature` (operator-
+  signable digest; no `ensure_ascii=False`), `ops/check_task_generator_mismatch.py`
+  (canonical-STRING comparator, not a doc sha). The `state/conformance*` canonical
+  copy stays for a later pass (owned by the Wave-C interlock).
 - 2026-07-07: written (Fable, pre-deadline), rulings 0a/0b folded.
 - 2026-07-08: **the fingerprint amendment LANDED (Phase-3, the three legs).**
   - **`data_sha` shape PINNED — one canonical sha over the manifest's `files`
@@ -238,3 +263,34 @@ commons, the catalog to the quant pack, bindings to program specs.**
     gained `data_sha` and the run sidecar gained `data_manifest_sha` —
     `bake_operations_json.py --write` + schema regen owe an update. Additive +
     optional, so existing baked schemas + v1 records still parse.
+
+## Ruling record (2026-07-10 user, recorded from session): bounded auto-prune
+
+Remote extras that are MANIFEST-KNOWN (files the manifest names as ours,
+present remotely but no longer in the deploy set) may be auto-pruned under a
+disclosed bound; anything NOT manifest-known is an anomaly → ASK, never
+delete. Spec + build = post-run-#12 batch item 6.
+
+**SHIPPED (2026-07-10).** The pure planner is
+`ops/transfer/prune.py::plan_prune` (→ `PrunePlan`): it splits the manifest
+delta's `extra` into `prunable` (path recorded in the PRIOR push manifest —
+proven ours) vs `anomalies` (never shipped by us — NEVER deleted, surfaced),
+and REFUSES the whole plan (`to_prune == ()`) when the manifest-known set
+breaches either conservative cap. Chosen defaults: **`DEFAULT_PRUNE_MAX_FILES
+= 100`**, **`DEFAULT_PRUNE_MAX_BYTES = 100 MiB`**, overridable at the transport
+call site via `HPC_DEPLOY_PRUNE_MAX_FILES` / `HPC_DEPLOY_PRUNE_MAX_BYTES`;
+kill-switch `HPC_NO_DEPLOY_PRUNE=1`. Wired into `infra/transport.py`'s
+rsync-less delta push (`rsync_push`, the `delete=True` branch that already
+holds the dial — zero new cold SSH): after the additive delta ship,
+`_prune_manifest_known_extras` reads the prior push manifest
+(`_read_prior_push_manifest`, `.hpc/.push_manifest.json`), plans, discloses
+(`_disclose_prune`), JOURNALS each prune (what / `reason: manifest-known` /
+`old_sha256`) to `<experiment>/.hpc/deploy_prune.jsonl`, then deletes exactly
+`to_prune` via one bounded ssh `rm` (`_execute_prune`); `_write_push_manifest`
+then records the new shipped set for the next push. The prune is fully
+fail-open — it can never break a successful transfer. A first push (no prior
+manifest) routes every extra to the anomaly branch (nothing proven ours →
+nothing pruned). Tests: `tests/ops/transfer/test_prune.py` (8, the planner)
+and `tests/infra/test_transport_prune.py` (5, the seam: manifest-known
+journaled+pruned, anomaly never-pruned+surfaced, over-bound refused+journaled,
+kill-switch, own-bookkeeping-filtered).

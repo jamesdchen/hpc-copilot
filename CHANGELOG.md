@@ -24,6 +24,50 @@ terminate at human decision points with code-digested **briefs**. No decision
 point is resolved by the LLM; the LLM only drafts proposals over code-digested
 evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
 
+### Added — packages swarm: MCP surface, latency, doc-honesty (2026-07-12)
+
+Three coordinated packages settled against the tree by the architect memo
+(`docs/plans/` handoff). All fail-open by construction; caches are
+optimisations, never correctness gates.
+
+- **MCP surface.** `poll-detached` — the instant, non-blocking snapshot of a
+  detached worker (lease pid-liveness + journal status + block-terminal
+  presence; local, no SSH), the MCP-safe complement to the blocking
+  `wait-detached`: it reports `running` / `exited_recorded` /
+  `exited_unrecorded` / `no_lease`, naming the run-#12 dead-worker gap
+  explicitly (`ops/monitor/poll_detached.py`,
+  `_wire/queries/poll_detached.py`). The MCP-direct read/recovery verbs
+  (`read-decisions`, `verify-relay`, `attention-queue`, `revise-resolved`,
+  `poll-detached`) are now curated-reachable over MCP, pinned by a new
+  reachability lint (`scripts/lint_skill_mcp_reachability.py`) that fails when
+  a SKILL names a verb MCP-direct that isn't reachable. Relay parity is proven,
+  not re-implemented: the autofetch hooks are unnecessary over MCP by
+  construction (the envelope IS the structured tool result), pinned by
+  envelope-parity tests, with the Stop-guard enforcement half named honestly as
+  having no MCP equivalent. A second-client elicitation proof
+  (`tests/test_mcp_elicitation_client_proof.py`) certifies capability-1 over a
+  non-Claude client end to end.
+- **Latency.** The persistent asyncssh SSH engine now defaults **on** under
+  `mcp-serve` (the one long-lived process where a persistent connection
+  amortises; every other verb is one-shot), honouring a user-preset engine and
+  an `HPC_MCP_NO_SSH_ENGINE=1` opt-out, and falling back automatically on any
+  engine trouble (`cli/mcp.py`). A cross-process on-disk `ClusterSnapshot`
+  cache (`state/snapshot_cache.py`, 60s TTL, `HPC_NO_SNAPSHOT_CACHE=1` bypass)
+  backs `inspect_cluster` between the in-process cache miss and the backend
+  fetch; only successful (error-free) snapshots are cached. The CLI fast-path
+  plugin gate is narrowed from "any plugin present" to "a CLI-shaping
+  (`register_cli`) plugin present", so primitives-only plugins keep the fast
+  path (`cli/dispatch.py`).
+- **Doc-honesty.** `docs/internals/submit-sequence.md` and
+  `docs/workflows/code-driven-orchestration.md` rewritten against the live
+  block-drive substrate (the deleted worker-prompt / resolver modules purged).
+  New contract pins guard operational docs: console-script and
+  `src/hpc_agent/...` path references in `docs/internals/` + `docs/workflows/`
+  must resolve (`tests/contracts/test_doc_references.py`), and
+  `docs/design/*.md` `status:` frontmatter must use the closed vocabulary
+  {plan, shipped, superseded, partial} with no landed-banner on a `status:
+  plan` doc (`tests/contracts/test_doc_status_headers.py`).
+
 ### Added — MCP elicitation (the second capability-1 channel, 2026-07-08)
 
 - The MCP server's hand-rolled JSON-RPC pump is now **bidirectional**
@@ -64,6 +108,32 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
   mis-sequenced call fails loudly. **`submit-speculate`** runs a speculative
   canary during S1 review (budget of 1, nudge-invalidation both free via the
   canary TTL cache).
+
+### Added — opt-in continuous-async campaign refill (RFC #362, Phase 1)
+
+- **`campaign-refill`** — the autonomous refill actor
+  (`ops/campaign_refill.py`). Once a campaign is greenlit and its manifest sets
+  `async_refill`, the pool is kept ~full instead of draining to zero at each
+  iteration barrier: each tick calls `campaign-advance` authoritatively and, on
+  `decision == "refill"`, resolves + detach-submits `refill_count` fresh
+  iterations **sequentially** through `resolve-submit-inputs` (the per-slot
+  sidecar write advances the async optuna scaffold's proposal index, so each
+  slot gets a **distinct** trial) + `campaign-run` (the per-iteration spine).
+  No new state files, no cursor — partial ticks self-correct via
+  `in_flight`-shrinking `refill_count`. The greenlit manifest is the standing
+  consent; `campaign-refill` refuses an un-greenlit campaign and carries no
+  per-iteration human boundary.
+- **Wiring:** `campaign-watch` gains a fourth no-boundary terminator
+  `watching_refill` (split out of `watching_healthy`); `block-drive` chains
+  `campaign-watch/watching_refill → campaign-refill` in code and ends the chain
+  there (the next tick re-enters via `campaign-watch` — one step per tick).
+  `load-context` routes a deterministic `kind="cli"` refill step when async is
+  on, the manifest is greenlit, and advance decided `refill`.
+- **Opt-in & default-safe:** with `async_refill` unset the behavior is
+  byte-identical to the synchronous batch loop (property-tested); every new
+  branch is dead unless the flag is set. **Not yet non-experimental:** the
+  Phase-2 live-verify gate (`scripts/campaign_async_live_verify.py`, RFC §10)
+  has not run on a real cluster.
 
 ### Added — §5 recovery machine
 

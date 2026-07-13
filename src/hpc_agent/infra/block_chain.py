@@ -61,6 +61,13 @@ ORDER: dict[str, list[str]] = {
     "status": ["status-snapshot", "status-watch"],
     "aggregate": ["aggregate-check", "aggregate-run"],
     "campaign": ["campaign-greenlight", "campaign-watch", "campaign-complete"],
+    # RFC #362: campaign-refill is a side-spur off campaign-watch (watching_refill),
+    # NOT a linear campaign touchpoint — adding it to the "campaign" chain would
+    # shift the block_index positions the §4 field-change routing compares for the
+    # three real touchpoints. Its own single-member family gives it a WORKFLOW_OF
+    # entry + block_index(0) (so the SUCCESSORS coverage test's WORKFLOW_OF
+    # membership assertion holds) without perturbing the campaign chain.
+    "campaign-refill": ["campaign-refill"],
 }
 
 # Each block verb → its workflow family. Derived from ORDER so the two can never
@@ -219,6 +226,7 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     # aggregate-run — end of the aggregate chain.
     ("aggregate-run", "harvested"): None,
     ("aggregate-run", "harvest_partial"): None,
+    ("aggregate-run", "detached"): None,  # brief arrives via the journal.
     # ── campaign family ───────────────────────────────────────────────────────
     # campaign-greenlight
     ("campaign-greenlight", "greenlit"): "campaign-watch",  # stamped → observe.
@@ -227,9 +235,17 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     # campaign-watch
     ("campaign-watch", "watching_complete"): "campaign-complete",  # stop fired → completion.
     ("campaign-watch", "watching_healthy"): None,  # self-chains async — no boundary, no hint.
+    ("campaign-watch", "watching_refill"): "campaign-refill",  # free slots → refill (#362).
     ("campaign-watch", "watching_anomaly"): None,  # loud-fail / budget halt — human decides.
     # campaign-complete — end of the campaign chain.
     ("campaign-complete", "complete"): None,
+    # campaign-refill (RFC #362) — a side-spur off watch; every stage ends the
+    # chain, so the next cron/loop tick re-enters via campaign-watch (one step
+    # per tick). NOT in ORDER["campaign"] (it is not a linear touchpoint) and NOT
+    # in GATED_BLOCKS (its own greenlight refusal is the consent check).
+    ("campaign-refill", "refilled"): None,  # chain ends; next tick re-enters via campaign-watch.
+    ("campaign-refill", "no_refill_needed"): None,  # advance said wait/stop/continue — noop.
+    ("campaign-refill", "refill_blocked"): None,  # live-prior / scaffold escalation — human.
 }
 
 
@@ -290,7 +306,66 @@ def next_block_hint(
     verb = successor_verb(current_verb, stage_reached)
     if verb is None:
         return None
-    return {"verb": verb, "why": why, "spec_hint": dict(spec_hint)}
+    return {"verb": verb, "why": why, "spec_hint": _complete_spec_hint(verb, dict(spec_hint))}
+
+
+# ── spec_hint completeness (notebook-audit.md Addendum 8, item 13) ─────────────
+
+# The driver passes an UNGATED successor's ``spec_hint`` VERBATIM as that block's
+# input spec (``_kernel/lifecycle/block_drive._chain``). A hint that omits a
+# required NESTED sub-block the successor's ``--spec`` model mandates bounces off
+# that validator the instant the driver crosses the boundary — an unrecoverable
+# mid-chain stall on an unattended tick (run #11: a submit-s3 spec bounced on a
+# missing required ``monitor``). Where a successor requires the run identity under
+# a nested sub-block, compose that shape HERE from the flat ``run_id`` the
+# terminator already carries; the sub-spec's own schema defaults fill the rest
+# (``MonitorFlowSpec`` needs only ``run_id``). This is IDENTITY reshaping over
+# opaque caller content (engineering-principles Q1), never fabricating semantics —
+# and it is idempotent: a terminator that already emits the nested shape (e.g.
+# ``status-snapshot`` → ``{"monitor": {"run_id": ...}}``) is left untouched.
+
+
+def _wrap_run_id_under(nested_key: str) -> Any:
+    """A shaper that lifts a flat ``run_id`` hint into ``{nested_key: {run_id}}``.
+
+    A no-op when the hint carries no ``run_id`` or already nests ``nested_key``.
+    Non-``run_id`` fields the terminator passed (e.g. ``canary_run_id``) are
+    preserved alongside — they stay declared fields on the successor's spec.
+    """
+
+    def _shape(spec_hint: dict[str, Any]) -> dict[str, Any]:
+        run_id = spec_hint.get("run_id")
+        if run_id is None or nested_key in spec_hint:
+            return spec_hint
+        reshaped = {k: v for k, v in spec_hint.items() if k != "run_id"}
+        reshaped[nested_key] = {"run_id": run_id}
+        return reshaped
+
+    return _shape
+
+
+# Successor verb → the shaper that completes its ``spec_hint`` into a shape the
+# successor's spec model accepts. Only the UNGATED chained successors need this
+# (a gated successor parks and runs under the human-committed ``resolved`` spec,
+# not the hint — ``block_drive.run_tick`` §3): ``status-watch`` embeds the run
+# identity under a required ``monitor`` sub-block, so a flat-``run_id`` terminator
+# (``submit-s3`` watching_timeout, ``status-watch`` watch_timeout self-loop) would
+# otherwise hand the driver a spec ``StatusWatchSpec`` rejects.
+_SUCCESSOR_SPEC_SHAPERS: dict[str, Any] = {
+    "status-watch": _wrap_run_id_under("monitor"),
+}
+
+
+def _complete_spec_hint(successor: str, spec_hint: dict[str, Any]) -> dict[str, Any]:
+    """Reshape ``spec_hint`` into a shape *successor*'s ``--spec`` model accepts.
+
+    The completeness half of the successor table: ``next_block_hint`` routes every
+    hint through here so an ungated in-code chain never hands the driver a spec its
+    successor's validator would bounce. Pinned by
+    ``tests/contracts/test_spec_hint_completeness.py``.
+    """
+    shaper = _SUCCESSOR_SPEC_SHAPERS.get(successor)
+    return shaper(spec_hint) if shaper is not None else spec_hint
 
 
 def is_gated(verb: str) -> bool:

@@ -50,6 +50,24 @@ def _mk(exp: Path, run_id: str, *, status: str = "in_flight", **kw: object) -> R
     return rec
 
 
+def test_snapshot_brief_echoes_hpc_env_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The morning digest echoes every exported HPC_* override (B15, run-12
+    finding 24 addendum) — the surface an agent reads first is where a stray
+    transport override that reroutes ssh must be visible. Disclosure only."""
+    import os
+
+    for key in [k for k in os.environ if k.startswith("HPC_") and k != "HPC_JOURNAL_DIR"]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HPC_SSH_ENGINE", "asyncssh")
+
+    result = status_snapshot(tmp_path, spec=StatusSnapshotSpec(now_iso=_NOW, mark_seen=False))
+    echoed = result.brief["active_env_overrides"]
+    assert echoed["HPC_SSH_ENGINE"] == "asyncssh"
+    assert all(k.startswith("HPC_") for k in echoed)
+
+
 def test_snapshot_brief_carries_attention_ordered_by_the_one_seat(tmp_path: Path) -> None:
     _mk(tmp_path, "run-stalled")
     stamp_tick(

@@ -22,6 +22,9 @@ sidecars and campaign scratch already live under)::
     <experiment_dir>/.hpc/scopes/<tag>.decisions.jsonl         # scope_kind="scope"
     <experiment_dir>/.hpc/notebooks/<audit_id>.decisions.jsonl # scope_kind="notebook"
     <experiment_dir>/.hpc/registrations/<registration_id>.decisions.jsonl  # "registration"
+    <experiment_dir>/.hpc/packs/<pack_name>.decisions.jsonl    # scope_kind="pack"
+    <experiment_dir>/.hpc/conclusions/<conclusion_id>.decisions.jsonl  # "conclusion"
+    <experiment_dir>/.hpc/challenges/<challenge_id>.decisions.jsonl  # scope_kind="challenge"
 
 One JSONL record per exchange, newest last, **append-only**: a write
 never rewrites or truncates a prior record. Appends are serialized under
@@ -53,6 +56,7 @@ __all__ = [
     "append_decision",
     "read_decisions",
     "latest_decision",
+    "is_committed_greenlight_for_boundary",
     "is_latest_committed_greenlight",
     "decisions_path",
 ]
@@ -79,7 +83,33 @@ SCHEMA_VERSION = 1
 # ``append-decision`` under the R6 gate; the journal stores the shape, never any
 # field/prerequisite vocabulary. It is a SIXTH kind (never coupled to a run's
 # journal — a registration outlives any single run and spans dossier re-exports).
-SCOPE_KINDS = frozenset({"run", "campaign", "scope", "notebook", "registration"})
+# A "pack" decision journals the bind/receipt touchpoints of a domain pack
+# (``docs/design/domain-packs.md``, "The bind event") — the mechanical
+# ``pack-bind`` / ``pack-receipt`` CODE attestations that ride ``append-decision``
+# under a caller-authored pack ``name``; the journal stores the shape, never any
+# seam/reader/pattern vocabulary. It is a SEVENTH kind; packs and the registration
+# kernel took the next two slots in whichever order they landed — the kinds are
+# independent (``docs/design/registration-kernel.md`` R9).
+# A "conclusion" decision journals a human-authored finding — the one new record
+# type of evidence memory (``docs/design/evidence-memory.md`` E-shape) — under a
+# caller-authored ``conclusion_id``: the ``conclusion`` / ``conclusion-revoke``
+# attestations that ride ``append-decision`` under the E-shape gate; the journal
+# stores the shape, never any tag/finding vocabulary. It is an EIGHTH kind (never
+# coupled to a run or campaign journal — a conclusion typically spans several and
+# outlives any one of them; the R9 rationale).
+# A "challenge" decision journals a human-authored, evidence-bound, sha-targeted
+# attestation of DISSENT against a committed record — the missing "this is wrong"
+# object (``docs/design/challenge-attestation.md`` C-shape) — under a
+# caller-authored ``challenge_id``: the ``challenge`` / ``challenge-verdict`` /
+# ``challenge-withdraw`` records that ride ``append-decision`` under the C-gate
+# locks; the journal stores the shape, never any grounds/reasoning vocabulary. It
+# is a NINTH kind, deliberately its OWN store rather than riding the target's
+# journal (C-shape: a challenge may target a conclusion / registration / sign-off /
+# fingerprint sample across four+ path branches, and some targets have no journal
+# to ride — the R9 one-branch-per-family rule).
+SCOPE_KINDS = frozenset(
+    {"run", "campaign", "scope", "notebook", "registration", "pack", "conclusion", "challenge"}
+)
 
 _log = logging.getLogger(__name__)
 
@@ -132,6 +162,18 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
         from hpc_agent._kernel.contract.layout import RepoLayout
 
         return RepoLayout(experiment_dir).hpc / "registrations" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "pack":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "packs" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "conclusion":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "conclusions" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "challenge":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "challenges" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign" (validated above)
     from hpc_agent.meta.campaign.dirs import campaign_dir
 
@@ -161,6 +203,7 @@ def append_decision(
     proposal: str | list[Any] | dict[str, Any] | None = None,
     resolved: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
+    attestor_id: str | None = None,
     ts: str | None = None,
 ) -> dict[str, Any]:
     """Append one ``y``/nudge exchange to a scope's decision journal.
@@ -170,6 +213,15 @@ def append_decision(
     auto-stamped (current UTC ISO-8601) when omitted — the one field no
     caller has any business asserting. Returns the record written (the
     caller can echo it back as confirmation).
+
+    *attestor_id* is the OPAQUE, harness-asserted multi-human actor slug of the
+    session that authored this record (``docs/design/multi-human.md`` MH3/MH4).
+    It is ADDITIVE and default-``None``: when ``None`` (today's single-actor
+    world, or a >1-actor session whose actor did not resolve) the key is NOT
+    emitted, so the on-disk record is byte-identical to before multi-human — the
+    byte-identity pin. Present only when the ``ops`` gate resolved a session
+    actor under a >1-actor declaration; readers tolerate the extra key
+    (forward-compat, no schema bump). Core never verifies who set it.
 
     Append-only: this never reads-modifies-writes a prior record; a second
     call always adds a new line after the first.
@@ -196,6 +248,10 @@ def append_decision(
         "resolved": dict(resolved) if resolved else {},
         "provenance": dict(provenance) if provenance else {},
     }
+    if attestor_id is not None:
+        # Additive, opaque, harness-asserted (MH3): stamped ONLY when a session
+        # actor resolved under a >1-actor declaration. Absent → byte-identical.
+        record["attestor_id"] = attestor_id
     _append_jsonl_line(decisions_path(experiment_dir, scope_kind, scope_id), record)
     return record
 
@@ -250,17 +306,52 @@ def latest_decision(experiment_dir: Path, scope_kind: str, scope_id: str) -> dic
 def is_latest_committed_greenlight(experiment_dir: Path, scope_kind: str, scope_id: str) -> bool:
     """True iff a scope's most recent decision is a committed ``y`` greenlight.
 
-    This is the decision-journal half of the §5 "committed-but-unadvanced"
-    predicate — the other half being a still-set ``pending_decision`` marker
-    (``state.journal.is_awaiting_decision``). It is the single canonical
-    encoding of the rule the ``block-drive`` Stop guard
-    (``_kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced``)
-    and the out-of-session ``doctor`` both key their advance detection on: the
-    LATEST record has ``response == "y"``. A trailing nudge (or no decision
-    yet) is not a greenlight, so the two surfaces agree on when a parked driver
-    holds an approved-but-unconsumed decision that must be advanced.
+    UNSCOPED latest-record read: true whenever the LATEST record has
+    ``response == "y"``, with no regard for WHICH boundary that ``y`` targeted.
+    Correct for touchpoint-level questions — "is the human's newest word on
+    this scope an approval?" (the campaign-pending queue collector, the
+    relay-audit standing check). NOT sufficient for the §5
+    "committed-but-unadvanced" advance detection: a consumed ``y`` is never
+    removed from the journal, so after a driver consumes it and re-parks, the
+    latest record is a STALE greenlight (bug-sweep #1/#23, run-12 finding 21).
+    Advance detection must use :func:`is_committed_greenlight_for_boundary`,
+    which the Stop guard, ``doctor``, and the attention queue's
+    greenlight-unadvanced split all route through.
 
     Raises :class:`errors.SpecInvalid` on a bad scope.
     """
     latest = latest_decision(experiment_dir, scope_kind, scope_id)
     return latest is not None and latest.get("response") == "y"
+
+
+def is_committed_greenlight_for_boundary(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> bool:
+    """True iff the scope's latest decision is the greenlight for THIS parked boundary.
+
+    The decision-journal half of the §5 "committed-but-unadvanced" predicate,
+    BOUNDARY-SCOPED (bug-sweep #1/#23, run-12 finding 21): the latest record
+    must be a ``y`` that NAMES the parked marker's ``next_verb`` and was
+    journaled at-or-after the marker's ``awaiting_since`` — the single shared
+    rule (:func:`hpc_agent._kernel.lifecycle.block_drive.greenlight_targets_boundary`)
+    the ``block-drive`` Stop guard, the out-of-session ``doctor``, and the
+    attention queue's greenlight-unadvanced split all key on, so no surface can
+    read a consumed greenlight as a fresh one. *next_verb*/*awaiting_since*
+    come from the run's ``pending_decision`` marker (its ``resume_cursor``).
+
+    Raises :class:`errors.SpecInvalid` on a bad scope.
+    """
+    latest = latest_decision(experiment_dir, scope_kind, scope_id)
+    if latest is None:
+        return False
+    # Lazy import: block_drive imports this module at top level; the shared
+    # predicate is pure (no journal I/O), so the one-way runtime import here
+    # keeps the single definition without an import cycle.
+    from hpc_agent._kernel.lifecycle.block_drive import greenlight_targets_boundary
+
+    return greenlight_targets_boundary(latest, next_verb=next_verb, awaiting_since=awaiting_since)

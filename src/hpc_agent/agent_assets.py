@@ -27,6 +27,9 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any
 
+from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.io import atomic_write_text
+
 __all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets"]
 
 
@@ -395,7 +398,7 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
     config["mcpServers"] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    atomic_write_text(config_path, json.dumps(config, indent=2, sort_keys=False) + "\n")
     return {"config_path": str(config_path), "action": action, "wrote": True}
 
 
@@ -517,9 +520,7 @@ def _merge_hook_entry(
     settings["hooks"] = hooks
 
     claude_dir.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
     return {
         "settings_path": str(settings_path),
         "action": action,
@@ -531,8 +532,7 @@ def _skill_allow_rule(skill_name: str) -> str:
     """Return the canonical ``permissions.allow`` entry for a Skill grant.
 
     Mirrors the ``Bash(<prefix>:*)`` parameterised matcher format Claude Code
-    uses for the existing precedent in ``ops/memory/interview.py``'s
-    ``_maybe_write_claude_permissions`` (which grants ``Bash(hpc-agent:*)``).
+    uses (the ``Bash(hpc-agent:*)`` grant this installer writes user-globally).
     For Skill, the natural matcher is the skill name, so the entry is
     ``Skill(<name>)`` — narrowest grant per bundled skill rather than a
     blanket ``"Skill"``.
@@ -625,13 +625,211 @@ def _merge_skill_permissions(
     settings["permissions"] = permissions
 
     claude_dir.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
     return {
         "settings_path": str(settings_path),
         "action": "added",
         "added": missing,
+        "wrote": True,
+    }
+
+
+# Raw-ssh / raw-scp DENY rules (anti-vendor-lockout ruling (a), 2026-07-10;
+# NARROWED 2026-07-10 per user: "hpc-agent should be a TOOL and not something
+# that takes over the user's entire workspace"). The improvisation class — an
+# agent hand-rolling ``ssh <cluster> "<cmd>"`` / ``scp`` instead of a sanctioned
+# verb — bypasses the #346 connection-storm guards (ConnectTimeout /
+# IdentitiesOnly / the per-host safe_interval throttle in infra/ssh_throttle)
+# that only protect the cluster when ALL SSH flows through infra.remote.ssh_run.
+# The lint (scripts/lint_no_raw_ssh.py) already removes the affordance from
+# agent-facing PROSE; this closes the runtime side: a DENY on the agent's Bash
+# tool so a raw ssh/scp the model authors AT RUN TIME dies at the permission
+# layer, not in honor-system conduct prose.
+#
+# The original ruling text said "against cluster hosts" — the first install
+# wrote a BLANKET ``Bash(ssh:*)`` / ``Bash(scp:*)`` deny into the user-GLOBAL
+# ``~/.claude/settings.json``, which blocked ALL ssh/scp in EVERY project on the
+# box (tool-that-takes-over). The narrowing: derive the deny from the CONFIGURED
+# CLUSTER HOSTS the install can see (packaged default + user overrides via
+# :func:`hpc_agent.infra.clusters.load_clusters_config`) and emit HOST-SCOPED
+# rules — ``Bash(ssh *<host>*)`` / ``Bash(scp *<host>*)`` per host. So only ssh
+# to a configured cluster is denied; ssh to any other host (a colleague's box, a
+# git remote, a VM) is untouched. When no hosts are resolvable at install time we
+# install NO deny rules at all — the user-side cluster-ssh confirm-guard hook is
+# the backstop. The sanctioned hpc-agent verbs dial ssh INSIDE their own
+# subprocesses (never via the agent's Bash tool), so they are unaffected either
+# way.
+#
+# Rule form: the ``Bash(<pat>)`` matcher globs ``*`` anywhere (per the Claude
+# Code settings docs, whose own deny example is ``Bash(curl *)``). ``ssh
+# *<host>*`` matches the ``ssh`` command with the host token anywhere in the
+# argv — as ``ssh user@host``, ``ssh -i key host cmd``, or a bare ``ssh host`` —
+# while ``ssh-keygen`` / ``ssh-add`` (distinct command tokens with no cluster
+# host) and the identifier forms ``ssh_run`` / ``ssh_target`` do not match a
+# real cluster host and are not denied.
+
+# The over-broad BLANKET rules the pre-narrowing install wrote user-globally.
+# The installer REMOVES exactly these two on every run so an upgrade heals the
+# over-reach — matched by exact string, so no other ``deny`` entry is touched.
+_BLANKET_SSH_DENY_RULES: list[str] = ["Bash(ssh:*)", "Bash(scp:*)"]
+
+
+def _configured_cluster_hosts() -> list[str]:
+    """Resolve the SSH host tokens from the clusters config the install can see.
+
+    Uses :func:`hpc_agent.infra.clusters.load_clusters_config`, which searches
+    (in order) ``HPC_CLUSTERS_CONFIG`` → ``~/.hpc-agent/clusters.yaml`` → the
+    packaged ``config/clusters.yaml`` default — so a user override wins and a
+    bare pip install still sees the shipped hoffman2 / discovery hosts. Returns
+    the sorted, de-duplicated ``host`` values, skipping empty entries and the
+    angle-bracketed ``<...>`` placeholders the bundled template ships (a
+    placeholder host is not a real cluster to scope a deny to). Best-effort: a
+    bad / missing config yields no hosts (and thus no deny rules) rather than
+    breaking the install.
+    """
+    try:
+        config = load_clusters_config()
+    except Exception:  # noqa: BLE001 — a bad/missing config must not break install
+        return []
+    if not isinstance(config, dict):
+        return []
+    hosts: list[str] = []
+    for entry in config.values():
+        if not isinstance(entry, dict):
+            continue
+        host = entry.get("host")
+        if not isinstance(host, str):
+            continue
+        host = host.strip()
+        if not host or host.startswith("<"):
+            continue
+        if host not in hosts:
+            hosts.append(host)
+    return sorted(hosts)
+
+
+def _raw_ssh_deny_rules(hosts: list[str]) -> list[str]:
+    """Host-scoped raw-ssh/scp DENY rules — two per configured cluster *host*.
+
+    ``Bash(ssh *<host>*)`` + ``Bash(scp *<host>*)`` for each host (see the module
+    comment above for the glob semantics and the tool-not-takeover narrowing).
+    Empty when *hosts* is empty — no configured cluster means no deny rules.
+    """
+    rules: list[str] = []
+    for host in hosts:
+        rules.append(f"Bash(ssh *{host}*)")
+        rules.append(f"Bash(scp *{host}*)")
+    return rules
+
+
+def _merge_deny_rules(
+    claude_dir: Path,
+    deny_rules: list[str],
+    *,
+    remove_rules: list[str],
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Idempotently host-scope the raw-ssh/scp ``Bash(...)`` DENY rules.
+
+    Two coupled operations on ``permissions.deny``, both narrow:
+
+    * **add** the host-scoped *deny_rules* (``Bash(ssh *<host>*)`` /
+      ``Bash(scp *<host>*)`` — see :func:`_raw_ssh_deny_rules`) that aren't
+      already present; and
+    * **remove** any *remove_rules* still present — the over-broad blanket
+      ``Bash(ssh:*)`` / ``Bash(scp:*)`` an earlier install wrote
+      (:data:`_BLANKET_SSH_DENY_RULES`), so an upgrade heals the over-reach.
+
+    Sibling of :func:`_merge_skill_permissions`: same skip-unparseable +
+    dry-run contract. Removal is by **exact string** against *remove_rules*
+    only, so every other ``deny`` entry (``Bash(rm -rf:*)``, a user's own rule)
+    and every other permission key (``allow``) is preserved verbatim. Idempotent:
+    a settings file already host-scoped and blanket-free is an
+    ``"already-present"`` no-op. When *deny_rules* is empty (no configured
+    hosts) nothing is added, but a stale blanket rule is still removed — the
+    migration heals the over-reach even on a host-less box.
+
+    Returns ``{settings_path, action, added, removed, wrote}`` where ``action``
+    is:
+
+    * ``"added"`` — at least one host-scoped rule appended (blanket rules, if
+      any, removed in the same write)
+    * ``"updated"`` — nothing to add, but a stale blanket rule was removed
+    * ``"already-present"`` — nothing to add and no blanket rule to remove
+    * ``"skipped-unparseable"`` — existing settings.json is not a JSON object
+    * ``"dry-run-would-add"`` — would have written but ``dry_run=True``
+
+    ``added`` lists the rule strings actually appended, ``removed`` the blanket
+    rules actually dropped (both empty on ``"already-present"``); on dry-run,
+    the strings that *would* have been added / removed.
+    """
+    settings_path = claude_dir / "settings.json"
+
+    settings: dict[str, Any]
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "added": [],
+                "removed": [],
+                "wrote": False,
+            }
+        if not isinstance(loaded, dict):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "added": [],
+                "removed": [],
+                "wrote": False,
+            }
+        settings = loaded
+    else:
+        settings = {}
+
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        permissions = {}
+    deny = permissions.get("deny")
+    if not isinstance(deny, list):
+        deny = []
+
+    missing = [rule for rule in deny_rules if rule not in deny]
+    stale = [rule for rule in remove_rules if rule in deny]
+
+    if not missing and not stale:
+        return {
+            "settings_path": str(settings_path),
+            "action": "already-present",
+            "added": [],
+            "removed": [],
+            "wrote": False,
+        }
+
+    if dry_run:
+        return {
+            "settings_path": str(settings_path),
+            "action": "dry-run-would-add",
+            "added": missing,
+            "removed": stale,
+            "wrote": False,
+        }
+
+    # Drop the blanket rules (exact-string only), keep every other entry, then
+    # append the host-scoped rules that were missing.
+    deny = [rule for rule in deny if rule not in remove_rules] + missing
+    permissions["deny"] = deny
+    settings["permissions"] = permissions
+
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
+    return {
+        "settings_path": str(settings_path),
+        "action": "added" if missing else "updated",
+        "added": missing,
+        "removed": stale,
         "wrote": True,
     }
 
@@ -671,6 +869,39 @@ def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> 
         f"hpc-agent setup needs to install {kind_phrase} here. "
         "Move or remove the conflicting file, then re-run."
     )
+
+
+def _skill_is_internal(skill_dir: Any) -> bool:
+    """True when a skill's ``SKILL.md`` frontmatter marks it maintainer-only.
+
+    A skill flagged ``internal: true`` (or ``distribution: maintainer``) in its
+    leading ``---``-fenced YAML frontmatter is a maintainer procedure (the
+    ``release`` skill bumps versions, commits, and builds wheels) that must never
+    be copied into an end user's ``~/.claude/skills`` nor granted an auto-invoke
+    ``Skill(...)`` permission (bug-sweep #58). Parsed with a minimal frontmatter
+    scan — no yaml dependency, and only the frontmatter block is consulted.
+    """
+    md = skill_dir / "SKILL.md"
+    try:
+        text = md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        k = key.strip().lower()
+        v = value.strip().strip('"').strip("'").lower()
+        if k == "internal" and v in ("true", "yes", "1"):
+            return True
+        if k == "distribution" and v == "maintainer":
+            return True
+    return False
 
 
 def _install_tree(
@@ -714,6 +945,13 @@ def _install_tree(
             cleared.append(cleared_path)
         for skill in skills_src.iterdir():
             if not skill.is_dir():
+                continue
+            if _skill_is_internal(skill):
+                # Maintainer-only skills (e.g. ``release`` — it bumps versions,
+                # commits, builds wheels) are NEVER installed into an end user's
+                # ~/.claude, and therefore never granted an auto-invoke
+                # ``Skill(...)`` permission (the permission merge below feeds off
+                # this returned ``skills`` list). bug-sweep #58.
                 continue
             skills.append(skill.name)
             if not dry_run:
@@ -785,9 +1023,25 @@ def install_agent_assets(
                                           "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
+            "settings_deny": {"settings_path": "...", "action": "added",
+                              "added": ["Bash(ssh *hoffman2.idre.ucla.edu*)", ...],
+                              "removed": ["Bash(ssh:*)", "Bash(scp:*)"], "wrote": <bool>},
             "mcp_server": {"config_path": "...", "action": "added", "wrote": <bool>},
             "wrote": <bool>,
         }
+
+    ``settings_deny`` reports the host-scoped merge of the raw-ssh / raw-scp
+    ``Bash(...)`` DENY rules into ``permissions.deny`` — see
+    :func:`_merge_deny_rules`. The rules are derived from the CONFIGURED CLUSTER
+    HOSTS the install can see (:func:`_configured_cluster_hosts`), so an agent
+    hand-rolling raw ssh/scp *to a cluster* dies at the permission layer while
+    ssh to any other host is untouched (the 2026-07-10 narrowing: hpc-agent is a
+    tool, not a workspace takeover). The same merge REMOVES the over-broad
+    blanket ``Bash(ssh:*)`` / ``Bash(scp:*)`` a pre-narrowing install wrote, so an
+    upgrade self-heals; ``removed`` lists what was dropped. No configured hosts →
+    no deny rules added (the user-side cluster-ssh confirm-guard hook is the
+    backstop). The sanctioned verbs dial inside hpc-agent's own processes and are
+    unaffected.
 
     ``mcp_server`` reports the additive, idempotent registration of the
     ``hpc-agent`` MCP server into ``.claude.json``'s ``mcpServers`` — see
@@ -947,6 +1201,22 @@ def install_agent_assets(
     # merge above.
     settings_permissions = _merge_skill_permissions(target, sorted(skills), dry_run=dry_run)
 
+    # DENY raw ssh/scp to the CONFIGURED CLUSTER HOSTS from the agent's Bash tool
+    # (anti-vendor-lockout ruling (a), narrowed 2026-07-10): host-scoped rules
+    # derived from the clusters config the install can see, so the improvisation
+    # class dies at the permission layer for cluster ssh while ssh to any other
+    # host is untouched (tool, not takeover). The same run REMOVES the over-broad
+    # blanket rules a pre-narrowing install wrote, so an upgrade self-heals. No
+    # configured hosts → no deny rules (the confirm-guard hook is the backstop).
+    # The sanctioned verbs dial ssh inside hpc-agent's own processes (never via
+    # agent Bash) and are unaffected either way.
+    settings_deny = _merge_deny_rules(
+        target,
+        _raw_ssh_deny_rules(_configured_cluster_hosts()),
+        remove_rules=_BLANKET_SSH_DENY_RULES,
+        dry_run=dry_run,
+    )
+
     return {
         "claude_dir": str(target),
         "commands_installed": sorted(commands),
@@ -963,6 +1233,7 @@ def install_agent_assets(
         "settings_answer_capture_hook": settings_answer_capture_hook,
         "settings_relay_audit_hook": settings_relay_audit_hook,
         "settings_permissions": settings_permissions,
+        "settings_deny": settings_deny,
         "mcp_server": mcp_server,
         "wrote": not dry_run,
     }

@@ -21,6 +21,12 @@
       "description": "Capability name -> the named tier its absence degrades to.",
       "title": "Tier Consequences",
       "type": "object"
+    },
+    "harness_contract_version": {
+      "default": "",
+      "description": "The SemVer of the harness contract this verb reports against — the single ``HARNESS_CONTRACT_VERSION`` constant beside the verb (``ops/harness_capabilities.py``), pinned equal to the ``docs/internals/harness-contract.md`` version line and the conformance kit's stamped version (conformance-kit D-K6/K10). Within major 1 the contract is additive-only.",
+      "title": "Harness Contract Version",
+      "type": "string"
     }
   },
   "$defs": {

@@ -84,6 +84,7 @@ def _run(experiment_dir: Path, **overrides):
         input_roots=overrides.pop("input_roots", []),
         inventory_roots=overrides.pop("inventory_roots", []),
         audit_id=overrides.pop("audit_id", None),
+        engines=overrides.pop("engines", []),
     )
     return notebook_draft_context(experiment_dir=experiment_dir, spec=spec)
 
@@ -135,6 +136,41 @@ def test_engine_resolution_signature_and_doc(tmp_path: Path) -> None:
     assert summarize.resolved is True
     assert summarize.signature == "rows"
     assert summarize.doc == "Summarize the rows into a single line."
+
+
+def test_declared_engine_module_symbol_resolves_with_tag(tmp_path: Path) -> None:
+    # Finding 6b: a caller-declared module.symbol entry resolves exactly like a
+    # template import and carries the declared provenance tag.
+    _setup(tmp_path)
+    result = _run(tmp_path, engines=["engines.report.summarize"])
+    declared = [e for e in result.resolved_engines if e.declared]
+    # summarize is ALSO a template import — the dedup keeps the template's copy.
+    assert declared == []
+    result2 = _run(tmp_path, engines=["engines.widget"])
+    by_name = {e.name: e for e in result2.resolved_engines if e.declared}
+    widget = by_name["widget"]
+    assert widget.resolved is True
+    assert widget.module == "engines.widget"
+    assert widget.symbol is None
+    assert widget.doc == "Widget engine module docstring."
+    assert "[declared]" in result2.markdown
+
+
+def test_declared_engine_unresolvable_listed_honestly(tmp_path: Path) -> None:
+    _setup(tmp_path)
+    result = _run(tmp_path, engines=["numpy.linalg.solve"])
+    solve = next(e for e in result.resolved_engines if e.name == "solve")
+    assert solve.declared is True
+    assert solve.resolved is False
+    assert "[declared]" in result.markdown
+
+
+def test_declared_engines_change_cache_key(tmp_path: Path) -> None:
+    # Same tree, different declared engines => different projection (no stale hit).
+    _setup(tmp_path)
+    base = _run(tmp_path)
+    with_declared = _run(tmp_path, engines=["engines.widget"])
+    assert base.markdown != with_declared.markdown
 
 
 def test_stdlib_import_listed_unresolved(tmp_path: Path) -> None:

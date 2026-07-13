@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from hpc_agent.ops.overnight import HEAL_ATTEMPT_KIND, record_consumption
 from hpc_agent.state import run_story as rs
 from hpc_agent.state.block_terminal import record_terminal
 from hpc_agent.state.decision_briefs import append_brief
@@ -235,6 +236,75 @@ def test_notebook_non_attestation_block_skipped(tmp_path: Path) -> None:
     assert rs.project_notebook_decisions(read_decisions(tmp_path, "notebook", "audit-1"), "a") == []
 
 
+# ── the Class-C2 overnight finding projection (overnight-repair §4.4/§7.4) ────────
+
+
+def test_c2_finding_projection_carries_cause_class_disposition(tmp_path: Path) -> None:
+    # A journaled Class-C2 finding (a result anomaly is science) — written with the
+    # REAL ledger writer, never hand-forged JSONL.
+    record_consumption(
+        tmp_path,
+        scope_kind="run",
+        scope_id="r1",
+        consumed_block="campaign-watch",
+        event_kind="auto-advance",
+        failed_at=_TS,
+        detail={"heal_class": "C2", "cause": "result-anomaly"},
+    )
+    events = rs.project_c2_findings(rs._read_overnight_c2_ledger(tmp_path, "r1"), "r1")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.stream == "overnight-ledger"
+    assert ev.actor == "code"  # a finding is code-composed — a human projection FAILS here
+    assert ev.kind == "c2-finding"
+    assert ev.subject_id == "r1"
+    assert ev.ts == _TS  # the finding's failed_at (when it happened overnight)
+    assert ev.evidence["cause"] == "result-anomaly"
+    assert ev.evidence["heal_class"] == "C2"
+    assert ev.evidence["disposition"] == "report-only"
+    assert ev.text == ""
+
+
+def test_non_c2_heal_record_not_projected(tmp_path: Path) -> None:
+    # An A/B heal is OPERATIONAL (the healer's own audit trail, kept by the morning
+    # brief) — NOT an observation about the experiment, so it never enters the story.
+    record_consumption(
+        tmp_path,
+        scope_kind="run",
+        scope_id="r1",
+        consumed_block="campaign-watch",
+        event_kind=HEAL_ATTEMPT_KIND,
+        failed_at=_TS,
+        detail={"heal_class": "A", "outcome": "respawned"},
+    )
+    assert rs.project_c2_findings(rs._read_overnight_c2_ledger(tmp_path, "r1"), "r1") == []
+
+
+def test_absent_overnight_ledger_is_empty_not_error(tmp_path: Path) -> None:
+    # No ledger at all → no findings (the tolerant-read doctrine); never a crash.
+    assert rs._read_overnight_c2_ledger(tmp_path, "ghost") == []
+    assert rs.project_c2_findings([], "ghost") == []
+
+
+def test_build_story_includes_run_scoped_c2_finding(tmp_path: Path) -> None:
+    upsert_run(tmp_path, _run_record("r1"))
+    record_consumption(
+        tmp_path,
+        scope_kind="run",
+        scope_id="r1",
+        consumed_block="campaign-watch",
+        event_kind="auto-advance",
+        failed_at="2026-07-08T17:00:00+00:00",
+        detail={"heal_class": "C2", "cause": "stale-wheel"},
+    )
+    story = rs.build_story(tmp_path, run_ids=["r1"])
+    c2 = [e for e in story if e.stream == "overnight-ledger"]
+    assert len(c2) == 1
+    assert c2[0].kind == "c2-finding"
+    assert c2[0].subject_id == "r1"
+    assert c2[0].evidence["cause"] == "stale-wheel"
+
+
 # ── the merge (D2) ────────────────────────────────────────────────────────────
 
 
@@ -264,6 +334,13 @@ def test_merge_stream_rank_tie_break() -> None:
         "notebook-journal",
         "journal-record",
     ]
+
+
+def test_overnight_ledger_ranks_after_journal_record_same_second() -> None:
+    # The C2 finding is a DERIVED overnight observation — on a same-second tie it
+    # sorts AFTER the run's own journal-record stamps (appended rank, no shift).
+    merged = rs.merge_events([_ev("overnight-ledger"), _ev("journal-record")])
+    assert [e.stream for e in merged] == ["journal-record", "overnight-ledger"]
 
 
 def test_merge_preserves_intra_stream_order() -> None:

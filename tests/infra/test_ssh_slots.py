@@ -22,7 +22,6 @@ from hpc_agent.infra.ssh_slots import (
     DEFAULT_MAX_CONNECTIONS,
     SLOT_JITTER_MAX_SEC,
     SLOT_POLL_BASE_SEC,
-    SLOT_TTL_SEC,
     SLOT_WAIT_MAX_SEC,
     acquire_slot,
     connection_slot,
@@ -133,7 +132,7 @@ class TestCap:
             slept.append(seconds)
             clock.advance(seconds)
             if len(slept) == 2:  # a holder finishes while we wait
-                release_slot(tokens[0])
+                release_slot(tokens[0], pid=100)  # slot0 was claimed by pid 100
 
         tok = acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=pid, pid_alive=_ALIVE)
         assert tok is not None and tok.exists()
@@ -216,6 +215,80 @@ class TestGiveUp:
 
 
 # ---------------------------------------------------------------------------
+# F-N: a blocked waiter discloses who holds the slots (never silent)
+# ---------------------------------------------------------------------------
+
+
+class TestWaitDisclosure:
+    def test_wait_past_first_interval_discloses_holders(self, capsys):
+        """FIRES: a wait that passes SLOT_DISCLOSE_FIRST_SEC emits a periodic
+        disclosure naming the host, the elapsed wait, and each holder's pid +
+        liveness + claim age — so a long block is legible, not silent."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)  # slots held by pids 100, 101
+
+        def sleeper(seconds: float) -> None:
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=500, pid_alive=_ALIVE)
+
+        err = capsys.readouterr().err
+        assert "still waiting" in err
+        assert HOST in err
+        # Both holders named with pid + liveness + age (deterministic wording).
+        assert "slot0=pid:100" in err
+        assert "slot1=pid:101" in err
+        assert "age:" in err
+        # Liveness is the reclaim signal now that pid-liveness is the sole reaper
+        # (the disclosure reads it via the REAL probe; fake test pids read DEAD).
+        assert "alive" in err or "DEAD" in err
+
+    def test_immediate_claim_emits_no_disclosure(self, capsys):
+        """PASSES: a free slot is claimed with no wait, so no disclosure line is
+        emitted (the heartbeat is a wait-only diagnostic)."""
+        clock = FakeClock()
+        tok = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=100, pid_alive=_ALIVE)
+        assert tok is not None
+        assert "still waiting" not in capsys.readouterr().err
+
+    def test_disclosure_is_periodic_after_the_first(self, capsys):
+        """A wait long enough for several disclosure intervals emits more than
+        one heartbeat line — the operator gets a steady signal, not a one-shot."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)
+
+        def sleeper(seconds: float) -> None:
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=501, pid_alive=_ALIVE)
+
+        lines = [ln for ln in capsys.readouterr().err.splitlines() if "still waiting" in ln]
+        # SLOT_WAIT_MAX_SEC (120s) / SLOT_DISCLOSE_INTERVAL_SEC (30s) ⇒ several.
+        assert len(lines) >= 2
+
+    def test_disclosure_failure_never_breaks_the_wait(self, monkeypatch, capsys):
+        """Fail-open: a disclosure that raises must NOT perturb the wait — the
+        waiter still bounds out with SshSlotWaitTimeout, disclosure swallowed."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)
+
+        import hpc_agent.infra.ssh_slots as slots
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("disclosure blew up")
+
+        monkeypatch.setattr(slots, "_slot_hold_disclosure", _boom)
+
+        def sleeper(seconds: float) -> None:
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=502, pid_alive=_ALIVE)
+
+
+# ---------------------------------------------------------------------------
 # Breaker interplay: open circuit ⇒ fail fast, never queue
 # ---------------------------------------------------------------------------
 
@@ -282,6 +355,45 @@ class TestRelease:
     def test_release_none_is_noop(self):
         release_slot(None)
 
+    def test_release_of_own_live_claim_unlinks(self):
+        """The ordinary path still frees the slot for the next waiter."""
+        clock = FakeClock()
+        (token,) = _claim_n(1, clock, first_pid=100)
+        assert token.exists()
+        release_slot(token, pid=100)
+        assert not token.exists()
+
+    def test_release_after_reclaim_does_not_delete_successors_claim(self):
+        """bug-sweep #35 (ownership-bound release, now the PRIMARY hand-off after
+        the G4 TTL removal): A's slot is reclaimed by B after A's pid reads dead;
+        B now holds slot0. When A's process (a raced pid-reuse successor on a
+        shared home) releases its stale token, the unlink must be a NO-OP —
+        deleting the path would evict B's LIVE claim and over-admit a third
+        concurrent connection to the host the limiter exists to protect."""
+        clock = FakeClock()
+        tokens = _claim_n(2, clock, first_pid=100)  # A=pid100 on slot0, pid101 on slot1
+        slot0 = tokens[0]
+        assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 100
+        # A's pid (100) reads DEAD, so B (pid 200) reclaims the stale slot0 by
+        # pid-liveness — no wall clock involved.
+        tok_b = acquire_slot(
+            TARGET, clock=clock, sleep=_no_sleep, pid=200, pid_alive=lambda pid: pid != 100
+        )
+        assert tok_b == slot0  # B reclaimed slot0
+        assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 200
+        # A releases its now-reclaimed token: must NOT delete B's live claim.
+        release_slot(slot0, pid=100)
+        assert slot0.exists()
+        assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 200
+
+    def test_release_missing_doc_is_noop_and_never_raises(self):
+        """A token whose file is already gone (or unreadable) releases as a
+        silent no-op — nothing verifiable to unlink, fail-safe."""
+        clock = FakeClock()
+        (token,) = _claim_n(1, clock, first_pid=100)
+        token.unlink()  # simulate the file having vanished
+        release_slot(token, pid=100)  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # Cross-process sharing (file-based state)
@@ -334,17 +446,29 @@ class TestReclaim:
         assert tok is not None
         assert json.loads(tok.read_text(encoding="utf-8"))["pid"] == 200
 
-    def test_ttl_expired_slot_is_reclaimed_even_if_pid_looks_alive(self):
+    def test_live_pid_slot_is_never_reclaimed_by_wall_clock(self):
+        """G4 shrink: there is NO wall-clock TTL. A slot whose holder pid is
+        still ALIVE is never reclaimable no matter how long it has been held —
+        the acquirer waits and bounds out rather than over-admitting (a
+        wall-clock lease below the worst legitimate hold was the #35
+        over-admission)."""
         clock = FakeClock()
         _claim_n(2, clock)
-        clock.advance(SLOT_TTL_SEC + 1)
-        tok = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=201, pid_alive=_ALIVE)
-        assert tok is not None
+        clock.advance(1_000_000)  # an arbitrarily long, alive hold
+        slept: list[float] = []
+
+        def sleeper(seconds: float) -> None:
+            slept.append(seconds)
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=201, pid_alive=_ALIVE)
+        assert slept  # actually waited — never stole a live slot on age alone
 
     def test_fresh_live_claim_is_never_stolen(self):
         clock = FakeClock()
         _claim_n(2, clock)
-        clock.advance(SLOT_TTL_SEC / 2)  # aged, but inside the TTL
+        clock.advance(60.0)  # aged, but the holder pids are alive
         slept: list[float] = []
 
         def sleeper(seconds: float) -> None:

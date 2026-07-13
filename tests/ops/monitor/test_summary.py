@@ -14,7 +14,7 @@ the journal record + the most recent line of
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -35,8 +35,8 @@ def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
-def _seed(experiment: Path, run_id: str = "r1", **overrides) -> RunRecord:
-    base = dict(
+def _seed(experiment: Path, run_id: str = "r1", **overrides: Any) -> RunRecord:
+    base: dict[str, Any] = dict(
         run_id=run_id,
         profile="p",
         cluster="c",
@@ -55,7 +55,13 @@ def _seed(experiment: Path, run_id: str = "r1", **overrides) -> RunRecord:
 
 
 def _write_ticks(experiment: Path, run_id: str, *records: dict) -> None:
-    path = experiment / ".hpc" / "runs" / f"{run_id}.monitor.jsonl"
+    # Write through the SAME journal-runs-dir path helper the production tick
+    # writers use, so the fixture and the reader can actually meet. The old
+    # hand-written ``<experiment>/.hpc/runs/`` (cluster sidecar) path masked
+    # the summary reader's wrong-path bug (finding #14).
+    from hpc_agent.ops.monitor.tick_log import _tick_log_path
+
+    path = _tick_log_path(experiment, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
 
@@ -155,8 +161,10 @@ def test_combined_and_failed_waves_in_body(tmp_path: Path, journal_home: Path) -
 
 def test_malformed_jsonl_line_skipped(tmp_path: Path, journal_home: Path) -> None:
     """A bad line in the tick log shouldn't tank the read; we take the most recent valid line."""
+    from hpc_agent.ops.monitor.tick_log import _tick_log_path
+
     _seed(tmp_path)
-    path = tmp_path / ".hpc" / "runs" / "r1.monitor.jsonl"
+    path = _tick_log_path(tmp_path, "r1")
     path.parent.mkdir(parents=True, exist_ok=True)
     valid_record = {
         "summary": {"complete": 4, "running": 0, "pending": 6, "failed": 0},
@@ -168,6 +176,37 @@ def test_malformed_jsonl_line_skipped(tmp_path: Path, journal_home: Path) -> Non
     )
     out = monitor_summary(tmp_path, run_id="r1")
     assert "complete=4" in out["body"]
+
+
+def test_terminal_tick_from_real_writer_summarized_terminal(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """Finding #14: the reader must resolve the tick log to the SAME journal
+    runs dir the production writer (``_append_tick``) appends to — not the
+    cluster sidecar ``.hpc/runs/`` path. A terminal tick written by the REAL
+    writer must summarize as terminal with armed_hint=None. Before the fix the
+    reader saw no tick and reported in_flight with a "schedule the next tick"
+    hint — the run-#8 arm-a-cron-on-a-finished-run class."""
+    from hpc_agent.ops.monitor.tick_log import _append_tick
+
+    _seed(tmp_path)
+    _append_tick(
+        tmp_path,
+        "r1",
+        summary={"complete": 10, "running": 0, "pending": 0, "failed": 0},
+        diff_from_prev={
+            "newly_complete": [],
+            "newly_failed": [],
+            "newly_combined_waves": [],
+        },
+        actions=[],
+        lifecycle_state="complete",
+        next_tick_seconds=None,
+    )
+    out = monitor_summary(tmp_path, run_id="r1")
+    assert out["lifecycle_state"] == "complete"
+    assert "terminal" in out["headline"]
+    assert out["armed_hint"] is None
 
 
 def test_empty_run_id_raises(tmp_path: Path) -> None:

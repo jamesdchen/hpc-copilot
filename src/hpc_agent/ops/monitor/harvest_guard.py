@@ -141,6 +141,34 @@ def harvest_on_terminal(
     }
     combiner_dir: str | None = None
 
+    # POSITIVE-EVIDENCE GATE (run-#12 finding 19): the "abnormal-exit"
+    # sentinel means the WATCH died, not the run — three ssh timeouts
+    # unwound the poll loop while 27 healthy jobs sat in the queue, and this
+    # guard then pulled a LIVE run's results for 1800s. Under the sentinel,
+    # harvest only when the JOURNAL positively records a terminal status
+    # (read FRESH — the caller's record predates the unwind); otherwise
+    # record a clean skip and return. The watchdog / doctor re-arm the
+    # watch, and the real terminal path harvests later under its own cause.
+    if terminal_cause == "abnormal-exit":
+        from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES
+        from hpc_agent.state.journal import load_run
+
+        fresh: Any | None = None
+        with contextlib.suppress(Exception):
+            fresh = load_run(experiment_dir, run_id)
+        status = getattr(fresh if fresh is not None else record, "status", None)
+        if status not in TERMINAL_STATUSES:
+            marker["harvest_skipped_reason"] = "run_not_terminal"
+            _log.warning(
+                "terminal harvest: abnormal watch exit for run %s but the journal "
+                "records status %r (not terminal) — clean skip, nothing pulled; "
+                "re-arm the watch (the watchdog sees the stamp gap).",
+                run_id,
+                getattr(status, "value", status),
+            )
+            _write_marker(experiment_dir, run_id, marker)
+            return marker
+
     # (a) Metrics harvest — the same aggregate entry the driver routes to,
     #     so a crash / session-death after the terminal tick still yields a
     #     metrics envelope. Operational failures (SSH down, nothing to

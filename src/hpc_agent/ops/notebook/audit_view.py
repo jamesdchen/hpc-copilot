@@ -73,7 +73,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from hpc_agent.execution.mapreduce.data_trace_contract import (
+    RECEIPT_GRADE_SOURCES,
+    TRACE_SOURCE_FIELD,
+)
 from hpc_agent.state.audit_source import ParsedModule, normalize_source
+from hpc_agent.state.data_trace import records_sha
 
 __all__ = [
     "INHERITED",
@@ -86,6 +91,7 @@ __all__ = [
     "AuditView",
     "build_audit_view",
     "render_markdown",
+    "render_summary_markdown",
 ]
 
 #: Classification of a source section against the template (by source-hash, D6).
@@ -141,6 +147,7 @@ class SectionView:
     tier: str
     view_sha: str
     payload: Mapping[str, Any]
+    trace_summary: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +171,12 @@ class AuditView:
     template_module_sha: str
     view_sha: str
     payload: Mapping[str, Any]
+    #: The compose-ready DRAFT for each dropped template slug (draft-at-pass):
+    #: ``(slug, template_section_source)`` in template order. Pure presentation —
+    #: NOT part of ``view_sha`` (the roll-up already covers the dropped slugs), and
+    #: never applied to the source. Defaulted for back-compat with any positional
+    #: constructor; :func:`build_audit_view` always populates it.
+    dropped_template_drafts: tuple[tuple[str, str], ...] = ()
 
 
 # ── canonical JSON / hashing ─────────────────────────────────────────────────
@@ -310,6 +323,113 @@ def _tier(classification: str, flags_count: int, assertions_green: bool) -> str:
     return HUMAN_REQUIRED
 
 
+# ── the section join — per-section runtime-evidence summary (Amendment 16) ────
+#
+# B3-LEAN: each human_required section's trusted render carries a per-section
+# summary — one line per OBSERVABLE whose value CHANGED across the section
+# (first→last), the LATEST execution only, citing the SET-sha of the section's
+# record subset. Freshness rides ``section_sha`` the runner stamps: a section
+# whose latest-execution records are NOT stamped with the current section_sha is
+# STALE and its summary is ELIDED with a disclosed marker (a missing stamp =
+# stale, so a runner that does not stamp degrades honestly, never rendered as if
+# current). Receipts/sign-off surfaces consume RUNNER-TIER records ONLY (A10).
+
+_RECEIPT_GRADE = frozenset(RECEIPT_GRADE_SOURCES)
+
+
+def _latest_execution(runner_records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The LAST execution's records, segmenting the runner stream on a ``seq`` reset.
+
+    One ``observe_source`` pass emits ``seq`` monotone from 0 across ALL its
+    sections; a new pass restarts at 0. So a record whose ``seq`` does not exceed
+    the prior one opens a new execution — the last segment is the latest execution
+    (Amendment 16 "the LATEST execution only"). Records lacking an int ``seq`` do
+    not open a segment (they ride the current one). Pure.
+    """
+    execs: list[list[Mapping[str, Any]]] = []
+    current: list[Mapping[str, Any]] = []
+    prev_seq: int | None = None
+    for rec in runner_records:
+        seq = rec.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            if prev_seq is not None and seq <= prev_seq:
+                execs.append(current)
+                current = []
+            prev_seq = seq
+        current.append(rec)
+    if current:
+        execs.append(current)
+    return execs[-1] if execs else []
+
+
+def _changed_observables(subset: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """First→last atoms per observable that MOVED across the section (else nothing).
+
+    Groups the section's records by ``stage`` (the observable name), keeping the
+    FIRST and LAST atoms seen in append order; an observable whose first and last
+    atoms are equal did not move and contributes NO line (Amendment 16 "unchanged
+    observables render nothing"). Observable order is first-appearance order for a
+    deterministic render.
+    """
+    first: dict[str, Any] = {}
+    last: dict[str, Any] = {}
+    order: list[str] = []
+    for rec in subset:
+        name = rec.get("stage")
+        if not isinstance(name, str) or not name:
+            continue
+        atoms = rec.get("atoms")
+        if name not in first:
+            first[name] = atoms
+            order.append(name)
+        last[name] = atoms
+    return [
+        {"observable": name, "first": first[name], "last": last[name]}
+        for name in order
+        if first[name] != last[name]
+    ]
+
+
+def _section_trace_summary(
+    slug: str, current_section_sha: str, audit_traces: Sequence[Mapping[str, Any]]
+) -> dict[str, Any] | None:
+    """The B3-LEAN per-section runtime summary, or ``None`` when nothing to show.
+
+    Reduces the audit-scope trace records to this section's evidence:
+
+    1. keep RUNNER-TIER records only (A10 — sign-off never sees engine/draft);
+    2. take the LATEST execution (:func:`_latest_execution`) then this section's
+       subset (records tagged with *slug*);
+    3. no subset → ``None`` (no evidence; the section renders as it always did);
+    4. FRESHNESS — the subset's stamped ``section_sha`` set must be exactly
+       ``{current_section_sha}``; any missing/mismatched stamp → STALE, returns
+       ``{"stale": True}`` (the summary is ELIDED with a disclosed marker, never
+       rendered as if current);
+    5. the CHANGED observables (:func:`_changed_observables`); none changed →
+       ``None`` (unchanged renders nothing);
+    6. else ``{"stale": False, "section_records_sha": <SET-sha of the subset>,
+       "changed": [...]}``.
+
+    Pure. The returned mapping is JSON-native (it enters the hashed payload, so it
+    is part of what the human signs).
+    """
+    runner = [r for r in audit_traces if r.get(TRACE_SOURCE_FIELD) in _RECEIPT_GRADE]
+    subset = [r for r in _latest_execution(runner) if r.get("section") == slug]
+    if not subset:
+        return None
+    stamped = {r.get("section_sha") for r in subset}
+    if stamped != {current_section_sha}:
+        return {"stale": True}
+    changed = _changed_observables(subset)
+    if not changed:
+        return None
+    return {
+        "stale": False,
+        "section_records_sha": records_sha([dict(r) for r in subset]),
+        "changed": changed,
+    }
+
+
 # ── the builder ──────────────────────────────────────────────────────────────
 
 
@@ -320,6 +440,7 @@ def build_audit_view(
     *,
     receipt: Mapping[str, Any] | None = None,
     attention_order: Sequence[str] | None = None,
+    audit_traces: Sequence[Mapping[str, Any]] | None = None,
 ) -> AuditView:
     """Build the deterministic :class:`AuditView` for *source* against *template*.
 
@@ -342,8 +463,19 @@ def build_audit_view(
     the module-level ``view_sha`` (a reorder that actually moves sections moves
     the roll-up); per-section ``view_sha`` values are unaffected. It is pure
     caller config — never a tier or authorship input.
+
+    *audit_traces* (A16 B3-LEAN, the section join) are the audit-scope trace
+    records (``read_trace(experiment_dir, "audit", audit_id, 0)``; ``None`` = no
+    trace). Each ``human_required`` section gets a per-section runtime summary
+    (:func:`_section_trace_summary`): one line per observable whose value moved
+    across the section's LATEST execution, citing the SET-sha of the section's
+    record subset. It is bound into that section's ``view_sha`` (signed evidence,
+    not presentation) and is ABSENT when there is nothing to show — byte-identical
+    to a trace-free view. A STALE section (its latest records not stamped with the
+    current ``section_sha``, or unstamped) is elided with a disclosed marker.
     """
     template_by_slug = {s.slug: s for s in template.sections}
+    traces = audit_traces or ()
 
     section_views: list[SectionView] = []
     for sect in source.sections:
@@ -356,6 +488,15 @@ def build_audit_view(
         green = _assertions_green(assertions, sect.slug, receipt, sect.section_sha)
         tier = _tier(classification, len(flags), green)
 
+        # Section join (A16 B3-LEAN): runtime evidence rides ONLY the sections
+        # that route human attention, and enters the hashed payload (signed
+        # evidence). Absent when there is nothing to show → byte-identical.
+        summary = (
+            _section_trace_summary(sect.slug, sect.section_sha, traces)
+            if tier == HUMAN_REQUIRED
+            else None
+        )
+
         payload: dict[str, Any] = {
             "slug": sect.slug,
             "classification": classification,
@@ -366,6 +507,8 @@ def build_audit_view(
             "lint_flags": [_plainify(f) for f in flags],
             "tier": tier,
         }
+        if summary is not None:
+            payload["trace_summary"] = summary
         section_views.append(
             SectionView(
                 slug=sect.slug,
@@ -378,6 +521,7 @@ def build_audit_view(
                 tier=tier,
                 view_sha=_sha_json(payload),
                 payload=payload,
+                trace_summary=summary,
             )
         )
 
@@ -394,6 +538,12 @@ def build_audit_view(
 
     source_slugs = set(source.slugs)
     dropped = tuple(s.slug for s in template.sections if s.slug not in source_slugs)
+    # Draft-at-pass: the missing section's draft is KNOWN — it is the template's
+    # own cell source verbatim. Compose it (never applied to the source), disclosed
+    # only in the markdown footer, so it never enters the ``view_sha`` payload.
+    dropped_drafts = tuple(
+        (s.slug, s.source) for s in template.sections if s.slug not in source_slugs
+    )
 
     module_payload: dict[str, Any] = {
         "source_module_sha": source.module_sha,
@@ -408,6 +558,7 @@ def build_audit_view(
         template_module_sha=template.module_sha,
         view_sha=_sha_json(module_payload),
         payload=module_payload,
+        dropped_template_drafts=dropped_drafts,
     )
 
 
@@ -452,6 +603,38 @@ def _render_section(sv: SectionView) -> list[str]:
     else:
         lines.append("(none)")
     lines.append("")
+
+    lines.extend(_render_trace_summary(sv))
+    return lines
+
+
+def _render_trace_summary(sv: SectionView) -> list[str]:
+    """The section-join runtime-evidence block (A16 B3-LEAN), or nothing.
+
+    Rendered ONLY when a section carries a ``trace_summary`` (a human_required
+    section with runtime evidence): a STALE section discloses the elision and
+    shows no values (never rendered as if current); a fresh section lists one
+    line per CHANGED observable (first→last atoms) and cites the SET-sha of the
+    section's record subset. Deterministic; carries no verdict vocabulary — the
+    values are the runner's own measurements.
+    """
+    summary = sv.trace_summary
+    if not summary:
+        return []
+    lines = ["### runtime evidence (latest execution)", ""]
+    if summary.get("stale"):
+        lines.append(
+            "(section trace is STALE — its latest execution predates the current "
+            "section code; the summary is elided)"
+        )
+        lines.append("")
+        return lines
+    lines.append(f"- section_records_sha: {summary.get('section_records_sha')}")
+    for entry in summary.get("changed", ()):
+        first = _canonical_json(_plainify(entry.get("first")))
+        last = _canonical_json(_plainify(entry.get("last")))
+        lines.append(f"- {entry.get('observable')}: {first} -> {last}")
+    lines.append("")
     return lines
 
 
@@ -482,8 +665,93 @@ def render_markdown(view: AuditView) -> str:
         lines.extend(_render_section(sv))
 
     lines.extend(_render_next_actions(view))
+    lines.extend(_render_dropped_drafts(view))
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_summary_markdown(view: AuditView, render_paths: Mapping[str, str] | None = None) -> str:
+    """The bodies-OMITTED DIGEST render (run-#12 finding 12, B1; user-ruled: OMIT
+    at the source, never compact downstream).
+
+    Under popup-primary the model is no longer the display channel: the diff /
+    assertion / flag BODIES live in the per-section render files and the
+    sign-off popup, so shipping ~11k tokens of them through the agent every
+    loop pass is pure cost plus a re-summarization temptation. This render
+    carries the header, ONE metadata line per section (slug, tier,
+    classification, sha12s, verdict/diff COUNTS), a POINTER to where that
+    section's full render lives (its ``render_path``, when *render_paths* is
+    supplied — a ``{slug: experiment_relpath}`` mapping), and the SAME
+    next-actions footer + compose-ready dropped drafts. Nothing here summarizes
+    a body — it is the metadata BESIDE the bodies, deterministic and
+    code-authored like its sibling. *render_paths* is pure presentation
+    (relpath pointers), never part of any ``view_sha``.
+    """
+    paths = render_paths or {}
+    lines: list[str] = []
+    lines.append("# Notebook audit view (metadata; bodies live in the render files + popup)")
+    lines.append("")
+    lines.append(f"- view_sha: {view.view_sha}")
+    lines.append(f"- source module_sha: {view.source_module_sha}")
+    lines.append(f"- template module_sha: {view.template_module_sha}")
+    if view.dropped_template_slugs:
+        dropped = ", ".join(view.dropped_template_slugs)
+        lines.append(
+            f"- dropped template sections (present in template, absent in source): {dropped}"
+        )
+    lines.append("")
+    if not view.sections:
+        lines.append("(no sections)")
+        lines.append("")
+    for sv in view.sections:
+        added = sum(1 for ln in sv.diff if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in sv.diff if ln.startswith("-") and not ln.startswith("---"))
+        lines.append(
+            f"- {sv.slug}  [{sv.tier}] {sv.classification} — "
+            f"section_sha {sv.section_sha[:12]}, view_sha {sv.view_sha[:12]}, "
+            f"diff +{added}/-{removed}, {len(sv.assertions)} assertion(s), "
+            f"{len(sv.lint_flags)} lint flag(s)"
+        )
+        render_path = paths.get(sv.slug)
+        if render_path:
+            lines.append(f"  - full render: {render_path}")
+    lines.append("")
+    lines.extend(_render_next_actions(view))
+    lines.extend(_render_dropped_drafts(view))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_dropped_drafts(view: AuditView) -> list[str]:
+    """Compose-ready drafts for the sections the source DROPPED (draft-at-pass).
+
+    When the source omits a template section, the missing section's draft is
+    KNOWN — it is the template's own cell source, verbatim (marker included). The
+    poka-yoke composes it here so the human/LLM pastes a structurally-complete
+    section, rather than being merely TOLD a slug is missing and left to re-derive
+    it (the run-#10 conversion doctrine: compose what code can). Pure presentation:
+    it is NOT part of ``view_sha`` (the roll-up already covers the dropped SLUGS,
+    exactly as ``_render_next_actions`` adds nothing the sha covers), and it NEVER
+    edits the source — applying the draft stays the human's/LLM's act.
+    """
+    if not view.dropped_template_drafts:
+        return []
+    lines: list[str] = ["## compose the dropped sections", ""]
+    lines.append(
+        "These template sections are absent from the source; the graduation gate "
+        "(T9) refuses on them. Each draft below is the template's own cell source "
+        "(marker included) — paste it into the source in template order, then "
+        "re-run the loop from lint. Applying it is your act; the view never edits "
+        "the source."
+    )
+    lines.append("")
+    for slug, source in view.dropped_template_drafts:
+        lines.append(f"### {slug}")
+        lines.append("")
+        lines.append("```python")
+        lines.append(source.rstrip("\n"))
+        lines.append("```")
+        lines.append("")
+    return lines
 
 
 def _render_next_actions(view: AuditView) -> list[str]:

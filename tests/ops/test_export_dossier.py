@@ -41,7 +41,7 @@ from hpc_agent.state.decision_journal import append_decision
 from hpc_agent.state.fingerprint_store import fingerprint_path
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
-from hpc_agent.state.runs import write_run_sidecar
+from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 from hpc_agent.state.scopes import record_lock, record_look
 
 if TYPE_CHECKING:
@@ -188,6 +188,23 @@ def test_every_seeded_store_becomes_exactly_one_entry(journal_home: Path, experi
     assert not result.gaps
     assert result.entry_count == len(result.manifest["entries"])
     assert result.run_ids == [_RID]
+
+
+def test_corrupt_sidecar_degrades_to_gap_not_crash(journal_home: Path, experiment: Path) -> None:
+    """#43: a torn / hand-edited / newer-schema sidecar must degrade the identity
+    projection (null-padded), not crash export_dossier / the recompute lock. The
+    raw sidecar bytes are still sealed at the no-parse boundary."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+    # Corrupt the sidecar AFTER seeding — a truncated write the strict
+    # read_run_sidecar parse would raise json.JSONDecodeError on.
+    run_sidecar_path(experiment, _RID).write_text('{"run_id": "', encoding="utf-8")
+
+    # Succeeds (no uncaught traceback); the recompute signature is total.
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+    assert result.run_ids == [_RID]
+    assert compute_dossier_signature(experiment_dir=experiment, run_id=_RID)
+    # The raw (corrupt) sidecar bytes are still sealed as a source entry.
+    assert "sidecar" in _sources_of(result.manifest)
 
 
 def test_archive_layout_and_manifest_are_written(journal_home: Path, experiment: Path) -> None:
@@ -506,6 +523,46 @@ def test_dry_signature_reflects_the_fingerprint_ledger_identically(
     assert sig.write_map[key] == _FINGERPRINT_LEDGER_BYTES
     with zipfile.ZipFile(result.archive_path) as zf:
         assert zf.read(key) == sig.write_map[key]
+
+
+def _write_conformance_ledger(experiment_dir: Path, reg_id: str, data: bytes) -> Path:
+    """Write a registration-conformance ledger straight to disk (opaque to the bundler)."""
+    base = experiment_dir / "_aggregated" / "_conformance"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{reg_id}.jsonl"
+    path.write_bytes(data)
+    return path
+
+
+def test_conformance_ledger_is_sealed_byte_for_byte(journal_home: Path, experiment: Path) -> None:
+    """A registration-conformance ledger seals under the ``live-conformance`` noun as
+    RAW BYTES (C-dossier: a re-registration carries the live record that motivated
+    it). A deliberately-torn ledger must round-trip byte-identical — never parsed."""
+    import hashlib
+
+    _seed_full_run(experiment, _RID)
+    ledger_bytes = b'{"schema_version":1,"subject_kind":"conformance-observation","payload":{"rea'
+    _write_conformance_ledger(experiment, "reg-sensor-7", ledger_bytes)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    by_path = {e["path"]: e for e in result.manifest["entries"]}
+    entry = by_path["conformance/reg-sensor-7.jsonl"]
+    assert entry["source"] == "live-conformance"
+    assert set(entry) == {"source", "path", "sha256", "bytes"}  # no meaning field
+    assert entry["sha256"] == hashlib.sha256(ledger_bytes).hexdigest()
+    with zipfile.ZipFile(result.archive_path) as zf:
+        assert zf.read("conformance/reg-sensor-7.jsonl") == ledger_bytes  # opaque, never mutated
+
+
+def test_absent_conformance_dir_seals_nothing_and_records_no_gap(
+    journal_home: Path, experiment: Path
+) -> None:
+    """Absent-tolerant (unlike aggregated): no conformance dir → no entry, no gap."""
+    _seed_full_run(experiment, _RID)
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+    assert "live-conformance" not in _sources_of(result.manifest)
+    assert not [g for g in result.gaps if g["source"] == "live-conformance"]
 
 
 def test_appending_a_sample_between_exports_changes_the_bundle_sha(

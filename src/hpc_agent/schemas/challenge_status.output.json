@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/challenge_status.output.json",
+  "title": "challenge-status output data",
+  "description": "Shape of the ``data`` field on a ``challenge-status`` envelope (C-verb).\n\nThe reduced per-challenge statuses (both views), per-citation read-time\ndisclosure, the ``contested`` counts block, and the fleet skip accounting —\nplus the ``render`` markdown the agent relays VERBATIM and the ``view_sha``\n(the canonical-JSON sha of the deterministic brief) a subsequent verdict may\ncarry so the gate can RECOMPUTE what-they-saw (the v1.6 rule). ``computed_at``\ndates the whole projection.",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "render",
+    "view_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The instant the projection was computed against (ISO-8601 UTC).",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "challenges": {
+      "description": "The reduced challenges (thread: one; target view: all matching) — newest filed first.",
+      "items": {
+        "$ref": "#/$defs/ChallengeEntry"
+      },
+      "title": "Challenges",
+      "type": "array"
+    },
+    "citations_status": {
+      "description": "Per-citation read-time re-resolution disclosure (verified / unresolvable).",
+      "items": {
+        "$ref": "#/$defs/CitationStatusLine"
+      },
+      "title": "Citations Status",
+      "type": "array"
+    },
+    "contested": {
+      "$ref": "#/$defs/ContestedCounts",
+      "description": "The contested counts across the matched challenges (counts + identities)."
+    },
+    "skipped": {
+      "description": "Namespaces skipped during fleet collection (fail-open accounting).",
+      "items": {
+        "$ref": "#/$defs/SkippedNamespace"
+      },
+      "title": "Skipped",
+      "type": "array"
+    },
+    "render": {
+      "description": "The deterministic markdown brief — relayed to the human verbatim.",
+      "title": "Render",
+      "type": "string"
+    },
+    "view_sha": {
+      "description": "Canonical-JSON sha of the rendered brief — the view a later verdict may bind and the gate recomputes.",
+      "title": "View Sha",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "ChallengeEntry": {
+      "additionalProperties": false,
+      "description": "One reduced challenge — its status, target, grounds, and (if ruled) verdict.\n\nThe lead of both views. ``status`` is the reduced per-challenge status;\n``resolution`` is the target's read-time re-resolution (disclosed, never\nrefused); ``grounds`` is the challenger's opaque free-text dissent (echoed\nverbatim, never parsed); ``verdict`` rides only when a ruling exists.",
+      "properties": {
+        "challenge_id": {
+          "description": "The challenge's caller-authored slug (opaque path segment).",
+          "title": "Challenge Id",
+          "type": "string"
+        },
+        "status": {
+          "description": "open | upheld | dismissed | withdrawn | superseded — the reduced status.",
+          "enum": [
+            "open",
+            "upheld",
+            "dismissed",
+            "withdrawn",
+            "superseded"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "filed_at": {
+          "description": "The filing record's ts — every challenge dated (the item ages while open).",
+          "title": "Filed At",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ChallengeTarget",
+          "description": "The committed record this challenge attacks (address + resolver kind)."
+        },
+        "resolution": {
+          "description": "found-current | found-superseded | unresolvable — the target re-resolved at read.",
+          "enum": [
+            "found-current",
+            "found-superseded",
+            "unresolvable"
+          ],
+          "title": "Resolution",
+          "type": "string"
+        },
+        "grounds": {
+          "description": "The challenger's free-text dissent — opaque, echoed verbatim, never interpreted.",
+          "title": "Grounds",
+          "type": "string"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChallengeVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The human verdict record when the challenge was ruled; null while open/withdrawn."
+        }
+      },
+      "required": [
+        "challenge_id",
+        "status",
+        "filed_at",
+        "target",
+        "resolution",
+        "grounds"
+      ],
+      "title": "challenge entry",
+      "type": "object"
+    },
+    "ChallengeTarget": {
+      "additionalProperties": false,
+      "description": "The committed record a challenge attacks — citation-shaped + the R3 address.\n\nThe ``kind`` dispatches target resolution through the SAME ``CITATION_KINDS``\nresolver table evidence-memory owns (one definition). ``subject_kind`` /\n``subject_id`` / ``content_sha`` are the full address the filing gate verified\nexists as a committed record at exactly this sha — echoed here VERBATIM;\n``subject_kind`` and ``subject_id`` are opaque caller identities, never parsed.",
+      "properties": {
+        "kind": {
+          "description": "The resolver-dispatch kind (closed set) — which store resolves the target.",
+          "enum": [
+            "dossier",
+            "run",
+            "fingerprint",
+            "attestation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subject_kind": {
+          "description": "The challenged record's subject_kind (opaque caller identity; echoed, never parsed).",
+          "title": "Subject Kind",
+          "type": "string"
+        },
+        "subject_id": {
+          "description": "The challenged record's subject_id (opaque caller identity; echoed, never parsed).",
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "content_sha": {
+          "description": "The exact challenged content_sha (the full address's discriminator).",
+          "title": "Content Sha",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "subject_kind",
+        "subject_id",
+        "content_sha"
+      ],
+      "title": "challenge target address",
+      "type": "object"
+    },
+    "ChallengeVerdict": {
+      "additionalProperties": false,
+      "description": "The human verdict that resolved a challenge (C4) — present only when ruled.\n\n``verdict`` is ``upheld`` | ``dismissed``; ``reasoning`` is the mandatory,\nopaque, verbatim-echoed dissent-resolution prose (never parsed); ``ts`` dates\nthe ruling. Absent on an ``open`` or ``withdrawn`` challenge (the\nemitted-only-when-present precedent). A verdict on a SINCE-superseded\nchallenge remains disclosed here even as ``status`` reads ``superseded``\n(both reported; superseded wins the headline — C-reduce).",
+      "properties": {
+        "verdict": {
+          "description": "upheld | dismissed — the human's resolution of the challenge.",
+          "enum": [
+            "upheld",
+            "dismissed"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "reasoning": {
+          "description": "The human's free-text resolution rationale — opaque, echoed verbatim, never parsed.",
+          "title": "Reasoning",
+          "type": "string"
+        },
+        "ts": {
+          "description": "The ruling's date (the verdict record's ts).",
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "reasoning",
+        "ts"
+      ],
+      "title": "challenge verdict record",
+      "type": "object"
+    },
+    "CitationStatusLine": {
+      "additionalProperties": false,
+      "description": "Per-citation read-time re-resolution disclosure (the E read posture).\n\nA challenge MUST cite evidence shas at filing (they resolve LIVE or the append\ngate refuses). Evidence legitimately moves afterward (archived, re-exported,\nwiped); the read side re-resolves each citation and reports ``verified`` per\nline — the challenge stays a truthful dated record; the drift is disclosed,\nthe reader decides (the append gate is the deliberate refuse exception, never\nrun here). ``challenge_id`` scopes the line to its challenge.",
+      "properties": {
+        "challenge_id": {
+          "description": "The challenge this cited evidence belongs to (opaque slug).",
+          "title": "Challenge Id",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The citation's resolver-dispatch kind (closed set) — its one resolver.",
+          "enum": [
+            "dossier",
+            "run",
+            "fingerprint",
+            "attestation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "description": "The opaque citation ref (run_id / cmd_sha key / dossier path); echoed, never parsed.",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sha": {
+          "description": "The full sha the challenge recorded for this citation.",
+          "title": "Sha",
+          "type": "string"
+        },
+        "verified": {
+          "description": "True = re-resolved and the sha still matches here; False = unresolvable/mismatched at read.",
+          "title": "Verified",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "challenge_id",
+        "kind",
+        "ref",
+        "sha",
+        "verified"
+      ],
+      "title": "challenge citation-status line",
+      "type": "object"
+    },
+    "ContestedCounts": {
+      "additionalProperties": false,
+      "description": "The ``contested`` projection every disclosure seat carries (C-status).\n\nCounts and identities, never a severity score (the attention-queue no-urgency\nrule; a merit score is core grading dissent). Parallel to — never folded into\n— any status vocabulary: a target can be ``current`` AND ``contested``. A\nseat whose target has ALL-ZERO counts omits the block entirely (the\nemitted-only-when-present precedent); this model is the shape when present.",
+      "properties": {
+        "open": {
+          "default": 0,
+          "description": "Count of open (unresolved, un-superseded) challenges.",
+          "title": "Open",
+          "type": "integer"
+        },
+        "upheld": {
+          "default": 0,
+          "description": "Count of upheld challenges.",
+          "title": "Upheld",
+          "type": "integer"
+        },
+        "dismissed": {
+          "default": 0,
+          "description": "Count of dismissed challenges.",
+          "title": "Dismissed",
+          "type": "integer"
+        },
+        "withdrawn": {
+          "default": 0,
+          "description": "Count of withdrawn challenges.",
+          "title": "Withdrawn",
+          "type": "integer"
+        },
+        "superseded": {
+          "default": 0,
+          "description": "Count of challenges the target's subject has moved past (computed).",
+          "title": "Superseded",
+          "type": "integer"
+        },
+        "challenge_ids": {
+          "description": "The challenge slugs counted here (identities, never a ranking); opaque.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Challenge Ids",
+          "type": "array"
+        }
+      },
+      "title": "challenge contested counts",
+      "type": "object"
+    },
+    "SkippedNamespace": {
+      "additionalProperties": false,
+      "description": "One namespace skipped during fleet collection, with the reason (fail-open).\n\nA wiped repo, an unreadable/torn ``repo.json``, or an absent store must never\ncrash the read — it is skipped silently and counted here (the evidence-memory\n/ attention-queue ``SkippedNamespace`` posture, mirrored).",
+      "properties": {
+        "ref": {
+          "description": "The repo_hash / namespace id that was skipped.",
+          "title": "Ref",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it was skipped (unreadable, torn, absent).",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "reason"
+      ],
+      "title": "challenge skipped namespace",
+      "type": "object"
+    }
+  }
+}

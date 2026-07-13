@@ -83,6 +83,22 @@ class CampaignRunSpec(BaseModel):
             "advance any cursor — the tag is pass-through context only."
         ),
     )
+    detach: bool = Field(
+        default=True,
+        description=(
+            "Detach-by-contract (design §3; run-#10 F-K): default ON — never-stall is "
+            "the norm. A campaign iteration's spine (submit → monitor to terminal → "
+            "aggregate) is minutes-to-hours of cluster-bound wall-clock, yet it ran "
+            "synchronously over the single-threaded MCP server. When True the whole "
+            "iteration runs in a durable detached worker and campaign-run returns "
+            "immediately with a {started, watch: journal, detached_pid} handle; the "
+            "iteration outcome (and its relay-due marker) is read from the journal on "
+            "completion. The detach seat wraps OUTSIDE the relay-due seam, so the "
+            "detached child still arms the relay-due marker on its terminal. Set False "
+            "to run the iteration synchronously in-process (the campaign driver's "
+            "in-code chain / tests / CI)."
+        ),
+    )
 
 
 class CampaignRunResult(BaseModel):
@@ -108,13 +124,21 @@ class CampaignRunResult(BaseModel):
         "run_abandoned",
         "aggregate_failed",
         "complete",
+        # Detach-by-contract (design §3; run-#10 F-K): campaign-run spawned a durable
+        # detached worker to own the whole submit→monitor→aggregate iteration and
+        # returned immediately — the real outcome (and its relay-due marker) arrives
+        # on completion, read from the journal (never held in a process that could
+        # wedge the synchronous MCP server for the length of an iteration).
+        "detached",
     ] = Field(description="Which stage of the iteration spine the composite reached / stopped at.")
     needs_decision: bool = Field(
         description=(
             "True for the failure / budget stages (submit_failed / run_failed / "
             "run_timeout / run_abandoned / aggregate_failed) that hand a decision "
-            "back; False for the clean `complete` terminal. run_timeout is the "
-            "budget case — nothing failed; the driver re-invokes to keep watching."
+            "back; False for the clean `complete` terminal and for the `detached` "
+            "handle (nothing to decide yet — the outcome arrives via the journal). "
+            "run_timeout is the budget case — nothing failed; the driver re-invokes "
+            "to keep watching."
         ),
     )
     reason: str = Field(description="Human-readable summary of the outcome / what must be decided.")
@@ -145,5 +169,42 @@ class CampaignRunResult(BaseModel):
             "The aggregate-flow `data` summary on a `complete` stage (combined_waves, "
             "failed_waves, aggregated_metrics, etc.); null when aggregate was not reached "
             "or did not produce a clean result."
+        ),
+    )
+    started: bool = Field(
+        default=False,
+        description=(
+            "Detach-by-contract handle (design §3; run-#10 F-K): True when campaign-run "
+            "spawned a durable detached worker to own the whole iteration and returned "
+            "immediately instead of running the spine in-process. The outcome is read "
+            "from the journal on completion. False on the synchronous (detach=False) path."
+        ),
+    )
+    watch: str | None = Field(
+        default=None,
+        description=(
+            'How to learn the detached iteration\'s outcome — ``"journal"`` when '
+            "``started`` is True. None on the synchronous path."
+        ),
+    )
+    detached_pid: int | None = Field(
+        default=None,
+        description=(
+            "The detached worker's OS process id (informational — do NOT wait on it; "
+            "read the journal). None on the synchronous path."
+        ),
+    )
+    active_env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Every framework-relevant HPC_* environment variable currently "
+            "exported in THIS process's environment, verbatim. Pure disclosure "
+            "— the brief never judges the values (run-12 finding 24 addendum, "
+            "B15). A campaign iteration submits, polls and pulls over SSH, so a "
+            "stray transport override (e.g. HPC_SSH_ENGINE='asyncssh') silently "
+            "reshapes every cluster call while the durable record says otherwise; "
+            "echoing it on the iteration brief makes the env-vs-record drift "
+            "visible at the decision boundary. An override that shows up here "
+            "unexpectedly IS the finding. Empty when no HPC_* variable is set."
         ),
     )

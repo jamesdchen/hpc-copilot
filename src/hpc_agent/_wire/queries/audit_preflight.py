@@ -19,14 +19,19 @@ class AuditPreflightSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="audit-preflight input spec")
 
-    template: str = Field(
+    template: str | None = Field(
+        default=None,
         description=(
             "Path (experiment-relative, or absolute) to the audit TEMPLATE .py — "
             "the percent-format module whose section slugs are the required "
             "inventory. Checked for: present, parses via parse_percent_source, and "
             "git-committed-clean at that path (an uncommitted/dirty template is an "
-            "'unsigned template' NO-GO — the commit IS the signature)."
-        )
+            "'unsigned template' NO-GO — the commit IS the signature). OMITTED => "
+            "composed from the bound pack's audit_template seam (the interview's "
+            "own selection, one definition — run-#12 finding 5); the composed path "
+            "is echoed on the result, and nothing composable is a loud refusal, "
+            "never a guess."
+        ),
     )
     source_roots: list[str] | None = Field(
         default=None,

@@ -526,3 +526,33 @@ def test_no_failed_clusters_is_clean_noop(journal_home: Path, experiment: Path) 
     )
     assert outcome.clusters == ()
     assert rec.calls == []
+
+
+# ── vocabulary gap: unvalidatable error_class degrades per-cluster ────────────
+
+
+def test_unknown_error_class_skips_cluster_not_tick(journal_home: Path, experiment: Path) -> None:
+    """A cluster whose error_class the wire FailureFeatures model cannot
+    validate (a future catalog row / leaked sentinel) must yield a per-cluster
+    'skipped' outcome — never a ValidationError killing the whole monitor
+    terminal-FAILED tick (bug-sweep #2 defense-in-depth). A sibling VALID
+    cluster in the same batch must still be resolved."""
+    _seed_record(experiment)
+    _write_sidecar(experiment, resources={"mem_mb": 4000})
+    rec = _Recorder()
+    fetch = _fetcher(
+        [
+            _cluster("not_a_real_error_class", task_ids=[0], fingerprint="fp-gap"),
+            _cluster("gpu_oom", task_ids=[1], fingerprint="fp-oom"),
+        ]
+    )
+
+    outcome = maybe_resolve_and_recover(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
+
+    by_class = {c.error_class: c for c in outcome.clusters}
+    gap = by_class["not_a_real_error_class"]
+    assert gap.disposition == "skipped"
+    assert "vocabulary gap" in gap.reason
+    assert "test_failure_category_covers_classifier" in gap.reason
+    # The valid sibling was still processed (any non-skipped disposition).
+    assert by_class["gpu_oom"].disposition != "skipped"

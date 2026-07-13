@@ -71,6 +71,19 @@ class _HpcArgumentParser(argparse.ArgumentParser):
         match = _INVALID_CHOICE_RE.search(message)
         if match is not None:
             bad = match.group(1)
+            # run-#12 finding 22: a caller who typed a REGISTRY name whose CLI
+            # verb differs (`reconcile-journal`, from framework guidance) gets
+            # the exact verb to run, not a fuzzy guess — the alias is derived
+            # from the one shared map, so it is authoritative.
+            from hpc_agent.cli._verb_aliases import cli_verb_for_registry_name
+
+            alias = cli_verb_for_registry_name(bad)
+            if alias is not None:
+                self.exit(
+                    2,
+                    f"{self.prog}: error: unknown command {bad!r} — that is the "
+                    f"registry name; invoke it as `{self.prog} {alias}`.\n",
+                )
             choices = self._subcommand_choices()
             close = difflib.get_close_matches(bad, choices, n=3, cutoff=0.5)
             hint = f" Did you mean: {', '.join(close)}?" if close else ""

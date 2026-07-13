@@ -159,3 +159,7 @@ class FailureCategory(StrEnum):
     MPI_LAUNCHER_MISSING = "mpi_launcher_missing"
     MPI_PE_INVALID = "mpi_pe_invalid"
     MPI_INIT_FAILED = "mpi_init_failed"
+    # Grid Engine (UGE/SGE) / Lmod contentless env-init failure — a transient
+    # per-task/per-node flake the canary verifier / reconcile now classify
+    # (see infra/failure_signatures.py, notebook-audit Addendum 10 item 15).
+    CLUSTER_ENV_INIT = "cluster_env_init"

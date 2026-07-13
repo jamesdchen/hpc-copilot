@@ -21,18 +21,47 @@ move a trust anchor OUT of the model's reach; where a harness cannot provide
 it, the machinery degrades HONESTLY to a weaker, named tier rather than
 pretending the guarantee still holds.
 
+## Contract version
+
+Contract version: 1.1.0
+
+This is the SemVer of the contract this page specifies. It has ONE home in
+code — `HARNESS_CONTRACT_VERSION` in `ops/harness_capabilities.py` — and this
+line, that constant, and the conformance kit's stamped verdict
+(`hpc_agent.conformance.report.CONTRACT_VERSION`) are pinned mutually equal by
+`tests/contracts/test_harness_contract.py`. The `harness-capabilities` verb
+reports it to a negotiating harness as its `harness_contract_version` result
+field. The conformance verdict line names only the MAJOR — `conforming:
+harness contract v1 (kit hpc-agent X.Y.Z)` (`docs/design/conformance-kit.md`
+D-K6).
+
+**Deprecation posture.** Within major 1 the contract is **ADDITIVE-ONLY**: a
+new capability, a new assertion, or a new conforming implementation SHAPE (as
+capability 2's ACT gained the response-gateway alongside the Stop hook) may
+land as a MINOR bump, but only if both reference adapters stay conforming — a
+previously-conforming harness failing a minor is the definition of a breaking
+change and forces a MAJOR. Capability REMOVAL never happens. The sha
+canonicalization (below) is the canonical MAJOR trigger: changing it
+drift-revokes every stored attestation, so it can only ever ship as v2 with a
+`canon_version` field on new records, never silently.
+
 ## The three capabilities
 
 A conforming harness MUST provide all three. Each names what it provides, the
 trust property it earns, and what degrades — to which exact seam — when it is
 absent.
 
-### Capability 1 — the out-of-band human-utterance log
+### Capability 1 — the attributed utterance log (the out-of-band human-utterance log)
 
 **Provides.** An append-only log of the text a human verifiably TYPED, written
 by the harness at the moment of input, through the write API in §2. The model
 never mediates the write: the harness is the writer, the log is the reader's
-trust anchor.
+trust anchor. When the harness knows WHOSE session it is, it MAY ATTRIBUTE the
+write — appending through the actor-suffixed locator (§2) so the record carries
+harness-asserted authorship — while the record schema, provenance contract,
+no-scaffold rule, and fail-open semantics are unchanged (attribution rides the
+locator, never a fourth record field). Core never verifies the attribution: the
+claim is harness-asserted, the tier is named ("The honest trust limit", below).
 
 **Trust property earned.** The FULL-STRENGTH authorship tier. With the log
 present, the human-authorship gate
@@ -55,6 +84,20 @@ a determined agent could still fabricate a human quote. The fallback is
 deliberate back-compat: refusing it outright would break every pre-hook
 install. The honesty is that the two tiers are NAMED and different, not a
 uniform claim.
+
+**Attribution degrades the same way (multi-actor, MH2).** The full-strength tier
+becomes ATTRIBUTION-CONDITIONAL when interview.json declares MORE THAN ONE actor.
+Each authorship gate then draws its evidence from the SESSION ACTOR'S own log
+only — `ops/decision/journal.py::_harness_human_texts` passes the actor through
+to `state/utterances.py::read_utterances(experiment_dir, actor=<slug>)`, an
+actor-scoped read that deliberately EXCLUDES the unsuffixed log (anonymous text
+satisfying an actor-specific check is the cross-actor laundering channel). So a
+harness that fully honors §2 v1 but writes UNATTRIBUTED — into the unsuffixed
+log — no longer earns the full-strength tier in a declared-multi-actor
+experiment: its writes land where the actor-scoped evidence pool cannot see
+them, and the gate falls to the JOURNAL-RESPONSE FRICTION TIER at that same seam.
+This is disclosed, not accidental. Zero or one declared actor → no scoped read,
+no degradation, byte-identical to today.
 
 ### Capability 2 — the relay/verbatim enforcement point
 
@@ -109,6 +152,22 @@ the bullet list the PLUGIN wave implements against:
   `sha256(canonicalized resolved dir)[:12]`. The locator MUST reuse these two
   derivations, never re-implement the hash — a divergent hash writes into a
   namespace the reader never looks up.
+  **Attributed variant (additive, MH2).** When the harness knows the session's
+  actor, it writes instead to `<journal home>/<repo_hash>/utterances.<actor>.jsonl`
+  — the SAME locator with an actor-slug segment, produced by the SAME
+  `state/utterances.py::utterances_path(experiment_dir, actor=<slug>)` (no
+  re-derived path). The slug rides into the filename, so it is validated by the
+  shared filesystem-safe tag class (`state/utterances.py::_actor_utterances_name`
+  → `state/scopes.py::validate_tag`); an invalid slug FAILS OPEN to the
+  unsuffixed log. Reads are UNION by default —
+  `state/utterances.py::read_utterances(experiment_dir)` merges the unsuffixed
+  log and every `utterances.<actor>.jsonl` oldest-first by `ts`, so every
+  identity-less consumer still sees all human text; an actor-scoped read
+  (`read_utterances(experiment_dir, actor=<slug>)`) returns that actor's file
+  ONLY, never the unsuffixed log. Attribution rides the LOCATOR, never a fourth
+  record field — the frozen schema below is UNCHANGED, holds PER FILE, and the
+  single-actor world stays byte-identical (no actor configured → no suffixed
+  file is ever created).
 
 - **Frozen record schema.** One JSON object per line, sorted keys, append-only,
   oldest-first. Exactly three fields:
@@ -224,9 +283,25 @@ whole boundary. It defeats the model fabricating its own authorship evidence. It
 does NOT defend against filesystem-level attacks (a process editing
 `utterances.jsonl` directly) or harness-config-level attacks (disabling the
 capture hook) — those are OUT OF SCOPE, and a harness that cannot keep its own
-config honest cannot be made honest by this contract. The tier is stated, not
+config honest cannot be made honest by this contract. The SAME boundary covers
+ATTRIBUTION (MH2): the actor an attributed write is stamped with is
+harness-asserted, never verified — core runs no credential check, no signature
+verification, no OS-user probe. Impersonating another actor — exporting someone
+else's session-actor env, editing a `utterances.<actor>.jsonl` file directly, or
+forging the harness config that supplies the slug — is the same class of
+env/filesystem/harness-config attack as disabling the capture hook, OUT OF SCOPE
+exactly as today. Attributed ≠ verified. The tier is stated, not
 overclaimed: full-strength when the harness holds up its end, named friction
 when it does not.
+
+The AUTH boundary is the same class (anti-vendor-lockout T2): how a harness's
+own processes authenticate to their model provider — e.g. the
+`ANTHROPIC_API_KEY` a subscription user must export before any spawned worker
+can run — is a harness-side concern, OUT OF SCOPE of this contract exactly as
+disabling a capture hook is. Core neither checks, stores, nor forwards
+provider credentials; a conforming harness earns no extra trust by naming its
+provider, and an auth failure inside the harness is the harness's own named
+friction, not a contract violation.
 
 ## The CLI is the invariant substrate
 
@@ -303,6 +378,30 @@ named seam:
   reported honestly.
 - **Capability 4 (trusted display)** — reported `"unknown"`: no detection seam
   exists yet for a trusted-render surface, so the verb asserts nothing.
+- **Capability 5 (Stop-hook append channel)** — a hook `systemMessage` the
+  harness DISPLAYS to the human (added v1.1.0, additive; `docs/design/stop-hook-completer.md`,
+  D1). It is what lets the relay-audit Stop hook COMPLETE — code-append the owed
+  render / verdict / correction and PROCEED — instead of bouncing the model into
+  re-relaying what deterministic code already holds verbatim. Reported tri-state
+  like capability 4: there is no passive install seam, so it reads `"unknown"`
+  until a conforming harness's conformance probe confirms `systemMessage` display
+  (the probe MUST cover BOTH output shapes — a bare `systemMessage` on a
+  proceeding stop AND a `systemMessage` combined with `decision:"block"`, since
+  display may differ) and activates it via `detect_stop_hook_append` /
+  `detect_stop_hook_append_on_block` (`ops/harness_capabilities.py`). **Degrades
+  when absent/unknown** (the default — no harness declares it yet): the Stop hook
+  stays the REJECTOR (block-once bounce, `_kernel/hooks/relay_audit_stop.py`), an
+  owed verdict or contradicted claim re-relayed by the MODEL, never code-appended.
+  No wedge — the completer path is dark until the append channel is confirmed.
+
+**The detection asymmetry (D-K3; anti-vendor-lockout T2).** The needles above
+detect OUR reference providers — the Claude Code hooks this repo installs;
+they are not the definition of the capability. A foreign harness is detected
+BY BEHAVIOR: it proves each capability by running the conformance kit against
+its own providers (declared == detected == behaved), and `harness-capabilities`
+reporting a needle absent means only that the REFERENCE provider is absent —
+never that a conforming foreign provider is. The needle is a fast path for our
+own install; the kit verdict is the portable claim.
 
 **Tiers key off detection, not declaration** — this is existing behavior, not a
 new rule. The gate already reads the DETECTED presence of the log (capability 1)

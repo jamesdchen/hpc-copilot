@@ -1,0 +1,176 @@
+{
+  "_note": "K5 relay-enforcement scenario triples (journal state, final message, expected verdict). Every contradiction kind in relay_audit_stop._CONTRADICTION_KINDS is covered for BOTH the run relay (verify_relay) and the notebook relay (verify_notebook_relay), plus the pass cases and a fail-open case. `mismatch_kinds` pins every kind the reference verdict carries (incl. non-blocking `unverifiable`); `blocks` is DERIVED in relay_fixtures.py from the hook's own blocking set, never stored here. Notebook seeds use the two-section source in relay_fixtures.NB_SOURCE.",
+  "triples": [
+    {
+      "name": "run_number_contradiction",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "number — a wrong core-hours count vs the recorded value",
+      "seed": {
+        "journal": {"canary": "green", "core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "failed"}
+      },
+      "final_message": "Run run-1 has failed. It consumed 256 core-hours across 10 tasks.",
+      "mismatch_kinds": ["number"]
+    },
+    {
+      "name": "run_state_contradiction",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "state — 'running' relayed over a journaled 'failed' (proving-run-#3)",
+      "seed": {
+        "journal": {"core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "failed"}
+      },
+      "final_message": "Run run-1 is still running; results soon.",
+      "mismatch_kinds": ["state"]
+    },
+    {
+      "name": "run_run_id_contradiction",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "run_id — a run-id-like token matching no journaled id",
+      "seed": {
+        "journal": {"core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "complete"}
+      },
+      "final_message": "Run run-1 is done. Results for run-2 are also ready.",
+      "mismatch_kinds": ["run_id"]
+    },
+    {
+      "name": "run_job_id_contradiction",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "run_id — a job-id-shaped digit run not among the recorded job ids",
+      "seed": {
+        "journal": {"core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "in_flight", "job_ids": ["13610902"]}
+      },
+      "final_message": "Run run-1 is in flight; scheduler job 99999999 handled it.",
+      "mismatch_kinds": ["run_id"]
+    },
+    {
+      "name": "run_zero_count_contradiction",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "number — 'no failed waves' over a record that counted failures (count claim)",
+      "seed": {
+        "journal": {"failed": 2},
+        "record": {"status": "failed"}
+      },
+      "final_message": "Run run-1: all good, no failed waves.",
+      "mismatch_kinds": ["number"]
+    },
+    {
+      "name": "run_faithful_pass",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "PASS — a faithful relay: every number/state/id matches the record",
+      "seed": {
+        "journal": {"canary": "green", "core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "failed"}
+      },
+      "final_message": "Run run-1 has failed. It consumed 128 core-hours across 10 tasks; the canary was green.",
+      "mismatch_kinds": []
+    },
+    {
+      "name": "run_truncation_pass",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "PASS — a truncation-prefix decimal (3.14 of 3.1411) is tolerated",
+      "seed": {
+        "journal": {"metric": 3.1411},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "complete"}
+      },
+      "final_message": "Run run-1 is complete: the metric is 3.14.",
+      "mismatch_kinds": []
+    },
+    {
+      "name": "run_unverifiable_pass",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "PASS — a numeric claim with no comparable source is unverifiable, not a contradiction (the seam does not block)",
+      "seed": {},
+      "final_message": "Run run-1 consumed 512 core-hours.",
+      "mismatch_kinds": ["unverifiable"]
+    },
+    {
+      "name": "run_no_claim_pass",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "PASS — a message naming no run and carrying only conversational numbers",
+      "seed": {
+        "journal": {"core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "complete"}
+      },
+      "final_message": "The setup is proceeding; check back in ~2 minutes.",
+      "mismatch_kinds": []
+    },
+    {
+      "name": "nb_status_contradiction",
+      "scope": "notebook",
+      "target_id": "demo-audit",
+      "doc": "state (notebook) — a section relayed as auto_cleared while it reduces to unsigned",
+      "seed": {"source": true, "template": true, "interview": true, "sign": ["fit-model"]},
+      "final_message": "For demo-audit, the load-data section is auto-cleared, ready to go.",
+      "mismatch_kinds": ["state"]
+    },
+    {
+      "name": "nb_passed_contradiction",
+      "scope": "notebook",
+      "target_id": "demo-audit",
+      "doc": "state (notebook) — the module 'passed' verdict claimed while a required section is unsigned",
+      "seed": {"source": true, "template": true, "interview": true, "sign": ["load-data"]},
+      "final_message": "The demo-audit graduation gate passed; ready to submit.",
+      "mismatch_kinds": ["state"]
+    },
+    {
+      "name": "nb_sha_contradiction",
+      "scope": "notebook",
+      "target_id": "demo-audit",
+      "doc": "number (notebook) — a sha-hex matching neither the current nor a recorded sign-off sha",
+      "seed": {"source": true, "template": true, "interview": true, "sign": ["load-data"]},
+      "final_message": "For demo-audit, section load-data was signed at ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.",
+      "mismatch_kinds": ["number"]
+    },
+    {
+      "name": "nb_faithful_pass",
+      "scope": "notebook",
+      "target_id": "demo-audit",
+      "doc": "PASS — both required sections signed and relayed as signed_current",
+      "seed": {"source": true, "template": true, "interview": true, "sign": ["load-data", "fit-model"]},
+      "final_message": "For demo-audit, load-data is signed_current and fit-model is signed_current.",
+      "mismatch_kinds": []
+    },
+    {
+      "name": "nb_unverifiable_pass",
+      "scope": "notebook",
+      "target_id": "demo-audit",
+      "doc": "PASS — an unresolvable .py source makes a status claim unverifiable, not a contradiction (the seam drops it)",
+      "seed": {"source": false, "template": false, "interview": false, "sign": ["load-data"]},
+      "final_message": "For demo-audit, the load-data section is auto_cleared.",
+      "mismatch_kinds": ["unverifiable"]
+    },
+    {
+      "name": "run_torn_record_failopen",
+      "scope": "run",
+      "target_id": "run-1",
+      "doc": "FAIL-OPEN — a torn (non-JSON) run record degrades to unverifiable; the same 'running' claim that blocks with an intact record does NOT block here",
+      "seed": {
+        "journal": {"core_hours": 128},
+        "sidecar": {"task_count": 10},
+        "record": {"status": "failed"},
+        "corrupt_record": true
+      },
+      "final_message": "Run run-1 is still running.",
+      "mismatch_kinds": ["unverifiable"]
+    }
+  ]
+}

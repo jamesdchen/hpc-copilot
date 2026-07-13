@@ -86,6 +86,7 @@ from hpc_agent.cli._dispatch import CliShape, _leaf_verb
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
     from typing import IO
 
     from hpc_agent._kernel.registry.primitive import PrimitiveMeta
@@ -195,6 +196,8 @@ _CURATED_EXTRA_VERBS = frozenset(
         # ``notebook-draft-context`` — the deterministic drafting projection
         # (draft-context design): template slugs, resolved engines, call sites,
         # root inventories — the mechanized run-#10 drafting brief.
+        # ``notebook-draft`` — the drafter-attribution record (multi-human MH5).
+        "notebook-draft",
         "notebook-draft-context",
         # ``notebook-scaffold-template`` — the content-free template scaffold
         # that opens an audit.
@@ -203,8 +206,79 @@ _CURATED_EXTRA_VERBS = frozenset(
         # run-#10 rootless-canonical fix); unreachable it would be the next
         # hand-authored spec JSON.
         "notebook-record-config",
+        # ``audit-preflight`` — the GO/NO-GO substrate-prereq brief the
+        # notebook-audit skill runs FIRST (before drafting). Human-sequenced
+        # like the rest of the audit loop (no ``next_block``), so it is
+        # unioned explicitly — unreachable, the agent re-derives the checks
+        # by hand (the exact prose-rot the verb mechanized away).
+        "audit-preflight",
+        # ``evidence-brief`` — the evidence-memory point digest the audit
+        # onboarding relays VERBATIM when the human named scope tags. A pure
+        # read with no ``next_block``; unreachable, the agent skips the
+        # prior-evidence surface or hand-walks the stores.
+        "evidence-brief",
+        # ── the read-loop QUERY verbs the skills name MCP-direct ─────────────
+        # These are pure reads the skills instruct the agent to call "DIRECT
+        # through MCP — never a spec-file round-trip" (hpc-submit/hpc-status/
+        # hpc-aggregate/hpc-campaign/hpc-notebook-audit SKILL §"Read-only QUERY
+        # verbs go DIRECT through MCP"). None declares ``next_block`` (a read is
+        # not a block), so none DERIVES in; each is unioned explicitly per the
+        # run-#8 lesson — an MCP-unreachable verb gets hand-rolled (a Write +
+        # Bash + Read spec-file round-trip for a value one MCP call returns, the
+        # stale-relay class the rule-10 Stop hook exists to catch). The
+        # reachability lint (scripts/lint_skill_mcp_reachability.py) enforces
+        # that every verb a SKILL body names MCP-direct is curated-reachable.
+        #
+        # ``read-decisions`` — the decision-journal chain-coherence read named
+        # MCP-direct at hpc-submit/hpc-status/hpc-aggregate/hpc-campaign/
+        # hpc-notebook-audit SKILLs (the parallel-prep back-half preflight scan).
+        "read-decisions",
+        # ``verify-relay`` — the relay-integrity read named MCP-direct at
+        # hpc-submit/hpc-status/hpc-aggregate/hpc-campaign SKILLs ("relay the
+        # numbers `status-snapshot`/`verify-relay` report — never a figure you
+        # remember").
+        "verify-relay",
+        # ``attention-queue`` — the fleet-wide needs-your-verdict digest named
+        # MCP-direct at hpc-status SKILL ("read-only MCP, direct — no spec-file
+        # round-trip"); its ``render`` is relayed VERBATIM, so a spec-file
+        # round-trip is exactly the hand-rolled detour this entry closes.
+        "attention-queue",
+        # ``revise-resolved`` — the spec-delta re-resolve the hpc-submit SKILL
+        # names MCP-direct ("call `revise-resolved` (MCP-direct) — NEVER
+        # hand-write or hand-edit a spec JSON"). VERIFIED it declares NO
+        # ``next_block`` (``_wire/workflows/revise_resolved.py::
+        # ReviseResolvedResult``), so despite the SKILL's MCP-direct directive it
+        # does NOT derive into the curated catalog — the honest fix is this
+        # explicit union, not a phantom ``next_block``. (``retarget-run``, the
+        # sibling recovery arm the same SKILL names MCP-direct, DOES declare
+        # ``next_block`` and derives in — no entry needed.) Hand-rolling this one
+        # is precisely the finding-4/10/13/17 spec-corruption class the verb
+        # exists to make impossible.
+        "revise-resolved",
+        # ``poll-detached`` — the zero-SSH detached-lease liveness query (architect
+        # memo §2, built by the sibling m-poll unit; wire ``_wire/queries/
+        # poll_detached.py``, home ``ops/monitor/poll_detached.py``). Added here
+        # now so the curated surface is complete the moment that verb lands; it is
+        # a pure read (no ``next_block``, so no derivation) and, until m-poll
+        # merges, is simply ABSENT from the registry — ``_curated_metas`` filters
+        # ``_CURATED_EXTRA_VERBS`` through ``if v in base``, so a not-yet-built
+        # extra is a harmless no-op (the pin test guards on registry presence).
+        "poll-detached",
     }
 )
+
+# Curated-catalog decision for the attestation/dossier exporters (conformance-kit
+# K10, "expose export-attestations beside export-dossier's posture"). Both
+# ``export-dossier`` and ``export-attestations`` are read-only ``query`` verbs
+# that declare NO ``next_block`` and are NOT in the extras above, so NEITHER
+# derives into the curated catalog — the honest mirror is a recorded
+# NON-EXPOSURE, not a new entry. They are HUMAN-run publish/export steps (a human
+# exports a dossier or an in-toto attestation bundle after a run completes), not
+# agent-loop touchpoints the way the block verbs and recovery opt-ins are; adding
+# either to ``_CURATED_EXTRA_VERBS`` would advertise an export affordance the
+# amplification loop never needs. Recorded here so the parity is deliberate and
+# auditable rather than incidental: if one is ever curated, curate the other and
+# say why.
 
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.
@@ -280,21 +354,33 @@ _ELICITATION_REQUESTED_SCHEMA: dict[str, Any] = {
 }
 
 
-def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
-    """Build the elicitation prompt from CODE-SELECTED identifiers ONLY (D5).
+def _render_elicitation_prompt(
+    arguments: Mapping[str, Any], experiment_dir: Path | None = None
+) -> str:
+    """Build the elicitation prompt from CODE-SELECTED identifiers + a code-read
+    render digest (D5 + E-render).
 
-    A PURE function: the prompt is assembled from fixed instructional text plus
-    the journal-derived identifiers the gate itself token-matches — the block
-    name, the scope kind/id, and (for a notebook sign-off) the section slug. It
-    NEVER embeds any model-authored free text from the tool arguments: not the
-    ``proposal``, not the ``response``, not the ``evidence_digest``. If the model
-    could author the prompt it would bait the human's reply into the trust
-    anchor — the laundering channel the authorship gate exists to close.
+    The prompt is assembled from fixed instructional text plus the journal-derived
+    identifiers the gate itself token-matches — the block name, the scope kind/id,
+    and (for a notebook sign-off) the section slug. It NEVER embeds any
+    model-authored free text from the tool arguments: not the ``proposal``, not the
+    ``response``, not the ``evidence_digest``. If the model could author the prompt
+    it would bait the human's reply into the trust anchor — the laundering channel
+    the authorship gate exists to close. The refusal envelope's own ``message`` is
+    deliberately NOT interpolated either: some authorship-gate messages quote the
+    model's ``response`` (the bare-ack refusal names it), so echoing the message
+    would reopen the same laundering channel.
 
-    The refusal envelope's own ``message`` is deliberately NOT interpolated
-    either: some authorship-gate messages quote the model's ``response`` (the
-    bare-ack refusal names it), so echoing the message would reopen the same
-    laundering channel. The identifiers below are the only variable content.
+    E-render (``docs/design/mcp-elicitation.md``, SHIPPED 2026-07-09): when the
+    refusal is a NOTEBOOK sign-off, the server reads the section's content-addressed
+    render off disk and embeds a CODE-COMPUTED digest (diff stats, assert table,
+    lint-flag count) + the ``view_sha12`` — code-read bytes in, typed utterance out,
+    one channel. Trust is unchanged: the digest is derived from the code-authored
+    render (the trusted-display artifact the T8 gate binds), NEVER from the notebook
+    source or any model text (RULING 1: digest, not full render — the full render
+    stays on disk for the Read pane). Missing/stale render → an explicit,
+    reason-disclosing fallback line, never an unmarked silent omission and never a
+    crash.
     """
     spec = arguments.get("spec")
     spec = spec if isinstance(spec, dict) else {}
@@ -304,9 +390,21 @@ def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
     resolved = spec.get("resolved")
     resolved = resolved if isinstance(resolved, dict) else {}
     section = ""
+    view_sha = ""
     if scope_kind == "notebook":
         raw_section = resolved.get("section")
         section = str(raw_section).strip() if isinstance(raw_section, str) else ""
+        raw_view_sha = resolved.get("view_sha")
+        view_sha = str(raw_view_sha).strip() if isinstance(raw_view_sha, str) else ""
+
+    # Overnight standing consent (USER RULING 3, 2026-07-12): the popup IS the
+    # binding surface — it names EXACTLY what the consent covers (the boundary,
+    # the repair classes, the caps + morning boundary) so the human's typed reply
+    # is captured BOUND to that coverage (docs/design/bound-capture.md). The
+    # binding itself is built by ``_overnight_consent_binding``; here we render
+    # what it covers, from code-selected identifiers only.
+    if block == _OVERNIGHT_CONSENT_BLOCK and scope_kind in ("run", "campaign"):
+        return "\n".join(_render_overnight_consent_block(scope_kind, scope_id, resolved))
 
     lines = ["Your sign-off must be typed by you, in your own words."]
     if scope_kind and scope_id:
@@ -315,11 +413,339 @@ def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
         lines.append(f"Block awaiting sign-off: {block}.")
     if section:
         lines.append(f"Notebook section to name in your sign-off: {section}.")
+    if scope_kind == "notebook":
+        lines.extend(
+            _render_digest_block(
+                experiment_dir, audit_id=scope_id, section=section, view_sha=view_sha
+            )
+        )
     lines.append(
         "Type what you reviewed and your decision, in your own words. A bare "
         "'y' or a clicked option cannot stand in for it."
     )
     return "\n".join(lines)
+
+
+# The overnight standing-consent block terminator, duplicated as a plain literal
+# (like ``ops/overnight._DEFAULT_CHAIN_TICK_SECONDS``) so the elicitation firing
+# site never imports the ops role-root at module load. Kept in lockstep with
+# ``hpc_agent.ops.overnight.OVERNIGHT_CONSENT_BLOCK`` (a drift test could pin it).
+_OVERNIGHT_CONSENT_BLOCK = "overnight-consent"
+
+
+def _render_overnight_consent_block(
+    scope_kind: str, scope_id: str, resolved: Mapping[str, Any]
+) -> list[str]:
+    """The coverage a standing-consent popup names, from code-selected identifiers.
+
+    Names EXACTLY what the human's typed consent will be BOUND to (the same subset
+    ``_overnight_consent_binding`` copies into the record): the boundary scope, the
+    repair classes it authorizes (``heal_classes``), and the caps + morning
+    boundary. Never embeds model free text (``response`` / ``proposal`` /
+    ``evidence_digest``). The morning boundary shown is the code-composed default
+    (:func:`ops.overnight.compose_consent_defaults`) so it matches what the gate
+    records, even when the caller omitted ``expires_at``.
+    """
+    heal_classes = resolved.get("heal_classes")
+    classes = (
+        sorted(str(c) for c in heal_classes if isinstance(c, str))
+        if isinstance(heal_classes, list)
+        else []
+    )
+    try:
+        from hpc_agent.ops.overnight import compose_consent_defaults
+
+        composed = compose_consent_defaults(dict(resolved))
+        expires_at = str(composed.get("expires_at") or "")
+    except Exception:  # noqa: BLE001 — a compose failure must not wedge the popup
+        expires_at = str(resolved.get("expires_at") or "")
+    budget_cap = resolved.get("budget_cap")
+    walltime_cap = resolved.get("walltime_cap")
+
+    lines = [
+        "Your OVERNIGHT consent must be typed by you, in your own words.",
+        f"Boundary you are consenting to advance unattended: {scope_kind} {scope_id}.",
+    ]
+    lines.append(
+        "Repair classes you authorize while you sleep: "
+        + (", ".join(classes) if classes else "none (watcher re-arm only)")
+        + "."
+    )
+    if expires_at:
+        lines.append(f"Consent expires at the morning boundary: {expires_at}.")
+    caps = []
+    if isinstance(budget_cap, (int, float)) and not isinstance(budget_cap, bool):
+        caps.append(f"budget_cap={budget_cap}")
+    if isinstance(walltime_cap, (int, float)) and not isinstance(walltime_cap, bool):
+        caps.append(f"walltime_cap={walltime_cap}s")
+    if caps:
+        lines.append("Hard caps on the fallout: " + ", ".join(caps) + ".")
+    lines.append(
+        "Type your consent, naming the boundary and the caps you accept, in your "
+        "own words. A bare 'y' or a clicked option cannot stand in for it."
+    )
+    return lines
+
+
+def _overnight_consent_binding(arguments: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The ``bound`` mapping a captured overnight-consent utterance carries, or ``None``.
+
+    For an ``append-decision`` refusal on the ``overnight-consent`` block, binds the
+    human's typed reply to the EXACT coverage the popup displayed
+    (:func:`_render_overnight_consent_block`) so the gate's evidence is one exact
+    lookup, never a word-overlap over the unbound chat stream (USER RULING 3,
+    docs/design/bound-capture.md). Every value is a CODE-SELECTED identifier copied
+    from the spec — the scope tuple, the ``heal_classes`` list, the ``cmd_sha``
+    spec-identity, and a code-composed morning-boundary coverage window — NEVER
+    model free text (``response`` / ``proposal`` / ``evidence_digest``), mirroring
+    :func:`_render_elicitation_prompt`'s selection. ``None`` for any non-overnight
+    refusal (a notebook / scope-unlock sign-off carries no overnight binding).
+    """
+    spec = arguments.get("spec")
+    spec = spec if isinstance(spec, dict) else {}
+    if str(spec.get("block") or "").strip() != _OVERNIGHT_CONSENT_BLOCK:
+        return None
+    scope_kind = str(spec.get("scope_kind") or "").strip()
+    scope_id = str(spec.get("scope_id") or "").strip()
+    if scope_kind not in ("run", "campaign") or not scope_id:
+        return None
+    resolved = spec.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    heal_classes = resolved.get("heal_classes")
+    classes = (
+        sorted(str(c) for c in heal_classes if isinstance(c, str))
+        if isinstance(heal_classes, list)
+        else []
+    )
+    cmd_sha_raw = resolved.get("cmd_sha")
+    cmd_sha = cmd_sha_raw if isinstance(cmd_sha_raw, str) and cmd_sha_raw else None
+    try:
+        from hpc_agent.ops.overnight import compose_consent_defaults
+
+        composed = compose_consent_defaults(dict(resolved))
+        expires_at = composed.get("expires_at")
+    except Exception:  # noqa: BLE001 — a compose failure must not wedge capture
+        expires_at = resolved.get("expires_at")
+    return {
+        "channel": "elicitation",
+        "scope_kind": scope_kind,
+        "scope_id": scope_id,
+        "block": _OVERNIGHT_CONSENT_BLOCK,
+        "subject": {
+            "heal_classes": classes,
+            "expires_at": expires_at if isinstance(expires_at, str) else None,
+            "cmd_sha": cmd_sha,
+        },
+    }
+
+
+# The digest is a SIGNING surface, not a reading surface (RULING 2): a byte budget
+# on the render-derived block keeps the terminal dialog from scrolling. When the
+# HONEST digest exceeds it (pathologically many hunks/flags), the composer does NOT
+# compress harder — it emits an honest-refusal block (identity + counts + the
+# pointer), because a digest that could silently drop a judgment-critical item to
+# fit a cap is the misleading-summary class. The budget is generous for the normal
+# case (the per-item caps in ``render_store`` bound that); it is the last-ditch
+# guard against a render whose sheer item count would blow the popup.
+_DIGEST_BLOCK_MAX_BYTES: int = 1400
+
+#: Budget for the popup's embedded DIFF BODY (run-#12 finding 11). RULING 2's
+#: "per-hunk one-liners — never the diff body" was REVERSED by live run-#12
+#: feedback at the first popup ("there's not enough diff showed for me to
+#: properly review"): a signing surface must carry enough of the change to
+#: review, not just count it. The body rides in its OWN bounded block so the
+#: digest's honesty budget above is untouched; truncation is always DISCLOSED
+#: with the on-disk remainder pointed at. Interim until unified-render O3+
+#: (chunked popups carrying the full render) supersedes.
+_DIFF_EMBED_MAX_BYTES: int = 6000
+
+
+def _render_diff_body_lines(path: Path) -> list[str]:
+    """The render's fenced diff-from-template body, embedded BOUNDED.
+
+    Extracts the FIRST ```diff fence from the code-written render file —
+    code-read bytes, nothing recomputed, no model text — capped at
+    :data:`_DIFF_EMBED_MAX_BYTES` on a line boundary with the elision count
+    disclosed. Empty when the render has no diff fence (an inherited section)
+    or cannot be read — the digest already routes to the on-disk render.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    marker = "\n```diff\n"
+    start = text.find(marker)
+    if start < 0:
+        return []
+    body_start = start + len(marker)
+    end = text.find("\n```", body_start)
+    if end < 0:
+        return []
+    diff_lines = text[body_start:end].splitlines()
+    out = ["", "Diff from template (code-read from the render):", "```diff"]
+    used = 0
+    shown = 0
+    for line in diff_lines:
+        used += len(line.encode("utf-8")) + 1
+        if used > _DIFF_EMBED_MAX_BYTES:
+            break
+        out.append(line)
+        shown += 1
+    out.append("```")
+    if shown < len(diff_lines):
+        out.append(
+            f"… (+{len(diff_lines) - shown} more diff lines — the full render on disk carries them)"
+        )
+    return out
+
+
+def _render_digest_block(
+    experiment_dir: Path | None, *, audit_id: str, section: str, view_sha: str
+) -> list[str]:
+    """The E-render DIGEST v2 lines for a notebook sign-off, or a disclosed fallback.
+
+    Reads the content-addressed render off disk and returns a BOUNDED, three-JOB
+    signing digest (RULING 2, ``docs/design/mcp-elicitation.md``):
+
+    * **BIND** — audit id, section slug, ``view_sha12``, freshness. A STALE render
+      (the signed ``view_sha`` no longer addresses the on-disk render) says
+      STALE — do NOT sign and shows nothing but the pointer (Job 1).
+    * **WHY YOUR JUDGMENT** — the tier-trigger headline (which of diff / lint /
+      assertions fired, with counts), the declared-assertion table (marked
+      unverified — the trusted render is STATIC, no execution, so there is no
+      computed value to show and none is fabricated), the lint-flag NAMES +
+      locations, and per-hunk one-liners (line range + first changed line)
+      (Job 2). The DIFF BODY additionally rides in its own bounded block
+      (:func:`_render_diff_body_lines` — run-#12 finding 11 reversed RULING 2's
+      never-the-diff-body clause: a signing surface must carry enough of the
+      change to review).
+    * **ROUTE** — the on-disk render path, stated plainly (Job 3).
+
+    Every non-embeddable condition — no experiment context, no bound ``view_sha``
+    yet, no render on disk, or a header that disagrees with the signed view —
+    returns a single reason-disclosing line instead (never a crash, never an
+    unmarked silent omission). THE HONESTY RULE: when the honest digest exceeds
+    :data:`_DIGEST_BLOCK_MAX_BYTES`, the composer emits an honest-refusal block
+    ("too large to digest honestly: N hunks, M flags — read the render") rather than
+    compressing until a judgment-critical item silently drops. The digest is
+    code-authored throughout: no notebook source, no model text, ever enters it.
+    """
+    view_sha12 = view_sha[:12]
+
+    def _fallback(reason: str) -> list[str]:
+        return [
+            "",
+            f"(render digest unavailable: {reason} — open the section render in your "
+            "Read pane before signing.)",
+        ]
+
+    if experiment_dir is None:
+        return _fallback("no experiment context on this call")
+    if not (audit_id and section and view_sha):
+        return _fallback("the sign-off carries no bound view_sha yet")
+
+    from hpc_agent.ops import notebook_view
+
+    path = notebook_view.render_path(
+        experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
+    )
+
+    def _do_not_sign() -> list[str]:
+        # Job 1 freshness failure: the render is content-addressed by the SIGNED
+        # view_sha, so an absent/unreadable render for it means the source drifted
+        # (the view_sha moved) or the section was never rendered at this view — the
+        # STALE case. Never summarize it as current; say do-not-sign and show only
+        # the pointer.
+        return [
+            "",
+            f"STALE or missing render — do NOT sign: no current code-written render "
+            f"on disk for the view_sha you are signing ({view_sha12}).",
+            f"Re-render and open the section render in your Read pane before signing: {path}",
+        ]
+
+    digest = notebook_view.read_render_digest(path)
+    if digest is None:
+        return _do_not_sign()
+    if digest.view_sha != view_sha or digest.section != section:
+        return _do_not_sign()
+
+    # Job 1 — BIND.
+    lines = [
+        "",
+        f"Reviewed render digest — view_sha {view_sha12} (fresh):",
+        f"- audit {digest.audit_id} / section {digest.section}",
+    ]
+    # Job 2 — WHY YOUR JUDGMENT.
+    lines.append(f"- {_tier_trigger_headline(digest)}")
+    if digest.assertion_count:
+        lines.append(
+            f"- assertions (declared, unverified — static audit, no execution): "
+            f"{digest.assertion_count}"
+        )
+        for entry in digest.assertions:
+            lines.append(f"    · {entry}")
+        elided = digest.assertion_count - len(digest.assertions)
+        if elided > 0:
+            lines.append(f"    · … ({elided} more — read the render)")
+    if digest.lint_flag_count:
+        lines.append(f"- lint flags ({digest.lint_flag_count}):")
+        for name in digest.lint_flags:
+            lines.append(f"    · {name}")
+        elided = digest.lint_flag_count - len(digest.lint_flags)
+        if elided > 0:
+            lines.append(f"    · … ({elided} more — read the render)")
+    if digest.diff_hunk_count:
+        lines.append(
+            f"- diff from template: +{digest.diff_added} / -{digest.diff_removed} "
+            f"lines across {digest.diff_hunk_count} hunk(s):"
+        )
+        for hunk in digest.diff_hunks:
+            lines.append(f"    · {hunk}")
+        elided = digest.diff_hunk_count - len(digest.diff_hunks)
+        if elided > 0:
+            lines.append(f"    · … ({elided} more — read the render)")
+    # Job 3 — ROUTE.
+    lines.append(f"- full render on disk: {path}")
+
+    # THE HONESTY RULE: if the honest digest overruns the budget, do not compress
+    # harder — refuse to digest and point at the render, disclosing the counts.
+    if len("\n".join(lines).encode("utf-8")) > _DIGEST_BLOCK_MAX_BYTES:
+        return [
+            "",
+            f"Reviewed render digest — view_sha {view_sha12} (fresh):",
+            f"- audit {digest.audit_id} / section {digest.section}",
+            f"- too large to digest honestly: {digest.diff_hunk_count} diff hunks, "
+            f"{digest.lint_flag_count} lint flags, {digest.assertion_count} assertions "
+            "— read the render.",
+            f"- full render on disk: {path}",
+            # The bounded diff body still rides (finding 11): the digest refused
+            # to COMPRESS, but review material with disclosed truncation is
+            # additive, not a silent drop.
+            *_render_diff_body_lines(path),
+        ]
+    return lines + _render_diff_body_lines(path)
+
+
+def _tier_trigger_headline(digest: Any) -> str:
+    """The one-line "why your judgment is required" headline for a render digest.
+
+    Names which of the three D-attention tier legs FIRED, with counts — derived from
+    the render's own fields (``classification`` for the diff leg, ``lint_flag_count``
+    for the flags leg, ``assertion_count`` for the assertions leg; in the static
+    audit any declared assertion is unverified and so a judgment trigger). An
+    ``auto_cleared`` render (a redundant/voluntary sign-off) has no trigger and says
+    so — the human is signing something the tiering deemed already clear.
+    """
+    triggers: list[str] = []
+    if digest.classification and digest.classification != "inherited":
+        triggers.append(f"diff: {digest.classification}")
+    if digest.lint_flag_count:
+        triggers.append(f"lint: {digest.lint_flag_count} flag(s)")
+    if digest.assertion_count:
+        triggers.append(f"assertions: {digest.assertion_count} unverified")
+    if not triggers:
+        return "requires your judgment: no tier trigger (auto-cleared — a voluntary review)"
+    return "requires your judgment — " + "; ".join(triggers)
 
 
 def _accepted_utterance(response: dict[str, Any] | None) -> str | None:
@@ -531,19 +957,64 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
 # detach-by-contract too — its monitor poll runs in a durable detached worker, so
 # a blocking (detach=false) invocation over this synchronous server would wedge it
 # exactly like an S2/S3/S4 watch.
-_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3", "submit-s4", "status-watch"})
+# ``aggregate-run`` / ``aggregate-flow`` / ``campaign-run`` joined 2026-07-08
+# (run-#10 F-K): a live ``aggregate-run`` call held the synchronous server for
+# 20+ minutes with zero observability (no log, no lease). Each is now
+# detach-by-contract — the combine SSH + rsync pull (or a whole campaign
+# iteration) runs in a durable detached worker.
+_DETACH_REQUIRED_VERBS = frozenset(
+    {
+        "submit-s2",
+        "submit-s3",
+        "submit-s4",
+        "status-watch",
+        "aggregate-run",
+        "aggregate-flow",
+        "campaign-run",
+    }
+)
+
+# ``wait-detached`` is refused OUTRIGHT, not detach-gated: it is itself the
+# blocking wait (a local pid-lease block that runs "potentially many
+# minutes/hours" — ``ops/monitor/wait_detached.py``), so there is no
+# ``detach=true`` remedy — it is not a submit that can be handed to a worker.
+# The curated catalog already excludes it (its Result declares no ``next_block``
+# and it is not a curated extra), but the DEFAULT ``full`` catalog and
+# ``tiered`` expose it (it is ``agent_facing`` ``verb="query"``); without this
+# seam refusal a client calling it there wedges the synchronous server for the
+# whole wait (proving-run-3 head-of-line class). The MCP-safe alternatives are
+# named in the refusal: ``poll-detached`` for an instant snapshot, or running
+# ``wait-detached`` via backgrounded Bash OUTSIDE this server.
+_BLOCKING_WAIT_VERBS = frozenset({"wait-detached"})
 
 
 def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     """Raise ``_Invalid`` for tool calls that would block the server.
 
-    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch`` must carry
-    ``spec.detach == true`` (the detached worker + ``wait-detached`` is the
-    sanctioned wait; the S4 harvest's combine + rsync pull + breaker
-    wait-and-retry — and the status-watch monitor poll — can hold the line for
-    many minutes on a throttled host). The detached path returns a pid handle
-    immediately; ``wait-detached`` (via backgrounded Bash) wakes the caller once.
+    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch``/``aggregate-run``/
+    ``aggregate-flow``/``campaign-run`` must carry ``spec.detach == true`` (the
+    detached worker + ``wait-detached`` is the sanctioned wait; the S4 /
+    aggregate harvest's combine + rsync pull + breaker wait-and-retry — the
+    status-watch monitor poll — and a full ``campaign-run`` submit→monitor→
+    aggregate iteration can hold the line for many minutes on a throttled host).
+    The detached path returns a pid handle immediately; ``wait-detached`` (via
+    backgrounded Bash) wakes the caller once.
+
+    ``wait-detached`` itself is refused outright (:data:`_BLOCKING_WAIT_VERBS`):
+    it is the blocking wait, with no ``detach`` escape hatch, so over this
+    synchronous server any invocation wedges the line. Curated already excludes
+    it; this backstops the ``full``/``tiered`` catalogs where it is otherwise
+    invocable.
     """
+    if name in _BLOCKING_WAIT_VERBS:
+        raise _Invalid(
+            f"{name} is a BLOCKING local wait on a detached worker's lease pid "
+            "(potentially many minutes/hours) with no detach=true remedy — over "
+            "this synchronous server it wedges every later tool call "
+            "(head-of-line; an abandoned turn does not stop it). For an instant "
+            "status read call `poll-detached`; to be woken at completion run "
+            "`hpc-agent wait-detached` via backgrounded Bash OUTSIDE this server."
+        )
     spec = arguments.get("spec")
     spec_dict = spec if isinstance(spec, dict) else {}
     if name in _DETACH_REQUIRED_VERBS and not spec_dict.get("detach"):
@@ -862,6 +1333,16 @@ class McpServer:
         # from ``params["capabilities"]["elicitation"]``; elicitation fires only
         # when this is true (the gate check lands in E4).
         self._client_elicitation: bool = False
+        # ADAPTIVE DEGRADATION (notebook-audit item 12 / Addendum 7, run #11): a
+        # client can DECLARE elicitation at ``initialize`` yet render no popup, so
+        # a refusal becomes a silent 300s stall (all journal locks probed free).
+        # When an elicitation times out with NO response of ANY kind (silence —
+        # NOT a human DECLINE, which IS a response), the channel is marked dark and
+        # every later authorship refusal this session degrades to the hook path
+        # IMMEDIATELY (the same plain-refusal path a never-declaring client takes).
+        # A capability declaration is a claim, not a proof; it is re-probed next
+        # session (this is per-session state, reset on construction).
+        self._client_elicitation_dark: bool = False
 
     # -- projection ---------------------------------------------------------
 
@@ -995,11 +1476,19 @@ class McpServer:
         assert isinstance(shape, CliShape)
 
         result = self._invoke_cli(name, shape, arguments)
-        # E4 firing site (D4): the ``append-decision`` sign-off retry-once wrap.
-        # Fires ONLY on an authorship-evidence refusal, with a client that
-        # negotiated elicitation, a live transport, and no elicitation already in
-        # flight (nested/suppressed dispatch never reaches here). Every other tool
-        # and every other refusal returns unchanged.
+        # The elicitation firing site (D4 + the D6 amendment, user-ruled 2026-07-09):
+        # the ``append-decision`` sign-off popup is the PRIMARY read-and-sign channel,
+        # not a retry-only fallback. When the authorship gate would refuse (no
+        # matching human utterance) the server ELICITS FIRST and the append proceeds
+        # with the typed utterance — the model NEVER sees the interim refusal (this
+        # `call_tool` is atomic; the CLI runs, the popup collects the sign-off, the
+        # invocation re-runs, and only the final verdict returns). An utterance that
+        # ALREADY passes the gate (ok:true) returns straight through — no popup on a
+        # valid append. The FALLBACK (the plain refusal → hook path) is taken exactly
+        # when elicitation is unavailable: an undeclared or declared-but-dark client,
+        # no transport, or a suppressed nested dispatch — :meth:`_elicitation_applies`
+        # gates all of it, so a client without the channel behaves byte-for-byte as
+        # before this promotion.
         if self._elicitation_applies(name, result):
             return self._elicit_then_retry(name, shape, arguments, result)
         return result
@@ -1024,7 +1513,24 @@ class McpServer:
                     json.dump(spec, fh)
             argv = _build_invocation(name, shape, arguments, spec_path)
             started = time.perf_counter()
-            exit_code, stdout, stderr = self._runner(argv)
+            # Mid-call liveness (run-#12 finding 3): a long verb showed the
+            # human NOTHING between dispatch and result — three separate
+            # "is it hung?" investigations in one night. One stderr line every
+            # ~15s on the same tail-able surface as the per-call telemetry;
+            # the daemon timer dies with the call.
+            _hb_stop = threading.Event()
+
+            def _heartbeat() -> None:
+                while not _hb_stop.wait(15.0):
+                    sys.stderr.write(
+                        f"[mcp] {name} still running ({int(time.perf_counter() - started)}s)\n"
+                    )
+
+            threading.Thread(target=_heartbeat, daemon=True).start()
+            try:
+                exit_code, stdout, stderr = self._runner(argv)
+            finally:
+                _hb_stop.set()
             # Per-call telemetry (2026-07-04): "why is MCP slow" must be a
             # measurement, not a mystery. One stderr line per tools/call —
             # stderr rides the harness's MCP log, never the JSON-RPC channel.
@@ -1044,15 +1550,19 @@ class McpServer:
 
         Every leg is required (D4 step 2): the tool is ``append-decision`` (D6 —
         the sole firing site), the client negotiated elicitation at initialize
-        (:attr:`_client_elicitation`, D2), a live transport exists, no elicitation
-        is already in flight and none is suppressed (nested dispatch takes the
-        degrade path), and the envelope is ``ok:false`` carrying E2's distinct
-        ``authorship_evidence`` KEY in ``failure_features`` — never the block's
-        mere presence (the synthesized spec_invalid default), never prose.
+        (:attr:`_client_elicitation`, D2) AND that channel has not gone dark
+        (:attr:`_client_elicitation_dark` — a prior elicitation this session timed
+        out with no response of any kind, so the declaration is treated as unproven
+        and every later refusal degrades to the hook path; item 12 / Addendum 7),
+        a live transport exists, no elicitation is already in flight and none is
+        suppressed (nested dispatch takes the degrade path), and the envelope is
+        ``ok:false`` carrying E2's distinct ``authorship_evidence`` KEY in
+        ``failure_features`` — never the block's mere presence (the synthesized
+        spec_invalid default), never prose.
         """
         if name != _ELICITATION_FIRING_TOOL:
             return False
-        if not self._client_elicitation:
+        if not self._client_elicitation or self._client_elicitation_dark:
             return False
         if self._transport is None or self._msg_queue is None:
             return False
@@ -1071,7 +1581,12 @@ class McpServer:
         arguments: Mapping[str, Any],
         refusal: dict[str, Any],
     ) -> dict[str, Any]:
-        """Elicit a typed sign-off, append it, and re-run the invocation once (D4).
+        """Elicit a typed sign-off (the PRIMARY channel), append it, re-run once (D4 + D6).
+
+        This is the promoted primary read-and-sign path (D6 amendment, 2026-07-09):
+        the popup fires BEFORE any refusal reaches the model, collects the human's
+        typed sign-off, and the append proceeds with it — the re-run is the mechanism
+        that lands the now-present utterance, not a second user-visible attempt.
 
         Sends ``elicitation/create`` with the code-rendered prompt (D5) and the
         free-text-only schema (D3), filters the response
@@ -1083,26 +1598,70 @@ class McpServer:
         non-capture outcome (decline/cancel/timeout/EOF/injected/empty, or a
         no-op append) returns the ORIGINAL *refusal* unchanged — no utterance
         appended, never a JSON-RPC error.
+
+        Wait disclosure (item 12 leg b / Addendum 10's no-black-box contract): the
+        wait is not dead air. One ``[mcp]`` line at OPEN names the tool + deadline
+        and one at CLOSE names the outcome (answered / declined / timed-out-dark),
+        landing on the same tail-able stderr surface the per-call telemetry uses
+        (the harness's MCP log, never the JSON-RPC channel).
+
+        Adaptive degradation (item 12 leg a): a ``None`` from the wait is SILENCE
+        (timeout / EOF — the transport is present, :meth:`_elicitation_applies`
+        guaranteed it), which is DISTINCT from a human DECLINE (a real response
+        whose filtered text is empty). Silence marks the channel dark so the rest
+        of this session skips elicitation; a decline leaves it live.
         """
-        response = self._request_from_client(
-            "elicitation/create",
-            {
-                "message": _render_elicitation_prompt(arguments),
-                "requestedSchema": _ELICITATION_REQUESTED_SCHEMA,
-            },
-            _ELICITATION_TIMEOUT_SEC,
-        )
-        text = _accepted_utterance(response)
-        if text is None:
-            return refusal  # decline / cancel / timeout / EOF / injected / empty
-
         from pathlib import Path
-
-        from hpc_agent.state.utterances import append_utterance
 
         exp = arguments.get("experiment_dir")
         experiment_dir = Path(exp) if isinstance(exp, str) and exp else Path.cwd()
-        record = append_utterance(experiment_dir, text)
+
+        timeout = _ELICITATION_TIMEOUT_SEC
+        sys.stderr.write(
+            f"[mcp] waiting on human elicitation ({timeout:.0f}s timeout) for {name}\n"
+        )
+        response = self._request_from_client(
+            "elicitation/create",
+            {
+                # E-render: the popup carries the code-computed render digest for a
+                # notebook sign-off (bytes read off disk here, model suspended).
+                "message": _render_elicitation_prompt(arguments, experiment_dir),
+                "requestedSchema": _ELICITATION_REQUESTED_SCHEMA,
+            },
+            timeout,
+        )
+        if response is None:
+            # SILENCE — no response of any kind within the deadline (or EOF). The
+            # client declared elicitation but rendered nothing (run #11): mark the
+            # channel dark so subsequent authorship refusals return the plain
+            # refusal immediately, and log the close outcome.
+            self._client_elicitation_dark = True
+            sys.stderr.write(
+                f"[mcp] elicitation channel DARK for {name}: no response within "
+                f"{timeout:.0f}s — degrading to the hook path for the rest of this "
+                "session (timed-out-dark)\n"
+            )
+            return refusal
+        text = _accepted_utterance(response)
+        if text is None:
+            # A real response arrived (decline / cancel / injected / empty): the
+            # human saying no is a valid outcome, not a fault — the channel stays
+            # LIVE, never marked dark.
+            sys.stderr.write(
+                f"[mcp] elicitation for {name}: human response, no sign-off (declined)\n"
+            )
+            return refusal
+        sys.stderr.write(f"[mcp] elicitation for {name}: sign-off captured (answered)\n")
+
+        from hpc_agent.state.utterances import append_utterance
+
+        # ``experiment_dir`` was resolved above (shared with the render-digest read).
+        # For an overnight standing consent the capture is BOUND to the coverage the
+        # popup named (USER RULING 3, docs/design/bound-capture.md): the gate then
+        # matches this exact binding instead of word-overlapping the chat stream. A
+        # non-overnight sign-off binds nothing (``None``) — byte-identical to before.
+        bound = _overnight_consent_binding(arguments)
+        record = append_utterance(experiment_dir, text, bound=bound)
         if record is None:
             # Fail-open (no namespace / unwritable log): nothing was recorded, so
             # a retry would re-refuse identically — return the original refusal.

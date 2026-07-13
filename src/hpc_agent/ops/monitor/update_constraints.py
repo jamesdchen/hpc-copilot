@@ -29,6 +29,8 @@ from hpc_agent._wire.actions.update_run_constraints import (
     UpdateRunConstraintsResult,
     UpdateRunConstraintsSpec,
 )
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.io import atomic_locked_update
 
 if TYPE_CHECKING:
@@ -57,7 +59,13 @@ def _validate_feature(feat: str) -> str:
 @primitive(
     name="update-run-constraints",
     verb="mutate",
-    side_effects=[SideEffect("ssh", "<cluster> (scontrol update Features)")],
+    side_effects=[
+        SideEffect("ssh", "<cluster> (scontrol update jobid=<id> Features=<expr>)"),
+        SideEffect(
+            "writes-sidecar",
+            "<experiment>/.hpc/runs/<run_id>.json (constraints.features mirror)",
+        ),
+    ],
     error_codes=[
         errors.SpecInvalid,
         errors.SshUnreachable,
@@ -65,6 +73,19 @@ def _validate_feature(feat: str) -> str:
     ],
     idempotent=True,
     idempotency_key="run_id",
+    cli=CliShape(
+        help=(
+            "Mutate a run's cluster-side SLURM Features in place via "
+            "`scontrol update jobid=<id> Features=<expr>` — retargets constraints "
+            "WITHOUT cancel+resubmit, so the jobs keep their accumulated age "
+            "priority; mirrors the new feature set onto the run sidecar."
+        ),
+        spec_arg=True,
+        spec_model=UpdateRunConstraintsSpec,
+        experiment_dir_arg=True,
+        requires_ssh=True,
+        schema_ref=SchemaRef(input="update_run_constraints"),
+    ),
     agent_facing=True,
 )
 def update_run_constraints(
@@ -101,7 +122,7 @@ def update_run_constraints(
     # the journal record at ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
     # is the canonical store.
     record = load_run(experiment_dir, spec.run_id)
-    ssh_target = record.ssh_target if record is not None else None
+    ssh_target = resolve_ssh_target(record) if record is not None else None
     if not ssh_target:
         raise errors.SpecInvalid(
             f"no journal record for run_id={spec.run_id!r}, or the record "

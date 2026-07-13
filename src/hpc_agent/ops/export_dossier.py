@@ -58,6 +58,7 @@ from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.export_dossier import ExportDossierResult, ExportDossierSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.io import atomic_replace_path
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.provenance_manifest import manifest_signature
 from hpc_agent.state import scopes as _scopes
@@ -65,7 +66,7 @@ from hpc_agent.state.decision_briefs import briefs_path
 from hpc_agent.state.decision_journal import decisions_path
 from hpc_agent.state.fingerprint_store import fingerprint_path
 from hpc_agent.state.journal import load_run
-from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
+from hpc_agent.state.runs import read_run_sidecar_or_empty, run_sidecar_path
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
@@ -103,6 +104,9 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "notebook-journal",  # <exp>/.hpc/notebooks/<audit_id>.decisions.jsonl (attestation journal)
         "renders",  # <exp>/.hpc/renders/<audit_id>/** — the trusted-display render files
         "determinism-fingerprint",  # <exp>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl
+        "pack-manifest",  # the bound domain-pack manifest file (raw bytes; T10)
+        "pack-journal",  # <exp>/.hpc/packs/<pack>.decisions.jsonl (bind/receipt journal; T10)
+        "live-conformance",  # <exp>/_aggregated/_conformance/<registration_id>.jsonl
     }
 )
 
@@ -127,17 +131,23 @@ def _sha256_hex(data: bytes) -> str:
 
 
 def _safe_sidecar(experiment_dir: Path, run_id: str) -> dict[str, Any]:
-    """Return a run's parsed sidecar dict, or ``{}`` when none exists.
+    """Return a run's parsed sidecar dict, or ``{}`` when none exists or it is
+    unreadable.
 
     The parse happens inside :func:`state.runs.read_run_sidecar` — this module
     itself never parses the bytes it seals (the no-parse boundary pin). A run
     with a journal record but no sidecar (or vice versa) yields ``{}`` rather
     than raising, so a missing store is data, not an error.
+
+    Routes through the shared :func:`state.runs.read_run_sidecar_or_empty`
+    tolerant reader (#43): a torn, hand-edited, or newer-schema sidecar was
+    ALREADY sealed by ``_gather_optional`` at the raw-bytes boundary — only this
+    identity projection re-parses it, and a crash here would take down
+    ``export_dossier`` / ``compute_dossier_signature`` (and the registration
+    recompute lock) instead of degrading to the null-padded projection it
+    already emits for a sidecar-less run.
     """
-    try:
-        return read_run_sidecar(experiment_dir, run_id)
-    except FileNotFoundError:
-        return {}
+    return read_run_sidecar_or_empty(experiment_dir, run_id)
 
 
 def _project_run_identity(
@@ -314,6 +324,10 @@ def _gather_run(
     _gather_fingerprint(
         experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps
     )
+    # pack-manifest + pack-journal — sealed only when the sidecar echoed a `packs`
+    # block (domain-packs T10). The bound domain standards (manifest + journal),
+    # copied as RAW BYTES, never parsed.
+    _gather_packs(experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps)
     record = load_run(experiment_dir, run_id)
     projection = _project_run_identity(run_id, sidecar, record)
     tags = [str(t) for t in (sidecar.get("scopes") or []) if t]
@@ -476,6 +490,64 @@ def _gather_fingerprint(
     )
 
 
+def _gather_packs(
+    experiment_dir: Path,
+    run_id: str,
+    sidecar: dict[str, Any],
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal each opted-in pack's manifest file + decision journal as RAW BYTES (T10).
+
+    The sidecar's opaque ``packs`` echo (a list of ``{pack, version, sha,
+    manifest}``) points at two per-pack stores, both sealed as OPAQUE BYTES and
+    NEVER parsed (the no-parse boundary): the bound manifest file at the echoed
+    ``manifest`` relpath (the ``pack-manifest`` store noun) and the pack decision
+    journal at ``.hpc/packs/<pack>.decisions.jsonl`` (the ``pack-journal`` noun —
+    the bind + receipt attestation trail). Both prove WHICH domain standards, at
+    WHICH hashes, gated the run.
+
+    A run with no ``packs`` echo seals nothing and records no gap (a pack-free run
+    legitimately has none); an echo whose store is missing records a gap
+    (present-or-gap accounting, never a crash). The manifest relpath comes from the
+    already-parsed sidecar echo, so this module still never parses interview.json.
+    """
+    echoes = sidecar.get("packs")
+    if not isinstance(echoes, list):
+        return
+    hpc = RepoLayout(experiment_dir).hpc
+    for echo in echoes:
+        if not isinstance(echo, dict):
+            continue
+        pack_name = echo.get("pack")
+        if not isinstance(pack_name, str) or not pack_name:
+            continue
+        manifest_rel = echo.get("manifest")
+        if isinstance(manifest_rel, str) and manifest_rel:
+            _gather_optional(
+                "pack-manifest",
+                Path(experiment_dir) / manifest_rel,
+                f"runs/{run_id}/packs/{pack_name}/manifest.json",
+                run_id,
+                f"bound pack manifest {manifest_rel!r} not on disk for pack {pack_name!r}",
+                write_map=write_map,
+                entries=entries,
+                gaps=gaps,
+            )
+        _gather_optional(
+            "pack-journal",
+            hpc / "packs" / f"{pack_name}.decisions.jsonl",
+            f"runs/{run_id}/packs/{pack_name}.decisions.jsonl",
+            run_id,
+            f"no pack decision journal on disk for pack {pack_name!r}",
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
+
+
 def _gather_aggregated(
     experiment_dir: Path,
     run_id: str,
@@ -525,6 +597,41 @@ def _gather_aggregated(
                 "note": "no aggregated artifacts on disk",
             }
         )
+
+
+def _gather_conformance(
+    experiment_dir: Path,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+) -> None:
+    """Seal the registration-conformance ledgers as RAW BYTES (live-conformance C-dossier).
+
+    Every ``<exp>/_aggregated/_conformance/<registration_id>.jsonl`` — the live
+    evidence FOR/AGAINST each registration — is copied as OPAQUE BYTES under the
+    ``live-conformance`` store noun, so a RE-registration's sealed dossier carries
+    the live record that motivated it ("ran nonconforming for 3 windows before
+    re-registration" is printed where reviewers look — the anti-gaming-by-disclosure
+    pattern at the operation boundary). Never ``json``-parsed (the no-parse boundary
+    holds): the derived verdicts live in the code-rendered ``conformance-status``
+    brief, never here, so a deliberately-torn ledger round-trips byte-identical.
+
+    ABSENT-TOLERANT (unlike the run-scoped aggregated store): the conformance dir is
+    registration-scoped, not per-run, and most run dossiers legitimately have none —
+    an absent dir / empty dir seals nothing and records NO gap (a gap per run would
+    be noise). Keyed by archive path so a re-gather is stable. Gathered ONCE per
+    signature, not per run in the lineage.
+    """
+    base = Path(experiment_dir) / "_aggregated" / "_conformance"
+    if not base.is_dir():
+        return
+    for ledger in sorted(base.glob("*.jsonl")):
+        if not ledger.is_file():
+            continue
+        archive_path = f"conformance/{ledger.name}"
+        if archive_path in write_map:
+            continue
+        _seal("live-conformance", ledger, archive_path, write_map=write_map, entries=entries)
 
 
 def _gather_scope(
@@ -667,6 +774,10 @@ def compute_dossier_signature(
             gaps=gaps,
         )
 
+    # live-conformance ledgers (C-dossier) — registration-scoped, sealed ONCE per
+    # signature (not per run), absent-tolerant (no gap when none exist).
+    _gather_conformance(experiment_dir, write_map=write_map, entries=entries)
+
     # Path-sort the entries (and the write order) so a store hashes identically
     # regardless of gather order.
     entries.sort(key=lambda e: e["path"])
@@ -756,7 +867,15 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
         archive_path = experiment_dir / "_dossier" / f"{run_id}.zip"
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    # Build the zip on a temp sibling and atomically swap it in (bug-sweep #42,
+    # generator G12): ZipFile(archive_path, "w") TRUNCATES the previously-sealed
+    # registration-grade archive the instant it opens, so a crash mid-write
+    # destroys it. atomic_replace_path leaves the old seal untouched until the new
+    # one is fully written and fsync'd.
+    with (
+        atomic_replace_path(archive_path) as tmp_archive,
+        zipfile.ZipFile(tmp_archive, "w", zipfile.ZIP_DEFLATED) as zf,
+    ):
         for path in sorted(sig.write_map):
             zf.writestr(path, sig.write_map[path])
         # manifest.json is the seal over the entries — NOT itself an entry.

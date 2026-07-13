@@ -107,6 +107,13 @@ def run_capture_bounded(
         "stderr": subprocess.PIPE,
         "text": True,
         "encoding": "utf-8",
+        # stdin ISOLATION by default (run-12 finding 4): a child that inherits
+        # the parent's stdin inside ``mcp-serve`` inherits the live JSON-RPC
+        # pipe — a child that reads it steals protocol bytes or blocks forever
+        # (offline probes never reproduce it: piped-file stdin hits EOF). A
+        # caller that genuinely feeds stdin (the ``tar | ssh`` pump) passes it
+        # explicitly and overrides the DEVNULL below.
+        "stdin": subprocess.DEVNULL,
     }
     if stdin is not None:
         popen_kwargs["stdin"] = stdin

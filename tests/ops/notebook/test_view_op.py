@@ -17,6 +17,7 @@ from hpc_agent import errors
 from hpc_agent._wire.queries.notebook_audit_view import (
     NotebookAuditViewResult,
     NotebookAuditViewSpec,
+    NotebookSectionView,
 )
 from hpc_agent.ops.notebook.audit_view import AUTO_CLEARED, HUMAN_REQUIRED, INHERITED
 from hpc_agent.ops.notebook.view_op import notebook_audit_view
@@ -171,6 +172,89 @@ def test_explicit_output_roots_override_is_a_preview(tmp_path: Path) -> None:
     _write(tmp_path)
     assert _view(tmp_path).canonical is True
     assert _view(tmp_path, output_roots=["results"]).canonical is False
+
+
+# ── B1 payload cut: digest-by-default, full markdown only behind `full: true` ──
+
+# `model` is MODIFIED vs the template (body edited) so the full render carries a
+# real unified diff whose bytes the contract test can look for.
+_TEMPLATE_MODIFIED = """\
+# %%
+# hpc-audit-section: setup
+import numpy as np
+x = 1
+
+# %%
+# hpc-audit-section: model
+def train():
+    return 42
+"""
+
+_SOURCE_MODIFIED = """\
+# %%
+# hpc-audit-section: setup
+import numpy as np
+x = 1
+
+# %%
+# hpc-audit-section: model
+def train():
+    return 99
+"""
+
+
+def _write_modified(tmp_path: Path) -> None:
+    (tmp_path / "source.py").write_text(_SOURCE_MODIFIED, encoding="utf-8")
+    (tmp_path / "template.py").write_text(_TEMPLATE_MODIFIED, encoding="utf-8")
+
+
+def test_section_wire_shape_carries_no_diff_field(tmp_path: Path) -> None:
+    # B1: the `sections[].diff` wire duplication is dropped — the field no longer
+    # exists on the model, so it cannot ship the diff bytes a second time.
+    assert "diff" not in NotebookSectionView.model_fields
+    _write_modified(tmp_path)
+    dumped = _view(tmp_path).model_dump()
+    for section in dumped["sections"]:
+        assert "diff" not in section
+
+
+def test_default_response_carries_no_diff_or_full_body_bytes(tmp_path: Path) -> None:
+    # The DEFAULT (full omitted) response is the DIGEST: its serialization contains
+    # NO diff bytes and no full-markdown body anywhere.
+    _write_modified(tmp_path)
+    result = _view(tmp_path)
+    blob = result.model_dump_json()
+    # Full-render-only section header — absent from the digest markdown.
+    assert "### diff-from-template" not in result.markdown
+    # Diff-body bytes — the unified-diff labels and the changed code line — appear
+    # nowhere in the whole serialized response (not in markdown, not in a section).
+    assert "--- template:" not in blob
+    assert "+++ source:" not in blob
+    assert "return 99" not in blob
+    # The digest is still a complete, signable projection: metadata + counts +
+    # render-file pointers + the next-actions footer.
+    assert "view_sha:" in result.markdown
+    assert "diff +1/-1" in result.markdown  # the COUNT survives; the bytes do not
+    assert "## next actions" in result.markdown
+    for s in result.sections:
+        assert s.render_path
+        assert s.render_path in result.markdown  # the pointer to the full render
+
+
+def test_full_true_response_carries_the_diff_body(tmp_path: Path) -> None:
+    # `full: true` restores the whole-body render for a harness that model-relays.
+    _write_modified(tmp_path)
+    result = _view(tmp_path, full=True)
+    assert "### diff-from-template" in result.markdown
+    # The actual diff bytes are present in the full render.
+    assert "return 99" in result.markdown
+    assert "--- template:model" in result.markdown
+    # The per-section view_shas and render_paths are identical to the default —
+    # `full` selects only how much of the render the RESPONSE carries.
+    default = _view(tmp_path)
+    assert [s.view_sha for s in result.sections] == [s.view_sha for s in default.sections]
+    assert [s.render_path for s in result.sections] == [s.render_path for s in default.sections]
+    assert result.view_sha == default.view_sha
 
 
 def test_receipt_passthrough_greens_asserted_section(tmp_path: Path) -> None:

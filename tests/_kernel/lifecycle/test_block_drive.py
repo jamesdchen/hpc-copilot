@@ -281,6 +281,14 @@ def faked(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setattr(bd, "read_pending_decision", lambda run_id, **_k: dict(state["pending"]))
     monkeypatch.setattr(bd, "_latest_committed_resolved", lambda *_a, **_k: state["committed"])
+    # The RESUME path now reads through the boundary-scoped reader; fake it to
+    # serve the same ``committed`` so the routing tests below stay focused on the
+    # §4 advance/rerun logic. The boundary-scoping itself is pinned separately
+    # (``greenlight_targets_boundary`` / ``_boundary_scoped_committed_resolved``
+    # unit tests + the real-journal ``run_tick`` tests).
+    monkeypatch.setattr(
+        bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: state["committed"]
+    )
     monkeypatch.setattr(
         bd,
         "clear_pending_decision",
@@ -359,6 +367,80 @@ def test_run_tick_parks_before_gated_successor(faked: dict[str, Any]) -> None:
     assert [r["verb"] for r in faked["ran"]] == ["aggregate-check"]
     assert len(faked["parked"]) == 1
     marker = faked["parked"][0]
+    assert marker["resume_cursor"]["next_verb"] == "aggregate-run"
+
+
+def _gated_park_results() -> dict[str, Any]:
+    """A clean entry block whose gated successor forces a park (the rendezvous).
+
+    ``aggregate-check`` is bare-startable from a ``(run_id, workflow)`` tick, so
+    this drives ``run_tick`` all the way into ``_park`` — unlike ``submit-s1``,
+    which is not bare-startable and short-circuits to ``skip`` before parking.
+    The ``_park`` code path (and its ``mark_pending_decision`` call) is identical
+    for both boundaries, so this faithfully exercises the sidecar-only crash.
+    """
+    return {
+        "aggregate-check": {
+            "block": "check",
+            "stage_reached": "ready",
+            "needs_decision": False,
+            "run_id": "r1",
+            "brief": {"terminal": True},
+            "next_block": {"verb": "aggregate-run", "spec_hint": {"aggregate": {"run_id": "r1"}}},
+        },
+    }
+
+
+def test_run_tick_parks_sidecar_only_run_without_a_record_does_not_crash(
+    faked: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sidecar-only run (no journal RunRecord) PARKS without crashing the tick.
+
+    notebook-audit.md Addendum 13.0: the journal RunRecord is minted by
+    ``submit_and_record`` INSIDE the gated submit-s2 (qsub) — S1's resolve leg
+    writes only the per-run sidecar. So the FIRST park (the S1→S2 greenlight
+    gate) is reached before any record exists, and ``mark_pending_decision`` →
+    ``update_run_status`` raises FileNotFoundError for the record-less run. That
+    crashed the driver tick at the rendezvous for both of run #11's runs. The
+    park must DEGRADE DISCLOSED: the human still gets the brief
+    (``awaiting_decision``), only the durable journal marker is skipped. FIRES on
+    the unguarded call (FileNotFoundError propagates out of the tick).
+    """
+
+    def _raise_missing(run_id: str, **_kw: Any) -> None:
+        raise FileNotFoundError(f"no run record for {run_id!r}")
+
+    monkeypatch.setattr(bd, "mark_pending_decision", _raise_missing)
+    faked["results"] = _gated_park_results()
+    # Must NOT raise even though the marker write hits a missing record.
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.current_verb == "aggregate-check"
+    assert result.next_verb == "aggregate-run"
+    # The brief still rode out to the human (disclosure survived) …
+    assert result.brief == {"terminal": True}
+    # … but no durable marker was persisted (the raise swallowed, not appended).
+    assert faked["parked"] == []
+
+
+def test_run_tick_parks_with_a_record_still_writes_the_marker(
+    faked: dict[str, Any],
+) -> None:
+    """The normal park (a journal RunRecord exists) still persists the §5 marker.
+
+    The record-less guard added for Addendum 13.0 must not weaken the happy path:
+    when ``mark_pending_decision`` succeeds, the durable pending-decision marker
+    (the "parked ≠ stalled" flag + resume_cursor) is still written.
+    """
+    faked["results"] = _gated_park_results()
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb == "aggregate-run"
+    assert len(faked["parked"]) == 1
+    marker = faked["parked"][0]
+    assert marker["run_id"] == "r1"
     assert marker["resume_cursor"]["next_verb"] == "aggregate-run"
 
 
@@ -563,6 +645,9 @@ def test_run_tick_resume_validates_against_the_real_spec_model(
     }
     monkeypatch.setattr(bd, "read_pending_decision", lambda run_id, **_k: dict(pending))
     monkeypatch.setattr(bd, "_latest_committed_resolved", lambda *_a, **_k: dict(committed))
+    monkeypatch.setattr(
+        bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: dict(committed)
+    )
     monkeypatch.setattr(bd, "clear_pending_decision", lambda *_a, **_k: None)
     monkeypatch.setattr(bd, "mark_pending_decision", lambda *_a, **_k: None)
     import hpc_agent._kernel.lifecycle.drive as drive_mod
@@ -681,4 +766,193 @@ def test_run_tick_bare_status_without_run_id_still_runs_fleet_digest(
     result, code = run_tick(Path("."), run_id=None, workflow="status")
     assert code == 0
     assert faked["ran"] == [{"verb": "status-snapshot", "spec": {}}]
+    assert result.action == "terminal"
+
+
+# ── boundary-scoped resume: a consumed greenlight is not this boundary's ───────
+# (bug-sweep 2026-07-11 #1 / run-12 finding 21)
+
+
+def _greenlight(*, next_block: str, ts: str) -> dict[str, Any]:
+    """A committed ``y`` record shaped like ``append_decision`` writes."""
+    return {"response": "y", "resolved": {"approved": True, "next_block": next_block}, "ts": ts}
+
+
+def test_greenlight_targets_boundary_matches_named_and_fresh() -> None:
+    """A ``y`` naming the parked ``next_verb`` and journaled after the park matches."""
+    rec = _greenlight(next_block="submit-s3", ts="2026-07-03T01:00:00+00:00")
+    assert bd.greenlight_targets_boundary(
+        rec, next_verb="submit-s3", awaiting_since="2026-07-03T00:30:00+00:00"
+    )
+
+
+def test_greenlight_targets_boundary_rejects_prior_boundary_target() -> None:
+    """bug-sweep #1: a consumed ``y`` naming the PREVIOUS boundary (submit-s2)
+    is not the approval of the run parked at submit-s3."""
+    rec = _greenlight(next_block="submit-s2", ts="2026-07-03T01:00:00+00:00")
+    assert not bd.greenlight_targets_boundary(
+        rec, next_verb="submit-s3", awaiting_since="2026-07-03T00:30:00+00:00"
+    )
+
+
+def test_greenlight_targets_boundary_rejects_stale_same_boundary_reparks() -> None:
+    """run-12 finding 21: a ``y`` that DID name this boundary but predates the
+    (re-)park's ``awaiting_since`` is a consumed greenlight, not a fresh one."""
+    rec = _greenlight(next_block="aggregate-run", ts="2026-07-03T00:00:00+00:00")
+    assert not bd.greenlight_targets_boundary(
+        rec, next_verb="aggregate-run", awaiting_since="2026-07-03T00:30:00+00:00"
+    )
+
+
+def test_greenlight_targets_boundary_rejects_nudge() -> None:
+    rec = {
+        "response": "cap it",
+        "resolved": {"next_block": "submit-s3"},
+        "ts": "2026-07-03T01:00:00+00:00",
+    }
+    assert not bd.greenlight_targets_boundary(
+        rec, next_verb="submit-s3", awaiting_since="2026-07-03T00:30:00+00:00"
+    )
+
+
+def test_greenlight_targets_boundary_accepts_verb_hint_dict_form() -> None:
+    """block_gate ``_journaled_target`` accepts the ``{"verb": ...}`` hint form."""
+    rec = {
+        "response": "y",
+        "resolved": {"next_block": {"verb": "submit-s3"}},
+        "ts": "2026-07-03T01:00:00+00:00",
+    }
+    assert bd.greenlight_targets_boundary(
+        rec, next_verb="submit-s3", awaiting_since="2026-07-03T00:30:00+00:00"
+    )
+
+
+# ── real-journal integration: run_tick honors the boundary scope ──────────────
+
+
+def _seed_run_record(exp: Path, run_id: str = "r1") -> None:
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        exp,
+        RunRecord(
+            run_id=run_id,
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="u@h",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=["100"],
+            total_tasks=4,
+            submitted_at="2026-07-03T00:00:00+00:00",
+            experiment_dir=str(exp),
+            status="in_flight",
+        ),
+    )
+
+
+@pytest.fixture
+def real_journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A real journal home + faked verb runner/watchdog, for boundary-scope tests."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    import hpc_agent._kernel.lifecycle.drive as drive_mod
+
+    monkeypatch.setattr(drive_mod, "_stamp_driver_tick", lambda *_a, **_k: None)
+    return tmp_path
+
+
+def test_run_tick_prior_boundary_y_plans_awaiting_not_advance(
+    real_journal: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-sweep #1: parked at submit-s2→submit-s3 with the journal's latest ``y``
+    naming the PREVIOUS boundary (submit-s2, already consumed) must plan
+    ``awaiting_decision`` — never re-run/advance and never a spurious 'block failed'."""
+    from hpc_agent.state.decision_journal import append_decision
+    from hpc_agent.state.journal import mark_pending_decision
+
+    exp = real_journal
+    _seed_run_record(exp)
+    mark_pending_decision(
+        "r1",
+        block="submit-s2",
+        workflow="submit",
+        brief={"note": "canary green"},
+        resume_cursor={
+            "workflow": "submit",
+            "run_id": "r1",
+            "next_verb": "submit-s3",
+            "current_verb": "submit-s2",
+            "input_spec": {"walltime_sec": 100},
+        },
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=exp,
+    )
+    # The only committed greenlight names submit-s2 (the prior boundary).
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id="r1",
+        block="submit-s1",
+        response="y",
+        resolved={"walltime_sec": 100, "next_block": "submit-s2"},
+        ts="2026-07-03T00:10:00+00:00",
+    )
+
+    def _boom(*_a: Any, **_k: Any) -> tuple[dict, int]:
+        raise AssertionError("no block verb must run while awaiting the human")
+
+    monkeypatch.setattr(bd, "_run_block_verb", _boom)
+
+    result, code = run_tick(exp, run_id="r1", workflow="submit")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+
+
+def test_run_tick_boundary_targeting_y_advances(
+    real_journal: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counter-test: a committed ``y`` that NAMES the parked boundary (submit-s3),
+    journaled after the park, still advances as today."""
+    from hpc_agent.state.decision_journal import append_decision
+    from hpc_agent.state.journal import mark_pending_decision
+
+    exp = real_journal
+    _seed_run_record(exp)
+    mark_pending_decision(
+        "r1",
+        block="submit-s2",
+        workflow="submit",
+        brief={"note": "canary green"},
+        resume_cursor={
+            "workflow": "submit",
+            "run_id": "r1",
+            "next_verb": "submit-s3",
+            "current_verb": "submit-s2",
+            "input_spec": {"walltime_sec": 100},
+        },
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=exp,
+    )
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id="r1",
+        block="submit-s2",
+        response="y",
+        resolved={"walltime_sec": 100, "next_block": "submit-s3"},
+        ts="2026-07-03T01:00:00+00:00",
+    )
+
+    ran: list[str] = []
+
+    def _fake_run(verb: str, spec: dict[str, Any], experiment_dir: Path) -> tuple[dict, int]:
+        ran.append(verb)
+        return {"block": "s3", "stage_reached": "watching_terminal", "next_block": None}, 0
+
+    monkeypatch.setattr(bd, "_run_block_verb", _fake_run)
+
+    result, code = run_tick(exp, run_id="r1", workflow="submit")
+    assert code == 0
+    assert ran == ["submit-s3"]  # advanced into the greenlit successor
     assert result.action == "terminal"

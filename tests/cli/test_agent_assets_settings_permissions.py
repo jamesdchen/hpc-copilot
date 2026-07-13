@@ -21,11 +21,13 @@ from hpc_agent.agent_assets import install_agent_assets
 
 
 def _settings(claude_dir: Path) -> dict:
-    return json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    data: dict = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    return data
 
 
 def _allow(settings: dict) -> list:
-    return settings.get("permissions", {}).get("allow", [])
+    allow: list = settings.get("permissions", {}).get("allow", [])
+    return allow
 
 
 # ─── fresh install: no settings.json yet ────────────────────────────────────
@@ -45,6 +47,22 @@ def test_fresh_install_adds_skill_allow_rules(tmp_path: Path) -> None:
     allow = _allow(_settings(tmp_path))
     for skill_name in result["skills_installed"]:
         assert f"Skill({skill_name})" in allow
+
+
+def test_maintainer_release_skill_not_installed_or_granted(tmp_path: Path) -> None:
+    """bug-sweep #58: the maintainer-only ``release`` skill (frontmatter
+    ``internal: true``) is NEVER copied into an end user's ~/.claude/skills, and
+    therefore NEVER gets an auto-invoke ``Skill(release)`` permission grant.
+    """
+    result = install_agent_assets(claude_dir=tmp_path)
+
+    assert "release" not in result["skills_installed"]
+    assert not (tmp_path / "skills" / "release").exists()
+    allow = _allow(_settings(tmp_path))
+    assert "Skill(release)" not in allow
+    # A normal bundled skill IS installed + granted (proves the filter is scoped).
+    assert "hpc-submit" in result["skills_installed"]
+    assert "Skill(hpc-submit)" in allow
 
 
 # ─── idempotency ────────────────────────────────────────────────────────────
@@ -121,7 +139,12 @@ def test_preserves_unrelated_permission_keys(tmp_path: Path) -> None:
 
     settings = _settings(tmp_path)
     assert settings["theme"] == "dark"
-    assert settings["permissions"]["deny"] == ["Bash(rm -rf:*)"]
+    # Pre-existing deny entry preserved; the host-scoped raw-ssh/scp deny rules
+    # are covered in test_agent_assets_settings_deny.py. The over-broad blanket
+    # rule is NEVER written (narrowed 2026-07-10 — tool, not takeover).
+    deny = settings["permissions"]["deny"]
+    assert "Bash(rm -rf:*)" in deny
+    assert "Bash(ssh:*)" not in deny
     # Pre-existing allow entry preserved
     assert "Bash(echo:*)" in settings["permissions"]["allow"]
 

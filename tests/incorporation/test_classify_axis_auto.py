@@ -32,8 +32,17 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._wire.actions.classify_axis_auto import ClassifyAxisAutoInput
 from hpc_agent.incorporation import classify_axis_auto as caa
+from hpc_agent.state.pack_declarations import AxisHintsDecl, PackEcho
 
 _SHA = "a" * 64
+
+
+def _hint_decl(*hints: dict[str, str], pack: str = "toy-widgets") -> AxisHintsDecl:
+    """A toy ``AxisHintsDecl`` — pack-ignorant payload the classifier consumes."""
+    return AxisHintsDecl(
+        hints=tuple(hints),
+        echo=PackEcho(pack=pack, version="0.0.1", sha=_SHA),
+    )
 
 
 # ── canned preflight / sub-call builders ─────────────────────────────────
@@ -409,3 +418,177 @@ class TestSequencingGuard:
         assert len(easy_calls) == 1
         assert easy_calls[0]["run_name"] == "weird_run"
         assert easy_calls[0]["source_path"] == "/exp/src/deep/weird_run.py"
+
+
+# ── S3 axis hints: the pure caution-not-clearance helper (T9c) ────────────
+
+
+class TestApplyAxisHintsHelper:
+    """`_apply_axis_hints` is pure and pack-ignorant: it decides confirm vs.
+    demote off an opaque hint list + core's own verdict. Toy names only."""
+
+    def test_no_hints_is_none_verdict(self) -> None:
+        out = caa._apply_axis_hints("independent", "forecast", [])
+        assert out.verdict == "none"
+        assert out.hint_kinds == ()
+        assert out.confirmations == () and out.conflicts == ()
+
+    def test_non_matching_pattern_is_none(self) -> None:
+        # The hint's regex does not match run_name → it never applies.
+        out = caa._apply_axis_hints(
+            "independent", "forecast", [_hint_decl({"pattern": "^train$", "axis": "Sequential"})]
+        )
+        assert out.verdict == "none"
+
+    def test_agreeing_hint_confirms_and_echoes(self) -> None:
+        out = caa._apply_axis_hints(
+            "independent", "forecast", [_hint_decl({"pattern": "fore", "axis": "Independent"})]
+        )
+        assert out.verdict == "agree"
+        assert out.hint_kinds == ("independent",)
+        assert len(out.confirmations) == 1
+        # The pack {pack, version, sha} echo rides the confirmation verbatim.
+        assert out.confirmations[0]["pack"] == {
+            "pack": "toy-widgets",
+            "version": "0.0.1",
+            "sha": _SHA,
+        }
+
+    def test_disagreeing_hint_conflicts_naming_both(self) -> None:
+        out = caa._apply_axis_hints(
+            "independent", "forecast", [_hint_decl({"pattern": "fore", "axis": "Sequential"})]
+        )
+        assert out.verdict == "conflict"
+        assert out.core_kind == "independent"  # core's candidate
+        assert out.hint_kinds == ("sequential",)  # the hint's candidate
+        assert out.conflicts[0]["pack"]["pack"] == "toy-widgets"
+
+    def test_unresolvable_core_never_cleared_by_hint(self) -> None:
+        # core_kind=None (matcher abstained): a matching hint can only CONFLICT —
+        # it may never clear an axis core could not resolve structurally.
+        out = caa._apply_axis_hints(
+            None, "forecast", [_hint_decl({"pattern": "fore", "axis": "Independent"})]
+        )
+        assert out.verdict == "conflict"
+        assert out.core_kind is None
+        assert out.confirmations == ()
+
+    def test_multiple_hints_any_disagreement_demotes(self) -> None:
+        # One agrees, one disagrees → caution wins (the safe direction).
+        out = caa._apply_axis_hints(
+            "independent",
+            "forecast",
+            [
+                _hint_decl({"pattern": "fore", "axis": "Independent"}),
+                _hint_decl({"pattern": "cast", "axis": "Sequential"}, pack="other-pack"),
+            ],
+        )
+        assert out.verdict == "conflict"
+        assert set(out.hint_kinds) == {"independent", "sequential"}
+
+    def test_multiple_hints_all_agree_confirms(self) -> None:
+        out = caa._apply_axis_hints(
+            "sequential",
+            "forecast",
+            [
+                _hint_decl({"pattern": "fore", "axis": "Sequential"}),
+                _hint_decl({"pattern": "cast", "axis": "Sequential"}, pack="other-pack"),
+            ],
+        )
+        assert out.verdict == "agree"
+        assert len(out.confirmations) == 2
+
+
+# ── S3 axis hints: the classify_axis_auto terminal shapes (T9c) ───────────
+
+
+class TestAxisHintsIntegration:
+    """The hint wiring at the branch D/E boundary, exercised end to end. The
+    injected ``axis_hints`` is the pack-ignorant list the ``state`` resolver
+    would hand the classifier — here supplied directly."""
+
+    def test_no_hints_branch_d_byte_identical(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        record_calls: list[dict[str, Any]] = []
+        _patch(
+            monkeypatch,
+            easy={"kind": "independent", "evidence": "DOALL", "halo_expr": None, "tried": ["ind"]},
+            record_calls=record_calls,
+        )
+        result = caa.classify_axis_auto(
+            tmp_path,
+            spec=ClassifyAxisAutoInput.model_validate({"run_name": "forecast"}),
+            axis_hints=[],
+        )
+        assert result["recorded"] is True
+        assert result["classified_by"] == "agent"
+        assert record_calls[0]["data_axis"] == {"kind": "independent"}
+
+    def test_agreeing_hint_records_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        record_calls: list[dict[str, Any]] = []
+        _patch(
+            monkeypatch,
+            easy={"kind": "independent", "evidence": "DOALL", "halo_expr": None, "tried": ["ind"]},
+            record_calls=record_calls,
+        )
+        result = caa.classify_axis_auto(
+            tmp_path,
+            spec=ClassifyAxisAutoInput.model_validate({"run_name": "forecast"}),
+            axis_hints=[_hint_decl({"pattern": "fore", "axis": "Independent"})],
+        )
+        # Agreement proceeds unchanged: recorded as agent, byte-identical record.
+        assert result["recorded"] is True
+        assert result["classified_by"] == "agent"
+        assert result["kind"] == "independent"
+        assert record_calls[0]["data_axis"] == {"kind": "independent"}
+
+    def test_disagreeing_hint_demotes_naming_both(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        record_calls: list[dict[str, Any]] = []
+        _patch(
+            monkeypatch,
+            easy={"kind": "independent", "evidence": "DOALL", "halo_expr": None, "tried": ["ind"]},
+            record_calls=record_calls,
+        )
+        result = caa.classify_axis_auto(
+            tmp_path,
+            spec=ClassifyAxisAutoInput.model_validate({"run_name": "forecast"}),
+            axis_hints=[_hint_decl({"pattern": "fore", "axis": "Sequential"})],
+        )
+        # Disagreement demotes to the decision tree — NO record — naming BOTH.
+        assert result.get("needs_llm_tree") is True
+        assert "recorded" not in result
+        assert record_calls == []
+        assert "independent" in result["evidence"]  # core's candidate
+        assert "sequential" in result["evidence"]  # the hint's candidate
+        assert "toy-widgets" in result["evidence"]
+
+    def test_unresolvable_with_hint_stays_needs_llm_tree(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        record_calls: list[dict[str, Any]] = []
+        _patch(
+            monkeypatch,
+            easy={
+                "kind": "unclassifiable",
+                "evidence": "abstained",
+                "halo_expr": None,
+                "tried": ["ind", "halo"],
+            },
+            record_calls=record_calls,
+        )
+        result = caa.classify_axis_auto(
+            tmp_path,
+            spec=ClassifyAxisAutoInput.model_validate({"run_name": "forecast"}),
+            axis_hints=[_hint_decl({"pattern": "fore", "axis": "Independent"})],
+        )
+        # A hint NEVER auto-resolves an axis core could not resolve structurally.
+        assert result.get("needs_llm_tree") is True
+        assert "recorded" not in result
+        assert record_calls == []
+        # The hint rides along as caution, but the tree still decides.
+        assert "toy-widgets" in result["evidence"]

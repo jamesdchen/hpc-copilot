@@ -31,6 +31,7 @@ overwrites interview.json with byte-equivalent content modulo the
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -104,12 +105,52 @@ def _interview_arg_pre(ns: Namespace) -> dict[str, Any]:
     return {"campaign_dir": Path(ns.campaign_dir).resolve()}
 
 
+def _compose_audit_template_default(
+    intent: Mapping[str, Any], campaign_dir: Path
+) -> dict[str, str] | None:
+    """Compose the audit-template default from a bound pack's ``audit_template`` seam.
+
+    The CODE seat that replaces the on-ramp's ``confirm-default`` prose (2026-07-10
+    evening ruling, CONVERSION 2 — "prose cannot be load-bearing"): when a pack is
+    bound and the caller supplied NO template, the interview DEFAULTS it silently
+    from the pack's audit-facing ``audit_template`` seam and DISCLOSES the composed
+    default in the persisted record — the template is never brought to human
+    attention (supersedes the pack-status confirm-default).
+
+    Returns a disclosure dict ``{field, value, pack, source}`` (``value`` is the
+    experiment-dir-relative template relpath) or ``None`` when there is nothing to
+    compose:
+
+    * ``audited_source`` present → the caller committed a ``template`` → UNTOUCHED.
+    * no ``packs`` opt-in → today's behavior → ``None``.
+    * no opted-in pack declares an ``audit_template`` seam → ``None``.
+
+    Preference (the rv-over-quant precedent — the pack whose seam the audits
+    reference): among candidate packs, the FIRST that is the target of a
+    ``receipt_bindings`` slot (the program pack) wins over the domain skeleton;
+    absent any referenced candidate, the first in opt-in order. Manifest reads are
+    best-effort — a missing/unreadable/malformed manifest is skipped here (the
+    submit gate refuses a genuine broken setup loudly), never a crash at intake.
+    """
+    # The caller committed a template (via audited_source) → never override it.
+    if "audited_source" in intent:
+        return None
+    packs = intent.get("packs")
+    if not isinstance(packs, list) or not packs:
+        return None
+
+    # The ONE selection definition (run-#12 finding 5 extracted it so
+    # audit-preflight composes from the SAME seam over the persisted block):
+    # referenced-pack-first, opt-in order, best-effort manifest reads.
+    from hpc_agent.state.pack_declarations import compose_audit_template
+
+    return compose_audit_template(packs, campaign_dir)
+
+
 @primitive(
     name="interview",
     verb="scaffold",
-    side_effects=[
-        SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json,.claude/settings.json}")
-    ],
+    side_effects=[SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json}")],
     idempotent=True,
     idempotency_key="campaign_dir",
     cli=CliShape(
@@ -386,9 +427,24 @@ def record_interview(
         "at": utcnow().isoformat(),
         "cmd_sha": cmd_sha,
         "total_tasks": total_tasks,
+        # Run-#12 finding 14: record the REAL origin of tasks.py so a downstream
+        # consumer (walk-submit-ambiguities) never mislabels an interview-
+        # materialized sweep as ``hand_written``. Generator mode → the interview
+        # wrote it from the typed recipe; validate mode → the interview agent
+        # authored it by hand.
+        "tasks_py_origin": (
+            "interview_materialized" if "task_generator" in intent else "hand_written"
+        ),
     }
     if entry_point_materialized is not None:
         materialized["entry_point"] = entry_point_materialized
+    # CONVERSION 2 (2026-07-10 evening ruling): when a pack is bound and the caller
+    # supplied no template, COMPOSE the audit-template default from the pack's
+    # ``audit_template`` seam IN CODE — silently, disclosed here, never brought to
+    # human attention (supersedes the on-ramp's pack-status confirm-default).
+    composed_default = _compose_audit_template_default(intent, campaign_dir)
+    if composed_default is not None:
+        materialized["composed_defaults"] = [composed_default]
     interview_doc = {
         **dict(intent),
         "_materialized": materialized,
@@ -401,12 +457,6 @@ def record_interview(
 
     if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
         artifacts.append("meta.json")
-
-    # Grant the experiment dir the Bash(hpc-agent:*) allow rule so a spawned
-    # bare worker can drive the CLI headlessly (#190). Idempotent merge — only
-    # reported as an artifact when the rule was newly added.
-    if _maybe_write_claude_permissions(campaign_dir):
-        artifacts.append(".claude/settings.json")
 
     return {
         "campaign_dir": str(campaign_dir.resolve()),
@@ -450,50 +500,6 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
     # window loses updates (a parallel agent + driver scenario).
     atomic_locked_update(meta_path, _mutate)
     return True
-
-
-# The permission rule the spawned `claude -p --bare` worker needs to call the
-# `hpc-agent` CLI headlessly. A bare worker has no human to approve prompts, so
-# without an allow rule Claude Code's auto-mode classifier blocks its first
-# `hpc-agent ...` Bash call and the default worker path silently degrades (#190).
-# Project-scoped `<campaign_dir>/.claude/settings.json` merges on top of the
-# user-global config, so anyone launching `claude` from the experiment dir gets
-# the grant with zero manual config and no global mutation.
-_HPC_AGENT_ALLOW_RULE = "Bash(hpc-agent:*)"
-
-
-def _maybe_write_claude_permissions(campaign_dir: Path) -> bool:
-    """Idempotently grant the experiment dir the `Bash(hpc-agent:*)` allow rule.
-
-    Writes/merges ``<campaign_dir>/.claude/settings.json`` so a spawned bare
-    worker (or any `claude` launched from here) can call the `hpc-agent` CLI
-    without a permission prompt it cannot answer (#190). Returns True iff the
-    file was created or the rule was newly added; a no-op (rule already present)
-    returns False so the artifacts list doesn't churn on re-runs.
-
-    Merge, never overwrite: an existing settings.json keeps every other key and
-    every other allow entry; we only ensure our one rule is present (deduped).
-    """
-    settings_path = campaign_dir / ".claude" / "settings.json"
-    added = False
-
-    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
-        nonlocal added
-        merged = dict(existing or {})
-        permissions = dict(merged.get("permissions") or {})
-        allow = list(permissions.get("allow") or [])
-        if _HPC_AGENT_ALLOW_RULE not in allow:
-            allow.append(_HPC_AGENT_ALLOW_RULE)
-            added = True
-        permissions["allow"] = allow
-        merged["permissions"] = permissions
-        return merged
-
-    # Serialize against a concurrent interview/driver touching the same file —
-    # same rationale as the meta.json write above. ``atomic_locked_update``
-    # creates parent dirs and the file on first write.
-    atomic_locked_update(settings_path, _mutate)
-    return added
 
 
 # ─── task_generator: typed recipes that materialize tasks.py ───────────────
@@ -754,7 +760,102 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
         return len(params["items"]) * len(params["seeds"])
     if kind in ("numeric_logspace", "numeric_linspace"):
         return int(params["n"])
+    if kind == "chunked_series":
+        # Independent count formula (chunks x product(extra-axis lens)) so it
+        # cross-checks the length of the list ``_chunked_series_tasks`` emits.
+        _validate_chunked_series(params)
+        n = int(params["chunks"])
+        for axis_values in (params.get("extra_axes") or {}).values():
+            n *= len(axis_values)
+        return n
     raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
+
+
+def _validate_chunked_series(params: Mapping[str, Any]) -> None:
+    """Spec-time validation for a ``chunked_series`` recipe.
+
+    Raises :class:`errors.SpecInvalid` on any condition that would make the
+    chunk arithmetic degenerate — the off-by-one class run #11 hit with a
+    hand-scripted ``enumerated`` list that only the COUNT cross-checked.
+    """
+    series_length = int(params["series_length"])
+    chunks = int(params["chunks"])
+    halo = int(params["halo"])
+    start = int(params.get("start", 0))
+    if chunks < 1:
+        raise errors.SpecInvalid(f"chunked_series requires chunks >= 1; got {chunks}")
+    if halo < 0:
+        raise errors.SpecInvalid(f"chunked_series requires halo >= 0; got {halo}")
+    if start + halo >= series_length:
+        raise errors.SpecInvalid(
+            f"chunked_series requires start + halo < series_length (a non-empty "
+            f"scoring space); got start={start}, halo={halo}, "
+            f"series_length={series_length}"
+        )
+    span = series_length - start - halo
+    if span // chunks < 1:
+        raise errors.SpecInvalid(
+            f"chunked_series chunk width < 1: the scoring span [{start + halo}, "
+            f"{series_length}) has width {span}, but chunks={chunks} would leave "
+            f"an empty chunk; reduce chunks or widen the span"
+        )
+    empties = [name for name, vals in (params.get("extra_axes") or {}).items() if not vals]
+    if empties:
+        raise errors.SpecInvalid(
+            f"chunked_series extra_axes must each have >=1 value; empty: {empties}"
+        )
+
+
+def _chunked_series_tasks(params: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Emit the ordered per-task kwargs for a ``chunked_series`` recipe.
+
+    The scoring space ``[start + halo, series_length)`` is tiled into
+    ``chunks`` contiguous chunks; the last chunk absorbs the remainder so the
+    final ``chunk_end`` equals ``series_length`` EXACTLY. Every task carries
+    its ``chunk_start`` / ``chunk_end`` / ``halo`` bounds — a run-#11-style
+    executor replays ``halo`` bars before ``chunk_start`` (reading from
+    ``chunk_start - halo``, which the validation guarantees is >= ``start``,
+    so the halo never underflows the series). Each ``extra_axes`` value
+    multiplies the grid: the emitted order is every extra-axes combination
+    (outer, in declared-key order) crossed with every chunk (inner) — the
+    bucket x chunk fan-out.
+
+    This is the ONE home of the chunk arithmetic. ``_expected_count`` derives
+    the count by an independent formula and the interview cross-checks it, and
+    the materializer emits the list this returns verbatim — so the bounds math
+    has a single, test-seated definition.
+    """
+    _validate_chunked_series(params)
+    series_length = int(params["series_length"])
+    chunks = int(params["chunks"])
+    halo = int(params["halo"])
+    start = int(params.get("start", 0))
+    extra_axes: Mapping[str, Any] = params.get("extra_axes") or {}
+
+    emit_lo = start + halo
+    width = (series_length - emit_lo) // chunks
+    bounds: list[tuple[int, int]] = []
+    for i in range(chunks):
+        chunk_start = emit_lo + i * width
+        # The last chunk absorbs the remainder so the union covers the space
+        # exactly and the final end lands on series_length.
+        chunk_end = series_length if i == chunks - 1 else emit_lo + (i + 1) * width
+        bounds.append((chunk_start, chunk_end))
+
+    keys = list(extra_axes.keys())
+    axis_values = [list(extra_axes[k]) for k in keys]
+    tasks: list[dict[str, Any]] = []
+    # ``itertools.product()`` with no axes yields a single empty tuple, so the
+    # no-extra-axes case is just the chunk sequence.
+    for combo in itertools.product(*axis_values):
+        bucket = dict(zip(keys, combo, strict=True))
+        for chunk_start, chunk_end in bounds:
+            # Chunk bounds go LAST so they win if an extra axis is (mis)named
+            # like a bound key — the bounds are the point of the recipe.
+            tasks.append(
+                {**bucket, "chunk_start": chunk_start, "chunk_end": chunk_end, "halo": halo}
+            )
+    return tasks
 
 
 def _materialize_tasks_py(
@@ -846,6 +947,18 @@ def _materialize_tasks_py(
             f"    {{{params['param']!r}: _LOW + (_HIGH - _LOW) * i / (_N - 1)}}\n"
             f"    for i in range(_N)\n"
             f"]\n\n"
+            f"def total() -> int: return len(_TASKS)\n"
+            f"{merge_resolve}"
+        )
+    elif kind == "chunked_series":
+        # Bounds are computed here (the ONE arithmetic home) and emitted as a
+        # verbatim literal list — same round-trip guarantee as ``enumerated``,
+        # and the count was already cross-checked by ``_expected_count`` via an
+        # independent formula.
+        tasks = _chunked_series_tasks(params)
+        body = (
+            f"{inject_prefix}"
+            f"_TASKS = {tasks!r}\n\n"
             f"def total() -> int: return len(_TASKS)\n"
             f"{merge_resolve}"
         )

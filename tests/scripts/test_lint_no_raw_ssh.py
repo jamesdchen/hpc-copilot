@@ -2,11 +2,10 @@
 
 Pins these invariants (mirrors ``test_lint_backend_boundary.py``):
 
-1. The real tree passes — no SKILL body / worker prompt offers a raw-ssh
-   affordance today.
+1. The real tree passes — no SKILL body offers a raw-ssh affordance today.
 2. The lint can actually FIRE: a bare ``ssh`` / ``scp`` / ``rsync`` invocation
-   in a code span (inline or fenced) of a SKILL / worker-prompt is reported
-   with the throttled-verb remediation.
+   in a code span (inline or fenced) of a SKILL is reported with the
+   throttled-verb remediation.
 3. Documentation forms do NOT fire: plain-prose mentions outside code spans,
    the bare word with no argument, identifier forms (``ssh_run`` /
    ``ssh_target`` / ``rsync_push`` / ``ssh-add``), and angle-bracket
@@ -45,14 +44,6 @@ def _skill(tmp_path: Path, body: str, *, name: str = "hpc-demo") -> Path:
     return root
 
 
-def _worker_prompt(tmp_path: Path, body: str, *, name: str = "demo.md") -> Path:
-    root = tmp_path / "src"
-    p = root / "hpc_agent" / "_kernel" / "extension" / "worker_prompts" / name
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(body, encoding="utf-8")
-    return root
-
-
 def test_inline_raw_ssh_fires(tmp_path: Path, capsys) -> None:
     root = _skill(tmp_path, 'Inspect with `ssh usc-discovery "ls /scratch1/jc_905/"`.\n')
     assert lint.main(root) == 1
@@ -81,11 +72,6 @@ def test_reports_the_line_of_the_match_not_the_span_start(tmp_path: Path, capsys
 
 def test_raw_scp_and_rsync_fire(tmp_path: Path) -> None:
     root = _skill(tmp_path, "Pull with `scp host:/a /b` or `rsync host:/a /b`.\n")
-    assert lint.main(root) == 1
-
-
-def test_worker_prompt_is_scanned(tmp_path: Path) -> None:
-    root = _worker_prompt(tmp_path, "Probe via `ssh $SSH_TARGET hostname` first.\n")
     assert lint.main(root) == 1
 
 

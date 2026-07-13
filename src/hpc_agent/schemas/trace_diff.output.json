@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace_diff.output.json",
+  "title": "trace-diff output",
+  "description": "Result of overlaying two traces — facts, no verdicts.",
+  "type": "object",
+  "required": [
+    "trace_schema_version",
+    "a",
+    "b",
+    "clean",
+    "aligned",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "trace_schema_version": {
+      "description": "The T1 record schema version the diff was computed against.",
+      "minimum": 1,
+      "title": "Trace Schema Version",
+      "type": "integer"
+    },
+    "a": {
+      "$ref": "#/$defs/TraceEndpoint",
+      "description": "The A-side endpoint echo + presence."
+    },
+    "b": {
+      "$ref": "#/$defs/TraceEndpoint",
+      "description": "The B-side endpoint echo + presence."
+    },
+    "clean": {
+      "description": "True when the two traces have NO divergence at any stage/atom.",
+      "title": "Clean",
+      "type": "boolean"
+    },
+    "aligned": {
+      "description": "True when every stage matched on (stage, seq) — no structural divergence.",
+      "title": "Aligned",
+      "type": "boolean"
+    },
+    "tolerance_applied": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Verbatim echo of the caller-owned tolerance (null when exact).",
+      "title": "Tolerance Applied"
+    },
+    "first_divergence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FirstDivergence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The earliest diverging (stage, atom); null on a clean diff."
+    },
+    "stages": {
+      "description": "One entry per aligned/structural position, in seq order: `{stage, seq, side, divergences: [{atom, kind, detail}]}` (side ∈ both | a_only | b_only).",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Stages",
+      "type": "array"
+    },
+    "structural": {
+      "description": "Structural divergences (unmatched stages) in the T1 flag shape.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Structural",
+      "type": "array"
+    },
+    "render": {
+      "description": "Deterministic, self-describing markdown overlay (trusted-display; no verdicts).",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "FirstDivergence": {
+      "additionalProperties": false,
+      "description": "The earliest diverging ``(stage, atom)`` — leads the render and the result.\n\n``atom`` is ``null`` for a STRUCTURAL divergence (a stage present on one side\nonly); ``kind`` names the semantics that parted (``exact`` / ``set-delta`` /\n…) or ``\"structural\"``.",
+      "properties": {
+        "stage": {
+          "description": "The diverging stage name.",
+          "title": "Stage",
+          "type": "string"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The diverging stage's seq (null only for a degenerate stage).",
+          "title": "Seq"
+        },
+        "atom": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The diverging atom name; null for a structural divergence.",
+          "title": "Atom"
+        },
+        "kind": {
+          "description": "The comparison semantics that parted, or 'structural'.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "description": "The factual one-line difference (never a verdict).",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "kind",
+        "detail"
+      ],
+      "title": "trace-diff first divergence",
+      "type": "object"
+    },
+    "TraceEndpoint": {
+      "additionalProperties": false,
+      "description": "One side's key echo + what the store held for it (absence disclosed).",
+      "properties": {
+        "scope_kind": {
+          "description": "The side's trace scope kind.",
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_id": {
+          "description": "The side's scope id.",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "task": {
+          "description": "The side's task index.",
+          "minimum": 0,
+          "title": "Task",
+          "type": "integer"
+        },
+        "present": {
+          "description": "False when the store held no trace for this key (disclosed).",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "stage_count": {
+          "description": "Number of stage records read for this side.",
+          "minimum": 0,
+          "title": "Stage Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope_kind",
+        "scope_id",
+        "task",
+        "present",
+        "stage_count"
+      ],
+      "title": "trace-diff endpoint",
+      "type": "object"
+    }
+  }
+}
