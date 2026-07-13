@@ -1,12 +1,12 @@
 ---
 name: hpc-wrap-entry-point
-description: "Onboard a repo for hpc-agent submission, autonomously. Given a partial `InterviewSpec` (goal + task_generator are required from the caller; everything else is detected from the repo), the skill: (a) detects an existing entry point or scaffolds one via `build-template --shape {script,notebook}` for greenfield repos, (b) prefers `@register_run` direct decoration on the user's existing function and falls back to materializing a wrapper at `.hpc/wrappers/<run_name>.py` only when direct decoration is structurally blocked (non-Python entry point, `@hydra.main` signature rewrite, vendor code), (c) detects frozen YAML configs by convention, (d) walks the data-axis decision tree, (e) invokes the `interview` primitive to persist `tasks.py` + `interview.json`. No `[Y/n]` prompts — every choice point has a deterministic resolution. Human-driven callers (the `/wrap-entry-point-hpc` slash) gather intent from the user *first* and pass a fully-resolved spec; the skill records what it was given."
+description: "Onboard a repo for hpc-agent submission, autonomously. Given a partial `InterviewSpec` (goal + task_generator are required from the caller; everything else is detected from the repo), the skill: (a) detects an existing entry point or scaffolds one via `build-template --shape {script,notebook}` for greenfield repos, (b) prefers `@register_run` direct decoration on the user's existing function and falls back to materializing a wrapper at `.hpc/wrappers/<run_name>.py` only when direct decoration is structurally blocked (non-Python entry point, `@hydra.main` signature rewrite, vendor code), (c) detects frozen YAML configs by convention, (d) walks the data-axis decision tree, (e) invokes the `interview` primitive to persist `tasks.py` + `interview.json`. No `[Y/n]` prompts — every choice point has a deterministic resolution. Human-driven callers (`/submit-hpc`'s interview phase) gather intent from the user *first* and pass a fully-resolved spec; the skill records what it was given."
 allowed-tools: Bash Read Write Glob
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[interview](../../../../docs/primitives/interview.md) primitive**. Autonomous mode fills a partial `InterviewSpec` from repo inspection; the slash consumer (`/wrap-entry-point-hpc`) passes a fully-resolved spec and the skill just records.
+Agent-facing composition over the **[interview](../../../../docs/primitives/interview.md) primitive**. Autonomous mode fills a partial `InterviewSpec` from repo inspection; the slash consumer (`/submit-hpc`'s interview phase) passes a fully-resolved spec and the skill just records.
 
 The skill persists, in either pathway:
 - A `tasks.py` (from the supplied `task_generator`) whose kwargs include `<stem>_sha` for every frozen YAML, so `cmd_sha` distinguishes `exp_42.yaml` from `exp_43.yaml` and catches in-place edits.

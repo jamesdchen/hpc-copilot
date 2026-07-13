@@ -1,12 +1,12 @@
 ---
 name: hpc-classify-axis
-description: "Classify a @register_run experiment's series axis as a DataAxis (Independent / Associative / BoundedHalo / Sequential) autonomously, and record the result into .hpc/axes.yaml. Callers supplying a pre-resolved data_axis (e.g. the /classify-axis-hpc slash, after a human-facing dialog) bypass the autonomous classifier and the skill just records what it was given."
+description: "Classify a @register_run experiment's series axis as a DataAxis (Independent / Associative / BoundedHalo / Sequential) autonomously, and record the result into .hpc/axes.yaml. Callers supplying a pre-resolved data_axis (e.g. `/submit-hpc`'s interview phase, after a human-facing dialog) bypass the autonomous classifier and the skill just records what it was given."
 allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[classify-axis](../../../../docs/primitives/classify-axis.md) primitive**. Autonomous: reads `run()`, walks the decision tree, commits a `DataAxis`, records it. No `[Y/n]` prompts. Human-driven callers (`/classify-axis-hpc`) pass a pre-resolved `data_axis` and the skill skips classification, just records.
+Agent-facing composition over the **[classify-axis](../../../../docs/primitives/classify-axis.md) primitive**. Autonomous: reads `run()`, walks the decision tree, commits a `DataAxis`, records it. No `[Y/n]` prompts. Human-driven callers (`/submit-hpc`'s interview phase) pass a pre-resolved `data_axis` and the skill skips classification, just records.
 
 `@register_run` captures entry point, CLI flags, and `gpu` — but **not** the parallel decomposition of the ordered series the experiment iterates. This skill closes that gap.
 
@@ -61,7 +61,7 @@ Pass `--spec` only when you have inputs to give; a bare `--experiment-dir .` cal
 ```
 
 - `run_name` — scope when multiple `@register_run` functions exist (else the sole one is used; multiple with no scope → `spec_invalid` `ambiguous_run`).
-- `data_axis` — supply when the caller already resolved the classification (the human-driven slash path, after `/classify-axis-hpc` ran its interview); the composite records it directly as `classified_by: "interview"` and runs neither recall nor the matcher.
+- `data_axis` — supply when the caller already resolved the classification (the human-driven slash path, after `/submit-hpc`'s interview resolved it); the composite records it directly as `classified_by: "interview"` and runs neither recall nor the matcher.
 - `root` / `task_kind` — forwarded to the recall sub-call for memory pre-fill.
 
 **Branch on the returned `data` — exactly two outcomes:**
@@ -125,7 +125,7 @@ On a `spec_invalid` envelope the most common cause is a `bounded_halo` whose `ha
 
 ### 6. Carry the *why* into the return envelope
 
-The one-line rationale (which tree branch resolved, which parameters were referenced) is carried forward in the return envelope's `reasoning` field — written in Step 8, read by the parent skill. There is **no separate transcript CLI call** here: the `interview` primitive is one-shot (`--spec` / `--campaign-dir`), with no incremental add-turn surface. The interview transcript is owned by the slash command (`/classify-axis-hpc` etc.) for human-driven runs; agent-classified runs surface their reasoning through the return envelope, not through `interview.json`.
+The one-line rationale (which tree branch resolved, which parameters were referenced) is carried forward in the return envelope's `reasoning` field — written in Step 8, read by the parent skill. There is **no separate transcript CLI call** here: the `interview` primitive is one-shot (`--spec` / `--campaign-dir`), with no incremental add-turn surface. The interview transcript is owned by the composing slash command (`/submit-hpc`) for human-driven runs; agent-classified runs surface their reasoning through the return envelope, not through `interview.json`.
 
 ### 7. The elision gate is the backstop
 

@@ -247,15 +247,15 @@ def _build_delegate(
                 "wrap-entry-point to build the dispatch/resource contract "
                 "before any submission"
             ),
-            # No SpawnRequest: onboarding is the ``wrap-entry-point`` /
-            # ``/wrap-entry-point-hpc`` interview, not one of the
+            # No SpawnRequest: onboarding is the ``wrap-entry-point``
+            # (``hpc-wrap-entry-point`` skill) interview, not one of the
             # submit/status/aggregate/campaign workflows the spawn
             # contract enumerates.
             "spawn_request": None,
             "prompt": (
                 f"This repo at {exp} is not onboarded — there is no "
                 ".hpc/tasks.py, so there is nothing to submit yet. Run "
-                "wrap-entry-point (slash command /wrap-entry-point-hpc) to "
+                "the `hpc-wrap-entry-point` skill (via the Skill tool) to "
                 "interview the entry point and generate the dispatch "
                 "contract (tasks.py + EXECUTOR/result_dir_template/run_id). "
                 "Do NOT hand-write tasks.py or reverse-engineer the "
