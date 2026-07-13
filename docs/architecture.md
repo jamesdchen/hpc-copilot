@@ -20,9 +20,6 @@ rules.
 │                                                                     │
 │  src/hpc_agent/slash_commands/skills/                               │
 │  in-chat Skill-tool utilities (2 paired with slashes)               │
-│                                                                     │
-│  src/hpc_agent/_kernel/extension/worker_prompts/                    │
-│  delegated-worker prompts (submit, status, aggregate, campaign)     │
 │                                  ↓                                  │
 │  cli/dispatch.py (`hpc-agent` console script — main())              │
 │    └ delegates to cli/parser.py + cli/_dispatch.py                  │
@@ -132,22 +129,17 @@ rules.
 │   │   ├ schema.py      runtime spec validation                      │
 │   │   ├ layout.py      RepoLayout, JournalLayout                    │
 │   │   └ vocabulary.py  StrEnum: LifecycleState, FailureCategory     │
-│   ├ lifecycle/     primitive lifecycle + spawn invocation +         │
+│   ├ lifecycle/     primitive lifecycle +                            │
 │   │                code-driven drive loop                           │
-│   │   ├ invoke.py      WorkerInvoker, InvocationResult,             │
-│   │   │                RenderedPrompt                               │
 │   │   ├ drive.py       drive_once code-driven orchestration         │
-│   │   ├ llm_resolver.py + structured.py  typed judgement funnel     │
+│   │   ├ structured.py  typed judgement funnel                       │
 │   │   ├ run.py         lifecycle run helpers                        │
 │   │   └ playbook.py                                                 │
 │   └ extension/     kernel-to-agent surfaces                         │
 │       ├ capabilities.py   operations-catalog envelope (kernel       │
 │       │                   introspection primitive)                  │
-│       ├ spawn_prompt.py   spawn-contract render/parse               │
 │       ├ telemetry.py      monitor.jsonl writer                      │
-│       ├ version.py        cross-domain schema manifest              │
-│       └ worker_prompts/   worker procedure markdown package         │
-│                           (loaded via importlib.resources)          │
+│       └ version.py        cross-domain schema manifest              │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -377,16 +369,6 @@ See `docs/internals/skill-policy.md` for the full forcing rule.
    paired slash — users don't type `/classify-axis-hpc`; the in-chat
    agent reaches them through `/submit-hpc`'s composition. Listed in
    `SKILL_ONLY_OK` in the lint.
-
-3. **Worker prompts** (`src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`)
-   — **STRANDED under the fork** (design §6). Pre-fork, these were the
-   execution layer: the four host workflows inlined into a `claude -p
-   --bare` worker by `_kernel/extension/spawn_prompt.py`. The fork removes
-   the headless worker from default routing — there is no LLM inside
-   execution to spawn; the **block verbs** (item 2) are the execution.
-   The prompt files + spawn machinery stay on disk untouched pending a
-   dedicated deletion pass (`strand ≠ delete`); their snapshot tests still
-   pin the rendered bytes. Do not route new work through them.
 
 `scripts/lint_skill_command_sync.py` pins the surfaces:
 `WORKFLOW_PAIRS` enumerates the four workflow (slash, skill) pairs;
