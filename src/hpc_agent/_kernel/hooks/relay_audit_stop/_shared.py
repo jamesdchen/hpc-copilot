@@ -47,9 +47,9 @@ class _Violation(NamedTuple):
 
 def _journal_runs_dir(experiment_dir: Path) -> Path:
     """``<journal home>/<repo_hash>/runs`` — WITHOUT creating (no-scaffold)."""
-    from hpc_agent.state.run_record import _current_homedir, repo_hash
+    from hpc_agent.state.run_record import current_homedir, repo_hash
 
-    return _current_homedir() / repo_hash(experiment_dir) / "runs"
+    return current_homedir() / repo_hash(experiment_dir) / "runs"
 
 
 def _notebook_audits_dir(experiment_dir: Path) -> Path:

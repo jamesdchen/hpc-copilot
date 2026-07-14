@@ -34,7 +34,7 @@ def test_breadcrumb_path_is_session_scoped(monkeypatch: pytest.MonkeyPatch, tmp_
     bleed); absent the env var it falls back to the shared name."""
     from hpc_agent.cli import skill_returns
 
-    monkeypatch.setattr("hpc_agent.state.run_record._current_homedir", lambda: tmp_path)
+    monkeypatch.setattr("hpc_agent.state.run_record.current_homedir", lambda: tmp_path)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sessA")
     a = skill_returns._breadcrumb_path()
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sessB")
@@ -47,7 +47,7 @@ def test_breadcrumb_path_is_session_scoped(monkeypatch: pytest.MonkeyPatch, tmp_
 @pytest.fixture(autouse=True)
 def _isolate_breadcrumb_home(tmp_path, monkeypatch):
     """Isolate the skill-return breadcrumb (``<home>/_skill_return_dirs.json``)
-    per test. The breadcrumb lives under ``_current_homedir()`` (``~/.claude/hpc``,
+    per test. The breadcrumb lives under ``current_homedir()`` (``~/.claude/hpc``,
     HPC_JOURNAL_DIR-overridable); without isolation a sibling emit test on
     another xdist worker leaks a committed-return dir into these no-op
     assertions. Tests that set HPC_JOURNAL_DIR themselves override this default.

@@ -183,18 +183,18 @@ def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
     no live lease is a corpse and does NOT block re-resolve. Returns the canary
     record's ``run_id`` / ``status`` / ``cluster`` for the decision brief.
     """
-    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+    from hpc_agent.ops.monitor.reconcile import sibling_run_ids
     from hpc_agent.ops.supersession import _live_lease
     from hpc_agent.state.journal import load_run
     from hpc_agent.state.run_record import TERMINAL_STATUSES, RunRecord
 
     # The paired canary FAMILY entries via the one #258 suffix definition —
-    # never a second hardcoded ``-canary`` (the `_sibling_run_ids` docstring owns
+    # never a second hardcoded ``-canary`` (the `sibling_run_ids` docstring owns
     # the pairing convention; supersession's `_supersede_missing_main` uses it
     # too). The double canary adds ``<run_id>-canary2``, so surface a live attempt
     # if ANY family member — or a live detached lease for the main or a member —
     # is non-terminal.
-    canary_ids = _sibling_run_ids(run_id)
+    canary_ids = sibling_run_ids(run_id)
     records = [(cid, load_run(experiment_dir, cid)) for cid in canary_ids]
     lease = _live_lease(run_id)
     if lease is None:

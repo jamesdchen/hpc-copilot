@@ -617,9 +617,9 @@ def spawn_stray_reap_detached(
     (classify) and spawns; the child enacts. That is the never-actuate boundary.
     """
     from hpc_agent._kernel.lifecycle.detached import _agent_launch_prefix, _spawn_detached
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     detached_dir.mkdir(parents=True, exist_ok=True)
     # Not a run-keyed block, so it does not ride ``launch_submit_block_detached`` (which
     # keys on run_id + SUPPORTED_DETACHED_BLOCK_VERBS). A synthetic filesystem-safe key

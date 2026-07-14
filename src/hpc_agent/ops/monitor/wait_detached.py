@@ -8,7 +8,7 @@ and up to a full poll interval of dead air after the brief is ready.
 
 This verb is the bridge: a BLOCKING local wait on the worker's lease pid
 (``_kernel/lifecycle/detached.py`` writes ``_detached/<block>-<run_id>.lease.json``
-with the launched pid; ``_pid_alive`` probes it). The agent launches
+with the launched pid; ``pid_alive`` probes it). The agent launches
 ``hpc-agent wait-detached --spec <file with {"run_id": ...}>`` (a file path —
 never inline JSON on the command line) through the harness's native
 backgrounding (Claude Code ``run_in_background``) and the harness wakes it
@@ -51,7 +51,7 @@ def _live_lease(detached_dir: Path, run_id: str, block: str | None) -> dict[str,
     must not strand the waiter; the ``no_live_worker`` outcome + journal state
     remain the truthful answer.
     """
-    from hpc_agent._kernel.lifecycle.detached import _pid_alive
+    from hpc_agent._kernel.lifecycle.detached import pid_alive
 
     pattern = f"{block}-{run_id}.lease.json" if block else f"*-{run_id}.lease.json"
     for lease_path in sorted(detached_dir.glob(pattern)):
@@ -63,7 +63,7 @@ def _live_lease(detached_dir: Path, run_id: str, block: str | None) -> dict[str,
             continue
         lease: dict[str, Any] = loaded
         pid = lease.get("pid")
-        if isinstance(pid, int) and pid > 0 and _pid_alive(pid):
+        if isinstance(pid, int) and pid > 0 and pid_alive(pid):
             return lease
     return None
 
@@ -98,10 +98,10 @@ def wait_detached(*, spec: WaitDetachedInput) -> WaitDetachedResult:
     alive (not an anomaly: long queue waits are normal; re-arm or consult
     ``status-snapshot``).
     """
-    from hpc_agent._kernel.lifecycle.detached import _pid_alive
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent._kernel.lifecycle.detached import pid_alive
+    from hpc_agent.state.run_record import current_homedir
 
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     started = time.monotonic()
 
     lease = _live_lease(detached_dir, spec.run_id, spec.block) if detached_dir.is_dir() else None
@@ -116,7 +116,7 @@ def wait_detached(*, spec: WaitDetachedInput) -> WaitDetachedResult:
         )
 
     pid = int(lease["pid"])
-    while _pid_alive(pid):
+    while pid_alive(pid):
         if time.monotonic() - started >= spec.timeout_sec:
             return WaitDetachedResult(
                 outcome="timeout",

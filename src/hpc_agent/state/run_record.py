@@ -41,6 +41,7 @@ __all__ = [
     "HPC_HOMEDIR",
     "TERMINAL_STATUSES",
     "RunRecord",
+    "current_homedir",
     "repo_hash",
     "journal_dir",
     "journal_root_if_exists",
@@ -54,7 +55,7 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 
 
-def _current_homedir() -> Path:
+def current_homedir() -> Path:
     """Re-resolve the journal home on every call.
 
     Lookup order:
@@ -79,6 +80,9 @@ def _current_homedir() -> Path:
     if isinstance(attr, Path):
         return attr
     return Path.home() / ".claude" / "hpc"
+
+
+_current_homedir = current_homedir  # back-compat alias
 
 
 # Import-time snapshot kept as a public attribute for back-compat —

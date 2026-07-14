@@ -17,7 +17,7 @@ Mechanism — N claimable slots per host, shared across processes:
   :func:`resolve_max_connections` (default :data:`DEFAULT_MAX_CONNECTIONS`)
   per-host slot files under ``<journal home>/_ssh_throttle/`` (sibling of the
   breaker's ``_ssh_circuit/``; journal home =
-  :func:`hpc_agent.state.run_record._current_homedir`, so ``HPC_JOURNAL_DIR``
+  :func:`hpc_agent.state.run_record.current_homedir`, so ``HPC_JOURNAL_DIR``
   redirection and the test suite's isolation apply).
 * A claim is a lock-free **atomic exclusive create** (``O_CREAT|O_EXCL``) of
   ``<host>.slot<i>`` — the hot path with a free slot costs one syscall and
@@ -181,9 +181,9 @@ def _safe_name(host: str) -> str:
 
 
 def _slot_dir() -> Path:
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    return _current_homedir() / "_ssh_throttle"
+    return current_homedir() / "_ssh_throttle"
 
 
 def slot_paths(host: str, limit: int | None = None) -> list[Path]:

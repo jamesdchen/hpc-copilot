@@ -73,9 +73,9 @@ def probe_ttl_sec() -> float:
 
 def cache_path(host: str) -> Path:
     """State file for *host* under the journal home (test-isolatable)."""
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    return _current_homedir() / "_preflight_probe_cache" / f"{_safe_name(host)}.json"
+    return current_homedir() / "_preflight_probe_cache" / f"{_safe_name(host)}.json"
 
 
 def _lock_path(target: Path) -> Path:

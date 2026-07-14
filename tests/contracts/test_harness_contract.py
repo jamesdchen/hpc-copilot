@@ -96,8 +96,8 @@ def test_doc_pins_the_frozen_write_api_schema() -> None:
         assert field in text, f"the frozen record schema must name the {field!r} field"
     assert "MAX_UTTERANCE_BYTES" in text, "the per-entry cap must be named"
     assert "utterances.jsonl" in text, "the storage locator filename must be named"
-    assert "repo_hash" in text and "_current_homedir" in text, (
-        "the locator derivation (_current_homedir + repo_hash) must be pinned"
+    assert "repo_hash" in text and "current_homedir" in text, (
+        "the locator derivation (current_homedir + repo_hash) must be pinned"
     )
     assert "sorted" in text.lower() and "append-only" in text.lower(), (
         "sorted-keys JSON + append-only must be pinned"

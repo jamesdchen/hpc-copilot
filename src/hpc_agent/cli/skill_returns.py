@@ -111,12 +111,12 @@ _MAX_BREADCRUMB_DIRS = 32
 def _breadcrumb_path() -> Path:
     """Path to the committed-return-dir breadcrumb (cwd-independent).
 
-    Resolved from :func:`hpc_agent.state.run_record._current_homedir` (``~/.claude/hpc``,
+    Resolved from :func:`hpc_agent.state.run_record.current_homedir` (``~/.claude/hpc``,
     overridable via ``HPC_JOURNAL_DIR``), so the emitter and the Stop guard —
     running in the same process environment — resolve it identically regardless
     of the harness cwd.
     """
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
     # Session-scoped (run #7): the Stop guard reads this per-SESSION, so a
     # machine-global file let ONE session's committed returns nag a DIFFERENT
@@ -127,7 +127,7 @@ def _breadcrumb_path() -> Path:
     # to the shared name so nothing breaks.
     session = re.sub(r"[^A-Za-z0-9_-]", "", os.environ.get("CLAUDE_CODE_SESSION_ID", ""))[:64]
     name = f"_skill_return_dirs_{session}.json" if session else "_skill_return_dirs.json"
-    return _current_homedir() / name
+    return current_homedir() / name
 
 
 def record_return_dir(experiment_dir: Path | str) -> None:

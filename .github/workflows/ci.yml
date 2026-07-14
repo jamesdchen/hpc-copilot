@@ -191,6 +191,9 @@ jobs:
         # imports each allowlisted symbol from the installed hpc_agent.
         if: matrix.python-version == '3.12'
         run: python scripts/lint_plugin_api_surface.py
+      - name: Lint no cross-package private-symbol imports
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_private_cross_package_imports.py
       - name: Check JSON schemas regenerated from Pydantic
         if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check

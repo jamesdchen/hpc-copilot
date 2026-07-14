@@ -1508,11 +1508,11 @@ def discover_fleet_experiments() -> tuple[list[Path], list[dict[str, str]]]:
     exists on disk, is skipped silently and counted (a wiped demo repo must never
     crash the morning read). A missing journal home yields nothing.
     """
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
     experiments: list[Path] = []
     skipped: list[dict[str, str]] = []
-    home = _current_homedir()
+    home = current_homedir()
     if not home.exists():
         return experiments, skipped
     for repo_json in sorted(home.glob("*/repo.json")):
@@ -1566,9 +1566,9 @@ def _all_run_records(experiment_dir: Path) -> list[Any]:
     added here).
     """
     from hpc_agent.state.journal import load_run
-    from hpc_agent.state.run_record import _current_homedir, repo_hash
+    from hpc_agent.state.run_record import current_homedir, repo_hash
 
-    home = _current_homedir()
+    home = current_homedir()
     if not home.exists():
         return []
     runs = home / repo_hash(experiment_dir) / "runs"

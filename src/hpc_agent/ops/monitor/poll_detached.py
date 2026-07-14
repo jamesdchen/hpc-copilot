@@ -18,7 +18,7 @@ disk — reusing each source, never reimplementing it:
   (``_kernel/lifecycle/detached.py``: ``<verb>-<run_id>.lease.json`` under the
   global ``_detached/`` home, carrying the worker ``pid``) — read via
   ``detached._read_lease_holder_pid``; pid-liveness via the ONE liveness probe
-  ``infra.proc.pid_alive`` (the same definition ``detached._pid_alive`` forwards
+  ``infra.proc.pid_alive`` (the same definition ``detached.pid_alive`` forwards
   to);
 * the per-run JOURNAL status (``state.journal_poll.read_run_status``);
 * the block TERMINAL record (``state.block_terminal.read_terminal_with_fallback``,
@@ -89,12 +89,12 @@ def poll_detached(*, experiment_dir: Path, spec: PollDetachedInput) -> PollDetac
     from hpc_agent._kernel.lifecycle.detached import _read_lease_holder_pid
     from hpc_agent.state.block_terminal import read_terminal_with_fallback
     from hpc_agent.state.journal_poll import read_run_status
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
     # Lease home is the GLOBAL journal home's ``_detached/`` (where the launcher
     # writes it), NOT the experiment tree — file-name convention owned by
     # ``detached._spawn_detached`` / ``_guard_single_lease``.
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     lease_path = detached_dir / f"{spec.block}-{spec.run_id}.lease.json"
     lease_present = lease_path.exists()
     pid = _read_lease_holder_pid(detached_dir, spec.block, spec.run_id)

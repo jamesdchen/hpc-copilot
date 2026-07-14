@@ -166,10 +166,10 @@ def _watch_lease_path(run_id: str) -> Path:
     the launcher's lease key.
     """
     from hpc_agent.state.block_terminal import terminal_block_key
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
     watch_key = terminal_block_key("status-watch")
-    return _current_homedir() / "_detached" / f"{watch_key}-{run_id}.lease.json"
+    return current_homedir() / "_detached" / f"{watch_key}-{run_id}.lease.json"
 
 
 def status_watch_armed(run_id: str) -> bool:
@@ -187,14 +187,14 @@ def status_watch_armed(run_id: str) -> bool:
     """
     import json
 
-    from hpc_agent._kernel.lifecycle.detached import _pid_alive
+    from hpc_agent._kernel.lifecycle.detached import pid_alive
 
     try:
         lease = json.loads(_watch_lease_path(run_id).read_text(encoding="utf-8"))
         pid = int(lease.get("pid", -1))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return False
-    return pid > 0 and _pid_alive(pid)
+    return pid > 0 and pid_alive(pid)
 
 
 def assert_wake_armed(
@@ -1176,9 +1176,9 @@ def _iter_campaign_run_leases(
     experiments and campaigns, so an unscoped read would cross wires. Any unreadable
     / torn / foreign lease is skipped, never raised.
     """
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     out: list[tuple[dict[str, Any], str, float]] = []
     if not detached_dir.is_dir():
         return out
@@ -1221,14 +1221,14 @@ def _campaign_live_detached_worker(experiment_dir: Path, campaign_id: str) -> bo
     declare a slow-but-healthy iteration dead). Pure local: reads the lease pid and
     checks it is alive (the SAME probe the single-lease guard uses).
     """
-    from hpc_agent._kernel.lifecycle.detached import _pid_alive
+    from hpc_agent._kernel.lifecycle.detached import pid_alive
 
     for lease, _run_id, _mtime in _iter_campaign_run_leases(experiment_dir, campaign_id):
         try:
             pid = int(lease.get("pid", -1))
         except (TypeError, ValueError):
             continue
-        if pid > 0 and _pid_alive(pid):
+        if pid > 0 and pid_alive(pid):
             return True
     return False
 

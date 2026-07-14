@@ -310,7 +310,7 @@ class TestCrossProcessSharing:
         clock = FakeClock()
         _fail_n(clock, CIRCUIT_THRESHOLD)  # "worker A" tripped the breaker
         with (
-            patch("hpc_agent.infra.remote._capture_via_select") as seam,
+            patch("hpc_agent.infra.remote.capture_via_select") as seam,
             pytest.raises(SshCircuitOpen),
         ):
             remote.ssh_run("true", ssh_target=TARGET)
@@ -344,7 +344,7 @@ class TestLadderIntegration:
         clock = FakeClock()
         _fail_n(clock, CIRCUIT_THRESHOLD)
         with (
-            patch("hpc_agent.infra.remote._capture_via_select") as seam,
+            patch("hpc_agent.infra.remote.capture_via_select") as seam,
             pytest.raises(SshCircuitOpen),
         ):
             remote.ssh_run("true", ssh_target=TARGET)
@@ -358,7 +358,7 @@ class TestLadderIntegration:
         monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")
         clock = FakeClock()
         _fail_n(clock, CIRCUIT_THRESHOLD - 1)
-        with patch("hpc_agent.infra.remote._capture_via_select") as seam:
+        with patch("hpc_agent.infra.remote.capture_via_select") as seam:
             seam.return_value = subprocess.CompletedProcess(["ssh"], 0, "ok", "")
             remote.ssh_run("true", ssh_target=TARGET)
         assert _state()["consecutive_failures"] == 0

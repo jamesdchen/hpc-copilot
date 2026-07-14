@@ -50,7 +50,7 @@ from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.ops.attention_queue import collect_queue
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
-from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, reconcile
+from hpc_agent.ops.monitor.reconcile import canary_parent_of, reconcile, sibling_run_ids
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.overnight import morning_brief_if_any
 from hpc_agent.ops.recover.notify import acknowledge_alerts, read_unacknowledged_alerts
@@ -256,7 +256,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     if spec.run_id is not None:
         records = [
             rec
-            for rid in (spec.run_id, *_sibling_run_ids(spec.run_id))
+            for rid in (spec.run_id, *sibling_run_ids(spec.run_id))
             if (rec := load_run(experiment_dir, rid)) is not None
         ]
     else:
@@ -547,16 +547,16 @@ def _live_watch_handle(experiment_dir: Path, run_id: str) -> StatusBlockResult |
     second spawn, no dial). A dead/absent/torn lease → None (the caller spawns; the
     single-lease reclaims the dead pid — the dead-lease re-spawn seam).
     """
-    from hpc_agent._kernel.lifecycle.detached import _pid_alive
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent._kernel.lifecycle.detached import pid_alive
+    from hpc_agent.state.run_record import current_homedir
 
-    lease_path = _current_homedir() / "_detached" / f"{_WATCH_BLOCK_KEY}-{run_id}.lease.json"
+    lease_path = current_homedir() / "_detached" / f"{_WATCH_BLOCK_KEY}-{run_id}.lease.json"
     try:
         lease = json.loads(lease_path.read_text(encoding="utf-8"))
         pid = int(lease.get("pid", -1))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    if pid <= 0 or not _pid_alive(pid):
+    if pid <= 0 or not pid_alive(pid):
         return None
     return _detached_watch_result(run_id=run_id, pid=pid, log_path=lease.get("log_path"))
 
