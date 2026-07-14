@@ -24,7 +24,7 @@ yours to perform / judge. It exits non-zero if a measurable criterion fails.
 | # | Criterion | How it's judged |
 |---|-----------|-----------------|
 | 1 | **Pool occupancy ≈ K** across iteration boundaries (no drain-to-zero); measurably higher utilization than the synchronous baseline on the same straggler-heavy workload. | measured (script) + compared to the baseline run |
-| 2 | **Crash-safe resume** — kill `hpc-campaign-driver` mid-stream, restart; it reconstructs in-flight/told sets from `.hpc/` with **no stranded** and **no double-told** trials. | interactive (you kill) + measured diff (script) |
+| 2 | **Crash-safe resume** — kill `hpc-block-drive` mid-stream, restart; it reconstructs in-flight/told sets from `.hpc/` with **no stranded** and **no double-told** trials. | interactive (you kill) + measured diff (script) |
 | 3 | **Default unchanged** — the same campaign with `async_refill` **off** reproduces today's synchronous batch behavior byte-for-byte. | measured drain-to-zero (script) + **human** artifact diff |
 | 4 | **Polling within the connection-storm envelope** (#346) — one `qstat`/login-node query per group regardless of in-flight count. | measured group cardinality (script) + **human** qstat count in logs |
 
@@ -98,7 +98,7 @@ disk-as-truth — so the continuous loop is just a `/loop` (or cron) around it. 
 **not** build or expect a daemon.
 
 ```bash
-/loop 30m hpc-campaign-driver --experiment-dir . --allow-agent-steps
+/loop 30m hpc-block-drive --experiment-dir .
 ```
 
 Let it run until the pool fills (≈ K trials in flight). Confirm:
@@ -158,7 +158,7 @@ mid-stream and restart it**:
 1. While trials are in flight, **stop the running driver** (Ctrl-C the `/loop`,
    or kill the cron tick / PID). The BEFORE snapshot shows the in-flight set you
    are interrupting.
-2. **Restart it identically:** `/loop 30m hpc-campaign-driver --experiment-dir . --allow-agent-steps`.
+2. **Restart it identically:** `/loop 30m hpc-block-drive --experiment-dir .`.
 3. Press ENTER; the script waits `--settle` seconds for the restarted driver to
    reconcile from `.hpc/`, then re-snapshots and diffs.
 
