@@ -1,10 +1,6 @@
 ---
 name: clusters-describe
 verb: query
-inputs:
-- name: name
-  type: string
-  description: Cluster key from clusters.yaml.
 side_effects: []
 idempotent: true
 idempotency_key: none

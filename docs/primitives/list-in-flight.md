@@ -1,10 +1,6 @@
 ---
 name: list-in-flight
 verb: query
-inputs:
-- name: experiment_dir
-  type: path
-  description: Repo root containing the journal. Defaults to cwd.
 side_effects: []
 idempotent: true
 idempotency_key: none

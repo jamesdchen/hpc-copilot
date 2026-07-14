@@ -1,16 +1,6 @@
 ---
 name: reconcile-journal
 verb: mutate
-inputs:
-- name: run_id
-  type: string
-- name: scheduler
-  type: enum
-  description: One of `sge`, `slurm`, `pbspro`, `torque`. Determines which on-cluster
-    query backend to invoke.
-- name: experiment_dir
-  type: path
-  description: Repo root. Defaults to cwd.
 side_effects:
 - writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)
 - ssh: <cluster>

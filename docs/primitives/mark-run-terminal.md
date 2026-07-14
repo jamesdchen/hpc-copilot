@@ -1,15 +1,6 @@
 ---
 name: mark-run-terminal
 verb: mutate
-inputs:
-- name: experiment_dir
-  type: path
-- name: run_id
-  type: string
-- name: status
-  type: enum
-  description: One of `complete`, `failed`, `abandoned`. Cannot be `in_flight` (use
-    the natural lifecycle for that).
 outputs:
 - name: run_id
   type: string
