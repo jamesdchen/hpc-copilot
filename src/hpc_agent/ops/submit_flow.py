@@ -2190,7 +2190,43 @@ def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowRes
     """Return a deduped SubmitFlowResult if a *live* journal record already exists."""
     existing = load_run(experiment_dir, spec.run_id)
     if existing is None:
+        # F47: no journal record — but the crash-safety pre-stamp may already have
+        # landed real scheduler job_ids on the sidecar (a partial multi-wave
+        # failure, or a kill in the qsub→submit_and_record window: submit_and_record
+        # is post-qsub, so the journal write never happened). Proceeding here would
+        # re-qsub the SAME run_id — waves running twice, concurrent double-writers
+        # to the result dirs — and the post-qsub stamp would then REPLACE the
+        # pre-stamped ids, orphaning the first arrays from every monitor/kill/
+        # reconcile path. Refuse loudly instead, naming the landed ids.
+        _refuse_prestamped_without_journal(experiment_dir, spec)
         return None
+    # F48: reuse the pure layer-1 predicate (runner._resolve_layer1) so this
+    # front-door dedup cannot drift from the proving-run-#5 cross-cluster REFUSE
+    # guard downstream. A LIVE (non-terminal) run whose recorded cluster differs
+    # from this submit's target is a retarget under a parameter-only run_id
+    # (#207), NOT a duplicate — deduping would silently "succeed" against the OLD
+    # cluster while nothing runs on the new one. Refuse. (Only the cluster arm is
+    # consulted here; complete/terminal drift stays governed by the existing
+    # branches below, so behaviour is unchanged when clusters agree.)
+    from hpc_agent.ops.submit.runner import _REFUSE, _resolve_layer1
+
+    decision = _resolve_layer1(
+        existing,
+        invalidate_on_code_change=False,
+        current_executor=None,
+        current_tasks_py_sha=None,
+        current_cluster=spec.cluster,
+    )
+    if decision.action == _REFUSE:
+        raise errors.SpecInvalid(
+            f"run {spec.run_id!r} is already live on cluster {existing.cluster!r} "
+            f"(status={existing.status}), but this submit targets {spec.cluster!r} "
+            "— one run_id cannot be live on two clusters at once. The run_id keys "
+            "on swept parameters only (#207), so deduping this retarget would "
+            "silently re-attach it to the other cluster's live run and nothing "
+            "would run on the target. Wait for or kill the live attempt, or make "
+            "the retarget a NEW attempt (distinct run_name + supersedes)."
+        )
     # #276: a terminal-but-not-``complete`` record (``failed`` / ``abandoned``)
     # is not a live run — its ``job_ids`` are forensic, not an in-flight marker.
     # Deduping against it blocked every future submit for this run_id (a single
@@ -2205,6 +2241,40 @@ def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowRes
         total_tasks=int(existing.total_tasks),
         deduped=True,
         canary_done=False,
+    )
+
+
+def _refuse_prestamped_without_journal(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
+    """F47: refuse a submit whose sidecar carries landed job_ids but no journal.
+
+    The crash-safety pre-stamp writes the just-parsed scheduler ids onto the
+    sidecar BEFORE ``submit_and_record`` lands the journal entry; if the process
+    died in that window (or a multi-wave plan failed mid-flight after some waves
+    landed), the run has real arrays on the cluster but no journal record. A
+    re-run must NOT re-qsub over them. Read the sidecar; when it carries non-empty
+    ``job_ids`` refuse with a typed error naming them and the recovery path.
+
+    The two-phase canary (S3) window is EXCLUDED for free: there the main run is
+    deliberately jobless (only the ``<run_id>-canary`` sibling holds ids), so the
+    guard reads no ``job_ids`` and does not fire. Resubmittable-terminal corpses
+    have a journal record, so they never reach here (``existing is None``).
+    """
+    from hpc_agent.state.runs import read_run_sidecar_or_empty
+
+    sidecar = read_run_sidecar_or_empty(experiment_dir, spec.run_id)
+    landed = [str(j) for j in (sidecar.get("job_ids") or [])]
+    if not landed:
+        return
+    raise errors.SpecInvalid(
+        f"run {spec.run_id!r} has scheduler arrays already submitted "
+        f"(job_ids={landed}) recorded on its sidecar, but no journal record — a "
+        "prior submit landed these arrays and then crashed before recording them "
+        "(or a multi-wave plan failed after some waves landed). Re-submitting "
+        "would launch duplicate arrays under the same run_id (concurrent "
+        "double-writers to the result dirs) and orphan the ones above from every "
+        "monitor/kill/reconcile path. Reconcile the run to rebuild its journal "
+        "from the sidecar (then monitor/resume it), or kill the listed arrays and "
+        "re-run fresh — do not plain-resubmit."
     )
 
 
@@ -2367,12 +2437,21 @@ def _submit_one_spec(
     *,
     experiment_dir: Path,
     spec: SubmitFlowSpec,
+    canary_decision: tuple[bool, str | None] | None = None,
 ) -> SubmitFlowResult:
     """Per-spec submission work — backend build + (canary?) + main qsub + record.
 
     The expensive shared steps (preflight + rsync + deploy) MUST already
     have run on this ``(ssh_target, remote_path)`` before reaching here;
     :func:`submit_flow_batch` is responsible for that prelude.
+
+    ``canary_decision`` (F50): the ``(run_canary, skip_reason)`` computed ONCE by
+    the batch caller BEFORE the rsync, threaded in so the pre-rsync sidecar mirror
+    and this post-rsync canary leg act on the SAME decision. ``_canary_decision``
+    consults a wall-clock TTL cache (#249), so re-evaluating it here across a
+    multi-hour rsync could flip skip→run and fire a canary whose sidecar was never
+    mirrored (guaranteed ``sidecar_not_found``, and with afterok the whole sweep
+    dropped). ``None`` (a direct caller) re-evaluates locally, unchanged.
     """
     job_env_full = _augment_job_env(
         job_env=spec.job_env,
@@ -2414,11 +2493,21 @@ def _submit_one_spec(
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
     canary_done = False
+    # F51: True only when a NEW canary qsub fired on THIS call. The afterok gate
+    # (#250) may key ONLY on a canary this call actually submitted — a REPLAYED
+    # canary id (below) can be a scheduler-purged job (MinJobAge), and gating the
+    # main array's --dependency=afterok on a vanished id makes sbatch reject the
+    # submission on every retry (a wedge no error message escapes).
+    canary_fired_this_call = False
     # #263/#249: a tiny batch (total_tasks <= threshold) or a cmd_sha already
     # canary-validated within the TTL skips the canary and goes straight to
     # main; canary_only / force_canary always canary. The skip REASON rides the
     # result (fallback-inventory S1/S2 — a silent skip is the zombie class).
-    run_canary, canary_skip_reason = _canary_decision(spec)
+    # F50: use the batch caller's ONE pre-rsync decision when threaded in, so this
+    # post-rsync leg cannot disagree with the pre-rsync sidecar mirror.
+    run_canary, canary_skip_reason = (
+        canary_decision if canary_decision is not None else _canary_decision(spec)
+    )
     if run_canary:
         canary_run_id = f"{spec.run_id}-canary"
         existing_canary = load_run(experiment_dir, canary_run_id)
@@ -2448,6 +2537,7 @@ def _submit_one_spec(
                 job_env_full=job_env_full,
             )
             canary_done = True
+            canary_fired_this_call = True
 
     if spec.canary_only:
         # Two-phase canary gate (#160): the canary is submitted; do NOT launch
@@ -2468,18 +2558,25 @@ def _submit_one_spec(
 
     # #250: gate the main array on the canary SUCCEEDING via a scheduler-level
     # afterok dependency, so it co-submits now (no orchestrator wait+verify
-    # round-trip) yet the scheduler drops main if the canary fails. Only when
-    # the canary actually fired this call (canary_job_ids), the spec opted in,
-    # and the scheduler supports afterok (SGE has none → left un-gated, as today).
-    # The canary gate ids: the main array depends on the canary SUCCEEDING.
-    # Only when the canary fired this call, the spec opted in, and the scheduler
-    # supports afterok (SGE has none → left un-gated, as today). Passed as ids
-    # (not pre-built flags) so the multi-wave path can gate *every* wave —
-    # the completion-only inter-wave chain can't propagate a canary failure.
+    # round-trip) yet the scheduler drops main if the canary fails. Passed as ids
+    # (not pre-built flags) so the multi-wave path can gate *every* wave — the
+    # completion-only inter-wave chain can't propagate a canary failure.
+    #
+    # F51: gate ONLY on a canary this call actually FIRED (``canary_fired_this_call``),
+    # never on a REPLAYED ``canary_job_ids``. A replayed id belongs to a prior,
+    # unmonitored canary whose 1-task job the scheduler may already have purged
+    # (MinJobAge, ~300s); ``--dependency=afterok:<purged id> --kill-on-invalid-dep``
+    # makes sbatch REJECT the main submission, and the in_flight canary record is
+    # not resubmittable-terminal, so every retry repeats the dead id — a wedge with
+    # no escape in the error text. Falling back to un-gated co-submission on replay
+    # is the documented SGE posture (SGE has no afterok and is un-gated already).
     gate_job_ids: list[str] = (
         list(canary_job_ids)
         if (
-            spec.enable_afterok_dependency and canary_job_ids and backend_obj.supports_afterok  # type: ignore[attr-defined]
+            spec.enable_afterok_dependency
+            and canary_fired_this_call
+            and canary_job_ids
+            and backend_obj.supports_afterok  # type: ignore[attr-defined]
         )
         else []
     )
@@ -2833,6 +2930,26 @@ def _submit_flow_batch_locked(
             f"got {len(targets)} distinct combinations: {sorted(targets)}"
         )
 
+    # F52: the batch runs ONE shared rsync (the specs share a target), so only
+    # the batch-level ``rsync_excludes`` is honoured — a per-spec value on an
+    # inner SubmitFlowSpec is silently ignored, so a spec asking to exclude e.g.
+    # ``data/raw/`` (tens of GB) would ship it anyway. ``extra='forbid'`` cannot
+    # catch this because the field is legal on SubmitFlowSpec (the single-spec
+    # surface honours it). Refuse a per-spec value that DIFFERS from the batch
+    # value rather than ignore it. (The single-spec ``submit_flow`` wrapper copies
+    # ``spec.rsync_excludes`` up to the batch level, so its inner value matches
+    # and never trips this.)
+    for s in specs:
+        if s.rsync_excludes is not None and list(s.rsync_excludes) != (rsync_excludes or []):
+            raise errors.SpecInvalid(
+                f"spec {s.run_id!r} sets rsync_excludes={list(s.rsync_excludes)!r}, but a "
+                "batch runs ONE shared rsync and honours only the batch-level "
+                f"rsync_excludes ({rsync_excludes!r}) — a per-spec value would be silently "
+                "ignored and the excluded paths shipped anyway. Set rsync_excludes at the "
+                "SubmitFlowBatchSpec level (identical across the batch), or submit this spec "
+                "on its own where the per-spec field is honoured."
+            )
+
     # Per-spec idempotency: dedup against the journal up front, never
     # touch the cluster for already-submitted run_ids.
     results: list[SubmitFlowResult | None] = [_dedup_existing(experiment_dir, s) for s in specs]
@@ -2892,6 +3009,17 @@ def _submit_flow_batch_locked(
     for i in fresh_indices:
         apply_supersession_gate(experiment_dir, specs[i])
 
+    # F50: evaluate the canary decision ONCE per fresh spec, HERE (pre-rsync),
+    # and thread it into both the pre-rsync sidecar mirror below AND the
+    # post-rsync canary leg in _submit_one_spec. _canary_decision consults a
+    # wall-clock TTL cache (#249): re-evaluating it after a multi-hour rsync can
+    # flip skip→run, firing a canary whose sidecar was never mirrored (the mirror
+    # ran under the pre-rsync 'skip'), which dies sidecar_not_found — and with
+    # afterok drops the whole sweep. One decision, both seats.
+    canary_decisions: dict[int, tuple[bool, str | None]] = {
+        i: _canary_decision(specs[i]) for i in fresh_indices
+    }
+
     # Guarantee the cluster-required per-run sidecar exists for every
     # fresh spec BEFORE rsync — submit-flow owns this artifact rather than
     # trusting a prior step to have written it. Missing + synthesizable →
@@ -2920,7 +3048,7 @@ def _submit_flow_batch_locked(
         # so the pre-rsync mirror must fire in exactly the cases the canary runs
         # — otherwise the forced-canary sidecar never ships and dies
         # ``sidecar_not_found`` on the cluster.
-        if _should_run_canary(specs[i]):
+        if canary_decisions[i][0]:
             _mirror_canary_sidecar(experiment_dir, specs[i].run_id, f"{specs[i].run_id}-canary")
 
     # notebook-audit Addendum 4 item 7: bounded LOCAL task-0 dry-run BEFORE any
@@ -2982,7 +3110,11 @@ def _submit_flow_batch_locked(
     # accounting.
     for i in fresh_indices:
         try:
-            results[i] = _submit_one_spec(experiment_dir=experiment_dir, spec=specs[i])
+            results[i] = _submit_one_spec(
+                experiment_dir=experiment_dir,
+                spec=specs[i],
+                canary_decision=canary_decisions[i],
+            )
             # Forward half of the supersession audit link: the backward
             # (superseded_by) half was journaled by the gate BEFORE any
             # cluster traffic; stamp `supersedes` on the just-landed new

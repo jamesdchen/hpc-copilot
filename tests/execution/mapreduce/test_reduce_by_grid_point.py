@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from hpc_agent.execution.mapreduce.reduce.metrics import (
     _neumaier_sum,
+    collect_wave_errors,
     reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
@@ -342,3 +343,73 @@ class TestReducePartialsOrderInvariant:
         b = reduce_partials(cdir_b)
         assert a[grid_key]["n_samples"] == b[grid_key]["n_samples"]
         assert abs(a[grid_key]["mse"] - b[grid_key]["mse"]) < 1e-12
+
+
+def _write_wave_with_run_id(combiner_dir, wave, run_id, grid_points, errors=None):
+    combiner_dir.mkdir(parents=True, exist_ok=True)
+    (combiner_dir / f"wave_{wave}.json").write_text(
+        json.dumps(
+            {
+                "wave": wave,
+                "run_id": run_id,
+                "task_ids": [],
+                "grid_points": grid_points,
+                "errors": errors or [],
+            }
+        )
+    )
+
+
+class TestReducePartialsRunIdFilter:
+    """F05: a prior run's leftover wave partials persist under the shared,
+    delete-protected ``_combiner/``. reduce_partials must SKIP any wave whose
+    own run_id names a different run — but FAIL OPEN when run_id is absent
+    (legacy trees) or the target run_id is not supplied."""
+
+    def test_foreign_wave_skipped(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave_with_run_id(
+            combiner_dir, 0, "target", {"g_ours": {"mse": 0.10, "n_samples": 10}}
+        )
+        _write_wave_with_run_id(
+            combiner_dir, 1, "OTHER", {"g_foreign": {"mse": 9.0, "n_samples": 10}}
+        )
+        result = reduce_partials(combiner_dir, run_id="target")
+        assert "g_ours" in result
+        assert "g_foreign" not in result  # FIRE PATH: foreign wave excluded
+
+    def test_fail_open_when_no_run_id_field(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        # No run_id on the wave (legacy) -> still reduced under a run_id target.
+        _write_wave(combiner_dir, 0, {"g_legacy": {"mse": 0.5, "n_samples": 3}})
+        result = reduce_partials(combiner_dir, run_id="target")
+        assert "g_legacy" in result
+
+    def test_fail_open_when_target_run_id_none(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave_with_run_id(combiner_dir, 0, "whatever", {"g": {"mse": 0.5, "n_samples": 3}})
+        # No target -> historical behavior (no filtering).
+        assert "g" in reduce_partials(combiner_dir)
+
+
+class TestCollectWaveErrorsUnreadable:
+    """F09: an unreadable/torn wave file drops silently from reduce_partials;
+    collect_wave_errors must surface it as that wave's error so the loss is
+    disclosed and the incremental pull re-fetches the intact remote copy."""
+
+    def test_unreadable_wave_recorded_as_error(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        combiner_dir.mkdir(parents=True)
+        # A truncated JSON write (interrupted scp / disk-full).
+        (combiner_dir / "wave_7.json").write_text('{"wave": 7, "grid_points": {')
+        errs = collect_wave_errors(combiner_dir)
+        assert 7 in errs  # FIRE PATH: the torn wave is disclosed
+        assert "unreadable" in errs[7][0]
+
+    def test_foreign_wave_not_reported_as_this_runs_error(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave_with_run_id(
+            combiner_dir, 0, "OTHER", {"g": {"mse": 1.0, "n_samples": 1}}, errors=["task 5: boom"]
+        )
+        # The foreign wave's errors belong to another run — not ours.
+        assert collect_wave_errors(combiner_dir, run_id="target") == {}

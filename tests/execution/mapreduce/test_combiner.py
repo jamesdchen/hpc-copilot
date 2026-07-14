@@ -13,6 +13,8 @@ import math
 import random
 from typing import TYPE_CHECKING
 
+import pytest
+
 from hpc_agent.execution.mapreduce import combiner as combiner_mod
 from hpc_agent.execution.mapreduce.combiner import _grid_key, _neumaier_sum, _weighted_mean, main
 
@@ -703,3 +705,149 @@ class TestRuntimeAggregation:
         doc = json.loads(runtime_out.read_text())
         assert len(doc["samples"]) == 1
         assert doc["samples"][0]["task_id"] == 1
+
+
+class TestForeignPartialOverwrite:
+    """F05: ``_combiner/`` is delete-protected and shared across runs at one
+    remote_path, so a prior run's ``wave_<N>.json`` persists. A no-force run of
+    a DIFFERENT run_id must OVERWRITE the foreign partial (not adopt it), while a
+    same-run no-force replay must still refuse for idempotency."""
+
+    def _seed_two_runs(self, tmp_path, monkeypatch, *, mse):
+        # One sidecar per run_id; shared tasks.py + result dirs (keyed by
+        # task_id, not run_id — the exact cross-run collision the finding hits).
+        for run_id in ("runA", "runB"):
+            _scaffold(
+                tmp_path,
+                kwargs_per_task=[{"model": "ridge"}, {"model": "ridge"}],
+                run_id=run_id,
+            )
+        result_root = tmp_path / "results"
+        for tid in (0, 1):
+            d = result_root / f"task_{tid}"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "metrics.json").write_text(json.dumps({"mse": mse, "n_samples": 100}))
+        _patch_sibling_lookup(monkeypatch, tmp_path / ".hpc")
+        monkeypatch.chdir(tmp_path)
+
+    def _run(self, monkeypatch, run_id):
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", run_id)
+        main()
+
+    def test_foreign_partial_is_overwritten(self, tmp_path, monkeypatch):
+        self._seed_two_runs(tmp_path, monkeypatch, mse=0.10)
+        # Run A combines first -> wave_0.json carries run_id=runA.
+        self._run(monkeypatch, "runA")
+        first = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert first["run_id"] == "runA"
+        assert abs(next(iter(first["grid_points"].values()))["mse"] - 0.10) < 1e-9
+
+        # Run B's tasks re-wrote their metrics with new values.
+        for tid in (0, 1):
+            (tmp_path / "results" / f"task_{tid}" / "metrics.json").write_text(
+                json.dumps({"mse": 0.90, "n_samples": 100})
+            )
+        # No-force run of run B: FIRE PATH — the foreign partial is overwritten,
+        # not adopted. No SystemExit, and the file now carries run B's data.
+        self._run(monkeypatch, "runB")
+        second = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert second["run_id"] == "runB"
+        assert abs(next(iter(second["grid_points"].values()))["mse"] - 0.90) < 1e-9
+
+    def test_same_run_partial_still_refuses(self, tmp_path, monkeypatch):
+        self._seed_two_runs(tmp_path, monkeypatch, mse=0.10)
+        self._run(monkeypatch, "runA")
+        # Same run, no force: idempotency preserved — refuse with the run_id
+        # stamped so the control plane can recognize a same-run collision.
+        with pytest.raises(SystemExit) as exc:
+            self._run(monkeypatch, "runA")
+        assert exc.value.code == 1
+
+
+class TestTasksReadEvidence:
+    """F07: ``task_ids`` echoes the full wave membership even when tasks error,
+    so the combiner ALSO emits ``tasks_read`` — the subset actually aggregated
+    into ``grid_points`` — as the honest completeness evidence."""
+
+    def test_errored_task_absent_from_tasks_read(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        (result_root / "task_0").mkdir(parents=True)
+        (result_root / "task_0" / "metrics.json").write_text(
+            json.dumps({"mse": 0.10, "n_samples": 50})
+        )
+        # task 1 never wrote metrics -> lands in errors, absent from grid_points.
+        (result_root / "task_1").mkdir()
+
+        hpc = _scaffold(tmp_path, kwargs_per_task=[{"model": "a"}, {"model": "b"}])
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert data["task_ids"] == [0, 1]  # full membership, unchanged
+        assert data["tasks_read"] == [0]  # only the task that aggregated
+        assert len(data["errors"]) == 1
+
+
+class TestFinalReduceForeignSkip:
+    """F05: the cluster-side ``--final`` reduce merges every ``wave_*.json`` —
+    it must SKIP (and disclose) any partial whose own run_id names another run,
+    or a run absorbs a prior run's leftover higher-numbered waves."""
+
+    def _agg(self, tmp_path):
+        path = tmp_path / "_aggregated" / "target" / "metrics_aggregate.json"
+        return json.loads(path.read_text())
+
+    def test_foreign_wave_excluded_from_final_aggregate(self, tmp_path, monkeypatch):
+        combiner = tmp_path / "_combiner"
+        combiner.mkdir()
+        (combiner / "wave_0.json").write_text(
+            json.dumps(
+                {
+                    "wave": 0,
+                    "run_id": "target",
+                    "task_ids": [0],
+                    "tasks_read": [0],
+                    "grid_points": {"g_target": {"mse": 0.10, "n_samples": 10}},
+                    "errors": [],
+                }
+            )
+        )
+        (combiner / "wave_1.json").write_text(
+            json.dumps(
+                {
+                    "wave": 1,
+                    "run_id": "OTHER",
+                    "task_ids": [1],
+                    "tasks_read": [1],
+                    "grid_points": {"g_foreign": {"mse": 9.0, "n_samples": 10}},
+                    "errors": [],
+                }
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        main(argv=["--final", "--run-id", "target"])
+
+        agg = self._agg(tmp_path)
+        assert "g_target" in agg["aggregated_metrics"]
+        assert "g_foreign" not in agg["aggregated_metrics"]  # foreign skipped
+        assert agg["provenance"]["skipped_foreign_waves"] == [1]
+
+    def test_legacy_wave_without_run_id_still_reduced(self, tmp_path, monkeypatch):
+        # Fail OPEN: a partial with no run_id field (legacy tree) is reduced.
+        combiner = tmp_path / "_combiner"
+        combiner.mkdir()
+        (combiner / "wave_0.json").write_text(
+            json.dumps(
+                {"wave": 0, "grid_points": {"g": {"mse": 0.5, "n_samples": 3}}, "errors": []}
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        main(argv=["--final", "--run-id", "target"])
+        agg = self._agg(tmp_path)
+        assert "g" in agg["aggregated_metrics"]
+        assert agg["provenance"]["skipped_foreign_waves"] == []

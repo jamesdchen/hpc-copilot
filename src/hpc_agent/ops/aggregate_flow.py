@@ -182,23 +182,23 @@ _WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_(\d+)\.json$")
 def _incremental_include_patterns(
     combiner_local: Path, combined_waves: list[int]
 ) -> list[str] | None:
-    """Return rsync ``--include`` patterns to fetch only not-yet-pulled waves.
+    """Return rsync ``--include`` patterns for the ``_combiner/`` pull.
 
-    Returns ``None`` when the caller should fall back to an unfiltered
-    pull. Two cases produce ``None``:
+    Returns ``None`` (unfiltered pull) when ``combined_waves`` is empty — no
+    per-wave state to narrow on; the caller intentionally relies on whatever
+    the cluster has under ``_combiner/`` (the "no wave_map" path documented
+    above). Also ``None`` on the first call (nothing pulled locally yet) where
+    an unfiltered pull is the simplest equivalent.
 
-    * ``combined_waves`` is empty — no per-wave state to narrow on; the
-      caller intentionally relies on whatever the cluster has under
-      ``_combiner/`` (the "no wave_map" path documented above).
-    * No combiner files are present locally yet (first call) AND every
-      combined wave is missing locally — an unfiltered pull is the
-      simplest equivalent and avoids emitting a long argv.
-
-    Otherwise returns a list of ``wave_<N>.json`` / ``wave_<N>.runtime.json``
-    include patterns sized to the diff. An empty diff (everything already
-    pulled) returns ``["wave_NONE_SENTINEL"]`` so rsync's filter excludes
-    every file — the rsync still runs (cheap directory stat) but
-    transfers nothing.
+    Otherwise returns the two-glob wave filter ``["wave_*.json",
+    "wave_*.runtime.json"]``. This deliberately does NOT narrow to the waves
+    absent locally: an earlier filename-only diff excluded any wave whose file
+    already existed on disk, so a force-recombined REMOTE wave (F08) and a
+    truncated LOCAL wave (F09) were never re-pulled — the local reduce kept
+    reading stale/torn data for the rest of the campaign. Including all wave
+    files lets rsync's own size/mtime delta re-transfer exactly the changed
+    ones while skipping unchanged files; the two globs keep the argv tiny even
+    for a 1000-wave run (the size concern the old narrowing addressed).
     """
     if not combined_waves:
         return None
@@ -208,20 +208,12 @@ def _incremental_include_patterns(
             m = _WAVE_PARTIAL_NAME_RE.match(child.name)
             if m is not None:
                 have_locally.add(int(m.group(1)))
-    needed = sorted(set(combined_waves) - have_locally)
-    if not have_locally and len(needed) == len(set(combined_waves)):
-        # First call (or nothing pulled yet) — no benefit to narrowing.
+    if not have_locally:
+        # First call (or nothing pulled yet) — no benefit to a filter.
         return None
-    if not needed:
-        # Everything already pulled: include a non-matching pattern so
-        # the trailing ``--exclude='*'`` skips every wave file, leaving
-        # the local tree untouched while still confirming connectivity.
-        return ["wave_NONE_SENTINEL.json"]
-    patterns: list[str] = []
-    for wave in needed:
-        patterns.append(f"wave_{wave}.json")
-        patterns.append(f"wave_{wave}.runtime.json")
-    return patterns
+    # A prior pull left local wave files: re-check ALL of them via rsync's
+    # delta so a force-recombine (F08) or torn file (F09) is repaired.
+    return ["wave_*.json", "wave_*.runtime.json"]
 
 
 def _nonempty_failing_task_ids(
@@ -672,13 +664,13 @@ def _combiner_only_reduce(
     weighted-mean. The caller stamps ``source`` into the durable local
     aggregate artifact so its provenance is honest.
 
-    Incremental rsync: rather than walking the entire cluster-side
-    ``_combiner/`` tree on every call (slow for runs with 1000+ waves even when
-    nothing changed), narrow the pull to the waves not already present locally.
-    State source is ``record.combined_waves``; the diff against locally-present
-    ``wave_<N>.json`` files is the set still to fetch. When the diff equals the
-    full set (first call) or ``combined_waves`` is empty, an unfiltered pull is
-    emitted so behaviour matches the original.
+    Bounded rsync: rather than emitting a per-wave argv that scales with wave
+    count, the pull passes the two-glob filter ``wave_*.json`` /
+    ``wave_*.runtime.json`` (or an unfiltered pull on the first call / the
+    no-wave_map path). rsync's own size/mtime delta then transfers only the
+    changed files. The filter deliberately does NOT drop waves already present
+    locally by filename: a force-recombined REMOTE wave (F08) or a torn LOCAL
+    wave (F09) must be re-pulled, and a filename-only diff would exclude both.
 
     No-combiner default (#352): when the ``_combiner/`` tree does not exist on
     the cluster (the combiner step never ran — the common shape for a
@@ -767,13 +759,17 @@ def _combiner_only_reduce(
             f"rsync_pull of _combiner failed (exit {pull.returncode}): {stderr_tail[:300]}"
         )
 
-    # Reduce locally.
-    aggregated = reduce_partials(combiner_local)
+    # Reduce locally. Thread run_id so a prior run's leftover wave partials
+    # (delete-protected ``_combiner/`` is shared across runs at one remote_path)
+    # are skipped instead of contaminating this run's aggregate (F05).
+    aggregated = reduce_partials(combiner_local, run_id=run_id)
     # Waves where the combiner couldn't read every task's metrics.json
     # contribute a partial grid_points set; reduce_partials means over
     # only the readable subset. Surface those waves so the caller does
-    # not treat the aggregate as computed over the full task set.
-    incomplete_waves = sorted(collect_wave_errors(combiner_local))
+    # not treat the aggregate as computed over the full task set. An
+    # unreadable/torn wave file also lands here now (F09) so the loss is
+    # disclosed and the next pull re-fetches the intact remote copy.
+    incomplete_waves = sorted(collect_wave_errors(combiner_local, run_id=run_id))
     return aggregated, incomplete_waves, "local_reduce"
 
 

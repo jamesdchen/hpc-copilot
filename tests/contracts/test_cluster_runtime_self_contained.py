@@ -41,6 +41,14 @@ import pytest
 
 from hpc_agent.infra import transport
 
+# The version-floor lint lives under ``scripts/`` (wired into CI + pre-commit);
+# import its shared scanner so this contract exercises the same code path.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+import lint_deploy_python_floor as deploy_floor  # noqa: E402
+
 # Top-level third-party packages that must NEVER be reachable from the
 # cluster-side import closure. If an entry point imports one of these at
 # load time, the subprocess (run with site-packages stripped) raises
@@ -245,3 +253,65 @@ def test_reporter_help_runs_from_deployed_copy(deploy_tree: Path) -> None:
     _assert_no_import_failure(proc, "reporter --help")
     assert proc.returncode == 0, f"reporter --help exit={proc.returncode}: {proc.stderr}"
     assert "usage" in proc.stdout.lower()
+
+
+# ---------------------------------------------------------------------------
+# Python version-floor gate over the deployed .py files (F18)
+# ---------------------------------------------------------------------------
+#
+# The deployed files run under whatever ``python3`` the cluster has (RHEL/Rocky
+# 8 = 3.6.8; torch-1.x conda = 3.8/3.9). A modernization lint once added
+# ``zip(strict=True)`` (3.10+) to the combiner and ``str.removeprefix`` (3.9+)
+# to ``read_kw_env`` — crashing every wave combine / task AFTER the campaign had
+# burned its hours, because nothing in CI runs the shipped files on an old
+# interpreter. ``scripts/lint_deploy_python_floor.py`` closes that gap; these
+# tests pin the clean state AND prove the scanner actually fires.
+
+
+def test_deployed_files_within_python_floor() -> None:
+    """The real ship list stays under ``DEPLOY_PYTHON_FLOOR`` — the lint passes.
+
+    This is the regression pin for F18: the moment a modernization pass
+    re-raises the floor of a deployed file (another ``zip(strict=)`` /
+    ``str.removeprefix`` / ``match`` / ``except*``), ``main()`` returns 1 and
+    this fails, well before any cluster runs the file.
+    """
+    assert deploy_floor.main() == 0, (
+        "a cluster-deployed .py file uses a Python feature above the deploy "
+        "floor — run `python scripts/lint_deploy_python_floor.py` for the offenders"
+    )
+
+
+def test_deploy_floor_scanner_fires_on_modernization() -> None:
+    """Fire-path proof: the scanner flags each modernization family, above the
+    floor, and stays silent on floor-clean stdlib.
+
+    Drives the exact constructs the F18 regression introduced (``zip(strict=)``
+    and ``str.removeprefix``) plus the other families the lint guards, and
+    asserts each is reported with its minimum version."""
+    over_floor = (
+        "def f(a, b):\n"
+        "    z = list(zip(a, b, strict=True))\n"
+        "    s = a.removeprefix('HPC_')\n"
+        "    t = a.removesuffix('_X')\n"
+        "    return z, s, t\n"
+    )
+    hits = dict(deploy_floor.scan_source(over_floor))
+    assert hits.get("zip(strict=...)") == (3, 10)
+    assert hits.get("str.removeprefix") == (3, 9)
+    assert hits.get("str.removesuffix") == (3, 9)
+
+    # A ``match`` statement (3.10) is also caught (the test suite runs on the
+    # py310 target floor or newer, so this always parses).
+    match_src = "def g(x):\n    match x:\n        case 1:\n            return 1\n"
+    assert dict(deploy_floor.scan_source(match_src)).get("match statement") == (3, 10)
+
+    # Floor-clean stdlib equivalents raise nothing — the shape the fix ships.
+    clean = (
+        "def f(a, b):\n"
+        "    assert len(a) == len(b)\n"
+        "    z = list(zip(a, b))  # noqa: B905\n"
+        "    s = a[len('HPC_'):]\n"
+        "    return z, s\n"
+    )
+    assert deploy_floor.scan_source(clean) == []

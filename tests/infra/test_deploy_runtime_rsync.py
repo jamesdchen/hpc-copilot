@@ -1,9 +1,11 @@
 """deploy_runtime ships its files in ONE batched transfer (#252).
 
-The prior N-scp fan-out (#245) is replaced by a single ``rsync -az --inplace``
-delta where rsync is on PATH, with a single ``tar c | ssh tar x`` stream as
-the fallback (native Windows). These tests assert exactly one transfer
-invocation and that a failed transfer surfaces.
+The prior N-scp fan-out (#245) is replaced by a single ``rsync -az`` delta where
+rsync is on PATH, with a single ``tar c | ssh tar x`` stream as the fallback
+(native Windows). These tests assert exactly one transfer invocation and that a
+failed transfer surfaces. The rsync leg is deliberately NOT ``--inplace`` (#F20):
+an in-place rewrite tears the live ``.hpc/_hpc_dispatch.py`` under a concurrent
+in-flight array; rsync's default temp-then-atomic-rename replaces it whole.
 """
 
 from __future__ import annotations
@@ -56,7 +58,10 @@ def test_deploy_issues_a_single_rsync_invocation():
     assert len(rsync_calls) == 1, f"expected ONE rsync, got {len(rsync_calls)}: {calls}"
     # Delta + archive flags, no --delete (deploy merges, never removes).
     rsync = rsync_calls[0]
-    assert "-az" in rsync and "--inplace" in rsync
+    assert "-az" in rsync
+    # #F20 fire-path: NO --inplace, so rsync writes a temp file then atomically
+    # renames — a concurrent array task never execs a torn dispatcher/preamble.
+    assert "--inplace" not in rsync
     assert "--delete" not in rsync
     assert rsync[-1] == "u@c:/p/"
 
@@ -102,7 +107,7 @@ def test_rsync_deploy_translates_win32_local_src(monkeypatch):
         )
     cmd = run_mock.call_args[0][0]
     assert cmd[0] == "rsync"
-    # argv = ["rsync", "-az", "--inplace", src, dst] → src is second-to-last.
+    # argv = ["rsync", "-az", src, dst] → src is second-to-last (no --inplace, #F20).
     assert cmd[-2] == "/d/Temp/tmpABC/"
     assert cmd[-1] == "u@c:/p/"
 

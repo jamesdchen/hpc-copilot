@@ -43,6 +43,8 @@ __all__ = [
     "RunRecord",
     "repo_hash",
     "journal_dir",
+    "journal_root_if_exists",
+    "detect_forked_namespace",
     "runs_dir",
 ]
 
@@ -422,6 +424,99 @@ def journal_dir(experiment_dir: Path) -> Path:
         )
     (d / "runs").mkdir(exist_ok=True)
     return d
+
+
+def journal_root_if_exists(experiment_dir: Path) -> Path:
+    """``~/.claude/hpc/<repo_hash>/`` for *experiment_dir* WITHOUT creating it.
+
+    The read-side twin of :func:`journal_dir`: it computes the SAME path but never
+    ``mkdir``s the namespace or writes ``repo.json``. Readers use it to answer
+    "does this experiment have a journal yet?" without SCAFFOLDING a ghost
+    namespace as a side effect (F46). ``journal_dir().exists()`` could never be a
+    real guard — ``journal_dir`` created the dir it was about to test, so every
+    read path that reached it minted a stray ``~/.claude/hpc/<hash>/`` for
+    whatever cwd the CLI happened to run from, which then polluted the fleet
+    ``*/repo.json`` walks. Writers keep :func:`journal_dir` (create-on-write);
+    readers probe with this and bail before any creating accessor runs.
+    """
+    return _current_homedir() / repo_hash(experiment_dir)
+
+
+def _namespace_run_count(root: Path) -> int:
+    """Number of run-record JSONs under ``<root>/runs/`` (0 if absent).
+
+    Excludes ``*.last_status.json`` cache snapshots (not journal records), the
+    same exclusion :func:`hpc_agent.state.index._all_run_files` applies. Used by
+    :func:`detect_forked_namespace` to tell a populated namespace from an empty
+    freshly-scaffolded one. Never creates the directory.
+    """
+    runs = root / "runs"
+    if not runs.exists():
+        return 0
+    return sum(1 for p in runs.glob("*.json") if not p.name.endswith(".last_status.json"))
+
+
+def detect_forked_namespace(experiment_dir: Path) -> dict | None:
+    """Detect a journal namespace FORKED by a mid-campaign dir rename (F30).
+
+    When an experiment dir is renamed (``~/exp1`` → ``~/exp1-v2``), ``repo_hash``
+    changes, so every journal read now targets a FRESH empty
+    ``~/.claude/hpc/<newhash>/`` while the populated OLD namespace becomes
+    invisible — the campaign silently loses its run records, decision journal, and
+    utterance log with no detection and no relink path.
+
+    This is a NON-MUTATING probe. It is deliberately NOT called from
+    :func:`journal_dir` — per the fable-panel finding, a per-verb scan of every
+    sibling namespace on that hot path would be expensive and racy; a
+    ``doctor`` / ``status-snapshot`` seam is the intended caller. It returns a
+    relink report when the CURRENT namespace holds no run records (the renamed-away
+    signature) AND some OTHER namespace's ``repo.json`` names an ``experiment_dir``
+    that no longer exists on disk yet still holds run records — the fork's tell.
+    Returns ``None`` when no fork is evident (the common, healthy case).
+
+    Report shape (the caller renders a relink hint / verb)::
+
+        {"current_hash", "forked_hash", "forked_experiment_dir", "run_count"}
+
+    NFS path-alias forks where BOTH paths still exist are not covered here (they
+    need a physical-samefile / run-id-overlap tiebreak); the rename case above is
+    the primary, unambiguous signature.
+    """
+    home = _current_homedir()
+    if not home.exists():
+        return None
+    current_hash = repo_hash(experiment_dir)
+    current_root = home / current_hash
+    # A fork only matters when THIS dir has no live journal yet (renamed away):
+    # a populated current namespace is the normal case, never a fork.
+    if _namespace_run_count(current_root) > 0:
+        return None
+    try:
+        children = list(home.iterdir())
+    except OSError:
+        return None
+    for child in children:
+        if not child.is_dir() or child.name == current_hash:
+            continue
+        meta = _read_json(child / "repo.json")
+        if not isinstance(meta, dict):
+            continue
+        prior_dir = meta.get("experiment_dir")
+        if not isinstance(prior_dir, str) or not prior_dir:
+            continue
+        # The tell: the recorded dir is GONE (renamed) but its namespace still
+        # holds run records — those runs are now orphaned from the new hash.
+        if Path(prior_dir).exists():
+            continue
+        run_count = _namespace_run_count(child)
+        if run_count > 0:
+            return {
+                "current_hash": current_hash,
+                "forked_hash": child.name,
+                "forked_experiment_dir": prior_dir,
+                "run_count": run_count,
+            }
+    return None
 
 
 def runs_dir(experiment_dir: Path) -> Path:

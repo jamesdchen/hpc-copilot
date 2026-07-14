@@ -181,14 +181,14 @@ class JournalLayout:
         return self.root / "index.json"
 
     def preflight_marker(self, cluster: str) -> Path:
-        """``<journal_root>/preflight-<cluster>.json`` — per-cluster cache marker.
+        """``<journal_root>/preflight-<cluster>.json`` — per-cluster marker path.
 
-        The single source of truth for the preflight cache-marker path.
-        ``hpc-preflight`` writes ``{checked_at, all_ok, cluster}`` here on a
-        green run; ``hpc-submit``'s pre-flight gate reads it and skips the
-        re-check while the marker is under its TTL. Both skills' markdown
-        document the same ``~/.claude/hpc/<repo_hash>/preflight-<cluster>.json``
-        literal — keep them in step with this method.
+        The single source of truth for the marker path. NOTE (#F31): the 24h
+        "cache marker" this named had NO consumer — nothing ever read it, and the
+        claimed ``hpc-submit`` "Step 6b gate" did not exist — so the writer was
+        removed. This path helper is retained (the cross-stage ``probe_cache`` in
+        ``ops/preflight`` is the real handshake-eliding cache); it computes the
+        canonical path without asserting a gate reads it.
         """
         if not cluster:
             raise errors.SpecInvalid("cluster must be non-empty")

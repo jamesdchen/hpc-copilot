@@ -86,7 +86,8 @@ def install_commands(
 
 def _setup_handler(args: argparse.Namespace) -> int:
     from hpc_agent.agent_assets import install_agent_assets
-    from hpc_agent.ops.preflight.check import check_preflight, write_preflight_marker
+    from hpc_agent.cli._helpers import _err_from_hpc
+    from hpc_agent.ops.preflight.check import _preflight_exit_error, check_preflight
 
     claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
     assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
@@ -94,12 +95,11 @@ def _setup_handler(args: argparse.Namespace) -> int:
 
     cluster = getattr(args, "cluster", None)
     experiment_dir = Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
+    preflight_error = None
     if cluster:
         preflight = check_preflight(cluster=cluster)
         payload["preflight"] = preflight
-        if preflight["all_ok"] and not args.dry_run:
-            marker = write_preflight_marker(cluster=cluster, experiment_dir=experiment_dir)
-            payload["preflight_marker"] = str(marker)
+        preflight_error = _preflight_exit_error(preflight)
 
     plugin_actions = run_plugin_setup_actions(
         {
@@ -111,6 +111,15 @@ def _setup_handler(args: argparse.Namespace) -> int:
     )
     if plugin_actions:
         payload["plugin_actions"] = plugin_actions
+
+    # A red cluster probe must exit non-zero + ok:false (#F31): before this,
+    # ``setup --cluster`` emitted ``ok:true`` / ``EXIT_OK`` regardless of
+    # ``preflight['all_ok']``, so a scripted bootstrap (or a glance at ``$?``)
+    # proceeded believing setup succeeded over a broken environment. The assets
+    # were still installed; the failure being reported is the cluster probe, with
+    # the failing checks carried in the error envelope's ``failure_features``.
+    if preflight_error is not None:
+        return _err_from_hpc(preflight_error)
 
     _emit({"ok": True, "idempotent": True, "data": payload})
     return EXIT_OK
@@ -151,8 +160,8 @@ def _setup_handler(args: argparse.Namespace) -> int:
                 help=(
                     "Optional cluster name. When supplied, probe the cluster's "
                     "environment (SSH agent, ssh/transport on PATH, clusters.yaml, "
-                    "TCP :22) after install and write the 24h cache marker that "
-                    "/submit-hpc's Step 6b gate reads."
+                    "TCP :22) after install; a failing probe exits non-zero "
+                    "(cluster-error) so a scripted bootstrap sees the failure."
                 ),
             ),
             CliArg(
@@ -160,8 +169,8 @@ def _setup_handler(args: argparse.Namespace) -> int:
                 type=str,
                 default=None,
                 help=(
-                    "Experiment directory whose journal receives the preflight "
-                    "cache marker. Defaults to cwd. Only used when --cluster is set."
+                    "Experiment directory passed to plugin setup hooks. Defaults "
+                    "to cwd. Only used when --cluster is set."
                 ),
             ),
             CliArg(
@@ -193,8 +202,10 @@ def setup(
     Installs the bundled slash commands + skills into ``~/.claude/``.
     With *cluster* supplied, also probes the cluster's environment
     (SSH agent, ssh + file-transfer transport on PATH, ``clusters.yaml``
-    parses, TCP :22 reachable) and — on a green probe — writes the 24h
-    cache marker that ``/submit-hpc``'s Step 6b gate reads.
+    parses, TCP :22 reachable) and reports the verdict under ``preflight``.
+    The CLI handler (:func:`_setup_handler`) exits cluster-error on a red
+    probe; this in-process form returns the verdict in the payload for a
+    caller to inspect.
 
     Any installed plugin's optional setup hook is invoked with a context
     dict (``cluster``, ``experiment_dir``, ``install``, ``dry_run``); the
@@ -204,14 +215,9 @@ def setup(
     contributes and the field is absent. The host names no specific
     plugin action — what an action does (e.g. installing a snapshot
     cron) is entirely the plugin's concern.
-
-    The marker is scoped to *experiment_dir* (default: cwd) because
-    the Step 6b gate reads from ``JournalLayout(experiment_dir)`` — run
-    setup from your experiment directory or pass an explicit
-    *experiment_dir*.
     """
     from hpc_agent.agent_assets import install_agent_assets
-    from hpc_agent.ops.preflight.check import check_preflight, write_preflight_marker
+    from hpc_agent.ops.preflight.check import check_preflight
 
     target_claude_dir = Path(claude_dir).expanduser() if claude_dir else None
     assets = install_agent_assets(claude_dir=target_claude_dir, dry_run=dry_run)
@@ -221,9 +227,6 @@ def setup(
     if cluster:
         preflight = check_preflight(cluster=cluster)
         payload["preflight"] = preflight
-        if preflight["all_ok"] and not dry_run:
-            marker = write_preflight_marker(cluster=cluster, experiment_dir=exp)
-            payload["preflight_marker"] = str(marker)
 
     plugin_actions = run_plugin_setup_actions(
         {

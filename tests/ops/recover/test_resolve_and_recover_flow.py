@@ -556,3 +556,87 @@ def test_unknown_error_class_skips_cluster_not_tick(journal_home: Path, experime
     assert "test_failure_category_covers_classifier" in gap.reason
     # The valid sibling was still processed (any non-skipped disposition).
     assert by_class["gpu_oom"].disposition != "skipped"
+
+
+# ── F25/F26: the terminal-FAILED tick must never crash the whole watch ─────────
+
+
+def test_stale_pack_declaration_degrades_not_crashes(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F25: a stale pack bind makes ``resolve_failure_patterns`` raise SpecInvalid
+    (loud by design). Inside the monitor's terminal-FAILED tick that must DEGRADE
+    to no failure patterns — not propagate and kill the detached watch before
+    mark_terminal runs. The resolve-and-recover verdict still fires on the
+    un-pack-augmented evidence vector."""
+    from hpc_agent.ops import resolve_and_recover_flow as rr_mod
+
+    _seed_record(experiment)
+    _write_sidecar(experiment, resources={"mem_mb": 4000})
+
+    def _boom(_experiment_dir: Path) -> Any:
+        raise errors.SpecInvalid("pack 'quant': opted in but has no CURRENT bind")
+
+    monkeypatch.setattr(rr_mod, "resolve_failure_patterns", _boom)
+    rec = _Recorder()
+    fetch = _fetcher([_cluster("gpu_oom", task_ids=[0])])
+
+    # Must NOT raise despite the SpecInvalid inside pattern resolution.
+    outcome = maybe_resolve_and_recover(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
+
+    # The verdict still fired (degraded to no patterns), the cluster was resolved.
+    assert len(outcome.resubmitted) == 1
+    assert len(rec.calls) == 1
+
+
+def test_resubmit_ssh_fault_parks_held_not_crashes(journal_home: Path, experiment: Path) -> None:
+    """F26: a transient SSH fault on the resubmit leg must NOT propagate through
+    the monitor's terminal-FAILED tick and kill the detached watch. The cluster
+    is parked HELD with the reason (nothing landed → the cap is NOT consumed), so
+    the monitor falls through to the normal FAILED surface."""
+    _seed_record(experiment)
+    _write_sidecar(experiment, resources={"mem_mb": 4000})
+
+    def _resubmit_boom(*_a: Any, **_kw: Any) -> Any:
+        raise errors.SshUnreachable("qmaster unreachable mid-resubmit")
+
+    fetch = _fetcher([_cluster("gpu_oom", task_ids=[0])])
+
+    outcome = maybe_resolve_and_recover(
+        experiment, _RUN_ID, resubmit=_resubmit_boom, failures_fetcher=fetch
+    )
+
+    assert len(outcome.resubmitted) == 0
+    assert len(outcome.held) == 1
+    held = outcome.held[0]
+    assert held.decided_by == "code"
+    assert "resubmit failed" in held.reason
+    # Nothing landed on the cluster → the cap counter is untouched.
+    assert outcome.auto_recover_count == 0
+    assert load_run(experiment, _RUN_ID).auto_recover_count == 0
+
+
+def test_counter_write_fault_fails_closed_in_memory(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F26: the resubmit SUCCEEDED but persisting the cap-counter bump raises
+    (NFS/homedir hiccup). The watch must NOT die AND the attempt MUST still count
+    (fail CLOSED so the cap cannot loosen) — the bumped count rides out in-memory,
+    mirroring the auto-resume twin's guard."""
+    from hpc_agent.ops import resolve_and_recover_flow as rr_mod
+
+    _seed_record(experiment)
+    _write_sidecar(experiment, resources={"mem_mb": 4000})
+
+    def _write_boom(*_a: Any, **_kw: Any) -> Any:
+        raise OSError("NFS write failed persisting auto_recover_count")
+
+    monkeypatch.setattr(rr_mod, "update_run_status", _write_boom)
+    rec = _Recorder()  # deduped=False → a real resubmit that should bump the cap
+    fetch = _fetcher([_cluster("gpu_oom", task_ids=[0])])
+
+    outcome = maybe_resolve_and_recover(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
+
+    # The resubmit stands and the attempt counts in-memory (fail closed).
+    assert len(outcome.resubmitted) == 1
+    assert outcome.auto_recover_count == 1

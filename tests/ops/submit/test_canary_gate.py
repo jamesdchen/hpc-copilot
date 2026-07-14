@@ -309,3 +309,121 @@ def test_mpi_canary_resources_handles_none() -> None:
     from hpc_agent.ops.submit_flow import _mpi_canary_resources
 
     assert _mpi_canary_resources(None) == (None, None)
+
+
+# ── F50: one canary decision, threaded (not re-evaluated across the rsync) ────
+
+
+def test_threaded_canary_decision_skip_overrides_a_ttl_flip(tmp_path, _journal_home) -> None:
+    """F50 fire-path: the batch computes ONE canary decision pre-rsync and threads
+    it into _submit_one_spec. A threaded 'skip' must win — _submit_one_spec must
+    NOT re-consult the wall-clock TTL cache (which could have flipped skip->run
+    while the multi-hour rsync ran, firing a canary whose sidecar never shipped)."""
+    from hpc_agent.ops import submit_flow as sf
+
+    spec = _spec(canary=True)  # the RAW decision would fire a canary
+    with (
+        mock.patch.object(
+            sf, "_augment_job_env", return_value={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
+        ),
+        mock.patch.object(sf, "build_remote_backend", return_value=mock.MagicMock()),
+        mock.patch.object(sf, "_fire_canary") as fire,
+        mock.patch.object(sf, "_submit_main_array", return_value=(["300"], None)),
+        mock.patch.object(sf, "submit_and_record"),
+    ):
+        res = sf._submit_one_spec(
+            experiment_dir=tmp_path, spec=spec, canary_decision=(False, "threaded skip")
+        )
+    fire.assert_not_called()  # the threaded 'skip' won — no canary fired post-rsync
+    assert res.canary_done is False
+    assert res.canary_skip_reason == "threaded skip"
+
+
+def test_threaded_canary_decision_run_fires_canary(tmp_path, _journal_home) -> None:
+    """F50 boundary: a threaded 'run' fires the canary — the decision is honoured
+    in both directions."""
+    from hpc_agent.ops import submit_flow as sf
+
+    spec = _spec(canary=True)
+    with (
+        mock.patch.object(
+            sf, "_augment_job_env", return_value={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
+        ),
+        mock.patch.object(sf, "build_remote_backend", return_value=mock.MagicMock()),
+        mock.patch.object(sf, "_fire_canary", return_value=["42"]) as fire,
+        mock.patch.object(sf, "_submit_main_array", return_value=(["300"], None)),
+        mock.patch.object(sf, "submit_and_record"),
+    ):
+        res = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec, canary_decision=(True, None))
+    fire.assert_called_once()
+    assert res.canary_done is True
+
+
+# ── F51: the afterok gate keys on a FRESH-fired canary, never a replayed id ───
+
+
+def _seed_inflight_canary(tmp_path, run_id: str, job_ids: list[str]) -> None:
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=run_id,
+            profile="p",
+            cluster="c",
+            ssh_target="u@h",
+            remote_path="/r",
+            job_name=run_id,
+            job_ids=list(job_ids),
+            total_tasks=1,
+            submitted_at="2026-01-01T00:00:00+00:00",
+            experiment_dir=str(tmp_path.resolve()),
+        ),
+    )  # default status in_flight
+
+
+def test_replayed_canary_does_not_gate_main_on_stale_id(tmp_path, _journal_home) -> None:
+    """F51 fire-path: a crash-then-retry reuses an in_flight canary record whose
+    1-task job the scheduler may already have purged (MinJobAge). The main array
+    must NOT be co-submitted with --dependency=afterok:<purged id> (which sbatch
+    rejects, wedging every retry). On replay the main submit is un-gated."""
+    from hpc_agent.ops import submit_flow as sf
+
+    _seed_inflight_canary(tmp_path, "rX-canary", ["9999"])
+    spec = _spec(canary=True, enable_afterok_dependency=True)
+    backend = mock.MagicMock()
+    backend.supports_afterok = True
+    with (
+        mock.patch.object(
+            sf, "_augment_job_env", return_value={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
+        ),
+        mock.patch.object(sf, "build_remote_backend", return_value=backend),
+        mock.patch.object(sf, "_submit_main_array", return_value=(["300"], None)) as mainmk,
+        mock.patch.object(sf, "submit_and_record"),
+    ):
+        res = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec, canary_decision=(True, None))
+    # The replayed canary id still rides the RESULT, but the main array is un-gated.
+    assert res.canary_job_ids == ["9999"]
+    assert mainmk.call_args.kwargs["gate_job_ids"] == []
+
+
+def test_fresh_canary_gates_main_when_afterok_enabled(tmp_path, _journal_home) -> None:
+    """F51 boundary: a canary fired THIS call still gates the main array on afterok
+    — the guard narrows to replay, it does not disable #250 for fresh submits."""
+    from hpc_agent.ops import submit_flow as sf
+
+    spec = _spec(canary=True, enable_afterok_dependency=True)
+    backend = mock.MagicMock()
+    backend.supports_afterok = True
+    with (
+        mock.patch.object(
+            sf, "_augment_job_env", return_value={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
+        ),
+        mock.patch.object(sf, "build_remote_backend", return_value=backend),
+        mock.patch.object(sf, "_fire_canary", return_value=["42"]),
+        mock.patch.object(sf, "_submit_main_array", return_value=(["300"], None)) as mainmk,
+        mock.patch.object(sf, "submit_and_record"),
+    ):
+        sf._submit_one_spec(experiment_dir=tmp_path, spec=spec, canary_decision=(True, None))
+    assert mainmk.call_args.kwargs["gate_job_ids"] == ["42"]

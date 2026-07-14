@@ -115,6 +115,14 @@ PROTECTED_OUTPUT_DIRS: list[str] = [
     # other run-output dirs. Empirical 2026-06-09 demo: a re-deploy left ``logs`` a
     # 24KB file instead of a dir of ``*.o<job>.<task>`` entries.
     "logs/",
+    # aggregate-flow lands its outputs under ``_aggregated/<run_id>/`` and the
+    # cluster-side final reduce (``_hpc_combiner.py --final``) writes the
+    # aggregate there too. Without protection the next submit's ``--delete``
+    # pre-clean clobbers the cluster's own aggregate artifacts, and the local
+    # pulled tree (per-task result mirrors + evidence ledgers, potentially GBs)
+    # is pushed back up on every submit (F10). Protect it like the other
+    # run-output dirs — written by the job, not part of the local deploy tree.
+    "_aggregated/",
 ]
 
 # Framework runtime files placed on the cluster by ``deploy_runtime`` (scp'd
@@ -366,18 +374,30 @@ def _path_excluded(parts: tuple[str, ...], pats: list[str]) -> bool:
 
     Semantics mirror tar/rsync as the codebase applies them: a bare pattern
     matches ANY path component (match-any-depth); an anchored ``./name`` /
-    ``^name`` pattern (the F-I dialects) matches only the TOP-LEVEL component.
-    An internal-slash pattern (e.g. ``.hpc/templates/``) matches no single
-    component and is therefore inert here — the same as in the pre-existing
-    disclosure walk, which keeps the local and remote manifests consistent.
+    ``^name`` pattern (the F-I dialects) matches only the TOP-LEVEL component;
+    an internal-slash pattern (e.g. ``data/interim/``) is anchored to the
+    transfer ROOT — it matches that path and everything under it — mirroring
+    rsync's transfer-root anchoring and the same shape :func:`_remote_clean_cmd`
+    already applies via ``find -path`` (#F57). Before this it was inert here (an
+    anchored exclude silently SHIPPED in delta mode while the rsync and full-copy
+    tar modes honored it); the remote snippet :data:`_REMOTE_MANIFEST_SNIPPET`
+    carries the identical logic so the local and remote manifests stay in
+    lockstep.
     """
-    for i, part in enumerate(parts):
-        for pat in pats:
-            if pat.startswith("./") or pat.startswith("^"):
-                anchored = pat[2:] if pat.startswith("./") else pat[1:]
-                if i == 0 and fnmatch.fnmatch(part, anchored):
-                    return True
-                continue
+    relposix = "/".join(parts)
+    for pat in pats:
+        if pat.startswith("./") or pat.startswith("^"):
+            anchored = pat[2:] if pat.startswith("./") else pat[1:]
+            if parts and fnmatch.fnmatch(parts[0], anchored):
+                return True
+            continue
+        if "/" in pat:
+            # Root-anchored internal-slash pattern: the path itself or any file
+            # under it (``pat/*`` — fnmatch's ``*`` spans ``/``).
+            if fnmatch.fnmatch(relposix, pat) or fnmatch.fnmatch(relposix, f"{pat}/*"):
+                return True
+            continue
+        for part in parts:
             if fnmatch.fnmatch(part, pat):
                 return True
     return False
@@ -551,13 +571,18 @@ _REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
         cap = int(os.environ.get('HPC_DELTA_CAP', '100000'))
 
         def excluded(parts):
-            for i, part in enumerate(parts):
-                for pat in pats:
-                    if pat.startswith('./') or pat.startswith('^'):
-                        a = pat[2:] if pat.startswith('./') else pat[1:]
-                        if i == 0 and fnmatch.fnmatch(part, a):
-                            return True
-                        continue
+            rel = '/'.join(parts)
+            for pat in pats:
+                if pat.startswith('./') or pat.startswith('^'):
+                    a = pat[2:] if pat.startswith('./') else pat[1:]
+                    if parts and fnmatch.fnmatch(parts[0], a):
+                        return True
+                    continue
+                if '/' in pat:
+                    if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(rel, pat + '/*'):
+                        return True
+                    continue
+                for part in parts:
                     if fnmatch.fnmatch(part, pat):
                         return True
             return False
@@ -899,22 +924,34 @@ def _prune_manifest_known_extras(
     remote_manifest: Any,
     extra: tuple[str, ...],
     timeout: float | None,
-) -> None:
+) -> set[str]:
     """Plan + disclose + journal + execute the bounded auto-prune (ruling 6).
 
     Called only from the delete=True delta push (holds the dial). Fully
     fail-open: any error leaves the remote untouched — a prune we cannot do
     cleanly is a prune we skip, never a broken push.
+
+    Returns the set of manifest-known remote extras that this push did NOT
+    successfully delete (a cap-REFUSED plan, a failed/racing ``rm``, or an
+    error) — the paths that are STILL ours on the remote. The caller folds them
+    into the push manifest it writes (#F58): a refused or failed prune must keep
+    those extras classified ``manifest-known (prunable)`` for the next push, or
+    the disclosure's own ``raise the cap and re-push`` remediation can never
+    work (they would silently downgrade to never-touched ANOMALYs).
     """
     if os.environ.get(_PRUNE_ENV_KILL) == "1":
-        return
+        return set()
+    # Provenance we must NOT lose: manifest-known extras still on the remote.
+    # Populated as soon as the plan is known and cleared only on a confirmed
+    # delete, so an exception at any later point still retains it.
+    retained: set[str] = set()
     try:
         # Our own bookkeeping file is a remote extra (never shipped locally); it
         # is neither ours-to-prune nor an anomaly — filter it out up front.
         # Same for deploy_runtime's own placed files (:func:`_is_runtime_placed`).
         candidates = [p for p in extra if p != _PUSH_MANIFEST_REL and not _is_runtime_placed(p)]
         if not candidates:
-            return
+            return set()
 
         from hpc_agent.infra.manifest import FileEntry
         from hpc_agent.infra.prune import plan_prune
@@ -930,6 +967,8 @@ def _prune_manifest_known_extras(
             max_files=_prune_max_files(),
             max_bytes=_prune_max_bytes(),
         )
+        # Until proven deleted, every manifest-known extra keeps its provenance.
+        retained = {e.path for e in plan.prunable}
         _disclose_prune(plan, remote_path=remote_path)
 
         if plan.refused:
@@ -943,9 +982,9 @@ def _prune_manifest_known_extras(
                     "manifest_known_bytes": plan.prune_bytes,
                 },
             )
-            return
+            return retained
         if not plan.to_prune:
-            return
+            return retained
 
         # Journal BEFORE deleting: record what + why + the old remote sha, so the
         # timeline survives even if the delete itself races or fails.
@@ -961,14 +1000,17 @@ def _prune_manifest_known_extras(
                     "size": entry.size,
                 },
             )
-        _execute_prune(
+        if _execute_prune(
             ssh_target=ssh_target,
             remote_path=remote_path,
             paths=list(plan.to_prune),
             timeout=timeout,
-        )
+        ):
+            # Confirmed gone from the remote — drop them from the manifest.
+            retained = set()
+        return retained
     except Exception:  # noqa: BLE001 — the prune is never load-bearing on a push
-        pass
+        return retained
 
 
 #: Transfer-progress heartbeat cadence (queue item 10). The tar|ssh pipe emits
@@ -1522,7 +1564,7 @@ def rsync_push(
             # same delete=True dial (no new cold SSH); anomalies are never
             # touched. Then persist the push manifest so the NEXT push knows what
             # is ours. Both fail-open — neither can break a successful transfer.
-            _prune_manifest_known_extras(
+            retained_extras = _prune_manifest_known_extras(
                 ssh_target=ssh_target,
                 remote_path=remote_path,
                 local_path=local_path,
@@ -1530,10 +1572,15 @@ def rsync_push(
                 extra=delta.extra,
                 timeout=effective_timeout,
             )
+            # Write the manifest as the UNION of the current local paths AND any
+            # manifest-known extras this push did NOT delete (#F58): a cap-refused
+            # or failed prune must keep its provenance, or those remote extras
+            # silently downgrade to never-touched ANOMALYs on the very next push
+            # and the "raise the cap and re-push" remediation can never fire.
             _write_push_manifest(
                 ssh_target=ssh_target,
                 remote_path=remote_path,
-                paths=[e.path for e in local_manifest.entries],
+                paths=sorted({e.path for e in local_manifest.entries} | retained_extras),
                 timeout=effective_timeout,
             )
             return pushed
@@ -1797,12 +1844,20 @@ def _parse_remote_manifest(stdout: str) -> dict[str, Any] | None:
 def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
     """rsync the staged deploy tree to the cluster — one invocation, delta only.
 
-    ``-az --inplace`` ships only the changed bytes of changed files. The cache
-    already filtered to changed *files*; rsync's delta narrows it further to
-    changed *bytes*. NO ``--delete``: deploy merges its subset into the cluster
-    tree and must never remove the user's run output or sibling framework
-    files. rsync invokes its own ssh, so :func:`ssh_env` pins the binary +
-    crypto/multiplex opts, mirroring :func:`rsync_push`.
+    ``-az`` ships only the changed *files* (the cache already narrowed the set)
+    with rsync's own delta over the wire. Deliberately NOT ``--inplace`` (#F20):
+    ``--inplace`` rewrites the destination file's bytes in place, so an array
+    task of an UNRELATED in-flight run in the same ``remote_path`` that execs
+    ``.hpc/_hpc_dispatch.py`` (or sources a preamble) mid-transfer reads a torn
+    file → ``SyntaxError`` → the retry wrapper stamps a terminal
+    ``.hpc_failed`` marker on a task that was healthy. rsync's default
+    temp-file-plus-atomic-rename means a concurrent reader sees either the
+    complete old file or the complete new one, never a half-written one; the
+    delta economy is marginal for the sub-100 KB python files this ships. NO
+    ``--delete``: deploy merges its subset into the cluster tree and must never
+    remove the user's run output or sibling framework files. rsync invokes its
+    own ssh, so :func:`ssh_env` pins the binary + crypto/multiplex opts,
+    mirroring :func:`rsync_push`.
     """
     # Per-host connection-rate guard (ban-driver); no-op unless
     # HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
@@ -1814,7 +1869,7 @@ def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
     def _run() -> subprocess.CompletedProcess[str]:
         try:
             return run_capture_bounded(
-                ["rsync", "-az", "--inplace", src, dst],
+                ["rsync", "-az", src, dst],
                 timeout_sec=SSH_TIMEOUT_SEC,
                 env=rsync_env,
             )
@@ -1836,9 +1891,11 @@ def _deploy_transfer(*, ssh_target: str, remote_path: str, items: list[_DeployIt
 
     Stages each item at ``staging/<dst_rel>`` (a verbatim package file is
     copied, rendered ``content`` is written), then transfers the whole staging
-    tree in ONE invocation: an ``rsync -az --inplace`` delta where rsync is on
-    PATH, else a single ``tar c | ssh tar x`` stream (``delete=False`` — merge,
-    never remove). Same transport detection :func:`rsync_push` uses.
+    tree in ONE invocation: an ``rsync -az`` delta where rsync is on PATH (no
+    ``--inplace`` — #F20: an in-place rewrite tears the live dispatcher under a
+    concurrent array), else a single ``tar c | ssh tar x`` stream
+    (``delete=False`` — merge, never remove). Same transport detection
+    :func:`rsync_push` uses.
     *remote_path* is validated up front so it can flow verbatim into the rsync
     target / remote shell, matching the rest of the module.
     """
@@ -1870,6 +1927,38 @@ def _deploy_transfer(*, ssh_target: str, remote_path: str, items: list[_DeployIt
             )
 
 
+def _write_deploy_manifest(*, ssh_target: str, remote_path: str, content: str) -> None:
+    """Persist the deploy-cache manifest at :data:`_DEPLOY_MANIFEST_REL` in its
+    OWN ssh leg, run ONLY after the file transfer has succeeded (#F53).
+
+    The manifest must never ride the batched file transfer: on the rsync leg it
+    sorts ahead of ``_hpc_combiner.py`` / ``_hpc_dispatch.py`` / ``templates``
+    (``.`` < ``_`` < ``t``) and the tar leg extracts in archive order, so it
+    lands FIRST on the wire. An interrupted transfer that delivered the manifest
+    but not the code it attests would leave the user's natural retry reading a
+    manifest whose shas all "match" — shipping nothing and reporting success
+    over stale-or-torn framework code, exactly the version-skew the pkg_version
+    cache key exists to prevent. Writing it here, after :func:`_deploy_transfer`
+    returned (it raises on any transfer failure), closes that window.
+
+    Base64-piped so the JSON needs no shell quoting (mirrors
+    :func:`_write_push_manifest`). Fail-open: a lost manifest write only forces
+    the NEXT deploy to re-ship as a full cache miss — never a stale manifest
+    attesting a file that did not land.
+    """
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    root = shlex.quote(remote_path.rstrip("/"))
+    dst = shlex.quote(_DEPLOY_MANIFEST_REL)
+    cmd = f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(b64)} | base64 -d > {dst}"
+    with contextlib.suppress(TimeoutError, OSError):
+        _ssh_bounded(
+            ssh_target,
+            cmd,
+            timeout=SSH_TIMEOUT_SEC,
+            what=f"write deploy manifest of {remote_path}",
+        )
+
+
 def deploy_runtime(
     *,
     ssh_target: str,
@@ -1894,10 +1983,13 @@ def deploy_runtime(
        files are placed here by scp.
 
     The (cache-filtered) files ship in a **single batched transfer** (#252):
-    an ``rsync -az --inplace`` delta where rsync is on PATH — so only the
-    *changed bytes* of changed files cross the wire, which matters for the
-    framework artifacts that grow over time (combiner.py, dispatch.py, the
-    templates) — falling back to one ``tar c | ssh tar x`` stream on hosts
+    an ``rsync -az`` delta where rsync is on PATH — so only the *changed files*
+    cross the wire (rsync still deltas the bytes over the wire), which matters
+    for the framework artifacts that grow over time (combiner.py, dispatch.py,
+    the templates). It is deliberately NOT ``--inplace`` (#F20): an in-place
+    rewrite tears a live ``.hpc/_hpc_dispatch.py`` under a concurrent in-flight
+    array; rsync's default temp-then-rename replaces the file atomically.
+    Falls back to one ``tar c | ssh tar x`` stream on hosts
     without rsync (native Windows). This is the same transport detection
     :func:`rsync_push` uses, and replaces the prior N-scp fan-out (#245): a
     re-deploy is now at most one prelude ssh + one transfer. The transfer is
@@ -1989,26 +2081,23 @@ def deploy_runtime(
     else:
         to_deploy = list(items)
 
-    # Record the new manifest only when it actually changed (a full cache hit
-    # leaves it identical, so we skip the write — and the whole transfer — and
-    # its round-trip). The manifest rides the SAME batched transfer as the
-    # files it describes, written last in the staging tree; a failed transfer
-    # raises before anything is recorded, so a stale manifest never claims a
-    # file landed that didn't.
+    # Ship the code FIRST, then record the manifest in a SEPARATE ssh leg after
+    # the transfer succeeded (#F53). The manifest must NOT ride the batched
+    # transfer: it sorts/extracts ahead of the files it attests, so an
+    # interrupted deploy could land the manifest over un-shipped code and make
+    # the retry a false success. ``_deploy_transfer`` raises on any transfer
+    # failure, so the manifest write below is reached only on a fully landed
+    # transfer; the write is itself fail-open (a lost manifest just forces the
+    # next deploy to re-ship as a full cache miss — never a false attestation).
     manifest_changed = use_cache and remote_manifest != new_manifest
-    transfer_items = list(to_deploy)
+    if to_deploy:
+        _deploy_transfer(ssh_target=ssh_target, remote_path=remote_path, items=to_deploy)
     if manifest_changed:
-        manifest_json = json.dumps(new_manifest, indent=2, sort_keys=True)
-        transfer_items.append(
-            _DeployItem(
-                dst_rel=_DEPLOY_MANIFEST_REL,
-                sha=_sha256_bytes(manifest_json.encode("utf-8")),
-                src_path=None,
-                content=manifest_json,
-            )
+        _write_deploy_manifest(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            content=json.dumps(new_manifest, indent=2, sort_keys=True),
         )
-    if transfer_items:
-        _deploy_transfer(ssh_target=ssh_target, remote_path=remote_path, items=transfer_items)
 
 
 def run_combiner(

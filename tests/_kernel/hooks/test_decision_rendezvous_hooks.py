@@ -159,6 +159,34 @@ def test_committed_y_but_no_marker_is_silent(tmp_path: Path) -> None:
     assert guard.build_hook_output(_stop_payload(tmp_path)) is None
 
 
+def _commit_unrelated_later(exp: Path, run_id: str = _RUN_ID) -> None:
+    """An UNRELATED later touchpoint under a DIFFERENT block (e.g. an overnight-consent)."""
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block="overnight-consent",
+        response="let it run overnight to the canary, cap 50 dollars",
+    )
+
+
+def test_y_then_unrelated_later_record_still_forces_continue(tmp_path: Path) -> None:
+    """F13 direction (b): a committed `y` followed by an UNRELATED later record (a
+    different block's touchpoint — an overnight-consent, a sign-off) must NOT silence the
+    guard. Previously the guard tested only ``decisions[-1]``, so the trailing consent
+    hid the genuine committed-but-unadvanced `y` and the 2026-06-10 stall re-opened. The
+    shared newest-first scan skips the unrelated block and still finds the `y`."""
+    _park(tmp_path)
+    _commit_y(tmp_path)
+    _commit_unrelated_later(tmp_path)
+
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+
+    assert out is not None
+    assert out["decision"] == "block"
+    assert _RUN_ID in out["reason"]
+
+
 # ─── boundary scoping: a consumed greenlight is not THIS boundary's ──────────
 # (bug-sweep 2026-07-11 #23 / run-12 finding 21)
 

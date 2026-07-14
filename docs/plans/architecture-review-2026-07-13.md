@@ -1,6 +1,11 @@
 # Architecture review — 2026-07-13 (banked proposals)
 
-Status: **BANKED — review complete, no proposals executed yet.** Produced by a
+Status: **BANKED — MOSTLY EXECUTED.** The original "no proposals executed yet"
+line below is stale: as re-verified on 2026-07-14 against HEAD, the large
+majority of P1–P6 has since landed (the journal-package split + the fable-sweep
+hardening train). See the per-proposal status and the genuine remaining worklist
+in **[`architecture-review-2026-07-13-delta.md`](architecture-review-2026-07-13-delta.md)**
+before scheduling any work from this doc. Produced by a
 15-reader whole-repo ingest (~370k lines), adversarially verified by 5 independent
 review agents, then a completeness-critic + deep-test + mechanical-sweep second
 round (corrections recorded in §F of the addendum). Paths and counts were

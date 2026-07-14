@@ -116,7 +116,7 @@ Wired in `hpc_agent/cli/_helpers.py` (`_EXIT_CODE_BY_CATEGORY`).
 | 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `ssh_circuit_open`, `scheduler_throttled`, `remote_command_failed`, `combiner_failed`, `cluster_timeout`, `outputs_missing`, `cluster_partially_degraded`, `preempted`, `model_endpoint_error` |
 | 3 | `internal` | bug in framework or corrupt state | `journal_corrupt`, `internal`, `schema_incompat` |
 
-`preflight` returns 2 when any check fails (it is a `cluster`-class diagnostic, even though the envelope is `ok=true`).
+`preflight` (and `setup --cluster`) returns 2 with an `ok=false` / `remote_command_failed` envelope when any check fails — it is a `cluster`-class diagnostic. The full `checks` list rides in `failure_features`; a green verdict is the ordinary `ok=true` envelope carrying the `data` block. (Before #F29 the adapter had no exit mapping and emitted `ok=true` / exit 0 over a broken env, so `submit_preflight` — which reads `envelope.ok` — reported `overall='pass'`.)
 
 Per-primitive exit-code overrides live in each primitive's frontmatter (`exit_codes:` field).
 

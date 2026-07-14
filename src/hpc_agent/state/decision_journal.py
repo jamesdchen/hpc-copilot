@@ -331,27 +331,40 @@ def is_committed_greenlight_for_boundary(
     *,
     next_verb: str | None,
     awaiting_since: str | None,
+    block: str | None = None,
 ) -> bool:
-    """True iff the scope's latest decision is the greenlight for THIS parked boundary.
+    """True iff a committed greenlight for THIS parked boundary is the scope's latest word.
 
     The decision-journal half of the §5 "committed-but-unadvanced" predicate,
-    BOUNDARY-SCOPED (bug-sweep #1/#23, run-12 finding 21): the latest record
-    must be a ``y`` that NAMES the parked marker's ``next_verb`` and was
-    journaled at-or-after the marker's ``awaiting_since`` — the single shared
-    rule (:func:`hpc_agent._kernel.lifecycle.block_drive.greenlight_targets_boundary`)
-    the ``block-drive`` Stop guard, the out-of-session ``doctor``, and the
-    attention queue's greenlight-unadvanced split all key on, so no surface can
-    read a consumed greenlight as a fresh one. *next_verb*/*awaiting_since*
-    come from the run's ``pending_decision`` marker (its ``resume_cursor``).
+    BOUNDARY-SCOPED (bug-sweep #1/#23, run-12 finding 21): a record must be a ``y`` that
+    NAMES the parked marker's ``next_verb`` and was journaled at-or-after the marker's
+    ``awaiting_since`` — the single shared rule
+    (:func:`hpc_agent._kernel.lifecycle.block_drive.committed_greenlight_for_boundary`) the
+    ``block-drive`` Stop guard, the out-of-session ``doctor``, and the attention queue's
+    greenlight-unadvanced split all key on, so no surface can read a consumed greenlight as
+    a fresh one. *next_verb*/*awaiting_since* come from the run's ``pending_decision`` marker.
+
+    F13: uses the NEWEST-FIRST scan (not a bare ``latest_decision`` read) so it agrees with
+    the driver + Stop guard on BOTH directions of "y then a later record": an UNRELATED later
+    record (an overnight-consent, a sign-off, another block's touchpoint) journaled after the
+    greenlight does not falsely read "not committed" and stall a genuine ``y`` (it is skipped),
+    while a SAME-boundary retraction nudge (*block* names the parked block, ts>=awaiting_since)
+    DOES supersede the earlier ``y`` (stays parked). *block* comes from the ``pending_decision``
+    marker; when omitted the supersession leg is off (skip-unrelated-only).
 
     Raises :class:`errors.SpecInvalid` on a bad scope.
     """
-    latest = latest_decision(experiment_dir, scope_kind, scope_id)
-    if latest is None:
+    records = read_decisions(experiment_dir, scope_kind, scope_id)
+    if not records:
         return False
-    # Lazy import: block_drive imports this module at top level; the shared
-    # predicate is pure (no journal I/O), so the one-way runtime import here
-    # keeps the single definition without an import cycle.
-    from hpc_agent._kernel.lifecycle.block_drive import greenlight_targets_boundary
+    # Lazy import: block_drive imports this module at top level; the shared scan is
+    # pure (no journal I/O), so the one-way runtime import here keeps the single
+    # definition without an import cycle.
+    from hpc_agent._kernel.lifecycle.block_drive import committed_greenlight_for_boundary
 
-    return greenlight_targets_boundary(latest, next_verb=next_verb, awaiting_since=awaiting_since)
+    return (
+        committed_greenlight_for_boundary(
+            records, block=block, next_verb=next_verb, awaiting_since=awaiting_since
+        )
+        is not None
+    )

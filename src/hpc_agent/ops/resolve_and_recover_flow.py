@@ -376,7 +376,32 @@ def maybe_resolve_and_recover(
     # separately; until then resolve_failure_patterns reads the opt-in shape-only
     # (an opted-in repo with no current bind is loud by design, never a silent
     # pass), and this call gains records_reader=... when that scope kind exists.
-    failure_patterns = resolve_failure_patterns(experiment_dir) if clusters else []
+    #
+    # F25: pack-declaration staleness (SpecInvalid — a moved/edited manifest, a
+    # superseded receipt with no current bind, a malformed entry) is loud by
+    # design on the SUBMIT paths; the monitor's terminal-FAILED tick is the WRONG
+    # place to enforce it. This resolution runs inside monitor_flow's unguarded
+    # FAILED branch, so an unguarded raise here kills a multi-hour detached watch
+    # BEFORE mark_terminal runs, stranding the run in-flight and re-crashing on
+    # every re-watch. Degrade to no patterns (the features glue only COUNTS
+    # pattern hits — losing them degrades evidence, not correctness) and surface
+    # the reason, rather than letting unrelated pack state wedge failure
+    # classification at the exact moment it is needed.
+    failure_patterns: list[Any] = []
+    if clusters:
+        try:
+            failure_patterns = resolve_failure_patterns(experiment_dir)
+        except errors.HpcError as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "resolve-and-recover for run_id=%s: pack failure-pattern "
+                "resolution failed (%s); degrading to NO failure patterns for this "
+                "tick — the recovery verdict proceeds on the un-pack-augmented "
+                "evidence vector. Fix the pack bind on a submit path, not here.",
+                run_id,
+                exc,
+            )
 
     outcomes: list[ClusterOutcome] = []
     count = int(record.auto_recover_count)
@@ -576,27 +601,81 @@ def _act_on_code(
     # distinct request (mirrors auto_resume_flow): two genuine recoveries of the
     # same set must not dedup against each other.
     request_id = f"auto_recover_{run_id}_{count}"
-    result = resubmit(
-        experiment_dir,
-        run_id,
-        failed_task_ids=failed_task_ids,
-        category=error_class,
-        overrides=overrides,
-        from_checkpoint=True,
-        submit_to_cluster=True,
-        script=record.script,
-        backend=record.backend,
-        job_name=record.job_name,
-        job_env=dict(record.job_env),
-        request_id=request_id,
-    )
+    try:
+        result = resubmit(
+            experiment_dir,
+            run_id,
+            failed_task_ids=failed_task_ids,
+            category=error_class,
+            overrides=overrides,
+            from_checkpoint=True,
+            submit_to_cluster=True,
+            script=record.script,
+            backend=record.backend,
+            job_name=record.job_name,
+            job_env=dict(record.job_env),
+            request_id=request_id,
+        )
+    except (errors.HpcError, OSError) as exc:
+        # F26: the resubmit leg is a qsub-over-ssh — a transient SshUnreachable /
+        # RemoteCommandFailed / OSError at exactly the moment the monitor already
+        # survived a dozen tolerated poll blips must NOT propagate through
+        # monitor_flow's terminal-FAILED branch and kill the detached watch after
+        # nothing was even put on the cluster. Park the cluster as HELD with the
+        # reason (never bumping the cap — nothing landed) so the monitor falls
+        # through to the normal FAILED surface instead of dying; the module's
+        # never-blocks policy applies to the resubmit call itself, not only the
+        # status polls in the same loop.
+        import logging
+
+        logging.getLogger(__name__).error(
+            "auto-recover for run_id=%s: resubmit of %s failed (%s); parking the "
+            "cluster as held and surfacing the reason rather than crashing the "
+            "monitor's terminal-FAILED tick.",
+            run_id,
+            error_class,
+            exc,
+        )
+        return (
+            ClusterOutcome(
+                fingerprint=fingerprint,
+                error_class=error_class,
+                task_ids=task_ids,
+                disposition="held",
+                decided_by="code",
+                reason=f"{error_class}: auto-recover resubmit failed: {exc}",
+                overrides=overrides,
+            ),
+            count,
+        )
 
     deduped = bool(getattr(result, "deduped", False))
     new_count = count
     if not deduped:
+        # A real resubmit fired — bump the cap counter. Fail CLOSED on a journal-
+        # write failure (mirrors the auto_resume_flow twin): the work is ALREADY
+        # on the cluster, so this attempt MUST count against the cap even when we
+        # cannot persist the bump. An uncaught write failure here would (a) crash
+        # the monitor's terminal-FAILED tick outright and (b) leave the counter
+        # un-bumped — which LOOSENS the cap (the next watch reads the stale count
+        # and fires an extra resubmit PAST the ceiling). Keep the in-memory bump
+        # and log loudly rather than under-count or propagate.
         new_count += 1
-        updated = update_run_status(experiment_dir, run_id, auto_recover_count=new_count)
-        new_count = int(updated.auto_recover_count)
+        try:
+            updated = update_run_status(experiment_dir, run_id, auto_recover_count=new_count)
+            new_count = int(updated.auto_recover_count)
+        except (errors.HpcError, OSError) as exc:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "auto-recover for run_id=%s fired a resubmit but FAILED to persist "
+                "the cap-counter bump (%s); counting the attempt in-memory to fail "
+                "CLOSED so the recover cap cannot loosen. The journal "
+                "auto_recover_count may be stale-by-one until the next successful "
+                "status write.",
+                run_id,
+                exc,
+            )
 
     return (
         ClusterOutcome(

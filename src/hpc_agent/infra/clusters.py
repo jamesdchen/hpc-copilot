@@ -10,6 +10,7 @@ than silently disabling the feature.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import shlex
@@ -822,6 +823,30 @@ def validate_clusters_config(clusters: dict[str, Any]) -> None:
             raise errors.ConfigInvalid(
                 f"clusters.yaml entry {cluster_name!r} failed validation: {exc}"
             ) from exc
+
+
+def near_miss_cluster_keys(entry: dict[str, Any]) -> dict[str, list[str]]:
+    """Map each unrecognized key in *entry* to close-matching allowed keys.
+
+    ``ClusterConfig`` uses ``extra='ignore'`` for forward-compat, so a misspelled
+    key (``conda_env`` for ``conda_envs``, ``nfs-data-dir`` for ``nfs_data_dir``)
+    is silently dropped and the feature it meant to enable never fires — a class
+    ``validate_clusters_config`` can't catch (unknown keys are ignored, not
+    rejected). This surfaces the LIKELY typos: an unknown key that is a near-miss
+    (``difflib``, cutoff 0.7) of a real one. A wholly novel forward-compat key
+    (no close match) is deliberately NOT reported, so the allowlist can lag a new
+    field without a false alarm. Returns ``{unknown_key: [suggestions]}`` (empty
+    when every key is recognized).
+    """
+    allowed = _allowed_cluster_keys()
+    out: dict[str, list[str]] = {}
+    for key in entry:
+        if not isinstance(key, str) or key in allowed:
+            continue
+        close = difflib.get_close_matches(key, sorted(allowed), n=3, cutoff=0.7)
+        if close:
+            out[key] = close
+    return out
 
 
 def load_constraints(

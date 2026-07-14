@@ -129,8 +129,8 @@ def test_default_local_reduce_persists_durable_artifact(journal_home, experiment
 
     fixed = {"g0": {"pi_estimate": _EXPECTED_MEAN, "n_samples": len(_PI_VALUES)}}
     monkeypatch.setattr(af_module, "rsync_pull", _rsync_combiner_ok)
-    monkeypatch.setattr(af_module, "reduce_partials", lambda _dir: fixed)
-    monkeypatch.setattr(af_module, "collect_wave_errors", lambda _dir: [3])
+    monkeypatch.setattr(af_module, "reduce_partials", lambda _dir, **_kw: fixed)
+    monkeypatch.setattr(af_module, "collect_wave_errors", lambda _dir, **_kw: [3])
 
     result = aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
 
@@ -176,8 +176,8 @@ def test_write_failure_warns_but_flow_still_returns(journal_home, experiment, mo
 
     fixed = {"g0": {"pi_estimate": _EXPECTED_MEAN, "n_samples": len(_PI_VALUES)}}
     monkeypatch.setattr(af_module, "rsync_pull", _rsync_combiner_ok)
-    monkeypatch.setattr(af_module, "reduce_partials", lambda _dir: fixed)
-    monkeypatch.setattr(af_module, "collect_wave_errors", lambda _dir: [])
+    monkeypatch.setattr(af_module, "reduce_partials", lambda _dir, **_kw: fixed)
+    monkeypatch.setattr(af_module, "collect_wave_errors", lambda _dir, **_kw: [])
 
     def _boom(*_a, **_kw):
         raise OSError("disk full")

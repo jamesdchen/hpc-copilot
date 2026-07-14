@@ -453,7 +453,7 @@
             }
           ],
           "default": null,
-          "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
+          "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults. Honoured on the single-spec submit-flow surface; in a BATCH (submit-flow-batch) the specs share ONE rsync, so only the batch-level rsync_excludes is used — a per-spec value that differs from the batch value is REFUSED rather than silently ignored (F52). Set it at the batch level for a campaign.",
           "title": "Rsync Excludes"
         },
         "partial_ok": {

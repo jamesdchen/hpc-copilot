@@ -163,6 +163,17 @@ class CliShape:
     # Rich hooks.
     arg_pre: Callable[[argparse.Namespace], dict[str, Any]] | None = None
     result_post: Callable[[Any], dict[str, Any]] | None = None
+    # Map a primitive's RETURN VALUE to a CLI error outcome. A diagnostic that
+    # RETURNS a structured verdict (``check-preflight``'s ``{"all_ok": False,
+    # ...}``) rather than raising — so in-process callers (``setup``,
+    # ``submit_preflight``) can read every check — still needs the CLI to exit
+    # non-zero and emit an ``ok:false`` envelope over a broken environment. When
+    # set and it returns an ``HpcError``, the dispatcher emits that error
+    # (``ok:false``, category → exit code) instead of the ``_ok`` envelope;
+    # returning ``None`` passes through to the normal success envelope. Without
+    # it, ``dispatch_primitive`` wrapped ANY return in ``_ok``/``EXIT_OK`` — the
+    # inert-preflight-gate bug (a green preflight over a broken env).
+    result_error: Callable[[Any], errors.HpcError | None] | None = None
     # Tier 2 escape hatch.
     handler: Callable[[argparse.Namespace], int] | None = None
     # Verb-group support: when set, the primitive's CLI parser is nested
@@ -419,6 +430,15 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
         result = meta.func(**kwargs)
     except errors.HpcError as exc:
         return _err_from_hpc(exc)
+
+    # A diagnostic primitive that RETURNS its verdict (rather than raising) still
+    # needs the CLI to exit non-zero + emit an ok:false envelope when the verdict
+    # is a failure — otherwise ``_ok``/``EXIT_OK`` below reports a green preflight
+    # over a broken env (the inert-preflight-gate bug).
+    if shape.result_error is not None:
+        error = shape.result_error(result)
+        if error is not None:
+            return _err_from_hpc(error)
 
     data = shape.result_post(result) if shape.result_post is not None else _coerce_result(result)
     _ok(data, name=name)

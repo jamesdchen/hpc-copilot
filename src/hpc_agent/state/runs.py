@@ -16,6 +16,7 @@ task content also changes the run's identity.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import warnings
@@ -54,6 +55,8 @@ __all__ = [
 # monkeypatch. Default raised from 10 to 500 (long campaigns); ``HPC_MAX_RUNS``
 # env var overrides at module load.
 MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
+
+_log = logging.getLogger(__name__)
 
 # Sidecar JSON schema version. v2 adds first-class config-snapshot fields
 # (resources/env/env_group/constraints/cluster/profile/campaign_id/...) so
@@ -475,8 +478,17 @@ def write_run_sidecar(
     target.parent.mkdir(parents=True, exist_ok=True)
     # Write atomically (tempfile + flush + fsync + rename) so a crash
     # mid-write leaves either the previous sidecar or the new one — never
-    # a 0-byte or partial-JSON file.
-    _atomic_write_json(target, sidecar)
+    # a 0-byte or partial-JSON file. F45: take the SAME sibling
+    # ``<run_id>.json.lock`` advisory flock that ``update_run_sidecar_job_ids``
+    # holds via ``atomic_locked_update``, so the two writers really do serialize
+    # — the exclusion its comment claims. Without it, a bare atomic_write here
+    # could interleave with the post-qsub job_ids finalize and land a jobless
+    # sidecar over a committed one, flipping a live run to orphan (prune-eligible,
+    # dedup-invisible).
+    from hpc_agent.infra.io import advisory_flock
+
+    with advisory_flock(target.with_suffix(target.suffix + ".lock"), timeout_sec=120.0):
+        _atomic_write_json(target, sidecar)
     prune_old_runs(experiment_dir, keep=MAX_RUNS)
     return target
 
@@ -1257,6 +1269,15 @@ def prune_old_runs(experiment_dir: Path, keep: int | None = None) -> list[Path]:
     call time so a test/caller that monkeypatches ``MAX_RUNS`` is
     honoured — a ``keep=MAX_RUNS`` default argument would freeze the
     value at import time.
+
+    Status-aware (F44): eviction is oldest-mtime-first, but a candidate past the
+    cap is SKIPPED when it is still live — its journal record is ``in_flight`` or
+    held on a verdict — or when it is one half of a retained ``(main, -canary)``
+    pair (each submit contributes two files, which would otherwise halve the
+    effective cap and split a pair). Losing a live run's sidecar mid-flight
+    silently breaks ``/status`` / ``/aggregate`` / resubmit-on-verdict and drops
+    the frozen ``trial_params`` manifest, so the cap yields to liveness. When the
+    cap fires, the evicted run_ids are logged (never a silent retention drop).
     """
     if keep is None:
         keep = MAX_RUNS
@@ -1265,11 +1286,49 @@ def prune_old_runs(experiment_dir: Path, keep: int | None = None) -> list[Path]:
     hits = find_existing_runs(experiment_dir)
     if len(hits) <= keep:
         return []
+    retained = {p.stem for p in hits[:keep]}
     deleted: list[Path] = []
+    skipped_live: list[str] = []
     for path in hits[keep:]:
+        if _prune_protected(experiment_dir, path.stem, retained):
+            skipped_live.append(path.stem)
+            continue
         try:
             path.unlink()
             deleted.append(path)
         except OSError:
             continue
+    if skipped_live:
+        _log.warning(
+            "runs: retention cap (keep=%d) reached in %s; kept %d live/paired "
+            "run(s) past the cap rather than evict them: %s",
+            keep,
+            experiment_dir,
+            len(skipped_live),
+            ", ".join(sorted(skipped_live)),
+        )
     return deleted
+
+
+def _prune_protected(experiment_dir: Path, run_id: str, retained: set[str]) -> bool:
+    """True when *run_id*'s sidecar must survive :func:`prune_old_runs` (F44).
+
+    Protected when it is one half of a retained ``(main, <id>-canary)`` pair, or
+    when its journal record is still ``in_flight`` / held on a verdict. Never
+    raises — a missing/corrupt journal record simply reads as "not live", so a
+    genuinely orphaned old sidecar is still prunable.
+    """
+    # Canary mirror pairing: never split a retained pair by evicting only one.
+    if run_id.endswith("-canary"):
+        if run_id[: -len("-canary")] in retained:
+            return True
+    elif f"{run_id}-canary" in retained:
+        return True
+    from hpc_agent.state.journal import is_held, load_run
+
+    record = load_run(experiment_dir, run_id)
+    if record is None:
+        return False
+    if record.status == "in_flight":
+        return True
+    return is_held(record)

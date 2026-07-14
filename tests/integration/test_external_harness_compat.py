@@ -504,3 +504,52 @@ def test_cluster_failures_rollup_covers_all_four_categories_with_retry_advice(
     assert "retry_advice" not in by_cat["unknown"], (
         "unknown category must not gain retry_advice — no policy entry covers it"
     )
+
+
+# ─── F03: the CONTRACT.md retry table must not drift from errors.py ───────────
+
+
+def test_contract_retry_table_matches_errors_hierarchy() -> None:
+    """``docs/integrations/CONTRACT.md``'s ``error_code`` → retry-policy table is
+    what external harnesses dispatch on, and the doc itself names
+    ``src/hpc_agent/errors.py`` as its source of truth. F03: the
+    ``outputs_missing`` row was mislabeled ``user`` / ``retry_safe=false`` while
+    the wire emits ``cluster`` / ``retry_safe=true`` (exit 2) — a routine
+    mid-campaign error mis-routed into a caller-fix / no-retry branch. This guard
+    parses every row and asserts its ``category`` / ``retry_safe`` matches the
+    :class:`~hpc_agent.errors.HpcError` subclass that owns the code, so a
+    hand-edit can never re-introduce the drift (the generate-don't-maintain
+    posture, enforced)."""
+    import re
+    from pathlib import Path
+
+    from hpc_agent import errors as errs
+
+    # code -> {(category, retry_safe)} across the whole HpcError hierarchy.
+    code_map: dict[str, set[tuple[str, bool]]] = {}
+    seen: set[type] = set()
+    stack: list[type] = [errs.HpcError]
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+        code_map.setdefault(cls.error_code, set()).add((cls.category, cls.retry_safe))
+        stack.extend(cls.__subclasses__())
+
+    contract = Path(__file__).resolve().parents[2] / "docs" / "integrations" / "CONTRACT.md"
+    text = contract.read_text(encoding="utf-8")
+    rows = re.findall(
+        r"^\|\s*`([a-z_]+)`\s*\|\s*([a-z]+)\s*\|\s*(true|false)\s*\|",
+        text,
+        re.MULTILINE,
+    )
+    assert rows, "no retry-policy rows parsed from CONTRACT.md"
+
+    for code, category, retry_safe_str in rows:
+        assert code in code_map, f"CONTRACT.md lists unknown error_code {code!r}"
+        retry_safe = retry_safe_str == "true"
+        assert (category, retry_safe) in code_map[code], (
+            f"CONTRACT.md row for {code!r} says ({category}, {retry_safe}); "
+            f"errors.py declares {sorted(code_map[code])} — regenerate the table"
+        )

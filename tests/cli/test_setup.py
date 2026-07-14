@@ -2,10 +2,11 @@
 
 The ``--cluster <name>`` option grew out of the preflight-as-setup
 migration: environment-authority work (SSH agent, cluster reachability)
-moved out of a runtime skill into one-time setup, and setup writes the
-24h cache marker that ``/submit-hpc``'s Step 6b gate reads. These tests
-pin the contract — envelope shape, marker writing on green, no marker on
-red or dry-run.
+moved out of a runtime skill into one-time setup. These tests pin the
+contract — envelope shape, and (#F31) a RED probe exiting cluster-error /
+``ok:false`` so a scripted bootstrap sees the failure (the dead 24h cache
+marker its predecessor wrote, and the nonexistent "Step 6b gate" that
+supposedly read it, were removed).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ def _run_setup(
     cluster: str | None = None,
     dry_run: bool = False,
     experiment_dir: str | None = None,
+    expect_rc: int = 0,
 ) -> dict:
     """Invoke ``cmd_setup`` in-process; return the parsed envelope."""
     from hpc_agent.cli.setup import cmd_setup
@@ -46,7 +48,7 @@ def _run_setup(
     buf = io.StringIO()
     with mock.patch("sys.stdout", buf):
         rc = cmd_setup(args)
-    assert rc == 0
+    assert rc == expect_rc
     lines = [line for line in buf.getvalue().strip().splitlines() if line.strip()]
     assert len(lines) == 1
     return json.loads(lines[0])
@@ -61,25 +63,28 @@ def test_setup_without_cluster_installs_assets_only(isolated_dirs: Path) -> None
     assert "preflight_marker" not in env["data"]
 
 
-def test_setup_with_cluster_green_writes_marker(isolated_dirs: Path) -> None:
-    """A green probe writes the cache marker the Step 6b gate reads."""
+def test_setup_with_cluster_green_returns_verdict_ok(isolated_dirs: Path) -> None:
+    """A green probe exits 0 / ok:true and reports the verdict (no dead marker)."""
     with mock.patch(
         "hpc_agent.ops.preflight.check.check_preflight",
         return_value={"all_ok": True, "checks": []},
     ):
         env = _run_setup(isolated_dirs, cluster="hoffman2")
 
+    assert env["ok"] is True
     assert env["data"]["preflight"] == {"all_ok": True, "checks": []}
-    marker_path = Path(env["data"]["preflight_marker"])
-    assert marker_path.exists()
-    payload = json.loads(marker_path.read_text(encoding="utf-8"))
-    assert payload["all_ok"] is True
-    assert payload["cluster"] == "hoffman2"
-    assert "checked_at" in payload
+    # The 24h cache marker (and its nonexistent Step 6b consumer) were removed.
+    assert "preflight_marker" not in env["data"]
 
 
-def test_setup_with_cluster_red_skips_marker(isolated_dirs: Path) -> None:
-    """A failing probe surfaces failures and does NOT write the marker."""
+def test_setup_with_cluster_red_exits_cluster_error(isolated_dirs: Path) -> None:
+    """#F31 FIRE PATH: a failing probe exits cluster-error (2) with ok:false.
+
+    Before the fix ``setup --cluster`` emitted ok:true / exit 0 regardless of
+    ``preflight['all_ok']``, so a scripted bootstrap proceeded over a broken
+    env. Now the red probe drives the exit-error mapping — the guard that
+    previously could not fire.
+    """
     failures = {
         "all_ok": False,
         "checks": [{"name": "ssh_auth_sock", "ok": False, "detail": "unset"}],
@@ -88,43 +93,26 @@ def test_setup_with_cluster_red_skips_marker(isolated_dirs: Path) -> None:
         "hpc_agent.ops.preflight.check.check_preflight",
         return_value=failures,
     ):
-        env = _run_setup(isolated_dirs, cluster="hoffman2")
+        env = _run_setup(isolated_dirs, cluster="hoffman2", expect_rc=2)
 
-    assert env["data"]["preflight"] == failures
-    assert "preflight_marker" not in env["data"]
-    # The journal dir may or may not exist; the marker file itself must not.
-    from hpc_agent._kernel.contract.layout import JournalLayout
+    assert env["ok"] is False
+    assert env["error_code"] == "remote_command_failed"
+    assert env["category"] == "cluster"
+    # The failing checks ride in failure_features so the ok:false envelope is
+    # as inspectable as the ok:true one.
+    checks = env["failure_features"]["checks"]
+    assert {c["name"]: c["ok"] for c in checks} == {"ssh_auth_sock": False}
+    assert "ssh_auth_sock" in env["message"]
 
-    expected = JournalLayout(isolated_dirs).preflight_marker("hoffman2")
-    assert not expected.exists()
 
-
-def test_setup_with_cluster_dry_run_skips_marker(isolated_dirs: Path) -> None:
-    """``--dry-run`` reports the probe outcome but writes no marker."""
+def test_setup_with_cluster_dry_run_green_exits_ok(isolated_dirs: Path) -> None:
+    """``--dry-run`` reports the probe outcome; a green verdict exits 0."""
     with mock.patch(
         "hpc_agent.ops.preflight.check.check_preflight",
         return_value={"all_ok": True, "checks": []},
     ):
         env = _run_setup(isolated_dirs, cluster="hoffman2", dry_run=True)
 
+    assert env["ok"] is True
     assert env["data"]["preflight"]["all_ok"] is True
     assert "preflight_marker" not in env["data"]
-
-
-def test_setup_experiment_dir_scopes_marker(isolated_dirs: Path, tmp_path: Path) -> None:
-    """``--experiment-dir`` controls which journal receives the marker."""
-    other = tmp_path / "other_experiment"
-    other.mkdir()
-    with mock.patch(
-        "hpc_agent.ops.preflight.check.check_preflight",
-        return_value={"all_ok": True, "checks": []},
-    ):
-        env = _run_setup(isolated_dirs, cluster="hoffman2", experiment_dir=str(other))
-
-    marker_path = Path(env["data"]["preflight_marker"])
-    # Marker hash derives from *other*, not cwd.
-    from hpc_agent._kernel.contract.layout import JournalLayout
-
-    expected = JournalLayout(other).preflight_marker("hoffman2")
-    assert marker_path == expected
-    assert marker_path.exists()

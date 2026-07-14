@@ -2,7 +2,7 @@
 
 HPC orchestrator for array-batch experiments on SGE / SLURM / PBS (PBS Pro & TORQUE) clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. The four workflow triggers cover every end-user moment; entry-point onboarding, axis classification, and axes-init are folded into `/submit-hpc`'s escalation playbook (the worker escalates when it can't proceed; the playbook walks the user through the dialog and the agent invokes the relevant skill with a resolved spec). Environment preflight (SSH agent, cluster reachability) is a one-time-per-machine CLI step: `hpc-agent setup --cluster <name>` probes the cluster and writes a 24h cache marker `/submit-hpc`'s Step 6b gate reads — runtime workflows assume setup succeeded.
+- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. The four workflow triggers cover every end-user moment; entry-point onboarding, axis classification, and axes-init are folded into `/submit-hpc`'s escalation playbook (the worker escalates when it can't proceed; the playbook walks the user through the dialog and the agent invokes the relevant skill with a resolved spec). Environment preflight (SSH agent, cluster reachability) is a one-time-per-machine CLI step: `hpc-agent setup --cluster <name>` probes the cluster and exits non-zero on a red probe — runtime workflows assume setup succeeded.
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
 Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (the per-subject runners under `hpc_agent/ops/`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
@@ -14,15 +14,15 @@ Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markd
 ```bash
 pip install hpc-agent                              # or `pip install -e .` from a checkout
 hpc-agent setup                                    # copy commands + skills
-hpc-agent setup --cluster hoffman2                 # probe cluster + populate 24h preflight cache (run once per cluster)
+hpc-agent setup --cluster hoffman2                 # probe cluster (run once per cluster)
 ```
 `hpc-agent setup` (no flags) copies the bundled slash commands into
 `~/.claude/commands/` and the skills into `~/.claude/skills/` —
 idempotent. Re-run with `--cluster <name>` once per machine + cluster
 to probe SSH agent reachability, ssh/transport on PATH,
-`clusters.yaml` parseability, and TCP :22; on a green probe it writes
-a 24h cache marker that `/submit-hpc`'s Step 6b gate consults, so the
-first submit doesn't re-run the check. Pass `--dry-run` to preview.
+`clusters.yaml` parseability, and TCP :22; a red probe exits non-zero
+(cluster-error) so a scripted bootstrap sees the failure. Pass
+`--dry-run` to preview.
 Each preflight check's `detail` field carries actionable remediation
 prose, so a red probe tells you exactly what to fix. Every command
 (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`)
@@ -62,7 +62,7 @@ user-global `~/.claude/settings.json`:
 
 ```bash
 pip install hpc-agent
-hpc-agent setup --cluster hoffman2                        # one-time: install assets + probe cluster + write 24h cache marker
+hpc-agent setup --cluster hoffman2                        # one-time: install assets + probe cluster
 hpc-agent interview --spec intent.json --campaign-dir <d> # persist campaign intent next to tasks.py
 hpc-agent recall --root ~/experiments --task-kind <kind>  # query past interviews for next-interview grounding
 hpc-agent submit --spec spec.json                          # JSON envelope on stdout
@@ -92,8 +92,7 @@ spawn env dropping `SSH_AUTH_SOCK`. `hpc-agent
 status`/`aggregate`/`reconcile` fail fast with `error_code:
 "ssh_unreachable"` (exit 2) instead of hanging on auth — run
 `hpc-agent setup --cluster <name>` once on each machine to verify the
-spawn env and populate the 24h cache marker that `/submit-hpc`'s
-Step 6b gate reads. hpc-agent does not kill cluster jobs by design
+spawn env (a red probe exits non-zero). hpc-agent does not kill cluster jobs by design
 (the repo's `.claude/settings.json` denies `scancel`/`qdel`); if the integrator decides
 a run is bad, stop polling and let it expire.
 

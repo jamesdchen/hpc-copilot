@@ -65,6 +65,7 @@ __all__ = [
     "run_tick",
     "block_drive_once",
     "greenlight_targets_boundary",
+    "committed_greenlight_for_boundary",
     "main",
 ]
 
@@ -364,6 +365,14 @@ def _run_block_verb(
             "block verb %s exceeded its %.0fs driver deadline — child killed", verb, deadline
         )
         return {}, _TIMEOUT_EXIT_CODE
+    except OSError as exc:
+        # F14: a spawn failure (fork exhaustion, ENOMEM, EMFILE — the documented
+        # fork-exhaustion night) raised UNCAUGHT here bypassed ``on_first_failure``,
+        # so a cleared resume marker was never re-parked and the human's edit was
+        # silently downgraded to a journal-derived advance. Return an empty result +
+        # non-zero code exactly like a failed span so the re-park guard FIRES.
+        _log.warning("block verb %s could not spawn its capture subprocess (%s)", verb, exc)
+        return {}, 1
     finally:
         with contextlib.suppress(OSError):
             os.unlink(spec_path)
@@ -510,10 +519,12 @@ def run_tick(
             # :func:`plan_block_action` returns ``awaiting_decision`` (exit 0).
             cursor = pending.get("resume_cursor") or {}
             next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+            current_verb = cursor.get("current_verb") if isinstance(cursor, dict) else None
             committed_resolved = _boundary_scoped_committed_resolved(
                 experiment_dir,
                 scope_kind,
                 run_id,
+                block=current_verb if isinstance(current_verb, str) else None,
                 next_verb=next_verb,
                 awaiting_since=pending.get("awaiting_since"),
             )
@@ -535,6 +546,18 @@ def run_tick(
         last_run_inputs=last_run_inputs,
     )
     action = plan["action"]
+
+    # F12: a standing consent recorded AFTER the driver parked at a gated boundary must
+    # still auto-advance it. The awaiting_decision resume path never consulted the consent
+    # (only _chain's FRESH gated-successor site did), so a consent typed after the park was
+    # stranded — the night lost and the morning brief silent on why. Consult it HERE on the
+    # resume path, but only when the human is NOT mid-redraft: a same-boundary nudge
+    # journaled after the park (F13) means the human is engaging THIS boundary, so the
+    # standing consent must not steamroll the un-redrafted spec.
+    if action == "awaiting_decision" and not dry_run and pending and run_id:
+        f12 = _consume_parked_boundary_under_consent(experiment_dir, run_id, pending, workflow)
+        if f12 is not None:
+            return f12
 
     # Non-executing outcomes: report and exit 0. ``awaiting_decision`` carries the
     # parked brief so the caller can re-surface it.
@@ -880,9 +903,12 @@ def _consume_overnight(
     from hpc_agent.ops.overnight import consume_boundary_under_consent
     from hpc_agent.state.runs import read_run_sidecar
 
+    current_cmd_sha = ""
+    spent_walltime: float | None = None
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
         current_cmd_sha = str((sidecar or {}).get("cmd_sha") or "")
+        spent_walltime = _run_requested_walltime(sidecar)
     except Exception:  # noqa: BLE001 — a bad sidecar must not crash the tick; park instead
         current_cmd_sha = ""
     return consume_boundary_under_consent(
@@ -891,6 +917,125 @@ def _consume_overnight(
         scope_id=run_id,
         boundary_block=successor,
         current_cmd_sha=current_cmd_sha,
+        # F16: meter the walltime cap against the fallout THIS boundary authorizes —
+        # the main array's requested wall-seconds (walltime_sec × task_count) — passed
+        # explicitly so a consent whose walltime_cap is below the launch's cost REFUSES
+        # the auto-advance (the mandatory cap the ledger-fed meter, which nothing writes,
+        # could never fire). ``None`` when unavailable ⇒ the ledger auto-meter (0 today).
+        spent_walltime=spent_walltime,
+    )
+
+
+def _run_requested_walltime(sidecar: dict[str, Any] | None) -> float | None:
+    """The run's requested total wall-seconds (``walltime_sec`` × ``task_count``), or ``None``.
+
+    The cost the ``submit-s3`` main-array launch would burn — the fallout a standing
+    consent's ``walltime_cap`` exists to bound (F16). Reads the sidecar's
+    ``resources.walltime_sec`` (an int) and ``task_count``; ``None`` when either is
+    absent/non-numeric so the caller falls back to the ledger auto-meter rather than
+    fabricating a cost.
+    """
+    if not isinstance(sidecar, dict):
+        return None
+    resources = sidecar.get("resources")
+    walltime = resources.get("walltime_sec") if isinstance(resources, dict) else None
+    if not (isinstance(walltime, (int, float)) and not isinstance(walltime, bool) and walltime > 0):
+        return None
+    try:
+        tasks = int(sidecar.get("task_count") or 0)
+    except (TypeError, ValueError):
+        tasks = 0
+    return float(walltime) * max(tasks, 1)
+
+
+def _consume_parked_boundary_under_consent(
+    experiment_dir: Path,
+    run_id: str,
+    pending: dict[str, Any],
+    workflow: str | None,
+) -> tuple[BlockDriveResult, int] | None:
+    """Auto-advance a PARKED gated boundary under a standing consent, or ``None`` (F12).
+
+    The resume-path counterpart of ``_chain``'s fresh gated-successor consult: when the
+    tick is awaiting a human at a gated boundary and a live standing consent covers it, the
+    consent (typically recorded AFTER the driver parked — a natural "I see it's awaiting a
+    decision; run it overnight" flow) auto-advances it instead of losing the night. Returns
+    the advanced ``_chain`` result, or ``None`` to fall through to the normal awaiting stop
+    when: the marker's successor is not gated; the human is mid-redraft (a same-boundary
+    nudge journaled at/after the park — the consent must not steamroll it); there is no run
+    to key on; or no live consent covers the boundary.
+
+    Transactional (F14 posture): the marker is cleared BEFORE the resumed span and re-parked
+    verbatim if the first span fails, so a crash/OSError leg does not lose the parked state.
+    """
+    cursor = pending.get("resume_cursor") or {}
+    if not isinstance(cursor, dict):
+        return None
+    gated_next = cursor.get("next_verb")
+    parked_block = cursor.get("current_verb")
+    if not (isinstance(gated_next, str) and gated_next and block_chain.is_gated(gated_next)):
+        return None
+    scope_kind = "campaign" if (pending.get("workflow") or workflow) == "campaign" else "run"
+    if _boundary_has_post_park_nudge(
+        experiment_dir,
+        scope_kind,
+        run_id,
+        block=parked_block if isinstance(parked_block, str) else None,
+        awaiting_since=pending.get("awaiting_since"),
+    ):
+        return None  # the human is redrafting this boundary — do not steamroll (F13)
+    overnight = _consume_overnight(experiment_dir, run_id, gated_next)
+    if overnight is None or not overnight.consumed:
+        return None
+    _log.info(
+        "overnight consent for %s consumed the parked %s greenlight on the resume path "
+        "— auto-advancing (F12)",
+        run_id,
+        gated_next,
+    )
+    clear_pending_decision(run_id, experiment_dir=experiment_dir)
+    marker = dict(pending)
+
+    def _repark() -> None:
+        _repark_marker(experiment_dir, run_id, marker)
+
+    hint = cursor.get("next_spec_hint")
+    return _chain(
+        experiment_dir,
+        run_id=run_id,
+        workflow=(pending.get("workflow") or workflow),
+        first_verb=gated_next,
+        first_spec=dict(hint) if isinstance(hint, dict) else {},
+        first_label="advanced",
+        on_first_failure=_repark,
+    )
+
+
+def _boundary_has_post_park_nudge(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    block: str | None,
+    awaiting_since: str | None,
+) -> bool:
+    """True when a same-boundary nudge was journaled at/after the park (F12/F13).
+
+    The "the human is mid-redraft" signal the F12 resume-path consent consult must respect:
+    a non-greenlight decision on the parked block, journaled ``ts >= awaiting_since``
+    (:func:`_same_boundary_nudge`). Fail-safe: an unreadable scope reads False (no nudge
+    seen), so a journal surprise never blocks a legitimate auto-advance.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    if not scope_id:
+        return False
+    try:
+        records = read_decisions(experiment_dir, scope_kind, scope_id)
+    except Exception:  # noqa: BLE001 — a bad scope must not crash the tick
+        return False
+    return any(
+        _same_boundary_nudge(rec, block=block, awaiting_since=awaiting_since) for rec in records
     )
 
 
@@ -1072,23 +1217,92 @@ def greenlight_targets_boundary(
     return not consumed_before_park
 
 
+def _same_boundary_nudge(
+    record: dict[str, Any], *, block: str | None, awaiting_since: str | None
+) -> bool:
+    """True when *record* is a non-greenlight decision on THIS parked boundary (F13).
+
+    A nudge (``response != "y"``) whose ``block`` names the parked block and whose ``ts``
+    is AT OR AFTER the marker's ``awaiting_since`` is the human still redrafting THIS
+    boundary — journaled after the park, it SUPERSEDES any earlier greenlight for the
+    same boundary (the driver must not launch the retracted spec; the Stop guard must not
+    fire on it). An UNRELATED later record — a different block's touchpoint, an
+    overnight-consent, a sign-off — has a different ``block`` and is skipped, so it neither
+    silences the guard nor blocks the driver (the "y then an unrelated later record" half of
+    the disagreement).
+
+    Keys on the record's ``block`` field (a nudge carries no ``next_block`` target) plus the
+    ``ts >= awaiting_since`` anchor. A missing/unparseable stamp is NOT treated as
+    superseding (fail toward the pre-fix behaviour rather than over-refusing a live
+    greenlight), mirroring :func:`greenlight_targets_boundary`'s timestamp leg.
+    """
+    if str(record.get("response") or "") == "y":
+        return False
+    if not block or str(record.get("block") or "") != block:
+        return False
+    parked_at = parse_iso_utc_or_none(awaiting_since)
+    ts = record.get("ts")
+    recorded_at = parse_iso_utc_or_none(ts if isinstance(ts, str) else None)
+    if parked_at is None or recorded_at is None:
+        return False
+    return recorded_at >= parked_at
+
+
+def committed_greenlight_for_boundary(
+    records: list[dict[str, Any]],
+    *,
+    block: str | None,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> dict[str, Any] | None:
+    """The ``resolved`` of the greenlight answering THIS parked boundary, or ``None`` (F13).
+
+    THE single scan the driver (:func:`_boundary_scoped_committed_resolved`) and the
+    ``block-drive`` Stop guard
+    (:func:`hpc_agent._kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced`)
+    both share, so the two surfaces apply ONE rule to the SAME record set and cannot drift
+    (the docstring's "cannot drift" claim was false — they applied the shared predicate to
+    DIFFERENT record sets: the driver scanned newest-first skipping a trailing nudge, the
+    guard tested only ``records[-1]``). Scans *records* newest-first and stops at the FIRST
+    record that CONCERNS this boundary:
+
+    * a greenlight that TARGETS it (:func:`greenlight_targets_boundary`) → return its
+      ``resolved`` (the driver advances / the guard forces continue);
+    * a SAME-BOUNDARY nudge journaled at/after the park (:func:`_same_boundary_nudge`) → the
+      human retracted / is mid-redraft → return ``None`` (the driver stays awaiting; the
+      guard stays silent). This closes BOTH directions of the disagreement: the driver
+      consuming a retracted ``y`` behind a trailing nudge, and the guard stalling a genuine
+      ``y`` behind an unrelated later record.
+
+    Unrelated records (a different block, a later overnight-consent / sign-off) are skipped.
+    ``None`` when nothing concerns the boundary yet — still awaiting the human.
+    """
+    for record in reversed(records):
+        if greenlight_targets_boundary(record, next_verb=next_verb, awaiting_since=awaiting_since):
+            resolved = record.get("resolved")
+            return dict(resolved) if isinstance(resolved, dict) else {}
+        if _same_boundary_nudge(record, block=block, awaiting_since=awaiting_since):
+            return None
+    return None
+
+
 def _boundary_scoped_committed_resolved(
     experiment_dir: Path,
     scope_kind: str,
     scope_id: str,
     *,
+    block: str | None,
     next_verb: str | None,
     awaiting_since: str | None,
 ) -> dict[str, Any] | None:
     """The ``resolved`` of the latest greenlight that TARGETS the parked boundary.
 
     The boundary-scoped counterpart of :func:`_latest_committed_resolved`, used on
-    the RESUME path (a pending marker exists). Scans the decision journal
-    newest-first — exactly as ``block_gate.assert_greenlit_target`` does — and
-    returns the ``resolved`` of the first record for which
-    :func:`greenlight_targets_boundary` holds, else ``None``. ``None`` means no
-    committed greenlight answers THIS boundary yet: the tick is still awaiting the
-    human (a valid parked stop, exit 0), never a spurious advance/rerun.
+    the RESUME path (a pending marker exists). Reads the decision journal and delegates
+    to the shared :func:`committed_greenlight_for_boundary` scan (F13 — the ONE predicate
+    the driver and Stop guard both key on). ``None`` means no committed greenlight answers
+    THIS boundary yet (or a same-boundary nudge superseded an earlier one): the tick is
+    still awaiting the human (a valid parked stop, exit 0), never a spurious advance/rerun.
     """
     from hpc_agent.state.decision_journal import read_decisions
 
@@ -1098,11 +1312,9 @@ def _boundary_scoped_committed_resolved(
         records = read_decisions(experiment_dir, scope_kind, scope_id)
     except Exception:  # noqa: BLE001 — a bad scope must not crash the tick
         return None
-    for record in reversed(records):
-        if greenlight_targets_boundary(record, next_verb=next_verb, awaiting_since=awaiting_since):
-            resolved = record.get("resolved")
-            return dict(resolved) if isinstance(resolved, dict) else {}
-    return None
+    return committed_greenlight_for_boundary(
+        records, block=block, next_verb=next_verb, awaiting_since=awaiting_since
+    )
 
 
 def block_drive_once(

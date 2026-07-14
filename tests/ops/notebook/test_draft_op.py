@@ -186,6 +186,11 @@ def test_sole_actor_census_nulled_byte_identical(
     # draft record holds the same zero/one-actor byte-identity floor as every
     # decision record — attestor_id stays None, and the journaled bytes are
     # IDENTICAL whether or not HPC_ACTOR is exported.
+    # Freeze the record clock: this assertion is about actor byte-identity, and
+    # record_draft stamps ``created_at`` via utcnow_iso() on each run — without
+    # the freeze the two runs flake apart whenever they straddle a wall-clock
+    # second boundary (observed on the slow Windows CI runner).
+    monkeypatch.setattr("hpc_agent.infra.time.utcnow_iso", lambda: "2026-07-12T00:00:00+00:00")
     _write(tmp_path)
     _write_interview(tmp_path, ["alice"])
     monkeypatch.setenv("HPC_ACTOR", "alice")

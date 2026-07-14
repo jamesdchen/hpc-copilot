@@ -115,7 +115,7 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
     run we cannot read is treated as not-pending.
     """
     from hpc_agent import errors
-    from hpc_agent._kernel.lifecycle.block_drive import greenlight_targets_boundary
+    from hpc_agent._kernel.lifecycle.block_drive import committed_greenlight_for_boundary
     from hpc_agent.state.decision_journal import read_decisions
     from hpc_agent.state.index import find_in_flight_runs
     from hpc_agent.state.journal import read_pending_decision
@@ -137,21 +137,27 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
             continue
         if not decisions:
             continue
-        # BOUNDARY-SCOPED (bug-sweep #23 / run-12 finding 21): fire only when the
-        # latest committed decision is a greenlight that actually TARGETS this
-        # parked boundary — mirroring the driver + ``ops/block_gate.py`` via the
-        # ONE shared predicate ``block_drive.greenlight_targets_boundary``. A prior
-        # boundary's already-consumed ``y`` (its ``resolved`` names an earlier
-        # verb) or a same-boundary re-park's stale ``y`` (older than the marker's
-        # ``awaiting_since``) is NOT this decision: the run is still legitimately
-        # waiting for the human, so stay silent rather than force a tick into a
-        # void (§5). A trailing nudge is likewise still-waiting (not a greenlight).
+        # BOUNDARY-SCOPED (bug-sweep #23 / run-12 finding 21 / F13): fire only when the
+        # greenlight that actually TARGETS this parked boundary is the newest decision
+        # CONCERNING it — via the ONE shared scan ``block_drive.committed_greenlight_for_boundary``
+        # the driver also keys on (previously the guard tested only ``decisions[-1]`` while
+        # the driver scanned newest-first, so the two drifted). The scan scans newest-first
+        # and stops at the first SAME-BOUNDARY record: a targeting ``y`` fires; a same-boundary
+        # nudge journaled at/after the park is the human redrafting → silent; a prior
+        # boundary's already-consumed ``y`` / a stale re-park ``y`` / an UNRELATED later record
+        # (an overnight-consent, a sign-off, another block's touchpoint) is skipped, so it
+        # neither fires the guard nor — the F13 fix — silences a genuine ``y`` behind it.
         cursor = marker.get("resume_cursor") or {}
         next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
-        if not greenlight_targets_boundary(
-            decisions[-1],
-            next_verb=next_verb,
-            awaiting_since=marker.get("awaiting_since"),
+        marker_block = marker.get("block")
+        if (
+            committed_greenlight_for_boundary(
+                decisions,
+                block=marker_block if isinstance(marker_block, str) else None,
+                next_verb=next_verb,
+                awaiting_since=marker.get("awaiting_since"),
+            )
+            is None
         ):
             continue
         return {

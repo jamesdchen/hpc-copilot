@@ -288,9 +288,41 @@ def test_doctor_parked_with_only_nudge_stays_awaiting_human(tmp_path: Path) -> N
     assert out["stalled_count"] == 0
 
 
+def test_doctor_y_then_unrelated_later_record_surfaces_as_awaiting_advance(
+    tmp_path: Path,
+) -> None:
+    """F13 direction (b): a committed `y` followed by an UNRELATED later record (a different
+    block — an overnight-consent) must still surface as awaiting_advance. Previously the
+    doctor keyed on ``latest_decision`` only, so the trailing consent hid the genuine `y`
+    and the out-of-session backstop stalled it — and disagreed with the now-fixed Stop guard."""
+    now = "2026-07-03T01:00:00+00:00"
+    upsert_run(tmp_path, _record("decided-then-consent"))
+    stamp_tick(
+        "decided-then-consent",
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park(tmp_path, "decided-then-consent")
+    _commit_y(tmp_path, "decided-then-consent")
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="decided-then-consent",
+        block="overnight-consent",  # a DIFFERENT block — unrelated to the parked boundary
+        response="let it run overnight",
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["awaiting_advance_count"] == 1
+    assert out["awaiting_advance"][0]["run_id"] == "decided-then-consent"
+    assert out["parked_count"] == 0
+
+
 def test_doctor_y_then_nudge_latest_wins_stays_parked(tmp_path: Path) -> None:
-    """A `y` followed by a later nudge → latest is the nudge → still awaiting the
-    human (matches the Stop guard, which keys on the LATEST decision)."""
+    """A `y` followed by a later SAME-boundary nudge → the nudge supersedes the `y` → still
+    awaiting the human (F13: matches the Stop guard + driver via the shared boundary scan)."""
     now = "2026-07-03T01:00:00+00:00"
     upsert_run(tmp_path, _record("reopened"))
     stamp_tick(

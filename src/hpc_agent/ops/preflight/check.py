@@ -11,11 +11,6 @@ File transfer is satisfied by ``rsync`` *or* the ``scp``+``tar`` pair
 -r`` pull pipeline when rsync is absent — typically Windows hosts
 without WSL/MSYS rsync), so a missing ``rsync`` alone does not fail
 preflight.
-
-Also exposes :func:`write_preflight_marker`, the one-line helper that
-writes the per-cluster 24h cache marker consumed by ``/submit-hpc``'s
-Step 6b gate. Called by ``hpc-agent setup --cluster <name>`` after a
-green probe; the gate skips its re-check while the marker is fresh.
 """
 
 from __future__ import annotations
@@ -25,15 +20,17 @@ import os
 import shutil
 import socket
 import subprocess
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends import backend_requires_ssh
-from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.clusters import (
+    load_clusters_config,
+    near_miss_cluster_keys,
+    validate_clusters_config,
+)
 from hpc_agent.infra.runtime_preflight import runtime_uv_preflight
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
 from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binary
@@ -42,6 +39,43 @@ from hpc_agent.ops.preflight import probe_cache
 
 def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     return {"name": name, "ok": ok, "detail": detail}
+
+
+def _preflight_exit_error(result: Any) -> errors.HpcError | None:
+    """Map an ``all_ok=False`` preflight verdict to the CLI cluster-error envelope.
+
+    :func:`check_preflight` RETURNS its verdict rather than raising so the
+    in-process callers — ``setup``, ``submit_preflight`` — can read every check;
+    but the CLI adapter must still exit non-zero and emit an ``ok:false``
+    envelope over a broken environment. Before this, ``check-preflight``'s
+    ``CliShape`` had no exit mapping and ``dispatch_primitive`` wrapped any return
+    in ``_ok``/``EXIT_OK``, so ``hpc-agent preflight`` exited 0/ok:true with every
+    check failing and ``submit_preflight`` (which reads ``envelope.ok``) reported
+    ``overall='pass'`` — a green preflight over a broken env in the S1 brief.
+
+    Returns ``None`` on a green verdict (the normal ok envelope), else a
+    cluster-category :class:`errors.HpcError` (→ ``EXIT_CLUSTER_ERROR``) naming
+    the failing checks. The full ``checks`` list rides in ``failure_features`` so
+    the ``ok:false`` shape still carries the diagnostic detail a degraded-but-
+    inspectable environment needs. ``remote_command_failed`` is reused as the
+    coarse cluster-class code (the envelope error_code enum is a frozen contract;
+    adding a code is a breaking change) with ``retry_safe=False`` — a preflight
+    failure is fixed, not blindly retried.
+    """
+    if not isinstance(result, dict) or result.get("all_ok", True):
+        return None
+    checks = result.get("checks") or []
+    failing = [c for c in checks if isinstance(c, dict) and not c.get("ok", True)]
+    names = ", ".join(str(c.get("name")) for c in failing) or "one or more checks"
+    detail = "; ".join(f"{c.get('name')}: {c.get('detail')}" for c in failing)
+    err = errors.RemoteCommandFailed(
+        f"preflight failed: {len(failing)} check(s) did not pass ({names})",
+        remediation=f"Fix each failing check and re-run `hpc-agent preflight`: {detail}",
+    )
+    # Carry the full checks list so the ok:false envelope stays as inspectable as
+    # the ok:true one (``_err_from_hpc`` reads this attribute verbatim).
+    err.failure_features = {"error_class": "preflight_failed", "checks": checks}  # type: ignore[attr-defined]
+    return err
 
 
 def _probe_cache_key(host: str, spec: dict[str, Any] | None) -> str:
@@ -280,6 +314,11 @@ def _cluster_combined_probe(ssh_target: str, spec: dict[str, Any]) -> list[dict[
         # ssh-touching-primitives contract test (#WS4) does not flag the
         # ssh_run call added for the cluster_ssh_echo functional probe.
         requires_ssh=True,
+        # ``all_ok=False`` → cluster-error exit + ok:false envelope. The
+        # primitive RETURNS its verdict (in-process callers read it); this hook
+        # is where the CLI honours the documented "maps all_ok=False to the
+        # cluster-error exit code" contract instead of a blanket EXIT_OK.
+        result_error=_preflight_exit_error,
     ),
     agent_facing=True,
 )
@@ -312,7 +351,10 @@ def check_preflight(
     ``remote.SSH_TIMEOUT_SEC``) on an unreachable host).
 
     Returns ``{"all_ok": bool, "checks": list[dict]}``. The CLI adapter
-    maps ``all_ok=False`` to the cluster-error exit code.
+    (:func:`_preflight_exit_error` on the ``CliShape``) maps ``all_ok=False``
+    to the cluster-error exit code and an ``ok:false`` envelope (the checks
+    ride in ``failure_features``); a green verdict is the ordinary ``ok:true``
+    envelope carrying the ``data`` block.
     """
     checks: list[dict[str, Any]] = []
 
@@ -421,6 +463,37 @@ def check_preflight(
         clusters = {}
         checks.append(_check("clusters_yaml_parses", False, str(exc)))
 
+    # Clusters config schema-valid (#F32). Parsing proves the YAML loads, not
+    # that its keys/types are right: ``validate_clusters_config`` — the "opt-in
+    # strong contract" — had ZERO callers, and ``ClusterConfig`` uses
+    # ``extra='ignore'``, so a misspelled key (``conda_env`` for ``conda_envs``)
+    # silently disabled its feature and a wrong-typed value only exploded hours
+    # later mid-submit (rc 127 cluster-side, no pointer to clusters.yaml). Run
+    # the validator here, right after the parse check, and additionally name
+    # near-miss keys (difflib against the allowlist) so a probable typo points at
+    # the config instead of a doomed array. Runs whether or not ``--cluster`` is
+    # given — a typo anywhere is worth surfacing at preflight.
+    if clusters:
+        problems: list[str] = []
+        try:
+            validate_clusters_config(clusters)
+        except errors.ConfigInvalid as exc:
+            problems.append(str(exc))
+        for entry_name, entry in clusters.items():
+            if not isinstance(entry, dict):
+                continue
+            for bad_key, suggestions in near_miss_cluster_keys(entry).items():
+                problems.append(
+                    f"{entry_name!r}: unknown key {bad_key!r} — did you mean "
+                    f"{' / '.join(suggestions)}? (silently ignored, so its feature is off)"
+                )
+        if problems:
+            checks.append(_check("cluster_config_valid", False, "; ".join(problems)))
+        else:
+            checks.append(
+                _check("cluster_config_valid", True, f"{len(clusters)} cluster entr(y/ies) valid")
+            )
+
     # Runtime-binary probe (#275) — DEFERRED so it can ride the same ssh
     # round-trip as cluster_ssh_echo. When a built submit-flow spec asks for
     # ``runtime=uv``, the probe verifies ``uv`` is on PATH after the cluster env
@@ -449,6 +522,22 @@ def check_preflight(
                     False,
                     f"{cluster!r} not in clusters.yaml — run `hpc-agent clusters list` "
                     "and pick from the available names",
+                )
+            )
+        # An empty entry (``mycluster:`` with no body) parses as ``None`` (#F33).
+        # Before this guard, ``clusters[cluster].get('scheduler')`` on the next
+        # branch raised ``AttributeError`` → an ``internal`` envelope (exit 3)
+        # naming neither clusters.yaml nor the cluster — and since
+        # ``SshUnreachable``'s remediation says "run hpc-agent preflight to
+        # diagnose", the diagnostic tool crashing made the remediation circular.
+        # Report a failed ``cluster_known`` and skip the transport block instead.
+        elif not isinstance(clusters[cluster], dict):
+            checks.append(
+                _check(
+                    "cluster_known",
+                    False,
+                    f"{cluster!r} entry in clusters.yaml is empty / not a mapping — "
+                    "fill in its scheduler/host/user (see `hpc-agent clusters describe`)",
                 )
             )
         # A pure-API backend (``requires_ssh=False``) has no login node, so the
@@ -557,8 +646,10 @@ def check_preflight(
         # carrying <your_user> / <your_scratch> / <your_env> would pass
         # the TCP probe but fail every task at submit time. Purely local
         # (no SSH), so it runs for pure-API backends too — a placeholder
-        # config fails their submits just the same.
-        if cluster in clusters:
+        # config fails their submits just the same. The ``isinstance`` guard
+        # repeats the #F33 None-entry check used above — ``_placeholder_fields``
+        # calls ``.items()`` and would raise on a ``None`` entry.
+        if cluster in clusters and isinstance(clusters[cluster], dict):
             placeholders = _placeholder_fields(clusters[cluster])
             if placeholders:
                 checks.append(
@@ -585,34 +676,3 @@ def check_preflight(
 
     all_ok = all(c["ok"] for c in checks)
     return {"all_ok": all_ok, "checks": checks}
-
-
-def write_preflight_marker(*, cluster: str, experiment_dir: Path | None = None) -> Path:
-    """Write the per-cluster preflight cache marker; return its path.
-
-    Populates the 24h cache that ``/submit-hpc``'s Step 6b gate reads
-    so the first submit in an experiment doesn't re-run the SSH probe.
-    Called by ``hpc-agent setup --cluster <name>`` after a green
-    :func:`check_preflight` on the same cluster.
-
-    The marker is scoped to *experiment_dir* (default: ``Path.cwd()``)
-    because the gate reads from ``JournalLayout(experiment_dir)`` —
-    the marker must land in the same per-repo journal the gate
-    consults. Setup is therefore typically run from inside the
-    experiment directory.
-    """
-    from hpc_agent._kernel.contract.layout import JournalLayout
-    from hpc_agent.infra.io import atomic_write_json
-
-    layout = JournalLayout(experiment_dir or Path.cwd())
-    marker = layout.preflight_marker(cluster)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(
-        marker,
-        {
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "all_ok": True,
-            "cluster": cluster,
-        },
-    )
-    return marker

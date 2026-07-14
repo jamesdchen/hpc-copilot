@@ -217,9 +217,15 @@ class TestDeployRuntime:
             captured["remote_path"] = remote_path
             captured["dst_rels"] = [it.dst_rel for it in items]
 
+        def _capture_manifest(*, ssh_target, remote_path, content):
+            captured["manifest_written"] = content
+
         with (
             patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
             patch("hpc_agent.infra.transport._deploy_transfer", side_effect=_capture),
+            patch(
+                "hpc_agent.infra.transport._write_deploy_manifest", side_effect=_capture_manifest
+            ),
         ):
             mock_ssh.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
@@ -244,10 +250,11 @@ class TestDeployRuntime:
         assert "rm -f" in mkdir_argv[-1]
         assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
-        # One batched transfer to the project root carrying every file plus the
-        # cache-manifest write. No scheduler arg → sge + slurm cpu/gpu/mpi
+        # One batched transfer to the project root carrying every file. The
+        # cache manifest does NOT ride it (#F53) — it is written in a separate
+        # post-transfer leg. No scheduler arg → sge + slurm cpu/gpu/mpi
         # templates. Twelve base files + the 7-module status-reporter eager
-        # closure (#349) + manifest = 20 dst_rels.
+        # closure (#349) = 19 dst_rels (no manifest item).
         assert captured["ssh_target"] == "u@c"
         assert captured["remote_path"] == "/p"
         rels = set(captured["dst_rels"])
@@ -276,9 +283,12 @@ class TestDeployRuntime:
         assert "hpc_agent/errors.py" in rels
         assert "hpc_agent/infra/time.py" in rels
         assert "hpc_agent/execution/mapreduce/_guard.py" in rels
-        # Cache manifest write (#242), riding the same transfer.
-        assert ".hpc/.deploy_state.json" in rels
-        assert len(rels) == 20, sorted(rels)
+        # Cache manifest (#242) NEVER rides the file transfer (#F53): it is
+        # written in the separate post-transfer leg, not a transfer item.
+        assert ".hpc/.deploy_state.json" not in rels
+        assert len(rels) == 19, sorted(rels)
+        # ... and the separate manifest-write leg DID fire (first deploy).
+        assert "manifest_written" in captured
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +739,117 @@ class TestSshBackoff:
             with pytest.raises(TimeoutError):
                 remote.ssh_run("ls", ssh_target="u@c")
         assert mock_run.call_count == 5  # 1 initial + 4 retries
+
+    def test_non_idempotent_timeout_is_not_retried(self, monkeypatch):
+        """F54 fire-path: a client-side TimeoutError on a NON-idempotent submit
+        leg must surface immediately — the remote qsub runs under a server-side
+        deadline that outlives the client by REMOTE_DEADLINE_MARGIN_SEC, so it may
+        already have submitted the array; a retry would duplicate it. Even with
+        the breaker overridden (so retries WOULD otherwise run), exactly one
+        attempt is made."""
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with pytest.raises(TimeoutError):
+                remote.ssh_run("qsub job.sh", ssh_target="u@c", idempotent=False)
+        assert mock_run.call_count == 1  # NO retry — the duplicate-submit door is closed
+
+    def test_non_idempotent_still_retries_a_throttle_reject(self, monkeypatch):
+        """F54: an sshd rate-limit rejects the connection BEFORE the command
+        dispatches, so re-trying it can never double-run — throttle retry is
+        preserved even for a non-idempotent command."""
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
+        throttle_cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
+        ok_cp = _cp(stdout="JOB1\n", returncode=0)
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = [throttle_cp, ok_cp]
+            r = remote.ssh_run("qsub job.sh", ssh_target="u@c", idempotent=False)
+        assert r.returncode == 0
+        assert mock_run.call_count == 2
+
+    def test_non_idempotent_remote_scope_disables_timeout_retry(self, monkeypatch):
+        """F54: the ambient non_idempotent_remote() scope reaches ssh_run without
+        threading the keyword — the submit leg's seam. A client timeout inside it
+        is not retried."""
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with remote.non_idempotent_remote(), pytest.raises(TimeoutError):
+                remote.ssh_run("qsub job.sh", ssh_target="u@c")
+        assert mock_run.call_count == 1
+
+    def test_explicit_idempotent_kwarg_overrides_scope(self, monkeypatch):
+        """An explicit idempotent=True wins over an enclosing non_idempotent_remote
+        scope, so a nested idempotent probe still gets its retries."""
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with remote.non_idempotent_remote(), pytest.raises(TimeoutError):
+                remote.ssh_run("qstat", ssh_target="u@c", idempotent=True)
+        assert mock_run.call_count == 5  # retried despite the ambient non-idempotent scope
+
+
+class TestEngineSeamIdempotence:
+    """F55: the engine's ``except EngineUnavailable: pass`` one-shot fall-through
+    is a SECOND re-execution door (besides the backoff timeout-retry). A command
+    the engine already DISPATCHED must not be re-run one-shot when it is
+    non-idempotent — that duplicates a qsub the remote may still be executing."""
+
+    def _engine_raises(self, monkeypatch, exc):
+        from hpc_agent.infra import ssh_engine
+
+        monkeypatch.setattr(ssh_engine, "engine_enabled", lambda: True)
+
+        def _raise(*_a, **_k):
+            raise exc
+
+        monkeypatch.setattr(ssh_engine, "engine_ssh_run", _raise)
+
+    def test_non_idempotent_dispatched_failure_is_not_reexecuted(self, monkeypatch):
+        """Fire-path: engine on, a POST-dispatch failure for a non-idempotent
+        command surfaces (TimeoutError) instead of falling through to the one-shot
+        path — the one-shot subprocess is never invoked."""
+        from hpc_agent.infra import ssh_engine
+
+        self._engine_raises(
+            monkeypatch, ssh_engine.EngineUnavailable("torn mid-run", dispatched=True)
+        )
+        with (
+            patch("hpc_agent.infra.remote._capture_via_select") as one_shot,
+            pytest.raises(TimeoutError),
+        ):
+            remote.ssh_run("qsub job.sh", ssh_target="u@c", idempotent=False)
+        one_shot.assert_not_called()  # the one-shot re-execution door is closed
+
+    def test_idempotent_dispatched_failure_still_falls_through(self, monkeypatch):
+        """Back-compat: an idempotent read surface keeps the 'engine can never be
+        worse than off' contract — a dispatched failure falls through to one-shot
+        and degrades normally."""
+        from hpc_agent.infra import ssh_engine
+
+        self._engine_raises(
+            monkeypatch, ssh_engine.EngineUnavailable("torn mid-run", dispatched=True)
+        )
+        with patch("hpc_agent.infra.remote._capture_via_select") as one_shot:
+            one_shot.return_value = _cp(stdout="ok\n", returncode=0)
+            r = remote.ssh_run("qstat", ssh_target="u@c")  # idempotent default
+        assert r.returncode == 0
+        one_shot.assert_called_once()
+
+    def test_non_idempotent_predispatch_failure_falls_through(self, monkeypatch):
+        """A PRE-dispatch engine failure (breaker refused / failed connect) never
+        ran the command, so even a non-idempotent command safely falls back."""
+        from hpc_agent.infra import ssh_engine
+
+        self._engine_raises(
+            monkeypatch,
+            ssh_engine.EngineUnavailable("connect refused"),  # dispatched=False
+        )
+        with patch("hpc_agent.infra.remote._capture_via_select") as one_shot:
+            one_shot.return_value = _cp(stdout="JOB1\n", returncode=0)
+            r = remote.ssh_run("qsub job.sh", ssh_target="u@c", idempotent=False)
+        assert r.returncode == 0
+        one_shot.assert_called_once()
 
 
 # Module-level (NOT under TestSshBackoff, whose autouse fixture zeroes the

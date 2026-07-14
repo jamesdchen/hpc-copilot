@@ -125,10 +125,14 @@ def test_no_scheduler_cancel_or_submit_tool_ever() -> None:
 
 
 def test_forbidden_tool_call_is_invalid_params() -> None:
-    # submit-flow exists but is gated off by default; calling it is a contract
-    # error (-32602), not a silent success.
+    # submit-s1 exists but is a mutating (workflow) verb gated off by default;
+    # calling it without --allow-mutations is a contract error (-32602), not a
+    # silent success. (submit-flow, the former example here, is now refused
+    # OUTRIGHT by the blocking-verb fence regardless of the flag — see
+    # test_mcp_refuses_blocking_no_detach_workflow — so it no longer exercises
+    # the mutation gate.)
     resp = _server().handle(
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "submit-flow"}}
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "submit-s1"}}
     )
     assert resp["error"]["code"] == -32602
     assert "allow-mutations" in resp["error"]["message"]
@@ -567,3 +571,147 @@ def test_subprocess_cli_runner_deadline_fires(monkeypatch) -> None:
     assert "deadline" in err
     assert "find" in err
     assert elapsed < 30, "child was awaited, not killed"
+
+
+# ─── F01: blocking WORKFLOW verbs with no detach field refused outright ───────
+
+
+@pytest.mark.parametrize(
+    ("verb", "alt_hint"),
+    [
+        ("monitor-flow", "status-snapshot"),
+        ("verify-canary", "submit-s2"),
+        ("submit-flow", "submit-s1"),
+    ],
+)
+def test_mcp_refuses_blocking_no_detach_workflow(verb: str, alt_hint: str) -> None:
+    """``monitor-flow`` / ``verify-canary`` / ``submit-flow`` are poll-to-terminal
+    workflows with NO ``detach`` field in their ``extra='forbid'`` specs, so —
+    unlike ``submit-s2`` / ``status-watch`` — no ``{"detach": true}`` remedy
+    exists. Over the synchronous server they wedge the line for up to 24h
+    (proving-run-3 head-of-line class). Refused OUTRIGHT at the seam, each naming
+    its MCP-safe alternative, and NEVER reaching the runner — the fire path for
+    the extended fence."""
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, catalog="full", runner=runner)
+    resp = _call(server, verb, {"spec": {"run_id": "r1"}})
+    assert "error" in resp
+    msg = resp["error"]["message"]
+    assert "detach=true" in msg and "wedges" in msg
+    assert alt_hint in msg
+    assert not runner.calls, "refused blocking workflow must not reach the runner"
+
+
+def test_mcp_refuses_monitor_flow_via_tiered_run_primitive() -> None:
+    """The tiered catalog routes through ``run-primitive``; the outright refusal
+    fires on the INNER name, so the blocking workflow is wedge-proof there too."""
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, catalog="tiered", runner=runner)
+    resp = _call(
+        server,
+        "run-primitive",
+        {"name": "monitor-flow", "arguments": {"spec": {}}},
+    )
+    assert "error" in resp
+    assert "status-snapshot" in resp["error"]["message"]
+    assert not runner.calls, "refused blocking workflow must not reach the runner"
+
+
+# ─── F01: the DEFAULT in-process runner is now deadline-bounded too ───────────
+
+
+def test_in_process_runner_deadline_interrupts_wedged_call(monkeypatch) -> None:
+    """The default ``_in_process_cli_runner`` now enforces the same server-level
+    ceiling the subprocess runner does — via a SIGALRM backstop that raises IN
+    the wedged call (no leaked thread, no corrupted JSON-RPC stdout, no per-call
+    subprocess latency). Fire path: a synthetic dispatch that sleeps past an
+    injected sub-second deadline is INTERRUPTED and mapped to exit 124, not
+    awaited."""
+    import time
+
+    import hpc_agent.cli.dispatch as _dispatch
+
+    if not hasattr(M.signal, "setitimer"):  # pragma: no cover - POSIX-only backstop
+        pytest.skip("setitimer/SIGALRM unavailable on this platform")
+
+    monkeypatch.setattr(M, "_SUBPROCESS_RUNNER_TIMEOUT_SEC", 0.1)
+
+    def _slow_main(argv: list[str]) -> int:
+        time.sleep(30)
+        return 0
+
+    monkeypatch.setattr(_dispatch, "main", _slow_main)
+    start = time.monotonic()
+    code, out, err = M._in_process_cli_runner(["find"])
+    elapsed = time.monotonic() - start
+    assert code == 124
+    assert out == ""
+    assert "deadline" in err and "find" in err
+    assert elapsed < 10, "the wedged call was interrupted, not awaited"
+
+
+# ─── F02: the mid-call heartbeat survives the in-process runner's redirect ────
+
+
+def test_heartbeat_reaches_pre_redirect_stderr(monkeypatch) -> None:
+    """The default in-process runner wraps dispatch in
+    ``contextlib.redirect_stderr``, which rebinds ``sys.stderr`` PROCESS-WIDE
+    across every thread for the call. A heartbeat that resolved ``sys.stderr`` at
+    WRITE time would land in that captured StringIO (then be discarded) —
+    resurrecting the 'is it hung?' blindness it exists to fix. It must bind the
+    REAL (pre-redirect) handle at thread start. Fire path: a runner that mimics
+    the redirect while several heartbeat intervals elapse must still deliver the
+    line to the pre-redirect stderr, and NOT into the redirect capture."""
+    import contextlib as _ctx
+    import io as _io
+    import time
+
+    monkeypatch.setattr(M, "_HEARTBEAT_INTERVAL_SEC", 0.02)
+
+    swallowed: dict[str, str] = {}
+
+    def _redirecting_runner(argv: list[str]) -> tuple[int, str, str]:
+        captured = _io.StringIO()
+        with _ctx.redirect_stderr(captured):
+            time.sleep(0.12)  # several heartbeat intervals under the redirect
+        swallowed["text"] = captured.getvalue()
+        return 0, json.dumps({"ok": True, "data": {}}), ""
+
+    real_err = _io.StringIO()
+    monkeypatch.setattr(M.sys, "stderr", real_err)
+    server = _server(runner=_redirecting_runner)
+    shape = get_registry()["find"].cli
+    server._invoke_cli("find", shape, {})
+
+    assert "[mcp] find still running" in real_err.getvalue(), (
+        "heartbeat must reach the pre-redirect stderr"
+    )
+    assert "still running" not in swallowed.get("text", ""), (
+        "heartbeat must NOT be swallowed by the runner's redirect_stderr"
+    )
+
+
+# ─── F04: prompts/get serves the EXECUTABLE start_instruction, not slash body ─
+
+
+def test_get_prompt_serves_executable_start_instruction_not_slash_body() -> None:
+    """An MCP-only client has no Skill tool / Bash / CronCreate, so the packaged
+    slash ``.md`` body (which instructs exactly those) is unusable. Every
+    ``prompts/get`` must return the entry's executable ``start_instruction``
+    (``block-drive`` + ``append-decision`` — curated verbs the client HAS) as the
+    message body, and use the ``.md`` only for the human ``description``."""
+    from hpc_agent._kernel.extension.workflow_entries import WORKFLOW_ENTRIES_BY_PROMPT
+
+    server = _server()
+    for name, entry in WORKFLOW_ENTRIES_BY_PROMPT.items():
+        got = _result(server, "prompts/get", {"name": name})
+        text = got["messages"][0]["content"]["text"]
+        assert text == entry.start_instruction
+        assert "block-drive" in text
+        assert "Skill tool" not in text  # the slash-only affordance must not leak
+
+    # When the slash .md IS installed (package data — the normal case), prove we
+    # deliberately did NOT serve it as the body.
+    body = M._read_command_md("submit-hpc")
+    if body is not None:
+        assert body.strip() != WORKFLOW_ENTRIES_BY_PROMPT["submit-hpc"].start_instruction

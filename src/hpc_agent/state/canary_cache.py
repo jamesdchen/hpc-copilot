@@ -85,18 +85,43 @@ def _lock_path(target: Path) -> Path:
     return target.with_suffix(target.suffix + ".lock")
 
 
-def canary_cache_key(*, cmd_sha: str, version: str, cluster: str) -> str:
-    """Stable key for a ``(cmd_sha, framework-version, cluster)`` triple.
+def canary_cache_key(
+    *,
+    cmd_sha: str,
+    version: str,
+    cluster: str,
+    tasks_py_sha: str = "",
+    executor_sha: str = "",
+) -> str:
+    """Stable key for a ``(cmd_sha, framework-version, cluster)`` identity, plus
+    optional CODE identity (``tasks_py_sha`` / ``executor_sha``).
 
     A version bump yields a different key (auto-invalidation on ``pip install
     -U``). ``cmd_sha`` is already a hash, so no further hashing is needed.
     ``cluster`` joined the key in proving run #5: a canary proves the spec runs
     on THAT cluster (modules, activation, scheduler dialect are cluster-local),
     so a discovery-validated entry must never let a hoffman2 submit skip its
-    canary. Pre-existing two-part entries simply never match again — the TTL
-    cache treats them as stale, which is the correct degradation.
+    canary.
+
+    ``tasks_py_sha`` / ``executor_sha`` fold CODE identity in (F41). ``cmd_sha``
+    is PARAMETER identity ONLY (``state/run_sha.py`` hashes just the materialized
+    ``resolve(i)`` kwargs — no executor, no ``tasks.py``, no experiment), so a
+    run with identical swept kwargs but a DIFFERENT executor / ``tasks.py`` / repo
+    carries the same ``cmd_sha``. Keyed on the triple alone it would skip its own
+    never-boot-tested canary AND satisfy submit-s3's predecessor gate on a
+    FOREIGN run's cache entry (the machine-global ``_canary_cache.json`` is shared
+    across every repo on the box). Appending the code shas — both carried on the
+    run sidecar / ``job_env`` at every call site — closes that cross-code /
+    cross-repo hole. An empty (omitted) sha appends nothing, so a caller passing
+    only the original three args gets a BYTE-IDENTICAL key: pre-existing entries
+    simply never match again, the established (two→three-part) stale degradation.
     """
-    return f"{cmd_sha}|{version}|{cluster}"
+    parts = [cmd_sha, version, cluster]
+    if tasks_py_sha:
+        parts.append(f"tasks={tasks_py_sha}")
+    if executor_sha:
+        parts.append(f"exec={executor_sha}")
+    return "|".join(parts)
 
 
 def _read_cache() -> dict[str, Any]:

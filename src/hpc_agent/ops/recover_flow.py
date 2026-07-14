@@ -268,6 +268,57 @@ def _format_walltime(walltime_sec: int) -> str:
     return walltime_hms(walltime_sec)
 
 
+def _invalidate_combined_waves_for_tasks(
+    experiment_dir: Path,
+    run_id: str,
+    task_ids: list[int],
+    sidecar: dict[str, Any] | None,
+) -> None:
+    """Drop the waves owning *task_ids* from ``combined_waves`` (F06).
+
+    Maps each resubmitted task id to its wave via the sidecar ``wave_map`` and,
+    for the affected waves that are currently combined, removes them from
+    ``combined_waves`` and records them in ``failed_waves``. The ``failed_waves``
+    entry is the durable "needs a forced recombine" signal
+    ``ops/aggregate/combine.py`` reads: without it a no-force recombine would
+    re-adopt the stale partial (its wave file still exists under the
+    delete-protected ``_combiner/``) instead of re-running over the recovered
+    tasks. Only waves that were actually combined are touched, so a resubmit of
+    never-combined waves is a no-op. Best-effort — a journal-write failure here
+    must not fail the resubmit that already landed.
+    """
+    from hpc_agent.state.journal import update_run_record
+
+    wave_map = (sidecar or {}).get("wave_map") or {}
+    if not wave_map:
+        return
+    task_set = {int(t) for t in task_ids}
+    affected: set[int] = set()
+    for wave_key, tids in wave_map.items():
+        try:
+            wave_num = int(wave_key)
+        except (TypeError, ValueError):
+            continue
+        try:
+            wave_tids = {int(x) for x in (tids or [])}
+        except (TypeError, ValueError):
+            continue
+        if task_set & wave_tids:
+            affected.add(wave_num)
+    if not affected:
+        return
+
+    def _apply(record: Any) -> None:
+        touched = affected & set(record.combined_waves)
+        if not touched:
+            return
+        record.combined_waves = [w for w in record.combined_waves if w not in touched]
+        record.failed_waves = sorted(set(record.failed_waves) | touched)
+
+    with contextlib.suppress(FileNotFoundError, OSError, errors.JournalCorrupt):
+        update_run_record(experiment_dir, run_id, _apply)
+
+
 def resubmit_flow(
     experiment_dir: Path,
     run_id: str,
@@ -547,6 +598,17 @@ def resubmit_flow(
         # isn't masked along with the expected journal-write failures (#165).
         with contextlib.suppress(OSError, errors.JournalCorrupt):
             _update_run_status(experiment_dir, run_id, pending_resubmit={})
+
+    if not deduped:
+        # F06: the resubmitted tasks will overwrite their metrics.json, so any
+        # wave whose partial was ALREADY combined over the pre-recovery subset
+        # is now stale — its grid_points exclude the recovered tasks and no path
+        # re-runs the combiner (``_missing_waves`` skips anything in
+        # ``combined_waves``). Invalidate exactly the affected waves so the next
+        # monitor/aggregate pass FORCE-recombines them (see combine.py's
+        # failed_waves recombine guard). Skipped on a dedup'd replay (already
+        # invalidated on the first landing).
+        _invalidate_combined_waves_for_tasks(experiment_dir, run_id, failed_task_ids, sidecar)
 
     return ResubmitFlowResult(
         run_id=record.run_id,

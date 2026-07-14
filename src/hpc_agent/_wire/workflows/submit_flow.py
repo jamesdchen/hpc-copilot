@@ -425,7 +425,13 @@ class SubmitFlowSpec(BaseModel):
     )
     rsync_excludes: list[str] | None = Field(
         default=None,
-        description="Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
+        description=(
+            "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults. Honoured on the "
+            "single-spec submit-flow surface; in a BATCH (submit-flow-batch) the "
+            "specs share ONE rsync, so only the batch-level rsync_excludes is used "
+            "— a per-spec value that differs from the batch value is REFUSED rather "
+            "than silently ignored (F52). Set it at the batch level for a campaign."
+        ),
     )
     # ``skip_preflight`` was removed from this wire surface (#275). It was an
     # agent-settable field whose SKILL.md example told agents to set it
@@ -555,6 +561,47 @@ class SubmitFlowSpec(BaseModel):
             raise ValueError(
                 f"supersedes={self.supersedes!r} must name a PRIOR sibling run_id, "
                 f"not this submit's own run_id ({self.run_id!r}) or its -canary pairing."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _sge_mpi_requires_pe_name(self) -> SubmitFlowSpec:
+        """F49 (bug-sweep #25, never-landed): SGE routes multi-rank jobs through a
+        parallel environment (``qsub -pe <pe_name> <ranks>``). Without a
+        ``pe_name`` the backend emits NO slot request and the job lands on a
+        single slot — N ranks oversubscribing one core. The wire builder guards
+        this on ``BuildSubmitSpecInput`` already, but the public submit-flow entry
+        (submit_flow.input.json) reaches ``_engine.py`` — whose comment ASSERTS
+        the wire guard makes ``pe_name`` present — with no equivalent check, so a
+        hand-authored SGE+MPI spec sails straight through. Mirror the builder's
+        guard here so the direct wire surface refuses it too."""
+        mpi = self.resources.mpi if self.resources is not None else None
+        if mpi is not None and self.backend == "sge" and not mpi.pe_name:
+            raise ValueError(
+                "backend='sge' with an mpi block requires mpi.pe_name — SGE "
+                "routes multi-rank jobs through a parallel environment "
+                "(`qsub -pe <pe_name> <ranks>`). Pick a PE with kind='mpi' from "
+                "inspect-cluster's parallel_environments (e.g. 'mpi', 'orte')."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _mpi_requires_single_task(self) -> SubmitFlowSpec:
+        """F49 (bug-sweep #25, never-landed): an mpi block is ONE multi-rank unit
+        of work (``total_tasks=1``). With ``total_tasks>1`` submit-flow takes the
+        ARRAY path (ops/submit_flow.py computes ``single_mpi_job=False``), and the
+        mpi template runs as task 0 in every array element — clobbering output.
+        Array-of-MPI is deferred (#293). Refuse at intake, matching the builder's
+        ``BuildSubmitSpecInput`` guard, so the direct wire surface can't take the
+        silent array path."""
+        mpi = self.resources.mpi if self.resources is not None else None
+        if mpi is not None and self.total_tasks > 1:
+            raise ValueError(
+                f"mpi block with total_tasks={self.total_tasks}: a multi-rank job "
+                "is ONE unit of work (total_tasks=1). Array-of-MPI (a fan-out of "
+                "independent multi-rank solves) is deferred (#293 out-of-scope) — "
+                "the mpi template runs as task 0, so an array would clobber output. "
+                "Set total_tasks=1, or drop the mpi block for an ordinary array."
             )
         return self
 

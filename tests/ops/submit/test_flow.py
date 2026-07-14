@@ -212,7 +212,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"job_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -289,7 +289,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"job_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -361,7 +361,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=["900"],
                 total_tasks=spec.total_tasks,
@@ -466,7 +466,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"job_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -494,7 +494,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"job_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -533,7 +533,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"job_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -572,7 +572,7 @@ class TestSubmitFlowBatch:
                 seen["canary_on_disk"] = run_sidecar_path(tmp_path, "r0-canary").is_file()
 
             push_deploy.side_effect = _deploy
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"job_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -614,7 +614,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=[f"new_{spec.run_id}"],
                 total_tasks=spec.total_tasks,
@@ -680,7 +680,7 @@ def _mock_prelude_and_submit(sf_module):
     """Patch the cluster-touching steps so the sidecar logic runs alone."""
     from hpc_agent.ops.submit_flow import SubmitFlowResult
 
-    def _fake_submit(*, experiment_dir, spec):
+    def _fake_submit(*, experiment_dir, spec, **_kw):
         return SubmitFlowResult(
             run_id=spec.run_id,
             job_ids=[f"job_{spec.run_id}"],
@@ -1302,7 +1302,7 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
         mock.patch.object(sf_module, "_push_and_deploy", side_effect=_capture_at_deploy),
         mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
     ):
-        submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+        submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
             run_id=spec.run_id,
             job_ids=["1"],
             total_tasks=spec.total_tasks,
@@ -1350,7 +1350,7 @@ def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -
         mock.patch.object(sf_module, "_push_and_deploy"),
         mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
     ):
-        submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+        submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
             run_id=spec.run_id,
             job_ids=["1"],
             total_tasks=spec.total_tasks,
@@ -1457,7 +1457,7 @@ class TestSkipPreflightDemotion:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
@@ -1475,7 +1475,7 @@ class TestSkipPreflightDemotion:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]), _skip_preflight=True)
@@ -1494,7 +1494,7 @@ class TestSkipPreflightDemotion:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
@@ -1563,7 +1563,7 @@ class TestSkipRsyncDeployDemotion:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
@@ -1581,7 +1581,7 @@ class TestSkipRsyncDeployDemotion:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]), _skip_rsync_deploy=True)
@@ -1600,7 +1600,7 @@ class TestSkipRsyncDeployDemotion:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
@@ -1707,7 +1707,7 @@ class TestTerminalNotBlocking:
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            submit_one.side_effect = lambda *, experiment_dir, spec, **_kw: SubmitFlowResult(
                 run_id=spec.run_id,
                 job_ids=["77"],
                 total_tasks=4,
@@ -2076,3 +2076,149 @@ class TestPreflightProbe:
         ):
             self._probe()
         assert ssh.call_count == 1
+
+
+class TestWpCDuplicateExecution:
+    """WP-C fire-paths: submit-flow's front-door dedup must refuse the two
+    duplicate-execution / routed-nowhere shapes (F47, F48) and the silently-ignored
+    per-spec rsync excludes (F52) rather than sail past them onto the cluster."""
+
+    def test_prestamped_sidecar_without_journal_refuses_resubmit(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """F47: a sidecar carrying landed job_ids but NO journal record (a crash in
+        the qsub->submit_and_record window, or a partial multi-wave failure) must
+        REFUSE a plain resubmit — re-qsubbing would run the same arrays twice and
+        the post-qsub stamp would orphan the pre-stamped ones. The refusal names
+        the landed ids; _submit_one_spec is never reached."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import update_run_sidecar_job_ids, write_run_sidecar
+
+        write_run_sidecar(
+            tmp_path,
+            run_id="r0",
+            cmd_sha="",
+            hpc_agent_version="",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor="python run.py",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="",
+        )
+        update_run_sidecar_job_ids(tmp_path, "r0", ["13610902", "13610903"])
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+            pytest.raises(errors.SpecInvalid) as ei,
+        ):
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert "13610902" in str(ei.value)  # the landed ids are named
+        assert submit_one.call_count == 0  # no duplicate qsub
+
+    def test_jobless_sidecar_does_not_refuse(self, tmp_path: Any, _journal_home: Any) -> None:
+        """F47 boundary: a jobless sidecar (the ordinary pre-qsub / two-phase-canary
+        S3 window state — no job_ids landed) is NOT a crash-orphan, so submit-flow
+        proceeds normally rather than refusing."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import write_run_sidecar
+
+        write_run_sidecar(
+            tmp_path,
+            run_id="r0",
+            cmd_sha="",
+            hpc_agent_version="",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor="python run.py",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="",
+        )
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            results = submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert results[0].job_ids == ["job_r0"]  # proceeded to a real submit
+
+    def test_cross_cluster_retarget_of_inflight_run_refuses(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """F48: a live (in_flight) run on cluster A, re-submitted with the SAME
+        run_id but targeting cluster B, must REFUSE — deduping would silently
+        succeed against A while nothing runs on B (run_id keys on params only)."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.journal import upsert_run
+        from hpc_agent.state.run_record import RunRecord
+
+        rec = RunRecord(
+            run_id="r0",
+            profile="p",
+            cluster="clusterA",
+            ssh_target="u@h",
+            remote_path="/r",
+            job_name="r0",
+            job_ids=["A1"],
+            total_tasks=4,
+            submitted_at="2026-01-01T00:00:00+00:00",
+            experiment_dir=str(tmp_path.resolve()),
+        )
+        upsert_run(tmp_path, rec)  # status in_flight on clusterA
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+            pytest.raises(errors.SpecInvalid, match="two clusters"),
+        ):
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0", cluster="clusterB")]))
+        assert submit_one.call_count == 0
+
+    def test_same_cluster_inflight_still_dedups(self, tmp_path: Any, _journal_home: Any) -> None:
+        """F48 boundary: a same-cluster in_flight run still dedups (idempotency),
+        not refuses — the cross-cluster guard must not over-fire."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+
+        _seed_record(tmp_path, "r0", "in_flight")  # cluster "c" (see _seed_record)
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            results = submit_flow_batch(tmp_path, spec=_batch([_spec("r0", cluster="c")]))
+        assert results[0].deduped is True
+        assert submit_one.call_count == 0
+        assert preflight.call_count == 0  # fully short-circuited
+
+    def test_batch_refuses_divergent_per_spec_rsync_excludes(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """F52: a per-spec rsync_excludes that differs from the batch-level value
+        is silently dropped in batch mode (one shared rsync) — refuse it loudly so
+        the excluded (tens-of-GB) paths are never shipped by surprise."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+            pytest.raises(errors.SpecInvalid, match="rsync_excludes"),
+        ):
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0", rsync_excludes=["data/raw/"])]))
+        assert submit_one.call_count == 0
+
+    def test_single_spec_submit_flow_honours_rsync_excludes(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """F52 boundary: the single-spec submit_flow copies spec.rsync_excludes up
+        to the batch level, so its inner value matches and the guard does not trip
+        — the honoured path stays honoured."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow
+
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            res = submit_flow(tmp_path, spec=_spec("r0", rsync_excludes=["data/raw/"]))
+        assert res.run_id == "r0"  # no refusal

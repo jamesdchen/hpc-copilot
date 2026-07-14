@@ -23,6 +23,26 @@ if TYPE_CHECKING:
 # (use --force)".
 _ALREADY_COMBINED_RE = re.compile(r"already exists: \S+ \(use --force")
 
+# The run_id the combiner now stamps onto its no-force refusal (``[run_id=<id>]``)
+# so this control plane can distinguish a same-run "already combined" from a
+# FOREIGN partial (a prior run's wave file persisting under the delete-protected
+# ``_combiner/``) without a second ssh read (F05). Absent on legacy/older
+# deployed combiners → the recovery falls back to its historical fail-open.
+_REFUSAL_RUN_ID_RE = re.compile(r"\[run_id=([^\]]+)\]")
+
+
+def _refusal_names_foreign_run(stderr: str, run_id: str) -> bool:
+    """True iff the combiner's refusal carries a run_id that is NOT *run_id*.
+
+    Fails OPEN (returns False) when no run_id witness is present — an older
+    deployed combiner whose refusal predates the stamp must keep the historical
+    "recognize as already combined" recovery.
+    """
+    m = _REFUSAL_RUN_ID_RE.search(stderr or "")
+    if not m:
+        return False
+    return m.group(1).strip() != run_id
+
 
 def _aggregate_handler(ns: argparse.Namespace) -> int:
     """Tier 2 escape hatch — delegate to the hand-written cmd_aggregate body.
@@ -156,9 +176,27 @@ def combine_wave(
     if not ok and not force and _ALREADY_COMBINED_RE.search(stderr):
         # The combiner's no-force refusal is the on-cluster witness that
         # this wave's output already exists — the journal missed the wave
-        # (e.g. wiped local state). Record it combined, not failed.
-        ok = True
-        stdout = f"wave {wave} already combined on cluster; pass --force to re-run\n{stdout}"
+        # (e.g. wiped local state). Record it combined, not failed. But TWO
+        # guards must hold before adopting it as THIS run's combined output:
+        #
+        #   F05: the incumbent partial must belong to this run. A prior run's
+        #   wave file persists under the delete-protected ``_combiner/``; the
+        #   combiner now overwrites a foreign partial (so its refusal implies a
+        #   same-run collision), and it stamps the incumbent run_id onto the
+        #   refusal as a second, deploy-version-independent witness. If that
+        #   run_id names a different run, do NOT journal it combined — leave
+        #   ok=False so ``_combine_missing``'s force retry recombines this run.
+        #
+        #   F06: a wave the journal marked for recombine (in ``failed_waves``,
+        #   set by a resubmit that re-ran its failed tasks — see
+        #   ops/recover_flow._invalidate_combined_waves_for_tasks) must be
+        #   force-recombined over the recovered data, never re-adopted from the
+        #   stale partial that was combined over the pre-recovery subset.
+        foreign = _refusal_names_foreign_run(stderr, run_id)
+        needs_recombine = _rec is not None and wave in _rec.failed_waves
+        if not foreign and not needs_recombine:
+            ok = True
+            stdout = f"wave {wave} already combined on cluster; pass --force to re-run\n{stdout}"
 
     def _apply(record: RunRecord) -> None:
         # Mutate inside the journal's per-run lock: a concurrent

@@ -35,6 +35,7 @@ _BASE = dict(
         "8570940",  # SLURM
         "8570940_3",  # SLURM array element
         "1234.pbs01",  # PBS (id.server)
+        "12345[]",  # PBS array parent (#F36 — bracket preserved at capture)
         "123+0",  # SLURM het-job component
     ],
 )

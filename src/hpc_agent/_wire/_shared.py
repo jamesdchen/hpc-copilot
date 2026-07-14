@@ -30,12 +30,16 @@ RunIdStrict = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$")]
 
 
 # A scheduler-issued job id — digit-leading: SGE ``13610902``, SLURM
-# ``8570940`` / ``8570940_3``, PBS ``1234.pbs01``. The digit-leading rule is
+# ``8570940`` / ``8570940_3``, PBS ``1234.pbs01``, PBS ARRAY ``12345[]`` (#F36 —
+# the bracket is load-bearing: PBS addresses an array as ``<seq>[]``, so the
+# captured/persisted id keeps it, and every later qstat/qdel targets the real
+# array instead of a non-existent bare ``<seq>``). The digit-leading rule is
 # the discriminator against prose placeholders an agent might fabricate to
 # satisfy a non-empty constraint (empirical 2026-06-11 demo: the orchestrator
 # recorded ``job_ids: ["purged-completed"]`` after the real id was lost,
-# poisoning the journal with an id no scheduler ever issued).
-SchedulerJobId = Annotated[str, StringConstraints(pattern=r"^\d[A-Za-z0-9._+\-]*$")]
+# poisoning the journal with an id no scheduler ever issued); allowing ``[]``
+# is purely additive — a non-digit-leading fabrication still fails.
+SchedulerJobId = Annotated[str, StringConstraints(pattern=r"^\d[A-Za-z0-9._+\[\]\-]*$")]
 
 
 # SSH target: ``user@host`` (or OpenSSH alias resolving to the same).

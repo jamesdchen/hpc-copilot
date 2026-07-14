@@ -497,11 +497,18 @@ entry but is never a ranking input.
   from the sidecar dir while every WRITER appends to the journal dir —
   terminal runs summarized in_flight; the test wrote fixtures to the
   wrong path itself), #62 (check_results vs check_results_from_tasks
-  disagree on zero-byte results), #67 (decide-concurrency kept the
+  disagree on zero-byte results — **listed retired here but the fix never
+  landed; re-verified live and actually fixed 2026-07-13 under WP-F / fable
+  finding F22 — see the correction section at the file's end**),
+  #67 (decide-concurrency kept the
   pre-fix double-count arithmetic advance.py's _refill documents and
   fixed), #25 (SubmitFlowSpec lacks the sge+mpi/pe_name and
   total_tasks guards its sibling wire entry has — the engine comment
-  relies on "the wire guard"), #18 (the pre-rsync canary mirror gates on
+  relies on "the wire guard"; **CORRECTION 2026-07-13 — this claim was
+  FALSE: no commit in the eb89fc87..6d6deac1 train touched
+  `_wire/workflows/submit_flow.py`, so the two guards never landed. Re-swept
+  as F49 and landed for real 2026-07-13; see the drift-log entry at the end
+  of this doc**), #18 (the pre-rsync canary mirror gates on
   the raw spec.canary field instead of the one decision function —
   the operator override breaks exactly where it exists to work), #20
   (collect_evidence re-implements the runs walk and forgot the
@@ -931,3 +938,62 @@ pull-vs-push twin being the fire, G10 overlap disclosed. Re-rank
 examined and declined: the live cost is minutes-scale, below the bar
 that would pull G11 over G10 under the scaled-cost rule — the order
 stands, disclosed in G11's cost line.
+
+## Correction / drift log: bug #62 (G11) never landed — fixed WP-F 2026-07-13
+
+**Drift recorded (ledger honesty).** The G11 "Fired symptoms retired" list
+above named **#62** (`check_results` vs `check_results_from_tasks` disagree on
+zero-byte results) as retired, and the corpus table row `| #62 | G11
+twin-predicate | high |` carried no open marker — but the fix **never landed**.
+The 2026-07-13 fable sweep (finding **F22**) re-verified it still live at
+`d731b12`: `check_results` guarded 0-byte only inside its CSV branch, so with
+`file_glob='*.json'` / `'*'` a crash-truncated zero-byte result still read
+`{status: complete}`, while the twin `check_results_from_tasks` (0-byte guard
+hoisted above the CSV branch) and the dispatcher's idempotency skip both
+correctly treated it as incomplete — the exact G11 twin-drift the row claims to
+have closed.
+
+**How the miss happened:** the retirement was booked from the *twin* being
+correct (`check_results_from_tasks` already had the hoisted guard) without
+re-deriving that the public `check_results`/`report_status` pair — the caller-less
+legacy API surface (`reduce/__init__` re-exports both) — was the un-fixed home.
+Blast radius stayed low (no in-repo production caller routes through the legacy
+pair; the deployed status CLI uses the `from_tasks` twin), which is likely why
+the never-landed fix went unnoticed.
+
+**Now actually fixed (WP-F):** a 0-byte guard is hoisted above the CSV branch
+in *both* strategies of `check_results` (matching the twin), with fire-path
+regressions `test_zero_byte_non_csv_incomplete_per_task_subdir` /
+`test_zero_byte_non_csv_incomplete_flat_scan` in
+`tests/execution/mapreduce/test_status.py`. #62 is genuinely retired as of this
+entry. (Kin note: F49 is the *other* never-landed row the same sweep flagged —
+tracked under its own package, not here.)
+
+## Drift-log correction: #25 was ledgered retired but never landed (2026-07-13, fable-sweep WP-C / F49)
+
+**The miss.** The "Fired symptoms retired" list above credited #25
+(`SubmitFlowSpec` missing the `sge+mpi` → `pe_name` guard and the
+`mpi`-requires-`total_tasks=1` guard that its sibling `BuildSubmitSpecInput`
+carries) to the eb89fc87..6d6deac1 fix train. The 2026-07-13 fable sweep
+re-verified it still LIVE at HEAD: `git log eb89fc87..6d6deac1 --
+src/hpc_agent/_wire/workflows/submit_flow.py` is empty and no commit in the
+train mentions `pe_name`/`mpi`. The guards existed only on
+`BuildSubmitSpecInput` (`_wire/actions/build_submit_spec.py`), so a
+hand-authored `submit_flow.input.json` with `backend='sge'` + an `mpi` block
+and no `pe_name` (or `mpi` + `total_tasks>1`) sailed straight through the
+public submit-flow surface into `_engine.py:334-340` — whose comment still
+ASSERTED "the wire guard (build_submit_spec) guarantees pe_name" — and qsub'd
+N ranks onto one slot (or silently took the array path, running the mpi
+template as task 0 in every element).
+
+**The fix (F49).** Landed the two `model_validator`s on `SubmitFlowSpec`
+(`_sge_mpi_requires_pe_name`, `_mpi_requires_single_task`), byte-for-byte the
+messages `BuildSubmitSpecInput` already raises, so the direct wire surface now
+refuses both shapes at intake. Fire-path tests:
+`tests/_wire/test_submit_flow_mpi_guards.py`.
+
+**Why it drifted (the honesty note the engineering-principles drift-log rule
+asks for).** A "retired symptom" was recorded from the fix PLAN, not from a
+landed-and-tested diff — the exact class the two never-landed rows (#25, #22)
+in this doc's scope-guard call out. The correction stands as the record; no
+attempt is made to backdate the original claim.

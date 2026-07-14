@@ -167,6 +167,9 @@ jobs:
       - name: Lint cluster-side schema-version constants stay synced
         if: matrix.python-version == '3.12'
         run: python scripts/lint_schema_versions.py
+      - name: Lint cluster-deployed files stay under the Python version floor
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_deploy_python_floor.py
       - name: Lint telemetry fields declare cumulative vs per-tick delta
         if: matrix.python-version == '3.12'
         run: python scripts/lint_telemetry_labels.py

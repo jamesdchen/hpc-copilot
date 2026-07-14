@@ -250,6 +250,47 @@ def test_ssh_circuit_open_is_transient_survives_to_complete(
     assert harvested == ["complete"]
 
 
+def test_nonconsecutive_env_blips_reset_and_do_not_escalate(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F27: a successful poll RESETS the deterministic-env failure streak, so
+    NON-consecutive rc-127 blips across a long watch can no longer accumulate to
+    the threshold and kill a healthy monitor. Three rc-127 faults interleaved
+    with clean polls (poll 1 fails, 2 ok, 3 fails, 4 ok, 5 fails, 6 complete)
+    must NOT reach ``_DETERMINISTIC_ENV_POLLS_TO_FAIL`` consecutive — the run
+    reaches COMPLETE, not a spurious reporter-UNREACHABLE TIMEOUT."""
+    _seed_record(experiment)
+    rc127 = errors.RemoteCommandFailed("status reporter failed (rc=127)", returncode=127)
+    in_flight = {"complete": 0, "running": 4, "pending": 0, "failed": 0}
+    seq: list[Any] = [rc127, in_flight, rc127, in_flight, rc127, _COMPLETE_STATUS]
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "record_status",
+        _record_status_sequence(experiment, seq),
+    )
+    monkeypatch.setattr(monitor_flow_module, "_ingest_runtime_at_terminal", lambda *a, **k: 0)
+    harvested: list[str] = []
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "harvest_on_terminal",
+        lambda *a, **k: harvested.append(k.get("terminal_cause", "?")),
+    )
+
+    spec = MonitorFlowSpec(
+        run_id=_RUN_ID,
+        poll_interval_seconds=5,
+        wall_clock_budget_seconds=10_000,
+        auto_combine_waves=False,
+    )
+    # _now pinned to 0 → never over budget; only an (erroneous) env escalation or
+    # the real COMPLETE can terminate.
+    result = monitor_flow(experiment, spec=spec, _sleep=lambda s: None, _now=lambda: 0.0)
+
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+    assert result.escalation_reason is None  # never escalated reporter-unreachable
+    assert harvested == ["complete"]
+
+
 def test_repeated_transient_terminates_to_timeout(
     journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

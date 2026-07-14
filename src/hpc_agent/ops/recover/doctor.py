@@ -509,6 +509,9 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
             run_id,
             next_verb=next_verb,
             awaiting_since=marker.get("awaiting_since") or hit.get("awaiting_since"),
+            # F13: the parked block so a same-boundary retraction nudge supersedes an
+            # earlier `y` (stays parked), while an unrelated later record does not stall it.
+            block=marker.get("block") if isinstance(marker.get("block"), str) else None,
         ):
             decision = latest_decision(experiment_dir, "run", run_id)
             advance_proposals.append(_draft_advance_proposal(hit, decision=decision, now=now))
