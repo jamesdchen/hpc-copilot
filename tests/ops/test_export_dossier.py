@@ -34,7 +34,6 @@ from hpc_agent.ops.export_dossier import (
     compute_dossier_signature,
     export_dossier,
 )
-from hpc_agent.state import run_record
 from hpc_agent.state.block_terminal import record_terminal
 from hpc_agent.state.decision_briefs import append_brief
 from hpc_agent.state.decision_journal import append_decision
@@ -46,14 +45,6 @@ from hpc_agent.state.scopes import record_lock, record_look
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the per-user journal home into the test's tmp dir."""
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

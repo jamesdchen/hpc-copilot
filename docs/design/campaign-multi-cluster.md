@@ -173,7 +173,7 @@ Two safe driver shapes — both pure functions over disk state, no new daemon
 `docs/internals/campaign-lifecycle.md`):
 
 1. **N `/loop` drivers** — one per cid, e.g.
-   `/loop 30m hpc-campaign-driver --experiment-dir . --campaign-id ebm_all_buckets_carc`
+   `/loop 30m hpc-block-drive --experiment-dir . --campaign-id ebm_all_buckets_carc`
    alongside a second loop for `_hoffman2`. They run concurrently.
 2. **Round-robin** — one driver that advances each cid in turn per tick.
 

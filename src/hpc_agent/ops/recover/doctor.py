@@ -25,7 +25,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._build_info import full_version, git_output, runtime_sha
-from hpc_agent._kernel.lifecycle.detached import _pid_alive
+from hpc_agent._kernel.lifecycle.detached import pid_alive
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.doctor import (
     AdvanceRunProposal,
@@ -46,7 +46,7 @@ from hpc_agent.state.decision_journal import (
 )
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
 from hpc_agent.state.journal import read_pending_decision
-from hpc_agent.state.run_record import _current_homedir
+from hpc_agent.state.run_record import current_homedir
 
 __all__ = ["doctor", "scan_dead_detached_workers"]
 
@@ -258,7 +258,7 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     cannot be scoped to this experiment).
 
     For each of THIS experiment's leases whose ``pid`` is DEAD
-    (:func:`_pid_alive` false), consult the block terminal-result store
+    (:func:`pid_alive` false), consult the block terminal-result store
     (:func:`read_terminal_with_fallback`, keyed by the lease's own ``block``
     verb — the canonical key — with a legacy short-key fallback so a
     pre-2026-07-07 record still counts): a dead pid WITH a recorded terminal is
@@ -282,7 +282,7 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     flag — would extend this scan from "dead pid, no terminal" to "alive but
     frozen", the finding-16 signature. Left as a note so the seam is discoverable.
     """
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     if not detached_dir.is_dir():
         return []
     findings: list[dict[str, Any]] = []
@@ -311,7 +311,7 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
             # successful Popen; a non-positive pid is a never-stamped / torn
             # lease, not a mid-flight death. Fail open — do not surface it.
             continue
-        if _pid_alive(pid):
+        if pid_alive(pid):
             continue  # a live worker owns the lease — not our concern
         if read_terminal_with_fallback(experiment_dir, run_id, block) is not None:
             # dead pid WITH a recorded terminal = normal completion. Read by the

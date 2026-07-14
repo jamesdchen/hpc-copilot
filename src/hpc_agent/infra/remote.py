@@ -33,6 +33,7 @@ __all__ = [
     "build_remote_command",
     "remote_op",
     "current_remote_op",
+    "capture_via_select",
     "ssh_run",
 ]
 
@@ -679,7 +680,7 @@ def _capture_windows(
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
-def _capture_via_select(
+def capture_via_select(
     argv: list[str],
     *,
     timeout: float | None,
@@ -705,6 +706,9 @@ def _capture_via_select(
     out, err = _communicate_select(proc, argv=argv, timeout=timeout)
     assert proc.returncode is not None  # set by _communicate_select
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+_capture_via_select = capture_via_select  # back-compat alias
 
 
 def ssh_run(
@@ -842,7 +846,7 @@ def ssh_run(
                 # the instant the foreground process exits instead of stalling
                 # until ``effective_timeout`` (#209). Windows falls back to
                 # subprocess.run inside the seam.
-                return _capture_via_select(argv, timeout=effective_timeout)
+                return capture_via_select(argv, timeout=effective_timeout)
             # Streaming mode inherits the parent's stdout/stderr — there are no
             # pipes for us to manage, so the original blocking call is correct.
             return subprocess.run(

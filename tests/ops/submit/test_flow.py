@@ -178,18 +178,9 @@ def _batch(specs, **overrides: Any):
     return SubmitFlowBatchSpec(specs=specs, **overrides)
 
 
-@pytest.fixture
-def _journal_home(tmp_path, monkeypatch):
-    """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-
-
 class TestSubmitFlowBatch:
     def test_heterogeneous_targets_raise_spec_invalid(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         from hpc_agent import errors
         from hpc_agent.ops.submit_flow import submit_flow_batch
@@ -200,7 +191,7 @@ class TestSubmitFlowBatch:
             submit_flow_batch(tmp_path, spec=_batch([a, b]))
 
     def test_shares_one_rsync_and_one_deploy_across_n_specs(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """The whole point of the batch: rsync + deploy fire once, qsub fires N."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -228,7 +219,7 @@ class TestSubmitFlowBatch:
         assert all(not r.deduped for r in results)
 
     def test_skips_prelude_when_every_spec_already_journaled(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """If every spec is already on the journal, NO ssh / rsync runs."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -266,7 +257,7 @@ class TestSubmitFlowBatch:
         assert [r.run_id for r in results] == ["r0", "r1"]
 
     def test_runtime_uv_check_passes_when_uv_on_path(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """When HPC_RUNTIME=uv and the activation+`command -v uv` probe
         succeeds, the canary qsub proceeds without raising."""
@@ -307,7 +298,7 @@ class TestSubmitFlowBatch:
         assert "command -v uv" in cmd
 
     def test_runtime_uv_check_raises_when_uv_missing(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """When HPC_RUNTIME=uv but the cluster env doesn't have uv on PATH,
         preflight raises SpecInvalid BEFORE any qsub — turning "all 100 tasks
@@ -346,7 +337,7 @@ class TestSubmitFlowBatch:
         assert submit_one.call_count == 0
 
     def test_runtime_uv_check_skipped_when_runtime_not_uv(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """When HPC_RUNTIME is unset or not 'uv', the runtime probe is a no-op
         (no extra ssh_run call). Only the standard reachability probe fires
@@ -373,7 +364,7 @@ class TestSubmitFlowBatch:
         assert ssh.call_count == 0
 
     def test_shared_prelude_overlaps_uv_probe_with_deploy(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """#280: the `command -v uv` probe runs CONCURRENTLY with rsync+deploy,
         so the prelude's wall-clock is ~max(uv, deploy), not their sum."""
@@ -415,7 +406,7 @@ class TestSubmitFlowBatch:
         assert elapsed < 0.7, f"expected concurrent (~0.4s), got {elapsed:.2f}s"
 
     def test_shared_prelude_uv_failure_aborts_but_tolerates_concurrent_deploy(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """#280: a uv ``SpecInvalid`` still aborts the prelude (no qsub), while
         the concurrent deploy arm is allowed to complete — a finished deploy
@@ -450,7 +441,7 @@ class TestSubmitFlowBatch:
         assert deploy_ran == [True]  # deploy completed concurrently before the uv error surfaced
 
     def test_skip_rsync_deploy_skips_push_and_deploy(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """#185/#283: when the operator/internal ``_skip_rsync_deploy`` is set,
         the prelude's rsync+deploy is skipped (Phase 2 of submit.md's two-phase
@@ -481,7 +472,7 @@ class TestSubmitFlowBatch:
         assert push_deploy.call_count == 0
         assert submit_one.call_count == 3
 
-    def test_no_skip_rsync_deploy_runs_prelude(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_no_skip_rsync_deploy_runs_prelude(self, tmp_path: Any, journal_home: Any) -> None:
         """#283: without the operator/internal ``_skip_rsync_deploy`` request,
         the rsync+deploy prelude runs — the conservative default. An agent can
         no longer drop it via a spec field (the lever is off the wire)."""
@@ -505,7 +496,7 @@ class TestSubmitFlowBatch:
 
         assert push_deploy.call_count == 1
 
-    def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, journal_home: Any) -> None:
         """Half-baked sidecars from a prior failed batch are silently swept
         before the next batch starts — no manual /prune-orphan-sidecars call."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -546,7 +537,7 @@ class TestSubmitFlowBatch:
         assert not run_sidecar_path(tmp_path, orphan_id).is_file()
 
     def test_pre_rsync_canary_mirror_uses_decision_not_raw_field(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         """#18: HPC_AGENT_ALWAYS_CANARY forces a canary that WINS over an agent
         ``canary=false`` opt-out, so the pre-rsync sidecar mirror must gate on
@@ -587,7 +578,7 @@ class TestSubmitFlowBatch:
         assert run_sidecar_path(tmp_path, "r0-canary").is_file()
         assert seen.get("canary_on_disk") is True
 
-    def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, journal_home: Any) -> None:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
@@ -697,7 +688,7 @@ def _mock_prelude_and_submit(sf_module):
 
 
 class TestSidecarGuarantee:
-    def test_synthesizes_sidecar_when_missing(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_synthesizes_sidecar_when_missing(self, tmp_path: Any, journal_home: Any) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
         from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
@@ -717,7 +708,7 @@ class TestSidecarGuarantee:
         assert sc["task_count"] == 4
 
     def test_fails_loud_when_synthesized_executor_would_self_recurse(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """#162: job_env['EXECUTOR'] is the job-script command (it runs the
         dispatcher), not a per-task command. submit-flow must NOT synthesize a
@@ -741,7 +732,7 @@ class TestSidecarGuarantee:
 
     @pytest.mark.parametrize("bad_executor", ["python3 .hpc/_hpc_dispatch.py", ""])
     def test_refuses_present_but_pending_sidecar(
-        self, tmp_path: Any, _journal_home: Any, bad_executor: str
+        self, tmp_path: Any, journal_home: Any, bad_executor: str
     ) -> None:
         """#171: a sidecar can be PRESENT but 'pending' — written with an empty
         or dispatcher-only executor (Step 6d skipped / half-written). Presence
@@ -774,7 +765,7 @@ class TestSidecarGuarantee:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
 
     def test_refuses_sidecar_that_diverges_from_interview_executor_cmd(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """Proving run #3 layer (b): the sidecar carried the executor NAME
         'run' while the real per-task command sat in interview.json's
@@ -831,7 +822,7 @@ class TestSidecarGuarantee:
         assert push_deploy.call_count == 0
 
     def test_accepts_sidecar_matching_interview_executor_cmd(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """A sidecar whose executor IS the materialized executor_cmd submits
         normally — the provenance check is a drift guard, not a new hoop."""
@@ -871,7 +862,7 @@ class TestSidecarGuarantee:
         assert results[0].job_ids == ["job_rMatch"]
 
     def test_sidecar_interview_check_skips_hand_onboarded_repos(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """Fail-open: no interview.json (and, second case, an interview without
         a ``_materialized`` block) means the repo was hand-onboarded and has no
@@ -907,7 +898,7 @@ class TestSidecarGuarantee:
             assert results[0].job_ids == [f"job_{run_id}"]
 
     def test_records_resources_on_synthesized_sidecar(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         from hpc_agent._wire.workflows.submit_flow import SubmitResources
         from hpc_agent.ops import submit_flow as sf_module
@@ -924,7 +915,7 @@ class TestSidecarGuarantee:
         }
 
     def test_records_env_hash_on_synthesized_sidecar(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         # #222: Step 6d captures ENVIRONMENT identity from the resolved
         # activation in job_env, alongside the param/code shas.
@@ -955,7 +946,7 @@ class TestSidecarGuarantee:
         )
 
     def test_records_data_sha_on_synthesized_sidecar(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         # #312: a spec that declares input_datasets gets data_sha captured at
         # sidecar-write time with no manual step, symmetric with env_hash.
@@ -977,7 +968,7 @@ class TestSidecarGuarantee:
         assert sc["data_sha"] is not None
 
     def test_data_sha_stays_null_when_no_dataset_declared(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         # Undeclared → null ("not captured"), distinguishable from the real
         # digest of an empty declaration — the #312 Gap 1 decision.
@@ -992,7 +983,7 @@ class TestSidecarGuarantee:
         assert read_run_sidecar(tmp_path, "rNoData")["data_sha"] is None
 
     def test_missing_result_dir_template_synthesizes_the_block_owned_default(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """Proving-run-3 finding (a) / conduct rule 6: a missing template used
         to die SpecInvalid here, and the driving agent papered over it by
@@ -1011,7 +1002,7 @@ class TestSidecarGuarantee:
         assert sc["result_dir_template"] == "results/{run_id}/task_{task_id}"
 
     def test_synthesized_sidecar_carries_spec_scopes(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """The submit-flow-owns-the-artifact guarantee carries the caller's
         opaque evidence-scope tags onto the synthesized sidecar even when the
@@ -1026,7 +1017,7 @@ class TestSidecarGuarantee:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
         assert read_run_sidecar(tmp_path, "rScopes")["scopes"] == ["ci.smoke", "band-A_1"]
 
-    def test_does_not_overwrite_existing_sidecar(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_does_not_overwrite_existing_sidecar(self, tmp_path: Any, journal_home: Any) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
         from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
@@ -1092,7 +1083,7 @@ def _write_interview(campaign_dir: Path, *, task_generator: dict, entry_point: d
 
 
 class TestSpecKwargsStamping:
-    def test_generator_mode_stamps_fixed_params(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_generator_mode_stamps_fixed_params(self, tmp_path: Any, journal_home: Any) -> None:
         """A generator-mode run with declared fixed_params → the synthesized
         sidecar's ``extra.spec_kwargs`` contains exactly those constant kwargs."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -1120,7 +1111,7 @@ class TestSpecKwargsStamping:
         sc = read_run_sidecar(tmp_path, "rGen")
         assert sc["extra"]["spec_kwargs"] == {"tp_size": 2}
 
-    def test_no_interview_no_spec_kwargs_no_error(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_no_interview_no_spec_kwargs_no_error(self, tmp_path: Any, journal_home: Any) -> None:
         """A hand-written tasks.py run (no interview.json) → no spec_kwargs, no
         error. The documented limitation: only declared fixed_params can be
         stamped; absence is a clean no-op, never a failure."""
@@ -1137,7 +1128,7 @@ class TestSpecKwargsStamping:
         assert "extra" not in sc
 
     def test_swept_axis_value_does_not_leak_into_spec_kwargs(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """SOUNDNESS GUARD: a per-task SWEPT axis (here ``seed``) is NOT
         run-constant, so a single value would misrepresent the cluster and could
@@ -1172,7 +1163,7 @@ class TestSpecKwargsStamping:
         assert "seed" not in spec_kwargs
 
     def test_resolve_uses_stamped_tp_size_for_increase_parallelism(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """End-to-end-ish: a sidecar stamped via submit-flow flows through
         ``build_failure_features`` → ``resource_spec`` carries ``tp_size``, so
@@ -1272,7 +1263,7 @@ class TestResourceFlagPlumbing:
         assert captured["extra_flags"] == ["-l", "h_rt=3600"]
 
 
-def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any) -> None:
+def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, journal_home: Any) -> None:
     """#175: the canary sidecar must exist on disk BEFORE ``_push_and_deploy``
     so it rides the SAME rsync as the main sidecar — otherwise it never reaches
     the cluster and every canary task dies ``sidecar_not_found``.
@@ -1318,7 +1309,7 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     assert csc["executor"] == "python run.py"
 
 
-def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -> None:
+def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, journal_home: Any) -> None:
     """The canary mirror copies ``extra.spec_kwargs`` from the main sidecar so a
     canary gpu_oom is discriminated by the same parallelism/width knobs as the
     main run, rather than silently falling back to the flat fix."""
@@ -1388,13 +1379,13 @@ class TestCheckpointCanaryEnv:
             _submit_one_spec(experiment_dir=tmp_path, spec=spec)
         return captured
 
-    def test_canary_carries_marker_main_does_not(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_canary_carries_marker_main_does_not(self, tmp_path: Any, journal_home: Any) -> None:
         spec = _spec("rCK", canary=True, force_canary=True, auto_resume_on_kill=True)
         captured = self._run_one(tmp_path, spec)
         assert captured["rCK_canary"]["HPC_CHECKPOINT_CANARY"] == "1"
         assert "HPC_CHECKPOINT_CANARY" not in captured["rCK"]
 
-    def test_no_marker_when_auto_resume_off(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_no_marker_when_auto_resume_off(self, tmp_path: Any, journal_home: Any) -> None:
         spec = _spec("rCK2", canary=True, force_canary=True, auto_resume_on_kill=False)
         captured = self._run_one(tmp_path, spec)
         assert "HPC_CHECKPOINT_CANARY" not in captured["rCK2_canary"]
@@ -1446,7 +1437,7 @@ class TestSkipPreflightDemotion:
         assert sf._skip_preflight_requested(False) is False
 
     def test_env_var_skips_the_preflight_probe(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
@@ -1464,7 +1455,7 @@ class TestSkipPreflightDemotion:
         assert preflight.call_args.kwargs["skip"] is True
 
     def test_internal_kwarg_skips_the_preflight_probe(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
@@ -1482,7 +1473,7 @@ class TestSkipPreflightDemotion:
         assert preflight.call_args.kwargs["skip"] is True
 
     def test_default_runs_the_preflight_probe(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         """No env var, no internal kwarg → the probe runs (skip=False)."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -1552,7 +1543,7 @@ class TestSkipRsyncDeployDemotion:
         assert sf._skip_rsync_deploy_requested(False) is False
 
     def test_env_var_skips_the_rsync_deploy(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
@@ -1570,7 +1561,7 @@ class TestSkipRsyncDeployDemotion:
         assert push_deploy.call_count == 0
 
     def test_internal_kwarg_skips_the_rsync_deploy(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
@@ -1588,7 +1579,7 @@ class TestSkipRsyncDeployDemotion:
         assert push_deploy.call_count == 0
 
     def test_default_runs_the_rsync_deploy(
-        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: Any
     ) -> None:
         """No env var, no internal kwarg → the rsync+deploy runs."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -1694,7 +1685,7 @@ class TestTerminalNotBlocking:
 
     @pytest.mark.parametrize("status", ["abandoned", "failed"])
     def test_terminal_record_does_not_dedup_submit_proceeds(
-        self, tmp_path: Any, _journal_home: Any, status: str
+        self, tmp_path: Any, journal_home: Any, status: str
     ) -> None:
         """Acceptance (#276): seed a terminal-not-complete record + job_ids, run
         submit-flow → it PROCEEDS (doesn't short-circuit as deduped)."""
@@ -1720,7 +1711,7 @@ class TestTerminalNotBlocking:
         assert results[0].deduped is False
         assert results[0].job_ids == ["77"]
 
-    def test_complete_record_still_dedups(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_complete_record_still_dedups(self, tmp_path: Any, journal_home: Any) -> None:
         """Idempotency preserved: a `complete` run with the same run_id still dedups."""
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
@@ -1738,7 +1729,7 @@ class TestTerminalNotBlocking:
 
     @pytest.mark.parametrize("status", ["abandoned", "failed"])
     def test_submit_and_record_skips_terminal(
-        self, tmp_path: Any, _journal_home: Any, status: str
+        self, tmp_path: Any, journal_home: Any, status: str
     ) -> None:
         """runner.submit_and_record: a terminal-not-complete record is not a dedup target."""
         import warnings
@@ -1765,7 +1756,7 @@ class TestTerminalNotBlocking:
         assert record.job_ids == ["71"]
 
     def test_backfills_provenance_onto_prewritten_sidecar(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         # #312: a Step 6d-style pre-written sidecar (real executor, no
         # provenance) gets null data_sha/env_hash backfilled at submit time;
@@ -1799,7 +1790,7 @@ class TestTerminalNotBlocking:
         assert sc["executor"] == "python run.py --task $HPC_TASK_ID"  # untouched
 
     def test_backfill_never_overwrites_recorded_provenance(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
@@ -1858,7 +1849,7 @@ class TestPostQsubSidecarPreStamp:
         )
 
     def test_main_job_ids_stamped_even_when_record_never_runs(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import _submit_one_spec
@@ -1884,7 +1875,7 @@ class TestPostQsubSidecarPreStamp:
         # The whole point: the id survived even though the journal write didn't.
         assert read_run_sidecar(tmp_path, "rStamp")["job_ids"] == ["13610902"]
 
-    def test_canary_job_ids_stamped_before_record(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_canary_job_ids_stamped_before_record(self, tmp_path: Any, journal_home: Any) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import _submit_one_spec
         from hpc_agent.state.runs import read_run_sidecar
@@ -1911,7 +1902,7 @@ class TestPostQsubSidecarPreStamp:
         assert read_run_sidecar(tmp_path, "rStampC-canary")["job_ids"] == ["13610900"]
 
     def test_missing_sidecar_does_not_fail_the_submission(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """The stamp is best-effort: no sidecar on disk (legacy caller) must
         not turn a landed qsub into a submit-flow error."""
@@ -1929,7 +1920,7 @@ class TestPostQsubSidecarPreStamp:
         assert result.job_ids == ["4242"]
 
     def test_production_flow_seeds_sidecar_so_the_stamp_actually_lands(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """The pre-stamp's protection is silent if its precondition is unmet:
         ``update_run_sidecar_job_ids`` no-ops (FileNotFoundError, swallowed)
@@ -2084,7 +2075,7 @@ class TestWpCDuplicateExecution:
     per-spec rsync excludes (F52) rather than sail past them onto the cluster."""
 
     def test_prestamped_sidecar_without_journal_refuses_resubmit(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """F47: a sidecar carrying landed job_ids but NO journal record (a crash in
         the qsub->submit_and_record window, or a partial multi-wave failure) must
@@ -2117,7 +2108,7 @@ class TestWpCDuplicateExecution:
         assert "13610902" in str(ei.value)  # the landed ids are named
         assert submit_one.call_count == 0  # no duplicate qsub
 
-    def test_jobless_sidecar_does_not_refuse(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_jobless_sidecar_does_not_refuse(self, tmp_path: Any, journal_home: Any) -> None:
         """F47 boundary: a jobless sidecar (the ordinary pre-qsub / two-phase-canary
         S3 window state — no job_ids landed) is NOT a crash-orphan, so submit-flow
         proceeds normally rather than refusing."""
@@ -2142,7 +2133,7 @@ class TestWpCDuplicateExecution:
         assert results[0].job_ids == ["job_r0"]  # proceeded to a real submit
 
     def test_cross_cluster_retarget_of_inflight_run_refuses(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """F48: a live (in_flight) run on cluster A, re-submitted with the SAME
         run_id but targeting cluster B, must REFUSE — deduping would silently
@@ -2174,7 +2165,7 @@ class TestWpCDuplicateExecution:
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0", cluster="clusterB")]))
         assert submit_one.call_count == 0
 
-    def test_same_cluster_inflight_still_dedups(self, tmp_path: Any, _journal_home: Any) -> None:
+    def test_same_cluster_inflight_still_dedups(self, tmp_path: Any, journal_home: Any) -> None:
         """F48 boundary: a same-cluster in_flight run still dedups (idempotency),
         not refuses — the cross-cluster guard must not over-fire."""
         from hpc_agent.ops import submit_flow as sf_module
@@ -2192,7 +2183,7 @@ class TestWpCDuplicateExecution:
         assert preflight.call_count == 0  # fully short-circuited
 
     def test_batch_refuses_divergent_per_spec_rsync_excludes(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """F52: a per-spec rsync_excludes that differs from the batch-level value
         is silently dropped in batch mode (one shared rsync) — refuse it loudly so
@@ -2210,7 +2201,7 @@ class TestWpCDuplicateExecution:
         assert submit_one.call_count == 0
 
     def test_single_spec_submit_flow_honours_rsync_excludes(
-        self, tmp_path: Any, _journal_home: Any
+        self, tmp_path: Any, journal_home: Any
     ) -> None:
         """F52 boundary: the single-spec submit_flow copies spec.rsync_excludes up
         to the batch level, so its inner value matches and the guard does not trip

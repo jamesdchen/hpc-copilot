@@ -13,7 +13,7 @@ frontmatter between the leading and closing ``---`` markers is
 regenerated.
 
 The registry doesn't yet model every frontmatter field (CLI invocation
-strings, free-form ``inputs`` / ``outputs`` documentation, prose
+strings, free-form ``outputs`` documentation, prose
 ``description`` text, exit-code descriptions). Those fields are
 read from the existing frontmatter and round-tripped untouched. Only
 the fields the registry owns (``name``, ``verb``, ``side_effects``,
@@ -52,7 +52,6 @@ PRIMITIVES_DIR = REPO_ROOT / "docs" / "primitives"
 _FIELD_ORDER = (
     "name",
     "verb",
-    "inputs",
     "outputs",
     "side_effects",
     "idempotent",
@@ -118,8 +117,6 @@ def _build_frontmatter(meta, fm_existing: dict) -> dict:
         "name": meta.name,
         "verb": meta.verb,
     }
-    if "inputs" in fm_existing:
-        fm["inputs"] = fm_existing["inputs"]
     if "outputs" in fm_existing:
         fm["outputs"] = fm_existing["outputs"]
     fm["side_effects"] = _render_side_effects(meta)

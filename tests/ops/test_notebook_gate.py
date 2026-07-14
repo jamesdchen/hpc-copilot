@@ -451,15 +451,6 @@ def _submit_flow_spec(run_id: str = "pi-abcd1234"):
     )
 
 
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
-
-
 def test_submit_flow_seat_gate_fires_before_staging(
     experiment: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

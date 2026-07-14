@@ -1,23 +1,6 @@
 ---
 name: combine-wave
 verb: mutate
-inputs:
-- name: run_id
-  type: string
-- name: wave
-  type: int
-  description: Wave index from the per-run sidecar's wave_map.
-- name: experiment_dir
-  type: path
-  description: Repo root. Defaults to cwd.
-- name: output_dir
-  type: path
-  description: Combined-output destination on the cluster.
-  default: <experiment_dir>/_aggregated/<run_id>/
-- name: force
-  type: bool
-  description: Re-run combiner even if wave appears in combined_waves.
-  default: false
 side_effects:
 - ssh: <cluster>
 - runs: cluster-side combiner (python3 .hpc/_hpc_combiner.py)

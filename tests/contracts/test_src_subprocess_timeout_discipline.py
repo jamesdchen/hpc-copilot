@@ -57,10 +57,10 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     "src/hpc_agent/conformance/adapters/claude_code.py": {"start_background"},
     # The compliant capture wrappers themselves — the S2-wedge fix. Every
     # wait inside is bounded: `_capture_windows` kills on deadline then
-    # drains for at most _POST_KILL_DRAIN_SEC; `_capture_via_select` bounds
+    # drains for at most _POST_KILL_DRAIN_SEC; `capture_via_select` bounds
     # the select loop via `_communicate_select(timeout=...)`. These are the
     # seams `ssh_run` funnels through; callers inherit the discipline.
-    "src/hpc_agent/infra/remote.py": {"_capture_windows", "_capture_via_select"},
+    "src/hpc_agent/infra/remote.py": {"_capture_windows", "capture_via_select"},
     # The cross-platform bounded-capture wrapper (2026-07-05 Hoffman2 orphan
     # fix). The Popen is immediately bounded by `communicate(timeout=...)`, and
     # on timeout the WHOLE process tree is killed (POSIX `os.killpg` / Windows
@@ -79,7 +79,8 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # bound the tar half. (Was a bare `subprocess.run(..., timeout=)` — NOT a
     # hard deadline on Windows for an ssh-spawning call; run #7 S2 staging
     # wedge, 2026-07-05. See _BOUNDED_RUNNER_REQUIRED below.)
-    "src/hpc_agent/infra/transport.py": {"_tar_ssh_push"},
+    # The engine stayed in transport/__init__.py when the module became a package.
+    "src/hpc_agent/infra/transport/__init__.py": {"_tar_ssh_push"},
     # Cluster-side dispatcher launching the user's payload: runtime is the
     # task's own runtime, bounded by the scheduler's wall-clock (h_rt /
     # --time) on the job, and heartbeat-monitored — a parent-side timeout
@@ -101,7 +102,7 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
 _GRANDFATHERED: set[tuple[str, str]] = set()
 # Emptied 2026-07-04: the three original entries were fixed the same wave —
 # `block_drive._run_block_verb` and `mcp_server._subprocess_cli_runner` now
-# route through `infra.remote._capture_via_select` with a per-verb deadline
+# route through `infra.remote.capture_via_select` with a per-verb deadline
 # from `infra.block_chain.verb_deadline_seconds` (watch-class verbs get their
 # spec's wall_clock_budget + slack), and `drive._run_cli_step` passes the same
 # deadline as `timeout=` (stdio inherited — no pipe wedge to drain).
@@ -120,7 +121,9 @@ _GRANDFATHERED: set[tuple[str, str]] = set()
 # `run_capture_bounded` is actually wired. See
 # `test_transport_ssh_sites_route_through_bounded_runner`.
 _BOUNDED_RUNNER_REQUIRED: dict[str, set[str]] = {
-    "src/hpc_agent/infra/transport.py": {
+    # All six ssh/rsync/tar/scp sites are engine functions that stayed in
+    # transport/__init__.py when the module became a package.
+    "src/hpc_agent/infra/transport/__init__.py": {
         "_remote_preclean",
         "_tar_ssh_push",
         "_scp_pull",

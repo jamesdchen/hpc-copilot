@@ -426,16 +426,16 @@ def _subprocess_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     identical envelope + exit code.
 
     The wait is BOUNDED by :data:`_SUBPROCESS_RUNNER_TIMEOUT_SEC`, and the
-    piped capture routes through ``infra.remote._capture_via_select`` — the
+    piped capture routes through ``infra.remote.capture_via_select`` — the
     S2-wedge-fix seam whose deadline can actually fire on Windows (kill on
     expiry, bounded post-kill drain). On expiry the child is killed and the
     call maps to exit 124 (the ``timeout(1)`` convention) with the deadline
     named on stderr.
     """
-    from hpc_agent.infra.remote import _capture_via_select
+    from hpc_agent.infra.remote import capture_via_select
 
     try:
-        proc = _capture_via_select(
+        proc = capture_via_select(
             _isolated_runner_argv(argv), timeout=_SUBPROCESS_RUNNER_TIMEOUT_SEC
         )
     except subprocess.TimeoutExpired:

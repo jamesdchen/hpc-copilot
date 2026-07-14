@@ -12,7 +12,7 @@ The idiom is the one every test uses (``tests/_kernel/hooks/test_utterance_captu
 ``_scaffold_namespace`` + ``tests/conftest.py``'s ``HPC_JOURNAL_DIR`` redirect):
 point ``HPC_JOURNAL_DIR`` at an isolated home, then call
 ``state/run_record.py::journal_dir`` — the sole real claim
-(``mkdir`` + ``repo.json`` + ``runs/``) that ``_current_homedir`` resolves
+(``mkdir`` + ``repo.json`` + ``runs/``) that ``current_homedir`` resolves
 through the env var. Stdlib-only (pytest-free); the ``fixture_repo`` pytest
 fixture in ``conftest.py`` wraps this.
 """
@@ -32,13 +32,13 @@ def journal_home() -> Path:
     """The journal home the kit will write under — honors ``HPC_JOURNAL_DIR``.
 
     Delegates to the ONE canonical resolver
-    (``state/run_record.py::_current_homedir``): ``HPC_JOURNAL_DIR`` when
+    (``state/run_record.py::current_homedir``): ``HPC_JOURNAL_DIR`` when
     set-and-non-empty, else the ``HPC_HOMEDIR`` attribute, else
     ``~/.claude/hpc``. Never re-derives the lookup.
     """
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    return _current_homedir()
+    return current_homedir()
 
 
 def claim_fixture_repo(experiment_dir: Path) -> Path:

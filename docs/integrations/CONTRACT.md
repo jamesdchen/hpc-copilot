@@ -319,5 +319,6 @@ one full contract you picked.
 - [`docs/reference/cli-spec.md`](../reference/cli-spec.md) — envelope shape and exit-code contract.
 - [`docs/reference/agent-surface.md`](../reference/agent-surface.md) — design rationale for the POSIX-native surface.
 - [`docs/reference/boundary-contract.md`](../reference/boundary-contract.md) — what hpc-agent owns vs. what experiment repos own.
+- [`docs/reference/plugin-api-contract.md`](../reference/plugin-api-contract.md) — the frozen core import surface a plugin may reach (pinned by `scripts/lint_plugin_api_surface.py`).
 - [`docs/reference/env-vars.md`](../reference/env-vars.md) — every `HPC_*` env var the framework reads.
 - [`docs/primitives/`](../primitives/) — one file per subcommand.

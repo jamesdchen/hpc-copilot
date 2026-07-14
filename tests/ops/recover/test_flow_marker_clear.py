@@ -20,7 +20,6 @@ import pytest
 
 from hpc_agent.infra.backends import HPCBackend
 from hpc_agent.ops.recover_flow import resubmit_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from tests.conftest import make_sidecar_json
@@ -33,13 +32,6 @@ CLUSTER = "test_cluster"
 RUN_ID = "ml_ridge_abcd1234"
 SSH_TARGET = "user@cluster.example.edu"
 REMOTE_PATH = "/u/scratch/exp"
-
-
-@pytest.fixture
-def journal_home(tmp_path, monkeypatch):
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return tmp_path
 
 
 @pytest.fixture

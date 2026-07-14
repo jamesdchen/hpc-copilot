@@ -103,6 +103,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops import export_dossier
 from hpc_agent.state.challenges import standing_challenges
 from hpc_agent.state.decision_journal import read_decisions
+from hpc_agent.state.determinism import canonical_sha
 from hpc_agent.state.registration import (
     ABSENT,
     CURRENT,
@@ -125,24 +126,6 @@ if TYPE_CHECKING:
 __all__ = ["verify_registration", "build_view"]
 
 _JOURNAL_SUFFIX = ".decisions.jsonl"
-
-
-# ── canonical JSON / hashing (the harness-contract form) ─────────────────────
-# One local definition, matching docs/internals/harness-contract.md "The sha
-# canonicalization": json.dumps sort_keys + compact separators + ensure_ascii=
-# False, UTF-8, sha256 lowercase hex. The same serialization every view_sha in
-# the system is taken over (ops/notebook/audit_view.py::_canonical_json is the
-# reference); the T7 gate recomputes the brief sha through this identical form.
-
-
-def _canonical_json(obj: Any) -> str:
-    """Canonical JSON: sorted keys, compact separators, unicode kept as-is."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _sha_json(obj: Any) -> str:
-    """sha256 hexdigest of :func:`_canonical_json` of *obj* (utf-8)."""
-    return hashlib.sha256(_canonical_json(obj).encode("utf-8")).hexdigest()
 
 
 # ── the T4 / T6 seams ────────────────────────────────────────────────────────
@@ -542,7 +525,7 @@ def build_view(
         "fields": fields.model_dump(),
     }
     brief = _render_brief(projection)
-    view_sha = _sha_json({**projection, "brief": brief})
+    view_sha = canonical_sha({**projection, "brief": brief})
     return brief, view_sha
 
 

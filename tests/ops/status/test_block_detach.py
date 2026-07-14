@@ -45,12 +45,6 @@ class _FakeLaunch:
     log_path = "/x/status-watch.log"
 
 
-@pytest.fixture(autouse=True)
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the journal-global ``_detached/`` lease store at a hermetic tmp dir."""
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-
-
 def _watch_spec(*, detach: bool = True) -> StatusWatchSpec:
     return StatusWatchSpec(monitor=MonitorFlowSpec(run_id=_RUN_ID), detach=detach)
 
@@ -263,7 +257,7 @@ def test_watch_returns_live_worker_handle_no_second_spawn(
     """The unattended cron tick re-fires block-drive while the worker still polls:
     a LIVE lease returns its handle (no second spawn), never DetachedLeaseHeld."""
     _write_lease(pid=7777)
-    monkeypatch.setattr("hpc_agent._kernel.lifecycle.detached._pid_alive", lambda _p: True)
+    monkeypatch.setattr("hpc_agent._kernel.lifecycle.detached.pid_alive", lambda _p: True)
 
     with (
         mock.patch(_LAUNCH_PATH) as m_launch,
@@ -282,7 +276,7 @@ def test_watch_dead_lease_respawns(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     """A DEAD lease (worker crashed/exited) is reclaimed → a fresh worker is
     spawned (the re-spawn seam), never re-dialed inline."""
     _write_lease(pid=999_999)
-    monkeypatch.setattr("hpc_agent._kernel.lifecycle.detached._pid_alive", lambda _p: False)
+    monkeypatch.setattr("hpc_agent._kernel.lifecycle.detached.pid_alive", lambda _p: False)
 
     with (
         mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch,
@@ -309,7 +303,8 @@ def test_guard_single_lease_keys_the_watch(tmp_path: Path, monkeypatch: pytest.M
     lease = detached_dir / "status-watch-somerun.lease.json"
     lease.write_text(json.dumps({"pid": 4242}), encoding="utf-8")
 
-    # Live pid → refuse the sibling.
+    # Live pid → refuse the sibling. ``_guard_single_lease`` reads the
+    # intra-module ``_pid_alive`` seam (kept), not the public ``pid_alive``.
     monkeypatch.setattr(detached, "_pid_alive", lambda _p: True)
     with pytest.raises(detached.DetachedLeaseHeld):
         detached._guard_single_lease(detached_dir, "status-watch", "somerun")

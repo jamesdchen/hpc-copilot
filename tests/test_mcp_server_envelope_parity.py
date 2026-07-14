@@ -36,8 +36,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from hpc_agent._kernel.extension import mcp_server as M
 from hpc_agent._kernel.hooks import decision_rendezvous_autofetch as rendezvous
 from hpc_agent._kernel.hooks import skill_return_autofetch as skillret
@@ -50,12 +48,6 @@ _BLOCK = "s2"
 _WORKFLOW = "submit"
 _NEXT_VERB = "s3"
 _BRIEF = {"proposal": "canary looks good", "cost": 42}
-
-
-@pytest.fixture(autouse=True)
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Isolate the journal home so nothing leaks between tests / into the real one.
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "_journal"))
 
 
 def _curated_server() -> M.McpServer:

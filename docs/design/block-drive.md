@@ -183,7 +183,7 @@ projected, never copied.
   is unenforceable; the verb-level guards are what hold.
 - **The CLI is the invariant substrate, not removable.** Detach children
   (`Popen(["hpc-agent", …])`), `doctor-install`, `watcher-install`, the
-  `hpc-campaign-driver` console script, cron/schtasks, cluster nodes, and
+  `hpc-block-drive` console script, cron/schtasks, cluster nodes, and
   non-MCP harnesses can only invoke the CLI. MCP is a *projection of* the
   registry + the interactive surface — never a replacement. Removing the CLI
   would invert the dependency graph and break detach + the recovery machine.

@@ -440,10 +440,10 @@ def _per_task_metrics_reduce(
     # 10-task run — the seed-mean 45/11 tell). The determinism fingerprint's
     # SECOND canary (``<run_id>-canary2``) contaminates the SAME way, so the
     # exclusion covers the whole ``-canary`` FAMILY — the one #258 suffix
-    # definition (``_sibling_run_ids``), never a second hardcoded "-canary".
-    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+    # definition (``sibling_run_ids``), never a second hardcoded "-canary".
+    from hpc_agent.ops.monitor.reconcile import sibling_run_ids
 
-    canary_ids = set(_sibling_run_ids(run_id))
+    canary_ids = set(sibling_run_ids(run_id))
     result_dirs = [d for d in result_dirs if canary_ids.isdisjoint(Path(d).parts)]
     # Cardinality gate (finding-21 family): MORE contributing rows than the
     # run's task count is PROVABLE foreign contamination (another run sharing
@@ -583,9 +583,9 @@ def _ingest_task_traces(
         )
         return counts
 
-    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+    from hpc_agent.ops.monitor.reconcile import sibling_run_ids
 
-    canary_ids = set(_sibling_run_ids(run_id))
+    canary_ids = set(sibling_run_ids(run_id))
     trace_files = sorted(
         p
         for p in traces_local.rglob(TRACE_TRANSPORT_FILENAME)

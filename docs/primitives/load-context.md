@@ -1,10 +1,6 @@
 ---
 name: load-context
 verb: query
-inputs:
-- name: experiment_dir
-  type: path
-  description: Repo root containing the journal and `.hpc/` state. Defaults to cwd.
 side_effects: []
 idempotent: true
 idempotency_key: none

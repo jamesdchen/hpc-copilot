@@ -1,0 +1,85 @@
+# Shrink-only burn-down ledger: remaining SANCTIONED cross-package private imports.
+#
+# Each line is a triple `importer_rel :: module :: _symbol` recording a place
+# where a file imports a leading-underscore (package-private) symbol from a
+# DIFFERENT package. scripts/lint_private_cross_package_imports.py fails on any
+# such import that is NOT listed here, and ALSO fails on any listed triple whose
+# import no longer exists (a stale entry) — so this ledger only ever shrinks:
+# promote the symbol to a public name (W2 pattern) and delete its line. Do NOT
+# add new entries to grow it; a genuinely new sanctioned exception needs a
+# reviewed reason. Regenerate the body (never blindly overwrite this header)
+# with: python scripts/lint_private_cross_package_imports.py --print-current
+#
+_kernel/contract/schema.py :: hpc_agent._kernel.registry.operations :: _cli_subcommand
+_kernel/extension/capabilities.py :: hpc_agent.cli._helpers :: _ok
+_kernel/extension/capabilities.py :: hpc_agent.cli.dispatch :: _live_subcommands
+_kernel/extension/mcp_server.py :: hpc_agent.cli._dispatch :: _leaf_verb
+_kernel/hooks/skill_return_autofetch.py :: hpc_agent.cli.skill_returns :: _KNOWN_SKILLS
+_kernel/hooks/skill_return_autofetch.py :: hpc_agent.cli.skill_returns :: _committed_path
+_kernel/hooks/skill_return_stop_guard.py :: hpc_agent.cli.skill_returns :: _KNOWN_SKILLS
+_kernel/hooks/skill_return_stop_guard.py :: hpc_agent.cli.skill_returns :: _committed_path
+_kernel/lifecycle/block_drive.py :: hpc_agent.ops.block_gate :: _journaled_target
+_wire/actions/classify_axis.py :: hpc_agent._wire.fixtures.axes :: _DataAxisConfig
+_wire/actions/classify_axis_auto.py :: hpc_agent._wire.fixtures.axes :: _DataAxisConfig
+_wire/queries/walk_submit_ambiguities.py :: hpc_agent._wire.actions.interview :: _TaskGenerator
+cli/lifecycle.py :: hpc_agent.ops.monitor.list_in_flight :: _last_status_age_seconds
+cli/setup.py :: hpc_agent._kernel.extension.capabilities :: _capabilities_handler
+cli/setup.py :: hpc_agent._kernel.extension.mcp_server :: _load_input_schema
+cli/setup.py :: hpc_agent.ops.preflight.check :: _preflight_exit_error
+conformance/relay_fixtures.py :: hpc_agent._kernel.hooks.relay_audit_stop :: _CONTRADICTION_KINDS
+experiment_kit/axis_matcher/_classifier.py :: hpc_agent.experiment_kit.axis_matcher.matchers.ema :: _match_ema_smoothing
+experiment_kit/axis_matcher/_classifier.py :: hpc_agent.experiment_kit.axis_matcher.matchers.pandas_rolling :: _match_pandas_rolling
+experiment_kit/axis_matcher/_classifier.py :: hpc_agent.experiment_kit.axis_matcher.matchers.stencil :: _match_stencil
+experiment_kit/axis_matcher/_classifier.py :: hpc_agent.experiment_kit.axis_matcher.matchers.window :: _match_bounded_window_deque
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _DEFAULT_EXECUTOR_CMD
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_bare_module_executor
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_bare_script_executor
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_executor_format_placeholders
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_executor_in_deploy_manifest
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_executor_is_dispatcher
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_executor_kwarg_casing
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_executor_var_references
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _check_register_run_executor
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _resolve_kwargs_keys
+incorporation/build/submit_spec.py :: hpc_agent.infra.executor_guard :: _warn_task_interface_blind_executor
+incorporation/build/tasks_py.py :: hpc_agent.cli._helpers :: _load_spec
+incorporation/build/tasks_py.py :: hpc_agent.cli._helpers :: _validate_against_schema
+incorporation/classify_axis_auto.py :: hpc_agent.ops.classify_axis_preflight :: _run_cache_check
+incorporation/decorate_entry_point.py :: hpc_agent.experiment_kit.axis_matcher._ast_utils :: _called_name
+incorporation/decorate_entry_point.py :: hpc_agent.experiment_kit.axis_matcher._ast_utils :: _find_function
+infra/backends/_engine.py :: hpc_agent.infra.inspect.pbs :: _pbs_inspect
+infra/backends/_engine.py :: hpc_agent.infra.inspect.sge :: _sge_inspect
+infra/backends/_engine.py :: hpc_agent.infra.inspect.slurm :: _slurm_inspect
+meta/campaign/atoms/health.py :: hpc_agent.cli._helpers :: _ok
+meta/campaign/atoms/health.py :: hpc_agent.cli._helpers :: _validate_against_schema
+meta/campaign/blocks.py :: hpc_agent._kernel.lifecycle.block_drive :: _spec_sha
+ops/aggregate_flow.py :: hpc_agent.ops.aggregate.runner :: _read_remote_sidecar
+ops/aggregate_flow.py :: hpc_agent.ops.monitor.terminal :: _is_terminal
+ops/attention_queue.py :: hpc_agent.ops.decision.journal.verify_relay :: _nb_resolve_sources
+ops/decision/journal/_shared.py :: hpc_agent.state.scopes :: _SCOPE_LOCK_BLOCK
+ops/decision/journal/brief_provenance.py :: hpc_agent._kernel.lifecycle.block_drive :: _META_KEYS
+ops/memory/recall.py :: hpc_agent.cli._helpers :: _validate_against_schema
+ops/monitor/poll_detached.py :: hpc_agent._kernel.lifecycle.detached :: _read_lease_holder_pid
+ops/monitor/status.py :: hpc_agent.state.run_record :: _atomic_write_json
+ops/monitor_flow.py :: hpc_agent.ops.monitor.harvest_guard :: _circuit_wait_sec
+ops/monitor_flow.py :: hpc_agent.ops.monitor.reconcile :: _ssh_alive_job_ids
+ops/monitor_flow.py :: hpc_agent.ops.monitor.terminal :: _ingest_runtime_at_terminal
+ops/monitor_flow.py :: hpc_agent.ops.monitor.terminal :: _is_terminal
+ops/monitor_flow.py :: hpc_agent.ops.monitor.tick_log :: _append_tick
+ops/monitor_flow.py :: hpc_agent.ops.monitor.tick_log :: _status_fingerprint
+ops/monitor_flow.py :: hpc_agent.ops.monitor.waves :: _newly_complete_waves
+ops/monitor_flow.py :: hpc_agent.ops.monitor.waves :: _read_partial_ok
+ops/preflight/check.py :: hpc_agent.infra.ssh_options :: _scp_binary
+ops/preflight/check.py :: hpc_agent.infra.ssh_options :: _ssh_add_binary
+ops/preflight/check.py :: hpc_agent.infra.ssh_options :: _ssh_binary
+ops/preflight/probe_cache.py :: hpc_agent.infra.ssh_circuit :: _safe_name
+ops/recover/heal_taxonomy.py :: hpc_agent._kernel.lifecycle.detached :: _agent_launch_prefix
+ops/recover/heal_taxonomy.py :: hpc_agent._kernel.lifecycle.detached :: _spawn_detached
+ops/scaffold_spec.py :: hpc_agent._wire.actions.interview :: _PARAM_NAME
+ops/submit/runner.py :: hpc_agent._kernel.lifecycle.drive :: _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
+ops/submit_flow.py :: hpc_agent.infra.executor_guard :: _is_bare_script_name
+ops/submit_flow.py :: hpc_agent.infra.transport :: _GENERATED_SHIPPABLE
+ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _REFUSE
+ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _resolve_layer1
+ops/validate/dry_run_local.py :: hpc_agent.execution.mapreduce.dispatch :: _executor_reinvokes_dispatcher
+state/snapshot_cache.py :: hpc_agent.infra.ssh_circuit :: _safe_name

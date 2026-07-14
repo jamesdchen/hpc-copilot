@@ -1,19 +1,6 @@
 ---
 name: plan-throughput
 verb: query
-inputs:
-- name: cluster
-  type: string
-  description: Cluster name; its `constraints:` block in clusters.yaml supplies the
-    scheduler limits.
-- name: total_tasks
-  type: integer
-  description: Total task count to pack into waves (the grid cardinality).
-- name: est_task_duration_s
-  type: integer
-  description: Optional estimated per-task wall seconds. Enables the walltime-feasibility
-    check and total-time estimate.
-  default: null
 side_effects: []
 idempotent: true
 idempotency_key: none

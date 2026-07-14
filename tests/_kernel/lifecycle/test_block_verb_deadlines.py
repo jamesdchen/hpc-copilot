@@ -16,7 +16,7 @@ per-verb deadline from the block registry
 The fire-path tests use a real synthetic hanging child (``python -c
 "time.sleep(60)"``) under an injected sub-second deadline — no real long
 sleeps, and the kill is exercised for real (including the Windows post-kill
-bounded drain inside ``infra.remote._capture_via_select``).
+bounded drain inside ``infra.remote.capture_via_select``).
 """
 
 from __future__ import annotations

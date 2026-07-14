@@ -1,7 +1,6 @@
 ---
 name: clusters-list
 verb: query
-inputs: []
 side_effects: []
 idempotent: true
 idempotency_key: none

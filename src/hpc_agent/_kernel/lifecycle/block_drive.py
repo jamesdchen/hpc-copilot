@@ -343,12 +343,12 @@ def _run_block_verb(
     The wait is BOUNDED by the per-verb deadline from the block registry
     (:func:`block_chain.verb_deadline_seconds` — watch-class blocks get their
     spec's own wall-clock budget + slack; everything else a class ceiling). The
-    capture routes through ``infra.remote._capture_via_select``, the S2-wedge-fix
+    capture routes through ``infra.remote.capture_via_select``, the S2-wedge-fix
     seam whose deadline can actually fire on Windows (kill on expiry, then a
     bounded post-kill drain — see ``_capture_windows``). On expiry the child is
     killed and the span reports ``({}, _TIMEOUT_EXIT_CODE)``.
     """
-    from hpc_agent.infra.remote import _capture_via_select
+    from hpc_agent.infra.remote import capture_via_select
 
     deadline = block_chain.verb_deadline_seconds(verb, spec)
     with tempfile.NamedTemporaryFile(
@@ -357,7 +357,7 @@ def _run_block_verb(
         json.dump(spec, handle)
         spec_path = handle.name
     try:
-        proc = _capture_via_select(
+        proc = capture_via_select(
             _block_verb_argv(verb, spec_path, experiment_dir), timeout=deadline
         )
     except subprocess.TimeoutExpired:

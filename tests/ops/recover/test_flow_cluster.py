@@ -22,7 +22,6 @@ from hpc_agent.ops.recover_flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 from tests.conftest import make_sidecar_json
@@ -33,13 +32,6 @@ if TYPE_CHECKING:
 PROFILE = "ml_ridge"
 CLUSTER = "test_cluster"
 RUN_ID = "ml_ridge_abcd1234"
-
-
-@pytest.fixture
-def journal_home(tmp_path, monkeypatch):
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return tmp_path
 
 
 @pytest.fixture

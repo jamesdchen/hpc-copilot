@@ -1,16 +1,6 @@
 ---
 name: failures
 verb: query
-inputs:
-- name: run_id
-  type: string
-- name: experiment_dir
-  type: path
-  default: cwd
-- name: lines
-  type: integer
-  default: 30
-  description: Per-task stderr tail length used for fingerprinting.
 outputs:
 - name: run_id
   type: string

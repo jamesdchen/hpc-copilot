@@ -254,7 +254,7 @@ def test_canary2_exclusion_routes_through_the_one_sibling_definition() -> None:
     src = inspect.getsource(aggregate_flow._per_task_metrics_reduce)
     # Route-through: the reduce calls the ONE suffix definition, never a re-inlined
     # ``result_dirs = [d for d in ... if "-canary" not in d]`` literal filter.
-    assert "_sibling_run_ids" in src
+    assert "sibling_run_ids" in src
     assert 'family.append(f"{run_id}-canary")' not in src  # the family lives in reconcile, not here
     # The ONE definition covers the whole ``-canary`` family, ``-canary2`` included.
     assert set(reconcile._sibling_run_ids("main")) == {"main-canary", "main-canary2"}

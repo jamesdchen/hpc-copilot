@@ -10,7 +10,7 @@ auto-recovers on one retry instead of surfacing a terminal ``status reporter
 failed`` that the monitor records as an ``abandoned`` journal corpse (the
 upstream of #276 Bug 1).
 
-The seam patched here is ``infra.remote._capture_via_select`` — the one capture
+The seam patched here is ``infra.remote.capture_via_select`` — the one capture
 point ``ssh_run`` funnels through (and the documented point tests fake remote
 output) — so the real ``run_with_named_pipe_retry`` recovery runs end to end.
 """
@@ -40,12 +40,12 @@ def _report(monkeypatch, attempts):
     outcomes = iter(attempts)
     calls: list[list[str]] = []
 
-    def _fake_capture(argv, *, timeout):  # matches remote._capture_via_select
+    def _fake_capture(argv, *, timeout):  # matches remote.capture_via_select
         calls.append(argv)
         return next(outcomes)
 
     monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")  # isolate the named-pipe retry
-    monkeypatch.setattr(remote, "_capture_via_select", _fake_capture)
+    monkeypatch.setattr(remote, "capture_via_select", _fake_capture)
     report = cluster_status.ssh_status_report(
         ssh_target="u@host",
         remote_path="/scratch/exp",

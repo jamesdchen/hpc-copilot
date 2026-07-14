@@ -48,7 +48,7 @@ def test_no_live_worker_returns_immediately(homedir) -> None:
 
 def test_dead_pid_lease_is_no_live_worker(homedir, monkeypatch) -> None:
     _write_lease(homedir, block="submit-s2", run_id="run-abc", pid=4242)
-    monkeypatch.setattr(detached_mod, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(detached_mod, "pid_alive", lambda pid: False)
     out = wait_detached(spec=WaitDetachedInput(run_id="run-abc"))
     assert out.outcome == "no_live_worker"
 
@@ -57,7 +57,7 @@ def test_worker_exit_is_observed(homedir, monkeypatch) -> None:
     """Alive for two probes, then dead → worker_exited with the lease's block."""
     _write_lease(homedir, block="submit-s2", run_id="run-abc", pid=4242)
     probes = iter([True, True, False])
-    monkeypatch.setattr(detached_mod, "_pid_alive", lambda pid: next(probes, False))
+    monkeypatch.setattr(detached_mod, "pid_alive", lambda pid: next(probes, False))
     out = wait_detached(
         spec=WaitDetachedInput(run_id="run-abc", timeout_sec=30, poll_interval_sec=0.01)
     )
@@ -69,7 +69,7 @@ def test_worker_exit_is_observed(homedir, monkeypatch) -> None:
 
 def test_timeout_when_worker_outlives_budget(homedir, monkeypatch) -> None:
     _write_lease(homedir, block="submit-s3", run_id="run-abc", pid=77)
-    monkeypatch.setattr(detached_mod, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(detached_mod, "pid_alive", lambda pid: True)
     out = wait_detached(
         spec=WaitDetachedInput(run_id="run-abc", timeout_sec=0.05, poll_interval_sec=0.01)
     )
@@ -81,7 +81,7 @@ def test_timeout_when_worker_outlives_budget(homedir, monkeypatch) -> None:
 def test_block_filter_selects_the_named_worker(homedir, monkeypatch) -> None:
     _write_lease(homedir, block="submit-s2", run_id="run-abc", pid=1)
     _write_lease(homedir, block="submit-s3", run_id="run-abc", pid=2)
-    monkeypatch.setattr(detached_mod, "_pid_alive", lambda pid: pid == 2)
+    monkeypatch.setattr(detached_mod, "pid_alive", lambda pid: pid == 2)
     out = wait_detached(
         spec=WaitDetachedInput(
             run_id="run-abc", block="submit-s3", timeout_sec=0.05, poll_interval_sec=0.01

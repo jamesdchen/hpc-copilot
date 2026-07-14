@@ -469,7 +469,7 @@ def canary_family(parent_run_id: str) -> list[str]:
     return [f"{parent_run_id}{suffix}" for suffix in _CANARY_SUFFIXES]
 
 
-def _sibling_run_ids(run_id: str) -> list[str]:
+def sibling_run_ids(run_id: str) -> list[str]:
     """Paired journal entries that share this submit's ``cmd_sha`` (#258 + double canary).
 
     A canary-gated ``submit-flow`` writes the main run and its ``<run_id>-canary``
@@ -485,6 +485,9 @@ def _sibling_run_ids(run_id: str) -> list[str]:
     if parent is not None:
         return [parent, *[c for c in canary_family(parent) if c != run_id]]
     return canary_family(run_id)
+
+
+_sibling_run_ids = sibling_run_ids  # back-compat alias
 
 
 @primitive(
@@ -561,7 +564,7 @@ def reconcile(
         return primary
 
     sibling_outcomes: list[dict[str, Any]] = []
-    for sib_id in _sibling_run_ids(run_id):
+    for sib_id in sibling_run_ids(run_id):
         sib = load_run(experiment_dir, sib_id)
         if sib is None:
             continue  # no paired entry — nothing to cascade to

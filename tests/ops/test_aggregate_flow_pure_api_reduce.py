@@ -30,7 +30,6 @@ from hpc_agent.infra import backends
 from hpc_agent.infra.backends import HPCBackend
 from hpc_agent.ops import aggregate_flow as agg
 from hpc_agent.ops.aggregate_flow import aggregate_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -50,13 +49,6 @@ _TASKS = [
     {"value": 3.0, "metrics": {"loss": 5.0, "n_samples": 2}},
 ]
 _MEAN_RESULT = {_RUN_ID: {"loss": 3.5, "n_samples": 4}}
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

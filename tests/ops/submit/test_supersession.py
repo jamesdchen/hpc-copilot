@@ -34,11 +34,6 @@ SHA = "a" * 64
 OTHER_SHA = "b" * 64
 
 
-@pytest.fixture(autouse=True)
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-
-
 def _record(
     tmp_path: Path,
     run_id: str,

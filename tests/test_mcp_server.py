@@ -551,7 +551,7 @@ def test_subprocess_cli_runner_deadline_fires(monkeypatch) -> None:
     Fire path for the bound that closed the last ``_GRANDFATHERED`` entry in
     ``tests/contracts/test_src_subprocess_timeout_discipline.py``: a synthetic
     hanging child under an injected sub-second cap is killed (via the
-    ``infra.remote._capture_via_select`` wedge-safe seam) rather than awaited,
+    ``infra.remote.capture_via_select`` wedge-safe seam) rather than awaited,
     and the call maps to exit 124 with the deadline named on stderr.
     """
     import sys

@@ -154,11 +154,11 @@ def open_circuit_lines() -> list[str]:
     the actionable next step — the file still says "open" until traffic runs
     the probe, and rendering that stale OPEN forever was the 2026-07-05 bug.
     """
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
     lines: list[str] = []
     try:
-        state_dir = _current_homedir() / "_ssh_circuit"
+        state_dir = current_homedir() / "_ssh_circuit"
         paths = sorted(state_dir.glob("*.json")) if state_dir.is_dir() else []
     except OSError:
         return []

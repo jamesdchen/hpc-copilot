@@ -7,7 +7,7 @@ AFTER the run is terminal. doctor's `scan_dead_detached_workers` closes that
 blind spot: a lease with a DEAD pid and NO recorded block-terminal is surfaced
 as a drafted re-invoke proposal (detection only — doctor never re-runs).
 
-Cluster-free: leases are fabricated on disk and `_pid_alive` is monkeypatched
+Cluster-free: leases are fabricated on disk and `pid_alive` is monkeypatched
 so liveness never depends on a real pid or wall-clock.
 """
 
@@ -68,11 +68,11 @@ def _write_lease(*, block: str, run_id: str, pid: int, experiment_dir: Path) -> 
 
 def _dead(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every pid reads DEAD — deterministic, no real process involved."""
-    monkeypatch.setattr(doctor_mod, "_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(doctor_mod, "pid_alive", lambda _pid: False)
 
 
 def _alive(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(doctor_mod, "pid_alive", lambda _pid: True)
 
 
 def test_dead_worker_without_terminal_is_surfaced(

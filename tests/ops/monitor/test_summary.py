@@ -20,19 +20,11 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.ops.monitor.summary import monitor_summary
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed(experiment: Path, run_id: str = "r1", **overrides: Any) -> RunRecord:

@@ -52,19 +52,20 @@ I/O contracts:
 
 from __future__ import annotations
 
-import json
-import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.backends import backend_requires_ssh
-from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.ops._preflight_common import (
+    SubCall,
+    _run_subprocess,
+    _synth_error_subresult,  # noqa: F401 - re-export (tests reference it via the module)
+)
 
 __all__ = [
     "SubCall",
@@ -83,14 +84,6 @@ _PARALLEL_SUBCALLS = (
     "check-preflight",
     "resolve-resources",
 )
-
-
-@dataclass(frozen=True)
-class SubCall:
-    """One sub-call within submit-preflight (name + full argv)."""
-
-    name: str
-    argv: list[str]
 
 
 def _resolve_resources_argv(
@@ -222,80 +215,6 @@ def _build_subcalls(
         )
 
     return calls
-
-
-def _synth_error_subresult(
-    *, error_code: str, message: str, category: str, elapsed_sec: float
-) -> dict[str, Any]:
-    """Build a SubResult whose envelope is a synthesised ErrorEnvelope.
-
-    Used when the sub-call could not emit its own JSON (spawn failure,
-    timeout, non-JSON stdout). Matches ErrorEnvelope in envelope.json.
-    """
-    return {
-        "envelope": {
-            "ok": False,
-            "error_code": error_code,
-            "message": message,
-            "category": category,
-            "retry_safe": False,
-        },
-        "elapsed_sec": elapsed_sec,
-        "ok": False,
-    }
-
-
-def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
-    """Run *call.argv* synchronously; return its SubResult dict.
-
-    Captures stdout + stderr; parses stdout as a JSON envelope. Spawn
-    failure, timeout, and non-JSON stdout all synthesise a uniform
-    ErrorEnvelope so the outer composite can branch consistently.
-    """
-    started = time.monotonic()
-    try:
-        proc = run_capture_bounded(call.argv, timeout_sec=timeout_sec)
-    except subprocess.TimeoutExpired:
-        return _synth_error_subresult(
-            error_code="cluster_timeout",
-            message=f"{call.name} exceeded {timeout_sec}s timeout",
-            category="cluster",
-            elapsed_sec=time.monotonic() - started,
-        )
-    except OSError as exc:
-        return _synth_error_subresult(
-            error_code="internal",
-            message=f"failed to spawn {call.name}: {exc}",
-            category="internal",
-            elapsed_sec=time.monotonic() - started,
-        )
-
-    elapsed_sec = time.monotonic() - started
-
-    try:
-        envelope = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        stderr_tail = (proc.stderr or "")[-400:]
-        return {
-            "envelope": {
-                "ok": False,
-                "error_code": "internal",
-                "message": (
-                    f"{call.name} did not emit a JSON envelope on stdout; "
-                    f"stderr tail: {stderr_tail}"
-                ),
-                "category": "internal",
-                "retry_safe": False,
-            },
-            "elapsed_sec": elapsed_sec,
-            "ok": False,
-        }
-
-    return {
-        "envelope": envelope,
-        "elapsed_sec": elapsed_sec,
-        "ok": bool(envelope.get("ok", False)),
-    }
 
 
 def _run_subcalls(calls: list[SubCall], *, timeout_sec: float) -> dict[str, dict[str, Any]]:

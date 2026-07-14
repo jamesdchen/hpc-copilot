@@ -57,9 +57,9 @@ def _alerts_paths(experiment_dir: Path) -> tuple[Path, Path]:
     ``<repo_hash>/`` dirs). The writer (:func:`_append_alert_log`) keeps using
     the creating ``journal_dir``.
     """
-    from hpc_agent.state.run_record import _current_homedir, repo_hash
+    from hpc_agent.state.run_record import current_homedir, repo_hash
 
-    base = _current_homedir() / repo_hash(experiment_dir)
+    base = current_homedir() / repo_hash(experiment_dir)
     return base / _ALERTS_LOG_NAME, base / _ALERTS_WATERMARK_NAME
 
 

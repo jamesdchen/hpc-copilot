@@ -27,7 +27,7 @@ Mechanism (classic circuit breaker, persisted per host):
   a fleet waking up together cannot stampede.
 
 State lives at ``<journal home>/_ssh_circuit/<host>.json`` (journal home =
-:func:`hpc_agent.state.run_record._current_homedir`, so ``HPC_JOURNAL_DIR``
+:func:`hpc_agent.state.run_record.current_homedir`, so ``HPC_JOURNAL_DIR``
 redirection — and therefore the test suite's autouse isolation — applies).
 File-based on purpose: CLI invocations, detached workers, and the MCP
 server are separate processes, and the breaker only works if they share
@@ -131,9 +131,9 @@ def _safe_name(host: str) -> str:
 
 def circuit_state_path(host: str) -> Path:
     """State file for *host* under the journal home (test-isolatable)."""
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    return _current_homedir() / "_ssh_circuit" / f"{_safe_name(host)}.json"
+    return current_homedir() / "_ssh_circuit" / f"{_safe_name(host)}.json"
 
 
 def _lock_path(target: Path) -> Path:

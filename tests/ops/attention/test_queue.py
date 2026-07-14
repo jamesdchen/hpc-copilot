@@ -8,7 +8,7 @@ the ``inspect.getsource`` route-through assertions (each collector calls its one
 source symbol), and the read-only / watermark-neutral discipline (D6) are pinned.
 
 Cluster-free: the journal home is redirected via ``HPC_JOURNAL_DIR``; the only
-liveness dependency (``_pid_alive`` for the dead-worker scan) and the ssh-circuit
+liveness dependency (``pid_alive`` for the dead-worker scan) and the ssh-circuit
 line source are monkeypatched so nothing touches a real process or breaker file.
 """
 
@@ -154,7 +154,7 @@ def test_parked_vs_greenlight_split(tmp_path: Path) -> None:
 
 
 def test_dead_worker_collector_fires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(doctor_mod, "_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(doctor_mod, "pid_alive", lambda _pid: False)
     detached = _current_homedir() / "_detached"
     detached.mkdir(parents=True, exist_ok=True)
     (detached / "submit-s4-run-crashed.lease.json").write_text(

@@ -26,8 +26,6 @@ import os
 import time
 from typing import TYPE_CHECKING
 
-import pytest
-
 from hpc_agent.state import runs as runs_module
 from hpc_agent.state.block_terminal import record_terminal, terminal_path
 from hpc_agent.state.runs import (
@@ -40,13 +38,6 @@ from hpc_agent.state.runs import (
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "journal_home"
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(home))
-    return home
 
 
 def _sidecar_kwargs(run_id: str, cmd_sha: str = "0" * 64) -> dict:
@@ -99,7 +90,7 @@ def test_find_existing_runs_skips_terminal_records(tmp_path: Path) -> None:
 
 
 def test_prune_orphan_sidecars_never_deletes_terminal_records(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """The ``submit_flow_batch`` shape: prune with ``min_age_seconds=0`` after
     prior runs recorded their block terminals. A genuine orphan sidecar is
@@ -117,7 +108,7 @@ def test_prune_orphan_sidecars_never_deletes_terminal_records(
 
 
 def test_find_run_by_cmd_sha_never_returns_a_terminal_record(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """A terminal record carries the tree's ``cmd_sha`` at top level and can be
     NEWER than the matching run sidecar — pre-fix the scan returned it, it

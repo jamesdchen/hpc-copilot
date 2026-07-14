@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
-
 from hpc_agent._wire.workflows.campaign_blocks import CampaignWatchSpec
 from hpc_agent.infra import block_chain
 from hpc_agent.meta.campaign.blocks import campaign_watch
@@ -21,15 +19,6 @@ from hpc_agent.meta.campaign.manifest import write_manifest
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_iteration(experiment_dir: Path, *, run_id: str, campaign_id: str, status: str) -> None:
@@ -74,7 +63,7 @@ def _seed_iteration(experiment_dir: Path, *, run_id: str, campaign_id: str, stat
 # ── watch terminator mapping ──────────────────────────────────────────────────
 
 
-def test_watch_refill_hands_off_to_campaign_refill(_journal_home: Path, tmp_path: Path) -> None:
+def test_watch_refill_hands_off_to_campaign_refill(journal_home: Path, tmp_path: Path) -> None:
     """An async campaign with a free pool slot (advance → refill) is a
     ``watching_refill`` terminator: no boundary, hand-off hint to campaign-refill."""
     write_manifest(tmp_path, campaign_id="A", goal="tune", async_refill=True, max_in_flight=3)
@@ -91,7 +80,7 @@ def test_watch_refill_hands_off_to_campaign_refill(_journal_home: Path, tmp_path
     assert res.next_block["spec_hint"]["campaign_id"] == "A"
 
 
-def test_watch_healthy_still_fires_for_continue(_journal_home: Path, tmp_path: Path) -> None:
+def test_watch_healthy_still_fires_for_continue(journal_home: Path, tmp_path: Path) -> None:
     """A SYNC campaign (no async opt-in) → advance continue → watching_healthy,
     unchanged (refill split did not disturb the healthy terminator)."""
     write_manifest(tmp_path, campaign_id="A", goal="tune")
@@ -105,7 +94,7 @@ def test_watch_healthy_still_fires_for_continue(_journal_home: Path, tmp_path: P
     assert res.next_block is None
 
 
-def test_watch_healthy_for_full_async_pool(_journal_home: Path, tmp_path: Path) -> None:
+def test_watch_healthy_for_full_async_pool(journal_home: Path, tmp_path: Path) -> None:
     """An async pool that is FULL (K=1, 1 in flight) → advance wait_in_flight →
     still watching_healthy (not refill): wait_in_flight stays a passive healthy
     tick, only ``refill`` routes to the actor."""
@@ -145,7 +134,7 @@ def test_campaign_refill_is_a_known_ungated_block() -> None:
     assert block_chain.is_gated("campaign-refill") is False
 
 
-def test_watching_refill_next_block_agrees_with_table(_journal_home: Path, tmp_path: Path) -> None:
+def test_watching_refill_next_block_agrees_with_table(journal_home: Path, tmp_path: Path) -> None:
     """The block's emitted next_block verb == the SUCCESSORS table (SoT-drift
     guard: the block module and the chain table cannot disagree)."""
     write_manifest(tmp_path, campaign_id="A", goal="tune", async_refill=True, max_in_flight=3)

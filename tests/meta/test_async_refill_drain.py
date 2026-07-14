@@ -30,15 +30,6 @@ if TYPE_CHECKING:
 _CID = "A"
 
 
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
-
-
 def _seed_iteration(experiment_dir: Path, *, run_id: str, status: str) -> None:
     """Seed a real sidecar + journal RunRecord for campaign ``_CID``."""
     from hpc_agent.state.journal import upsert_run

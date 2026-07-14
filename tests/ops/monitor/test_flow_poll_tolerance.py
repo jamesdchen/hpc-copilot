@@ -19,7 +19,6 @@ from hpc_agent._kernel.contract.vocabulary import LifecycleState
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.ops import monitor_flow as monitor_flow_module
 from hpc_agent.ops.monitor_flow import monitor_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import update_run_status, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -28,13 +27,6 @@ if TYPE_CHECKING:
 
 _RUN_ID = "20260606-130000-ccc"
 _COMPLETE_STATUS = {"complete": 4, "running": 0, "pending": 0, "failed": 0}
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

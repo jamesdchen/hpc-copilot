@@ -144,8 +144,8 @@ the bullet list the PLUGIN wave implements against:
 
 - **Storage locator.** `<journal home>/<repo_hash>/utterances.jsonl`, derived
   exactly as `state/utterances.py::utterances_path`:
-  `_current_homedir() / repo_hash(experiment_dir) / "utterances.jsonl"`.
-  `_current_homedir()` (`state/run_record.py`) resolves the journal home:
+  `current_homedir() / repo_hash(experiment_dir) / "utterances.jsonl"`.
+  `current_homedir()` (`state/run_record.py`) resolves the journal home:
   `HPC_JOURNAL_DIR` env if set-and-non-empty, else the module `HPC_HOMEDIR`
   attribute, else `~/.claude/hpc`. `repo_hash(experiment_dir)`
   (`state/run_record.py`) is the path-form-invariant

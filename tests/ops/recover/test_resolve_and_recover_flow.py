@@ -21,18 +21,10 @@ from hpc_agent.ops.resolve_and_recover_flow import (
     _concrete_overrides,
     maybe_resolve_and_recover,
 )
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import is_held, load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
 _RUN_ID = "20260606-120000-aaa"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

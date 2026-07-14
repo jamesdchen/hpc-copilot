@@ -30,7 +30,7 @@ The agent's job collapses to: read the run state, call this primitive, and (when
 ## Notes
 
 - **Adaptive table**: built into the primitive, lifted from `/monitor-hpc` Step 5's Markdown table. Order: queue-wait super-cache → ETA branches → all-pending fallback → running fallback. Single source of truth so changes land in one place.
-- **Cron-driven self-scheduling**: `data.cron_create_args` is ready to pass to `CronCreate`; each tick is a fresh process, so there is no exit contract to satisfy. The cadence table also picks a sensible interval for a cron running the headless `hpc-campaign-driver`.
+- **Cron-driven self-scheduling**: `data.cron_create_args` is ready to pass to `CronCreate`; each tick is a fresh process, so there is no exit contract to satisfy. The cadence table also picks a sensible interval for a cron running the headless `hpc-block-drive`.
 - **Terminal detection**: `arm == "none"` when (a) `complete == total_tasks` or (b) `failed > 0 and running == 0 and pending == 0`. The slash command must `CronDelete` any prior cron for the run_id when arm is none.
 - **`/loop` invocation**: when `user_invoked_via_loop=True`, returns `arm == "loop"` with `cadence_sec=0` and `cron_create_args=null`. The user is driving the cadence, so no cron is registered.
 - **Side-effect-free**: pure function. Safe to call from anywhere (slash command, external orchestrator, debug shell). Run multiple times to compare cadence picks across hypothetical states.

@@ -71,17 +71,14 @@ from hpc_agent.state.evidence import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-# --- the render seam (T4, built in parallel) ---------------------------------
+# --- the render seam (T4) ----------------------------------------------------
 # ``ops/evidence_render.py::render_brief(collection, *, computed_at, as_of=None)
-# -> str`` is authored by the parallel T4 agent. Import it at MODULE level so a
-# test can monkeypatch ``evidence_brief_op._render_brief``, guarded so this
-# module imports cleanly before T4 lands. When absent, a deterministic
-# placeholder keeps the verb functional (byte-stable for the cache) — the human
-# digest is empty-but-honest until the renderer is present.
-try:  # pragma: no cover — the seam flips to "present" once T4 lands
-    from hpc_agent.ops.evidence_render import render_brief as _render_brief
-except ImportError:  # pragma: no cover
-    _render_brief = None  # type: ignore[assignment]
+# -> str`` is imported at MODULE level so a test can monkeypatch
+# ``evidence_brief_op._render_brief``. T4 has landed and ``evidence_render`` is a
+# sibling ``ops/`` module, so it always resolves on the control plane (the only
+# surface this module imports on) — the former ``except ImportError`` placeholder
+# fallback could never fire and is gone.
+from hpc_agent.ops.evidence_render import render_brief as _render_brief
 
 __all__ = ["evidence_brief"]
 

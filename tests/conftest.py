@@ -152,6 +152,30 @@ def _isolated_journal_home(tmp_path: Path) -> Iterator[None]:
             os.environ.pop("HPC_JOURNAL_DIR", None)
 
 
+@pytest.fixture
+def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Re-point the journal home to a NAMED tmp dir and return that path.
+
+    The dozens of per-file ``journal_home``/``_journal_home`` fixtures all did
+    exactly this: patch ``run_record.HPC_HOMEDIR`` to ``tmp_path / "home_hpc"``
+    and hand the path back so the test can seed sidecars/records under a home it
+    can also read. This is the single shared version they collapse onto.
+
+    It COEXISTS with the autouse ``_isolated_journal_home`` above rather than
+    replacing it: that guard runs first at setup and redirects the home to a
+    *different* tmp subdir for EVERY test (the leak-proof floor, honoured whether
+    or not a test asks for a named home). Requesting this fixture re-points the
+    same attribute again — via the identical ``monkeypatch.setattr`` idiom, so
+    ordering is deterministic and undo restores cleanly — to the ``home_hpc``
+    path it returns, which the test body then reads.
+    """
+    from hpc_agent.state import run_record
+
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+    return home
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _register_primitives_once() -> None:
     """Populate the @primitive registry once per pytest session.

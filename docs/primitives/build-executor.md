@@ -1,21 +1,6 @@
 ---
 name: build-executor
 verb: scaffold
-inputs:
-- name: name
-  type: string
-  description: Output filename stem (no .py).
-- name: output_dir
-  type: path
-  description: Where to write the new file. Defaults to cwd.
-- name: type
-  type: enum
-  description: Starter template selector. Currently only `plain`.
-  default: plain
-- name: force
-  type: bool
-  description: Overwrite existing destination.
-  default: false
 side_effects:
 - writes-file: <output_dir>/<name>.py (refuses to overwrite without --force)
 idempotent: false

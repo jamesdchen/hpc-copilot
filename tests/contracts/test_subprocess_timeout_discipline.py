@@ -47,14 +47,10 @@ _ALLOWLIST_FILES: set[str] = {
 # follow-up migration is to switch each to :func:`tests._subprocess.run_cli`
 # (or add an explicit timeout) and remove its entry here. DO NOT GROW.
 _GRANDFATHERED: set[str] = {
-    "tests/cli/_helpers.py",
-    "tests/integration/test_external_harness_compat.py",
     "tests/integration/test_hpc_preamble_integration.py",
     "tests/integration/test_status_integration.py",
     "tests/infra/test_audit_fixes.py",
     "tests/scripts/test_bake_operations_json.py",
-    "tests/ops/memory/test_interview.py",
-    "tests/ops/memory/test_recall.py",
 }
 
 

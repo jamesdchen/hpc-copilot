@@ -1,16 +1,19 @@
 name: ci
 
 # Flake auto-recovery (2026-06-04): same pattern as ``docs.yml``. On
-# ``pull_request`` events a separate ``regen-pr`` job runs the full
-# generator chain (schemas, primitive frontmatter, primitive index,
-# operations index, baked operations.json) and commits the result back
-# to the PR branch via ``stefanzweifel/git-auto-commit-action``. The
+# ``pull_request`` events a separate ``regen-pr`` job regenerates the
+# NON-DOCS generated artifacts (schemas, baked operations.json) and
+# commits the result back to the PR branch via
+# ``stefanzweifel/git-auto-commit-action``. All docs/ regen+commit is
+# owned by ``docs.yml`` instead, so the two workflows' auto-commit
+# ``file_pattern``s are disjoint (``src/hpc_agent/...`` here vs
+# ``docs/...`` there) and can never race to push the same path. The
 # auto-commit triggers a fresh workflow run; workflow-level
 # ``concurrency`` cancels the in-flight run so only the post-regen run
-# reports status. The ``test`` matrix runs independently — when the
-# auto-regen cancels the original run, the new run's test matrix sees
-# the regenerated files and the ``--check`` gates below pass
-# deterministically.
+# reports status. The ``test`` matrix runs independently and regenerates
+# ALL artifacts locally (its own non-committing ``--write`` step) before
+# the ``--check`` gates below, so every gate self-heals regardless of
+# which workflow lands the committed drift.
 
 on:
   push:
@@ -55,15 +58,15 @@ jobs:
             uv.lock
       - name: Install package with dev extras
         run: pip install -e '.[dev]' pyyaml
-      - name: Regenerate every checked-in generated artifact
-        # Ordered same as the ``Notes for next session`` regen
-        # recipe in ``SESSION_HANDOFF.md``. Each is idempotent: a no-op
-        # when the committed file already matches the source.
+      - name: Regenerate the non-docs generated artifacts
+        # This job OWNS regen+commit of the non-docs generated files only:
+        # src/hpc_agent/schemas/ and src/hpc_agent/operations.json. All
+        # docs/ regen+commit is owned by docs.yml — the two auto-commit
+        # file_patterns are disjoint (src/hpc_agent/... here vs docs/...
+        # there), so the two workflows can no longer race to push the same
+        # path. Each is idempotent: a no-op when already consistent.
         run: |
           python scripts/build_schemas.py --write
-          python scripts/build_primitive_frontmatter.py --write
-          python scripts/build_primitive_index.py --write
-          python scripts/build_operations_index.py --write
           python scripts/bake_operations_json.py --write
       - name: Commit regen drift to PR branch
         # No-op when no diff; only fires when the regen actually
@@ -76,7 +79,7 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore(generated): auto-regenerate after upstream drift"
-          file_pattern: "docs/ src/hpc_agent/operations.json src/hpc_agent/schemas/"
+          file_pattern: "src/hpc_agent/operations.json src/hpc_agent/schemas/"
           commit_user_name: github-actions[bot]
           commit_user_email: github-actions[bot]@users.noreply.github.com
 
@@ -182,6 +185,15 @@ jobs:
       - name: Lint mirror comments name their twin + pinning test
         if: matrix.python-version == '3.12'
         run: python scripts/lint_mirror_ledger.py
+      - name: Lint plugin->core API surface (stay-inside + anti-drift)
+        # Both legs run without the plugin installed: the stay-inside AST scan
+        # reads the plugin source in the checkout, and the anti-drift leg
+        # imports each allowlisted symbol from the installed hpc_agent.
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_plugin_api_surface.py
+      - name: Lint no cross-package private-symbol imports
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_private_cross_package_imports.py
       - name: Check JSON schemas regenerated from Pydantic
         if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check
@@ -273,6 +285,12 @@ jobs:
         # a plugin, so the lint checks that plugin's MANIFEST against the runtime
         # reality (primitive names, worker-prompt overlays, cli_register).
         run: python scripts/lint_plugin_manifests.py
+      - name: Fire the plugin API surface (notebook-render only)
+        # The fire-path leg registers the plugin's verbs and proves the whole
+        # declared import surface resolves at call time — only meaningful where
+        # the plugin + its deps are installed, i.e. this leg.
+        if: matrix.plugin == 'hpc-agent-notebook-render'
+        run: python scripts/lint_plugin_api_surface.py --fire-path
       - name: Plugin offline tests (fake API client, zero network)
         run: pytest -q "examples/plugins/${{ matrix.plugin }}/tests"
       - name: actionlint workflow templates (syntax + expressions)

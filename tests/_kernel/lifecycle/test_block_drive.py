@@ -972,7 +972,7 @@ def test_run_block_verb_oserror_returns_failed_span_not_raise(
     def _raise(*_a: Any, **_k: Any) -> Any:
         raise OSError("fork: retry: Resource temporarily unavailable")
 
-    monkeypatch.setattr("hpc_agent.infra.remote._capture_via_select", _raise)
+    monkeypatch.setattr("hpc_agent.infra.remote.capture_via_select", _raise)
     result, code = bd._run_block_verb("submit-s2", {"run_id": "r1"}, tmp_path)
     assert result == {}
     assert code != 0  # a failed span, not an exception

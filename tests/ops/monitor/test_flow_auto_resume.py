@@ -25,7 +25,6 @@ from hpc_agent.ops import auto_resume_flow as auto_resume_module
 from hpc_agent.ops import monitor_flow as monitor_flow_module
 from hpc_agent.ops.auto_resume_flow import AutoResumeOutcome
 from hpc_agent.ops.monitor_flow import monitor_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import update_run_status, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -33,13 +32,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _RUN_ID = "20260606-130000-ccc"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
-
 from hpc_agent.meta.campaign.atoms.acknowledge_budget import campaign_acknowledge_budget
 from hpc_agent.meta.campaign.atoms.advance import campaign_advance
 from hpc_agent.meta.campaign.budget_ack import ack_covers_spend, read_budget_ack
@@ -27,15 +25,6 @@ if TYPE_CHECKING:
 
 _PROFILE = "ml"
 _CLUSTER = "hoffman2"
-
-
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_run(experiment_dir: Path, *, run_id: str) -> None:
@@ -92,7 +81,7 @@ def test_ack_without_snapshot_covers_nothing() -> None:
 # ─── end-to-end through campaign-advance ────────────────────────────────────
 
 
-def test_advance_halts_unacknowledged(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_halts_unacknowledged(journal_home: Path, tmp_path: Path) -> None:
     _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
     write_manifest(tmp_path, campaign_id="camp_a", budget={"max_walltime_sec": 400})
 
@@ -101,7 +90,7 @@ def test_advance_halts_unacknowledged(_journal_home: Path, tmp_path: Path) -> No
     assert out["needs_acknowledgement"] is True
 
 
-def test_acknowledge_then_continue(_journal_home: Path, tmp_path: Path) -> None:
+def test_acknowledge_then_continue(journal_home: Path, tmp_path: Path) -> None:
     _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
     write_manifest(tmp_path, campaign_id="camp_a", budget={"max_walltime_sec": 400})
 
@@ -115,7 +104,7 @@ def test_acknowledge_then_continue(_journal_home: Path, tmp_path: Path) -> None:
     assert out["needs_acknowledgement"] is False
 
 
-def test_ack_goes_stale_when_more_spend_lands(_journal_home: Path, tmp_path: Path) -> None:
+def test_ack_goes_stale_when_more_spend_lands(journal_home: Path, tmp_path: Path) -> None:
     _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
     write_manifest(tmp_path, campaign_id="camp_a", budget={"max_walltime_sec": 400})
     campaign_acknowledge_budget(experiment_dir=tmp_path, campaign_id="camp_a")
@@ -128,7 +117,7 @@ def test_ack_goes_stale_when_more_spend_lands(_journal_home: Path, tmp_path: Pat
     assert "stale" in out["reason"]
 
 
-def test_acknowledge_raising_cap_clears_halt(_journal_home: Path, tmp_path: Path) -> None:
+def test_acknowledge_raising_cap_clears_halt(journal_home: Path, tmp_path: Path) -> None:
     _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
     write_manifest(tmp_path, campaign_id="camp_a", budget={"max_walltime_sec": 400})
 
@@ -148,7 +137,7 @@ def test_acknowledge_raising_cap_clears_halt(_journal_home: Path, tmp_path: Path
     assert out["decision"] == "continue"
 
 
-def test_raising_cap_preserves_other_manifest_sections(_journal_home: Path, tmp_path: Path) -> None:
+def test_raising_cap_preserves_other_manifest_sections(journal_home: Path, tmp_path: Path) -> None:
     _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
     write_manifest(
         tmp_path,
@@ -171,7 +160,7 @@ def test_raising_cap_preserves_other_manifest_sections(_journal_home: Path, tmp_
 
 
 def test_raising_cap_preserves_async_greenlight_and_anomaly_sections(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """The cap raise rewrites the manifest in place — every section it does
     not touch survives byte-for-byte, including async_refill / max_in_flight,
@@ -207,7 +196,7 @@ def test_raising_cap_preserves_async_greenlight_and_anomaly_sections(
 
 
 def test_raising_cap_degrades_schema_invalid_manifest_to_fresh_caps(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """A schema-invalid manifest must not block clearing a budget halt: the
     ack degrades to a minimal fresh manifest carrying the raised caps."""

@@ -153,6 +153,12 @@ repos:
         language: python
         pass_filenames: false
 
+      - id: lint-private-cross-package-imports
+        name: no cross-package import of a leading-underscore private symbol
+        entry: python scripts/lint_private_cross_package_imports.py
+        language: python
+        pass_filenames: false
+
       - id: lint-remote-read-ack
         name: ssh stdout reads route through the ack sentinel (or are cited advisory)
         entry: python scripts/lint_remote_read_ack.py

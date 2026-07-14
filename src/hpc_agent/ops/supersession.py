@@ -148,10 +148,10 @@ def _live_lease(run_id: str) -> dict[str, Any] | None:
     stamps) and reports the first one whose recorded pid is still alive.
     Local reads only; best-effort — an unreadable lease contributes nothing.
     """
-    from hpc_agent._kernel.lifecycle.detached import _pid_alive
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent._kernel.lifecycle.detached import pid_alive
+    from hpc_agent.state.run_record import current_homedir
 
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     if not detached_dir.is_dir():
         return None
     for path in sorted(detached_dir.glob(f"*-{run_id}.lease.json")):
@@ -160,7 +160,7 @@ def _live_lease(run_id: str) -> dict[str, Any] | None:
             pid = int(data.get("pid", -1))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
-        if data.get("run_id") == run_id and pid > 0 and _pid_alive(pid):
+        if data.get("run_id") == run_id and pid > 0 and pid_alive(pid):
             return {"pid": pid, "block": data.get("block"), "lease_path": str(path)}
     return None
 
@@ -229,15 +229,15 @@ def supersede_run(
     Returns a summary ``{superseded_run_id, closed, pending_closure,
     superseded_at}`` for the caller's envelope/logging.
     """
-    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+    from hpc_agent.ops.monitor.reconcile import sibling_run_ids
 
     now = utcnow_iso()
     closed: list[str] = []
     pending: list[dict[str, Any]] = []
 
     # The old run and its #258 canary pairing (both directions covered by
-    # _sibling_run_ids: given either id it returns the paired one).
-    targets = [old_run_id, *_sibling_run_ids(old_run_id)]
+    # sibling_run_ids: given either id it returns the paired one).
+    targets = [old_run_id, *sibling_run_ids(old_run_id)]
     for target in targets:
         record = load_run(experiment_dir, target)
         if record is None:
@@ -346,12 +346,12 @@ def _supersede_missing_main(
       main record — it stamps + closes whichever paired ids exist), never
       "nothing to supersede".
     """
-    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of
+    from hpc_agent.ops.monitor.reconcile import canary_parent_of, sibling_run_ids
 
     # The paired canary FAMILY entries via the one #258 suffix definition (the
     # double canary adds ``<id>-canary2``). Pick a live attempt as the target;
     # else any existing family record; else the first id (a live lease only).
-    canary_ids = _sibling_run_ids(supersedes)
+    canary_ids = sibling_run_ids(supersedes)
     canaries = [(cid, load_run(experiment_dir, cid)) for cid in canary_ids]
     lease = _live_lease(supersedes)
     if lease is None:

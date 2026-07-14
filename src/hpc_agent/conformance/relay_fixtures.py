@@ -225,9 +225,9 @@ def _corrupt_run_record(experiment_dir: Path, run_id: str) -> None:
     proves the same message DOES block when the record reads, so the guard can
     fire (engineering-principles: verify a guard can actually fire).
     """
-    from hpc_agent.state.run_record import _current_homedir, repo_hash
+    from hpc_agent.state.run_record import current_homedir, repo_hash
 
-    path = _current_homedir() / repo_hash(experiment_dir) / "runs" / f"{run_id}.json"
+    path = current_homedir() / repo_hash(experiment_dir) / "runs" / f"{run_id}.json"
     if path.exists():
         path.write_text("{ this is not valid json", encoding="utf-8")
 

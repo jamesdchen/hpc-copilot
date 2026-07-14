@@ -1,25 +1,6 @@
 ---
 name: logs
 verb: query
-inputs:
-- name: run_id
-  type: string
-- name: experiment_dir
-  type: path
-  default: cwd
-- name: task_id
-  type: string
-  description: Comma-separated task ids to fetch (e.g. `7,12,42`). Mutually exclusive
-    with `--all-failed`.
-  default: null
-- name: all_failed
-  type: bool
-  default: false
-  description: Re-poll status and fetch logs for every task with `status=failed`.
-- name: lines
-  type: integer
-  default: 50
-  description: Number of trailing lines to return per log.
 outputs:
 - name: run_id
   type: string

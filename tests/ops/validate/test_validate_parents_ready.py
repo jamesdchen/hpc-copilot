@@ -15,7 +15,6 @@ import pytest
 
 from hpc_agent._wire.validators.validate_parents_ready import ValidateParentsReadySpec
 from hpc_agent.ops.validate.parents_ready import validate_parents_ready
-from hpc_agent.state import run_record as session_run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -53,14 +52,6 @@ def _seed_journal_run(experiment_dir: Path, *, run_id: str, status: str) -> None
         status=status,
     )
     upsert_run(experiment_dir, record)
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the journal root so seeded records land under tmp."""
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(session_run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _ready(experiment_dir: Path, *, run_id: str) -> None:

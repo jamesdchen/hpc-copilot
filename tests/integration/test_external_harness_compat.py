@@ -53,7 +53,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -68,6 +67,7 @@ from hpc_agent.ops.recover.runner_failures import (
 )
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
+from tests._subprocess import run_cli
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,16 +79,11 @@ if TYPE_CHECKING:
 def _run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """Invoke ``python -m hpc_agent`` and return (rc, stdout, stderr).
 
-    Mirrors :func:`tests.cli._helpers.run_cli` but kept inline so this
-    file is fully self-contained — integration tests carry their own
-    minimal subprocess wrapper.
+    Delegates to the canonical :func:`tests._subprocess.run_cli` (which
+    passes a ``timeout=`` hang-guard and forwards the isolated journal
+    home into the child).
     """
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", *args],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    proc = run_cli(*args, env=env)
     return proc.returncode, proc.stdout, proc.stderr
 
 

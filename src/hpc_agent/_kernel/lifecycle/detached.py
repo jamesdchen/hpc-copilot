@@ -59,6 +59,7 @@ __all__ = [
     "build_status_pipeline_spec",
     "SUPPORTED_DETACHED_BLOCK_VERBS",
     "launch_submit_block_detached",
+    "pid_alive",
 ]
 
 #: Bounded wait for the ``(run_id, block)`` decide→spawn→stamp lease lock
@@ -270,7 +271,7 @@ def _agent_launch_prefix(hpc_agent_bin: str | None) -> list[str]:
     return [sys.executable, "-m", "hpc_agent"]
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     """Whether *pid* names a running process on this host.
 
     The lease liveness check (a dead pid is a reclaimable stale lease; a live one
@@ -286,14 +287,18 @@ def _pid_alive(pid: int) -> bool:
     ``os.kill``-is-``TerminateProcess`` footgun).
 
     The wrapper SURVIVES (rather than exporting ``proc.pid_alive`` directly)
-    because every test in this module and its consumers monkeypatches THIS
-    module attribute — ``monkeypatch.setattr(detached, "_pid_alive", ...)`` — and
-    ``_guard_single_lease`` / the lazy-importing consumers all resolve the name
-    off this module at call time. Keeping a module-level ``_pid_alive`` here
-    preserves that seam with zero call-site churn; the probe logic lives in ONE
-    place (``infra/proc.py``), this only forwards.
+    because ``_guard_single_lease`` and this module's own lease tests
+    monkeypatch THIS module attribute at call time. The public name is
+    ``pid_alive`` (promoted so cross-package consumers no longer reach for a
+    leading-underscore symbol); the retained module-level ``_pid_alive`` alias
+    below is the INTRA-MODULE monkeypatch seam ``_guard_single_lease`` and the
+    detached-lease tests still key off. The probe logic lives in ONE place
+    (``infra/proc.py``), this only forwards.
     """
     return proc_pid_alive(pid)
+
+
+_pid_alive = pid_alive  # intra-module monkeypatch seam (kept)
 
 
 def _current_host() -> str:
@@ -612,7 +617,7 @@ def launch_submit_block_detached(
     that still has ``detach`` truthy (a guard against detaching a child that would
     itself re-detach into an infinite fork), or a missing run_id.
     """
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
     if verb not in SUPPORTED_DETACHED_BLOCK_VERBS:
         raise DriveModeError(
@@ -626,7 +631,7 @@ def launch_submit_block_detached(
         )
     run_id = _block_spec_run_id(spec)
 
-    detached_dir = _current_homedir() / "_detached"
+    detached_dir = current_homedir() / "_detached"
     detached_dir.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex[:8]
     spec_path = detached_dir / f"{verb}-{run_id}-{token}.spec.json"
