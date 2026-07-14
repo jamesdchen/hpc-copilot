@@ -276,10 +276,10 @@ injected through one seam:
 
 A `kind: "agent"` (judgement) step is **always planned as skip**: a
 judgement step is a human decision boundary, driven via `block-drive`.
-The `claude -p` worker-spawn transport this loop once dispatched — and
-the `JudgementResolver` seam that carried it — were removed in the §6
-worker removal, so there is no resolver to inject; the loop no longer
-takes one.
+The loop never executes an agent step and injects no LLM of its own —
+`drive_once` takes only a `step_table`, nothing model-shaped
+(`docs/design/history/proving-run-2-hardening.md` §6 closed the
+LLM-as-executor path).
 
 An integrator that wants to embed the loop without the console-script
 surface calls **`drive_once(experiment_dir, *, step_table, dry_run)`**

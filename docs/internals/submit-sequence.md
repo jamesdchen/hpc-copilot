@@ -4,14 +4,13 @@ What happens between a user typing `/submit-hpc` and their results
 landing in `aggregated.json`. This walkthrough traces the full
 pipeline so you can see how the layers interact in practice.
 
-The load-bearing shift this page tracks: **the LLM no longer executes
-the workflow.** There is no `claude -p --bare` worker reading a rendered
-`worker_prompts/submit.md` procedure — that transport and its prompt
-directory were removed (`docs/design/history/proving-run-2-hardening.md`
-§6). The submit flow is four *human-amplification blocks* — code
+The load-bearing fact this page tracks: **the LLM does not execute the
+workflow.** The submit flow is four *human-amplification blocks* — code
 primitives that chain in code and terminate at a human decision point
 carrying a code-digested *brief* — driven by the stateless `block-drive`
-tick. The seams to read alongside this page:
+tick. The LLM only translates at the parks; the LLM-as-executor path was
+removed (`docs/design/history/proving-run-2-hardening.md` §6). The seams
+to read alongside this page:
 
 - `_kernel/lifecycle/block_drive.py::run_tick` — the tick that chains
   deterministic spans and parks at each decision.
@@ -191,8 +190,8 @@ a gated block is greenlit and would sit on an SSH poll, it detaches: the
 parent verb runs its synchronous gate + drift guards, forces the spec's
 `detach` field OFF, and
 `_kernel/lifecycle/detached.py::launch_submit_block_detached` spawns a
-**DETACHED `hpc-agent <verb>` subprocess** — *not* a `claude -p` worker —
-running the SAME verb body. The child owns the SSH poll to terminal,
+**DETACHED `hpc-agent <verb>` subprocess** running the SAME verb body.
+The child owns the SSH poll to terminal,
 stamping the journal as it goes; the parent returns a `DetachedLaunch`
 handle immediately.
 

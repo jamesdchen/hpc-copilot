@@ -4,11 +4,9 @@ The shipped consumption styles put the control flow in **code**, not in
 an LLM. The interactive slash commands are a human + Claude translating
 at decision points; underneath, the workflow itself is driven by a
 stateless code tick (`block-drive`) that chains deterministic spans and
-parks at each genuine human boundary. There is no `claude -p` worker
-executing a rendered procedure any more — that spawn transport and its
-worker-prompt directory were removed
-(`docs/design/history/proving-run-2-hardening.md` §6); the LLM's role
-shrank to translation at the parks.
+parks at each genuine human boundary. The LLM's role is translation at
+the parks — nothing spawns an LLM to execute the workflow
+(`docs/design/history/proving-run-2-hardening.md` §6 closed that path).
 
 This page documents driving that same substrate from **a plain program**:
 your loop owns the control flow and consults an LLM only where a typed
@@ -58,9 +56,9 @@ its kind (`drive.plan_action`, a pure, unit-testable function):
   delegate step to an `hpc-agent` verb, run directly. **No LLM, ever.**
 - `kind == "agent"` → a judgement step. Always planned as **skip**: a
   judgement step is a human decision boundary, driven via `block-drive`
-  (seam 1). The `claude -p` worker-spawn transport this loop once
-  dispatched was removed in the §6 worker removal, so there is no
-  resolver to inject — the loop no longer takes one.
+  (seam 1). An agent step is never executed inside this loop — it is
+  handed to the block-drive rendezvous, and the loop injects no LLM of
+  its own (`drive_once` takes a `step_table`, nothing model-shaped).
 
 One step per invocation: idempotent and cron-friendly. Wrap it in cron or
 `/loop`; the on-disk state (run sidecars, journal, cursors) is the only
@@ -107,11 +105,11 @@ The integrator workflow (`find-prior-run` → `submit` →
 envelope and exit codes in
 [`../reference/cli-spec.md`](../reference/cli-spec.md).
 
-**Putting an LLM at a decision point in your own code.** There is no
-shipped resolver that adjudicates a parked residue for you — the block
+**Putting an LLM at a decision point in your own code.** The block
 architecture parks to the *human* at genuine judgement points, and the
-LLM only translates the brief. If your controller wants to make a bounded
-LLM call at a decision point, `_kernel/lifecycle/structured.py`
+LLM only translates the brief — the shipped system adjudicates nothing on
+your behalf. If your controller wants to make a bounded LLM call at a
+decision point, `_kernel/lifecycle/structured.py`
 (`structured`, `get_model`, the `ChatModel` messages-in/completion-out
 protocol) is the primitive to build on: constrain the completion to a
 closed menu of `candidate_actions`, feed the choice back as a spec, and
@@ -122,18 +120,18 @@ keeps control flow; the model picks from a menu you authored.
 
 The seams above keep the LLM out of *control flow*; this one keeps it out
 of the *connection loop*. The 0.10.63 cluster ban traced to an LLM
-**driving SSH**: a `claude -p --bare` worker was spawned to run a
-wait-until-terminal poll; it auto-backgrounded at 2 min, ended its turn
-mid-poll (so the run reported "no report"), and a fallback inline
-subagent retried SSH in prose for ~21 min. The fix is the
+**driving SSH**: an LLM was spawned to run a wait-until-terminal poll; it
+auto-backgrounded at 2 min, ended its turn mid-poll (so the run reported
+"no report"), and a fallback inline subagent retried SSH in prose for
+~21 min. The fix is the
 `infra/retry.py` principle carried to the drive layer: the poll loop runs
 in plain code with one process owning the connection, and the model is
 out of the loop.
 
 **Detach-by-contract** runs each cluster-bound block as a DETACHED
-`hpc-agent <verb>` subprocess — **not** a `claude -p` worker — that owns
-the connection and runs to terminal, while the orchestrator learns the
-outcome by **reading the journal**. This is DPDispatcher's "submit and
+`hpc-agent <verb>` subprocess that owns the connection and runs to
+terminal, while the orchestrator learns the outcome by **reading the
+journal**. This is DPDispatcher's "submit and
 poke until they finish" loop / jobflow-remote's Runner daemon applied to
 the drive layer. The detach-supported verbs are
 `detached.SUPPORTED_DETACHED_BLOCK_VERBS` (the S2 canary-wait, S3 main-
@@ -198,9 +196,8 @@ same `block-drive` spine:
 - `campaign-refill` (`ops/campaign_refill.py`) is the side-effecting
   **actor** that consumes that decision and tops the pool back up: per
   slot, sequentially, `resolve-submit-inputs` →
-  `campaign_run(detach=True)`. It is a first-class primitive — the refill
-  arm the deleted `deterministic_resolver` used to carry, now sitting on
-  the block-drive spine like `campaign-run`.
+  `campaign_run(detach=True)`. It is a first-class primitive on the
+  block-drive spine, like `campaign-run`.
 
 The strictly-sequential, sidecar-between-slots discipline is load-bearing
 (the async scaffold indexes proposals by the campaign sidecar count); see
