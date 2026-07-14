@@ -26,21 +26,12 @@ import pytest
 from hpc_agent import errors
 from hpc_agent.ops.provenance_manifest import write_provenance_manifest
 from hpc_agent.ops.trace import TRACE_SCHEMA_VERSION, trace
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the per-user journal home into the test's tmp dir."""
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

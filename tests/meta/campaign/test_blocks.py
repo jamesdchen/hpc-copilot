@@ -40,16 +40,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the run-record journal to a tmp home (mirrors atoms tests)."""
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
-
-
 def _seed_iteration(
     experiment_dir: Path,
     *,
@@ -215,7 +205,7 @@ def test_greenlight_missing_manifest_fails_loudly(tmp_path: Path) -> None:
 # ─── watch ──────────────────────────────────────────────────────────────────
 
 
-def test_watch_healthy_no_boundary(_journal_home: Path, tmp_path: Path) -> None:
+def test_watch_healthy_no_boundary(journal_home: Path, tmp_path: Path) -> None:
     """A nominal campaign (no stop criterion) is a healthy, no-decision watch."""
     write_manifest(tmp_path, campaign_id="A", goal="tune")
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="complete")
@@ -229,7 +219,7 @@ def test_watch_healthy_no_boundary(_journal_home: Path, tmp_path: Path) -> None:
     assert res.brief["anomaly_brief"] is None
 
 
-def test_watch_surfaces_anomaly_brief(_journal_home: Path, tmp_path: Path) -> None:
+def test_watch_surfaces_anomaly_brief(journal_home: Path, tmp_path: Path) -> None:
     """A circuit-breaker trip is an anomaly terminator (needs_decision=True) that
     surfaces the drafted anomaly_brief."""
     write_manifest(
@@ -252,7 +242,7 @@ def test_watch_surfaces_anomaly_brief(_journal_home: Path, tmp_path: Path) -> No
     assert brief["evidence"]["count"] == 3
 
 
-def test_watch_converged_hands_off_to_complete(_journal_home: Path, tmp_path: Path) -> None:
+def test_watch_converged_hands_off_to_complete(journal_home: Path, tmp_path: Path) -> None:
     """A fired stop criterion (max_iters) hands off to campaign-complete without
     a watch-level decision."""
     write_manifest(tmp_path, campaign_id="A", stop_criteria={"max_iters": 2})
@@ -272,7 +262,7 @@ def test_watch_converged_hands_off_to_complete(_journal_home: Path, tmp_path: Pa
 
 
 def test_complete_emits_brief_with_empty_interpretations(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """The completion brief carries spend / budget / stop reason / a per-iteration
     outcome table and an EMPTY proposed_interpretations slot."""

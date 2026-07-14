@@ -32,7 +32,6 @@ from hpc_agent.ops.resolve_and_recover_flow import (
     ClusterOutcome,
     ResolveAndRecoverOutcome,
 )
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import update_run_status, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -40,13 +39,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _RUN_ID = "20260606-140000-ddd"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

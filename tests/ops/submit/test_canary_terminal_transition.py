@@ -19,7 +19,6 @@ from unittest import mock
 import pytest
 
 import hpc_agent.ops.submit_and_verify as sav
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -36,11 +35,6 @@ def _single_canary(monkeypatch: pytest.MonkeyPatch) -> None:
     determinism-fingerprint DOUBLE canary. Without the opt-out the verified-canary
     test would fire a real second canary; pin single-canary so it stays focused."""
     monkeypatch.setenv("HPC_NO_DOUBLE_CANARY", "1")
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", tmp_path / "home_hpc")
 
 
 @pytest.fixture

@@ -9,8 +9,8 @@ other.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
+
+from tests._subprocess import run_cli as _run_cli_proc
 
 __all__ = ["run_cli", "parse_envelope", "SUBMIT_SPEC", "env_without_ssh_agent"]
 
@@ -40,13 +40,14 @@ def env_without_ssh_agent() -> dict[str, str]:
 
 
 def run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
-    """Invoke the CLI as a subprocess and return (exit_code, stdout, stderr)."""
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", *args],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    """Invoke the CLI as a subprocess and return (exit_code, stdout, stderr).
+
+    Delegates to the canonical :func:`tests._subprocess.run_cli` (which
+    always passes a ``timeout=`` hang-guard and forwards the isolated
+    journal home into the child), keeping the ``(rc, out, err)`` tuple
+    shape the CLI smoke-test consumers rely on.
+    """
+    proc = _run_cli_proc(*args, env=env)
     return proc.returncode, proc.stdout, proc.stderr
 
 

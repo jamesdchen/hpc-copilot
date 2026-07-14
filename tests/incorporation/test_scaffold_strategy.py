@@ -19,7 +19,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-import types
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +26,7 @@ import pytest
 
 from hpc_agent import _PACKAGE_ROOT, errors
 from hpc_agent.incorporation.scaffold_strategy import scaffold_strategy
+from tests._optuna_fakes import make_fake_optuna
 
 _SCAFFOLDS = Path(_PACKAGE_ROOT) / "execution" / "mapreduce" / "templates" / "scaffolds"
 _DEST_REL = Path(".hpc") / "tasks.py"
@@ -179,74 +179,12 @@ def test_async_refill_is_noop_for_pbt(tmp_path: Path) -> None:
 # ─── async _propose behavior (#362, plan §1.5) ──────────────────────────────
 
 
-def _make_fake_optuna() -> types.ModuleType:
-    """A minimal in-memory optuna stand-in (optuna isn't a test dependency).
-
-    Records sampler kwargs and persists studies by name so successive
-    ``create_study(load_if_exists=True)`` calls return the SAME study — the way
-    the real sqlite store persists trial state across ``_propose`` re-imports.
-    """
-    studies: dict[str, Any] = {}
-    sampler_calls: list[dict[str, Any]] = []
-
-    class TrialState:
-        RUNNING = "running"
-        COMPLETE = "complete"
-
-    class Trial:
-        def __init__(self, number: int) -> None:
-            self.number = number
-            self.state = TrialState.RUNNING
-
-        def suggest_float(self, name: str, low: float, high: float, log: bool = False) -> float:
-            # Deterministic + distinct per trial number so proposals differ.
-            return low * (self.number + 1)
-
-    class Study:
-        def __init__(self) -> None:
-            self.trials: list[Trial] = []
-
-        def ask(self) -> Trial:
-            t = Trial(len(self.trials))
-            self.trials.append(t)
-            return t
-
-        def tell(self, trial: Trial, value: float) -> None:
-            trial.state = TrialState.COMPLETE
-
-    class TPESampler:
-        def __init__(self, **kwargs: Any) -> None:
-            sampler_calls.append(kwargs)
-
-    def create_study(
-        *,
-        storage: str,
-        study_name: str,
-        direction: str,
-        sampler: Any = None,
-        load_if_exists: bool = False,
-    ) -> Any:
-        if load_if_exists and study_name in studies:
-            return studies[study_name]
-        s = Study()
-        studies[study_name] = s
-        return s
-
-    mod = types.ModuleType("optuna")
-    mod.create_study = create_study  # type: ignore[attr-defined]
-    mod.trial = types.SimpleNamespace(TrialState=TrialState)  # type: ignore[attr-defined]
-    mod.samplers = types.SimpleNamespace(TPESampler=TPESampler)  # type: ignore[attr-defined]
-    mod._studies = studies  # type: ignore[attr-defined]
-    mod._sampler_calls = sampler_calls  # type: ignore[attr-defined]
-    return mod
-
-
 def _load_async_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Materialize + load the async optuna template, wired to a fake optuna and
     tmp dirs, with ``_history`` controllable via the returned ``history`` list."""
     scaffold_strategy(output_dir=tmp_path, name="optuna", async_refill=True)
     module = _load(tmp_path / _DEST_REL)
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     monkeypatch.setitem(sys.modules, "optuna", fake)
     monkeypatch.setattr(module, "_CID", "test")
     monkeypatch.setattr(module, "_CAMPAIGN_DIR", tmp_path)

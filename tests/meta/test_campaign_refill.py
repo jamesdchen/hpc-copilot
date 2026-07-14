@@ -37,16 +37,6 @@ _BUILD = "hpc_agent.ops.campaign_refill._build_iteration_resolve_spec"
 # ── fixtures / helpers ────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the run-record journal to a tmp home (mirrors atoms tests)."""
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
-
-
 def _greenlit_async_manifest(experiment_dir: Path, *, campaign_id: str, k: int = 3) -> None:
     write_manifest(
         experiment_dir,
@@ -408,7 +398,7 @@ def _seed_iteration(experiment_dir: Path, *, run_id: str, campaign_id: str, stat
 
 
 def test_crash_mid_tick_self_corrects_via_shrunk_refill_count(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """Simulate a prior partial tick that submitted 2 of 3 slots (2 sidecars now
     in-flight). Re-ticking with REAL campaign-advance recomputes refill_count from
@@ -435,7 +425,7 @@ def test_crash_mid_tick_self_corrects_via_shrunk_refill_count(
     assert m_run.call_count == 1
 
 
-def test_full_pool_waits_not_refills(_journal_home: Path, tmp_path: Path) -> None:
+def test_full_pool_waits_not_refills(journal_home: Path, tmp_path: Path) -> None:
     """Contrast to the shrink test: when the pool is already full (K=2, 2 in
     flight) REAL advance decides wait_in_flight, so the actor is a no-op — this is
     the terminal of the self-correction (the last partial slot never over-submits)."""

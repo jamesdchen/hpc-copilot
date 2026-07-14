@@ -18,7 +18,6 @@ Spec scope:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from typing import TYPE_CHECKING
 
@@ -27,6 +26,7 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.ops.memory.interview import record_interview
+from tests._subprocess import run_cli
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1203,11 +1203,7 @@ def test_re_running_with_same_intent_overwrites_byte_equivalently(tmp_path: Path
 
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", *args],
-        capture_output=True,
-        text=True,
-    )
+    proc = run_cli(*args)
     return proc.returncode, proc.stdout, proc.stderr
 
 

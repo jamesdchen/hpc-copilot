@@ -45,12 +45,6 @@ class _FakeLaunch:
     log_path = "/x/status-watch.log"
 
 
-@pytest.fixture(autouse=True)
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the journal-global ``_detached/`` lease store at a hermetic tmp dir."""
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-
-
 def _watch_spec(*, detach: bool = True) -> StatusWatchSpec:
     return StatusWatchSpec(monitor=MonitorFlowSpec(run_id=_RUN_ID), detach=detach)
 

@@ -27,7 +27,6 @@ import hpc_agent.ops.aggregate_flow as af
 from hpc_agent import errors
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.ops.aggregate_flow import AggregateFlowResult
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -42,13 +41,6 @@ class _FakeLaunch:
     run_id = _RUN_ID
     pid = 4242
     log_path = "/x/detached.log"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

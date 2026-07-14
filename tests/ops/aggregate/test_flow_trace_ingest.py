@@ -34,7 +34,6 @@ from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_TRANSPORT_FILENAME
 from hpc_agent.ops import aggregate_flow as af_module
 from hpc_agent.ops.aggregate_flow import aggregate_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.data_trace import make_record, read_trace, trace_store_path
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.journal import upsert_run
@@ -59,13 +58,6 @@ _PI_VALUES = [
     3.141896,
 ]
 _EXPECTED_MEAN = sum(_PI_VALUES) / len(_PI_VALUES)
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

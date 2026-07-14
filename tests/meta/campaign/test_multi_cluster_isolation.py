@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from hpc_agent.meta.campaign.atoms.status import campaign_status
-from hpc_agent.state import run_record
 from hpc_agent.state.index import find_runs_by_campaign
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -38,14 +37,6 @@ if TYPE_CHECKING:
 _BASE = "ebm_all_buckets"
 _CID_CARC = f"{_BASE}_carc"
 _CID_HOFFMAN2 = f"{_BASE}_hoffman2"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the journal home into a per-test tmp directory."""
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

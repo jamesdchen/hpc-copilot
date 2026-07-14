@@ -26,16 +26,16 @@ across a fresh module load with optuna *absent*, the tell-guard edge cases, and
 the ``total()`` / ``resolve()`` contract under the async variant.
 
 optuna is not a test dependency; a minimal in-memory stand-in
-(``_make_fake_optuna``) records sampler kwargs, a per-trial tell log, and
-persists studies by name so ``create_study(load_if_exists=True)`` returns the
-SAME study — the way the real sqlite store carries trial state across re-imports.
+(``tests._optuna_fakes.make_fake_optuna``) records sampler kwargs, a per-trial
+tell log, and persists studies by name so ``create_study(load_if_exists=True)``
+returns the SAME study — the way the real sqlite store carries trial state
+across re-imports.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import sys
-import types
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +43,7 @@ import pytest
 
 from hpc_agent import _PACKAGE_ROOT
 from hpc_agent.incorporation.scaffold_strategy import scaffold_strategy
+from tests._optuna_fakes import make_fake_optuna
 
 _DEST_REL = Path(".hpc") / "tasks.py"
 _ASYNC_ASSET = (
@@ -64,67 +65,6 @@ def _load(path: Path) -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _make_fake_optuna() -> types.ModuleType:
-    """A minimal in-memory optuna stand-in with a tell log + sampler capture."""
-    studies: dict[str, Any] = {}
-    sampler_calls: list[dict[str, Any]] = []
-
-    class TrialState:
-        RUNNING = "running"
-        COMPLETE = "complete"
-
-    class Trial:
-        def __init__(self, number: int) -> None:
-            self.number = number
-            self.state = TrialState.RUNNING
-
-        def suggest_float(self, name: str, low: float, high: float, log: bool = False) -> float:
-            # Deterministic + distinct per trial number so proposals differ.
-            return low * (self.number + 1)
-
-    class Study:
-        def __init__(self) -> None:
-            self.trials: list[Trial] = []
-            # (trial_number, value) per tell — lets a test assert a re-tell
-            # against an already-COMPLETE trial is a no-op (the RUNNING guard).
-            self.tell_log: list[tuple[int, float]] = []
-
-        def ask(self) -> Trial:
-            t = Trial(len(self.trials))
-            self.trials.append(t)
-            return t
-
-        def tell(self, trial: Trial, value: float) -> None:
-            trial.state = TrialState.COMPLETE
-            self.tell_log.append((trial.number, value))
-
-    class TPESampler:
-        def __init__(self, **kwargs: Any) -> None:
-            sampler_calls.append(kwargs)
-
-    def create_study(
-        *,
-        storage: str,
-        study_name: str,
-        direction: str,
-        sampler: Any = None,
-        load_if_exists: bool = False,
-    ) -> Any:
-        if load_if_exists and study_name in studies:
-            return studies[study_name]
-        s = Study()
-        studies[study_name] = s
-        return s
-
-    mod = types.ModuleType("optuna")
-    mod.create_study = create_study  # type: ignore[attr-defined]
-    mod.trial = types.SimpleNamespace(TrialState=TrialState)  # type: ignore[attr-defined]
-    mod.samplers = types.SimpleNamespace(TPESampler=TPESampler)  # type: ignore[attr-defined]
-    mod._studies = studies  # type: ignore[attr-defined]
-    mod._sampler_calls = sampler_calls  # type: ignore[attr-defined]
-    return mod
 
 
 def _load_async(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, optuna: Any | None) -> Any:
@@ -161,7 +101,7 @@ def test_current_proposal_indexes_by_submitted_not_completed(
     Three iterations submitted, only one finished: the sync template would index
     the proposal by 1 (completed); the async template must index by 3 (submitted).
     """
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     history = [
         _rec(complete=True, token=0, val=0.5),
@@ -186,7 +126,7 @@ def test_refill_tick_asks_distinct_trials_as_history_grows(
     """The real refill mechanism: within one tick each submit writes a sidecar
     (history grows by one), so successive ``_current_proposal`` calls index a
     fresh iteration and ask a DISTINCT trial. Distinctness is per constant_liar."""
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     history: list[dict[str, Any]] = []
     monkeypatch.setattr(module, "_history", lambda: history)
@@ -212,7 +152,7 @@ def test_refill_tick_asks_distinct_trials_as_history_grows(
 def test_retell_of_completed_trial_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A finished trial is told exactly once: the second tick's ``_tell_finished``
     sees state != RUNNING and skips it. Proves the idempotent-tell guard fires."""
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     history: list[dict[str, Any]] = []
     monkeypatch.setattr(module, "_history", lambda: history)
@@ -236,7 +176,7 @@ def test_tell_finished_reconciles_out_of_order_by_token(
 ) -> None:
     """Record order != trial order: a later-submitted trial that finishes first
     is told by its ``trial_token``, never by record position."""
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     history: list[dict[str, Any]] = []
     monkeypatch.setattr(module, "_history", lambda: history)
@@ -265,7 +205,7 @@ def test_tell_finished_skips_malformed_records(
 ) -> None:
     """The tell guards hold: a record with no token, an out-of-range token, or a
     missing objective key is skipped without crashing; a valid one still tells."""
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     history: list[dict[str, Any]] = []
     monkeypatch.setattr(module, "_history", lambda: history)
@@ -297,7 +237,7 @@ def test_crash_replay_reuses_persisted_proposal_without_optuna(
     This is the compute-node / crash-restart fast path — the proposal file is
     the idempotency ledger, so no phantom trial is minted on re-import.
     """
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     monkeypatch.setattr(module, "_history", list)
 
@@ -367,7 +307,7 @@ def test_resolve_roundtrips_reserved_trial_token(
 ) -> None:
     """``resolve`` returns the swept params plus the reserved ``trial_token`` key
     (excluded from cmd_sha, round-tripped to the sidecar for out-of-order tell)."""
-    fake = _make_fake_optuna()
+    fake = make_fake_optuna()
     module = _load_async(tmp_path, monkeypatch, optuna=fake)
     monkeypatch.setattr(module, "_history", list)
 

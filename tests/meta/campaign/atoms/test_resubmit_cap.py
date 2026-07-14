@@ -12,23 +12,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
 from hpc_agent.meta.campaign.atoms.advance import campaign_advance
 from hpc_agent.meta.campaign.atoms.resubmit_cap import max_task_resubmits
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_iteration(
@@ -81,7 +70,7 @@ def _seed_iteration(
 # ─── helper: max_task_resubmits ─────────────────────────────────────────────
 
 
-def test_sums_attempts_per_slot_across_runs(_journal_home: Path, tmp_path: Path) -> None:
+def test_sums_attempts_per_slot_across_runs(journal_home: Path, tmp_path: Path) -> None:
     # Slot "0" retried twice in run r0 and once in run r1 → campaign total 3.
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 2}})
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", retries={"0": {"attempts": 1}})
@@ -94,7 +83,7 @@ def test_sums_attempts_per_slot_across_runs(_journal_home: Path, tmp_path: Path)
     assert out["per_task"] == {"0": 3}
 
 
-def test_reports_worst_slot(_journal_home: Path, tmp_path: Path) -> None:
+def test_reports_worst_slot(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(
         tmp_path,
         run_id="r0",
@@ -109,7 +98,7 @@ def test_reports_worst_slot(_journal_home: Path, tmp_path: Path) -> None:
     assert out["per_task"] == {"0": 1, "1": 4}
 
 
-def test_no_resubmits_is_zero(_journal_home: Path, tmp_path: Path) -> None:
+def test_no_resubmits_is_zero(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A")  # no retries
     from hpc_agent.state.index import find_runs_by_campaign
 
@@ -122,7 +111,7 @@ def test_no_resubmits_is_zero(_journal_home: Path, tmp_path: Path) -> None:
 # ─── end-to-end: campaign-advance stop_resubmit_cap ─────────────────────────
 
 
-def test_advance_stops_on_resubmit_cap(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_stops_on_resubmit_cap(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 2}})
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", retries={"0": {"attempts": 1}})
 
@@ -132,7 +121,7 @@ def test_advance_stops_on_resubmit_cap(_journal_home: Path, tmp_path: Path) -> N
     assert "'0'" in out["reason"]
 
 
-def test_advance_under_cap_continues(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_under_cap_continues(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 2}})
 
     out = campaign_advance(experiment_dir=tmp_path, campaign_id="A", max_task_resubmits=3)
@@ -140,7 +129,7 @@ def test_advance_under_cap_continues(_journal_home: Path, tmp_path: Path) -> Non
     assert out["resubmit_cap"]["count"] == 2
 
 
-def test_advance_default_cap_fires_when_silent(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_default_cap_fires_when_silent(journal_home: Path, tmp_path: Path) -> None:
     """Loud-fail DEFAULT (design §5): with no CLI arg and a silent manifest the
     resubmit backstop still fires at the framework default (2) — it is on by
     default, not opt-in."""
@@ -153,7 +142,7 @@ def test_advance_default_cap_fires_when_silent(_journal_home: Path, tmp_path: Pa
     assert out["resubmit_cap"]["threshold"] == DEFAULT_MAX_TASK_RESUBMITS == 2
 
 
-def test_advance_below_default_cap_continues(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_below_default_cap_continues(journal_home: Path, tmp_path: Path) -> None:
     """One resubmit is under the default backstop (2) → continue, not a halt."""
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 1}})
 
@@ -164,7 +153,7 @@ def test_advance_below_default_cap_continues(_journal_home: Path, tmp_path: Path
 
 
 def test_advance_resubmit_cap_defaults_from_anomaly_policy(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """``anomaly_policy.resubmit_cap`` is a fallback default source (after an
     explicit arg / ``stop_criteria`` and before the framework backstop)."""
@@ -178,7 +167,7 @@ def test_advance_resubmit_cap_defaults_from_anomaly_policy(
     assert out["resubmit_cap"]["threshold"] == 5
 
 
-def test_advance_emits_resubmit_anomaly_brief(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_emits_resubmit_anomaly_brief(journal_home: Path, tmp_path: Path) -> None:
     """A resubmit-cap trip emits a structured anomaly brief: what tripped,
     evidence counts, a drafted recommendation, and the surface/park action."""
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 3}})
@@ -198,7 +187,7 @@ def test_advance_emits_resubmit_anomaly_brief(_journal_home: Path, tmp_path: Pat
 
 
 def test_advance_park_policy_shapes_brief_recommendation(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """``anomaly_policy.on_anomaly='park'`` shapes the brief's recommendation to
     a park (data only) WITHOUT changing the decision."""
@@ -215,7 +204,7 @@ def test_advance_park_policy_shapes_brief_recommendation(
     assert "park" in brief["recommendation"]
 
 
-def test_advance_resubmit_cap_defaults_from_manifest(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_resubmit_cap_defaults_from_manifest(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.meta.campaign.manifest import write_manifest
 
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 2}})
@@ -225,7 +214,7 @@ def test_advance_resubmit_cap_defaults_from_manifest(_journal_home: Path, tmp_pa
 
 
 def test_advance_in_flight_takes_precedence_over_resubmit_cap(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     # An in-flight retry must get the chance to succeed before the cap halts.
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 3}})

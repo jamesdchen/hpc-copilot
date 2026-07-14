@@ -25,7 +25,6 @@ from hpc_agent.ops.monitor.classify import (
     UNKNOWN_TICKS_BEFORE_ESCALATION,
 )
 from hpc_agent.ops.monitor_flow import monitor_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import load_run, update_run_status, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -35,13 +34,6 @@ if TYPE_CHECKING:
 _RUN_ID = "20260704-210000-fff"
 _ALL_UNKNOWN = {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 4}
 _STILL_RUNNING = {"complete": 0, "running": 2, "pending": 2, "failed": 0, "unknown": 0}
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

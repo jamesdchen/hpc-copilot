@@ -35,13 +35,6 @@ def _spec(**overrides):
     return SubmitFlowSpec(**base)
 
 
-@pytest.fixture
-def _journal_home(tmp_path, monkeypatch):
-    from hpc_agent.state import run_record
-
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", tmp_path / "home_hpc")
-
-
 def test_canary_only_requires_canary() -> None:
     with pytest.raises(ValidationError, match="canary_only"):
         _spec(canary=False, canary_only=True)
@@ -208,7 +201,7 @@ def test_mirror_canary_sidecar_noop_when_main_missing(tmp_path) -> None:
     assert not run_sidecar_path(tmp_path, "rGone-canary").is_file()
 
 
-def test_canary_only_submits_canary_not_main(tmp_path, _journal_home) -> None:
+def test_canary_only_submits_canary_not_main(tmp_path, journal_home) -> None:
     from hpc_agent.ops import submit_flow as sf
     from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path, write_run_sidecar
 
@@ -249,7 +242,7 @@ def test_canary_only_submits_canary_not_main(tmp_path, _journal_home) -> None:
     assert csc["executor"] == "python run.py --seed $SEED"
 
 
-def test_phase2_canary_false_launches_main(tmp_path, _journal_home) -> None:
+def test_phase2_canary_false_launches_main(tmp_path, journal_home) -> None:
     """Phase 2 (canary=false) launches the main array: main_launched=True."""
     from hpc_agent.ops import submit_flow as sf
 
@@ -314,7 +307,7 @@ def test_mpi_canary_resources_handles_none() -> None:
 # ── F50: one canary decision, threaded (not re-evaluated across the rsync) ────
 
 
-def test_threaded_canary_decision_skip_overrides_a_ttl_flip(tmp_path, _journal_home) -> None:
+def test_threaded_canary_decision_skip_overrides_a_ttl_flip(tmp_path, journal_home) -> None:
     """F50 fire-path: the batch computes ONE canary decision pre-rsync and threads
     it into _submit_one_spec. A threaded 'skip' must win — _submit_one_spec must
     NOT re-consult the wall-clock TTL cache (which could have flipped skip->run
@@ -339,7 +332,7 @@ def test_threaded_canary_decision_skip_overrides_a_ttl_flip(tmp_path, _journal_h
     assert res.canary_skip_reason == "threaded skip"
 
 
-def test_threaded_canary_decision_run_fires_canary(tmp_path, _journal_home) -> None:
+def test_threaded_canary_decision_run_fires_canary(tmp_path, journal_home) -> None:
     """F50 boundary: a threaded 'run' fires the canary — the decision is honoured
     in both directions."""
     from hpc_agent.ops import submit_flow as sf
@@ -383,7 +376,7 @@ def _seed_inflight_canary(tmp_path, run_id: str, job_ids: list[str]) -> None:
     )  # default status in_flight
 
 
-def test_replayed_canary_does_not_gate_main_on_stale_id(tmp_path, _journal_home) -> None:
+def test_replayed_canary_does_not_gate_main_on_stale_id(tmp_path, journal_home) -> None:
     """F51 fire-path: a crash-then-retry reuses an in_flight canary record whose
     1-task job the scheduler may already have purged (MinJobAge). The main array
     must NOT be co-submitted with --dependency=afterok:<purged id> (which sbatch
@@ -408,7 +401,7 @@ def test_replayed_canary_does_not_gate_main_on_stale_id(tmp_path, _journal_home)
     assert mainmk.call_args.kwargs["gate_job_ids"] == []
 
 
-def test_fresh_canary_gates_main_when_afterok_enabled(tmp_path, _journal_home) -> None:
+def test_fresh_canary_gates_main_when_afterok_enabled(tmp_path, journal_home) -> None:
     """F51 boundary: a canary fired THIS call still gates the main array on afterok
     — the guard narrows to replay, it does not disable #250 for fresh submits."""
     from hpc_agent.ops import submit_flow as sf

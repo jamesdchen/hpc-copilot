@@ -11,21 +11,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from hpc_agent.ops.dag_frontier import dag_frontier
-from hpc_agent.state import run_record as session_run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the journal root so seeded records land under tmp."""
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(session_run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_node(

@@ -27,7 +27,6 @@ from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.infra import backends
 from hpc_agent.infra.backends import HPCBackend
 from hpc_agent.ops.aggregate_flow import aggregate_flow
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -36,13 +35,6 @@ if TYPE_CHECKING:
 
 _RUN_ID = "20260622-120000-bbb"
 _BACKEND_NAME = "fakepureapi"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

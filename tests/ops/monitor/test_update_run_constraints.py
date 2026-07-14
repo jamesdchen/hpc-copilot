@@ -20,7 +20,6 @@ from hpc_agent._wire.actions.update_run_constraints import (
     UpdateRunConstraintsSpec,
 )
 from hpc_agent.ops.monitor.update_constraints import update_run_constraints
-from hpc_agent.state import run_record as _run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
@@ -30,14 +29,6 @@ if TYPE_CHECKING:
 
 
 _RUN_ID = "20260101-000000-aaaaaaa"
-
-
-@pytest.fixture(autouse=True)
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect HPC_HOMEDIR so journal writes don't pollute ~/.claude."""
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(_run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_sidecar(tmp_path: Path, *, job_ids: list[str], features: list[str] | None = None) -> None:

@@ -11,23 +11,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
-
 from hpc_agent.meta.campaign.atoms.advance import campaign_advance
 from hpc_agent.meta.campaign.atoms.circuit_breaker import consecutive_terminal_failures
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_iteration(
@@ -78,7 +67,7 @@ def _seed_iteration(
 # ─── helper: consecutive_terminal_failures ──────────────────────────────────
 
 
-def test_counts_trailing_failures(_journal_home: Path, tmp_path: Path) -> None:
+def test_counts_trailing_failures(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="complete")
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r2", campaign_id="A", status="abandoned")
@@ -91,7 +80,7 @@ def test_counts_trailing_failures(_journal_home: Path, tmp_path: Path) -> None:
     assert out["last_status"] == "abandoned"
 
 
-def test_complete_resets_streak(_journal_home: Path, tmp_path: Path) -> None:
+def test_complete_resets_streak(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r2", campaign_id="A", status="complete")
@@ -103,7 +92,7 @@ def test_complete_resets_streak(_journal_home: Path, tmp_path: Path) -> None:
     assert out["last_status"] == "complete"
 
 
-def test_in_flight_skipped_not_reset(_journal_home: Path, tmp_path: Path) -> None:
+def test_in_flight_skipped_not_reset(journal_home: Path, tmp_path: Path) -> None:
     # A just-submitted retry (in_flight) at the tail must NOT reset a real
     # failing streak before it has a terminal verdict.
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
@@ -120,7 +109,7 @@ def test_in_flight_skipped_not_reset(_journal_home: Path, tmp_path: Path) -> Non
 # ─── end-to-end: campaign-advance stop_circuit_breaker ──────────────────────
 
 
-def test_advance_stops_on_circuit_breaker(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_stops_on_circuit_breaker(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r2", campaign_id="A", status="failed")
@@ -131,7 +120,7 @@ def test_advance_stops_on_circuit_breaker(_journal_home: Path, tmp_path: Path) -
     assert out["circuit_breaker"]["count"] == 3
 
 
-def test_advance_breaker_under_threshold_continues(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_breaker_under_threshold_continues(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
 
@@ -140,7 +129,7 @@ def test_advance_breaker_under_threshold_continues(_journal_home: Path, tmp_path
     assert out["circuit_breaker"]["count"] == 2
 
 
-def test_advance_no_breaker_arg_never_fires(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_no_breaker_arg_never_fires(journal_home: Path, tmp_path: Path) -> None:
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
     _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
 
@@ -149,7 +138,7 @@ def test_advance_no_breaker_arg_never_fires(_journal_home: Path, tmp_path: Path)
     assert out["circuit_breaker"]["threshold"] is None
 
 
-def test_advance_breaker_defaults_from_manifest(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_breaker_defaults_from_manifest(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.meta.campaign.manifest import write_manifest
 
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
@@ -160,7 +149,7 @@ def test_advance_breaker_defaults_from_manifest(_journal_home: Path, tmp_path: P
 
 
 def test_advance_in_flight_takes_precedence_over_breaker(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     # An in-flight run means the campaign is still progressing; wait_in_flight
     # must win so we don't halt (and orphan the live job) on a stale streak.
@@ -172,7 +161,7 @@ def test_advance_in_flight_takes_precedence_over_breaker(
     assert out["decision"] == "wait_in_flight"
 
 
-def test_advance_breaker_defaults_from_anomaly_policy(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_breaker_defaults_from_anomaly_policy(journal_home: Path, tmp_path: Path) -> None:
     """``anomaly_policy.circuit_breaker_failures`` is a fallback default source
     (after an explicit arg / ``stop_criteria``)."""
     from hpc_agent.meta.campaign.manifest import write_manifest
@@ -184,7 +173,7 @@ def test_advance_breaker_defaults_from_anomaly_policy(_journal_home: Path, tmp_p
     assert out["decision"] == "stop_circuit_breaker"
 
 
-def test_advance_emits_circuit_breaker_anomaly_brief(_journal_home: Path, tmp_path: Path) -> None:
+def test_advance_emits_circuit_breaker_anomaly_brief(journal_home: Path, tmp_path: Path) -> None:
     """A circuit-breaker trip emits a structured anomaly brief: what tripped,
     evidence counts (incl. the failing run ids), and a drafted recommendation."""
     _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")

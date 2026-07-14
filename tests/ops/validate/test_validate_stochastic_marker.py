@@ -10,13 +10,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from hpc_agent._wire.validators.validate_stochastic_marker import (
     ValidateStochasticMarkerSpec,
 )
 from hpc_agent.ops.validate.stochastic_marker import validate_stochastic_marker
-from hpc_agent.state import run_record as session_run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -45,22 +42,6 @@ def _seed_run_sidecar(
         "campaign_id": campaign_id,
     }
     (runs_dir / f"{run_id}.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect HPC_HOMEDIR for the journal lookup the validator does
-    via ``find_existing_runs``.
-
-    ``find_existing_runs`` actually scans ``<experiment_dir>/.hpc/runs/``
-    (the per-experiment sidecar dir, not the journal); the validator
-    doesn't need HPC_HOMEDIR redirection. But journal_dir() may still
-    be touched as a side-effect of importing run_record — redirect to be
-    safe.
-    """
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(session_run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def _seed_journal_run(experiment_dir: Path, *, run_id: str, campaign_id: str = "") -> None:

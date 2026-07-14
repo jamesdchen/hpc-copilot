@@ -38,13 +38,6 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "journal_home"
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(home))
-    return home
-
-
-@pytest.fixture
 def experiment(tmp_path: Path) -> Path:
     d = tmp_path / "exp"
     d.mkdir()

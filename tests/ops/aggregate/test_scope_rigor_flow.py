@@ -24,7 +24,7 @@ from hpc_agent import errors
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.ops import aggregate_flow as af_module
 from hpc_agent.ops.aggregate_flow import aggregate_flow
-from hpc_agent.state import run_record, scopes
+from hpc_agent.state import scopes
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
@@ -35,13 +35,6 @@ if TYPE_CHECKING:
 _SCOPE = "holdout"
 _PI_VALUES = [3.1404, 3.1421, 3.1399, 3.1430, 3.1410]
 _EXPECTED_MEAN = sum(_PI_VALUES) / len(_PI_VALUES)
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

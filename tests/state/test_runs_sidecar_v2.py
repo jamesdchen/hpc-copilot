@@ -613,15 +613,6 @@ def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import run_record
-
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
-
-
 def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
     """Write a journal RunRecord matching *run_id* with the given job_ids."""
     from hpc_agent.state.run_record import RunRecord
@@ -641,14 +632,14 @@ def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
     upsert_run(experiment, record)
 
 
-def test_is_orphan_when_no_journal_record(_journal_home: Path, tmp_path: Path) -> None:
+def test_is_orphan_when_no_journal_record(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import is_orphan_sidecar
 
     write_run_sidecar(tmp_path, **_common_required_kwargs())
     assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is True
 
 
-def test_is_not_orphan_when_journal_has_job_ids(_journal_home: Path, tmp_path: Path) -> None:
+def test_is_not_orphan_when_journal_has_job_ids(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import is_orphan_sidecar
 
     kwargs = _common_required_kwargs()
@@ -657,7 +648,7 @@ def test_is_not_orphan_when_journal_has_job_ids(_journal_home: Path, tmp_path: P
     assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is False
 
 
-def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path: Path) -> None:
+def test_is_orphan_when_journal_has_empty_job_ids(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import is_orphan_sidecar
 
     kwargs = _common_required_kwargs()
@@ -666,7 +657,7 @@ def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path:
     assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
 
 
-def test_is_orphan_tolerates_non_utf8_sidecar(_journal_home: Path, tmp_path: Path) -> None:
+def test_is_orphan_tolerates_non_utf8_sidecar(journal_home: Path, tmp_path: Path) -> None:
     """#73: a non-UTF-8 sidecar (e.g. UTF-16 from a Windows redirect) must be
     tolerant-read, not crash ``is_orphan_sidecar`` / ``prune_orphan_sidecars``.
     The undecodable file yields no ``sidecar_job_ids`` (consistent with the
@@ -682,7 +673,7 @@ def test_is_orphan_tolerates_non_utf8_sidecar(_journal_home: Path, tmp_path: Pat
     assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
 
 
-def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_path: Path) -> None:
+def test_prune_orphan_sidecars_removes_only_orphans(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
 
     real_kwargs = _common_required_kwargs(run_id="20260101-000000-real0001")
@@ -701,7 +692,7 @@ def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_pat
     assert not run_sidecar_path(tmp_path, orphan_kwargs["run_id"]).is_file()
 
 
-def test_prune_orphan_sidecars_idempotent(_journal_home: Path, tmp_path: Path) -> None:
+def test_prune_orphan_sidecars_idempotent(journal_home: Path, tmp_path: Path) -> None:
     from hpc_agent.state.runs import prune_orphan_sidecars
 
     write_run_sidecar(tmp_path, **_common_required_kwargs())
@@ -712,7 +703,7 @@ def test_prune_orphan_sidecars_idempotent(_journal_home: Path, tmp_path: Path) -
     assert second == []
 
 
-def test_prune_orphan_sidecars_skips_excluded_runs(_journal_home: Path, tmp_path: Path) -> None:
+def test_prune_orphan_sidecars_skips_excluded_runs(journal_home: Path, tmp_path: Path) -> None:
     """The run currently being submitted (and its canary) must survive
     the prune. ``submit_flow_batch`` writes the jobless Step-6d sidecar
     before calling prune inside the lock, so without ``exclude`` it looks
@@ -739,7 +730,7 @@ def test_prune_orphan_sidecars_skips_excluded_runs(_journal_home: Path, tmp_path
     assert not run_sidecar_path(tmp_path, stale["run_id"]).is_file()
 
 
-def test_canary_gate_pending_main_is_not_orphan(_journal_home: Path, tmp_path: Path) -> None:
+def test_canary_gate_pending_main_is_not_orphan(journal_home: Path, tmp_path: Path) -> None:
     """#17: during the S2->S3 greenlight window a two-phase ``canary_only``
     Phase 1 leaves the main run jobless + journal-less on purpose (job_ids land
     only on the ``<id>-canary`` sibling). A committed canary sibling marks that
@@ -756,7 +747,7 @@ def test_canary_gate_pending_main_is_not_orphan(_journal_home: Path, tmp_path: P
     assert is_orphan_sidecar(tmp_path, canary["run_id"]) is False
 
 
-def test_prune_spares_canary_gate_pending_main_run(_journal_home: Path, tmp_path: Path) -> None:
+def test_prune_spares_canary_gate_pending_main_run(journal_home: Path, tmp_path: Path) -> None:
     """#17 end to end: a SIBLING batch's ``prune_orphan_sidecars`` (min_age=0,
     exclude={B, B-canary}) must not delete run A's greenlit main sidecar while
     A's canary sibling is committed — deleting it bricks the S3 launch."""
@@ -779,7 +770,7 @@ def test_prune_spares_canary_gate_pending_main_run(_journal_home: Path, tmp_path
 
 
 def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """Default behaviour: a sidecar without a journal record IS findable
     so :func:`runner.submit_and_record` can reconstruct the journal."""
@@ -796,7 +787,7 @@ def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(
 
 
 def test_find_run_by_cmd_sha_with_skip_orphans_drops_half_baked(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """Opt-in flag for callers that have already pruned the failed batch."""
     from hpc_agent.state.runs import find_run_by_cmd_sha
@@ -814,7 +805,7 @@ def test_find_run_by_cmd_sha_with_skip_orphans_drops_half_baked(
 
 
 def test_sidecar_with_job_ids_is_not_orphan_even_without_journal(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """Journal-wipe recovery: a sidecar that finalize_run_sidecar_job_ids
     stamped is the canonical 'job ran on the cluster' signal — even if
@@ -825,7 +816,7 @@ def test_sidecar_with_job_ids_is_not_orphan_even_without_journal(
     assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is False
 
 
-def test_sidecar_without_job_ids_or_journal_is_orphan(_journal_home: Path, tmp_path: Path) -> None:
+def test_sidecar_without_job_ids_or_journal_is_orphan(journal_home: Path, tmp_path: Path) -> None:
     """The half-baked case: Step 6d wrote the sidecar but qsub never ran."""
     from hpc_agent.state.runs import is_orphan_sidecar, write_run_sidecar
 
@@ -834,7 +825,7 @@ def test_sidecar_without_job_ids_or_journal_is_orphan(_journal_home: Path, tmp_p
 
 
 def test_update_sidecar_job_ids_atomically_stamps_existing_sidecar(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """Post-qsub finalize: load + set + atomic rewrite, preserving v2 fields."""
     from hpc_agent.state.runs import (
@@ -867,7 +858,7 @@ def test_update_sidecar_job_ids_atomically_stamps_existing_sidecar(
 
 
 def test_update_sidecar_job_ids_raises_when_sidecar_missing(
-    _journal_home: Path, tmp_path: Path
+    journal_home: Path, tmp_path: Path
 ) -> None:
     """Caller-side bug: finalize before write. Surface, don't synthesize."""
     from hpc_agent.state.runs import update_run_sidecar_job_ids

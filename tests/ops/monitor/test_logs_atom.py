@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from hpc_agent.ops.monitor import logs_atom
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -23,13 +22,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _RUN_ID = "20260606-130000-lll"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 def test_all_failed_activation_seeded_from_record_cluster(

@@ -19,8 +19,6 @@ matched campaigns into a tiered rollup. The tests pin:
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -29,6 +27,7 @@ from hpc_agent import errors
 from hpc_agent._wire.queries.recall import RecallSpec
 from hpc_agent.ops.memory import recall as recall_mod
 from hpc_agent.ops.memory.recall import recall_campaigns, resolve_roots
+from tests._subprocess import run_cli
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -482,12 +481,7 @@ def test_resolve_roots_expands_tilde(tmp_path: Path, monkeypatch) -> None:
 
 
 def _run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", *args],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    proc = run_cli(*args, env=env)
     return proc.returncode, proc.stdout, proc.stderr
 
 

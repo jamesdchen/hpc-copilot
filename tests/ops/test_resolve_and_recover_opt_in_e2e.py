@@ -37,17 +37,9 @@ import pytest
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
 from hpc_agent.ops.resolve_and_recover_flow import maybe_resolve_and_recover
 from hpc_agent.ops.submit.runner import submit_and_record
-from hpc_agent.state import run_record
 from hpc_agent.state.journal import load_run
 
 _RUN_ID = "ml_ridge_optin01"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

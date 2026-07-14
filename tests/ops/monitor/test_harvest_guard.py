@@ -24,19 +24,11 @@ from hpc_agent.ops.monitor.harvest_guard import (
     harvest_marker_path,
     harvest_on_terminal,
 )
-from hpc_agent.state import run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 _RUN_ID = "20260703-090000-aaa"
-
-
-@pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
 
 
 @pytest.fixture

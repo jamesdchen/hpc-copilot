@@ -42,19 +42,6 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect HPC_HOMEDIR into a per-test tmp directory.
-
-    HPC_HOMEDIR lives in :mod:`hpc_agent.state.run_record`
-    after the session.py split; patching the module attribute is what
-    every reader sees because callers look the name up at call time.
-    """
-    home = tmp_path / "home_hpc"
-    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    return home
-
-
-@pytest.fixture
 def experiment(tmp_path: Path) -> Path:
     """A throwaway experiment dir on disk."""
     d = tmp_path / "exp"
