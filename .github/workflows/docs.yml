@@ -75,24 +75,36 @@ jobs:
         run: pip install -e '.[dev]' pyyaml
 
       - name: Auto-regenerate doc artifacts (PR only)
+        # This job OWNS regen+commit of ALL docs/ generated artifacts:
+        # primitive frontmatter, the primitive catalog, and the operations
+        # index. ci.yml owns only the non-docs files, so the two auto-commit
+        # file_patterns are disjoint and never race. Frontmatter must run
+        # first — build_primitive_index reads it to build README.md.
+        # (build_primitive_frontmatter is --checked in ci.yml's test job,
+        # which self-heals from its own local --write; docs.yml is what
+        # lands the frontmatter drift back on the PR branch.)
         # Recovers from the "another PR landed primitives while this
         # one was open" flake without forcing a manual merge+regen
         # dance. Idempotent: a no-op when the committed docs are
         # already consistent.
         if: github.event_name == 'pull_request'
         run: |
+          python scripts/build_primitive_frontmatter.py --write
           python scripts/build_primitive_index.py --write
           python scripts/build_operations_index.py --write
 
       - name: Commit regen drift to PR branch (PR only)
         # No-op when ``file_pattern`` shows no diff; only fires when
         # regen actually changed something. Skipped entirely on push
-        # events (where --check below is the hard gate).
+        # events (where --check below is the hard gate). The pattern
+        # ``docs/primitives/`` covers every regenerated primitive doc
+        # frontmatter plus README.md; it stays entirely under docs/, so
+        # it can never overlap ci.yml's src/hpc_agent/... pattern.
         if: github.event_name == 'pull_request'
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
-          commit_message: "chore(docs): auto-regenerate primitive catalog + operations index"
-          file_pattern: "docs/primitives/README.md docs/generated/operations.md"
+          commit_message: "chore(docs): auto-regenerate primitive frontmatter + catalog + operations index"
+          file_pattern: "docs/primitives/ docs/generated/operations.md"
           commit_user_name: github-actions[bot]
           commit_user_email: github-actions[bot]@users.noreply.github.com
 
