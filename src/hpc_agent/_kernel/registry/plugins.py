@@ -26,6 +26,10 @@ attributes of the informal plugin contract:
   explicit hook.
 
 All are optional; a plugin may provide any combination, or none.
+
+The core import surface a plugin may reach is frozen + pinned in
+``docs/reference/plugin-api-contract.md`` (enforced by
+``scripts/lint_plugin_api_surface.py``).
 """
 
 from __future__ import annotations

@@ -185,6 +185,12 @@ jobs:
       - name: Lint mirror comments name their twin + pinning test
         if: matrix.python-version == '3.12'
         run: python scripts/lint_mirror_ledger.py
+      - name: Lint plugin->core API surface (stay-inside + anti-drift)
+        # Both legs run without the plugin installed: the stay-inside AST scan
+        # reads the plugin source in the checkout, and the anti-drift leg
+        # imports each allowlisted symbol from the installed hpc_agent.
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_plugin_api_surface.py
       - name: Check JSON schemas regenerated from Pydantic
         if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check
@@ -276,6 +282,12 @@ jobs:
         # a plugin, so the lint checks that plugin's MANIFEST against the runtime
         # reality (primitive names, worker-prompt overlays, cli_register).
         run: python scripts/lint_plugin_manifests.py
+      - name: Fire the plugin API surface (notebook-render only)
+        # The fire-path leg registers the plugin's verbs and proves the whole
+        # declared import surface resolves at call time — only meaningful where
+        # the plugin + its deps are installed, i.e. this leg.
+        if: matrix.plugin == 'hpc-agent-notebook-render'
+        run: python scripts/lint_plugin_api_surface.py --fire-path
       - name: Plugin offline tests (fake API client, zero network)
         run: pytest -q "examples/plugins/${{ matrix.plugin }}/tests"
       - name: actionlint workflow templates (syntax + expressions)
