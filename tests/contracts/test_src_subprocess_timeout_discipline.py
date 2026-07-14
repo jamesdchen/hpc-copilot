@@ -79,7 +79,8 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # bound the tar half. (Was a bare `subprocess.run(..., timeout=)` — NOT a
     # hard deadline on Windows for an ssh-spawning call; run #7 S2 staging
     # wedge, 2026-07-05. See _BOUNDED_RUNNER_REQUIRED below.)
-    "src/hpc_agent/infra/transport.py": {"_tar_ssh_push"},
+    # The engine stayed in transport/__init__.py when the module became a package.
+    "src/hpc_agent/infra/transport/__init__.py": {"_tar_ssh_push"},
     # Cluster-side dispatcher launching the user's payload: runtime is the
     # task's own runtime, bounded by the scheduler's wall-clock (h_rt /
     # --time) on the job, and heartbeat-monitored — a parent-side timeout
@@ -120,7 +121,9 @@ _GRANDFATHERED: set[tuple[str, str]] = set()
 # `run_capture_bounded` is actually wired. See
 # `test_transport_ssh_sites_route_through_bounded_runner`.
 _BOUNDED_RUNNER_REQUIRED: dict[str, set[str]] = {
-    "src/hpc_agent/infra/transport.py": {
+    # All six ssh/rsync/tar/scp sites are engine functions that stayed in
+    # transport/__init__.py when the module became a package.
+    "src/hpc_agent/infra/transport/__init__.py": {
         "_remote_preclean",
         "_tar_ssh_push",
         "_scp_pull",

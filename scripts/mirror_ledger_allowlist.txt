@@ -83,7 +83,12 @@ src/hpc_agent/infra/scheduler_resolve.py
 src/hpc_agent/infra/ssh_options.py
 src/hpc_agent/infra/ssh_slots.py
 src/hpc_agent/infra/ssh_validation.py
-src/hpc_agent/infra/transport.py
+src/hpc_agent/infra/transport/__init__.py
+src/hpc_agent/infra/transport/_combiner.py
+src/hpc_agent/infra/transport/_delta.py
+src/hpc_agent/infra/transport/_excludes.py
+src/hpc_agent/infra/transport/_prune.py
+src/hpc_agent/infra/transport/_shared.py
 src/hpc_agent/meta/campaign/atoms/_concurrency.py
 src/hpc_agent/meta/campaign/atoms/advance.py
 src/hpc_agent/meta/campaign/atoms/circuit_breaker.py

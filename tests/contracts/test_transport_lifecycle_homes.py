@@ -43,7 +43,7 @@ _LIFECYCLE_TOKEN_HOMES: dict[str, tuple[re.Pattern[str], frozenset[str]]] = {
         re.compile(
             r"ControlMaster[=\s]*(?:auto|yes|no)|-oControlMaster|ControlPath=|ControlPersist="
         ),
-        frozenset({"infra/ssh_options.py", "infra/transport.py"}),
+        frozenset({"infra/ssh_options.py", "infra/transport/__init__.py"}),
     ),
     # Idle timers that recycle/sever connections — post-G4 exactly one home:
     # the zero-inflight slot-courtesy recycle in ssh_engine (policy, declared).

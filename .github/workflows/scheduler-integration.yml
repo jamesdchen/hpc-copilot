@@ -26,7 +26,7 @@ on:
       - "src/hpc_agent/ops/submit_flow.py"
       - "src/hpc_agent/ops/monitor_flow.py"
       - "src/hpc_agent/ops/aggregate_flow.py"
-      - "src/hpc_agent/infra/transport.py"
+      - "src/hpc_agent/infra/transport/**"
       - "src/hpc_agent/infra/backends/**"
       - "src/hpc_agent/execution/mapreduce/**"
 
