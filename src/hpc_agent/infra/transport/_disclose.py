@@ -223,6 +223,37 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
+#: Bound on the child stderr tail folded into a failure disclosure. An ssh/scp
+#: death can spew (host-key prompts, per-file errors); the tail carries the
+#: actual "Connection reset" / "lost connection" story a post-mortem needs.
+_CHILD_STDERR_TAIL_CHARS: Final[int] = 4000
+
+
+def disclose_child_failure(*, what: str, returncode: int, stderr: str | None) -> None:
+    """One ``[transport]`` line recording a dead ssh/scp child (run-#13 finding 2).
+
+    The child-process runner captures ssh/scp stderr into the returned
+    ``CompletedProcess``, but on a non-zero death that stderr was never written to
+    the worker log — a VPN-severed ``scp`` left a "lost connection" story in
+    ``proc.stderr`` that nobody recorded, so the log's last line was a stale
+    progress line and the failure was undiagnosable. This flushes the child's exit
+    status + a bounded stderr tail to the log at the moment the child dies, so the
+    story is on the tail-able surface. Best-effort and fail-open: disclosure never
+    blocks or re-raises on the transport path.
+    """
+    try:
+        tail = (stderr or "").strip()
+        truncated = len(tail) > _CHILD_STDERR_TAIL_CHARS
+        if truncated:
+            tail = tail[-_CHILD_STDERR_TAIL_CHARS:]
+        head = f"[transport] child {what} exited {returncode}; stderr tail"
+        head += " (truncated)" if truncated else ""
+        body = f"\n{tail}" if tail else " (no stderr captured)"
+        print(f"{head}:{body}", file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        pass
+
+
 def _pump_with_progress(
     src: IO[bytes],
     dst_fd: int,

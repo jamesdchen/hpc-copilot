@@ -268,13 +268,36 @@ def _record_detached_failure_terminal(exit_code: int) -> None:
     if not run_id or not block:
         return
     try:
+        import os as _os
         from pathlib import Path
 
+        from hpc_agent._kernel.lifecycle.crash_disclosure import log_has_fatal_marker
         from hpc_agent.state.block_terminal import read_terminal, record_terminal
 
         experiment_dir = Path.cwd()
         if read_terminal(experiment_dir, run_id, block) is not None:
             return
+        # Honest terminal (run-#13 finding 2): never assert the log discloses
+        # something the write path cannot guarantee. Read the worker log's tail
+        # (bounded) and say what it ACTUALLY contains — a flushed ``[fatal]``
+        # block, or none at all (a hard kill / unflushed buffers), naming the last
+        # log line so the reader sees where the worker really stopped.
+        disclosed, last_line = log_has_fatal_marker(_os.environ.get("HPC_DETACHED_LOG"))
+        if disclosed:
+            message = (
+                f"detached {block} worker for run {run_id} exited {exit_code} "
+                "before recording a terminal — the worker log carries the "
+                "disclosed failure ([fatal] block present); re-invoke the block "
+                "(recorded-terminal replay keeps it idempotent)"
+            )
+        else:
+            tail = f"; last log line: {last_line!r}" if last_line else ""
+            message = (
+                f"detached {block} worker for run {run_id} exited {exit_code} "
+                "WITHOUT disclosure in its log (no [fatal] block — hard kill or "
+                f"unflushed buffers){tail}; re-invoke the block (recorded-terminal "
+                "replay keeps it idempotent)"
+            )
         record_terminal(
             experiment_dir,
             run_id=run_id,
@@ -285,12 +308,8 @@ def _record_detached_failure_terminal(exit_code: int) -> None:
                 "detached_failure": True,
                 "error_code": "detached_worker_exit",
                 "exit_code": exit_code,
-                "message": (
-                    f"detached {block} worker for run {run_id} exited "
-                    f"{exit_code} before recording a terminal — the worker "
-                    "log carries the disclosed failure; re-invoke the block "
-                    "(recorded-terminal replay keeps it idempotent)"
-                ),
+                "log_disclosed": disclosed,
+                "message": message,
             },
         )
     except Exception:  # noqa: BLE001 — the exit path must never gain a new crash
@@ -305,15 +324,33 @@ def main(argv: list[str] | None = None) -> int:
     # worker (HPC_DETACHED_RUN_ID set) and HPC_DETACH_HEARTBEAT_SEC > 0. Started
     # before the verb runs, stopped in the CM's finally AFTER the verb returns —
     # so the wait-first loop never emits a line after the final envelope.
-    from hpc_agent._kernel.lifecycle.heartbeat import detached_heartbeat
+    from hpc_agent._kernel.lifecycle.crash_disclosure import (
+        emit_fatal_block,
+        install_crash_faulthandler,
+    )
+    from hpc_agent._kernel.lifecycle.heartbeat import detached_heartbeat, last_heartbeat_line
 
+    # Worker crash disclosure (run-#13 finding 2): a detached worker died exit-2
+    # (a VPN drop severed its scp child) and flushed NOTHING to its log — no
+    # traceback, no exit code — so the terminal's "the log carries the disclosed
+    # failure" was a lie. Arm faulthandler so a hard signal (segfault/abort — the
+    # paths no ``except`` can catch) dumps a native traceback to the log, and flush
+    # a ``[fatal]`` block on every catchable exit path below. No-ops outside a
+    # detached worker, so the foreground CLI console stays clean.
     with detached_heartbeat():
+        install_crash_faulthandler()
         try:
             rc = _dispatch_main(argv)
-        except Exception:
+        except SystemExit as exc:
+            if exc.code not in (0, None):
+                emit_fatal_block(exc=exc, last_stage=last_heartbeat_line())
+            raise
+        except Exception as exc:
+            emit_fatal_block(exc=exc, last_stage=last_heartbeat_line())
             _record_detached_failure_terminal(3)
             raise
         if rc != 0:
+            emit_fatal_block(exit_code=rc, last_stage=last_heartbeat_line())
             _record_detached_failure_terminal(rc)
         return rc
 

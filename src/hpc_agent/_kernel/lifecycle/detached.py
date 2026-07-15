@@ -503,6 +503,11 @@ def _spawn_detached(
                     **os.environ,
                     "HPC_DETACHED_RUN_ID": run_id,
                     "HPC_DETACHED_BLOCK": block,
+                    # The worker's own log path, so its exit-path terminal writer
+                    # can read the log tail and report HONESTLY whether a [fatal]
+                    # block was flushed (run-#13 finding 2) instead of asserting a
+                    # disclosure the write path cannot guarantee.
+                    "HPC_DETACHED_LOG": str(log_path.resolve()),
                 },
             )
         finally:

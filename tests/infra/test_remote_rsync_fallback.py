@@ -1356,3 +1356,61 @@ def test_remote_snippet_agrees_with_local_manifest(tmp_path: Path) -> None:
     from hpc_agent.infra.manifest import manifest_delta
 
     assert manifest_delta(local, remote).nothing_to_ship
+
+
+# ─── child-failure disclosure (run-#13 finding 2) ──────────────────────────
+# A VPN-severed scp/ssh child dies non-zero with its "lost connection" story in
+# stderr; the transport runner must flush that story to the worker log at death,
+# not let it die on the tail-able surface with a stale progress line.
+
+
+def _fail(stderr: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+
+
+def test_scp_pull_discloses_child_stderr_on_nonzero(tmp_path: Path, capsys) -> None:
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch(
+            "hpc_agent.infra.transport.run_capture_bounded",
+            return_value=_fail("scp: Connection reset by peer\nlost connection"),
+        ),
+    ):
+        proc = transport.rsync_pull(
+            ssh_target="u@h",
+            remote_path="/r",
+            remote_subdir="_combiner",
+            local_dir=tmp_path / "out",
+        )
+    assert proc.returncode == 1
+    err = capsys.readouterr().err
+    assert "[transport] child scp pull exited 1" in err
+    assert "lost connection" in err  # the story nobody used to record
+
+
+def test_disclose_child_failure_bounds_the_tail() -> None:
+    import contextlib as _ctx
+    import io as _io
+
+    from hpc_agent.infra.transport import disclose_child_failure
+    from hpc_agent.infra.transport._disclose import _CHILD_STDERR_TAIL_CHARS
+
+    buf = _io.StringIO()
+    with _ctx.redirect_stderr(buf):
+        disclose_child_failure(what="tar|ssh push", returncode=255, stderr="x" * 20_000)
+    out = buf.getvalue()
+    assert "child tar|ssh push exited 255" in out
+    assert "(truncated)" in out
+    assert len(out) < _CHILD_STDERR_TAIL_CHARS + 500
+
+
+def test_disclose_child_failure_names_empty_stderr() -> None:
+    import contextlib as _ctx
+    import io as _io
+
+    from hpc_agent.infra.transport import disclose_child_failure
+
+    buf = _io.StringIO()
+    with _ctx.redirect_stderr(buf):
+        disclose_child_failure(what="scp pull", returncode=1, stderr="")
+    assert "(no stderr captured)" in buf.getvalue()
