@@ -199,3 +199,10 @@ B5 **Onboarding index** (S–M). The fresh-session read chain (CLAUDE.md →
   convergence note was removed); (2) all fixes properly done, no near-term
   stopgaps — Part 1 rewritten as the full program-init/derived_from build
   with a no-heuristics selection law.
+- 2026-07-15 (fable sweep): 15-agent dive+premortem+critic sweep over this
+  plan produced the implementation handoff —
+  `docs/plans/fable-sweep-devx-2026-07-15/` (ARCHITECT-MEMO.md + full unit
+  specs in sweep-results.json). Batch B (B1-B5) is NOT in the sweep — its
+  items still need maintainer rulings. Known corrections to this doc from
+  the sweep: the generated file is `src/hpc_agent/operations.json` (not
+  `config/`); A6's pattern alternation should include 'regen scripts'.
