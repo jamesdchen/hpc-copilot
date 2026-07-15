@@ -86,7 +86,8 @@ __all__ = [
 # deploy-exclude protection in
 # :data:`hpc_agent.infra.transport.PROTECTED_OUTPUT_DIRS` (run-13 finding 4's
 # class — a code deploy must never re-ship export archives to the cluster).
-# ``tests/infra/test_pull_dest_excludes.py`` pins the exclude lockstep.
+# MIRROR: hpc_agent.infra.transport.PROTECTED_OUTPUT_DIRS
+#   pinned-by tests/infra/test_pull_dest_excludes.py
 DOSSIER_DIRNAME = "_dossier"
 
 # Bump when the emitted manifest shape changes in a way a consumer (the

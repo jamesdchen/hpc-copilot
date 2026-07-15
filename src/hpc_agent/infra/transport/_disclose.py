@@ -85,10 +85,11 @@ def deploy_payload_summary(
     root dirs — the structured, code-rendered figures the S2 greenlight brief
     surfaces BEFORE the transfer (run-13 finding 4).
 
-    Mirrors the transfer's own filtering exactly: *exclude* is resolved through
+    Applies the transfer's OWN filtering (the same shared functions, so there
+    is no copy to drift): *exclude* is resolved through
     :func:`_effective_excludes` (so the mandatory / protected groups the push
     always unions in — including the ``_per_task_results`` / ``_aggregated``
-    pull mirrors — are honored here too), then every file is tested with the
+    pull destinations — are honored here too), then every file is tested with the
     shared :func:`_path_excluded` core. ``None`` selects the default exclude set,
     the same as the push. Walk-capped like :func:`_disclose_payload` so it stays
     cheap on pathological trees; a capped total is a lower bound.
