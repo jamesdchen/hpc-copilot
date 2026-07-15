@@ -121,13 +121,13 @@ jobs:
         # ``--check`` gates would see stale files and fail on a branch whose
         # generated files merely drifted against an upstream merge. Skipped on
         # push to main / claude/**, where ``--check`` is the hard gate.
+        #
+        # ``regen_all.py`` runs all SIX generators in dependency order plus the
+        # pending-docs check — one recipe. It also regenerates
+        # ``cli/_verb_module_map.py``, which the old per-script list here OMITTED
+        # (so a PR that added an ungrouped verb healed everything BUT the map).
         if: matrix.python-version == '3.12' && github.event_name == 'pull_request'
-        run: |
-          python scripts/build_schemas.py --write
-          python scripts/build_primitive_frontmatter.py --write
-          python scripts/build_primitive_index.py --write
-          python scripts/build_operations_index.py --write
-          python scripts/bake_operations_json.py --write
+        run: python scripts/regen_all.py --write
       - name: Ruff lint
         if: matrix.python-version == '3.12'
         run: ruff check .
@@ -200,6 +200,17 @@ jobs:
       - name: Check baked operations.json is up to date
         if: matrix.python-version == '3.12'
         run: python scripts/bake_operations_json.py --check
+      - name: Check all generated artifacts regenerate cleanly (regen-all)
+        # The single-recipe superset of the per-script ``--check`` gates above.
+        # Its job here is coverage the granular gates DON'T give:
+        # ``cli/_verb_module_map.py`` has no other ``--check`` gate in any
+        # workflow, so this is its ONLY CI gate. Runs on the 3.12 leg ONLY (the
+        # one that ran the local ``--write`` heal above), honouring the self-heal
+        # doctrine — a pytest-embedded check would fire on the 3.10/3.11 legs and
+        # the Windows lane, which never regenerate locally. On push events the
+        # committed tree is authoritative and this is the hard gate.
+        if: matrix.python-version == '3.12'
+        run: python scripts/regen_all.py --check
       - name: Pytest (default)
         run: pytest -q
       - name: Pytest (slow tier)
