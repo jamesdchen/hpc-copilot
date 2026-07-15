@@ -58,42 +58,41 @@ would inherit silent first-wins the day they land.
 
 ### Proposed work (ranked)
 
-P1a **(NEEDS RULING — selection rule)** Fix `compose_audit_template`:
-  retire the receipt-bindings tiebreak. Candidate near-term rules, pick one:
-  (i) **refuse-on-ambiguity** (the pack_gate model): >1 candidate and no
-  explicit template → loud `SpecInvalid` naming every candidate, remedy =
-  pass `template` explicitly or declare a selection in interview.json;
-  (ii) an explicit `audit_template_pack` declaration in the interview packs
-  block (human-ruled once per experiment, journaled);
-  (iii) opt-in order wins, both candidates disclosed. Long-term the
-  derivation edge (rv `derived_from` quant-skeleton) is the principled
-  signal, gated on program-init landing. Whatever the rule: the compose
-  disclosure must name EVERY candidate + the deciding rule, so a wrong pick
-  surfaces at preflight, never at the sign-off surface. Flip the backwards
-  test in the same commit; add an enforcement-map row (multi-candidate
-  seam ⇒ disclosed selection or loud refusal) + fire-path test.
+**Maintainer ruling 2026-07-15: fixes are done PROPERLY, no near-term
+stopgaps.** The proper fix is the full derivation-lineage build, sequenced:
 
-P1b Derive `audited_source_echo` from the same disclosed selection as P1a
-  (not an independent first-match walk over manifest `files`).
+P1a **Build `program-init` + `derived_from`** per
+  `docs/design/program-init.md` (status PLANNED → build): the verb that
+  instantiates a program template from a domain skeleton stamps
+  `derived_from: {pack, seam, version, sha}` mechanically into the program
+  pack's manifest; `PackManifest` (`state/pack.py:150-165`) +
+  `parse_manifest` learn the field. Existing packs (quant v0.2.0, rv) get
+  the stamp by re-running the init/reseal path over the real lineage (rv
+  derives from the quant skeleton), not by hand-editing.
 
-P1c Define id-collision handling for `tolerances` and `registration_fields`
-  NOW, before their consumers land: same enforcement-map row as P1a —
-  a collision either refuses or resolves by a disclosed, journaled rule.
-  Cheap: the rule + a fires-test; no consumer exists to migrate.
+P1b **Rewrite `compose_audit_template` selection with NO heuristics**:
+  (i) exactly one candidate → it wins; (ii) >1 candidate and a derivation
+  edge exists among them → the DERIVED (program) template wins; (iii) >1
+  candidate and no edge → loud `SpecInvalid` naming every candidate (the
+  pack_gate refusal model — remedy: pass `template` explicitly, or fix the
+  lineage). The receipt-bindings tiebreak is retired outright. The compose
+  disclosure names EVERY candidate + the deciding rule, so any pick is
+  auditable at preflight. Flip the backwards test
+  (`test_compose_audit_template_referenced_pack_outranks_optin_order`) in
+  the same commit; add the enforcement-map row: **a multi-candidate pack
+  seam resolves by disclosed rule or refuses loudly — never a silent
+  heuristic** + fire-path test.
 
-P1d (When multi-lab reality arrives) `program-init` + `derived_from`
-  stamping per `docs/design/program-init.md`, then upgrade P1a's rule to the
-  derivation edge.
+P1c Derive `audited_source_echo` from the same disclosed selection as P1b
+  (not an independent first-match walk over manifest `files`); same
+  treatment for `resolve_template_pack_echo`'s file-collision first-match
+  (collision → loud, not first-wins).
 
-### Convergence note (verification-at-scale)
-
-The 2026-07-08 thread (machine memory
-`project_verification_at_scale_synthesis.md`, OPEN) lands on: the auto-clear
-tier map (which judgment classes code may clear vs. route to humans) should
-stop being a hardcoded dict and become a **journaled per-domain artifact a
-pack carries** — i.e. a future pack seam with exactly the multi-pack
-collision semantics P1c legislates. Rule the collision semantics once, and
-the tier-map seam inherits it.
+P1d Legislate id-collision handling for `tolerances` and
+  `registration_fields` NOW, before their consumers land, under the same
+  P1b enforcement-map row: a collision either refuses loudly or resolves by
+  a disclosed, journaled rule. Cheap: the rule + a fires-test; no consumer
+  exists to migrate.
 
 ---
 
@@ -188,10 +187,15 @@ B5 **Onboarding index** (S–M). The fresh-session read chain (CLAUDE.md →
 ### Suggested order
 
 1. Batch A as one wave (A1 first — A2 and A5 depend on it).
-2. Rule P1a + P1c (one ruling: the multi-candidate seam law) → build with
-   the enforcement-map row; P1b rides the same commit.
+2. Part 1 in sequence (P1a → P1b+P1c → P1d) — no ruling pends; the
+   maintainer ruled proper-fix-only on 2026-07-15.
 3. Rule B1 (biggest lever) and B2; B3-B5 opportunistic.
 
 ## Drift log
 
 - 2026-07-15: banked. Nothing executed.
+- 2026-07-15 (later): maintainer rulings — (1) NO verification-at-scale
+  material in this repo (explored in a separate repo; the earlier
+  convergence note was removed); (2) all fixes properly done, no near-term
+  stopgaps — Part 1 rewritten as the full program-init/derived_from build
+  with a no-heuristics selection law.
