@@ -117,20 +117,27 @@ def _compose_audit_template_default(
     default in the persisted record — the template is never brought to human
     attention (supersedes the pack-status confirm-default).
 
-    Returns a disclosure dict ``{field, value, pack, source}`` (``value`` is the
-    experiment-dir-relative template relpath) or ``None`` when there is nothing to
-    compose:
+    Returns a disclosure dict ``{field, value, pack, source, rule, candidates}``
+    (``value`` is the experiment-dir-relative template relpath) or ``None`` when
+    there is nothing to compose:
 
     * ``audited_source`` present → the caller committed a ``template`` → UNTOUCHED.
     * no ``packs`` opt-in → today's behavior → ``None``.
     * no opted-in pack declares an ``audit_template`` seam → ``None``.
 
-    Preference (the rv-over-quant precedent — the pack whose seam the audits
-    reference): among candidate packs, the FIRST that is the target of a
-    ``receipt_bindings`` slot (the program pack) wins over the domain skeleton;
-    absent any referenced candidate, the first in opt-in order. Manifest reads are
-    best-effort — a missing/unreadable/malformed manifest is skipped here (the
-    submit gate refuses a genuine broken setup loudly), never a crash at intake.
+    Selection is the ONE no-heuristics law of
+    :func:`~hpc_agent.state.pack_declarations.compose_audit_template` (run-#13
+    finding 1). The old ``receipt_bindings``-first preference — "the FIRST pack
+    that is the target of a receipt_bindings slot wins over the domain skeleton"
+    — is RETIRED: it silently picked the wrong pack for the two-layer
+    domain/program split and the pick was invisible until the sign-off surface.
+    Now one candidate wins; among many, the unique derivation-edge survivor wins;
+    any other shape (no lineage, siblings, or a cycle) is a loud
+    :class:`~hpc_agent.errors.SpecInvalid` naming every candidate — and that
+    refusal PROPAGATES out of ``record_interview`` (this is the universal submit
+    intake), so ambiguity refuses at intake with the ``audited_source.template``
+    remedy rather than persisting a wrong silent default. A manifest that fails to
+    load is NAMED in the disclosure's ``skipped`` key, never silently dropped.
     """
     # The caller committed a template (via audited_source) → never override it.
     if "audited_source" in intent:

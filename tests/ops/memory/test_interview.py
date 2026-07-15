@@ -17,6 +17,7 @@ Spec scope:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from typing import TYPE_CHECKING
@@ -26,7 +27,16 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.ops.memory.interview import record_interview
+from hpc_agent.state import pack as _pack
 from tests._subprocess import run_cli
+
+# The multi-candidate compose selection reads manifest.derived_from — the WS5
+# seam. Cases needing a real lineage activate on the WS5 rebase (field-presence
+# skipif flips them on automatically).
+_needs_ws5 = pytest.mark.skipif(
+    "derived_from" not in {f.name for f in dataclasses.fields(_pack.PackManifest)},
+    reason="WS5 seam not yet in tree: PackManifest.derived_from + reseal passthrough",
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -2052,8 +2062,12 @@ def test_actors_rejects_extra_keys(tmp_path: Path) -> None:
 # (supersedes the on-ramp's pack-status confirm-default).
 
 
-def _seal_pack_with_seam(campaign_dir, name: str) -> str:
-    """Seal a minimal pack manifest (an ``audit_template`` seam); return manifest rel."""
+def _seal_pack_with_seam(campaign_dir, name: str, *, derived_from: dict | None = None) -> str:
+    """Seal a minimal pack manifest (an ``audit_template`` seam); return manifest rel.
+
+    *derived_from* (WS5 reseal recipe passthrough) stamps the derivation lineage
+    the compose edge-elimination reads.
+    """
     from hpc_agent.state.pack_sweep import reseal_manifest
 
     pack_root = campaign_dir / "packs" / name
@@ -2067,6 +2081,8 @@ def _seal_pack_with_seam(campaign_dir, name: str) -> str:
         "pack_files": ["templates/audit.py"],
         "sweep": [],
     }
+    if derived_from is not None:
+        recipe["derived_from"] = derived_from
     (pack_root / "sweep.json").write_text(json.dumps(recipe), encoding="utf-8")
     manifest_rel = f"packs/{name}/manifest.json"
     reseal_manifest(campaign_dir / manifest_rel, pack_root / "sweep.json")
@@ -2100,26 +2116,59 @@ def test_composes_audit_template_default_when_pack_bound_no_template(tmp_path: P
     assert d["source"] == "pack_audit_template_seam"
 
 
-def test_prefers_program_pack_seam_over_domain_skeleton(tmp_path: Path) -> None:
-    """rv-over-quant: the pack a receipt_binding references wins over the skeleton."""
-    quant_rel = _seal_pack_with_seam(tmp_path, "quant")
-    rv_rel = _seal_pack_with_seam(tmp_path, "rv")
+@_needs_ws5
+def test_prefers_derived_program_template_over_skeleton(tmp_path: Path) -> None:
+    """The DERIVED program template wins over its skeleton (run-#13 finding 1).
+
+    Toy names (``skel``/``prog``) — never a real domain's words (the toy-domain
+    fixture rule). ``prog``'s manifest ``derived_from`` names ``skel``'s
+    audit_template seam, so the derivation edge eliminates the skeleton and the
+    program template is the composed default.
+    """
+    skel_rel = _seal_pack_with_seam(tmp_path, "skel")
+    prog_rel = _seal_pack_with_seam(
+        tmp_path,
+        "prog",
+        derived_from={
+            "pack": "skel",
+            "seam": "audit_template",
+            "version": "1.0.0",
+            "sha": "0" * 64,
+        },
+    )
     intent = _generator_intent(
         packs=[
-            {"pack": "quant", "manifest": quant_rel, "receipt_bindings": []},
-            {
-                "pack": "rv",
-                "manifest": rv_rel,
-                "receipt_bindings": [{"slot": "rv-audit", "pack": "rv"}],
-            },
+            {"pack": "skel", "manifest": skel_rel, "receipt_bindings": []},
+            {"pack": "prog", "manifest": prog_rel, "receipt_bindings": []},
         ]
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
 
     defaults = _composed_defaults(tmp_path)
     assert len(defaults) == 1
-    assert defaults[0]["pack"] == "rv"
-    assert defaults[0]["value"] == "packs/rv/templates/audit.py"
+    assert defaults[0]["pack"] == "prog"
+    assert defaults[0]["value"] == "packs/prog/templates/audit.py"
+    assert defaults[0]["rule"] == "derivation_edge"
+
+
+@_needs_ws5
+def test_intake_refuses_on_ambiguous_multi_candidate(tmp_path: Path) -> None:
+    """record_interview is the universal submit intake: a two-candidate,
+    lineage-less, no-template opt-in refuses LOUDLY at intake (the SpecInvalid
+    propagates, naming every candidate) rather than persisting a silent wrong
+    default — the remedy reads for a submit caller (audited_source.template)."""
+    a_rel = _seal_pack_with_seam(tmp_path, "alpha")
+    b_rel = _seal_pack_with_seam(tmp_path, "beta")
+    intent = _generator_intent(
+        packs=[
+            {"pack": "alpha", "manifest": a_rel, "receipt_bindings": []},
+            {"pack": "beta", "manifest": b_rel, "receipt_bindings": []},
+        ]
+    )
+    with pytest.raises(errors.SpecInvalid) as exc:
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert "alpha" in str(exc.value) and "beta" in str(exc.value)
+    assert "audited_source.template" in str(exc.value)
 
 
 def test_template_explicitly_supplied_leaves_record_untouched(tmp_path: Path) -> None:

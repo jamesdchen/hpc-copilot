@@ -10,6 +10,7 @@ rendered prediction, so every assertion is over the returned brief + fields.
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,14 @@ import pytest
 from hpc_agent._wire.queries.audit_preflight import AuditPreflightSpec
 from hpc_agent.ops import audit_preflight as ap
 from hpc_agent.state import notebook_audit
+from hpc_agent.state import pack as _pack
+
+# Multi-candidate compose selection reads manifest.derived_from — the WS5 seam.
+# Cases needing a real lineage activate on the WS5 rebase (field-presence skipif).
+_needs_ws5 = pytest.mark.skipif(
+    "derived_from" not in {f.name for f in dataclasses.fields(_pack.PackManifest)},
+    reason="WS5 seam not yet in tree: PackManifest.derived_from + reseal passthrough",
+)
 
 # A minimal, valid percent-format template with one section.
 _TEMPLATE_SRC = "# %%\n# hpc-audit-section: intro\nx = 1\n"
@@ -268,3 +277,49 @@ class TestComposeFromPack:
         # the unsigned-template blocker may fire) — the point is the SEAM path
         # was resolved, never a refusal and never a guessed path.
         assert result.template == "packs/toy/templates/audit.py"
+        # run-#13 finding 1: the composed pick + deciding rule is DISCLOSED in the
+        # brief (where the human caught the wrong pick), naming every candidate.
+        composed_line = next(d for d in result.disclosures if "composed audit_template" in d)
+        assert "rule=single_candidate" in composed_line
+        assert "toy:packs/toy/templates/audit.py" in composed_line
+
+    @_needs_ws5
+    def test_multi_candidate_no_edge_refuses_naming_every_candidate(self, tmp_path: Path) -> None:
+        # Two seamed packs, no derivation lineage, no explicit template → the
+        # compose ambiguity PROPAGATES as SpecInvalid naming EVERY candidate at
+        # the preflight seat (never the silent wrong pick of run-#13 finding 1).
+        import json as _json
+
+        from hpc_agent import errors
+        from hpc_agent.state.pack_sweep import reseal_manifest
+
+        for name in ("alpha", "beta"):
+            root = tmp_path / "packs" / name
+            (root / "templates").mkdir(parents=True)
+            (root / "templates" / "audit.py").write_text(
+                "# %%\n# hpc-audit-section: intro\nx = 1\n", encoding="utf-8"
+            )
+            recipe = {
+                "name": name,
+                "version": "1.0.0",
+                "seams": {"audit_template": "templates/audit.py"},
+                "fills_slots": [],
+                "pack_files": ["templates/audit.py"],
+                "sweep": [],
+            }
+            (root / "sweep.json").write_text(_json.dumps(recipe), encoding="utf-8")
+            reseal_manifest(tmp_path / f"packs/{name}/manifest.json", root / "sweep.json")
+        (tmp_path / "interview.json").write_text(
+            _json.dumps(
+                {
+                    "packs": [
+                        {"pack": "alpha", "manifest": "packs/alpha/manifest.json"},
+                        {"pack": "beta", "manifest": "packs/beta/manifest.json"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(errors.SpecInvalid) as exc:
+            ap.audit_preflight(experiment_dir=tmp_path, spec=AuditPreflightSpec())
+        assert "alpha" in str(exc.value) and "beta" in str(exc.value)

@@ -339,9 +339,13 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
     # audit path spent five greps re-deriving the pack's template). The
     # composed default is DISCLOSED; nothing composable is a loud refusal.
     template_rel = spec.template
+    composed: dict[str, str] | None = None
     if not template_rel:
         from hpc_agent.state.pack_declarations import compose_audit_template_from_repo
 
+        # A multi-candidate ambiguity raises SpecInvalid NAMING every candidate
+        # (run-#13 finding 1); it propagates so the candidate list surfaces here
+        # at preflight, never at the sign-off surface.
         composed = compose_audit_template_from_repo(experiment_dir)
         if composed is None:
             raise errors.SpecInvalid(
@@ -369,6 +373,14 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
     resuming, journal_records = _prior_audit_state(experiment_dir, spec.audit_id)
 
     disclosures = [_manifest_drift_disclosure(experiment_dir, input_roots)]
+    if composed is not None:
+        # Surface the composed pick + the deciding rule + every candidate, so a
+        # wrong selection is visible in the brief (run-#13 finding 1: the pick
+        # was absent from the brief, which is exactly where the human caught it).
+        disclosures.append(
+            f"composed audit_template = {composed['value']} "
+            f"(rule={composed['rule']}; candidates: {composed['candidates']})"
+        )
     if resuming:
         disclosures.append(
             f"resuming audit {spec.audit_id!r}: {journal_records} prior journal "

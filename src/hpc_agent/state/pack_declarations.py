@@ -652,41 +652,59 @@ def resolve_pack_echoes(
     return out
 
 
+@dataclass(frozen=True)
+class _TemplateCandidate:
+    """An opted-in pack that declares an ``audit_template`` seam (compose-internal).
+
+    Carries the loaded ``manifest`` so the derivation-edge elimination can read
+    its ``derived_from`` lineage with the real type (never an ``Any`` view that
+    would silently survive a type change to the seam).
+    """
+
+    pack: str
+    value: str  # base-dir-relative template relpath
+    manifest: PackManifest
+
+
 def compose_audit_template(packs: list[dict[str, Any]], base_dir: Path) -> dict[str, str] | None:
     """Choose the audit-facing template from bound packs' ``audit_template`` seams.
 
     The ONE selection definition (run-#12 finding 5: the compose seat existed
     only at interview, so the audit path spent five greps re-deriving the
-    pack's template): among opted-in packs whose manifest declares an
-    ``audit_template`` seam, the FIRST that is the target of a
-    ``receipt_bindings`` slot (the program pack) wins over the domain
-    skeleton; absent any referenced candidate, the first in opt-in order.
-    Manifest reads are best-effort — a missing/unreadable manifest is skipped
-    (the bind/submit gates refuse a genuinely broken setup loudly). Returns a
-    disclosure dict ``{field, value, pack, source}`` (``value`` is the
-    base-dir-relative template relpath) or ``None`` when nothing composes.
+    pack's template) — rewritten to the no-heuristics selection law after
+    run-#13 finding 1 (the retired ``receipt_bindings`` tiebreak silently
+    picked the WRONG pack for the two-layer domain/program split, and the pick
+    was invisible until the sign-off surface):
+
+    * **one candidate wins** with ``rule='single_candidate'``;
+    * **many candidates, one derivation edge** — every candidate that is the
+      derivation PARENT of another candidate is eliminated (candidate ``X`` is
+      a parent of ``Y`` iff ``Y``'s manifest ``derived_from`` names ``X`` by
+      pack NAME with ``seam == 'audit_template'``; the sha is for staleness
+      reporting, never identity — a re-sealed parent still matches). A unique
+      survivor is the DERIVED (most specific) template and wins with
+      ``rule='derivation_edge'``;
+    * **any other multi-candidate shape** — zero survivors (a self- or
+      mutual-derivation cycle) or two-plus survivors (no lineage, or sibling
+      derivatives of one skeleton) — is a loud :class:`errors.SpecInvalid`
+      naming EVERY candidate and the remedy. No tiebreak is invented.
+
+    A manifest that fails to load (missing/unreadable/malformed, incl. a
+    malformed ``derived_from``) is NOT silently dropped: it is NAMED with its
+    parse error in the disclosure's ``skipped`` key so a lineage typo surfaces
+    instead of quietly shrinking the candidate set. Returns a disclosure dict
+    ``{field, value, pack, source}`` — ADDING ``{rule, candidates}`` (and
+    ``skipped`` when any candidate failed to load) — or ``None`` when ZERO
+    candidates existed BEFORE elimination (nothing composes; the callers refuse
+    loudly). ``value`` is the base-dir-relative template relpath.
     """
     import os as _os
-
-    from hpc_agent.state.pack import load_manifest
 
     if not isinstance(packs, list) or not packs:
         return None
 
-    referenced: set[str] = set()
-    for entry in packs:
-        if not isinstance(entry, dict):
-            continue
-        for binding in entry.get("receipt_bindings") or []:
-            if not isinstance(binding, dict):
-                continue
-            target = binding.get("pack")
-            enclosing = entry.get("pack")
-            name = target if isinstance(target, str) and target else enclosing
-            if isinstance(name, str) and name:
-                referenced.add(name)
-
-    candidates: list[dict[str, str]] = []  # in opt-in order
+    candidates: list[_TemplateCandidate] = []  # in opt-in order; carries the manifest
+    skipped: list[tuple[str, str]] = []  # (pack, load error) — NAMED, never dropped
     for entry in packs:
         if not isinstance(entry, dict):
             continue
@@ -699,7 +717,9 @@ def compose_audit_template(packs: list[dict[str, Any]], base_dir: Path) -> dict[
         manifest_path = base_dir / manifest_rel
         try:
             manifest = load_manifest(manifest_path)
-        except errors.SpecInvalid:
+        except errors.SpecInvalid as exc:
+            # Under the selection law a skip IS a selection decision: name it.
+            skipped.append((pack_name, str(exc)))
             continue
         seam_rel = manifest.seams.get("audit_template")
         if not (isinstance(seam_rel, str) and seam_rel):
@@ -709,17 +729,67 @@ def compose_audit_template(packs: list[dict[str, Any]], base_dir: Path) -> dict[
             rel = _os.path.relpath(template_path, base_dir).replace(_os.sep, "/")
         except ValueError:
             continue  # cross-drive (Windows) — no relative path
-        candidates.append({"pack": pack_name, "value": rel})
+        candidates.append(_TemplateCandidate(pack=pack_name, value=rel, manifest=manifest))
 
     if not candidates:
+        # None only ever when zero candidates existed BEFORE elimination.
         return None
-    chosen = next((c for c in candidates if c["pack"] in referenced), candidates[0])
-    return {
+
+    if len(candidates) == 1:
+        chosen = candidates[0]
+        rule = "single_candidate"
+    else:
+        # Eliminate every candidate that is another candidate's derivation
+        # parent; the unique survivor is the derived (most specific) template.
+        def _is_parent_of_another(cand: _TemplateCandidate) -> bool:
+            for other in candidates:
+                if other is cand:
+                    continue
+                edge = other.manifest.derived_from
+                if edge is not None and edge.seam == "audit_template" and edge.pack == cand.pack:
+                    return True
+            return False
+
+        survivors = [c for c in candidates if not _is_parent_of_another(c)]
+        if len(survivors) == 1:
+            chosen = survivors[0]
+            rule = "derivation_edge"
+        else:
+            named = ", ".join(f"{c.pack} -> {c.value}" for c in candidates)
+            reason = (
+                "a derivation cycle eliminated every candidate"
+                if not survivors
+                else f"{len(survivors)} candidates carry no derivation lineage that selects one"
+            )
+            remedy = (
+                "supply the template explicitly (audit-preflight: the template "
+                "argument; record_interview: audited_source.template), or record "
+                "derivation lineage (derived_from) on the derived pack so exactly "
+                "one candidate is the derived template."
+            )
+            skipped_note = (
+                ""
+                if not skipped
+                else " Skipped (unreadable manifest, named not dropped): "
+                + "; ".join(f"{p}: {r}" for p, r in skipped)
+                + "."
+            )
+            raise errors.SpecInvalid(
+                f"audit_template compose is ambiguous: {reason} — candidates: "
+                f"{named}. {remedy}{skipped_note}"
+            )
+
+    disclosure: dict[str, str] = {
         "field": "audit_template",
-        "value": chosen["value"],
-        "pack": chosen["pack"],
+        "value": chosen.value,
+        "pack": chosen.pack,
         "source": "pack_audit_template_seam",
+        "rule": rule,
+        "candidates": ", ".join(f"{c.pack}:{c.value}" for c in candidates),
     }
+    if skipped:
+        disclosure["skipped"] = "; ".join(f"{p}: {r}" for p, r in skipped)
+    return disclosure
 
 
 def compose_audit_template_from_repo(experiment_dir: Path) -> dict[str, str] | None:
