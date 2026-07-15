@@ -101,6 +101,7 @@ class TestRsyncPush:
             + transport.MANDATORY_RSYNC_EXCLUDES
             + transport.PROTECTED_OUTPUT_DIRS
             + transport.PROTECTED_RUNTIME_FILES
+            + (transport._PUSH_HASH_CACHE_REL,)
         )
         # Source has trailing slash
         src = argv[-2]
@@ -139,9 +140,10 @@ class TestRsyncPush:
         # always unioned in and cannot be dropped by a custom exclude.
         assert patterns == (
             ["a/", "b/", "c/"]
-            + transport.MANDATORY_RSYNC_EXCLUDES
-            + transport.PROTECTED_OUTPUT_DIRS
-            + transport.PROTECTED_RUNTIME_FILES
+            + list(transport.MANDATORY_RSYNC_EXCLUDES)
+            + list(transport.PROTECTED_OUTPUT_DIRS)
+            + list(transport.PROTECTED_RUNTIME_FILES)
+            + [transport._PUSH_HASH_CACHE_REL]
         )
 
 
