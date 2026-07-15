@@ -201,18 +201,21 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python scripts/bake_operations_json.py --check
       - name: Pytest (default)
+        # 3.10 / 3.11 run the plain default tier; the 3.12 leg runs the
+        # coverage-instrumented variant below instead (folded here from a
+        # former separate pass — the two are mutually exclusive by ``if:``).
+        if: matrix.python-version != '3.12'
         run: pytest -q
-      - name: Pytest (slow tier)
-        if: always()
-        # ``--timeout=0`` disables the default-tier per-test cap: slow tests are
-        # real-time/multi-hour by design and self-bound via the
-        # subprocess-timeout discipline, so a 300s cap would falsely kill them.
-        run: pytest -q -m slow --timeout=0
-      - name: Coverage report (informational, not gated)
-        if: matrix.python-version == '3.12'
-        # Pass ``-m 'not slow'`` so we don't re-run the slow tier here
-        # (it already ran above). Coverage only needs ONE pass through
-        # the test set to measure executed-line coverage.
+      - name: Pytest (default, with coverage)
+        # The 3.12 leg's default-tier run, now carrying ``--cov`` so a single
+        # gating pass both runs the tests AND measures coverage — folding the
+        # former standalone "Coverage report" step into the gate it duplicated.
+        # The coverage NUMBER stays informational (no ``fail-under`` threshold —
+        # see ``[tool.coverage.report]`` in pyproject.toml), but this step gates
+        # the ``test (3.12)`` job exactly as the plain ``pytest -q`` it replaces:
+        # a real test failure reds the job. No ``-m 'not slow'`` needed — the
+        # project ``addopts`` (pyproject.toml:168) already deselects the slow
+        # tier, which runs separately below.
         #
         # Install the ``process_startup`` .pth and set COVERAGE_PROCESS_START
         # so the ~37 test files that drive the CLI via a spawned ``python``
@@ -226,12 +229,27 @@ jobs:
         # ``.coverage.<host>.<pid>`` shards where pytest-cov's session-end
         # combine can't find them. Pinning it next to the parent's data file
         # lets the combine pick every shard up.
+        if: matrix.python-version == '3.12'
         env:
           COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: |
           python scripts/enable_subprocess_coverage.py
-          pytest -q -m 'not slow' --cov=src/hpc_agent --cov-report=term-missing
+          pytest -q --cov=src/hpc_agent --cov-report=term-missing
+      - name: Pytest (slow tier)
+        # Gated on the 3.12 leg only (A3): slow tests are real-process/real-time
+        # and dominated by wall-clock, not version-specific bytecode paths — the
+        # same one-leg reasoning as the lints/mypy hoist above. ``!cancelled()``
+        # (not ``always()``) keeps the run-even-after-an-earlier-step-failed
+        # signal while letting a cancelled run release the runner immediately:
+        # under cancel-in-progress concurrency (see :27-29) ``always()`` would
+        # keep this multi-hour tier running on superseded pushes and leak runner
+        # minutes.
+        if: ${{ !cancelled() && matrix.python-version == '3.12' }}
+        # ``--timeout=0`` disables the default-tier per-test cap: slow tests are
+        # real-time/multi-hour by design and self-bound via the
+        # subprocess-timeout discipline, so a 300s cap would falsely kill them.
+        run: pytest -q -m slow --timeout=0
 
   plugins:
     # Isolated plugin suites. Installing a plugin makes the host's entry-point
