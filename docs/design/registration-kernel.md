@@ -680,11 +680,9 @@ re-register → verify `current` again → revoke with reason → verify
      `ops/registration/verify_op.py::_all_registration_ids` was RECONCILED to
      DERIVE the registrations directory from the one `decisions_path` definition
      (`decisions_path(exp, "registration", "_").parent`) — never a second path
-     constant. **Regen debt (deferred per the Wave-C dispatch — NOT run):** the
-     `ScopeKind` literal + the `verify-registration` verb owe the six regen scripts
-     (`operations.json` registry count, indices, frontmatter). The schema-freshness
-     contract test (`tests/_wire/test_schema_models_roundtrip.py`) is GREEN as
-     landed.
+     constant. **Regen debt: paid** (2026-07-15) — the `ScopeKind` literal +
+     `verify-registration` verb regen is reconciled and verified green on `main`;
+     see `docs/internals/regen-debt-ledger.md`.
 
 - **T7 implementation 2026-07-08 (`ops/decision/journal.py` + facade):**
   1. *Registration authorship refusals carry the E2 elicitation marker.* The

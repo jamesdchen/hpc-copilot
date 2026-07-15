@@ -686,7 +686,7 @@ dependencies, OpenLineage facet field names adopted as a courtesy mapping
 recorded in the atom registry (Waves 1–3 unblocked).
 
 Drift-log line: 2026-07-08 — T5 `trace-render` landed (Wave 3, registry +1;
-regen deferred to a serial rebake). RECORDED ANSWER on the reference lookups
+regen paid 2026-07-15 — see `docs/internals/regen-debt-ledger.md`). RECORDED ANSWER on the reference lookups
 (the `profile` under-specification the task flagged): `cmd_sha` resolves via
 `find_run_by_cmd_sha` (the T1/runs parameter-identity join, newest-first). The
 `profile` selector is IMPLEMENTED as a mechanical latest-by over the sidecar's
@@ -742,7 +742,7 @@ evaluation named missing; **B2 (record model carries no `source` tier)** —
 closed tier set, so a receipt/sign-off consumer has a runner-tier field to
 filter on. The section join now waits **only on B3** (the per-section summary
 + freshness semantics ruling) and its payload-shape rebake. Wire/regen debt
-(deferred to the serial rebake): the new `observables` field on the
+(paid 2026-07-15 — see `docs/internals/regen-debt-ledger.md`): the new `observables` field on the
 `interview` `_AuditedSource` + `NotebookRecordConfigSpec`/`Result` schemas, and
 the source-tier field is additive on the trace record (no `TRACE_SCHEMA_VERSION`
 bump — readers tolerate the new key).
@@ -784,11 +784,11 @@ determinism-fingerprint substrate. Shape choices, each recorded:
   digest still folds its row_count (an off-digest-policy run contributes
   counts); a digest recorded on only ONE side of a shared stage is a degraded
   observation, NOT a divergence.
-- **Wire debt (regen deferred)**: `ReproductionReceipt` gains
+- **Wire debt: paid** (2026-07-15): `ReproductionReceipt` gains
   `stage_interlock` + `diverged_stage` (optional, default-absent — v1/v2
   pre-interlock lines parse unchanged); `VerifyReproductionResult` gains
-  `diverged_stage`. Schema regen NOT run here (serial-regen discipline) —
-  rebake at merge.
+  `diverged_stage`. Schema regen reconciled and green on `main`; see
+  `docs/internals/regen-debt-ledger.md`.
 
 ## Drift-log evaluations (2026-07-09): the two deferred-by-design leftovers
 
@@ -938,8 +938,8 @@ batch item 7, user-ordered mechanize-now). What shipped vs Amendment 16:
    surface is the `markdown` render (relayed verbatim) + the `view_sha` the
    payload binds — both carry the summary. A `NotebookSectionView.trace_summary`
    field would be a schema move (regen); like the `observables` wire field
-   (A14) and the `stage_interlock` fields (A15) it is deferred wire debt for the
-   serial rebake. Regen `--check` is GREEN (registry unchanged at 164; 209
+   (A14) and the `stage_interlock` fields (A15) it was deferred wire debt, now
+   paid (2026-07-15 — see `docs/internals/regen-debt-ledger.md`). Regen `--check` is GREEN (registry unchanged at 164; 209
    schema models) precisely because nothing wire-facing moved.
 3. **Scope split honoured** — only the LEAN signed summary landed; no
    interactive/comprehension features (those ride `trace-render` + verify-relay,

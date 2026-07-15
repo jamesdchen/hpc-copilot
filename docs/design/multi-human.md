@@ -649,11 +649,9 @@ recorded reason (the `docs/design/notebook-audit.md` drift log form):
   It is server-resolved only; the `AppendDecisionInput` wire spec gained no field
   (`DecisionRecord`, the output, surfaces it). Byte-identical when absent.
 
-- **Regen debt at landing (out of MT7/MT10/MT11 scope).** Two pre-existing
-  contract failures inherited from earlier waves remain red on the branch:
-  `test_primitive_remediation::test_spec_verb_inventory_matches_cli`
-  (`notebook-draft` absent from the hard-coded `_SPEC_VERBS` inventory — MT5's
-  new-verb regen) and `test_lint_primitive_doc_templates` (`conformance-record`
-  agent_facing template mismatch — the Phase-8 conformance wave). Neither is
-  caused by the multi-human gate; both are noted here so the next regen pass
-  clears them.
+- **Regen debt at landing (out of MT7/MT10/MT11 scope): paid** (2026-07-15) —
+  the `notebook-draft` new-verb regen (`_SPEC_VERBS` inventory) and the
+  `conformance-record` template are reconciled;
+  `test_primitive_remediation::test_spec_verb_inventory_matches_cli` and
+  `test_lint_primitive_doc_templates` are green on `main`; see
+  `docs/internals/regen-debt-ledger.md`.

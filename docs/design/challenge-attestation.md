@@ -794,11 +794,8 @@ merge).
   `uncontested` demand reads the existing `stale` verdict (naming the challenge
   ids), not a new status — keeping `contested` orthogonal (C-status) while the
   caller-declared gate blocks through the ordinary currency vocabulary.
-- **Schema regen debt (inherited, NOT challenge scope).** The Wave-A/B branch
-  merges left sibling schema files uncommitted (`evidence_brief`,
-  `evidence_period`, `pack_*`, and a `resolve_submit_inputs.output.json` evidence
-  drift); `challenge_status.{input,output}.json` were committed here (mine). The
-  broad `test_schema_models_roundtrip[evidence_brief.input.json]` fails on that
-  inherited evidence-memory schema (a missing `_CROSS_FIELD_OVERRIDES` entry the
-  evidence author owns) — surfaced by regen, not caused by challenge work, and not
-  in this plan's targeted suites. Left for the evidence-memory/pack merges' regen.
+- **Schema regen debt (inherited, NOT challenge scope): paid** (2026-07-15) —
+  the inherited evidence-memory / pack schema drift (`evidence_brief`,
+  `evidence_period`, `pack_*`, `resolve_submit_inputs.output.json`) is reconciled
+  and `test_schema_models_roundtrip[evidence_brief.input.json]` is green on `main`;
+  see `docs/internals/regen-debt-ledger.md`.
