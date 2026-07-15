@@ -90,3 +90,16 @@ block-drive rendezvous — the improvisation class, and it led to narrating
 terminal (the loop was keyed to detect a ts CHANGE from the recorded
 failure). Relay rule reminder issued; no gate gap — the sanctioned verb
 exists and was bypassed.
+
+## 6. Content-hash scan has no cache — 37 minutes re-hashing an unchanged tree
+`[core]` Live, same run: the retry's push-delta scan re-hashed all 39,374
+files (9.9 GB) from scratch — ~37 min of the 47-min worker lifetime (hb
+timeline: conhost idle until the ssh transfer child appears at ~2,340s).
+The scan is pure re-computation: every byte hashed on every push, no
+reuse. Fix class: rsync-quick-check semantics — a local hash cache keyed
+by (relpath, size, mtime_ns) → sha, persisted under .hpc/; only files
+whose (size, mtime) moved get re-hashed. Unchanged trees scan in seconds;
+correctness unchanged (a stale mtime+size collision is the same risk
+rsync's default mode accepts; a --checksum-style escape hatch can force
+full re-hash). Compounded by finding 4 (the tree is 4x inflated) and
+finding 3 (the scan itself was paid twice).
