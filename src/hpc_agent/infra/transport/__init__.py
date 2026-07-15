@@ -95,6 +95,7 @@ from ._disclose import (
     _emit_progress,  # noqa: F401
     _pump_with_progress,  # noqa: F401
     _write_all,  # noqa: F401
+    disclose_child_failure,  # noqa: F401
 )
 from ._excludes import (
     _GENERATED_SHIPPABLE,  # noqa: F401
@@ -548,6 +549,12 @@ def _tar_ssh_push(
                 filter(None, [combined_stderr, f"transfer pump error: {pump_error[0]!r}"])
             )
 
+        if rc != 0:
+            # ssh/tar died non-zero (auth refused, host unreachable, a severed
+            # child): flush the combined stderr tail to the log at death, so the
+            # story is on the tail-able surface (run-#13 finding 2).
+            disclose_child_failure(what="tar|ssh push", returncode=rc, stderr=combined_stderr)
+
         return subprocess.CompletedProcess(
             args=tar_cmd + ["|"] + ssh_cmd,
             returncode=rc,
@@ -638,6 +645,9 @@ def _scp_pull(
                 f"{_truncate(f'{src} -> {dst_path}')}"
             ) from exc
         if proc.returncode != 0:
+            # A VPN-severed scp left its "lost connection" story in proc.stderr
+            # that nobody recorded (run-#13 finding 2): flush it to the log now.
+            disclose_child_failure(what="scp pull", returncode=proc.returncode, stderr=proc.stderr)
             return proc
         # Flatten scp's dir-copy into local_dir so the result matches rsync's
         # contents-only layout (local_dir/wave_*.json, not local_dir/<sub>/...).
