@@ -205,11 +205,22 @@ def _schema_property_names(schema: dict[str, Any]) -> set[str]:
 
 
 def _pack_wire_models() -> list[type[BaseModel]]:
-    """Every pack Pydantic wire model — the closed surface the vocab walk covers."""
-    from hpc_agent._wire.actions import pack_bind, pack_record_receipt, pack_status
+    """Every pack Pydantic wire model — the closed surface the vocab walk covers.
+
+    HAND-LISTED, unlike the ops/state glob scan above: the wire modules do not live
+    under a single scannable dir, so a new pack verb's wire model must be appended
+    here or it silently escapes the forbidden-vocabulary walk (``program_init`` was
+    the P1a addition).
+    """
+    from hpc_agent._wire.actions import (
+        pack_bind,
+        pack_record_receipt,
+        pack_status,
+        program_init,
+    )
 
     models: list[type[BaseModel]] = []
-    for mod in (pack_bind, pack_record_receipt, pack_status):
+    for mod in (pack_bind, pack_record_receipt, pack_status, program_init):
         for obj in vars(mod).values():
             if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel:
                 models.append(obj)
