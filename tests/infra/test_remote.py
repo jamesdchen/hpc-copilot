@@ -97,11 +97,11 @@ class TestRsyncPush:
         # protected output dirs (results/, _combiner/ — #173) appended.
         exclude_patterns = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--exclude"]
         assert exclude_patterns == (
-            transport.DEFAULT_RSYNC_EXCLUDES
-            + transport.MANDATORY_RSYNC_EXCLUDES
-            + transport.PROTECTED_OUTPUT_DIRS
-            + transport.PROTECTED_RUNTIME_FILES
-            + (transport._PUSH_HASH_CACHE_REL,)
+            list(transport.DEFAULT_RSYNC_EXCLUDES)
+            + list(transport.MANDATORY_RSYNC_EXCLUDES)
+            + list(transport.PROTECTED_OUTPUT_DIRS)
+            + list(transport.PROTECTED_RUNTIME_FILES)
+            + [transport._PUSH_HASH_CACHE_REL]
         )
         # Source has trailing slash
         src = argv[-2]
