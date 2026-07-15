@@ -55,7 +55,21 @@ import time
 from collections.abc import Iterator
 from typing import Any, TextIO
 
-__all__ = ["detached_heartbeat"]
+__all__ = ["detached_heartbeat", "last_heartbeat_line"]
+
+# The newest ``[hb]`` line the loop emitted, exposed for crash disclosure: the
+# worker's exit-path ``[fatal]`` block folds it in as the last known stage, so a
+# hard death (VPN-severed child, killed process) still records "was pulling via
+# ssh.exe" even when the child's own stderr was lost. A plain module global —
+# single writer (the heartbeat thread), single reader (the dying main thread) —
+# and the reassignment is atomic in CPython, so no lock is needed.
+_LAST_LINE: str | None = None
+
+
+def last_heartbeat_line() -> str | None:
+    """The most recent ``[hb]`` line this worker emitted, or ``None``."""
+    return _LAST_LINE
+
 
 _ENV_INTERVAL = "HPC_DETACH_HEARTBEAT_SEC"
 _DEFAULT_INTERVAL_SEC = 30.0
@@ -201,6 +215,8 @@ def _run_loop(stop: threading.Event, interval: float, stream: TextIO) -> None:
                 saw_child_ever=saw_child_ever,
                 psutil_ok=psutil_ok,
             )
+            global _LAST_LINE
+            _LAST_LINE = line
             stream.write(line + "\n")
             stream.flush()
         except Exception:  # noqa: BLE001 — a heartbeat must NEVER kill the worker
