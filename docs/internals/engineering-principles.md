@@ -461,8 +461,34 @@ the driver silently discards theirs-side prose regen cannot restore (the
 silent-wrong-pick class). An undeployed clone degrades to an ordinary conflict
 (loud), never a silent wrong pick.
 
+## Operational docs: counts are verified live, never frozen
+
+The operational-truth doc surfaces (`docs/internals` + `docs/workflows`)
+narrate what the system IS now, not what it was — so a bare count of a
+counted set (the primitive registry, the verb catalog, the shipped schemas,
+the error-code enum, the regen-script set) is a fact that rots the instant
+that set changes, and prose alone never notices. The rule: such a count
+either equals the live number derived from its source of truth, or sits in a
+cited allowlist for a deliberate historical reference. Design and plan docs
+narrate history by design and are out of scope; fenced code blocks and
+drift-log sections are masked (they legitimately carry the old numbers). The
+count is line-based (a claim is a digit and its noun on one line) and
+strict — no tolerance, because a two-off literal is exactly the drift that
+slipped a prior ±2 pin.
+
 ### Enforcement map
 
 | Rule | Enforced by | Fires when |
 |---|---|---|
 | The `merge=generated` attribute set equals the fully-generated manifest and NEVER includes a partially generated file: the root `.gitattributes` `merge=generated`/`!merge` lines equal `scripts/merge_generated.py::FULLY_GENERATED_PATTERNS`/`SCHEMA_MERGE_UNSET` exactly, the effective merge=generated schema set equals what `build_schemas.py` emits (a new hand-authored composite schema turns the pin RED, not silently keep-ours'd), no partially generated file (`PARTIALLY_GENERATED_EXCLUDED`) resolves to the driver, and only the ROOT attributes file carries it; the deployed driver keeps ours + exits 0 while the undeployed state conflicts loudly | `tests/contracts/test_generated_merge_driver.py` (manifest lockstep both directions + the build_schemas drift guard + the fires-AND-passes pair: undeployed conflict / deployed keep-ours in a space-bearing tmp repo) | a `merge=generated` line drifts from the manifest, a hand-authored/partially generated file enters the driver set, a second `.gitattributes` grows `merge=generated`, or the deployed driver stops keeping ours cleanly |
+| A digit count of primitives, verbs, schemas, error codes, or regen scripts in `docs/internals` + `docs/workflows` equals the live count derived from its source of truth (registry for primitives/verbs, a recursive `schemas/**/*.json` glob, the `envelope.json` error-code enum, the `scripts/regen_all.py::REGEN_SCRIPTS` seam) or sits in `_COUNT_ALLOWLIST` with a cited reason; verbs means the registry count (the repo-prose convention), not the CLI-exposed subset | `tests/contracts/test_doc_frozen_counts.py::test_frozen_counts_track_live` (real-tree pin), `::test_frozen_count_check_fires_on_synthetic_violation` + `::test_frozen_count_check_passes_on_exact_and_masked` (fire/pass pair), `::test_count_allowlist_not_stale` + `::test_stale_allowlist_check_fires_on_synthetic_entry` (anti-stale), `::test_live_counts_are_sane` (vacuity floors); scope/masking seam `tests/contracts/_doc_scan.py` | an in-scope doc freezes a count the registry / schemas / error-code enum / regen set has since outgrown, or an allowlist entry's count catches back up to live (a dead exception) |
+
+### Drift log
+
+`adding-a-primitive.md` opened with "the existing 167 primitives" while the
+registry had already grown past it; the older ±2 primitives-only prose pin
+sat at exactly its tolerance boundary on that line and let the two-off
+literal pass. This section's strict, whole-family, line-based pin replaces
+that tolerance for the operational surfaces; the ±2 pin was narrowed to the
+out-of-scope `README.md` + `docs/reference/` surfaces it still uniquely
+covers.

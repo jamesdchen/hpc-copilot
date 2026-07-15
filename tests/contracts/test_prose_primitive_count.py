@@ -1,14 +1,26 @@
 """Contract: prose ``N primitives`` references stay near the real count.
 
 Several markdown files quote a primitive count in prose — ``README.md``
-says ``~50 primitives``; ``docs/internals/adding-a-primitive.md`` says
-``50 primitives``. The real count is 55+ and growing. Each new
+says ``~50 primitives``. The real count is 55+ and growing. Each new
 primitive widens the gap silently until someone notices the docs lie.
 
 The test walks a set of doc files, regex-finds ``N primitives``, and
 asserts the integer is within ±2 of ``len(get_registry())`` OR contains
 ``auto-generated`` nearby (auto-regenerated catalogs like
 ``docs/generated/operations.md`` are allowed to carry exact numbers).
+
+Scope note (plan A6, 2026-07-15). The ``docs/internals`` +
+``docs/workflows`` surfaces moved to the STRICT-equality pin
+:mod:`tests.contracts.test_doc_frozen_counts`, which covers the whole count
+family (primitives / verbs / schemas / error codes / regen scripts) to
+exact equality — strictly dominating this ±2 primitives-only check there.
+So those files were dropped from :data:`_SCANNED_FILES` below; this pin now
+guards only the out-of-A6-scope surfaces (``README.md`` and
+``docs/reference/``), where the ±2 tolerance and primitives-only focus are
+still the right call. (Dropping ``adding-a-primitive.md`` here also defused
+a latent time bomb: its "167 primitives" sat at ``|167-169| == 2``, exactly
+this pin's tolerance, so the next primitive addition would have turned this
+test red on a doc it no longer needs to watch.)
 
 False positives — prose like ``the first 50 primitives we added were…``
 where the number is a historical reference, not a count — go in
@@ -28,16 +40,16 @@ from tests._registry_helpers import core_only_registry
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Files to scan. Each path is relative to the repo root.
+# Files to scan. Each path is relative to the repo root. The
+# ``docs/internals`` + ``docs/workflows`` surfaces are intentionally ABSENT:
+# they moved to the strict-equality pin (test_doc_frozen_counts, plan A6),
+# which dominates this ±2 check there. What remains is A6's out-of-scope
+# surfaces — ``README.md`` and ``docs/reference/`` — plus the two other
+# non-internals READMEs this pin has always watched.
 _SCANNED_FILES: tuple[str, ...] = (
     "README.md",
     "docs/README.md",
     "docs/integrations/CONTRACT.md",
-    "docs/internals/README.md",
-    "docs/internals/adding-a-primitive.md",
-    "docs/internals/campaign-lifecycle.md",
-    "docs/internals/skill-policy.md",
-    "docs/internals/sync-checklist.md",
     "docs/reference/agent-surface.md",
     "docs/reference/boundary-contract.md",
     "docs/reference/cli-spec.md",

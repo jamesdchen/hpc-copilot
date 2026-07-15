@@ -25,7 +25,10 @@ scope, two exclusions keep the pin honest rather than noisy:
   fault the very honesty they provide.
 
 Both exclusions preserve line numbers (masked regions become blank lines)
-so failure messages still point at the right line.
+so failure messages still point at the right line. The scope tuple and the
+masking helpers are the shared one-definition seam in
+:mod:`tests.contracts._doc_scan` (``test_doc_frozen_counts`` imports the
+same seam); this module imports them rather than re-declaring them.
 
 Honest scope caveat. The console-script half is **precision-first**: the
 ``hpc-`` prefix is heavily overloaded in this repo (skills
@@ -52,9 +55,14 @@ from pathlib import Path
 import pytest
 
 from tests._paths import REPO_ROOT
+from tests.contracts._doc_scan import (
+    SCOPE_DIRS,
+    _line_of,
+    _mask,
+    _scope_docs,
+)
 
-# Operational-truth doc surfaces. Design/plans narrate history — out of scope.
-SCOPE_DIRS: tuple[str, ...] = ("docs/internals", "docs/workflows")
+__all__ = ["SCOPE_DIRS"]  # re-exported for back-compat with importers
 
 
 # ---------------------------------------------------------------------------
@@ -113,58 +121,9 @@ MODULE_PATH_ALLOWLIST: dict[tuple[str, str], str] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Masking helpers (preserve line numbers so failures cite the right line).
-# ---------------------------------------------------------------------------
-
-_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_HEADING_RE = re.compile(r"^(#+)\s+(.*)$")
-
-
-def _blank_like(match: re.Match[str]) -> str:
-    """Replace a matched region with as many newlines as it spanned."""
-    return "\n" * match.group(0).count("\n")
-
-
-def _mask_drift_log_sections(text: str) -> str:
-    """Blank out any ``# ... drift log ...`` section, up to the next
-    same-or-shallower heading, preserving line count."""
-    lines = text.splitlines(keepends=True)
-    out: list[str] = []
-    skip_depth: int | None = None
-    for line in lines:
-        m = _HEADING_RE.match(line.rstrip("\n"))
-        if m:
-            depth = len(m.group(1))
-            if skip_depth is not None and depth <= skip_depth:
-                skip_depth = None  # section ended; fall through to emit
-            if skip_depth is None and "drift log" in m.group(2).lower():
-                skip_depth = depth
-                out.append("\n" if line.endswith("\n") else "")
-                continue
-        if skip_depth is not None:
-            out.append("\n" if line.endswith("\n") else "")
-        else:
-            out.append(line)
-    return "".join(out)
-
-
-def _mask(text: str) -> str:
-    """Fenced blocks + drift-log sections blanked; line numbers preserved."""
-    return _mask_drift_log_sections(_FENCE_RE.sub(_blank_like, text))
-
-
-def _scope_docs() -> list[Path]:
-    out: list[Path] = []
-    for rel in SCOPE_DIRS:
-        d = REPO_ROOT / rel
-        if d.is_dir():
-            out.extend(p for p in sorted(d.rglob("*.md")) if p.is_file())
-    return out
-
-
-def _line_of(text: str, offset: int) -> int:
-    return text.count("\n", 0, offset) + 1
+# Masking helpers (``_mask``/``_scope_docs``/``_line_of``) and ``SCOPE_DIRS``
+# are the shared one-definition seam in ``tests.contracts._doc_scan`` —
+# imported at the top of this module, not redefined here.
 
 
 # ---------------------------------------------------------------------------
