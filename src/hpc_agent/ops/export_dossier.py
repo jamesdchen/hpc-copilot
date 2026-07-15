@@ -72,12 +72,22 @@ if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
 
 __all__ = [
+    "DOSSIER_DIRNAME",
     "DOSSIER_SCHEMA_VERSION",
     "DOSSIER_SOURCES",
     "DossierSignature",
     "compute_dossier_signature",
     "export_dossier",
 ]
+
+# The experiment-root directory core MINTS for dossier exports — the archive
+# zip (``export_dossier``) and the attestation jsonl (``export_attestations``).
+# A stack-minted local OUTPUT store (not code): the SOURCE OF TRUTH for its
+# deploy-exclude protection in
+# :data:`hpc_agent.infra.transport.PROTECTED_OUTPUT_DIRS` (run-13 finding 4's
+# class — a code deploy must never re-ship export archives to the cluster).
+# ``tests/infra/test_pull_dest_excludes.py`` pins the exclude lockstep.
+DOSSIER_DIRNAME = "_dossier"
 
 # Bump when the emitted manifest shape changes in a way a consumer (the
 # repo-side renderer, an integrity checker) would need to branch on. Mirrored
@@ -864,7 +874,7 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
     if spec.output_path:
         archive_path = Path(spec.output_path)
     else:
-        archive_path = experiment_dir / "_dossier" / f"{run_id}.zip"
+        archive_path = experiment_dir / DOSSIER_DIRNAME / f"{run_id}.zip"
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build the zip on a temp sibling and atomically swap it in (bug-sweep #42,

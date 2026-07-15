@@ -87,6 +87,12 @@ PROTECTED_OUTPUT_DIRS: list[str] = [
     # constants are renamed without updating this set.
     "_per_task_results/",
     "_per_task_traces/",
+    # The dossier export store core mints at the experiment root — the archive
+    # zip + attestation jsonl (``ops/export_dossier.DOSSIER_DIRNAME``). A local
+    # OUTPUT store, not code; without this a code deploy re-ships prior dossier
+    # archives to the cluster (run-13 finding 4's sibling render-store class).
+    # Pinned lockstep by ``tests/infra/test_pull_dest_excludes.py``.
+    "_dossier/",
 ]
 
 # Framework runtime files placed on the cluster by ``deploy_runtime`` (scp'd

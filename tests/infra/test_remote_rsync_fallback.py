@@ -239,6 +239,7 @@ def test_effective_excludes_always_protects_output_dirs() -> None:
         "_aggregated/",
         "_per_task_results/",
         "_per_task_traces/",
+        "_dossier/",
     ]
     # Absent from the caller list -> appended.
     eff = transport._effective_excludes(["only_this/"])
@@ -248,6 +249,7 @@ def test_effective_excludes_always_protects_output_dirs() -> None:
     assert "_aggregated/" in eff  # F10: aggregate output — never --delete'd / re-pushed
     assert "_per_task_results/" in eff  # finding 4: pull mirror — never re-shipped as code
     assert "_per_task_traces/" in eff
+    assert "_dossier/" in eff  # finding 4 sibling: dossier export store — never re-shipped
     # Already present -> not duplicated.
     eff2 = transport._effective_excludes(["results/", "x/"])
     assert eff2.count("results/") == 1

@@ -27,6 +27,13 @@ from hpc_agent.ops.aggregate_flow import (
     PER_TASK_RESULTS_DIRNAME,
     PER_TASK_TRACES_DIRNAME,
 )
+from hpc_agent.ops.export_dossier import DOSSIER_DIRNAME
+
+#: Every experiment-root directory CORE MINTS as a local output/pull store — the
+#: aggregate pull mirrors plus the dossier export store. None of these are code;
+#: all must be deploy-excluded so a code push never re-ships a prior run's
+#: analysis outputs (run-13 finding 4 + its render-store sibling).
+MINTED_OUTPUT_DIRNAMES: tuple[str, ...] = (*LOCAL_PULL_MIRROR_DIRNAMES, DOSSIER_DIRNAME)
 
 
 def _uncovered_mirrors(minted: tuple[str, ...], protected: list[str]) -> list[str]:
@@ -40,11 +47,12 @@ def _uncovered_mirrors(minted: tuple[str, ...], protected: list[str]) -> list[st
 
 
 def test_minted_pull_dests_are_all_deploy_excluded() -> None:
-    """LOCKSTEP PIN: every local pull-mirror dir the aggregate flow mints is in
-    PROTECTED_OUTPUT_DIRS. Renaming a mint constant without updating the exclude
-    set (the run-13 finding-4 class) breaks this — the pull destination would once
-    again ride a code deploy back to the cluster."""
-    assert _uncovered_mirrors(LOCAL_PULL_MIRROR_DIRNAMES, transport.PROTECTED_OUTPUT_DIRS) == []
+    """LOCKSTEP PIN: every experiment-root output/pull store core mints (the
+    aggregate pull mirrors + the dossier export store) is in PROTECTED_OUTPUT_DIRS.
+    Renaming a mint constant without updating the exclude set (the run-13 finding-4
+    class) breaks this — the store would once again ride a code deploy back to the
+    cluster."""
+    assert _uncovered_mirrors(MINTED_OUTPUT_DIRNAMES, transport.PROTECTED_OUTPUT_DIRS) == []
 
 
 def test_lockstep_pin_fires_on_rename() -> None:
@@ -71,6 +79,8 @@ def test_pull_mirror_tree_deploys_without_the_mirrors(tmp_path: Path) -> None:
     _write(tmp_path, f"{PER_TASK_TRACES_DIRNAME}/task-0/_trace.jsonl")
     # And nested under the default _aggregated/<run_id>/ home.
     _write(tmp_path, f"_aggregated/run-abc/{PER_TASK_RESULTS_DIRNAME}/task-0/metrics.json")
+    # The dossier export store (a prior run's exported archive).
+    _write(tmp_path, f"{DOSSIER_DIRNAME}/run-abc.zip")
 
     exclude = transport._effective_excludes(None)
     shipped = transport._pushable_relpaths(tmp_path, exclude)
@@ -80,6 +90,7 @@ def test_pull_mirror_tree_deploys_without_the_mirrors(tmp_path: Path) -> None:
     assert not any(PER_TASK_RESULTS_DIRNAME in rel for rel in shipped)
     assert not any(PER_TASK_TRACES_DIRNAME in rel for rel in shipped)
     assert not any(rel.startswith("_aggregated/") for rel in shipped)
+    assert not any(rel.startswith(f"{DOSSIER_DIRNAME}/") for rel in shipped)
 
 
 def test_payload_summary_drops_the_pull_mirrors(tmp_path: Path) -> None:
