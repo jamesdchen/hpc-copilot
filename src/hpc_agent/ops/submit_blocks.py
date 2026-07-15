@@ -43,6 +43,7 @@ from hpc_agent._wire.workflows.submit_blocks import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.cost import CostEstimate, estimate_core_hours
+from hpc_agent.infra.transport import deploy_payload_summary
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.block_gate import assert_greenlit_or_consented, assert_greenlit_target
 from hpc_agent.ops.data_manifest import render_manifest_disclosure
@@ -444,6 +445,29 @@ def submit_s1(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     return _persist_brief(experiment_dir, _submit_s1_impl(experiment_dir, spec=spec))
 
 
+def _deploy_payload_brief(
+    experiment_dir: Path, submit_spec: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The code-computed deploy-payload disclosure for S1's resolved brief.
+
+    Run-13 finding 4: the tree submit-s2 pushes is *experiment_dir*, filtered by
+    the effective excludes (the submit spec's ``rsync_excludes``, or the defaults
+    when unset — :func:`deploy_payload_summary` unions the mandatory / protected
+    groups in either way). Returns the JSON-safe brief block (file count, MB, the
+    top-3 contributing root dirs, and a ``warn`` flag when the payload is large),
+    or ``None`` on any failure so the disclosure is never load-bearing.
+    """
+    try:
+        rsync_excludes = None
+        if isinstance(submit_spec, dict):
+            raw = submit_spec.get("rsync_excludes")
+            if isinstance(raw, list):
+                rsync_excludes = [str(x) for x in raw]
+        return deploy_payload_summary(experiment_dir, rsync_excludes).as_brief()
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        return None
+
+
 def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     brief: dict[str, Any] = {}
 
@@ -532,6 +556,16 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
         "prior_run_id": rr.prior_run_id,
         "prior_status": rr.prior_status,
     }
+    # CHECK-TIME PAYLOAD DISCLOSURE (run-13 finding 4; the check-time-surfacing
+    # class of finding 28): S1's resolved brief is the human boundary the
+    # greenlight crosses BEFORE submit-s2 detaches and pushes the whole tree, so
+    # a pathological payload (run 12's 1.18 GB of analysis outputs re-shipped as
+    # "code") must be legible HERE, not after the hour-long transfer. Computed
+    # by CODE from the same exclude-filtered walk the transfer uses — never an
+    # LLM estimate — and fail-open (an empty summary never blocks the greenlight).
+    _deploy_disclosure = _deploy_payload_brief(experiment_dir, rr.submit_spec)
+    if _deploy_disclosure is not None:
+        brief["deploy_payload"] = _deploy_disclosure
     # Only a CLEAN resolve (submit-flow spec built) has a single deterministic
     # successor (submit-s2). ``prior_run_found`` (resume-vs-fresh) and
     # ``needs_scaffold_interview`` are genuine human branches → next_block null.

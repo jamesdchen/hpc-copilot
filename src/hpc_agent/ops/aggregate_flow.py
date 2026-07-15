@@ -82,6 +82,24 @@ from hpc_agent.state.runs import read_run_cmd_sha, read_run_sidecar, resolved_su
 
 __all__ = ["aggregate_flow", "AggregateFlowResult", "per_task_fallback_reducible"]
 
+#: Local pull-mirror destination names the aggregate flow MINTS under its ``out``
+#: dir when the cluster has no ``_combiner/`` and it falls back to pulling raw
+#: per-task sidecars: the metrics mirror (:func:`_per_task_metrics_reduce`) and
+#: the trace mirror (the data-trace T4 pull). ``out`` defaults under
+#: ``_aggregated/`` but a caller ``output_dir`` can place them at any depth — so
+#: these names are the SOURCE OF TRUTH for the deploy-exclude protection in
+#: :data:`hpc_agent.infra.transport.PROTECTED_OUTPUT_DIRS` (run-13 finding 4: an
+#: unexcluded ``_per_task_results`` mirror rode a code deploy back to the cluster
+#: as a 1.18 GB payload). The lockstep test ``tests/infra/test_pull_dest_excludes.py``
+#: fails if either name is renamed here without updating that exclude set.
+PER_TASK_RESULTS_DIRNAME = "_per_task_results"
+PER_TASK_TRACES_DIRNAME = "_per_task_traces"
+#: Every stack-minted local pull destination, for the exclude lockstep pin.
+LOCAL_PULL_MIRROR_DIRNAMES: tuple[str, ...] = (
+    PER_TASK_RESULTS_DIRNAME,
+    PER_TASK_TRACES_DIRNAME,
+)
+
 
 def per_task_fallback_reducible(summary_name: str) -> bool:
     """Whether the no-combiner per-task weighted-mean fallback CAN reduce a run
@@ -391,7 +409,7 @@ def _per_task_metrics_reduce(
             f"(an aggregate_cmd / pack reducer that understands the artifact), "
             f"or re-submit declaring a JSON summary artifact."
         )
-    results_local = out / "_per_task_results"
+    results_local = out / PER_TASK_RESULTS_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     pull = rsync_pull(
         ssh_target=resolve_ssh_target(record),
@@ -554,7 +572,7 @@ def _ingest_task_traces(
     log = logging.getLogger(__name__)
     counts = {"pulled": 0, "ingested": 0, "skipped_existing": 0, "skipped_invalid": 0}
 
-    traces_local = out / "_per_task_traces"
+    traces_local = out / PER_TASK_TRACES_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     try:
         pull = rsync_pull(

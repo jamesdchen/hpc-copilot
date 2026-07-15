@@ -225,18 +225,31 @@ def test_mandatory_excludes_cannot_be_dropped_by_caller() -> None:
 
 
 def test_effective_excludes_always_protects_output_dirs() -> None:
-    """#173: cluster run-output dirs (results/, _combiner/, logs/, _aggregated/)
-    are unioned into every push's exclude set so a caller's incomplete list can't
-    expose them to --delete / the tar pre-clean. De-duplicated when already
-    present. F10 added ``_aggregated/`` (aggregate-flow output + cluster final
-    reduce) to the set."""
-    assert transport.PROTECTED_OUTPUT_DIRS == ["results/", "_combiner/", "logs/", "_aggregated/"]
+    """#173: cluster run-output dirs + stack-minted local pull mirrors are unioned
+    into every push's exclude set so a caller's incomplete list can't expose them
+    to --delete / the tar pre-clean, nor re-ship them as "code". De-duplicated
+    when already present. F10 added ``_aggregated/`` (aggregate-flow output +
+    cluster final reduce); run-13 finding 4 added ``_per_task_results/`` /
+    ``_per_task_traces/`` (the no-combiner reduce fallbacks' local pull mirrors —
+    run 12's 2,700-file mirror rode a code deploy back as 1.18 GB)."""
+    assert transport.PROTECTED_OUTPUT_DIRS == [
+        "results/",
+        "_combiner/",
+        "logs/",
+        "_aggregated/",
+        "_per_task_results/",
+        "_per_task_traces/",
+        "_dossier/",
+    ]
     # Absent from the caller list -> appended.
     eff = transport._effective_excludes(["only_this/"])
     assert "results/" in eff
     assert "_combiner/" in eff
     assert "logs/" in eff  # scheduler log dir — never --delete'd (else it becomes a file)
     assert "_aggregated/" in eff  # F10: aggregate output — never --delete'd / re-pushed
+    assert "_per_task_results/" in eff  # finding 4: pull mirror — never re-shipped as code
+    assert "_per_task_traces/" in eff
+    assert "_dossier/" in eff  # finding 4 sibling: dossier export store — never re-shipped
     # Already present -> not duplicated.
     eff2 = transport._effective_excludes(["results/", "x/"])
     assert eff2.count("results/") == 1

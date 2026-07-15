@@ -45,7 +45,7 @@ from hpc_agent._wire.actions.export_attestations import (
     ExportAttestationsSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.export_dossier import compute_dossier_signature
+from hpc_agent.ops.export_dossier import DOSSIER_DIRNAME, compute_dossier_signature
 
 __all__ = [
     "DSSE_PAYLOAD_TYPE",
@@ -241,7 +241,7 @@ def export_attestations(
     if spec.output_path:
         output_path = Path(spec.output_path)
     else:
-        output_path = experiment_dir / "_dossier" / f"{run_id}.attestations.jsonl"
+        output_path = experiment_dir / DOSSIER_DIRNAME / f"{run_id}.attestations.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         "".join(f"{line}\n" for line in lines),
