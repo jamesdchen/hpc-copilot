@@ -87,14 +87,26 @@ def _read_prior_push_manifest(
     return {str(p) for p in paths}
 
 
+#: Remote temp sibling the manifest is written to before the atomic ``mv`` swap
+#: (run-13 finding 3). Never a prune candidate (filtered beside
+#: :data:`_PUSH_MANIFEST_REL`) so a temp left by a torn write never nags as an
+#: anomaly extra.
+_PUSH_MANIFEST_TMP_REL: Final[str] = _PUSH_MANIFEST_REL + ".tmp"
+
+
 def _write_push_manifest(
     *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
 ) -> None:
     """Persist the current push's shipped path set at :data:`_PUSH_MANIFEST_REL`.
 
     Base64-piped so no path needs shell quoting (mirrors the remote-manifest
-    snippet). Fail-open: a write error only loses the NEXT push's prune ability
-    (extras degrade to anomalies), never breaks this push.
+    snippet). Written CRASH-SAFELY (run-13 finding 3): the bytes land in a temp
+    sibling which is then atomically ``mv``-d into place, so a torn write — a
+    connection severed mid-``printf`` — can never leave a corrupt manifest that a
+    later prune would misread. This matters because the push now checkpoints the
+    manifest per landed batch (many more writes, each a crash opportunity), not
+    only once at completion. Fail-open: a write error only loses the NEXT push's
+    prune ability (extras degrade to anomalies), never breaks this push.
     """
     # ``_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``) are both
     # re-exported by the package; import them call-time so this module never
@@ -105,7 +117,11 @@ def _write_push_manifest(
     b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
     root = shlex.quote(remote_path.rstrip("/"))
     dst = shlex.quote(_PUSH_MANIFEST_REL)
-    cmd = f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(b64)} | base64 -d > {dst}"
+    tmp = shlex.quote(_PUSH_MANIFEST_TMP_REL)
+    cmd = (
+        f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(b64)} | base64 -d > {tmp} "
+        f"&& mv -f {tmp} {dst}"
+    )
     with contextlib.suppress(TimeoutError, OSError):
         _ssh_bounded(
             ssh_target,
