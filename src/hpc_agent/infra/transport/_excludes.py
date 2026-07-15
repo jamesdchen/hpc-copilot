@@ -72,6 +72,21 @@ PROTECTED_OUTPUT_DIRS: list[str] = [
     # is pushed back up on every submit (F10). Protect it like the other
     # run-output dirs — written by the job, not part of the local deploy tree.
     "_aggregated/",
+    # The no-combiner reduce fallbacks pull each task's metrics / trace sidecars
+    # into a LOCAL mirror under the aggregate ``out`` dir — ``_per_task_results/``
+    # (:data:`hpc_agent.ops.aggregate_flow.PER_TASK_RESULTS_DIRNAME`) and
+    # ``_per_task_traces/`` (:data:`...PER_TASK_TRACES_DIRNAME`). ``out`` defaults
+    # under ``_aggregated/`` (already protected above) but a caller-supplied
+    # ``output_dir`` can place these mirrors at ANY depth, so protect the bare
+    # names too. Run-13 finding 4: run 12's 2,700-file ``_per_task_results``
+    # mirror rode a code deploy back to the cluster as a 1.18 GB "changed/new"
+    # payload because these stack-minted pull destinations were not excluded.
+    # Core mints these names; they belong in the default set, not per-repo config
+    # memory. The lockstep pin
+    # (``tests/infra/test_pull_dest_excludes.py``) fails if the mint-site
+    # constants are renamed without updating this set.
+    "_per_task_results/",
+    "_per_task_traces/",
 ]
 
 # Framework runtime files placed on the cluster by ``deploy_runtime`` (scp'd
