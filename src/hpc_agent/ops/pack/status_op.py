@@ -46,6 +46,7 @@ from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.pack_status import (
     PackBind,
     PackDanglingReference,
+    PackLineage,
     PackSlotStatus,
     PackStatusEntry,
     PackStatusResult,
@@ -55,7 +56,12 @@ from hpc_agent._wire.actions.pack_status import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state import decision_journal
 from hpc_agent.state.interview_doc import iter_interview_docs
-from hpc_agent.state.pack import PackManifest, load_manifest, verify_manifest_integrity
+from hpc_agent.state.pack import (
+    PackManifest,
+    load_manifest,
+    sha256_file,
+    verify_manifest_integrity,
+)
 from hpc_agent.state.pack_receipts import (
     CURRENT_FAILED,
     CURRENT_PASSED,
@@ -157,11 +163,53 @@ def _resolved_bind(records: list[dict[str, Any]]) -> StatePackBind | None:
     return current_bind(records)
 
 
+def _lineage_echo(
+    experiment_dir: Path,
+    manifest: PackManifest | None,
+    *,
+    entries: dict[str, dict[str, Any]],
+    manifests_by_pack: dict[str, PackManifest | None],
+    binds_by_pack: dict[str, StatePackBind | None],
+) -> PackLineage | None:
+    """The lineage + freshness echo for a PROGRAM pack (DC10), or ``None``.
+
+    ``None`` unless the pack's manifest carries a ``derived_from`` stamp. Freshness
+    compares the recorded seam sha against the currently-bound SOURCE pack's seam
+    file (identified by ``derived_from.pack`` name among co-bound packs — DC2,
+    NEVER by sha equality). A mismatch reports ``behind`` but never severs the edge;
+    an unbound/unresolvable source reports ``source-not-bound``.
+    """
+    if manifest is None or manifest.derived_from is None:
+        return None
+    df = manifest.derived_from
+    freshness: str = "source-not-bound"
+    source_bind = binds_by_pack.get(df.pack)
+    source_manifest = manifests_by_pack.get(df.pack)
+    source_entry = entries.get(df.pack)
+    if source_bind is not None and source_manifest is not None and source_entry is not None:
+        seam_rel = source_manifest.seams.get(df.seam)
+        source_manifest_rel = source_entry.get("manifest")
+        if isinstance(seam_rel, str) and seam_rel and isinstance(source_manifest_rel, str):
+            seam_path = (experiment_dir / source_manifest_rel).parent / seam_rel
+            try:
+                freshness = "current" if sha256_file(seam_path) == df.sha else "behind"
+            except (OSError, UnicodeDecodeError):
+                freshness = "source-not-bound"
+    return PackLineage(
+        pack=df.pack,
+        seam=df.seam,
+        version=df.version,
+        sha=df.sha,
+        freshness=freshness,  # type: ignore[arg-type]
+    )
+
+
 def _status_for_pack(
     experiment_dir: Path,
     pack_name: str,
     entry: dict[str, Any],
     *,
+    entries: dict[str, dict[str, Any]],
     records_by_pack: dict[str, list[dict[str, Any]]],
     manifests_by_pack: dict[str, PackManifest | None],
     binds_by_pack: dict[str, StatePackBind | None],
@@ -273,6 +321,13 @@ def _status_for_pack(
         unfillable=unfillable,
         dangling=dangling,
         audit_template=audit_template,
+        derived_from=_lineage_echo(
+            experiment_dir,
+            manifests_by_pack.get(pack_name),
+            entries=entries,
+            manifests_by_pack=manifests_by_pack,
+            binds_by_pack=binds_by_pack,
+        ),
     )
 
 
@@ -352,6 +407,7 @@ def pack_status(*, experiment_dir: Path, spec: PackStatusSpec) -> PackStatusResu
             experiment_dir,
             name,
             entry,
+            entries=entries,
             records_by_pack=records_by_pack,
             manifests_by_pack=manifests_by_pack,
             binds_by_pack=binds_by_pack,

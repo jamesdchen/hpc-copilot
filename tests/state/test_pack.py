@@ -348,5 +348,91 @@ def test_module_never_imports_or_executes_pack_content() -> None:
             assert node.id not in forbidden_names, f"no {node.id} in the pack substrate"
 
 
+# --- derived_from lineage (P1a) ---------------------------------------------
+
+
+def _good_derived_from() -> dict[str, str]:
+    return {
+        "pack": "toy-widgets",
+        "seam": "audit_template",
+        "version": "1.0.0",
+        "sha": "a" * 64,
+    }
+
+
+def test_manifest_without_derived_from_is_back_compat() -> None:
+    """A legacy manifest (no ``derived_from`` key) parses to ``None`` — unchanged."""
+    m = pack.parse_manifest(
+        {"name": "toy-widgets", "version": "1", "files": [], "seams": {}, "fills_slots": []}
+    )
+    assert m.derived_from is None
+
+
+def test_well_formed_derived_from_parses_into_frozen_dataclass() -> None:
+    """A well-formed block parses into the frozen :class:`DerivedFrom` on the manifest."""
+    m = pack.parse_manifest(
+        {
+            "name": "toy-widgets",
+            "version": "1",
+            "files": [],
+            "seams": {},
+            "fills_slots": [],
+            "derived_from": _good_derived_from(),
+        }
+    )
+    assert m.derived_from == pack.DerivedFrom(
+        pack="toy-widgets", seam="audit_template", version="1.0.0", sha="a" * 64
+    )
+    # Frozen — a lineage stamp is immutable identity.
+    with pytest.raises(Exception):  # noqa: B017 — FrozenInstanceError
+        m.derived_from.sha = "b" * 64  # type: ignore[misc]
+
+
+def test_parse_derived_from_round_trips() -> None:
+    """The shared :func:`parse_derived_from` accepts a well-formed block."""
+    df = pack.parse_derived_from(_good_derived_from(), what="test")
+    assert (df.pack, df.seam, df.version, df.sha) == (
+        "toy-widgets",
+        "audit_template",
+        "1.0.0",
+        "a" * 64,
+    )
+
+
+def test_derived_from_refusals_fire_on_synthetic_violations() -> None:
+    """Every derived_from shape refusal FIRES (the fires-AND-passes doctrine)."""
+    # non-object block
+    with pytest.raises(errors.SpecInvalid):
+        pack.parse_derived_from(["not", "an", "object"], what="test")
+    # non-slug pack
+    bad_pack = _good_derived_from() | {"pack": "bad pack!"}
+    with pytest.raises(errors.SpecInvalid):
+        pack.parse_derived_from(bad_pack, what="test")
+    # seam outside SEAM_NAMES
+    bad_seam = _good_derived_from() | {"seam": "not_a_seam"}
+    with pytest.raises(errors.SpecInvalid, match="seam"):
+        pack.parse_derived_from(bad_seam, what="test")
+    # empty version
+    bad_ver = _good_derived_from() | {"version": ""}
+    with pytest.raises(errors.SpecInvalid, match="version"):
+        pack.parse_derived_from(bad_ver, what="test")
+    # non-64-hex sha
+    bad_sha = _good_derived_from() | {"sha": "deadbeef"}
+    with pytest.raises(errors.SpecInvalid, match="sha"):
+        pack.parse_derived_from(bad_sha, what="test")
+    # a malformed derived_from inside a manifest is loud, never a silent drop
+    with pytest.raises(errors.SpecInvalid):
+        pack.parse_manifest(
+            {
+                "name": "toy-widgets",
+                "version": "1",
+                "files": [],
+                "seams": {},
+                "fills_slots": [],
+                "derived_from": {"pack": "toy-widgets"},  # missing seam/version/sha
+            }
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))

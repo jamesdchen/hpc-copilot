@@ -44,7 +44,13 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent.infra.io import atomic_write_text
-from hpc_agent.state.pack import SEAM_NAMES, sha256_bytes, sha256_file
+from hpc_agent.state.pack import (
+    SEAM_NAMES,
+    DerivedFrom,
+    parse_derived_from,
+    sha256_bytes,
+    sha256_file,
+)
 from hpc_agent.state.scopes import validate_tag
 
 if TYPE_CHECKING:
@@ -60,6 +66,7 @@ __all__ = [
     "fresh_manifest_dict",
     "serialize_manifest",
     "reseal_manifest",
+    "stamp_recipe_derived_from",
 ]
 
 #: The convention: a pack's sweep recipe lives beside its manifest, named
@@ -84,6 +91,13 @@ class SweepRecipe:
     fills_slots: tuple[str, ...]
     pack_files: tuple[str, ...]
     sweep: tuple[str, ...]
+    #: The lineage stamp copied VERBATIM into the rebuilt manifest, or ``None``.
+    #: The RECIPE is the durable stamp: a manifest-only ``derived_from`` would
+    #: vanish on the first auto-remedy reseal, so it lives here and enters the
+    #: :func:`_semantic` staleness projection (a hand-edited manifest ``derived_from``
+    #: reads stale and reseals back from the recipe — "never hand-editing" enforced
+    #: by construction, DC3).
+    derived_from: DerivedFrom | None = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +215,15 @@ def load_recipe(recipe_path: Path) -> SweepRecipe:
             out.append(item)
         return tuple(out)
 
+    # ``derived_from`` is OPTIONAL (a domain pack is a lineage root and omits it).
+    # Absent → None (back-compat). Present → the same shape validation the manifest
+    # applies (the one definition, :func:`hpc_agent.state.pack.parse_derived_from`),
+    # malformed → loud SpecInvalid.
+    raw_derived = data.get("derived_from")
+    derived_from = (
+        None if raw_derived is None else parse_derived_from(raw_derived, what="sweep recipe")
+    )
+
     return SweepRecipe(
         name=name,
         version=version,
@@ -208,6 +231,7 @@ def load_recipe(recipe_path: Path) -> SweepRecipe:
         fills_slots=_slug_list("fills_slots"),
         pack_files=_str_list("pack_files"),
         sweep=_str_list("sweep"),
+        derived_from=derived_from,
     )
 
 
@@ -258,13 +282,25 @@ def fresh_manifest_dict(recipe: SweepRecipe, pack_root: Path) -> dict[str, Any]:
                 f"unreadable ({exc}); cannot re-seal a manifest over a vanished file"
             ) from exc
         files.append({"path": rel, "sha256": sha})
-    return {
+    manifest: dict[str, Any] = {
         "name": recipe.name,
         "version": recipe.version,
         "files": files,
         "seams": dict(recipe.seams),
         "fills_slots": list(recipe.fills_slots),
     }
+    # The lineage stamp is emitted IFF the recipe carries it — a lineage-root
+    # (domain) pack's manifest never grows a ``derived_from`` key, so its bytes stay
+    # byte-identical to today (the live-pack no-spurious-staleness guarantee).
+    if recipe.derived_from is not None:
+        df = recipe.derived_from
+        manifest["derived_from"] = {
+            "pack": df.pack,
+            "seam": df.seam,
+            "version": df.version,
+            "sha": df.sha,
+        }
+    return manifest
 
 
 def serialize_manifest(manifest: dict[str, Any]) -> str:
@@ -272,11 +308,30 @@ def serialize_manifest(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
 
 
+def _derived_from_key(manifest: dict[str, Any]) -> tuple[tuple[str, Any], ...] | None:
+    """The staleness projection of ``derived_from``: sorted items, or ``None``.
+
+    CRITICAL back-compat contract (memo hazard 1): a manifest with NO
+    ``derived_from`` key projects to ``None`` — recipe-fresh (which omits the key
+    for a lineage root) and legacy-on-disk BOTH hit this branch, so they compare
+    equal and every existing pack stays not-stale. A malformed/non-object value
+    also projects to ``None`` here (staleness is a coarse verdict; the loud shape
+    refusal is :func:`load_recipe`'s job). A present object projects to its sorted
+    items so a hand-edited manifest ``derived_from`` differs from the recipe's and
+    reads stale (the recipe is truth; DC3).
+    """
+    df = manifest.get("derived_from")
+    if not isinstance(df, dict):
+        return None
+    return tuple(sorted(df.items()))
+
+
 def _semantic(manifest: dict[str, Any]) -> tuple[Any, ...]:
     """The staleness-relevant projection: identity + the {path: sha} integrity set.
 
     Whitespace / key-order differences never move it; a moved file sha, an added /
-    removed swept file, or a changed name/version/seams/fills_slots does.
+    removed swept file, a changed name/version/seams/fills_slots, or a moved
+    ``derived_from`` lineage stamp does.
     """
     files = manifest.get("files")
     file_map = (
@@ -292,6 +347,7 @@ def _semantic(manifest: dict[str, Any]) -> tuple[Any, ...]:
         tuple(sorted(seams.items())) if isinstance(seams, dict) else (),
         tuple(fills) if isinstance(fills, list) else (),
         tuple(sorted(file_map.items())),
+        _derived_from_key(manifest),
     )
 
 
@@ -365,3 +421,44 @@ def reseal_manifest(manifest_path: Path, recipe_path: Path) -> ResealOutcome:
         files_before=files_before,
         files_after=files_after,
     )
+
+
+def stamp_recipe_derived_from(recipe_path: Path, derived_from: DerivedFrom) -> None:
+    """Stamp *derived_from* into an EXISTING ``sweep.json`` — raw read-modify-write.
+
+    ``program-init`` adopt calls this to record the lineage on a pre-existing
+    program pack (the migration path). The write is a RAW dict read-modify-write,
+    NOT a :class:`SweepRecipe` round-trip: :func:`load_recipe` reads only the known
+    keys, so a round-trip would SILENTLY DELETE any unknown key a lab added to its
+    ``sweep.json`` (premortem). Here every existing key survives verbatim; only
+    ``derived_from`` is added/overwritten. The recipe is a build RECIPE outside the
+    integrity set (a Makefile is not one of its own targets), so its byte churn is
+    invisible to seal/bind — but it is the DURABLE stamp the next reseal copies into
+    the manifest, so this write must happen BEFORE :func:`reseal_manifest`.
+
+    Loud :class:`errors.SpecInvalid` on a missing/unreadable/non-object recipe (a
+    program pack with no recipe cannot be adopted; that is a broken setup).
+    """
+    try:
+        text = recipe_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise errors.SpecInvalid(
+            f"sweep recipe {str(recipe_path)!r} is unreadable ({exc}); cannot stamp "
+            "lineage onto a program pack with no recipe"
+        ) from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise errors.SpecInvalid(
+            f"sweep recipe {str(recipe_path)!r} is not valid JSON ({exc})"
+        ) from exc
+    if not isinstance(data, dict):
+        raise errors.SpecInvalid(f"sweep recipe {str(recipe_path)!r} must be a JSON object")
+    # Preserve insertion order + every unknown key; append/overwrite the stamp only.
+    data["derived_from"] = {
+        "pack": derived_from.pack,
+        "seam": derived_from.seam,
+        "version": derived_from.version,
+        "sha": derived_from.sha,
+    }
+    atomic_write_text(recipe_path, json.dumps(data, indent=2) + "\n")
