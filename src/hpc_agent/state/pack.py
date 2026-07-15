@@ -56,9 +56,11 @@ __all__ = [
     "SEAM_NAMES",
     "AXIS_LITERALS",
     "PackFile",
+    "DerivedFrom",
     "PackManifest",
     "sha256_bytes",
     "sha256_file",
+    "parse_derived_from",
     "parse_manifest",
     "load_manifest",
     "verify_manifest_integrity",
@@ -148,6 +150,69 @@ class PackFile:
 
 
 @dataclass(frozen=True)
+class DerivedFrom:
+    """The lineage stamp on a PROGRAM pack — which domain seam it was consumed from.
+
+    Stamped MECHANICALLY by ``program-init`` at program creation (P1a,
+    ``docs/design/program-init.md``), never hand-authored. Identity + freshness
+    evidence, never load-bearing selection:
+
+    * ``pack`` — the source DOMAIN pack's ``name`` slug. The derivation EDGE is
+      identified by ``{pack, seam}`` matched against a co-bound candidate's
+      ``manifest.name`` — NEVER by sha equality (a lab-vs-upstream copy or a
+      skeleton upgrade moves the sha but keeps the edge; DC2).
+    * ``seam`` — the consumed :data:`SEAM_NAMES` member (``audit_template`` at v1).
+    * ``version`` — the source pack's ``version`` string at init time. OPAQUE echo,
+      never compared by core (mirrors :class:`PackManifest` version discipline).
+    * ``sha`` — the raw-bytes SHA-256 (64-char lowercase hex) of the seam FILE
+      actually consumed at init. Freshness EVIDENCE only: a resolver/status may
+      disclose ``lineage behind`` when it differs from the currently-bound source
+      seam's sha, but a mismatch NEVER severs the edge (DC1/DC2).
+    """
+
+    pack: str
+    seam: str
+    version: str
+    sha: str
+
+
+def parse_derived_from(data: Any, *, what: str) -> DerivedFrom:
+    """Validate a parsed ``derived_from`` block into a :class:`DerivedFrom` (shape only).
+
+    Refuses (loud :class:`errors.SpecInvalid`) on: a non-object block; a non-slug
+    ``pack``; a ``seam`` outside :data:`SEAM_NAMES`; an empty/non-string
+    ``version``; a ``sha`` that is not 64-char lowercase hex. Never interprets a
+    value's meaning — ``pack``/``seam`` are matched by identity downstream,
+    ``version``/``sha`` are opaque freshness evidence. *what* names the enclosing
+    context for the error message (``pack manifest`` / ``sweep recipe``).
+    """
+    _require_mapping(data, what=f"{what} 'derived_from'")
+    pack = data.get("pack")
+    if not isinstance(pack, str):
+        raise errors.SpecInvalid(f"{what} derived_from 'pack' must be a string")
+    validate_tag(pack)  # slug class — it names a source pack by identity
+    seam = data.get("seam")
+    if seam not in SEAM_NAMES:
+        raise errors.SpecInvalid(
+            f"{what} derived_from 'seam' {seam!r} is not a member of the closed seam "
+            f"vocabulary {sorted(SEAM_NAMES)}"
+        )
+    version = data.get("version")
+    if not isinstance(version, str) or not version:
+        raise errors.SpecInvalid(
+            f"{what} derived_from 'version' must be a non-empty string (opaque, never "
+            f"compared); got {version!r}"
+        )
+    sha = data.get("sha")
+    if not isinstance(sha, str) or not _SHA256_HEX_RE.fullmatch(sha):
+        raise errors.SpecInvalid(
+            f"{what} derived_from 'sha' must be 64-char lowercase hex (raw-bytes "
+            f"SHA-256 of the consumed seam file); got {sha!r}"
+        )
+    return DerivedFrom(pack=pack, seam=seam, version=version, sha=sha)
+
+
+@dataclass(frozen=True)
 class PackManifest:
     """A pack manifest — identity + pointers only, never interpreted content.
 
@@ -163,6 +228,10 @@ class PackManifest:
     files: tuple[PackFile, ...]
     seams: dict[str, str]
     fills_slots: tuple[str, ...]
+    #: The lineage stamp for a PROGRAM pack derived from a domain seam, or ``None``
+    #: for a lineage ROOT (a domain pack). Optional + back-compat: a legacy manifest
+    #: with no ``derived_from`` key parses to ``None`` and behaves byte-identically.
+    derived_from: DerivedFrom | None = None
 
     def sha_for(self, relpath: str) -> str | None:
         """The recorded raw-bytes sha for a listed file, or ``None`` if unlisted."""
@@ -255,12 +324,21 @@ def parse_manifest(data: Mapping[str, Any]) -> PackManifest:
         validate_tag(slot)
         slots.append(slot)
 
+    # ``derived_from`` is OPTIONAL (a domain pack is a lineage root and omits it).
+    # Absent → None (back-compat: legacy manifests parse identically). Present →
+    # full shape validation, malformed → loud SpecInvalid (never a silent drop).
+    raw_derived = data.get("derived_from")
+    derived_from = (
+        None if raw_derived is None else parse_derived_from(raw_derived, what="pack manifest")
+    )
+
     return PackManifest(
         name=name,
         version=version,
         files=tuple(files),
         seams=seams,
         fills_slots=tuple(slots),
+        derived_from=derived_from,
     )
 
 
