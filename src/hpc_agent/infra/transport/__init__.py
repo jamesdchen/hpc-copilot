@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import json
 import os
 import shlex
@@ -69,10 +70,17 @@ from ._combiner import (
 from ._delta import (
     _DELTA_ENV_KILL,  # noqa: F401
     _DELTA_MANIFEST_FILE_CAP,  # noqa: F401
+    _PUSH_HASH_CACHE_REL,  # noqa: F401
     _REMOTE_MANIFEST_SNIPPET,  # noqa: F401
+    _build_local_manifest_cached,  # noqa: F401
+    _delta_batch_caps,  # noqa: F401
+    _delta_ship_batches,  # noqa: F401
+    _disclose_delta_batch,  # noqa: F401
+    _load_hash_cache,  # noqa: F401
     _local_push_manifest,  # noqa: F401
     _parse_remote_push_manifest,  # noqa: F401
     _remote_push_manifest,  # noqa: F401
+    _store_hash_cache,  # noqa: F401
 )
 from ._deploy_items import (
     _DEPLOY_MANIFEST_REL,  # noqa: F401
@@ -110,6 +118,7 @@ from ._excludes import (
 from ._prune import (
     _PRUNE_ENV_KILL,  # noqa: F401
     _PUSH_MANIFEST_REL,  # noqa: F401
+    _PUSH_MANIFEST_TMP_REL,  # noqa: F401
     _execute_prune,  # noqa: F401
     _journal_deploy_prune,  # noqa: F401
     _prune_max_bytes,  # noqa: F401
@@ -686,7 +695,11 @@ def _prune_manifest_known_extras(
         # Our own bookkeeping file is a remote extra (never shipped locally); it
         # is neither ours-to-prune nor an anomaly — filter it out up front.
         # Same for deploy_runtime's own placed files (:func:`_is_runtime_placed`).
-        candidates = [p for p in extra if p != _PUSH_MANIFEST_REL and not _is_runtime_placed(p)]
+        candidates = [
+            p
+            for p in extra
+            if p not in (_PUSH_MANIFEST_REL, _PUSH_MANIFEST_TMP_REL) and not _is_runtime_placed(p)
+        ]
         if not candidates:
             return set()
 
@@ -800,6 +813,13 @@ def rsync_push(
     # No-op unless HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
     throttle_connection(ssh_target)
     exclude = _effective_excludes(exclude)
+    # The local push-delta hash cache (run-13 finding 6) is a stack-internal file
+    # under ``.hpc/``; union it into the exclude set so no transfer path (delta
+    # local manifest, remote hash snippet, full-copy tar, payload disclosure)
+    # ever hashes, ships, or prunes it — the same standing as
+    # ``.hpc/.push_manifest.json`` (which ``_effective_excludes`` already unions).
+    if _PUSH_HASH_CACHE_REL not in exclude:
+        exclude = [*exclude, _PUSH_HASH_CACHE_REL]
     payload_bytes = _disclose_payload(local_path, exclude)
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
@@ -847,24 +867,68 @@ def rsync_push(
             # Ship the changed/new files (the delta is content-additive — the tar
             # extract runs delete=False and never prunes). ``ship`` may be empty
             # when the remote is already content-identical.
+            #
+            # Incremental manifest checkpointing (run-13 finding 3): ship the
+            # delta in BOUNDED BATCHES instead of one monolithic tar, and
+            # checkpoint the push manifest after each batch lands. A single tar
+            # that dies mid-stream leaves a truncated archive whose bookkeeping
+            # never commits, so a retry re-pays the WHOLE delta (attempt 1 shipped
+            # 355 MB of 1181 MB, then re-shipped all 1181 MB). Batching makes each
+            # landed batch DURABLE and independently confirmed: a retry's delta —
+            # computed from the live remote hash — re-derives the landed files and
+            # ships only the remainder, and the per-batch manifest checkpoint keeps
+            # the prune bookkeeping honest even if a LATER batch dies.
             if ship:
-                pushed = guarded_call(
-                    ssh_target,
-                    lambda: _tar_ssh_push(
-                        ssh_target=ssh_target,
-                        remote_path=remote_path,
-                        local_path=local_path,
-                        exclude=exclude,
-                        delete=False,
-                        timeout=effective_timeout,
-                        total_bytes=shipped_bytes,
-                        only_paths=ship,
-                    ),
+                ship_set = set(ship)
+                # Files already content-identical on the remote (reused, never
+                # shipped) are the base of every checkpoint: a checkpoint records
+                # ONLY files confirmed on the remote — the reused set plus the
+                # batches that have returned success so far.
+                base_paths = [e.path for e in local_manifest.entries if e.path not in ship_set]
+                max_files, max_bytes = _delta_batch_caps()
+                batches = list(
+                    _delta_ship_batches(ship, sizes, max_files=max_files, max_bytes=max_bytes)
                 )
-                if pushed.returncode != 0:
-                    # Transfer failed — leave the remote as-is (no prune, no
-                    # manifest rewrite) so the next push retries cleanly.
-                    return pushed
+                landed: list[str] = []
+                pushed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+                for i, batch in enumerate(batches, start=1):
+                    batch_bytes = sum(sizes.get(p, 0) for p in batch)
+                    _disclose_delta_batch(
+                        index=i, total=len(batches), n_files=len(batch), batch_bytes=batch_bytes
+                    )
+                    pushed = guarded_call(
+                        ssh_target,
+                        functools.partial(
+                            _tar_ssh_push,
+                            ssh_target=ssh_target,
+                            remote_path=remote_path,
+                            local_path=local_path,
+                            exclude=exclude,
+                            delete=False,
+                            timeout=effective_timeout,
+                            total_bytes=batch_bytes,
+                            only_paths=batch,
+                        ),
+                    )
+                    if pushed.returncode != 0:
+                        # This batch did not land. Earlier batches DID (each tar|ssh
+                        # completed and was checkpointed), so a retry's delta reflects
+                        # them and re-ships only the remainder. Leave the remote as-is
+                        # (no prune, no final seal) so the next push retries cleanly.
+                        return pushed
+                    landed.extend(batch)
+                    # Checkpoint the push manifest after each batch EXCEPT the last
+                    # (the final seal below covers the last batch and folds in the
+                    # prune's retained extras). Crash-safe: ``_write_push_manifest``
+                    # writes a remote temp then atomically ``mv``-s it into place, so
+                    # a torn checkpoint can never corrupt the live manifest.
+                    if i < len(batches):
+                        _write_push_manifest(
+                            ssh_target=ssh_target,
+                            remote_path=remote_path,
+                            paths=sorted(set(base_paths) | set(landed)),
+                            timeout=effective_timeout,
+                        )
             else:
                 pushed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
