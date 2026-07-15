@@ -664,3 +664,35 @@ form to follow.)
     experiment's `.hpc/`), the lab-bindings home, tracked-vs-gitignored pinned
     content, and the `derived_from` lineage field — all remain per the 2026-07-10
     ruling. No CLI verb, interview wiring, or core pack-reader was added.
+
+- **SELECTION LAW REWRITE (2026-07-15) — `compose_audit_template` is now the
+  no-heuristics selection law; the `receipt_bindings` tiebreak is RETIRED.**
+  Design-center change to the pack-seam selection model (recorded here per the
+  drift-log convention, not only in the enforcement map). Run-#13 finding 1: the
+  old tiebreak — "among `audit_template` candidates, the FIRST that is the target
+  of a `receipt_bindings` slot (the program pack) wins over the domain skeleton"
+  — silently picked the WRONG template for the two-layer domain/program split
+  (in harxhar-clean the receipt-bound pack IS the domain skeleton `quant`, while
+  the derived program pack `rv` carries no receipt binding), and the pick was
+  invisible until the sign-off surface (every section re-hashed against the wrong
+  template prose). The new law consumes the derivation edge the 2026-07-10 ruling
+  already mandated (`derived_from: {pack, seam, version, sha}`, matched by pack
+  NAME — a re-sealed parent still matches; the sha is for staleness reporting,
+  never identity): one candidate wins (`rule=single_candidate`); among many,
+  every candidate that is another candidate's derivation PARENT is eliminated and
+  a unique survivor is the DERIVED (most-specific) template
+  (`rule=derivation_edge`); any other shape — zero survivors (a self/mutual
+  cycle) or two-plus survivors (no lineage, or sibling derivatives of one
+  skeleton) — is a loud `SpecInvalid` naming EVERY candidate with the
+  explicit-template / record-lineage remedy. A manifest that fails to load
+  (including a malformed `derived_from`) is NAMED in the disclosure's `skipped`
+  key, never silently dropped (a lineage typo surfaces instead of a confident
+  wrong pick). The disclosure keeps `{field, value, pack, source}`
+  byte-compatible and ADDS `{rule, candidates}` (+`skipped` when any candidate
+  failed to load); `audit-preflight` renders the composed pick + rule +
+  candidates in the brief (the surface where the human caught the wrong pick).
+  The refusal PROPAGATES out of `record_interview` (the universal submit intake)
+  as well as `audit-preflight`. Enforcement-map row appended at
+  `docs/internals/engineering-principles.md` (P1b, held jointly with WS7's
+  P1c/P1d echo/collision rows). Depends on the `PackManifest.derived_from` field
+  landing first (WS5). No `@primitive`/schema/spec change → no regen.
