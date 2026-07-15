@@ -15,10 +15,11 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Final
 
-from ._excludes import _path_excluded
+from ._excludes import _effective_excludes, _path_excluded
 
 #: Payload size above which the pre-push disclosure escalates to a WARN line —
 #: run-#10 finding F-E: a 3.8G artifact tree rode a deploy silently into a
@@ -26,6 +27,110 @@ from ._excludes import _path_excluded
 _PAYLOAD_WARN_BYTES = 200 * 1024 * 1024
 #: Walk bound so disclosure itself stays cheap on pathological trees.
 _PAYLOAD_WALK_CAP = 50_000
+
+
+@dataclass(frozen=True)
+class DeployPayloadSummary:
+    """Code-computed size of what a deploy push would ship — for CHECK-TIME
+    disclosure in the S2/deploy greenlight brief (run-13 finding 4; the
+    check-time-surfacing class of finding 28).
+
+    A pathological payload (run 12's 1.18 GB of analysis outputs re-shipped as
+    "code") must get human eyes BEFORE the hour-long transfer starts, not after.
+    Every field is computed by :func:`deploy_payload_summary` from the same
+    exclude-filtered tree walk the transfer itself uses — never an LLM estimate.
+    """
+
+    file_count: int
+    total_bytes: int
+    #: The top-N experiment-root directories by shipped bytes: ``(name, bytes)``,
+    #: descending. Names the largest contributors so a rogue root (``_aggregated``,
+    #: a stray ``data/``) is legible at a glance.
+    top_roots: list[tuple[str, int]] = field(default_factory=list)
+    #: True when the walk hit :data:`_PAYLOAD_WALK_CAP`; the totals are a lower
+    #: bound (the brief says so).
+    walk_capped: bool = False
+
+    @property
+    def total_mb(self) -> float:
+        return self.total_bytes / (1024 * 1024)
+
+    @property
+    def warn(self) -> bool:
+        """The payload crosses the :data:`_PAYLOAD_WARN_BYTES` disclosure bar."""
+        return self.total_bytes > _PAYLOAD_WARN_BYTES
+
+    def as_brief(self) -> dict[str, Any]:
+        """A JSON-safe dict for the decision brief (code-rendered, never LLM)."""
+        return {
+            "file_count": self.file_count,
+            "total_bytes": self.total_bytes,
+            "total_mb": round(self.total_mb, 1),
+            "top_roots": [
+                {"name": name, "bytes": nbytes, "mb": round(nbytes / (1024 * 1024), 1)}
+                for name, nbytes in self.top_roots
+            ],
+            "walk_capped": self.walk_capped,
+            "warn": self.warn,
+        }
+
+
+def deploy_payload_summary(
+    local_path: str | Path,
+    exclude: list[str] | None,
+    *,
+    top_n: int = 3,
+) -> DeployPayloadSummary:
+    """Compute the deploy payload's file count, total bytes, and top-*top_n*
+    root dirs — the structured, code-rendered figures the S2 greenlight brief
+    surfaces BEFORE the transfer (run-13 finding 4).
+
+    Mirrors the transfer's own filtering exactly: *exclude* is resolved through
+    :func:`_effective_excludes` (so the mandatory / protected groups the push
+    always unions in — including the ``_per_task_results`` / ``_aggregated``
+    pull mirrors — are honored here too), then every file is tested with the
+    shared :func:`_path_excluded` core. ``None`` selects the default exclude set,
+    the same as the push. Walk-capped like :func:`_disclose_payload` so it stays
+    cheap on pathological trees; a capped total is a lower bound.
+
+    Best-effort and fail-open: any error yields an empty summary (all zeros) so a
+    disclosure failure never blocks a submit.
+    """
+    try:
+        pats = [p.rstrip("/") for p in _effective_excludes(exclude)]
+        root = Path(local_path)
+        total = 0
+        count = 0
+        capped = False
+        root_bytes: dict[str, int] = {}
+        for p in root.rglob("*"):
+            if count >= _PAYLOAD_WALK_CAP:
+                capped = True
+                break
+            try:
+                rel = p.relative_to(root)
+            except ValueError:
+                continue
+            if _path_excluded(rel.parts, pats):
+                continue
+            if p.is_file():
+                count += 1
+                sz = 0
+                with contextlib.suppress(OSError):
+                    sz = p.stat().st_size
+                total += sz
+                # Attribute bytes to the top-level component (a file directly at
+                # the root is its own "root", so it still shows up if huge).
+                root_bytes[rel.parts[0]] = root_bytes.get(rel.parts[0], 0) + sz
+        top = sorted(root_bytes.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        return DeployPayloadSummary(
+            file_count=count,
+            total_bytes=total,
+            top_roots=top,
+            walk_capped=capped,
+        )
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        return DeployPayloadSummary(file_count=0, total_bytes=0)
 
 
 def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:

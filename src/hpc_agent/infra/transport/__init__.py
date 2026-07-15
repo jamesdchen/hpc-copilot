@@ -88,6 +88,7 @@ from ._disclose import (
     _PAYLOAD_WARN_BYTES,  # noqa: F401
     _PROGRESS_INTERVAL_SEC,  # noqa: F401
     _PUMP_CHUNK_BYTES,  # noqa: F401
+    DeployPayloadSummary,
     _disclose_delta_mode,  # noqa: F401
     _disclose_no_rsync,  # noqa: F401
     _disclose_payload,  # noqa: F401
@@ -95,6 +96,7 @@ from ._disclose import (
     _emit_progress,  # noqa: F401
     _pump_with_progress,  # noqa: F401
     _write_all,  # noqa: F401
+    deploy_payload_summary,
 )
 from ._excludes import (
     _GENERATED_SHIPPABLE,  # noqa: F401
@@ -124,6 +126,8 @@ __all__ = [
     "MANDATORY_RSYNC_EXCLUDES",
     "PROTECTED_OUTPUT_DIRS",
     "PROTECTED_RUNTIME_FILES",
+    "DeployPayloadSummary",
+    "deploy_payload_summary",
     "deploy_runtime",
     "rsync_pull",
     "rsync_push",
