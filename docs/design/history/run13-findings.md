@@ -32,7 +32,8 @@ Live remedy relayed: re-run audit-preflight with
 the four unchanged sections re-hash to their previously signed shas; only
 feature-construction needs a fresh sign-off.
 
-Fix direction (NEEDS RULING on the selection rule): the principled signal
+Fix direction (RULED 2026-07-15, proper-fix-only; superseded by the
+fable-sweep handoff — docs/plans/fable-sweep-devx-2026-07-15/): the principled signal
 is the derivation edge, not receipt bindings — rv's manifest `derived_from`
 names the quant skeleton sha, i.e. the derived (more specific) template is
 the program pack and should win. Candidate rule: among audit_template
@@ -41,3 +42,51 @@ template wins; receipt-bindings tiebreak retired (or kept only as a
 last-resort ordering). Whatever the rule, the compose disclosure should
 name BOTH candidates and which rule picked the winner, so a wrong pick is
 visible at preflight instead of at the sign-off surface.
+
+## 2. Detached worker died exit-2 with NO disclosed failure in its log
+`[core]` Live (submit-s2, run causal_tune_linear_fixmask-82ba92e8,
+2026-07-15T21:31:46Z): the harness-written terminal records
+`detached_worker_exit, exit_code 2` and its message asserts "the worker
+log carries the disclosed failure" — but the log's final non-hb line is a
+normal `[transport] progress` line. Nothing was flushed: no traceback, no
+child scp/ssh stderr, no exit-path disclosure. The heartbeat showed a live
+ssh.exe child with growing CPU shortly before death. The disclosure
+contract the terminal message asserts is broken for hard-death paths
+(unhandled exit, killed process, unflushed buffers). Fix class: worker
+crash disclosure — faulthandler/atexit flush + capture child stderr and
+exit status into the log before (or independent of) the terminal write;
+the terminal message must never claim the log discloses something the
+write path cannot guarantee.
+
+## 3. Push manifest commits only at completion — died-mid-push retry re-pays the full delta
+`[core]` Live, same run: attempt 1 shipped 355+ MB of its 1181.4 MB delta
+before dying; the retry's content-hash delta line was byte-identical
+("shipping 18972 changed/new, 1181.4 MB") because the delta compares
+against the remote PUSH MANIFEST, which is written once at push
+completion. Partial progress is invisible → every mid-push death re-ships
+from zero (the run-12 delta-less double-pull class, now on the push side;
+this run paid the ~39k-file hash scan + the transfer twice). Fix class:
+incremental manifest checkpointing — commit manifest entries per file or
+per batch as they land (the remote files are already there; only the
+bookkeeping lags), so a retry's delta reflects remote reality.
+
+## 4. Stack-created pull destinations missing from deploy excludes → 1.18 GB junk payload
+`[target]+[core-default]` Live, same run: the deploy payload was 39,374
+files / 9.9 GB with `results`, `logs`, `_combiner` excluded — but NOT
+`_aggregated` and NOT `_per_task_results`, the directories the STACK
+ITSELF creates as local pull/reduce destinations (run 12's 2,700-file
+mirror + aggregate outputs). Run 13's code deploy therefore shipped run
+12's analysis outputs to the cluster (~the whole 18,972-file "changed/new"
+set). Core knows these directory names — it mints them; they belong in
+the DEFAULT exclude set (same standing as `_combiner`), not in per-repo
+config memory. Immediate demo remedy relayed: add both to the deploy
+excludes before the fleet submit.
+
+## 5. Hand-rolled bash watch loop over the terminal file
+`[harness]` The demo armed a 220-iteration bash loop (grep terminal ts +
+tasklist PID + sleep) instead of the sanctioned `poll-detached` /
+block-drive rendezvous — the improvisation class, and it led to narrating
+"progressing normally" against a directory already containing a failure
+terminal (the loop was keyed to detect a ts CHANGE from the recorded
+failure). Relay rule reminder issued; no gate gap — the sanctioned verb
+exists and was bypassed.
