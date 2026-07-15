@@ -444,3 +444,34 @@ boundary its enforcement-row table names.
 | Multi-human attestations route through the ONE kernel: the draft record binds via `attestation.bind`, the reviewer≠author reduction reads via `attestation.reduce` (`read_draft_author`), and the LLM gains no utterance-writing affordance — `notebook-draft` writes a JOURNAL record, never an utterance file (MH5/MH6) | `tests/contracts/test_multi_human_boundary.py::test_draft_records_route_through_the_kernel`, `::test_notebook_draft_writes_no_utterance_file`; the reviewer≠author fire tests `tests/ops/decision/test_multi_human_gate.py::test_signoff_self_sign_refused`, `::test_signoff_missing_draft_attribution_refused`, `::test_signoff_missing_session_actor_refused` | an actor-bearing path bypasses `bind`/`reduce`, or a verb writes any `utterances*.jsonl` |
 | MH7 resolver ≠ challenger / withdrawer == challenger — under >1 declared actors a challenge VERDICT refuses `resolver == challenger` (from the filing record's `attestor_id`) and an unattributed resolution; a WITHDRAWAL refuses `withdrawer != challenger` (the suppression channel) AND refuses withdrawing an UNATTRIBUTED filing outright (`challenger is None` — RULING 4 / bug-sweep #37: no one owns it, so no one may withdraw it — `None != None` is False, so the compare alone leaves the anonymous-suppression channel open; the refusal routes to challenge-verdict, which records WHO resolved it via the cheap "withdrawn-as-stale" shape); zero/one actor → silent, byte-identical (multi-human MH7, landed as the challenge-T5 follow-up) | `tests/ops/decision/test_multi_human_gate.py::test_verdict_resolver_equals_challenger_refused`, `::test_verdict_unattributed_resolution_refused`, `::test_withdraw_by_non_challenger_refused`, `::test_withdraw_of_unattributed_filing_refused_even_when_attributed`, `::test_unattributed_withdraw_of_unattributed_filing_refused`, `::test_verdict_closes_unattributed_filing_recording_the_resolver`, `::test_challenge_single_actor_byte_identical` | a resolver adjudicates their own filed challenge, an anonymous session resolves one, a non-challenger withdraws another's standing dissent, or an unowned (unattributed) filing is withdrawn instead of closed via a recorded verdict |
 | MH8 policy is declarative delegation — `actors.policy` `{block: [slug,…]}` is a membership test (`_assert_actor_policy`), never a predicate/role/quorum; a non-member (incl. an unresolvable session actor) is refused for a delegated block, an unlisted block is unrestricted, no policy is silent (multi-human MH8) | `tests/ops/decision/test_multi_human_gate.py::test_policy_non_member_refused`, `::test_policy_member_passes`, `::test_policy_unlisted_block_unrestricted` | policy grows a conditional/role/quorum shape, or a delegated block admits a non-member |
+
+## Operational docs: counts are verified live, never frozen
+
+The operational-truth doc surfaces (`docs/internals` + `docs/workflows`)
+narrate what the system IS now, not what it was — so a bare count of a
+counted set (the primitive registry, the verb catalog, the shipped schemas,
+the error-code enum, the regen-script set) is a fact that rots the instant
+that set changes, and prose alone never notices. The rule: such a count
+either equals the live number derived from its source of truth, or sits in a
+cited allowlist for a deliberate historical reference. Design and plan docs
+narrate history by design and are out of scope; fenced code blocks and
+drift-log sections are masked (they legitimately carry the old numbers). The
+count is line-based (a claim is a digit and its noun on one line) and
+strict — no tolerance, because a two-off literal is exactly the drift that
+slipped a prior ±2 pin.
+
+### Enforcement map
+
+| Rule | Enforced by | Fires when |
+|---|---|---|
+| A digit count of primitives, verbs, schemas, error codes, or regen scripts in `docs/internals` + `docs/workflows` equals the live count derived from its source of truth (registry for primitives/verbs, a recursive `schemas/**/*.json` glob, the `envelope.json` error-code enum, the `scripts/regen_all.py::REGEN_SCRIPTS` seam) or sits in `_COUNT_ALLOWLIST` with a cited reason; verbs means the registry count (the repo-prose convention), not the CLI-exposed subset | `tests/contracts/test_doc_frozen_counts.py::test_frozen_counts_track_live` (real-tree pin), `::test_frozen_count_check_fires_on_synthetic_violation` + `::test_frozen_count_check_passes_on_exact_and_masked` (fire/pass pair), `::test_count_allowlist_not_stale` + `::test_stale_allowlist_check_fires_on_synthetic_entry` (anti-stale), `::test_live_counts_are_sane` (vacuity floors); scope/masking seam `tests/contracts/_doc_scan.py` | an in-scope doc freezes a count the registry / schemas / error-code enum / regen set has since outgrown, or an allowlist entry's count catches back up to live (a dead exception) |
+
+### Drift log
+
+`adding-a-primitive.md` opened with "the existing 167 primitives" while the
+registry had already grown past it; the older ±2 primitives-only prose pin
+sat at exactly its tolerance boundary on that line and let the two-off
+literal pass. This section's strict, whole-family, line-based pin replaces
+that tolerance for the operational surfaces; the ±2 pin was narrowed to the
+out-of-scope `README.md` + `docs/reference/` surfaces it still uniquely
+covers.
