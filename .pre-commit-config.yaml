@@ -1,11 +1,12 @@
 # Pre-commit gates that mirror the CI checks but auto-fix when possible.
 # Install with: pre-commit install
 #
-# Why local hooks instead of upstream pre-commit-hooks repos: the four
-# regen scripts depend on the in-tree package being importable, so they
-# can't run from a pre-commit virtualenv. Each hook below runs against
-# the current repo's Python via `uv run` (or plain `python` if uv is
-# not installed) so the registry import resolves correctly.
+# Why local hooks instead of upstream pre-commit-hooks repos: the regen
+# scripts (driven by the single `scripts/regen_all.py` entry point) depend
+# on the in-tree package being importable, so they can't run from a
+# pre-commit virtualenv. Each hook below runs against the current repo's
+# Python via `uv run` (or plain `python` if uv is not installed) so the
+# registry import resolves correctly.
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -53,53 +54,18 @@ repos:
         # sources that CAN change what/whom it scans.
         files: '^(src/hpc_agent/(execution/mapreduce/.*|_kernel/contract/.*|infra/(transport|time)\.py|errors\.py|executor_cli\.py)|scripts/lint_deploy_python_floor\.py)$'
 
-      - id: build-primitive-frontmatter
-        name: regenerate primitive frontmatter
-        entry: python scripts/build_primitive_frontmatter.py --write
+      - id: regen-all
+        name: regenerate all generated artifacts (schemas, operations.json, indices, frontmatter, verb-map) + pending-docs check
+        entry: python scripts/regen_all.py --write
         language: system
         pass_filenames: false
-        files: '^(src/hpc_agent/.*\.py|docs/primitives/.*\.md)$'
-
-      - id: build-primitive-index
-        name: regenerate primitive catalog table
-        entry: python scripts/build_primitive_index.py
-        language: system
-        pass_filenames: false
-        files: '^docs/primitives/.*\.md$'
-
-      - id: build-verb-module-map
-        name: regenerate CLI fast-path verb→module map
-        entry: python scripts/build_verb_module_map.py --write
-        language: system
-        pass_filenames: false
-        # Fires whenever a primitive-bearing source changes — adding, renaming,
-        # moving, or grouping a verb changes the single-verb fast-path map. The
-        # runtime is self-healing (a stale entry just falls back to the full
-        # path), so this is a perf-hygiene gate, not correctness-critical.
-        files: '^src/hpc_agent/.*\.py$'
-
-      - id: build-operations-index
-        name: regenerate operations index
-        entry: python scripts/build_operations_index.py
-        language: system
-        pass_filenames: false
-        files: '^(src/hpc_agent/.*\.py|src/hpc_agent/schemas/.*\.json)$'
-
-      - id: build-schemas
-        name: regenerate JSON schemas from Pydantic models
-        entry: python scripts/build_schemas.py --write
-        language: system
-        pass_filenames: false
-        # ``build_schemas.py`` walks ``hpc_agent._wire`` for the core
-        # Pydantic models — fires whenever that surface changes.
-        files: '^src/hpc_agent/_wire/.*\.py$'
-
-      - id: bake-operations-json
-        name: regenerate baked operations.json (wheel-install fallback)
-        entry: python scripts/bake_operations_json.py --write
-        language: system
-        pass_filenames: false
-        files: '^src/hpc_agent/.*\.py$'
+        # ONE recipe replaces the six former build/bake hooks + the pending-docs
+        # check: regen_all runs every generator in dependency order (see
+        # scripts/regen_all.py). The trigger is the UNION of those hooks' file
+        # patterns — any hpc_agent source (``.py`` OR ``schemas/*.json``, so a
+        # hand-reverted schema still re-runs regen) or any primitive doc change
+        # runs the whole ~20s pipeline (idempotent no-op when already clean).
+        files: '^(src/hpc_agent/.*\.(py|json)|docs/primitives/.*\.md)$'
 
       - id: lint-primitive-doc-templates
         name: check primitive doc templates match agent_facing tier
@@ -107,13 +73,6 @@ repos:
         language: system
         pass_filenames: false
         files: '^(docs/primitives/.*\.md|src/hpc_agent/.*\.py)$'
-
-      - id: check-no-pending-primitive-docs
-        name: fail on '_Documentation pending._' in primitive docs
-        entry: python scripts/check_no_pending_primitive_docs.py
-        language: system
-        pass_filenames: false
-        files: '^docs/primitives/.*\.md$'
 
       - id: lint-skill-command-sync
         name: check src/hpc_agent/slash_commands/skills/ <-> src/hpc_agent/slash_commands/commands/ stay paired

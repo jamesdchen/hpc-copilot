@@ -59,11 +59,9 @@ verb — rejected (consent write path stays solely `append-decision`).
 - Repo doctrine: `docs/internals/engineering-principles.md` (guards must fire,
   determinism boundary, library-knowledge test). Caches are optimisations,
   never correctness gates (fail-open + env bypass).
-- Only the integrator runs the regen scripts
-  (`scripts/build_schemas.py`, `bake_operations_json.py`,
-  `build_operations_index.py`, `build_primitive_index.py`,
-  `build_primitive_frontmatter.py`, `build_verb_module_map.py`, then
-  `check_no_pending_primitive_docs.py`), then `ruff` + `mypy` +
+- Only the integrator runs the regen pipeline
+  (now `scripts/regen_all.py --write` — the single entry point over the six
+  generators + `check_no_pending_primitive_docs.py`), then `ruff` + `mypy` +
   `pytest -q -m 'not slow'`, then a structured commit series.
 - Build units work in isolated worktrees, one commit each on a `pkg/<key>`
   branch; integrator merges in the script's stated order (m-server last).
