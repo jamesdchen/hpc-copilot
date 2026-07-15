@@ -16,3 +16,56 @@
 *.ico  binary
 *.gz   binary
 *.zip  binary
+
+# --------------------------------------------------------------------------- #
+# Generated-artifact keep-ours merge driver (scripts/merge_generated.py)
+# --------------------------------------------------------------------------- #
+# These files are a PURE FUNCTION of the primitive registry — regenerated in
+# FULL by the regen scripts. They are the dominant swarm merge-conflict class.
+# The `generated` driver keeps OURS on a both-sides-changed merge; a post-merge
+# `scripts/regen_all.py --write` then rebuilds them from the merged registry.
+# The driver is NOT built into git — deploy it per clone with
+# `python scripts/merge_generated.py ensure` (WS1's regen_all runs this at the
+# top of every regen; worktrees share the clone's config, so one ensure covers
+# them all). A clone that never ran ensure degrades LOUDLY to a normal conflict.
+# Applies to `git merge` AND `git rebase`/`cherry-pick` — but rebase inverts
+# ours/theirs, so a rebasing branch drops its OWN generated edits until the
+# post-rebase regen restores them. The set below is mirrored by
+# scripts/merge_generated.py::FULLY_GENERATED_PATTERNS and pinned in lockstep by
+# tests/contracts/test_generated_merge_driver.py.
+docs/generated/**                      merge=generated
+src/hpc_agent/cli/_verb_module_map.py  merge=generated
+src/hpc_agent/operations.json          merge=generated
+src/hpc_agent/schemas/*.json           merge=generated
+
+# Hand-authored composite/preflight operation schemas: build_schemas.py does
+# NOT emit these, so keep-ours would silently drop edits no regen script
+# restores. Reset them to git's default 3-way text merge. Mirrored by
+# scripts/merge_generated.py::SCHEMA_MERGE_UNSET; pinned equal to
+# (live top-level schemas − build_schemas emitted) by the contract test, so a
+# new hand-authored schema turns the pin RED rather than being silently swept in.
+src/hpc_agent/schemas/aggregate_preflight.input.json          !merge
+src/hpc_agent/schemas/aggregate_preflight.output.json         !merge
+src/hpc_agent/schemas/check_task_generator_mismatch.input.json  !merge
+src/hpc_agent/schemas/check_task_generator_mismatch.output.json !merge
+src/hpc_agent/schemas/classify_axis_preflight.input.json      !merge
+src/hpc_agent/schemas/classify_axis_preflight.output.json     !merge
+src/hpc_agent/schemas/decide_resubmit.input.json              !merge
+src/hpc_agent/schemas/decide_resubmit.output.json             !merge
+src/hpc_agent/schemas/detect_entry_point.input.json           !merge
+src/hpc_agent/schemas/detect_entry_point.output.json          !merge
+src/hpc_agent/schemas/inspect_deployment.input.json           !merge
+src/hpc_agent/schemas/inspect_deployment.output.json          !merge
+src/hpc_agent/schemas/inspect_parallel_axes.input.json        !merge
+src/hpc_agent/schemas/inspect_parallel_axes.output.json       !merge
+src/hpc_agent/schemas/prepare_followup_specs.input.json       !merge
+src/hpc_agent/schemas/prepare_followup_specs.output.json      !merge
+src/hpc_agent/schemas/prepare_phase2_spec.output.json         !merge
+src/hpc_agent/schemas/resolve_resources.input.json            !merge
+src/hpc_agent/schemas/resolve_resources.output.json           !merge
+src/hpc_agent/schemas/smoke_test_executor.input.json          !merge
+src/hpc_agent/schemas/smoke_test_executor.output.json         !merge
+src/hpc_agent/schemas/status_preflight.input.json             !merge
+src/hpc_agent/schemas/status_preflight.output.json            !merge
+src/hpc_agent/schemas/submit_preflight.input.json             !merge
+src/hpc_agent/schemas/submit_preflight.output.json            !merge
