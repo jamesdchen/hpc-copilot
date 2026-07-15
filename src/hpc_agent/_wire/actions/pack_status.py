@@ -94,6 +94,31 @@ class PackDanglingReference(BaseModel):
     slot: str | None = None
 
 
+class PackLineage(BaseModel):
+    """The lineage stamp of a PROGRAM pack + its freshness against the bound source.
+
+    Additive/optional (P3 observability, DC10): present only when the pack's
+    manifest carries a ``derived_from`` stamp. ``pack``/``seam``/``version``/``sha``
+    echo the stamp; ``freshness`` compares the recorded ``sha`` against the
+    currently-bound source pack's seam-file sha:
+
+    * ``current`` — the source pack is bound and its seam sha matches the stamp.
+    * ``behind`` — the source pack is bound but its seam sha differs (a re-init from
+      upstream or a skeleton upgrade moved it; the edge is NOT severed — freshness
+      evidence only, DC2).
+    * ``source-not-bound`` — the named source pack is not an opted-in current bind,
+      so freshness cannot be established.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="pack lineage")
+
+    pack: str
+    seam: str
+    version: str
+    sha: str
+    freshness: Literal["current", "behind", "source-not-bound"]
+
+
 class PackStatusEntry(BaseModel):
     """The full status digest for one pack.
 
@@ -108,6 +133,16 @@ class PackStatusEntry(BaseModel):
     slots: list[PackSlotStatus] = Field(default_factory=list)
     unfillable: list[PackUnfillableRequirement] = Field(default_factory=list)
     dangling: list[PackDanglingReference] = Field(default_factory=list)
+    derived_from: PackLineage | None = Field(
+        default=None,
+        description=(
+            "The PROGRAM-pack lineage stamp + freshness, when the manifest carries a "
+            "``derived_from`` (P3 observability). ``None`` for a lineage-root (domain) "
+            "pack or a manifest with no stamp — serialized as ``null`` for legacy "
+            "packs (an additive optional field; the dispatch serializer does not "
+            "exclude_none)."
+        ),
+    )
     audit_template: str | None = Field(
         default=None,
         description=(

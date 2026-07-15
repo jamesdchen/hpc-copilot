@@ -299,3 +299,115 @@ def test_multi_pack_filter(tmp_path: Path, monkeypatch: Any) -> None:
     # Both packs' journals are read (the indices are precomputed), but only the
     # filtered pack is reported.
     assert set(calls) == {"pack-a", "pack-b"}
+
+
+# --- derived_from lineage echo (P1a, DC10) ----------------------------------
+
+
+def _bind_record_named(name: str, manifest_sha: str) -> dict[str, Any]:
+    return {
+        "block": PACK_BIND_BLOCK,
+        "ts": "2026-07-15T00:00:00Z",
+        "resolved": {"pack": name, "version": "0.2.0", "manifest_sha": manifest_sha, "seams": []},
+    }
+
+
+def _setup_lineage(tmp_path: Path, *, source_seam_bytes: bytes, stamp_sha: str) -> None:
+    """A source (domain) pack + a program pack whose manifest stamps derived_from."""
+    # Source pack: an audit_template seam file on disk.
+    seam_sha = _write(tmp_path, "packs/dom/templates/skel.py", source_seam_bytes)
+    src_manifest = {
+        "name": "dom",
+        "version": "0.2.0",
+        "files": [{"path": "templates/skel.py", "sha256": seam_sha}],
+        "seams": {"audit_template": "templates/skel.py"},
+        "fills_slots": [],
+    }
+    p = tmp_path / "packs/dom/manifest.json"
+    p.write_text(json.dumps(src_manifest), encoding="utf-8")
+    # Program pack: manifest carries derived_from pointing at dom's audit_template.
+    prog_tmpl_sha = _write(tmp_path, "packs/prog/templates/prog_audit.py", b"# prog\n")
+    prog_manifest = {
+        "name": "prog",
+        "version": "0.2.0",
+        "files": [{"path": "templates/prog_audit.py", "sha256": prog_tmpl_sha}],
+        "seams": {"audit_template": "templates/prog_audit.py"},
+        "fills_slots": [],
+        "derived_from": {
+            "pack": "dom",
+            "seam": "audit_template",
+            "version": "0.2.0",
+            "sha": stamp_sha,
+        },
+    }
+    (tmp_path / "packs/prog/manifest.json").write_text(json.dumps(prog_manifest), encoding="utf-8")
+    _write_interview(
+        tmp_path,
+        [
+            {"pack": "dom", "manifest": "packs/dom/manifest.json", "receipt_bindings": []},
+            {"pack": "prog", "manifest": "packs/prog/manifest.json", "receipt_bindings": []},
+        ],
+    )
+
+
+def test_lineage_echo_current_when_source_seam_matches(tmp_path: Path, monkeypatch: Any) -> None:
+    seam_bytes = b"# domain skeleton\n"
+    stamp_sha = _raw_sha(seam_bytes)  # stamp matches the on-disk source seam
+    _setup_lineage(tmp_path, source_seam_bytes=seam_bytes, stamp_sha=stamp_sha)
+    _patch_journal(
+        monkeypatch,
+        {
+            "dom": [_bind_record_named("dom", "d" * 64)],
+            "prog": [_bind_record_named("prog", "p" * 64)],
+        },
+    )
+    result = status_op.pack_status(experiment_dir=tmp_path, spec=PackStatusSpec())
+    lineage = result.packs["prog"].derived_from
+    assert lineage is not None
+    assert (lineage.pack, lineage.seam, lineage.freshness) == ("dom", "audit_template", "current")
+    # The lineage-ROOT (dom) has no stamp → None.
+    assert result.packs["dom"].derived_from is None
+
+
+def test_lineage_echo_behind_when_source_seam_drifted(tmp_path: Path, monkeypatch: Any) -> None:
+    seam_bytes = b"# domain skeleton v2\n"
+    _setup_lineage(tmp_path, source_seam_bytes=seam_bytes, stamp_sha="a" * 64)  # stamp != on-disk
+    _patch_journal(
+        monkeypatch,
+        {
+            "dom": [_bind_record_named("dom", "d" * 64)],
+            "prog": [_bind_record_named("prog", "p" * 64)],
+        },
+    )
+    result = status_op.pack_status(experiment_dir=tmp_path, spec=PackStatusSpec())
+    assert result.packs["prog"].derived_from is not None
+    assert result.packs["prog"].derived_from.freshness == "behind"  # edge NOT severed
+
+
+def test_lineage_echo_source_not_bound(tmp_path: Path, monkeypatch: Any) -> None:
+    seam_bytes = b"# domain skeleton\n"
+    _setup_lineage(tmp_path, source_seam_bytes=seam_bytes, stamp_sha=_raw_sha(seam_bytes))
+    # dom has NO bind record → source-not-bound.
+    _patch_journal(monkeypatch, {"dom": [], "prog": [_bind_record_named("prog", "p" * 64)]})
+    result = status_op.pack_status(experiment_dir=tmp_path, spec=PackStatusSpec())
+    assert result.packs["prog"].derived_from is not None
+    assert result.packs["prog"].derived_from.freshness == "source-not-bound"
+
+
+def test_legacy_pack_derived_from_serializes_as_null(tmp_path: Path, monkeypatch: Any) -> None:
+    """Memo hazard 4 pin: a legacy pack's entry emits ``"derived_from": null``.
+
+    ``cli/_dispatch.py`` serializes results via ``model_dump(mode='json')`` with NO
+    ``exclude_none``, so the additive optional field appears as ``null`` for every
+    legacy pack. This is ACCEPTED (do NOT touch the global serializer); pinned here.
+    """
+    vocab_sha = _write(tmp_path, _VOCAB_REL, b'["widgets.load_widget"]')
+    _write_manifest(tmp_path, fills_slots=[], vocab_sha=vocab_sha)
+    _write_interview(tmp_path, [{"pack": _PACK, "manifest": _MANIFEST_REL, "receipt_bindings": []}])
+    _patch_journal(monkeypatch, {_PACK: [_bind_record("m" * 64)]})
+    result = status_op.pack_status(experiment_dir=tmp_path, spec=PackStatusSpec())
+    entry = result.packs[_PACK]
+    assert entry.derived_from is None
+    # The dispatch serialization form (model_dump json, no exclude_none) shows null.
+    dumped = entry.model_dump(mode="json")
+    assert "derived_from" in dumped and dumped["derived_from"] is None
