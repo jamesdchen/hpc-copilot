@@ -17,10 +17,10 @@ relative to the `@primitive` registry.
 
 External consumers (agent harnesses, the in-process
 `validate_output` boundary check) read the JSON. Framework
-contributors edit the Pydantic. Pre-commit's `build-schemas`
+contributors edit the Pydantic. Pre-commit's `regen-all`
 `--check` gate fails CI when the two diverge.
 
-The `src/hpc_agent/schemas/` directory holds 244 `*.json` schema files
+The `src/hpc_agent/schemas/` directory holds the `*.json` schema files
 covering the agent-facing surface (count with
 `ls src/hpc_agent/schemas/*.json | wc -l` — this is the on-disk file
 count, not a hand-maintained literal). They break down as:

@@ -315,6 +315,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent program-init --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "program_init.input.json",
+    "name": "program-init",
+    "output_schema": "program_init.output.json",
+    "python": "hpc_agent.ops.pack.init_op.program_init",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Materialize (create) or migrate (adopt) a PROGRAM pack layer from a domain pack's audit_template seam: instantiate the program template (verbatim skeleton copy + provenance header in create mode; untouched in adopt mode), stamp the derived_from lineage MECHANICALLY into the sweep.json recipe, seal the manifest via the generic pack re-seal, and bind the packs (journaling old→new). Core never interprets template content and never composes a check argv from pack content — a caller-authored check (spec.check) is run in the experiment dir, else the domain receipt slots are reported as to-earn. Pure local read + file write + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "provenance_manifest.input.json",

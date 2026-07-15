@@ -102,6 +102,19 @@ def regen_all(*, write: bool) -> int:
     Runs ALL steps regardless of individual failures (run-all-report-all).
     """
     mode = "--write" if write else "--check"
+    if write:
+        # Keep the generated-artifact merge driver installed (repo-local git
+        # config; idempotent). --check stays a pure gate. Loudly degrading:
+        # a missing/failing installer never blocks regen.
+        ensure = REPO_ROOT / "scripts" / "merge_generated.py"
+        if ensure.is_file():
+            rc = subprocess.run(
+                [sys.executable, str(ensure), "ensure"], cwd=REPO_ROOT, check=False
+            ).returncode
+            if rc != 0:
+                print(f"WARN merge_generated.py ensure exited {rc}", file=sys.stderr)
+        else:
+            print("WARN scripts/merge_generated.py missing — driver not ensured", file=sys.stderr)
     print(f"regen_all ({mode}): {len(_STEPS)} steps")
     failed: list[str] = []
     for stem, check_argv, write_argv in _STEPS:

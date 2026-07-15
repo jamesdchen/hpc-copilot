@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/program_init.output.json",
+  "title": "program-init output data",
+  "description": "Echo of a ``program-init`` pass — what was written, stamped, and bound.\n\n``derived_from`` is the mechanically-stamped lineage; ``created_files`` the\nrelpaths written (empty for adopt's content files — adopt never byte-changes a\ntemplate); ``binds`` the packs bound/rebound with their new manifest shas;\n``check_ran``/``check_ok`` the caller-check outcome (a failing check is\nREPORTED, never raised); ``slots_to_earn`` the domain receipts still to earn\nwhen no check resolved; ``packs_optin`` the opt-in block for the interview to\npersist (init never writes interview.json — DC9).",
+  "type": "object",
+  "required": [
+    "program",
+    "mode",
+    "derived_from"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "program": {
+      "title": "Program",
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "create",
+        "adopt"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "derived_from": {
+      "$ref": "#/$defs/DerivedFromEcho"
+    },
+    "created_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Created Files",
+      "type": "array"
+    },
+    "binds": {
+      "items": {
+        "$ref": "#/$defs/ProgramBind"
+      },
+      "title": "Binds",
+      "type": "array"
+    },
+    "check_ran": {
+      "default": false,
+      "title": "Check Ran",
+      "type": "boolean"
+    },
+    "check_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Check Ok"
+    },
+    "slots_to_earn": {
+      "items": {
+        "$ref": "#/$defs/ProgramSlotToEarn"
+      },
+      "title": "Slots To Earn",
+      "type": "array"
+    },
+    "packs_optin": {
+      "items": {
+        "$ref": "#/$defs/PackOptInEcho"
+      },
+      "title": "Packs Optin",
+      "type": "array"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Honest mechanical note (e.g. pack-status stays empty until the interview persists packs_optin).",
+      "title": "Note"
+    }
+  },
+  "$defs": {
+    "DerivedFromEcho": {
+      "additionalProperties": false,
+      "description": "The stamped lineage — which domain seam the program was consumed from.\n\nMechanism identity + freshness evidence only: ``pack``/``seam`` identify the\nderivation edge, ``version`` is an opaque echo, ``sha`` the raw-bytes sha of\nthe consumed seam file (never compared for edge identity).",
+      "properties": {
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "seam": {
+          "title": "Seam",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "sha": {
+          "title": "Sha",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "seam",
+        "version",
+        "sha"
+      ],
+      "title": "program-init derived-from echo",
+      "type": "object"
+    },
+    "PackOptInEcho": {
+      "additionalProperties": false,
+      "description": "One opt-in entry the interview should persist under interview.json ``packs``.\n\n``program-init`` does NOT write interview.json (the interview primitive is the\none writer — DC9); it ECHOES the exact opt-in block so the on-ramp persists it.",
+      "properties": {
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "manifest": {
+          "title": "Manifest",
+          "type": "string"
+        },
+        "receipt_bindings": {
+          "items": {
+            "$ref": "#/$defs/ReceiptBindingEcho"
+          },
+          "title": "Receipt Bindings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pack",
+        "manifest"
+      ],
+      "title": "program-init pack opt-in echo",
+      "type": "object"
+    },
+    "ProgramBind": {
+      "additionalProperties": false,
+      "description": "One pack bound/rebound by ``program-init`` — its new manifest sha.",
+      "properties": {
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "manifest_sha": {
+          "title": "Manifest Sha",
+          "type": "string"
+        },
+        "rebound": {
+          "description": "True when a prior bind existed and the manifest sha moved (re-bind = drift).",
+          "title": "Rebound",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pack",
+        "manifest_sha",
+        "rebound"
+      ],
+      "title": "program-init bind",
+      "type": "object"
+    },
+    "ProgramSlotToEarn": {
+      "additionalProperties": false,
+      "description": "A domain receipt slot to earn after init, with its opaque caller check.\n\n``check`` is the caller-authored command the driving skill runs to earn the\nreceipt (from the interview receipt_bindings entry, when present); ``None``\nwhen the caller recorded none (the generic pack-record-receipt guidance\napplies). Core echoes it, never runs it here (DP2).",
+      "properties": {
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "check": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Check"
+        }
+      },
+      "required": [
+        "slot",
+        "pack"
+      ],
+      "title": "program-init slot to earn",
+      "type": "object"
+    },
+    "ReceiptBindingEcho": {
+      "additionalProperties": false,
+      "description": "One receipt-binding suggestion for the interview to persist (slot + pack).",
+      "properties": {
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "pack"
+      ],
+      "title": "program-init receipt binding echo",
+      "type": "object"
+    }
+  }
+}

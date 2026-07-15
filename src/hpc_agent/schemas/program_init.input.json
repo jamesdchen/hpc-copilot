@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/program_init.input.json",
+  "title": "program-init input spec",
+  "description": "Inputs to ``program-init`` — generate or adopt a program pack layer.",
+  "type": "object",
+  "required": [
+    "program",
+    "domain_manifest"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "program": {
+      "description": "The program pack slug to create/adopt (keys packs/<program>/).",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Program",
+      "type": "string"
+    },
+    "domain_manifest": {
+      "description": "Experiment-dir-relative path to the DOMAIN pack manifest whose audit_template seam is consumed as the lineage source (e.g. packs/quant/manifest.json). Read on disk; the seam file's raw-bytes sha is recorded as derived_from.sha (never caller-suppliable).",
+      "minLength": 1,
+      "title": "Domain Manifest",
+      "type": "string"
+    },
+    "mode": {
+      "default": "create",
+      "description": "'create' generates packs/<program>/ fresh from the domain skeleton; 'adopt' migrates an existing program pack onto its lineage without byte-changing any content file (the signed-template migration path).",
+      "enum": [
+        "create",
+        "adopt"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "template_relpath": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Experiment-dir-relative path for the program template file (create mode). Defaults to packs/<program>/templates/<program>_audit.py.",
+      "title": "Template Relpath"
+    },
+    "check": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional caller-authored check command core runs once after sealing (opaque — shlex-split, run shell=False in the experiment dir, never interpreted). Absent → the domain pack's receipt slots are reported as to-earn instead.",
+      "title": "Check"
+    },
+    "bind": {
+      "default": true,
+      "description": "Bind the packs after sealing (journaling the bind). Rarely disabled.",
+      "title": "Bind",
+      "type": "boolean"
+    }
+  }
+}

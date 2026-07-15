@@ -85,6 +85,46 @@
       "title": "pack dangling reference",
       "type": "object"
     },
+    "PackLineage": {
+      "additionalProperties": false,
+      "description": "The lineage stamp of a PROGRAM pack + its freshness against the bound source.\n\nAdditive/optional (P3 observability, DC10): present only when the pack's\nmanifest carries a ``derived_from`` stamp. ``pack``/``seam``/``version``/``sha``\necho the stamp; ``freshness`` compares the recorded ``sha`` against the\ncurrently-bound source pack's seam-file sha:\n\n* ``current`` — the source pack is bound and its seam sha matches the stamp.\n* ``behind`` — the source pack is bound but its seam sha differs (a re-init from\n  upstream or a skeleton upgrade moved it; the edge is NOT severed — freshness\n  evidence only, DC2).\n* ``source-not-bound`` — the named source pack is not an opted-in current bind,\n  so freshness cannot be established.",
+      "properties": {
+        "pack": {
+          "title": "Pack",
+          "type": "string"
+        },
+        "seam": {
+          "title": "Seam",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "sha": {
+          "title": "Sha",
+          "type": "string"
+        },
+        "freshness": {
+          "enum": [
+            "current",
+            "behind",
+            "source-not-bound"
+          ],
+          "title": "Freshness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "seam",
+        "version",
+        "sha",
+        "freshness"
+      ],
+      "title": "pack lineage",
+      "type": "object"
+    },
     "PackSlotStatus": {
       "additionalProperties": false,
       "description": "One caller-authored slot's receipt currency — mechanical, never interpreted.\n\n``status`` is the reduction outcome: ``current`` (a fresh, passed receipt),\n``failed`` (fresh receipt but ``passed=false``), ``stale`` (a receipt exists\nbut content it covered drifted — stale = missing by construction), or\n``missing`` (no receipt for the slot). ``passed`` is the recorded boolean\nwhen a receipt exists; ``reason`` is an optional honest note.",
@@ -170,6 +210,18 @@
           },
           "title": "Dangling",
           "type": "array"
+        },
+        "derived_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackLineage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The PROGRAM-pack lineage stamp + freshness, when the manifest carries a ``derived_from`` (P3 observability). ``None`` for a lineage-root (domain) pack or a manifest with no stamp — serialized as ``null`` for legacy packs (an additive optional field; the dispatch serializer does not exclude_none)."
         },
         "audit_template": {
           "anyOf": [
