@@ -194,14 +194,13 @@ graph that used to hold them together is gone.
 When you add a new invariant or change one of the above:
 
 1. Edit the Python SoT (the table above tells you which file).
-2. Run the regen scripts (or `pre-commit run -a`):
-   - `scripts/build_schemas.py --write` regenerates JSON schemas.
-   - `scripts/build_primitive_frontmatter.py --write` regenerates
-     `docs/primitives/<name>.md` frontmatter.
-   - `scripts/build_primitive_index.py` regenerates the catalog
-     table.
-   - `scripts/build_operations_index.py` regenerates
-     `docs/generated/operations.md`.
+2. Run the full regen pipeline (or `pre-commit run -a`):
+   `python scripts/regen_all.py --write` regenerates every generated
+   artifact in dependency order — JSON schemas, baked `operations.json`,
+   primitive frontmatter, the primitive catalog table
+   (`docs/primitives/README.md`), the operations index
+   (`docs/generated/operations.md`), and the CLI verb-module map — then
+   runs the pending-docs check.
 3. Update prose docs that explain WHY the invariant exists if the
    semantic changed (`cli-spec.md`, `boundary-contract.md`,
    `config-precedence.md`).

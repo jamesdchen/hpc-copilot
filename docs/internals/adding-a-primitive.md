@@ -1,8 +1,9 @@
 # Adding a new primitive
 
 Recipe for adding a wire-surface primitive (atom or workflow) to
-hpc-agent. Mirrors the patterns the existing 167 primitives follow;
-once you know the recipe the per-primitive work is mechanical.
+hpc-agent. Mirrors the patterns the existing primitives follow
+(`hpc-agent capabilities` is the live count); once you know the recipe
+the per-primitive work is mechanical.
 
 ## Decide first
 
@@ -96,15 +97,17 @@ inline-vs-cross-file-`$ref` decision stays automatic.
 
 Add `(<Name>Spec, "<name>.input.json")` and/or
 `(<Name>Result, "<name>.output.json")` to `SCHEMA_REGISTRY` in
-`scripts/build_schemas.py`. Run:
+`scripts/build_schemas.py`. Run the one regen recipe (schemas are its
+first step):
 
 ```bash
-uv run python scripts/build_schemas.py --write
+uv run python scripts/regen_all.py --write
 ```
 
 The JSON file lands under `hpc_agent/schemas/`. You don't edit it
 by hand again — the Pydantic model is the SoT, the JSON is
-regenerated.
+regenerated. (This is the same command you re-run in step 7 once the
+atom and doc exist; it is idempotent.)
 
 ### 3. Decorate the atom
 
@@ -233,14 +236,21 @@ auto-generated. Only write the body.
 ### 7. Run all the regen + lint gates
 
 ```bash
-uv run python scripts/build_primitive_frontmatter.py --write
-uv run python scripts/build_primitive_index.py
-uv run python scripts/build_operations_index.py
-uv run python scripts/build_schemas.py --write
+uv run python scripts/regen_all.py --write
 uv run python scripts/lint_primitive_doc_templates.py
 ```
 
-Pre-commit runs all five. CI's `--check` mode trips on any drift.
+`regen_all.py` runs all six generators in dependency order (schemas →
+baked `operations.json` → primitive frontmatter → primitive index →
+operations index → verb-module map) plus the
+`check_no_pending_primitive_docs` gate — one recipe instead of the
+divergent per-doc enumerations that used to drift. A new *ungrouped*
+verb also regenerates `cli/_verb_module_map.py` (the CLI single-verb
+fast-path map): an earlier recipe omitted that step, so a session
+following it shipped a stale map.
+
+Pre-commit runs regen-all and the doc-template lint. CI's `--check` mode
+(`python scripts/regen_all.py --check`) trips on any drift.
 
 ### 8. Tests
 
