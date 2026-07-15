@@ -98,6 +98,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "trace-render",
         "pack-bind",
         "pack-record-receipt",
+        "program-init",
         "pack-refresh",
         "pack-status",
         "audit-preflight",

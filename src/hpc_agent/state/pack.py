@@ -163,7 +163,7 @@ class DerivedFrom:
       skeleton upgrade moves the sha but keeps the edge; DC2).
     * ``seam`` — the consumed :data:`SEAM_NAMES` member (``audit_template`` at v1).
     * ``version`` — the source pack's ``version`` string at init time. OPAQUE echo,
-      never compared by core (mirrors :class:`PackManifest` version discipline).
+      never compared by core (same version discipline as :class:`PackManifest`).
     * ``sha`` — the raw-bytes SHA-256 (64-char lowercase hex) of the seam FILE
       actually consumed at init. Freshness EVIDENCE only: a resolver/status may
       disclose ``lineage behind`` when it differs from the currently-bound source

@@ -81,8 +81,20 @@ _STEPS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 # Canonical ordered list of the pipeline's script stems. Exported so other
 # units read the pipeline membership/order from ONE place (the pre-commit
 # hooks may collapse to a single ``regen-all`` hook, so the tuple — not the
-# hook list — is the source of truth).
-REGEN_SCRIPTS: tuple[str, ...] = tuple(stem for stem, _check, _write in _STEPS)
+# hook list — is the source of truth). A LITERAL tuple: the frozen seam is
+# consumed by static AST (tests/contracts/test_doc_frozen_counts.py), so it
+# must be parseable without executing this module; the assert below pins it
+# lockstep with _STEPS.
+REGEN_SCRIPTS: tuple[str, ...] = (
+    "build_schemas",
+    "bake_operations_json",
+    "build_primitive_frontmatter",
+    "build_primitive_index",
+    "build_operations_index",
+    "build_verb_module_map",
+    "check_no_pending_primitive_docs",
+)
+assert tuple(stem for stem, _check, _write in _STEPS) == REGEN_SCRIPTS
 
 
 def _run_step(stem: str, argv: tuple[str, ...]) -> int:

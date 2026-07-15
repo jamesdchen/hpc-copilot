@@ -1,5 +1,5 @@
 ---
-status: landed
+status: shipped
 ---
 # Program init — materializing the three-tier pack architecture (build spec)
 

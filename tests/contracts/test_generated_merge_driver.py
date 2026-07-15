@@ -98,7 +98,15 @@ class TestManifestLockstep:
             assert resolved != "generated", f"{rel} unexpectedly carries the driver"
 
     def test_no_other_gitattributes_carries_merge_generated(self):
-        for path in REPO_ROOT.rglob(".gitattributes"):
+        tracked = subprocess.run(
+            ["git", "ls-files", "--", "*.gitattributes", ".gitattributes"],
+            cwd=str(REPO_ROOT),
+            timeout=60,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.splitlines()
+        for path in (REPO_ROOT / rel for rel in tracked):
             if path.resolve() == ROOT_GITATTRIBUTES.resolve():
                 continue
             text = path.read_text(encoding="utf-8")
@@ -182,6 +190,7 @@ def _git(args: list[str], cwd: Path, env: dict[str, str]) -> subprocess.Complete
         ["git", *args],
         cwd=str(cwd),
         env=env,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -192,6 +201,7 @@ def _check_attr_merge(cwd: Path, rel: str) -> str:
     result = subprocess.run(
         ["git", "check-attr", "merge", "--", rel],
         cwd=str(cwd),
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -238,6 +248,7 @@ def _ensure(repo: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "scripts/merge_generated.py", "ensure"],
         cwd=str(repo),
+        timeout=60,
         env=env,
         capture_output=True,
         text=True,
@@ -280,6 +291,7 @@ class TestBehavioralFiresAndPasses:
             return subprocess.run(
                 [sys.executable, "scripts/merge_generated.py", "check"],
                 cwd=str(repo),
+                timeout=60,
                 env=env,
                 capture_output=True,
                 text=True,

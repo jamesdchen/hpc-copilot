@@ -239,6 +239,7 @@ def _run_gate_subprocess(target: str) -> bool:
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-o", "addopts=", *args],
         cwd=_REPO_ROOT,
+        timeout=600,
         capture_output=True,
     )
     return proc.returncode == 0
