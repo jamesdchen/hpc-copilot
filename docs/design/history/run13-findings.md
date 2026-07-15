@@ -103,3 +103,39 @@ correctness unchanged (a stale mtime+size collision is the same risk
 rsync's default mode accepts; a --checksum-style escape hatch can force
 full re-hash). Compounded by finding 4 (the tree is 4x inflated) and
 finding 3 (the scan itself was paid twice).
+
+## 7. Canary verifier polls a `-canary2` sidecar that was never pushed — false-negative blocks the fleet boundary
+`[core]` Live (job 10284428_1 COMPLETED exit 0, fresh
+results/causal_tune_linear/reclasso/sentiment/chunk_24000/_runtime.json
+with correct axis bindings, run causal_tune_linear_fixmask-82ba92e8-canary):
+verify_canary reported `reporter_unreachable` because it polled a
+`-canary2`-suffixed sidecar that was never pushed to the remote, while the
+real `-canary` sidecar is present. Same class as the 07-09 punch-list
+canary-verifier false-negative — a RECURRENCE, still unfixed at the
+3cb3db99 wheel. The S2 brief then proposed "fix before main" against a
+canary that in fact passed; the human overrode with direct evidence (the
+07-11 precedent). Fix class: one-definition of the canary sidecar name —
+the verifier must derive the sidecar path from the SAME recorded identity
+the submit wrote (never re-derive an attempt suffix); a missing sidecar
+under the derived name should disclose WHICH name it polled and which
+sibling names exist.
+
+## 8. Relay-audit correction FLOOD — 10 code-appended corrections, most false-positive
+`[core]` Live, same boundary: the Stop hook appended TEN corrections to one
+fleet-boundary relay. Real signal ≈ zero; the flood classes: (a) DATE
+FRAGMENTS tokenized as numeric claims ('07-09'/'07-11' session references
+→ '07','09','11' each "matches no source number"); (b) the brief's OWN
+cost line rejected ('300 tasks × 4 cpus × 3h = 3600 core-hours' → '300',
+'3', '3600' unsupported — the S2 brief text is not in this run-scope's
+verify corpus despite the F-Q ruling adding briefs); (c) scheduler + task
+artifacts outside corpus (job elapsed 1m39s, _runtime.json 97s vs journal
+82); (d) '300-task' flagged as a run-id-shaped token; (e) a VERBATIM QUOTE
+of the code-rendered brief's decision line ("canary failed verification")
+flagged as a state claim contradicting journal 'complete'. Quoting the
+gate's own rendered output must be corpus-supported by construction.
+Fix classes: corpus completeness (the CURRENT block brief + scheduler
+query results + pulled task artifacts are legitimate sources for the runs
+they name), tokenizer precision (date fragments, unit-suffixed numbers,
+hyphenated count phrases), and dedup/rate-bounding so one relay never
+carries 10 corrections of which 9 are noise — a flood teaches the operator
+to ignore the gate (the false-positive cost IS a conduct-surface cost).
