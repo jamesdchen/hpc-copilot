@@ -653,6 +653,13 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
         "results_table": _results_table(agg.aggregated_metrics),
         "combined_waves": agg.combined_waves,
         "failed_waves": agg.failed_waves,
+        # Rank 9 (#254) disclosure: which reduce engine produced the numbers —
+        # ``cluster_final`` (the default: cross-wave reduce ran on the cluster,
+        # one KB pull), ``local_reduce`` / ``per_task_fallback`` (the local
+        # pull-and-reduce, i.e. the kill-switch or the cluster-final fallback),
+        # ``cluster_reduce`` / ``pure_api``. Surfaced so the human sees the
+        # transfer shape the harvest paid, and can spot a silent downgrade.
+        "reduce_path": agg.reduce_path,
         # Code-extracted error sweep — the deterministic failure digest the human
         # sizes their interpretation against (never the LLM's read of raw logs).
         "error_sweep": {

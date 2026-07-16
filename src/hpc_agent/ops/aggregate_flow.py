@@ -133,6 +133,15 @@ class AggregateFlowResult:
     nonempty_failing_task_ids: list[int] | None = None
     columns_checked: bool = False
     column_violations: list[dict[str, Any]] | None = None
+    #: Which reduce engine produced ``aggregated_metrics`` (rank 9 disclosure).
+    #: ``"cluster_final"`` = the #254 cross-wave reduce ran ON THE CLUSTER and only
+    #: a single KB ``metrics_aggregate.json`` was pulled (the default when the
+    #: combiner is deployed and its activation resolves); ``"local_combiner"`` =
+    #: the wave partials were pulled and reduced locally (the fallback, or the
+    #: ``HPC_CLUSTER_FINAL_REDUCE=0`` opt-out); ``"cluster_reduce"`` / ``"pure_api"``
+    #: for those short-circuit branches. Surfaced verbatim in the aggregate brief
+    #: so the human sees which transfer shape the harvest paid.
+    reduce_path: str | None = None
     #: Per-scope PRIOR look counts recorded by this reduction —
     #: ``{tag: {"prior_looks": int, "distinct_lineages": int}}`` — or ``None``
     #: for a scope-less run (existing consumers untouched). Two plain integers
@@ -1447,6 +1456,7 @@ def _aggregate_flow_impl(
             aggregated_metrics=aggregated,
             summaries_dir_local=None,
             escalation_reason=None,
+            reduce_path="pure_api",
             scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
@@ -1528,6 +1538,7 @@ def _aggregate_flow_impl(
             # under ``combiner_dir_local`` already.
             summaries_dir_local=None,
             escalation_reason=None,
+            reduce_path="cluster_reduce",
             scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
@@ -1562,19 +1573,61 @@ def _aggregate_flow_impl(
             if record is None:  # pragma: no cover — defensive
                 raise errors.JournalCorrupt(f"record vanished for {run_id!r}")
 
-    # Obtain the aggregated metrics + the incomplete-wave set. By default this
-    # pulls the cluster ``_combiner/`` partials and reduces them locally; with
-    # ``HPC_CLUSTER_FINAL_REDUCE=1`` (#254) the cross-wave reduce runs ON THE
-    # CLUSTER and only the single KB ``metrics_aggregate.json`` is pulled —
-    # one RTT, not hundreds of wave_*.json transfers. Both paths yield the same
-    # ``(aggregated_metrics, incomplete_waves)``, so the rest of the flow is
-    # identical; the local path stays the default (opt-in, debug-reachable).
+    # Obtain the aggregated metrics + the incomplete-wave set. Rank 9 (#254): the
+    # cross-wave reduce now runs ON THE CLUSTER by DEFAULT — one RTT + a single KB
+    # ``metrics_aggregate.json`` pull instead of the hundreds of ``wave_*.json``
+    # transfers (re-paid on every re-aggregate) the local pull-and-reduce path
+    # costs. The standing ruling shape: eliminate the transfer rather than delta
+    # it. The env var is now the OPT-OUT debug knob:
+    #
+    #   * ``HPC_CLUSTER_FINAL_REDUCE=0`` — force the local pull-and-reduce (the
+    #     kill switch; e.g. to debug the combiner or on a login node whose
+    #     python3 cannot run the stdlib combiner).
+    #   * unset (default) — run cluster-final WHEN THE COMBINER IS DEPLOYED (the
+    #     run carries a wave_map → the combiner ``--final`` has partials to merge);
+    #     on ANY deterministic failure (too-old login python, activation
+    #     unresolved) fall back to the local reduce automatically — the fallback
+    #     chain the local path already is. A no-combiner ``@register_run`` sweep
+    #     (empty wave_map) has NO wave partials to reduce cluster-side, so it skips
+    #     straight to the local per-task fallback — no wasted cluster round-trip.
+    #   * ``HPC_CLUSTER_FINAL_REDUCE=1`` — legacy strict opt-in: run cluster-final
+    #     UNCONDITIONALLY with NO local fallback (a failure raises), for callers
+    #     that want to prove the cluster path end-to-end.
+    #
+    # Both paths yield the same ``(aggregated_metrics, incomplete_waves)`` so the
+    # rest of the flow is identical; ``reduce_path`` discloses which one ran.
     combiner_local = out / "_combiner"
-    if os.environ.get("HPC_CLUSTER_FINAL_REDUCE") == "1":
-        aggregated, incomplete_waves = _cluster_final_reduce(
-            experiment_dir, run_id, record=record, out=out
-        )
-    else:
+    kill_switch = os.environ.get("HPC_CLUSTER_FINAL_REDUCE")
+    reduce_path = "local_combiner"
+    aggregated = {}
+    incomplete_waves: list[int] = []
+    used_cluster_final = False
+    # "combiner deployed" = the run has waves (a wave_map): its partials are what
+    # the cluster ``--final`` merges. The strict opt-in ("1") overrides the gate.
+    attempt_cluster_final = kill_switch == "1" or (kill_switch != "0" and bool(wave_map_keys))
+    if attempt_cluster_final:
+        try:
+            aggregated, incomplete_waves = _cluster_final_reduce(
+                experiment_dir, run_id, record=record, out=out
+            )
+            reduce_path = "cluster_final"
+            used_cluster_final = True
+        except errors.RemoteCommandFailed as exc:
+            if kill_switch == "1":
+                # Strict opt-in: the caller asked to prove the cluster path — do
+                # not silently downgrade; re-raise the deterministic failure.
+                raise
+            # Default: disclose the downgrade and fall through to the local
+            # reduce. The cluster combiner isn't deployed / its login python3 is
+            # too old / activation didn't resolve — the local pull-and-reduce is
+            # the fallback that still produces the aggregate.
+            print(
+                f"[aggregate-flow] cluster-final reduce unavailable for run_id "
+                f"{run_id!r} — falling back to the local pull-and-reduce: "
+                f"{str(exc)[:200]}"
+            )
+
+    if not used_cluster_final:
         aggregated, incomplete_waves, reduce_source = _combiner_only_reduce(
             experiment_dir,
             run_id,
@@ -1589,14 +1642,18 @@ def _aggregate_flow_impl(
             # run #10 as a harvest gap. Absent/blank sidecar → metrics.json.
             summary_name=resolved_summary_artifact(sidecar_for_cmd),
         )
-        # Persist a durable local aggregate artifact on the DEFAULT path. The
+        reduce_path = reduce_source
+        # Persist a durable local aggregate artifact on the LOCAL-reduce path. The
         # combiner-only reduce (and its per-task fallback) return
         # ``aggregated_metrics`` inline and otherwise persist only the pulled
         # ``_combiner/wave_*.json`` partials — there is no single durable file a
         # later consumer (verify-reproduction, which diffs two runs) can
         # byte-read. Mirror the cluster-final path's
         # ``_aggregated/<run_id>/metrics_aggregate.json``. Best-effort: a failed
-        # write warns loudly and never aborts the harvest.
+        # write warns loudly and never aborts the harvest. (The cluster-final path
+        # pulls its OWN richer ``metrics_aggregate.json`` to the same canonical
+        # location, so it must NOT be routed through here — see
+        # :func:`_persist_local_aggregate`.)
         _persist_local_aggregate(
             out,
             run_id,
@@ -1775,5 +1832,6 @@ def _aggregate_flow_impl(
         nonempty_failing_task_ids=nonempty_failing,
         columns_checked=columns_checked,
         column_violations=column_violations,
+        reduce_path=reduce_path,
         scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
     )
