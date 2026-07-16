@@ -2,9 +2,11 @@
 
 The engine's contract mirrors the broker's: reuse ONE persistent connection
 per host, preserve split stdout/stderr and the real remote exit code, gate the
-connection open on the circuit breaker, hold a per-host slot while open, and
-degrade to :class:`EngineUnavailable` (never a hang, never a wrong answer) so
-the ssh seam can fall back to one-shot.
+connection open on the circuit breaker, hold a per-host slot per in-flight op
+(connect + each command window, released when the connection goes idle — the
+2026-07-16 run-14 correction, was "held while open"), and degrade to
+:class:`EngineUnavailable` (never a hang, never a wrong answer) so the ssh seam
+can fall back to one-shot.
 
 No cluster and no sshd: the module-level ``_connect`` coroutine seam is
 monkeypatched to return a STUB connection whose ``run()`` returns canned
@@ -321,30 +323,140 @@ def test_classification_seam_is_consulted_fatal_vs_throttle(
     assert any("[throttle]" in str(d) for d in failures)
 
 
-def test_slot_held_while_connected_and_released_on_close(
+def test_warm_idle_connection_holds_no_slot(
     engine: _Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Invariant 2: the persistent connection holds a slot for its lifetime and
-    frees it at close (here via shutdown_all)."""
+    """Invariant 2, run-14 correction (FLIPS the old 'slot-held-while-open' pin):
+    a warm-but-idle connection holds ZERO slots. This is the starvation scenario
+    directly — a warm ``status-watch`` connection between polls no longer blocks a
+    concurrent op. After a completed command the connection stays open (reused on
+    the next run), yet a concurrent acquirer can claim BOTH per-host slots under
+    the default cap of 2; under the old whole-life hold only ONE would be free and
+    the second acquire would block for SLOT_WAIT_MAX_SEC then SshSlotWaitTimeout.
+
+    Uses the REAL slot machinery (the autouse journal-home fixture isolates
+    state), which is the whole point — the fix lives in the acquire/release
+    lifecycle, not in a stub."""
     monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
-    acquired: list[str] = []
-    released: list[object] = []
-
-    def _acquire(*_a: object, **_k: object) -> str:
-        acquired.append("t")
-        return "SLOT"
-
-    monkeypatch.setattr(ssh_slots, "acquire_slot", _acquire)
-    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
     _install_connect(monkeypatch, lambda _t: _StubConn())
-
     engine.run("echo x", ssh_target="u@h", timeout=15)
-    assert acquired == ["t"]  # one slot claimed at open
-    assert released == []  # still held while connected
-    engine.run("echo y", ssh_target="u@h", timeout=15)
-    assert acquired == ["t"]  # reused — no second claim
-    engine.shutdown_all()
-    assert released == ["SLOT"]  # freed at close
+    assert "h" in engine._conns  # warm connection retained (reusable)
+    # The warm-but-idle connection holds no slot: both per-host slots are free.
+    t1 = ssh_slots.acquire_slot("u@h")
+    t2 = ssh_slots.acquire_slot("u@h")
+    assert t1 is not None and t2 is not None  # cap=2, BOTH claimable → conn holds 0
+    ssh_slots.release_slot(t1)
+    ssh_slots.release_slot(t2)
+    # Reuse still works after the concurrent acquirer released — no leaked state.
+    r = engine.run("echo y", ssh_target="u@h", timeout=15)
+    assert r.returncode == 0
+
+
+def test_inflight_command_holds_exactly_one_slot(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant 2, the other half: while a command is actually in flight the
+    connection DOES hold exactly one per-host slot (the burst bound the slot
+    exists for) — and once the command completes the warm connection drops back to
+    zero. Real slot machinery; the connect slot is already released by the time
+    the command is in flight, so exactly one file exists."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    started = threading.Event()
+    release = threading.Event()
+    conn = _BlockingConn(started, release)
+    _install_connect(monkeypatch, lambda _t: conn)
+
+    box: dict[str, object] = {}
+
+    def _worker() -> None:
+        try:
+            box["cp"] = engine.run("slow", ssh_target="u@h", timeout=30)
+        except BaseException as exc:  # noqa: BLE001 — record for the assertion
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_worker)
+    worker.start()
+    try:
+        assert started.wait(5.0), "the command never reached the in-flight state"
+        held = [p for p in ssh_slots.slot_paths("h") if p.exists()]
+        assert len(held) == 1, "an in-flight command must hold exactly one slot"
+        release.set()
+        worker.join(5.0)
+    finally:
+        release.set()
+        worker.join(5.0)
+    assert "exc" not in box, f"the command failed: {box.get('exc')!r}"
+    # Completed → warm-idle → holds zero slots (freed in run()'s finally).
+    assert [p for p in ssh_slots.slot_paths("h") if p.exists()] == []
+
+
+def test_concurrent_inflight_commands_are_bounded_to_the_cap(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant 2, the burst guard is INTACT: two commands multiplexed IN FLIGHT
+    on one warm connection hold TWO slots (= the default cap of 2), so a third
+    concurrent connection attempt to the host blocks — the MaxStartups burst the
+    limiter exists to prevent is still bounded, even though warm-idle connections
+    now hold nothing. Real slot machinery; SLOT_WAIT_MAX_SEC shrunk so the third
+    attempt bounds out fast."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "SLOT_WAIT_MAX_SEC", 0.4)
+    reached_two = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    state = {"inflight": 0}
+
+    class _MultiBlockingConn(_StubConn):
+        async def run(  # type: ignore[override]
+            self, cmd: str, *, check: bool = False, timeout: float | None = None
+        ) -> _StubResult:
+            import asyncio
+
+            self.run_calls.append(cmd)
+            with lock:
+                state["inflight"] += 1
+                if state["inflight"] >= 2:
+                    reached_two.set()
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+            with lock:
+                state["inflight"] -= 1
+            return _StubResult(returncode=0, stdout="done")
+
+    conn = _MultiBlockingConn()
+    _install_connect(monkeypatch, lambda _t: conn)
+
+    box: dict[str, BaseException] = {}
+
+    def _worker(tag: str) -> None:
+        try:
+            engine.run(f"cmd-{tag}", ssh_target="u@h", timeout=30)
+        except BaseException as exc:  # noqa: BLE001 — record for the assertion
+            box[tag] = exc
+
+    workers = [threading.Thread(target=_worker, args=(t,)) for t in ("a", "b")]
+    for w in workers:
+        w.start()
+    try:
+        assert reached_two.wait(5.0), "both commands never reached the in-flight state"
+        # Two in-flight commands hold both slots → a third acquirer must block and
+        # bound out with SshSlotWaitTimeout (the burst guard fires).
+        from hpc_agent.errors import SshSlotWaitTimeout
+
+        with pytest.raises(SshSlotWaitTimeout):
+            ssh_slots.acquire_slot("u@h")
+        held = [p for p in ssh_slots.slot_paths("h") if p.exists()]
+        assert len(held) == 2, "two in-flight commands must hold exactly the cap (2) slots"
+        release.set()
+        for w in workers:
+            w.join(5.0)
+    finally:
+        release.set()
+        for w in workers:
+            w.join(5.0)
+    assert not box, f"a bounded command unexpectedly failed: {box!r}"
+    # Both done → warm-idle → zero slots held.
+    assert [p for p in ssh_slots.slot_paths("h") if p.exists()] == []
 
 
 def test_quiet_live_connection_is_reused_not_reaped_on_next_run(
@@ -494,43 +606,41 @@ def test_run_deadline_does_not_fire_for_a_fast_command(
 # --- F-B residual: idle-close the pool (background sweep + slot release) ------
 
 
-def test_sweep_idle_closes_idle_connection_and_frees_slot(
+def test_sweep_idle_closes_idle_connection_session(
     engine: _Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F-B fires-test: a connection idle past the threshold is closed by the
-    sweep — WITHOUT a triggering run() — and its per-host slot is released."""
+    """F-B fires-test (run-14 correction): a connection idle past the threshold is
+    closed by the sweep — WITHOUT a triggering run() — returning its idle
+    login-node session. It no longer FREES A SLOT (the warm-idle connection
+    already holds none since the per-command release), so the assertion is on the
+    session close + zero leaked slots, not on a slot-release count."""
     monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
-    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
-    released: list[object] = []
-    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
     monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)  # everything is "idle"
-    _install_connect(monkeypatch, lambda _t: _StubConn())
+    conn = _StubConn()
+    _install_connect(monkeypatch, lambda _t: conn)
     engine.run("echo x", ssh_target="u@h", timeout=15)
-    assert "h" in engine._conns and released == []  # held while (nominally) active
+    # Already zero slots held while warm-idle (the whole point of the fix).
+    assert "h" in engine._conns
+    assert [p for p in ssh_slots.slot_paths("h") if p.exists()] == []
     engine._sweep_idle()
     assert "h" not in engine._conns  # reaped by the sweep alone (no second run())
-    assert released == ["SLOT"]  # slot freed on idle-close (the residual's crux)
+    assert conn.closed is True  # the idle login-node session was closed
+    assert [p for p in ssh_slots.slot_paths("h") if p.exists()] == []  # still no leak
 
 
 def test_sweep_idle_leaves_an_active_connection(
-    engine: _Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """F-B passes-test: a freshly-used connection (idle ≤ threshold) is never
-    reaped and keeps its slot."""
-    # A real Path token: the connection survives the test, so the engine
-    # fixture's teardown shutdown_all releases it through the (restored, real)
-    # release_slot — which unlinks a Path (a str token would AttributeError).
-    token = tmp_path / "slot"  # type: ignore[operator]
+    reaped by the sweep and stays reusable."""
     monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
-    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: token)
-    released: list[object] = []
-    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
     monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", 3600.0)
     _install_connect(monkeypatch, lambda _t: _StubConn())
     engine.run("echo x", ssh_target="u@h", timeout=15)
     engine._sweep_idle()
     assert "h" in engine._conns  # not idle → untouched
-    assert released == []
+    # Warm-idle between commands holds no slot regardless of the sweep.
+    assert [p for p in ssh_slots.slot_paths("h") if p.exists()] == []
 
 
 class _BlockingConn(_StubConn):
@@ -607,27 +717,24 @@ def test_background_sweeper_reaps_without_a_triggering_run(
     engine: _Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """F-B fires-test (the real seam): the background reaper thread — started on
-    open — closes an idle connection and frees its slot with NO further run(),
-    which is exactly the immortal mcp-serve case the residual describes."""
+    open — closes an idle connection's login-node session with NO further run(),
+    which is exactly the immortal mcp-serve case the residual describes. Since the
+    run-14 correction the slot is already free while idle, so the observable is the
+    connection close (and no leaked slot), not a slot-release."""
     import time
 
     monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
-    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
-    released: list[object] = []
-    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
     monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)
     monkeypatch.setattr(ssh_engine, "_SWEEP_INTERVAL_SEC", 0.05)  # sweep fast for the test
-    _install_connect(monkeypatch, lambda _t: _StubConn())
+    conn = _StubConn()
+    _install_connect(monkeypatch, lambda _t: conn)
     engine.run("echo x", ssh_target="u@h", timeout=15)  # opens conn + starts the reaper
-    # Poll for BOTH effects: the conn unregisters early in _discard (under the
-    # guard) while the slot release happens only after the bounded close, so
-    # asserting the release the instant the conn vanishes is a race (the slow
-    # py3.10 CI runner lost it, 2026-07-09).
     deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and ("h" in engine._conns or not released):
+    while time.monotonic() < deadline and "h" in engine._conns:
         time.sleep(0.05)
     assert "h" not in engine._conns, "the background reaper never closed the idle connection"
-    assert released == ["SLOT"]
+    assert conn.closed is True  # the idle login-node session was closed
+    assert [p for p in ssh_slots.slot_paths("h") if p.exists()] == []  # no leaked slot
 
 
 def test_shutdown_all_closes_the_connection(

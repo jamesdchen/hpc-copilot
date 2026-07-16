@@ -25,10 +25,13 @@ is default-ON process-wide (:func:`hpc_agent.infra.ssh_engine.engine_enabled` �
 an unset ``HPC_SSH_ENGINE`` now selects it). ``mcp-serve`` is still special: it
 is the one verb that runs as a long-lived process, and so the one place a
 persistent SSH connection AMORTISES across many commands — the outsourced command
-channel's idle sweeper + slot-held-while-open invariant
-(:mod:`hpc_agent.infra.ssh_engine` header, invariant 2) were hardened *from
-mcp-serve incidents* (the run-#10 F-B residual: an mcp-serve holding its per-host
-slot until process exit). So :func:`cmd_mcp_serve` (and nowhere else — no
+channel's idle sweeper + slot-held-per-in-flight-op invariant
+(:mod:`hpc_agent.infra.ssh_engine` header, invariant 2 — the 2026-07-16 run-14
+correction: a slot is held around each connect + command window and freed when
+the connection goes idle, so a warm-idle connection holds none) were hardened
+*from mcp-serve incidents* (the run-#10 F-B residual: an mcp-serve holding its
+per-host slot until process exit — now closed by that per-command release). So
+:func:`cmd_mcp_serve` (and nowhere else — no
 import-time side effect) PINS the engine value explicitly via ``setdefault`` — no
 longer to *turn it on* (the default already is) but to make the effective engine
 visible in every downstream env echo, honouring a user-preset value, and pinning

@@ -5,9 +5,10 @@ a native ``ssh -T host /bin/sh`` process framed with nonce sentinels and two
 reader threads). That broker WORKS, but it re-implements a command channel —
 stream separation, exit-code plumbing, deadline enforcement, framing safety —
 that a real SSH library already owns. This engine keeps the broker's *shape*
-(one persistent connection per host, breaker-gated open, slot-held-while-open,
-idle self-close, hard fallback to one-shot) and hands the transport to
-``asyncssh``.
+(one persistent connection per host, breaker-gated open, a per-host slot held
+per in-flight op — connect + each command window — released when the connection
+goes idle, idle self-close, hard fallback to one-shot) and hands the transport
+to ``asyncssh``.
 
 Why the move is worth a dependency:
 
@@ -51,11 +52,32 @@ Design, and the ban-safety invariants it preserves (each has a test):
   :func:`ssh_circuit.record_connection_success`. Run-time failures do NOT
   touch the breaker — they discard the connection, and the NEXT call's
   reconnect is the breaker-gated attempt (same division as the broker).
-* **Invariant 2 — slot-held-while-open.** The persistent connection holds one
-  :mod:`hpc_agent.infra.ssh_slots` per-host slot for its whole lifetime
-  (acquired at connect, released at close), so it counts against the fleet's
-  per-host connection cap. That cap is the connection-RATE courtesy — a
+* **Invariant 2 — slot-held-per-in-flight-op, released-when-idle** (the
+  2026-07-16 run-14 correction; was "slot-held-while-open"). A
+  :mod:`hpc_agent.infra.ssh_slots` per-host slot exists to bound the
+  MaxStartups BURST — concurrent connection ESTABLISHMENTS and in-flight
+  commands — NOT open-but-idle multiplexed connections. An idle warm
+  connection is not a "startup", so it must NOT hold a slot. The engine
+  therefore holds a slot around (a) the CONNECT/establish (:meth:`_Engine._open`,
+  released the instant the connection is up) and (b) each in-flight ``run()``
+  command window (:meth:`_Engine.run`, released when the command completes) —
+  and a connection that is merely open and quiet between commands holds ZERO
+  slots. This decouples slot-hold from connection-LIFETIME: N warm connections
+  can coexist under a cap of 2 CONCURRENT in-flight ops, so an active
+  ``status-watch`` frees its slot between polls for a concurrent harvest (the
+  run-14 starvation: watch(1) + harvest(1) = the cap, and any third fleet op
+  starved with :class:`SshSlotWaitTimeout` because the whole-life hold never
+  freed the watch's slot). That cap is the connection-RATE courtesy — a
   cluster-social POLICY the framework owns; it stays hand-rolled by design.
+
+  Deadlock-free by construction: the connect slot is RELEASED before ``run()``
+  acquires the per-command slot, so a single open+run sequence never holds two
+  slots at once — it can never block waiting for a second slot it would have to
+  release the first to obtain (the "acquire-for-connect, released before the
+  command's acquire" choice, over a re-entrant hold). ``run()`` bumps the
+  ``inflight`` veto BEFORE the (bounded) per-command slot wait, so the courtesy
+  sweeper cannot recycle the connection out from under a command that is queued
+  for a slot.
 
 Liveness is asyncssh-native (the G4 library-lifecycle shrink, ruled
 2026-07-12). The framework does NOT hand-roll a liveness probe or an
@@ -72,13 +94,17 @@ re-executed one-shot). Instead:
   framework timer that severs a connection to "detect" death — the library owns
   that, and an in-flight command is NEVER cut by a framework idle rule (the
   ``inflight`` counter vetoes any recycle while a command runs).
-* **The one retained framework recycle is a SLOT/SESSION courtesy, not a
+* **The one retained framework recycle is a SESSION courtesy, not a
   liveness mechanism.** A connection that has gone QUIET past
   :data:`IDLE_CLOSE_SEC` — and has ZERO commands in flight — is closed to free
-  its per-host slot and login-node session promptly (clusters count idle
-  sessions; the run-#10 F-B residual was an mcp-serve holding its slot until
-  process exit). This is a whole-connection recycle at a SAFE point (zero
-  inflight), the only shape the G4 ruling permits, justified as the same
+  its login-node session promptly (clusters count idle sessions). The per-host
+  SLOT is no longer this recycle's motivation: since the run-14 correction
+  (Invariant 2) a slot is held only around each connect + in-flight command and
+  freed when the connection goes idle, so a quiet connection already holds none.
+  The run-#10 F-B residual (an mcp-serve holding its slot until process exit) is
+  now closed by that per-command release; this recycle only returns the idle
+  login-node session on top. It is a whole-connection recycle at a SAFE point
+  (zero inflight), the only shape the G4 ruling permits, justified as the same
   cluster-social courtesy as the slot cap — never a mid-command sever.
 * **Wedged / dead discard.** A per-command deadline
   (:func:`_await_bounded`), a torn channel, or any asyncssh run-time error
@@ -128,16 +154,18 @@ __all__ = [
 ENGINE_ENV = "HPC_SSH_ENGINE"
 
 #: Recycle a per-host connection that has gone QUIET for this many seconds so a
-#: forgotten engine does not hold a login-node session — and, crucially, its
-#: per-host ssh SLOT — indefinitely. This is a SLOT/SESSION courtesy recycle
-#: (cluster-social policy), NOT a liveness timer: asyncssh keepalives own death
-#: detection (:func:`_keepalive_interval`), and a connection with a command in
-#: flight is never recycled (the ``inflight`` veto — the finding-24 no-mid-command
-#: -sever rule). Default 120s (down from the broker's 600): the run-#10 F-B
-#: residual was an mcp-serve process that ran ONE quick verb and then held its
-#: slot until process exit, because the slot is released only at connection close
-#: and nothing closed the quiet connection. A ~2-min quiet-recycle (enforced by
-#: the background sweep, :meth:`_Engine._sweep_idle`) frees that slot promptly.
+#: forgotten engine does not hold a login-node session indefinitely. This is a
+#: SESSION courtesy recycle (cluster-social policy), NOT a liveness timer:
+#: asyncssh keepalives own death detection (:func:`_keepalive_interval`), and a
+#: connection with a command in flight is never recycled (the ``inflight`` veto —
+#: the finding-24 no-mid-command-sever rule). Note the per-host ssh SLOT is no
+#: longer freed HERE: since the run-14 correction (Invariant 2) a slot is held
+#: only around each connect + in-flight command and released when the connection
+#: goes idle, so a quiet connection already holds none — the run-#10 F-B residual
+#: (an mcp-serve that ran ONE quick verb and then held its slot until process
+#: exit) is closed by that per-command release. This recycle now only returns the
+#: idle login-node session. Default 120s (down from the broker's 600); enforced
+#: by the background sweep, :meth:`_Engine._sweep_idle`.
 #: Env: ``HPC_SSH_IDLE_CLOSE_SEC``.
 IDLE_CLOSE_SEC = float(os.environ.get("HPC_SSH_IDLE_CLOSE_SEC", "120"))
 
@@ -528,8 +556,14 @@ class _HostConn:
     """One persistent connection plus the bookkeeping the calling thread owns.
 
     ``conn`` and ``sem`` are only ever touched on the engine loop; ``last_used``
-    / ``alive`` / ``slot_token`` / ``inflight`` are managed by the calling thread
-    under the engine's registry guard.
+    / ``alive`` / ``inflight`` are managed by the calling thread under the
+    engine's registry guard.
+
+    There is NO lifetime slot token (the run-14 correction, Invariant 2): a slot
+    is held only around the CONNECT (:meth:`_Engine._open`, released once the
+    connection is up) and each in-flight command (:meth:`_Engine.run`, a
+    per-command claim released in its ``finally``), so a warm-but-idle connection
+    holds none and this object owns no slot to release at close.
 
     ``inflight`` counts commands currently dispatched on this connection. The
     courtesy sweeper skips any connection with ``inflight > 0`` so a long remote
@@ -541,10 +575,9 @@ class _HostConn:
     close in :meth:`_Engine._finish`.
     """
 
-    def __init__(self, ssh_target: str, conn: Any, slot_token: Any, sem: Any) -> None:
+    def __init__(self, ssh_target: str, conn: Any, sem: Any) -> None:
         self.ssh_target = ssh_target
         self.conn = conn
-        self.slot_token = slot_token
         self.sem = sem
         self.last_used = time.monotonic()
         self.alive = True
@@ -609,6 +642,33 @@ class _Engine:
                 f"engine connection to {host} was recycled before dispatch could "
                 "claim it (retries exhausted)"
             )
+        # Invariant 2 (run-14 correction): a warm-but-idle connection holds NO
+        # slot — claim one for THIS in-flight command window and release it in the
+        # finally, so a watch between polls frees its slot for a concurrent
+        # harvest. ``inflight`` is already bumped, so the courtesy sweeper cannot
+        # recycle this connection while we WAIT (bounded, ≤SLOT_WAIT_MAX_SEC) for
+        # a slot; the connection stays warm through the wait. Acquired on the
+        # CALLING thread (never the loop) — a 120s slot-wait on the loop would
+        # wedge every connection. The connect slot (:meth:`_open`) was already
+        # released before we get here, so a single open+run never holds two slots
+        # (deadlock-free by construction).
+        try:
+            cmd_slot = ssh_slots.acquire_slot(ssh_target)
+        except SshCircuitOpen as exc:
+            # A breaker that opened while queued for a slot: PRE-dispatch (the
+            # command never ran → dispatched stays False), so a one-shot fallback
+            # is safe. Undo the inflight bump first.
+            self._finish(hc)
+            raise EngineUnavailable(
+                f"engine command to {host} refused by the circuit breaker while "
+                f"waiting for a connection slot: {exc}"
+            ) from exc
+        except BaseException:
+            # SshSlotWaitTimeout (local contention the one-shot path would hit
+            # identically — propagates unwrapped) or any other acquire failure:
+            # the command never dispatched, so undo the inflight bump.
+            self._finish(hc)
+            raise
         outer = None if timeout is None else timeout + _RESULT_MARGIN
         try:
             result = _submit(_do_run(hc, cmd, timeout), deadline=outer)
@@ -644,6 +704,12 @@ class _Engine:
                 dispatched=True,
             ) from exc
         finally:
+            # Free this command's in-flight slot FIRST (the run-14 correction: the
+            # slot is scoped to the command window, not the connection lifetime),
+            # then decrement the inflight veto. Ordering keeps the invariant "a
+            # connection with inflight==0 holds no command slot" — the sweep never
+            # sees an idle connection still pinning a slot.
+            ssh_slots.release_slot(cmd_slot)
             self._finish(hc)
         hc.last_used = time.monotonic()
         # One-shot parity: every successful guarded_call RESETS the host's
@@ -669,13 +735,22 @@ class _Engine:
                 raise EngineUnavailable(
                     f"engine connect to {host} refused by the circuit breaker: {exc}"
                 ) from exc
-            # Invariant 2: the persistent connection holds one per-host slot for
-            # its lifetime. A breaker that opens WHILE waiting for a slot raises
+            # Invariant 2 (run-14 correction): hold a per-host slot around the
+            # CONNECT only. The slot bounds the MaxStartups burst — concurrent
+            # ESTABLISHMENTS + in-flight commands — NOT open-but-idle multiplexed
+            # connections, so it is RELEASED (the finally below) the instant the
+            # connection is up, whether the connect succeeded (the warm
+            # connection now holds no slot) or failed. run() re-claims a slot for
+            # each command's in-flight window. Releasing the connect slot BEFORE
+            # run()'s per-command acquire is what makes a single open+run
+            # deadlock-free: one op never holds two slots at once, so it can never
+            # block on a second slot it would have to release the first to obtain.
+            # A breaker that opens WHILE waiting for the connect slot raises
             # SshCircuitOpen (→ EngineUnavailable); a slot-wait give-up
             # (SshSlotWaitTimeout) is local contention the one-shot path would
             # hit identically, so it propagates unwrapped.
             try:
-                slot_token = ssh_slots.acquire_slot(ssh_target)
+                connect_slot = ssh_slots.acquire_slot(ssh_target)
             except SshCircuitOpen as exc:
                 raise EngineUnavailable(
                     f"engine connect to {host} refused by the circuit breaker: {exc}"
@@ -685,7 +760,6 @@ class _Engine:
                     _do_connect(ssh_target), deadline=_connect_timeout() + _RESULT_MARGIN
                 )
             except Exception as exc:
-                ssh_slots.release_slot(slot_token)
                 if isinstance(exc, EngineUnavailable):
                     # A wedged engine loop (the _submit backstop) is LOCAL
                     # trouble, not host evidence — like SshSlotWaitTimeout it
@@ -711,8 +785,13 @@ class _Engine:
                 raise EngineUnavailable(
                     f"engine connect to {host} failed [{kind}]: {type(exc).__name__}: {exc}"
                 ) from exc
+            finally:
+                # Connect slot is scoped to the ESTABLISH window only (unifies the
+                # old failure-path release with the new success-path release — a
+                # warm connection holds no lifetime slot).
+                ssh_slots.release_slot(connect_slot)
             ssh_circuit.record_connection_success(ssh_target)
-            hc = _HostConn(ssh_target, conn, slot_token, sem)
+            hc = _HostConn(ssh_target, conn, sem)
             with self._guard:
                 self._conns[host] = hc
             self._ensure_sweeper()
@@ -740,19 +819,21 @@ class _Engine:
 
     def _sweep_idle(self) -> None:
         """Courtesy-recycle every connection that has gone QUIET past
-        :data:`IDLE_CLOSE_SEC` (or was already discarded) and free its slot.
+        :data:`IDLE_CLOSE_SEC` (or was already discarded), closing its idle
+        login-node session.
 
         This is the ONLY framework-side recycle (the G4 shrink): it exists to
-        release a per-host slot + login-node session promptly, NOT to detect
-        death — asyncssh keepalives own that. It is the F-B residual's fix: an
-        mcp-serve process that opened a connection for one quick verb and then
-        sat quiet has no ``run()`` to a host to trigger reuse, so without this
-        sweep its per-host ssh slot stays claimed (slot is released only at
-        connection close) until process exit. The sweep frees it ~IDLE_CLOSE_SEC
-        after last use. A connection with a command IN FLIGHT (``inflight > 0``)
-        is NEVER recycled — a long remote leg must not be severed mid-command
-        (bug-sweep #8 / finding 24); the recycle is a whole-connection close at a
-        SAFE point, the only shape the G4 ruling permits."""
+        return an idle login-node session promptly (clusters count idle
+        sessions), NOT to detect death — asyncssh keepalives own that. Since the
+        run-14 correction (Invariant 2) it no longer frees a per-host SLOT: a slot
+        is held only around each connect + in-flight command and released when the
+        connection goes idle, so a quiet connection already holds none (the
+        run-#10 F-B residual — an mcp-serve holding its slot until process exit —
+        is now closed by that per-command release). A connection with a command IN
+        FLIGHT (``inflight > 0``) is NEVER recycled — a long remote leg must not be
+        severed mid-command (bug-sweep #8 / finding 24); the recycle is a
+        whole-connection close at a SAFE point, the only shape the G4 ruling
+        permits."""
         with self._guard:
             stale = [
                 (host, hc)
@@ -760,10 +841,15 @@ class _Engine:
                 if not hc.alive or (hc.inflight == 0 and hc.idle_for() > IDLE_CLOSE_SEC)
             ]
         for host, hc in stale:
-            self._discard(host, hc)  # unregisters, closes on the loop, frees slot
+            self._discard(host, hc)  # unregisters, closes the idle session on the loop
 
     def _discard(self, host: str, hc: _HostConn | None) -> None:
-        """Drop *hc*: unregister, close on the loop (best effort), free its slot."""
+        """Drop *hc*: unregister and close on the loop (best effort).
+
+        No slot to release: the connection holds none while idle (Invariant 2, the
+        run-14 correction); the connect + per-command slots are released at their
+        own scope in :meth:`_open` / :meth:`run`.
+        """
         if hc is None:
             return
         with self._guard:
@@ -772,7 +858,6 @@ class _Engine:
             hc.alive = False
         with contextlib.suppress(Exception):
             _submit(_do_close(hc), deadline=_CLOSE_DEADLINE)
-        ssh_slots.release_slot(hc.slot_token)
 
     def _drain_or_discard(self, host: str, hc: _HostConn) -> None:
         """Failure-path teardown that honors the inflight veto (F56).
@@ -797,15 +882,18 @@ class _Engine:
 
     def _finish(self, hc: _HostConn) -> None:
         """Decrement ``inflight`` and, if a DRAINING connection's last command
-        just finished, perform the close + slot release the failure path deferred
-        to the last finisher (F56)."""
+        just finished, perform the close the failure path deferred to the last
+        finisher (F56).
+
+        No slot release here: each command already freed its OWN in-flight slot in
+        :meth:`run`'s finally before calling this, and a draining connection holds
+        no lifetime slot (Invariant 2, the run-14 correction)."""
         with self._guard:
             hc.inflight -= 1
             close_now = hc.draining and hc.inflight == 0
         if close_now:
             with contextlib.suppress(Exception):
                 _submit(_do_close(hc), deadline=_CLOSE_DEADLINE)
-            ssh_slots.release_slot(hc.slot_token)
 
     def shutdown_all(self) -> None:
         self._stop_sweeper.set()  # halt the background reaper first
@@ -816,7 +904,8 @@ class _Engine:
             hc.alive = False
             with contextlib.suppress(Exception):
                 _submit(_do_close(hc), deadline=_CLOSE_DEADLINE)
-            ssh_slots.release_slot(hc.slot_token)
+            # No slot to release: an idle connection holds none (Invariant 2, the
+            # run-14 correction); command slots are freed per-op in run().
 
 
 def _as_str(value: Any) -> str:
