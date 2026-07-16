@@ -1957,6 +1957,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent migrate-remainder --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "migrate_remainder.input.json",
+    "name": "migrate-remainder",
+    "output_schema": "migrate_remainder.output.json",
+    "python": "hpc_agent.ops.migrate.migrate_remainder.migrate_remainder",
+    "side_effects": [
+      "ssh",
+      "writes-derived-run"
+    ],
+    "summary": "Move a run's UNDONE tasks to another cluster as ONE gated verb (USER DIRECTIVE 2026-07-16). Censuses the source's per-task done-set, mints a DERIVED enumerated run over exactly the undone cells (per-run-scoped tasks.py, parents=[source], cell-ownership map), estimates the footprint over the undone count from the source-observed canary runtime, and returns a persisted migration brief with next_block=submit-s2. Returns in SECONDS: actuates NOTHING — the human's y greenlights submit-s2 to stage & canary the DERIVED run, and the source remainder is killed ONLY after that canary is verified GREEN (inverts retarget-run's supersede-first order — a remainder migration must not sacrifice partial progress). A same-cluster target / missing census / empty undone set is REFUSED.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]",
     "idempotent": true,
     "input_schema": "monitor_flow.input.json",

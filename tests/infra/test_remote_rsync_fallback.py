@@ -1415,3 +1415,171 @@ def test_disclose_child_failure_names_empty_stderr() -> None:
     with _ctx.redirect_stderr(buf):
         disclose_child_failure(what="scp pull", returncode=1, stderr="")
     assert "(no stderr captured)" in buf.getvalue()
+
+
+# ─── F7 verify-during-build (unit 2.4b): the transfer plane bypasses the ssh
+# engine and is preamble-free ──────────────────────────────────────────────────
+#
+# The verify memo (transport/__init__.py, "F7 verify-during-build memo") aborted
+# the transfer-plane-routing leg: every transfer op already reaches the cluster
+# through the ONE-SHOT ``run_capture_bounded`` bounded runner (never ``ssh_run``,
+# so never the asyncssh engine) with a raw, preamble-free remote command line.
+# These pins LOCK that verdict so a future edit that re-routed a transfer through
+# ``ssh_run`` (re-arming the engine wrapper) or bolted a ``module load`` /
+# ``conda activate`` preamble onto a transfer command would turn RED.
+
+# Tokens that would appear iff a transfer command acquired the control-plane
+# activation preamble (``remote_activation_for_sidecar``) or the ``ssh_run``
+# self-destruct wrapper (``remote.build_remote_command``). A transfer command line
+# is byte-equal to the raw shell it runs and carries NONE of these (E1).
+_FORBIDDEN_PREAMBLE_TOKENS = (
+    "module load",  # Lmod ceremony (control-plane preamble)
+    "module purge",
+    "conda activate",  # conda ceremony (control-plane preamble)
+    "source ",  # `source .../conda.sh` (control-plane preamble)
+    "HPC_AGENT_OP=",  # the LAYER-2 marker (ssh_run wrapper only)
+    "timeout -k",  # the LAYER-1 self-destruct deadline (ssh_run wrapper only)
+)
+
+
+def _warm_delta_push_ssh_cmds(tmp_path: Path, *, n_extra: int = 0) -> list[str]:
+    """Run a WARM rsync-less delta re-push against a real 3-file tree and return
+    the remote command string handed to ssh for every ``run_capture_bounded``
+    open, in call order.
+
+    The remote is content-identical except ``changed.txt`` (1 file ships). A smart
+    ``run_capture_bounded`` mock answers each open by inspecting the remote command
+    so the REAL ``_remote_push_manifest`` / ``_read_prior_push_manifest`` /
+    ``_write_push_manifest`` / prune legs all execute and are counted — no leg is
+    patched out, so the dial count is the true one. *n_extra* seeds a
+    manifest-known remote extra so the prune ``rm`` leg fires.
+    """
+    from dataclasses import replace
+
+    from hpc_agent.infra.manifest import FileEntry, build_manifest
+
+    (tmp_path / "same.txt").write_text("identical")
+    (tmp_path / "changed.txt").write_text("v1")
+    (tmp_path / "also_same.txt").write_text("stable")
+
+    entries = [
+        replace(e, sha256="0" * 64) if e.path == "changed.txt" else e
+        for e in build_manifest(tmp_path).entries
+    ]
+    if n_extra:
+        entries.append(FileEntry(path="gone_extra.txt", size=3, sha256="1" * 64))
+    remote_files = {
+        "files": [{"path": e.path, "size": e.size, "sha256": e.sha256} for e in entries],
+        "hashed": 0,
+        "cached": len(entries),
+    }
+    import json as _json
+
+    prior_manifest = _json.dumps({"paths": ["gone_extra.txt"], "manifest_schema": 2})
+
+    cmds: list[str] = []
+
+    def _smart(cmd, *_a, **_kw):
+        remote = str(cmd[-1]) if isinstance(cmd, list) else str(cmd)
+        cmds.append(remote)
+        if "HPC_DELTA_EXCLUDES" in remote:  # the remote hash-manifest snippet
+            return _ok(stdout=_json.dumps(remote_files))
+        if "cat " in remote and "push_manifest" in remote:  # read prior manifest
+            return _ok(stdout=prior_manifest if n_extra else "")
+        return _ok()
+
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_smart),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        result = transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    assert result.returncode == 0
+    # Filter the lazy ``ssh -V`` version probe — it never rides run_capture_bounded
+    # (it is a bare subprocess.run in ssh_options), so nothing to filter here, but
+    # guard defensively against a "-V" leaking into the list.
+    return [c for c in cmds if c != "-V"]
+
+
+def test_warm_delta_push_stays_within_four_opens(tmp_path: Path) -> None:
+    """F2 push-fold acceptance (unit 2.4b): a WARM rsync-less re-push (small delta,
+    nothing to prune) costs <= 4 cold ssh opens — remote hash manifest, the single
+    delta batch, and the final push-manifest seal (3). The many-batch cold case is
+    inherently more (one durable checkpoint per landed batch, run-13 finding 3 — a
+    correctness feature, not a fold-away regression); this pin fixes the WARM floor
+    so a future edit that re-added a per-op cold round-trip to the warm path turns
+    RED."""
+    cmds = _warm_delta_push_ssh_cmds(tmp_path)
+    assert len(cmds) <= 4, f"warm push opened {len(cmds)} ssh connections: {cmds}"
+    # The exact warm shape: manifest read, one delta batch, final seal.
+    assert any("HPC_DELTA_EXCLUDES" in c for c in cmds)  # remote hash manifest
+    assert any("tar x -C /r" in c for c in cmds)  # the single delta batch
+    assert any("push_manifest" in c.lower() or "HPC_PM_PAYLOAD" in c for c in cmds)  # final seal
+
+
+def test_transfer_plane_remote_commands_are_preamble_free(tmp_path: Path) -> None:
+    """E1 byte-equality: every transfer-plane remote command line — the delta path
+    (remote hash manifest, tar extract, push-manifest write) AND the with-prune
+    path (prior-manifest read, prune ``rm``) — is byte-equal to the raw shell it
+    runs: no ``module load`` / ``conda activate`` / ``source`` control-plane
+    preamble and no ``HPC_AGENT_OP=``/``timeout -k`` ssh_run self-destruct wrapper.
+    The transfer plane never routes through ``remote_activation_for_sidecar`` or
+    ``build_remote_command``."""
+    cmds = _warm_delta_push_ssh_cmds(tmp_path, n_extra=1)
+    # The with-prune path exercised every transfer leg: manifest, batch, prior-read,
+    # prune rm, seal.
+    assert any("rm -f -- gone_extra.txt" in c for c in cmds), f"prune leg absent: {cmds}"
+    for cmd in cmds:
+        for token in _FORBIDDEN_PREAMBLE_TOKENS:
+            assert token not in cmd, f"transfer command acquired {token!r}: {cmd!r}"
+
+
+def test_full_copy_tar_extract_is_preamble_free(tmp_path: Path) -> None:
+    """The manifest-less full-copy fallback's remote extract is preamble-free too —
+    a first deploy (no remote manifest) must not carry activation/wrapper text."""
+    remote_cmd = _tar_fallback_remote_cmd(tmp_path, exclude=[], delete=False)
+    for token in _FORBIDDEN_PREAMBLE_TOKENS:
+        assert token not in remote_cmd, f"full-copy extract acquired {token!r}: {remote_cmd!r}"
+    assert "tar x -C /r" in remote_cmd  # the raw extract, nothing wrapped around it
+
+
+def test_transfer_plane_push_never_consults_ssh_engine(tmp_path: Path) -> None:
+    """Row 9 (engine-seam laws extend): even with the asyncssh engine ENABLED, an
+    rsync-less push drives ``run_capture_bounded`` and never the engine — the
+    transfer plane IS the one-shot leg, so the 2026-07-16 engine-default flip
+    leaves its dial counts byte-identical. A regression that routed a transfer
+    through ``ssh_run`` (which owns the engine gate) would trip this."""
+    from hpc_agent.infra import ssh_engine
+
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch.object(ssh_engine, "engine_enabled", return_value=True),
+        patch.object(ssh_engine, "engine_ssh_run") as engine_mock,
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=False
+        )
+    engine_mock.assert_not_called()  # the engine gate was never reached
+    assert run_mock.called  # the one-shot bounded runner carried the transfer

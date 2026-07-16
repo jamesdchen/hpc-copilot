@@ -1,0 +1,108 @@
+# Scheduled mutation-testing sweep of the cluster verbs (INFORMATIONAL,
+# NON-REQUIRED, NEVER per-PR).
+#
+# Why scheduled and not per-PR (devx B4 ruling,
+# docs/plans/devx-and-pack-seams-2026-07-15.md): a mutmut sweep re-runs the
+# whole test suite once per mutant, so even a scope tightened to the cluster
+# verbs is tens of minutes to hours. That is far too slow for the PR gate. The
+# value is the periodic SIGNAL -- surviving mutants in submit_flow /
+# aggregate_flow / transport, where a silent wrong-path costs real cluster
+# time -- so it runs weekly and on demand, uploads its results as an artifact,
+# and never blocks a merge.
+#
+# Scoping: scripts/mutmut_shortlist.py rewrites [tool.mutmut].paths_to_mutate
+# in the *ephemeral* runner checkout to just the cluster-verb set (never
+# committed). The same script's `report` output records which functions in
+# those modules mutmut can actually reach vs. which are BLIND behind a lazy
+# import (the extraction shortlist) -- see docs/internals/mutation-testing.md.
+name: mutation
+
+on:
+  # Weekly, Monday 06:00 UTC. Off the PR path entirely.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      changed_since:
+        description: >-
+          Optional git ref: scope the sweep to cluster-verb files changed
+          since this ref (empty = full cluster-verb set).
+        required: false
+        default: ""
+
+# One sweep at a time; a newer dispatch supersedes an in-flight one.
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    # GitHub-hosted runners cap at 6h; a scoped sweep fits well inside this,
+    # and the job never gates a merge, so a generous ceiling is fine.
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # changed-since diffs need history; a shallow clone would break it.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package (dev extras) + mutmut
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]' mutmut
+
+      - name: Report the mutmut reachability shortlist (informational)
+        run: |
+          python scripts/mutmut_shortlist.py report | tee shortlist-report.txt
+          python scripts/mutmut_shortlist.py report --json > shortlist-report.json
+
+      - name: Scope [tool.mutmut].paths_to_mutate to the cluster verbs
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.changed_since }}" ]; then
+            ARGS="--changed-since ${{ github.event.inputs.changed_since }}"
+          fi
+          python scripts/mutmut_shortlist.py paths $ARGS \
+            --apply-to-pyproject pyproject.toml
+          echo "----- scoped [tool.mutmut] block -----"
+          sed -n '/\[tool.mutmut\]/,/^\[/p' pyproject.toml
+
+      - name: Run the mutation sweep
+        # Survivors are the SIGNAL, not a failure: mutmut exits non-zero when
+        # any mutant survives, so tolerate a non-zero exit and let the results
+        # step + artifact carry the outcome. A genuine infra break still shows
+        # in the logs.
+        run: |
+          rm -rf mutants/
+          mutmut run || echo "mutmut exited non-zero (survivors or skips) -- see results"
+
+      - name: Collect results
+        if: always()
+        run: |
+          echo "===== mutmut results =====" | tee mutation-results.txt
+          mutmut results 2>&1 | tee -a mutation-results.txt || true
+
+      - name: Upload sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-sweep
+          path: |
+            shortlist-report.txt
+            shortlist-report.json
+            mutation-results.txt
+            mutants/**/*.meta
+          if-no-files-found: warn
+          retention-days: 30

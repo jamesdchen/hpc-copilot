@@ -174,6 +174,58 @@ __all__ = [
 PRECLEAN_TIMEOUT_SEC: Final[int] = _env_int("HPC_PRECLEAN_TIMEOUT_SEC", 300)
 
 
+# ---------------------------------------------------------------------------
+# F7 verify-during-build memo (unit 2.4b, latency program 2026-07-16)
+# ---------------------------------------------------------------------------
+#
+# CLAIM under test: ``rt.transfer-plane-bypasses-engine`` (carried
+# PLAUSIBLE-UNVERIFIED, gated behind this unit's first step). The gate re-checks
+# the raw-spawn inventory against agent B's LANDED control-plane seam
+# (``infra/clusters.py`` ``remote_activation_for_sidecar`` / ``env_python``, and
+# the ``ops/submit_flow.py`` / ``ops/host_retarget.py`` / ``ops/monitor_flow.py``
+# callers — commit 9c410a8e's "preamble-free control plane") to decide whether
+# the transfer plane needs any routing change.
+#
+# VERDICT (leg ABORTED — already correct, no routing change): every transfer-plane
+# op in this module — ``_tar_ssh_push`` (tar|ssh push), ``_ssh_bounded`` /
+# ``_remote_preclean`` (stage/swap/clean legs), the ``_delta`` remote hash
+# manifest, the ``_prune`` push-manifest read/write + prune ``rm``, ``rsync_push``
+# / ``_rsync_deploy``, and the ``_pull`` engine (``tar_ssh_pull`` /
+# ``_pull_transfer`` / ``_ssh_capture``) — reaches the cluster through
+# :func:`hpc_agent.infra.bounded_subprocess.run_capture_bounded` (the tree-kill
+# ONE-SHOT bounded runner), NEVER through ``remote.ssh_run``. Two consequences the
+# gate confirmed and the pins below lock:
+#
+#   1. BYPASSES THE ENGINE (row 9). ``ssh_run`` is the ONLY seam that consults the
+#      asyncssh ``ssh_engine`` (capture-mode only; streaming pipes can't be framed
+#      by the channel). Because the transfer plane never calls ``ssh_run``, the
+#      2026-07-16 engine-default flip (asyncssh default ON) leaves every
+#      transfer-plane dial count byte-identical — before == after. The engine-seam
+#      laws (EngineUnavailable → one-shot fallthrough; ``capture=False`` never
+#      consults the engine; the one-shot leg stays on ``run_capture_bounded``)
+#      EXTEND here trivially: the transfer plane IS the one-shot leg.
+#
+#   2. PREAMBLE-FREE (E1). A transfer-plane remote command line is byte-equal to
+#      the raw shell it means to run — no ``module load`` / ``source`` conda
+#      ceremony (agent B's control-plane preamble is for the reporter/combiner/
+#      reconcile compute ops, which need the scientific stack; the pure transfer
+#      ops don't and never route through ``remote_activation_for_sidecar``) AND no
+#      ``HPC_AGENT_OP=…``/``timeout -k`` self-destruct wrapper (that lives in
+#      ``remote.build_remote_command``, reached only via ``ssh_run``). The one
+#      cluster-side interpreter a transfer touches — the ``_delta`` /``_prune``
+#      manifest snippets — is a bare stdlib-floor ``python3`` (no activation), so a
+#      degraded login node's Lmod/conda cannot wedge a transfer.
+#
+# The cluster-side REDUCE (``run_final_reduce`` in ``_combiner``) is NOT a transfer
+# op: it runs the real combiner (pandas &c.) and DOES carry activation — its pin
+# stays as-is. Enforcement: rows 8 (F2 pull cache) + 9 (this) in
+# ``docs/internals/principles/lifecycle-verdicts.md``; the byte-equality + dial +
+# never-consults-engine pins are ``test_remote_rsync_fallback.py`` /
+# ``test_transport_pull.py``; the bounded-runner route pin is
+# ``tests/contracts/test_src_subprocess_timeout_discipline.py::
+# test_transport_ssh_sites_route_through_bounded_runner``.
+
+
 def _have_rsync() -> bool:
     """Return True if an ``rsync`` binary is on PATH.
 

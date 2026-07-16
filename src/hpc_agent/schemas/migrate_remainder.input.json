@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/migrate_remainder.input.json",
+  "title": "migrate-remainder input spec",
+  "description": "Inputs to ``migrate-remainder``: the in-flight source + the target cluster.\n\n``source_run_id`` is the still-live run whose UNDONE cells move — its on-disk\nsidecar (``.hpc/runs/<source_run_id>.json``) supplies ``task_count`` / ``cluster``\n/ ``resources`` / ``wave_map`` / the run-owned inputs the census + cost read,\nand its cluster-side announce markers are the per-task done-set. ``target_cluster``\nis where the derived run lands — it MUST differ from the source's cluster (a\nsame-cluster migration is nothing to move; route to ``revise-resolved`` /\nresubmit). ``produced_by`` is the optional authorship stamp threaded onto the\nminted derived ``InterviewSpec``; when absent the derive step defaults it to the\nmigrating operator.",
+  "type": "object",
+  "required": [
+    "source_run_id",
+    "target_cluster"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "source_run_id": {
+      "description": "The in-flight run whose UNDONE tasks migrate. Its sidecar supplies the task_count / cluster / resources / wave_map, and its cluster-side announce markers are the per-task done-set the census reads. The source run itself is NOT killed by this verb — only after the derived canary is verified GREEN (SPEC §3 Step E, LIVE-3).",
+      "minLength": 1,
+      "title": "Source Run Id",
+      "type": "string"
+    },
+    "target_cluster": {
+      "description": "The cluster the derived remainder run lands on. MUST differ from the source's cluster — a same-cluster target is nothing to migrate (REFUSED, route to revise-resolved / resubmit).",
+      "minLength": 1,
+      "title": "Target Cluster",
+      "type": "string"
+    },
+    "produced_by": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional authorship stamp threaded onto the minted derived InterviewSpec (e.g. {\"kind\": \"human\", \"operator\": \"jc\"}). When null the derive step defaults it to the migrating operator — the LLM never authors run identity.",
+      "title": "Produced By"
+    }
+  }
+}

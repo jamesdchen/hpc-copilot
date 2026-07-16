@@ -20,16 +20,20 @@ still independently verifies every result. A marker never vouches for content.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from hpc_agent import errors
 from hpc_agent.infra import remote
 
 __all__ = [
     "read_announcements",
+    "read_announced_task_ids",
     "read_announcements_batch",
     "wait_for_announce_change",
+    "AnnouncedTaskIds",
     "ANNOUNCE_SUBPATH",
     "ANNOUNCE_STATE_COMPLETE",
     "ANNOUNCE_STATE_FAILED",
@@ -144,6 +148,84 @@ def _parse_count(lines: list[str], prefix: str) -> int:
             except ValueError:
                 return 0
     return 0
+
+
+# Positive-evidence ack for the id-listing sibling, SAME discipline as
+# ``_ANNOUNCE_ACK`` (echoed only after a successful ``cd`` into the announce dir):
+# an ABSENT ack — a ``cd`` that failed because the dir does not exist yet, or a
+# truncated read — reads as "no per-task census", NEVER as "all tasks undone".
+# A distinct token so a grep never confuses the counts read with the ids read.
+_ANNOUNCE_IDS_ACK = "__HPC_ANNOUNCE_IDS_ACK__"
+
+# ``task_<id>.complete`` basename → the 0-based task id, anchored so a stray file
+# (a partial ``task_.complete``, an editor swap) never parses to a bogus id.
+_COMPLETE_MARKER_RE = re.compile(r"^task_(\d+)\." + re.escape(ANNOUNCE_STATE_COMPLETE) + r"$")
+
+
+@dataclass(frozen=True)
+class AnnouncedTaskIds:
+    """The per-task done-set census (the id-carrying sibling of the counts read).
+
+    ``present`` is the capability signal — ``True`` iff the positive-evidence ack
+    was seen, i.e. the announce dir EXISTS (an announce-era run whose dispatcher
+    has started). ``present == False`` carries an EMPTY ``done_ids`` and means "no
+    per-task census" — the caller must REFUSE to partition, never read absence as
+    "every task is undone". ``done_ids`` is the set of 0-based ids whose
+    ``task_<id>.complete`` marker exists (COMPLETE only — a ``task_<id>.failed``
+    marker is a terminal FAILURE that still needs a re-run, so it is NOT counted
+    done for a remainder migration).
+    """
+
+    present: bool
+    done_ids: frozenset[int]
+
+
+def read_announced_task_ids(*, ssh_target: str, remote_path: str, run_id: str) -> AnnouncedTaskIds:
+    """Return the SET of ids whose ``task_<id>.complete`` marker exists (Δ1).
+
+    The id-carrying sibling of :func:`read_announcements`: where that reader COUNTS
+    the markers (``ls … | wc -l``), a remainder migration needs the actual ids to
+    compute ``undone = range(total_tasks) − done_ids``. ONE bounded ssh exec —
+    ``cd`` into ``<remote_path>/.hpc/announce/<run_id>`` and, only on success, echo
+    the ack then a pure ``ls task_*.complete`` (no ``cat``, no per-file read). The
+    id is parsed from each basename.
+
+    Same ACK discipline as :func:`read_announcements` (``announce.py:52,86-96``):
+
+    * a missing announce dir / no positive-evidence ack ⇒ ``present == False`` with
+      an EMPTY set — the caller REFUSES with "no per-task census", never "all
+      undone" (the migration would otherwise re-run every already-finished task);
+    * an ssh TRANSPORT failure (rc != 0, e.g. rc 255) raises
+      :class:`~hpc_agent.errors.RemoteCommandFailed` so a connectivity blip is
+      never read as an empty done-set.
+
+    A genuinely empty-but-present announce dir (dispatcher started, no task
+    complete yet) ``cd``s OK and returns ``present == True`` with an empty set —
+    distinct from the absent-dir refusal.
+    """
+    announce_dir = f"{remote_path.rstrip('/')}/{ANNOUNCE_SUBPATH}/{run_id}"
+    cmd = (
+        f"cd {shlex.quote(announce_dir)} 2>/dev/null "
+        f"&& printf '%s\\n' {shlex.quote(_ANNOUNCE_IDS_ACK)} "
+        f"&& ls task_*.{ANNOUNCE_STATE_COMPLETE} 2>/dev/null; true"
+    )
+    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
+    if proc.returncode != 0:
+        raise errors.RemoteCommandFailed(
+            f"announce id read failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+        )
+    lines = [ln.strip() for ln in proc.stdout.splitlines()]
+    if _ANNOUNCE_IDS_ACK not in lines:
+        # No positive ack: the announce dir doesn't exist yet (pre-announce run /
+        # dispatcher not started) or the read was truncated. "No per-task census" —
+        # NOT "all undone" (the caller refuses on ``present is False``).
+        return AnnouncedTaskIds(present=False, done_ids=frozenset())
+    done: set[int] = set()
+    for line in lines:
+        m = _COMPLETE_MARKER_RE.match(line)
+        if m is not None:
+            done.add(int(m.group(1)))
+    return AnnouncedTaskIds(present=True, done_ids=frozenset(done))
 
 
 # Positive-evidence ack for the batched read + the remote WAITER, same discipline

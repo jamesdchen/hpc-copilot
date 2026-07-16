@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/migrate_remainder.output.json",
+  "title": "migrate-remainder output data",
+  "description": "The migration outcome — a persisted brief + the S2 hand-off, or a refusal.\n\n``stage_reached`` is what the human decides on: ``migration_pending_canary``\n(the census partitioned cleanly, the derived run is minted, and the brief is\npersisted; the canary runs in ``submit-s2``'s DETACHED worker after the\ngreenlight — this verb never blocks on a canary poll, which is what makes it\nMCP-safe). ``needs_decision`` is always True on a successful mint: the human\n``y``s the brief through the EXISTING ``append-decision`` path — this verb\nproduces the brief, it does NOT bypass the gates; the canary (#160), the source\nrange-kill (ONLY after the canary is GREEN), and the S3 greenlight all still\nstand. ``next_block`` carries the ``{verb: submit-s2, ...}`` hand-off (also what\nderives this verb into the curated MCP catalog). ``derived_run_id`` /\n``superseded_nothing`` are the audit of what the migration minted and (did not)\nclose.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "source_run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "const": "migration_pending_canary",
+      "description": "The boundary the migration stops at for the human's y (mint done, nothing actuated).",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "Always True — the human y's the migration brief through append-decision.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the migration plan.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "source_run_id": {
+      "description": "The run whose undone cells the migration moves.",
+      "title": "Source Run Id",
+      "type": "string"
+    },
+    "derived_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The derived remainder run's id (submit-s2 stages & canaries it); None on refusal.",
+      "title": "Derived Run Id"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "The migration brief: run_id (derived), cluster (target), migrated_from, what-moves (undone count + wave/task_range shape), what-dies (source remainder job_ids + range, killed ONLY after the derived canary is green), est_core_hours + footprint_unknown + cost_estimate, ownership_map digest, the flip-back disclosure, and any census disagreement. The LLM relays it and takes the human's y.",
+      "title": "Brief",
+      "type": "object"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The {verb, why, spec_hint} hand-off — submit-s2 on the pending-canary path (its detached worker owns the canary poll). Presence of this field is also what derives migrate-remainder into the curated MCP catalog.",
+      "title": "Next Block"
+    }
+  }
+}

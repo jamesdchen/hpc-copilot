@@ -92,6 +92,62 @@ Surviving mutants cluster in branches the tests don't reach. Prioritise:
    this repo (`test_concurrent_writers_lose_no_samples`,
    `test_atomic_locked_update`). Add new ones as they appear.
 
+## The reachability shortlist + scheduled sweep (cluster verbs)
+
+Limitation #1 above is the load-bearing one: the lazy-import pattern blinds
+mutmut on exactly the high-severity cluster verbs (`submit_flow`,
+`aggregate_flow`, transport), where a silent wrong-path costs real cluster
+time. `scripts/mutmut_shortlist.py` turns that blind spot into an auditable
+shortlist instead of a silent gap, and `.github/workflows/mutation.yml` runs a
+scoped sweep on a schedule (weekly + `workflow_dispatch`, **never per-PR** — a
+sweep re-runs the suite once per mutant and is far too slow for the merge
+gate; the value is the periodic signal, uploaded as an artifact, never
+blocking).
+
+### `scripts/mutmut_shortlist.py` — two static (AST-only) jobs
+
+- **`report` (default)** — for each cluster-verb module, classify every
+  top-level function / method as mutmut-**reachable** (no body import; mutmut
+  can mutate it) or mutmut-**BLIND** (a lazy import blocks it). The BLIND set
+  is the **extraction shortlist**: the concrete functions whose module-scope
+  import extraction would buy new mutation coverage. `--json` for machine
+  output.
+
+- **`paths`** — emit the newline-separated source paths to scope
+  `[tool.mutmut].paths_to_mutate` to. `--changed-since REF` intersects the
+  target set with `git diff --name-only REF` (the *paths-changed shortlist* —
+  a dispatch can sweep just the cluster verbs a branch touched).
+  `--apply-to-pyproject PATH` rewrites the `paths_to_mutate` array in place
+  (a minimal line-based edit that preserves the sibling `also_copy` /
+  `do_not_mutate` / `pytest_add_cli_args` keys); the scheduled workflow uses
+  this on its **ephemeral** checkout, so the repo's `pyproject.toml` is never
+  committed-scoped.
+
+The target module list lives in `DEFAULT_TARGETS` in the script; override with
+`--targets`. Neither mode runs mutmut or the suite — it is safe anywhere.
+
+### Empirical shortlist (2026-07-16, HEAD `0592ed99`)
+
+Running `report` over the five cluster-verb modules found **85 reachable, 47
+blind** — the "few-to-zero mutants" framing in limitation #1 is true only for
+the *biggest* primitives (`aggregate_flow` itself, `_aggregate_flow_impl`,
+`_submit_flow_batch_locked` are all blind), not the modules wholesale. So a
+scoped sweep is worth running **today**, before any extraction, on the 85
+reachable functions; the 47-function extraction shortlist then grows coverage
+incrementally.
+
+### Do NOT bulk-extract the lazy imports
+
+`submit_flow` / `aggregate_flow` / transport are latency-hot and heavily
+churned; the lazy-import pattern is deliberate (avoids registry-import cycles
+and keeps cold-start import cost down — see the latency plan). Extraction is
+therefore **opportunistic and per-function**, only where a blind function
+holds high-severity branch logic and its import can move to module scope
+without creating a cycle or measurable cold-start cost. The shortlist names
+the candidates; it does not license a sweep-wide refactor. When you do extract
+one, re-run `report` to confirm it moved from BLIND to reachable, and add the
+end-to-end test that the new mutants demand.
+
 ## Triage checklist when a mutant survives
 
 1. **Read the mutant** with `mutmut show <id>` — what literal flipped?

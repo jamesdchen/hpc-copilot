@@ -80,6 +80,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'list-in-flight': ('list-in-flight', 'hpc_agent.ops.monitor.list_in_flight'),
     'load-context': ('load-context', 'hpc_agent.meta.campaign.atoms.load_context'),
     'logs': ('logs', 'hpc_agent.ops.monitor.logs_atom'),
+    'migrate-remainder': ('migrate-remainder', 'hpc_agent.ops.migrate.migrate_remainder'),
     'monitor-flow': ('monitor-flow', 'hpc_agent.ops.monitor_flow'),
     'monitor-summary': ('monitor-summary', 'hpc_agent.ops.monitor.summary'),
     'net-triage': ('net-triage', 'hpc_agent.ops.recover.net_triage'),

@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -762,3 +762,83 @@ def test_integration_full_engine_end_to_end(tmp_path, monkeypatch):
     assert result2.ok
     assert result2.files_pulled == 0
     assert result2.skipped_unchanged == 2  # the resumability/delta invariant
+
+
+# ─── F7 verify-during-build (unit 2.4b), pull side: the PULL engine bypasses the
+# ssh engine and is preamble-free ──────────────────────────────────────────────
+
+
+def test_pull_remote_commands_are_preamble_free() -> None:
+    """E1 byte-equality (pull side): the pull engine's remote command builders emit
+    raw ``tar c`` / ``find | tar c`` shell — no ``module load`` / ``conda
+    activate`` / ``source`` control-plane preamble and no ``HPC_AGENT_OP=``/
+    ``timeout -k`` ssh_run wrapper. The pull never routes through
+    ``remote_activation_for_sidecar`` or ``build_remote_command``."""
+    forbidden = ("module load", "conda activate", "source ", "HPC_AGENT_OP=", "timeout -k")
+    batch_cmd = _pull._batch_remote_cmd("/r", ["m0/metrics.json", "m1/metrics.json"], "z")
+    fallback_cmd = _pull._fallback_remote_cmd("/r", ["metrics.json"], [], "z")
+    manifest_cmd_probe: list[str] = []
+
+    # The manifest round-trip's remote command flows through _ssh_capture; capture
+    # it via a run_capture_bounded spy so its raw shape is asserted too.
+    def _spy(cmd, *_a, **_kw):
+        manifest_cmd_probe.append(str(cmd[-1]))
+        return _ok(stdout='{"files": []}')
+
+    with patch("hpc_agent.infra.transport._pull.run_capture_bounded", side_effect=_spy):
+        _pull._remote_pull_manifest(
+            ssh_target="u@h", remote_path="/r", include_globs=[], exclude=[], timeout=60
+        )
+
+    for cmd in (batch_cmd, fallback_cmd, *manifest_cmd_probe):
+        for token in forbidden:
+            assert token not in cmd, f"pull command acquired {token!r}: {cmd!r}"
+    assert "tar c" in batch_cmd  # raw archive, nothing wrapped around it
+    assert "find" in fallback_cmd and "tar c" in fallback_cmd
+
+
+def test_pull_transfer_drives_bounded_runner_not_ssh_run(tmp_path: Path) -> None:
+    """Row 9 (engine-seam laws extend, pull side): the ssh->tar pull's SINK is
+    ``run_capture_bounded`` (the one-shot tree-kill runner). ``ssh_run`` is the
+    ONLY seam that consults the asyncssh engine, and the ``_pull`` module never
+    even imports it — so the pull can never route through the engine. The ssh
+    SOURCE is a bounded ``subprocess.Popen`` reaped on the deadline (the
+    ``_pull_transfer`` exemption). A regression that pulled ``ssh_run`` into the
+    pull engine (re-arming the engine gate) would trip the hasattr assertion."""
+    import io
+    import os
+
+    # The engine-gated seam is structurally absent from the pull module.
+    assert not hasattr(_pull, "ssh_run"), "pull engine must not import ssh_run (the engine gate)"
+
+    calls: list[str] = []
+
+    def _rec_bounded(cmd, *_a, **kw):
+        calls.append(str(cmd[0]))
+        # Drain the pump's read end so the pump thread can complete (the sink
+        # normally consumes ssh's piped archive bytes).
+        stdin = kw.get("stdin")
+        if isinstance(stdin, int):
+            while os.read(stdin, 65536):
+                pass
+        return _ok()
+
+    with (
+        patch("hpc_agent.infra.transport._pull.run_capture_bounded", side_effect=_rec_bounded),
+        patch("hpc_agent.infra.transport._pull.subprocess.Popen") as popen_mock,
+    ):
+        ssh_proc = popen_mock.return_value
+        ssh_proc.stdout = io.BytesIO(b"")  # empty archive stream
+        ssh_proc.stderr = MagicMock()
+        ssh_proc.stderr.read.return_value = b""
+        ssh_proc.returncode = 0
+        ssh_proc.wait.return_value = 0
+        _pull._pull_transfer(
+            ssh_target="u@h",
+            remote_cmd="tar c -C /r -T - -f -",
+            local_path=tmp_path,
+            codec_flag=None,
+            total_bytes=0,
+            timeout=60,
+        )
+    assert any("tar" in c for c in calls)  # the local tar x sink ran on the bounded runner

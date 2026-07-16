@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**170 operations total**: 141 primitive atoms + 29 workflow atoms.
+**171 operations total**: 141 primitive atoms + 30 workflow atoms.
 
 ## How to read this page
 
@@ -190,7 +190,7 @@ Creates new files (e.g. starter executor templates).
 | [`scaffold-strategy`](../primitives/scaffold-strategy.md) | ✓ | writes-file | `hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]` | `_(none)_` | — | — |
 | [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` | `_(none)_` | — | — |
 
-## `workflow` (29)
+## `workflow` (30)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -205,6 +205,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`campaign-refill`](../primitives/campaign-refill.md) | ✓ | scheduler-submit; writes-campaign-state | `hpc-agent campaign-refill --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-run`](../primitives/campaign-run.md) | ✓ | scheduler-submit; ssh; writes-aggregate-output | `hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-watch`](../primitives/campaign-watch.md) | ✓ | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`migrate-remainder`](../primitives/migrate-remainder.md) | ✓ | ssh; writes-derived-run | `hpc-agent migrate-remainder --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`monitor-flow`](../primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `_(none)_` | — | — |
 | [`reproduce-run`](../primitives/reproduce-run.md) | ✓ | writes-sidecar | `hpc-agent reproduce-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`resolve-submit-inputs`](../primitives/resolve-submit-inputs.md) | ✓ | writes-sidecar | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
