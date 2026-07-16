@@ -167,6 +167,30 @@ def _driver_tick_cadence_seconds(experiment_dir: Path, run_id: str) -> float:
     return _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
 
 
+def _run_already_submitted(experiment_dir: Path, run_id: str) -> bool:
+    """True when *run_id*'s sidecar shows a landed cluster job (post-qsub).
+
+    The discriminator (run-14) between the BENIGN "fresh run, first span, no
+    journal record yet" case and the REAL error "an in-flight run's journal
+    record is gone": a run is SUBMITTED once its per-run sidecar carries
+    ``job_ids`` — stamped by ``update_run_sidecar_job_ids`` only after a
+    successful qsub (``ops/submit/runner.py``), the same post-qsub step that
+    mints the journal record. Pre-submit (S1's resolve leg alone) the sidecar
+    exists but has no ``job_ids``, so a missing journal record there is expected.
+
+    Fail-safe: any read trouble (or an unbuildable run_id) returns ``False``
+    (treat as not-yet-submitted → the calm skip), so a sidecar surprise can
+    never manufacture a false "record deleted on a live run" alarm.
+    """
+    try:
+        from hpc_agent.state.runs import read_run_sidecar_or_empty
+
+        sidecar = read_run_sidecar_or_empty(experiment_dir, run_id)
+        return bool(sidecar.get("job_ids"))
+    except Exception:  # noqa: BLE001 — best-effort discriminator; never crash the tick
+        return False
+
+
 def _stamp_driver_tick(experiment_dir: Path, run_id: str) -> None:
     """Stamp the driver dead-man's-switch fields for *run_id* (§5 watchdog).
 
@@ -175,9 +199,53 @@ def _stamp_driver_tick(experiment_dir: Path, run_id: str) -> None:
     ``doctor`` verb) can detect a stalled driver. ``next_tick_due`` is derived
     from the cadence the tick itself chose (see
     :func:`_driver_tick_cadence_seconds`). Best-effort and fully guarded: the
-    journal record is the primary state and a stamping failure (no record yet,
-    lock contention, clock issue) must never crash the tick.
+    journal record is the primary state and a stamping failure (lock contention,
+    clock issue) must never crash the tick.
+
+    FRESH-RUN FIRST SPAN (run-14): the §5 watchdog only watches IN-FLIGHT journal
+    records (``find_stalled_runs`` → the index ``upsert_run`` populates), and the
+    journal RunRecord for a fresh run is minted only INSIDE the (gated, often
+    detached) submit-s2 qsub — S1's resolve leg writes only the per-run sidecar.
+    So the FIRST driver span of a fresh run reaches this helper BEFORE any record
+    exists: there is simply nothing to stamp a deadline ON yet, and submit-s2's
+    own ``submit_and_record`` lays down the INITIAL watchdog deadline the moment
+    the record lands (coverage begins there). Stamping regardless raised
+    ``FileNotFoundError`` inside ``stamp_tick``; the broad guard swallowed it but
+    emitted a full-traceback WARNING that READ AS A CRASH — the run-14 signature
+    that pushed the demo's fresh S2 off block-drive onto direct CLI. So skip the
+    stamp with a CALM disclosure when no record exists yet, and stamp from the
+    span that mints the record onward.
+
+    The skip is a no-op ONLY for a not-yet-submitted run. A record that is absent
+    on a run that HAS been submitted (:func:`_run_already_submitted`) is a
+    genuinely-deleted record on an in-flight run — a real error, kept LOUD (§5:
+    "either side dying is loud"), never masked as a fresh first span.
     """
+    from hpc_agent.state.journal import load_run
+
+    try:
+        record = load_run(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — a bad record read must not crash the tick
+        record = None
+
+    if record is None:
+        if _run_already_submitted(experiment_dir, run_id):
+            logging.getLogger(__name__).warning(
+                "watchdog stamp skipped for run %s — the run was submitted (its "
+                "sidecar carries job_ids) but has no journal record: a deleted "
+                "record on an in-flight run, not a fresh first span. The doctor "
+                "cannot see this driver until the record is restored.",
+                run_id,
+            )
+        else:
+            logging.getLogger(__name__).info(
+                "watchdog stamp skipped for run %s — no journal record yet (first "
+                "span of a fresh run; submit-s2 mints the record and its initial "
+                "watchdog deadline, and the doctor begins coverage there).",
+                run_id,
+            )
+        return
+
     try:
         from datetime import timedelta
 
@@ -194,8 +262,10 @@ def _stamp_driver_tick(experiment_dir: Path, run_id: str) -> None:
             experiment_dir=experiment_dir,
         )
     except Exception:  # noqa: BLE001 — stamping must never crash the tick
-        # ... but a failing stamp blinds the watchdog (the doctor reads these
-        # fields), and "either side dying is loud" (§5). Warn, don't vanish.
+        # A record was present a moment ago but stamping still failed (a
+        # concurrent deletion race, lock contention, clock issue): that blinds
+        # the watchdog (the doctor reads these fields), and "either side dying is
+        # loud" (§5). Warn, don't vanish.
         logging.getLogger(__name__).warning(
             "watchdog stamp failed for run %s — doctor cannot see this driver until a stamp lands",
             run_id,
