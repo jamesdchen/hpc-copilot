@@ -230,3 +230,68 @@ def test_undeclared_reshaper_forces_core_verb_full(monkeypatch: pytest.MonkeyPat
     _patch_plugins(monkeypatch, (_undeclared_register_cli_plugin(),))
     monkeypatch.setattr(dispatch, "_invoke_parsed", lambda args: 4242)
     assert dispatch._try_fast_dispatch([_CORE_VERB, "--spec", "/x"]) is None
+
+
+# ── plugin_contributes_primitive_modules: the baked-hydration gate signal ───
+#
+# The baked ``operations.json`` catalog is CORE-ONLY. A plugin contributing
+# ``primitive_modules`` adds verbs the bake cannot carry, so the discovery verbs
+# (``describe`` / ``find``) must fall to the full walk rather than answer off the
+# core-only bake and MISS them. This predicate is that gate signal.
+
+# The discovery verbs served via baked hydration; both are in the generated map.
+_DISCOVERY_VERB = "describe"
+_OTHER_DISCOVERY_VERB = "find"
+
+
+def test_primitives_only_contributes_primitive_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_plugins(monkeypatch, (_primitives_only_plugin(),))
+    assert plugins_mod.plugin_contributes_primitive_modules() is True
+
+
+def test_no_plugins_contributes_no_primitive_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_plugins(monkeypatch, ())
+    assert plugins_mod.plugin_contributes_primitive_modules() is False
+
+
+def test_cli_shaping_plugins_contribute_no_primitive_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An add-only or reshaping ``register_cli`` plugin with no ``primitive_modules``
+    is handled by the reshaping gate, not the baked-hydration gate."""
+    _patch_plugins(monkeypatch, (_add_only_plugin(),))
+    assert plugins_mod.plugin_contributes_primitive_modules() is False
+    _patch_plugins(monkeypatch, (_reshaping_plugin(_CORE_VERB),))
+    assert plugins_mod.plugin_contributes_primitive_modules() is False
+
+
+# ── baked-hydration fast path: a primitive_modules plugin forces the walk ────
+
+
+def test_primitives_plugin_forces_discovery_off_baked_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FIX: with a TRUSTED (forced) bake but a plugin adding primitive_modules,
+    ``describe`` / ``find`` must fall to the full walk. The core-only bake cannot
+    carry the plugin's verbs, so serving off it would MISS them — non-byte-
+    identical to the full walk (which imports every ``primitive_modules`` module).
+    """
+    monkeypatch.setenv("HPC_AGENT_FORCE_BAKED_CATALOG", "1")
+    _patch_plugins(monkeypatch, (_primitives_only_plugin(),))
+    assert dispatch._try_fast_dispatch([_DISCOVERY_VERB, "submit-s1"]) is None
+    assert dispatch._try_fast_dispatch([_OTHER_DISCOVERY_VERB, "submit a batch"]) is None
+
+
+def test_add_only_plugin_keeps_discovery_on_baked_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control: a plugin that adds NO primitives leaves the discovery verbs on the
+    fast baked-hydration path — they reach the shared ``_invoke_parsed`` seam
+    (sentinel) instead of falling back. Proves the new gate fires ONLY on
+    ``primitive_modules`` contributors, not on any installed plugin."""
+    monkeypatch.setenv("HPC_AGENT_FORCE_BAKED_CATALOG", "1")
+    _patch_plugins(monkeypatch, (_add_only_plugin(),))
+    sentinel = 4242
+    monkeypatch.setattr(dispatch, "_invoke_parsed", lambda args: sentinel)
+    assert dispatch._try_fast_dispatch([_DISCOVERY_VERB, "submit-s1"]) == sentinel
+    assert dispatch._try_fast_dispatch([_OTHER_DISCOVERY_VERB, "submit a batch"]) == sentinel

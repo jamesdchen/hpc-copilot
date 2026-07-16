@@ -202,9 +202,11 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     generated map (grouped verbs, Tier-3 ``run`` / ``mcp-serve``, unknown
     verbs), an installed CLI-shaping (``register_cli``) plugin, a discovery
     verb whose baked catalog is not trustworthy (``describe`` / ``find`` in a
-    source checkout), ``describe --schema`` (resolves an arbitrary target verb's
-    meta the fast path has not imported), or any stale-map miss. Every fallback
-    path yields byte-identical behaviour to before — only speed differs.
+    source checkout) OR whose core-only bake would miss a plugin's
+    ``primitive_modules`` verbs, ``describe --schema`` (resolves an arbitrary
+    target verb's meta the fast path has not imported), or any stale-map miss.
+    Every fallback path yields byte-identical behaviour to before — only speed
+    differs.
     """
     if not argv or argv[0].startswith("-"):
         return None
@@ -216,11 +218,20 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
         # never imported — take the full walk so the meta is present.
         if "--schema" in argv:
             return None
+        from hpc_agent._kernel.registry.plugins import plugin_contributes_primitive_modules
         from hpc_agent._kernel.registry.primitive import baked_catalog_usable
 
         if not baked_catalog_usable():
             # Untrusted / unreadable bake — resolving off the partial live
             # registry would be wrong-but-plausible (A1). Full walk instead.
+            return None
+        if plugin_contributes_primitive_modules():
+            # The bake is CORE-ONLY; a plugin adding primitive_modules puts verbs
+            # in the full walk's catalog that the bake cannot carry. Serving
+            # ``describe`` / ``find`` off it would MISS those verbs — non-byte-
+            # identical to the full walk. Fall back so the discovery surface is
+            # the whole truth. (Scoped to describe/find only — core verbs never
+            # enter this branch, so the hot submit-preflight path is unaffected.)
             return None
     from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
 

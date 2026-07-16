@@ -1451,3 +1451,53 @@ def test_hook_and_verb_pinned_equal_on_shared_fixture(tmp_path: Path) -> None:
         verb_nums = [m for m in verb.mismatches if m.kind == "number"]
         assert (not hook_nums) is expect_clean
         assert bool(hook_nums) == bool(verb_nums)  # hook and verb agree
+
+
+# ─── run-14: number-WORD claims route through the SAME union pool as digits ────
+#
+# The F-R spelled-count lexicon path (``nineteen`` >= 13 threshold) had NOT been
+# wired through the hook's cross-run union corpus the way digit claims were: a
+# number a SIBLING run legitimately sources, relayed as a WORD, flagged under a
+# run whose scope never loaded the owning run's reduce artifacts — the exact
+# hook/verb divergence the digit path already closed.
+
+
+def test_hook_passes_sibling_sourced_number_word(tmp_path: Path) -> None:
+    """THE defect: ``runA aggregated nineteen waves; runB pending`` — runA owns the
+    reduce (n_waves=19), runB does not. The verb scoped to runA passes ``nineteen``
+    clean; the hook (auditing runB too) must NOT flag it, because the UNION pool
+    across mentioned runs carries the 19. Hook == verb verdict on the owning run."""
+    from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
+    from hpc_agent.ops.decision.journal.verify_relay import verify_relay
+
+    _seed_run(tmp_path, status="complete")  # RUN_ID owns the reduce
+    _seed_extra_run(tmp_path, "pi-run-2", status="complete")  # sibling, no reduce
+    _seed_reduce(tmp_path, RUN_ID, {"n_waves": 19})
+
+    relay = f"Runs {RUN_ID} and pi-run-2 aggregated nineteen waves total."
+
+    viols = _hook_number_violations(tmp_path, relay, [RUN_ID, "pi-run-2"])
+    assert [v for v in viols if v.kind in ("number", "run_id")] == [], viols
+
+    # The owning run's verb agrees the spelled count is clean (pinned equal).
+    verb = verify_relay(
+        experiment_dir=tmp_path,
+        spec=VerifyRelayInput(run_id=RUN_ID, relay_text=relay),
+    )
+    assert [m for m in verb.mismatches if m.kind == "number"] == []
+
+
+def test_hook_flags_fabricated_number_word(tmp_path: Path) -> None:
+    """The 539c1cdc finding-8 lexicon behaviour is PRESERVED: a spelled count NO
+    mentioned run sources still fires (``fifty`` when the union carries only 19),
+    and cites no misleading far neighbour (defect-3 gate on the word path)."""
+    _seed_run(tmp_path, status="complete")
+    _seed_reduce(tmp_path, RUN_ID, {"n_waves": 19})
+
+    relay = f"Run {RUN_ID} aggregated fifty waves overall."  # 50 sourced by nobody
+    viols = _hook_number_violations(tmp_path, relay, [RUN_ID])
+    nums = [v for v in viols if v.kind == "number"]
+    assert len(nums) == 1
+    assert nums[0].claim == "fifty"
+    assert nums[0].journal_value is None  # 19 is > 10% away — not a citable neighbour
+    assert "journal:" not in nums[0].text

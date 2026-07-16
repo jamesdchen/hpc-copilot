@@ -166,6 +166,41 @@ def test_seeded_stale_bake_falls_back_to_walk_byte_identical(tmp_path: object) -
         bake_path.write_text(original, encoding="utf-8")  # type: ignore[attr-defined]
 
 
+def test_resolve_catalog_walks_when_plugin_adds_primitive_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_resolve_catalog`` must NOT serve the CORE-ONLY bake when an installed
+    plugin contributes ``primitive_modules`` — even a TRUSTED bake would MISS the
+    plugin's verbs. It falls to the full walk (whose ``operations_catalog`` sees
+    every imported primitive), so the discovery surface is the whole truth.
+
+    Driven at the ``_resolve_catalog`` seam: force a partial registry + a trusted,
+    poisoned bake, and assert the poison is never returned when a plugin adds
+    primitives (walk taken) but IS returned when none do (bake taken)."""
+    import hpc_agent._kernel.registry.plugins as plugins_mod
+    import hpc_agent._kernel.registry.primitive as primitive_mod
+    from hpc_agent._kernel.registry.operations import operations_catalog
+    from hpc_agent.cli.setup import _resolve_catalog
+
+    poison = [{"name": "BAKE-ONLY-POISON", "verb": "query", "summary": ""}]
+    # Pretend registration has not completed so the bake branch is reachable, but
+    # keep the real (already-populated) registry so ``operations_catalog`` answers.
+    monkeypatch.setattr(primitive_mod, "_REGISTRATION_DONE", False)
+    monkeypatch.setattr(primitive_mod, "baked_catalog_usable", lambda: True)
+    monkeypatch.setattr(primitive_mod, "load_baked_catalog", lambda: poison)
+    monkeypatch.setattr(primitive_mod, "register_primitives", lambda: None)
+
+    # A plugin adding primitives → the bake is incomplete → full walk.
+    monkeypatch.setattr(plugins_mod, "plugin_contributes_primitive_modules", lambda: True)
+    walked = _resolve_catalog()
+    assert walked == operations_catalog()
+    assert walked != poison, "core-only bake was served despite a primitive_modules plugin"
+
+    # No plugin primitives → the trusted bake is served (unchanged core-only path).
+    monkeypatch.setattr(plugins_mod, "plugin_contributes_primitive_modules", lambda: False)
+    assert _resolve_catalog() == poison
+
+
 @pytest.mark.slow
 def test_fast_path_help_matches_full() -> None:
     """``<verb> --help`` is identical fast vs full (the fast path builds the

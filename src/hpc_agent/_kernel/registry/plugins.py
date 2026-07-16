@@ -46,6 +46,7 @@ __all__ = [
     "cli_reshaping_verdict",
     "get_plugin_manifests",
     "load_plugins",
+    "plugin_contributes_primitive_modules",
     "plugin_primitive_modules",
     "plugin_schema_roots",
     "plugin_slash_command_roots",
@@ -100,6 +101,26 @@ def plugin_primitive_modules() -> tuple[str, ...]:
     for plugin in load_plugins():
         modules.extend(getattr(plugin, "primitive_modules", ()) or ())
     return tuple(modules)
+
+
+def plugin_contributes_primitive_modules() -> bool:
+    """True when at least one installed plugin contributes ``primitive_modules``.
+
+    The baked ``operations.json`` catalog is CORE-ONLY (it is projected with the
+    plugin scan disabled — see ``scripts/bake_operations_json.py``). So the CLI
+    discovery verbs (``describe`` / ``find``) may only answer off the bake — the
+    baked-hydration fast path — when NO plugin adds primitive modules; otherwise
+    the bake would miss the plugin's verbs and the fast path would disagree with
+    the full walk (which imports every ``primitive_modules`` module). This is the
+    ``primitive_modules`` half of the gate ``load_baked_catalog``'s docstring
+    already asserts ("gated off when any plugin contributes primitive modules or
+    reshapes a verb"); the ``register_cli`` reshaping half is
+    :func:`cli_reshaping_verdict`.
+
+    A plugin that reshapes the CLI but adds no primitives, or adds neither,
+    contributes ``False`` here — that plugin is handled by the reshaping gate.
+    """
+    return bool(plugin_primitive_modules())
 
 
 @cache

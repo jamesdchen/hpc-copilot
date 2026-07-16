@@ -63,9 +63,9 @@ def _union_number_pool(experiment_dir: Path, run_ids: list[str]) -> tuple[set[st
 def _is_numeric_literal_claim(claim: str) -> bool:
     """True iff *claim* parses as a bare numeric value (not a word / phrase claim).
 
-    The union suppression and near-citation gate apply only to literal numeric
-    claims — a spelled-out number word (``nineteen``) or a zero-count phrase
-    (``no failed``) keeps the verb's own verdict/citation untouched.
+    A spelled-out number word (``nineteen``) or a zero-count phrase (``no failed``)
+    is not a literal; the number-word case is handled separately via
+    :func:`_number_word_claim_value` so the union suppression covers BOTH shapes.
     """
     from hpc_agent.ops.decision.journal.verify_relay import normalize_num
 
@@ -74,6 +74,22 @@ def _is_numeric_literal_claim(claim: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _number_word_claim_value(claim: str) -> float | None:
+    """The numeric value of a spelled-out number-word claim (``nineteen`` → 19).
+
+    Returns None when *claim* is not a single spelled cardinal — a digit literal
+    (already handled by :func:`_is_numeric_literal_claim`) or a non-numeric claim.
+    A verb number-word mismatch carries the SURFACE word as its ``claim`` (the F-R
+    lexicon path), so the hook must reconstruct the value to check it against the
+    UNION number pool exactly as it checks a digit claim — the run-14 hook/verb
+    parity fix, extended to the spelled-count path.
+    """
+    from hpc_agent.ops.decision.journal.verify_relay import number_word_value
+
+    value = number_word_value(claim)
+    return float(value) if value is not None else None
 
 
 def _number_matches_union(claim: str, union_strings: set[str], union_floats: list[float]) -> bool:
@@ -140,19 +156,36 @@ def _gather_violations(
             for m in result.mismatches:
                 if m.kind not in _CONTRADICTION_KINDS:
                     continue
-                # A numeric-literal claim SOME mentioned run legitimately sources
-                # is never a contradiction — whether this run flagged it as a
-                # ``number`` (no match in its own pool) OR, having job_ids, as a
-                # job-id-shaped ``run_id`` (a reduce number like ``437839`` under a
-                # sibling run). Both are the run-14 hook/verb corpus divergence.
+                # A numeric claim SOME mentioned run legitimately sources is never
+                # a contradiction — whether this run flagged it as a ``number`` (no
+                # match in its own pool) OR, having job_ids, as a job-id-shaped
+                # ``run_id`` (a reduce number like ``437839`` under a sibling run).
+                # Both are the run-14 hook/verb corpus divergence. The claim reaches
+                # this check as a digit literal (``437839``) OR — the F-R lexicon
+                # path — as a SPELLED-OUT number word (``nineteen``): the verb emits
+                # the surface word as the claim, so its value is reconstructed and
+                # checked against the SAME union pool as a digit claim. Without this
+                # the spelled-count path never saw the union (the exact defect: a
+                # sibling-owned ``nineteen`` = 19 flagged under a run whose scope
+                # never loaded the owning run's n_waves).
                 claim_numeric = _is_numeric_literal_claim(m.claim)
+                word_value = None if claim_numeric else _number_word_claim_value(m.claim)
                 if claim_numeric and _number_matches_union(m.claim, union_strings, union_floats):
+                    continue
+                if word_value is not None and _number_matches_union(
+                    str(word_value), union_strings, union_floats
+                ):
                     continue
                 nearest_value = m.nearest_source_value
                 if m.kind == "number" and claim_numeric:
                     # A genuinely fabricated number: cite only a GENUINELY-near
                     # union neighbour, never a misleading unrelated one (defect 3).
                     nearest_value = _cite_nearest(m.claim, union_floats)
+                elif m.kind == "number" and word_value is not None:
+                    # A genuinely fabricated spelled-count word: same defect-3 gate
+                    # on the reconstructed value (finding-8 behaviour preserved —
+                    # the word still fires, just cited against the union corpus).
+                    nearest_value = _cite_nearest(str(word_value), union_floats)
                 nearest = f" (journal: {nearest_value})" if nearest_value else ""
                 violations.append(
                     _Violation(

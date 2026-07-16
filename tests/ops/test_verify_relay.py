@@ -755,6 +755,22 @@ def test_number_word_no_source_is_unverifiable(tmp_path: Path) -> None:
     assert unv[0].claim.lower() == "ninety-nine"
 
 
+def test_number_word_value_is_public_for_the_hook() -> None:
+    """``number_word_value`` is a PUBLIC surface: the relay-audit Stop hook
+    reconstructs a spelled-count claim's value to check it against the cross-run
+    union number pool (run-14 hook/verb parity, extended to the F-R word path).
+    Pins the exact surface shapes the verb emits as a claim, and the None sink."""
+    from hpc_agent.ops.decision.journal.verify_relay import number_word_value
+
+    assert number_word_value("nineteen") == 19
+    assert number_word_value("NINETEEN") == 19  # case-insensitive (verb surface)
+    assert number_word_value("forty") == 40
+    assert number_word_value("twenty-one") == 21  # hyphenated compound
+    assert number_word_value("thousand") == 1000  # scale word
+    assert number_word_value("19") is None  # a digit literal is not a word
+    assert number_word_value("nope") is None  # non-cardinal → None
+
+
 # ── bug-sweep #12: value-semantic verification evidence (not a JSON key) ───────
 
 

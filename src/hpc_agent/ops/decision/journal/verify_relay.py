@@ -443,8 +443,17 @@ _NUMBER_WORD_RE = re.compile(
 )
 
 
-def _number_word_value(token: str) -> int | None:
-    """The integer value of a spelled cardinal *token*, or None if unrecognized."""
+def number_word_value(token: str) -> int | None:
+    """The integer value of a spelled cardinal *token*, or None if unrecognized.
+
+    Public because the relay-audit Stop hook reconstructs a spelled-out claim's
+    numeric value to check it against the UNION number pool the same way it checks
+    a digit claim (run-14 hook/verb parity: a number-word a SIBLING run legitimately
+    sources must not flag under a run whose scope never loaded it). Accepts one
+    surface token — a bare cardinal (``nineteen``), a tens word (``forty``), a
+    hyphenated compound (``twenty-one``), or a scale word (``thousand``) — the exact
+    shapes :func:`_extract_number_word_claims` emits as a claim's surface.
+    """
     t = token.lower()
     if "-" in t:
         tens, _, unit = t.partition("-")
@@ -482,7 +491,7 @@ def _extract_number_word_claims(text: str) -> list[tuple[int, int, str, int]]:
     """
     out: list[tuple[int, int, str, int]] = []
     for m in _NUMBER_WORD_RE.finditer(text):
-        value = _number_word_value(m.group(0))
+        value = number_word_value(m.group(0))
         if value is None or value < _NUMBER_WORD_MIN_VALUE:
             continue
         if _word_is_conversational(text, m.start()):
@@ -2141,3 +2150,4 @@ def verify_notebook_relay(
 # public names — the private-import lint enforces it).
 _normalize_num = normalize_num
 _match_number = match_number
+_number_word_value = number_word_value

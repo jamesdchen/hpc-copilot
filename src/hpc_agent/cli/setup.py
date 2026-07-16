@@ -258,16 +258,20 @@ def _resolve_catalog() -> list[dict[str, Any]]:
     silently matches ~4 rows, a ``describe`` of any other verb confidently
     errors). So hydrate from the shipped ``operations.json`` bake instead — but
     only when it is TRUSTWORTHY (``baked_catalog_usable`` is content-keyed on the
-    build fingerprint, so a stale source-checkout bake is never trusted). If the
-    bake is not trustworthy or cannot be read, refuse to answer off a partial
-    registry and complete the full walk. Either way the returned catalog is the
-    WHOLE truth, so the emitted envelope is byte-identical to the full path.
+    build fingerprint, so a stale source-checkout bake is never trusted) AND no
+    installed plugin contributes ``primitive_modules`` (the bake is core-only, so
+    it cannot carry a plugin's verbs — serving off it would MISS them). If the
+    bake is not trustworthy, cannot be read, or a plugin adds primitives, refuse
+    to answer off a partial registry and complete the full walk. Either way the
+    returned catalog is the WHOLE truth, so the emitted envelope is byte-identical
+    to the full path.
     """
     from hpc_agent._kernel.registry import primitive as _prim
     from hpc_agent._kernel.registry.operations import operations_catalog
+    from hpc_agent._kernel.registry.plugins import plugin_contributes_primitive_modules
 
     if not getattr(_prim, "_REGISTRATION_DONE", False):
-        if _prim.baked_catalog_usable():
+        if _prim.baked_catalog_usable() and not plugin_contributes_primitive_modules():
             baked = _prim.load_baked_catalog()
             if baked is not None:
                 return baked

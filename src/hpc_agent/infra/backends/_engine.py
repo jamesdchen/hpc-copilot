@@ -896,6 +896,26 @@ class ProfileBackend(HPCBackend):
         it carries no shell metacharacters (digits / ``,`` / ``-`` / ``:`` are
         all shell-safe) so it needs no quoting.
 
+        **Comma decomposition for the single-range families (SGE / PBS Pro).**
+        SLURM ``scancel <id>_[<indices>]`` accepts a comma index LIST verbatim
+        (``scancel 12_[4,8,13-15]`` is valid), so it stays ONE call. SGE/UGE
+        ``qdel -t`` — like ``qsub -t`` — accepts only a SINGLE ``n[-m[:s]]``
+        range, NOT a comma list: a whole-set ``qdel <id> -t 4,8,13-15`` cancels
+        at most the leading task and leaves the rest running (the reported
+        defect). The submit path can *refuse* a comma-bearing ``-t`` (see
+        :meth:`_build_sge_command`), but a cancel CANNOT refuse — it must cancel
+        every undone task — so for a family whose dialect lacks
+        ``supports_comma_array_ranges`` a non-contiguous range is DECOMPOSED
+        into one ``qdel <ids> -t <run>`` per contiguous comma segment (recover's
+        :func:`~hpc_agent.ops.recover.batching.compact_task_ids` already emits
+        one contiguous run per segment, so the comma split IS the
+        decomposition). The per-segment commands are sequenced with ``;`` — NOT
+        ``&&`` — so a non-zero qdel on an already-gone leading task still runs
+        the remaining segments: the emitted command cancels EXACTLY the undone
+        set, never a leading-range-only subset and never a task outside it. A
+        single-segment range ("42" / "13-15") collapses to the original single
+        ``qdel -t`` (byte-identical), so only the multi-segment case changes.
+
         *cluster* (#F37) mirrors :meth:`build_alive_check_cmd`: a federated
         ``scancel -M <cluster>`` so the cancel reaches the member ``sbatch
         --clusters=`` submitted to. Default ``None`` leaves the command
@@ -916,6 +936,15 @@ class ProfileBackend(HPCBackend):
             # SGE addresses array tasks with ``-t <range>`` (the submit ``-t``
             # dialect); the PBS families reuse it in this codepath (no PBS range
             # cancel is exercised today).
+            if not dialect_for(cls.profile.family).supports_comma_array_ranges:
+                # SGE/UGE ``qdel -t`` accepts one ``n[-m[:s]]`` range only, so a
+                # non-contiguous set must be decomposed into one qdel per
+                # contiguous comma segment (see the docstring). ``;`` — never
+                # ``&&`` — so every segment is cancelled even if an earlier one
+                # errors on an already-gone task. A single segment collapses to
+                # the original single ``qdel -t`` string.
+                segments = [seg.strip() for seg in str(task_range).split(",") if seg.strip()]
+                return " ; ".join(f"qdel {ids} -t {seg}" for seg in segments)
             return f"qdel {ids} -t {task_range}"
         return f"qdel {ids}"
 

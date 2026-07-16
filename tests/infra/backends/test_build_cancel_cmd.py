@@ -21,7 +21,54 @@ PBSPRO = get_backend_class("pbspro")
 
 def test_sge_range_cancel_uses_qdel_dash_t() -> None:
     # SGE addresses array subtasks with ``-t <range>`` (the submit ``-t`` dialect).
-    assert SGE.build_cancel_cmd(["12345"], "4,8,13-15") == "qdel 12345 -t 4,8,13-15"
+    # A single contiguous segment stays one ``qdel -t`` call.
+    assert SGE.build_cancel_cmd(["12345"], "13-15") == "qdel 12345 -t 13-15"
+
+
+# --- SGE non-contiguous decomposition (the reported defect) ------------------
+#
+# SGE/UGE ``qdel -t`` accepts a SINGLE ``n[-m[:s]]`` range only — a whole-set
+# ``qdel <id> -t 4,8,13-15`` cancels at most the leading task and leaves the
+# rest running. The cancel MUST decompose the non-contiguous undone set into one
+# ``qdel -t`` per contiguous comma segment, covering EXACTLY the set.
+
+
+def test_sge_noncontiguous_decomposes_into_one_qdel_per_run() -> None:
+    # {4,8,13,14,15} == "4,8,13-15" -> three ranges: 4 / 8 / 13-15.
+    cmd = SGE.build_cancel_cmd(["12345"], "4,8,13-15")
+    assert cmd == "qdel 12345 -t 4 ; qdel 12345 -t 8 ; qdel 12345 -t 13-15"
+    # Sequenced with ``;`` (never ``&&``): an already-gone leading task must not
+    # abort the cancel of the remaining segments (never a subset).
+    assert "&&" not in cmd
+    # Exactly the undone set — no task outside {4,8,13,14,15} is ever named.
+    segs = [part.split("-t ")[1].strip() for part in cmd.split(" ; ")]
+    assert segs == ["4", "8", "13-15"]
+
+
+def test_sge_single_task_is_one_range() -> None:
+    # Boundary {4} -> a single ``qdel -t 4``.
+    assert SGE.build_cancel_cmd(["12345"], "4") == "qdel 12345 -t 4"
+
+
+def test_sge_contiguous_set_is_one_range() -> None:
+    # {4,5,6} arrives compacted as "4-6" (compact_task_ids output) -> ONE range,
+    # never split into three single-index qdels.
+    assert SGE.build_cancel_cmd(["12345"], "4-6") == "qdel 12345 -t 4-6"
+
+
+def test_sge_noncontiguous_fans_across_multiple_ids() -> None:
+    # Every job id is named in every per-segment qdel.
+    cmd = SGE.build_cancel_cmd(["10", "20"], "4,13-15")
+    assert cmd == "qdel 10 20 -t 4 ; qdel 10 20 -t 13-15"
+
+
+def test_sge_whole_array_is_not_named_by_a_range_cancel() -> None:
+    # A range cancel must NEVER degrade to the whole-array ``qdel <id>`` (that
+    # would cancel a superset — running/done tasks outside the undone set).
+    cmd = SGE.build_cancel_cmd(["12345"], "4,8,13-15")
+    assert "-t" in cmd
+    for part in cmd.split(" ; "):
+        assert part.strip().startswith("qdel 12345 -t ")
 
 
 def test_slurm_range_cancel_uses_bracket_subscript() -> None:

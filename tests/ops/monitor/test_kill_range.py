@@ -101,7 +101,12 @@ def test_range_kill_dispatches_slurm_bracket_and_stays_in_flight(
 
 
 def test_range_kill_dispatches_sge_dash_t(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An SGE range kill emits ``qdel <id> -t <range>``."""
+    """An SGE range kill decomposes a non-contiguous set into one qdel per run.
+
+    SGE ``qdel -t`` accepts only a single ``n[-m[:s]]`` range, so the undone set
+    ``4,8,13-15`` is cancelled as three sequenced ``qdel -t`` calls covering
+    EXACTLY the set — never the leading-task-only subset the comma list produced.
+    """
     sent = _capture_ssh(monkeypatch)
     _patch_reconcile(monkeypatch)
     upsert_run(tmp_path, _record("r1", job_ids=["12345"], total_tasks=900))
@@ -114,7 +119,7 @@ def test_range_kill_dispatches_sge_dash_t(tmp_path: Path, monkeypatch: pytest.Mo
         spec=KillSpec(run_id="r1", scheduler="sge", task_range="4,8,13-15"),
     )
 
-    assert sent == ["qdel 12345 -t 4,8,13-15"]
+    assert sent == ["qdel 12345 -t 4 ; qdel 12345 -t 8 ; qdel 12345 -t 13-15"]
     assert out["settled"] is False
 
 
