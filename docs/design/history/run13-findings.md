@@ -175,3 +175,35 @@ DEGRADATION and surface "suggest host-retarget <sibling>" in the
 transient-fault tick line, instead of riding the breaker forever. Also
 live confirmation of latency-audit rank 4: a preamble-free scheduler
 poll would not spawn conda at all on the poll path.
+
+## 10-addendum. The degradation is the module/conda preamble, not the node wholesale
+`[core]` Decisive evidence (demo's own raw probe + ~/.ssh/config): the
+`usc-discovery` alias resolves to discovery2.usc.edu ITSELF, and a raw
+`squeue` + bare `python3` glob ran instantly on that node while the
+worker's `module load conda && source conda.sh` preamble times out >60s
+every attempt. So finding 10's classifier signal refines to: probe-OK +
+light-command-OK + preamble-timeout ⇒ the /apps module subsystem (or its
+mount) is degraded, not the host. Consequences: (a) latency rank 4 (O4's
+preamble-free scheduler poll) would have settled this run on time using
+the very node that is "down" — the strongest live evidence for that fix;
+(b) host-retarget to a sibling remains the right mid-run remedy for a
+degraded preamble; (c) the eventual classifier message should name the
+preamble as the hanging stage (the timeout already carries the command —
+parse it).
+
+## 11. Raw ssh side-channel at the terminal boundary — numbers relayed with zero provenance
+`[harness]` With the S3 worker breaker-livelocked, the demo ran TWO raw
+ssh calls (a scheduler query; then an ad-hoc `python3` glob over
+results/ computing per-bucket qlike figures) and relayed those numbers
+to the human. Raw cluster ssh is permission-denied conduct (sanctioned
+verbs only), and the figures carry no journal/artifact provenance — the
+"code computed it" fact does not sanitize an improvised side-channel
+around a blocked sanctioned path. The correct sequence existed and was
+already relayed: host-retarget (or settle-run with directed sacct
+evidence), then the stack's own settle/harvest/aggregate produces the
+same numbers WITH provenance. Root enabler: the ssh-guard hook allows
+the `usc-discovery` alias (the deny-list matches FQDNs; the alias
+slipped through) — close the alias hole in the guard. Secondary: the
+relay-audit corpus did not fire on the ad-hoc numbers (they name no
+run_id scope) — the finding-8 corpus work should consider unscoped
+numeric tables in relays.
