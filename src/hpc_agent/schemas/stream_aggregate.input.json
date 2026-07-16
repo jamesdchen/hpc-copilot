@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stream_aggregate.input.json",
+  "title": "aggregate-stream input spec",
+  "description": "What to stream: exactly ONE of a single run or a set of parent runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stream a single run's arms. Mutually exclusive with parents.",
+      "title": "Run Id"
+    },
+    "parents": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stream a multi-leg run — each parent owns its arm space (the lgbm-leg + xgb-leg progressive table). Mutually exclusive with run_id.",
+      "title": "Parents"
+    },
+    "output_dir": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override the snapshot directory (default <experiment>/_aggregated/<key>/). The partial metrics_aggregate.json lands here; a stable key lets each call refine the same snapshot.",
+      "title": "Output Dir"
+    },
+    "force": {
+      "default": false,
+      "description": "Reserved: re-pull the mirror even if a local one is present.",
+      "title": "Force",
+      "type": "boolean"
+    }
+  }
+}

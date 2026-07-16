@@ -469,6 +469,10 @@ WITHIN_ROLE_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("migrate", "ops", "memory"),
         ("migrate", "ops", "submit"),
         ("monitor", "ops", "recover"),
+        # streaming aggregate: the arm-census reads monitor's announce markers,
+        # and multi-leg streaming composes the migrate ownership-map harvest.
+        ("aggregate", "ops", "monitor"),
+        ("aggregate", "ops", "migrate"),
     }
 )
 

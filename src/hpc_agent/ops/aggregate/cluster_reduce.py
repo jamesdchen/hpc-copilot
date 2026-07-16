@@ -76,8 +76,26 @@ def _build_remote_cmd(
     aggregate_cmd: str,
     run_id: str,
     extra_env: dict[str, str] | None,
+    remote_activation: str = "",
 ) -> str:
-    """Compose the single shell line that runs the reducer on the cluster."""
+    """Compose the single shell line that runs the reducer on the cluster.
+
+    *remote_activation* is the run's control-plane activation prefix (S-REDUCE,
+    SPEC §3.C.1) — the ONE ``remote_activation_for_sidecar`` seam
+    (``infra/clusters.py:852``) every reporter / reconcile / combine call already
+    threads (``_combiner.run_final_reduce``, ``_combiner.py:157``). It is either
+    empty (``""``, bare login python — unchanged), a preamble-free
+    ``export PATH=<env_bin>:"$PATH" && `` PATH-prepend when the run pins an
+    ``env_python`` (run-13 finding 10), or a ``module load … && conda activate …
+    && `` legacy preamble. Each non-empty form ends in `` && ``, so it slots in
+    right before the reducer's own env-var setup: the reducer's literal
+    ``python3``/``python`` then resolves to the run's env interpreter instead of
+    bare login python — closing the run-14 crash where a py3.13-syntax
+    ``specs/reduce_*.py`` hit login py3.8 and died on parse (``exit 1`` mid-harvest).
+    Placed AFTER the ``cd``/``mkdir`` (which need no env) and BEFORE ``export
+    HPC_RUN_ID=…`` so a ``conda activate`` inside a legacy preamble does not clobber
+    the reducer's contract vars.
+    """
     env_parts: list[str] = [
         f"HPC_RUN_ID={shlex.quote(run_id)}",
         f"HPC_AGGREGATED_OUTPUT={shlex.quote(output_rel)}",
@@ -90,6 +108,7 @@ def _build_remote_cmd(
     return (
         f"cd {shlex.quote(remote_path)} && "
         f"mkdir -p {shlex.quote(output_dir_rel)} && "
+        f"{remote_activation}"
         f"{env_setup} && "
         f"{aggregate_cmd}"
     )
@@ -252,10 +271,11 @@ def cluster_reduce(
 
     from pathlib import Path as _Path
 
-    from hpc_agent.infra.clusters import resolve_ssh_target
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar, resolve_ssh_target
     from hpc_agent.infra.remote import ssh_run
     from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.journal import load_run
+    from hpc_agent.state.runs import read_run_sidecar
 
     record = load_run(experiment_dir, run_id)
     if record is None:
@@ -263,6 +283,19 @@ def cluster_reduce(
 
     aggregate_cmd = _resolve_aggregate_cmd(
         aggregate_cmd, experiment_dir=experiment_dir, run_id=run_id
+    )
+    # S-REDUCE (SPEC §3.C.1): thread the run's control-plane activation so the
+    # reducer's literal ``python3`` binds the run's env interpreter, not bare login
+    # python. Best-effort: a missing/unreadable sidecar degrades to ``""`` (bare
+    # python, the historical behaviour) exactly as ``remote_activation_for_sidecar``
+    # does for status/reconcile — the same ONE seam, ``fallback_cluster`` seeded
+    # from the record so an env-less submit-flow sidecar still activates (#281).
+    try:
+        _sidecar_for_env = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError):
+        _sidecar_for_env = {}
+    remote_activation = remote_activation_for_sidecar(
+        _sidecar_for_env, fallback_cluster=record.cluster
     )
     output_rel = format_output_rel(output_path or DEFAULT_OUTPUT_REL, run_id=run_id)
     local_dir_path = (
@@ -278,6 +311,7 @@ def cluster_reduce(
             aggregate_cmd=aggregate_cmd,
             run_id=run_id,
             extra_env=extra_env,
+            remote_activation=remote_activation,
         ),
         ssh_target=resolve_ssh_target(record),
         timeout=float(timeout_sec),

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**171 operations total**: 141 primitive atoms + 30 workflow atoms.
+**172 operations total**: 142 primitive atoms + 30 workflow atoms.
 
 ## How to read this page
 
@@ -14,12 +14,13 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (76)
+## `query` (77)
 
 Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
+| [`aggregate-stream`](../primitives/aggregate-stream.md) | ✓ | ssh; sync-pull | `hpc-agent aggregate-stream --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`apply-safe-defaults`](../primitives/apply-safe-defaults.md) | ✓ | _none_ | `hpc-agent apply-safe-defaults --spec <path>` | `_(none)_` | — | — |
 | [`attention-queue`](../primitives/attention-queue.md) | ✓ | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`audit-handoff`](../primitives/audit-handoff.md) | ✓ | _none_ | `hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

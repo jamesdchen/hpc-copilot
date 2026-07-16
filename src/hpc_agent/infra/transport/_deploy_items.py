@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # Remote path (relative to ``remote_path``) of the content-hash cache the
 # deploy step keys on to skip re-shipping unchanged files (#242). It maps
@@ -62,7 +66,55 @@ class _DeployItem:
     content: str | None
 
 
-def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
+def reducer_relpath_from_aggregate_cmd(aggregate_cmd: str | None) -> str | None:
+    """Derive the repo-relative reducer ``*.py`` path from an ``aggregate_cmd``.
+
+    This is how *core* answers "which repo file is the run's reducer?" from the
+    declared aggregate command (spec §3.C.2 of the streaming-aggregate plan).
+    The sidecar's ``aggregate_defaults.aggregate_cmd`` is a shell command line
+    (e.g. ``"python3 specs/reduce_causal_tune_tree.py"``); we tokenize it and
+    return the first token that names a literal ``*.py`` script path — the file
+    the deploy must ship and the stage-gate must find on disk.
+
+    Two shapes deliberately yield ``None`` (no shippable repo file):
+
+      * a **module** reducer — ``python -m pkg.reducer`` — names an *installed*
+        module, not a repo file. The rsync push already carried whatever package
+        provides it; there is nothing extra to content-hash and ship. The ``-m``
+        (and inline ``-c``) tokens are recognised explicitly so a malformed
+        ``-m foo.py`` still reads as a module invocation, mirroring how
+        ``ops.aggregate.cluster_reduce`` accepts a ``python -m`` reducer.
+      * a command that names **no** ``.py`` token at all.
+
+    Tokenizing uses :func:`shlex.split` (honours quotes exactly as the cluster
+    shell would); on a genuinely unbalanced-quote command it falls back to a
+    plain ``str.split`` so a best-effort path is still recovered rather than
+    raising in the middle of a submit.
+    """
+    if not aggregate_cmd:
+        return None
+    try:
+        tokens = shlex.split(aggregate_cmd)
+    except ValueError:
+        # Unbalanced quotes etc. — shlex refuses; a naive split still lets us
+        # spot a ``specs/reduce_x.py`` token rather than abort the whole submit.
+        tokens = aggregate_cmd.split()
+    for tok in tokens:
+        if tok in ("-m", "-c"):
+            # An interpreter flag introducing a MODULE / inline program, not a
+            # file path — the reducer ships with the installed package, so there
+            # is no repo file to deploy or stage-gate. Stop scanning.
+            return None
+        if tok.endswith(".py"):
+            return tok
+    return None
+
+
+def _build_deploy_items(
+    *,
+    scheduler: str | None,
+    extra_items: Sequence[tuple[Path, str]] | None = None,
+) -> list[_DeployItem]:
     """Enumerate every file :func:`deploy_runtime` ships, hashed for caching.
 
     The single source of truth for *what* the deploy places and the content
@@ -164,18 +216,43 @@ def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
     )
     for src_rel, dst_rel in reporter_closure:
         add_file(pkg_dir / Path(src_rel), dst_rel)
+
+    # Per-run EXTRA files layered atop the framework set — today the run's
+    # declared custom reducer (spec §3.C.2). Shipped as a content-hashed deploy
+    # item exactly like the combiner above (``add_file(... ".hpc/_hpc_combiner.py")``
+    # at the mirror precedent) so the cluster reduce resolves it deterministically
+    # and the deploy cache re-ships it only when its bytes change.
+    #
+    # A src that is NOT a file is skipped SILENTLY here: the LOUD refusal for an
+    # absent declared reducer lives at the submit stage-gate
+    # (``ops.submit_flow``, spec §6 row S6), NOT here. Keeping this path lenient
+    # means a re-deploy over an already-shipped tree — or a manifest recompute
+    # for the cache — never crashes on a transiently-absent path, while the
+    # fail-fast still happens once, at submit time, where it is actionable.
+    for src_abs, dst_rel in extra_items or ():
+        if src_abs.is_file():
+            add_file(src_abs, dst_rel)
     return items
 
 
-def _local_deploy_manifest(*, scheduler: str | None) -> dict[str, Any]:
+def _local_deploy_manifest(
+    *,
+    scheduler: str | None,
+    extra_items: Sequence[tuple[Path, str]] | None = None,
+) -> dict[str, Any]:
     """The deploy-cache manifest the CURRENT local sources would produce.
 
     ``{"pkg_version": <version>, "files": {dst_rel: sha256, ...}}`` — exactly
     what :func:`deploy_runtime` writes to :data:`_DEPLOY_MANIFEST_REL` after a
     deploy. Comparing it against the manifest read back from the cluster is
     how the cache decides which files (if any) actually need re-shipping.
+
+    *extra_items* mirrors :func:`_build_deploy_items`: the per-run reducer must
+    be in the manifest the local sources produce, else the cache would conclude
+    the reducer "never needs shipping" and a fresh reducer would silently never
+    reach the cluster.
     """
-    items = _build_deploy_items(scheduler=scheduler)
+    items = _build_deploy_items(scheduler=scheduler, extra_items=extra_items)
     return {
         "pkg_version": _pkg_version(),
         "files": {it.dst_rel: it.sha for it in items},

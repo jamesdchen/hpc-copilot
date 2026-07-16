@@ -106,6 +106,12 @@ ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
     {
         ("incorporation/build/submit_spec.py", "hpc_agent.infra.backends._remote_base"),
         ("ops/submit_flow.py", "hpc_agent.infra.backends._remote_base"),
+        # range-kill (B4): kill.py reuses the backend's canonical
+        # ``_expand_task_range`` to map a global undone-task set to per-wave
+        # local array indices — the ONE definition of the index grammar; a
+        # local reimplementation would be the mirror-twin the boundary exists
+        # to prevent (2026-07-16 deployed-bug-sweep B4).
+        ("ops/monitor/kill.py", "hpc_agent.infra.backends.query"),
         # ``inspect-deployment`` is the general case of S5's
         # ``preflight_executor_exists`` — a read-only listing over the same
         # throttled transport. It reuses the SAME ``deploy_target_for``

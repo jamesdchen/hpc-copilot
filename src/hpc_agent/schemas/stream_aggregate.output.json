@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stream_aggregate.output.json",
+  "title": "aggregate-stream output data",
+  "description": "A partial-but-honest aggregate over the arms complete NOW.\n\nEvery number in ``aggregated_metrics`` / ``per_arm_metrics`` is\nreducer-computed (core selected WHICH arms, the reducer computed the values).\n``arms_pending`` names what is still coming and from where; ``snapshot_seq``\nis monotonic across calls and ``newly_complete`` is the delta since the prior\nsnapshot. ``arms_regressed`` names any arm that was complete in a prior\nsnapshot but is not now (disclosed, never masked).",
+  "type": "object",
+  "required": [
+    "ok",
+    "parents",
+    "snapshot_seq",
+    "arms_complete",
+    "arms_pending",
+    "newly_complete",
+    "arms_regressed",
+    "aggregated_metrics",
+    "per_arm_metrics",
+    "output_path_local",
+    "reduce_path",
+    "reduced_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "parents": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Parents",
+      "type": "array"
+    },
+    "snapshot_seq": {
+      "minimum": 1,
+      "title": "Snapshot Seq",
+      "type": "integer"
+    },
+    "superseded": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The prior snapshot_seq this call supersedes, or null.",
+      "title": "Superseded"
+    },
+    "arms_complete": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Arms Complete",
+      "type": "array"
+    },
+    "arms_pending": {
+      "items": {
+        "$ref": "#/$defs/StreamArmPending"
+      },
+      "title": "Arms Pending",
+      "type": "array"
+    },
+    "newly_complete": {
+      "description": "Arms complete in THIS snapshot that were not in the prior one.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Newly Complete",
+      "type": "array"
+    },
+    "arms_regressed": {
+      "description": "Arms complete in a prior snapshot but not now (disclosed, never masked).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Arms Regressed",
+      "type": "array"
+    },
+    "aggregated_metrics": {
+      "additionalProperties": true,
+      "description": "Reducer weighted-mean over ALL complete arms' task summaries.",
+      "title": "Aggregated Metrics",
+      "type": "object"
+    },
+    "per_arm_metrics": {
+      "additionalProperties": true,
+      "description": "Per-complete-arm reducer rows (the progressive table), keyed owner:arm.",
+      "title": "Per Arm Metrics",
+      "type": "object"
+    },
+    "output_path_local": {
+      "description": "Where the partial metrics_aggregate.json was written.",
+      "title": "Output Path Local",
+      "type": "string"
+    },
+    "reduce_path": {
+      "description": "'builtin' (per-arm weighted-mean) or 'ownership' (multi-parent dedup).",
+      "title": "Reduce Path",
+      "type": "string"
+    },
+    "ownership_dedup": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Multi-parent ownership accounting (raced cells dropped to their owner), or null.",
+      "title": "Ownership Dedup"
+    },
+    "disagreement": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Announce-vs-status-reporter census disagreement per parent, or null.",
+      "title": "Disagreement"
+    },
+    "reduced_at": {
+      "title": "Reduced At",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "StreamArmPending": {
+      "additionalProperties": false,
+      "description": "One still-draining arm, disclosed by name (the never-silent-cap rule).",
+      "properties": {
+        "arm": {
+          "title": "Arm",
+          "type": "string"
+        },
+        "tasks_done": {
+          "minimum": 0,
+          "title": "Tasks Done",
+          "type": "integer"
+        },
+        "tasks_expected": {
+          "minimum": 0,
+          "title": "Tasks Expected",
+          "type": "integer"
+        },
+        "owner_run_id": {
+          "description": "The parent run whose leg still owes this arm.",
+          "title": "Owner Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "arm",
+        "tasks_done",
+        "tasks_expected",
+        "owner_run_id"
+      ],
+      "title": "aggregate-stream pending arm",
+      "type": "object"
+    }
+  }
+}

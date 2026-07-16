@@ -183,3 +183,6 @@ src/hpc_agent/ops/migrate/migrate_remainder.py
 src/hpc_agent/ops/migrate/ownership.py
 src/hpc_agent/infra/block_chain.py
 src/hpc_agent/ops/submit_blocks.py
+src/hpc_agent/infra/transport/_deploy_items.py
+src/hpc_agent/ops/aggregate/arm_census.py
+src/hpc_agent/ops/aggregate/stream.py

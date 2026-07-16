@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final
 
@@ -93,6 +94,7 @@ from ._deploy_items import (
     _parse_remote_manifest,  # noqa: F401
     _pkg_version,  # noqa: F401
     _sha256_bytes,  # noqa: F401
+    reducer_relpath_from_aggregate_cmd,
 )
 from ._disclose import (
     _PAYLOAD_WALK_CAP,  # noqa: F401
@@ -163,6 +165,7 @@ __all__ = [
     "run_combiner",
     "run_combiner_checked",
     "run_final_reduce",
+    "reducer_relpath_from_aggregate_cmd",
     "tar_ssh_pull",
 ]
 
@@ -1210,6 +1213,7 @@ def deploy_runtime(
     remote_path: str,
     scheduler: str | None = None,
     use_cache: bool | None = None,
+    extra_files: Sequence[tuple[str | Path, str]] | None = None,
 ) -> None:
     """Deploy framework runtime files to the cluster.
 
@@ -1253,6 +1257,15 @@ def deploy_runtime(
     The default rsync excludes preserve cluster-side framework files
     inside ``.hpc/``, but deploy_runtime is still safe to re-run after
     every push (it overwrites with the package-versioned bytes).
+
+    *extra_files* layers per-run ``(src, dst_rel)`` payloads on top of the
+    framework set — today the run's declared custom reducer (spec §3.C.2 of the
+    streaming-aggregate plan): the reducer named by the sidecar's
+    ``aggregate_defaults.aggregate_cmd``, shipped as a content-hashed deploy item
+    so it rides the same delta/cache path as the combiner. Each src is normalized
+    to a :class:`~pathlib.Path`; a non-existent src is silently omitted by
+    :func:`_build_deploy_items` (the loud absent-reducer refusal lives at the
+    submit stage-gate, not here).
     """
     if use_cache is None:
         use_cache = os.environ.get("HPC_NO_DEPLOY_CACHE") != "1"
@@ -1307,7 +1320,10 @@ def deploy_runtime(
 
     remote_manifest = _parse_remote_manifest(getattr(prelude, "stdout", "")) if use_cache else None
 
-    items = _build_deploy_items(scheduler=scheduler)
+    # Normalize the per-run extra payloads to (Path, dst_rel) so the reducer
+    # rides the same content-hash cache as every framework file (spec §3.C.2).
+    normalized_extra = [(Path(src), dst_rel) for src, dst_rel in (extra_files or ())]
+    items = _build_deploy_items(scheduler=scheduler, extra_items=normalized_extra or None)
     new_manifest = {
         "pkg_version": _pkg_version(),
         "files": {it.dst_rel: it.sha for it in items},

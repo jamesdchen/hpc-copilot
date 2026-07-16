@@ -244,6 +244,83 @@ def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_
     assert out["output_path_remote"] == "custom/r1.summary.json"
 
 
+def test_env_python_activation_threaded_into_reduce_cmd(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """S-REDUCE (SPEC §3.C.1): a run pinning ``env_python`` prefixes the reducer
+    command with the preamble-free PATH-prepend so the reducer's literal
+    ``python3`` binds the run's env interpreter — not bare login python (the
+    run-14 py3.8-vs-3.13 crash). The prefix must sit BEFORE the reducer's own
+    ``export HPC_RUN_ID`` env setup and after ``cd``/``mkdir``."""
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
+    from hpc_agent.state.runs import write_run_sidecar
+
+    _seed(tmp_path)
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1",
+        cmd_sha="0" * 64,
+        hpc_agent_version="0.2.0",
+        submitted_at="2026-01-01T00:00:00Z",
+        executor="python3 src/run.py",
+        result_dir_template="results/{seed}",
+        task_count=4,
+        tasks_py_sha="1" * 64,
+        env={"env_python": "/opt/conda/envs/rv/bin/python"},
+    )
+    local_dir = tmp_path / "_aggregated" / "r1"
+
+    def fake_rsync_pull(*args, **kwargs):
+        _stage_pulled_output(local_dir, "r1.json", {"z": 3})
+        return _completed(returncode=0)
+
+    captured_cmd: list[str] = []
+
+    def fake_ssh(cmd: str, **kwargs):
+        captured_cmd.append(cmd)
+        return _completed(returncode=0)
+
+    with (
+        mock.patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
+    ):
+        cluster_reduce(tmp_path, run_id="r1", aggregate_cmd="python3 specs/reduce_x.py")
+    cmd = captured_cmd[0]
+    assert 'export PATH=/opt/conda/envs/rv/bin:"$PATH" &&' in cmd
+    # activation lands before the reducer's own HPC_RUN_ID export …
+    assert cmd.index('export PATH=/opt/conda/envs/rv/bin') < cmd.index("HPC_RUN_ID=r1")
+    # … and the reducer still runs after it.
+    assert cmd.rstrip().endswith("python3 specs/reduce_x.py")
+
+
+def test_no_env_activation_leaves_bare_cmd(tmp_path: Path, journal_home: Path) -> None:
+    """No pinned env / no resolvable cluster ⇒ activation is ``""`` and the
+    remote command is byte-identical to the historical bare-python shape."""
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
+
+    _seed(tmp_path)  # RunRecord cluster="c" — absent from clusters.yaml ⇒ no activation
+    local_dir = tmp_path / "_aggregated" / "r1"
+
+    def fake_rsync_pull(*args, **kwargs):
+        _stage_pulled_output(local_dir, "r1.json", {"z": 3})
+        return _completed(returncode=0)
+
+    captured_cmd: list[str] = []
+
+    def fake_ssh(cmd: str, **kwargs):
+        captured_cmd.append(cmd)
+        return _completed(returncode=0)
+
+    with (
+        mock.patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
+    ):
+        cluster_reduce(tmp_path, run_id="r1", aggregate_cmd="python3 specs/reduce_x.py")
+    cmd = captured_cmd[0]
+    assert "export PATH=" not in cmd
+    assert "&& export HPC_RUN_ID=r1" in cmd
+
+
 def test_no_journal_record_raises(tmp_path: Path, journal_home: Path) -> None:
     from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 

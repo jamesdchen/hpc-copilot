@@ -53,6 +53,7 @@ from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.transport import (
     _GENERATED_SHIPPABLE,
     deploy_runtime,
+    reducer_relpath_from_aggregate_cmd,
     rsync_push,
 )
 from hpc_agent.ops.submit.runner import submit_and_record
@@ -427,6 +428,7 @@ def _run_shared_prelude(
     skip_preflight: bool,
     skip_prelude_io: bool,
     per_task_executors: list[str] | None = None,
+    reducer_item: tuple[Path, str] | None = None,
 ) -> None:
     """Connectivity gate, then rsync+deploy CONCURRENT with the uv probe (#280).
 
@@ -488,6 +490,7 @@ def _run_shared_prelude(
                 remote_path=remote_path,
                 rsync_excludes=rsync_excludes,
                 scheduler=scheduler,
+                reducer_item=reducer_item,
             )
         )
         # The `with` exit joins both threads regardless of which raised, so a
@@ -810,6 +813,7 @@ def _push_and_deploy(
     remote_path: str,
     rsync_excludes: list[str] | None,
     scheduler: str | None = None,
+    reducer_item: tuple[Path, str] | None = None,
 ) -> None:
     """rsync_push + deploy_runtime — the expensive ssh fan-out, done once.
 
@@ -818,6 +822,13 @@ def _push_and_deploy(
     architecture re-ran both for every spec, which is what tripped
     cluster sshd MaxStartups under campaign-time fan-out (see commit
     0c99e1f / the SSH-backoff commit).
+
+    *reducer_item* — an ``(absolute_src, dst_rel)`` for the run's declared custom
+    reducer (spec §3.C.2) — is forwarded to :func:`deploy_runtime` as an
+    ``extra_files`` payload so the reducer ships as a content-hashed deploy item
+    (guaranteed-ship insurance on top of the rsync that already carries
+    ``specs/``). ``None`` (module reducer / no custom reducer) is the unchanged
+    path.
     """
     # Progress legibility (run #7: staging was silent → 0-byte worker logs read
     # as "stuck", three false stall alarms). One line before each network leg.
@@ -835,8 +846,78 @@ def _push_and_deploy(
             f"{(push_result.stderr or '').strip()[:300]}"
         )
     _log.info("staging: code pushed; deploying runtime files ...")
-    deploy_runtime(ssh_target=ssh_target, remote_path=remote_path, scheduler=scheduler)
+    deploy_runtime(
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        scheduler=scheduler,
+        extra_files=[reducer_item] if reducer_item else None,
+    )
     _log.info("staging: deploy complete")
+
+
+def _resolve_reducer_deploy_item(
+    experiment_dir: Path,
+    specs: list[SubmitFlowSpec],
+    fresh_indices: list[int],
+) -> tuple[Path, str] | None:
+    """Stage-gate the run's declared custom reducer + return its deploy item.
+
+    S-REDUCE part b (spec §3.C.2, §6 row S6): a run whose sidecar declares a
+    custom reducer via ``aggregate_defaults.aggregate_cmd`` (e.g.
+    ``"python3 specs/reduce_causal_tune_tree.py"``) must ship that reducer file
+    to the cluster AND fail fast — HERE, at submit — if the file is absent,
+    rather than dying mid-harvest with "no such file" hours later when the
+    cluster reduce first tries to run it (the run-14 manual-scp class).
+
+    For each fresh spec we read its sidecar, derive the reducer's repo-relative
+    path with :func:`reducer_relpath_from_aggregate_cmd`, and:
+
+      * ``None`` (a ``python -m`` module reducer, or no custom reducer) → nothing
+        to ship or gate; the installed package already rode the rsync push.
+      * a literal ``specs/…​.py`` path that is **not on disk** under
+        *experiment_dir* → raise :class:`errors.SpecInvalid` (the loud
+        stage-refuse; the silent-skip in ``_build_deploy_items`` is deliberately
+        the *deploy* posture, this gate is the *submit* posture).
+      * a path that **is** a file → build ``(abs, rel)`` for
+        :func:`deploy_runtime`'s ``extra_files``.
+
+    Returns the single reducer deploy item for the batch (all specs in a batch
+    share one ``experiment_dir`` and, in practice, one campaign-level reducer, so
+    the distinct set is size ≤ 1 — the first resolved item is returned). Every
+    fresh spec is still gated, so a missing reducer on ANY spec refuses the whole
+    batch. An unreadable sidecar contributes nothing (best-effort, like
+    :func:`_collect_per_task_executors`).
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    resolved: tuple[Path, str] | None = None
+    for i in fresh_indices:
+        try:
+            sidecar = read_run_sidecar(experiment_dir, specs[i].run_id)
+        except Exception:  # noqa: BLE001 — unreadable sidecar → no reducer claim
+            continue
+        if not isinstance(sidecar, dict):
+            continue
+        defaults = sidecar.get("aggregate_defaults")
+        aggregate_cmd = defaults.get("aggregate_cmd") if isinstance(defaults, dict) else None
+        reducer_rel = reducer_relpath_from_aggregate_cmd(aggregate_cmd)
+        if reducer_rel is None:
+            continue
+        reducer_abs = (experiment_dir / reducer_rel).resolve()
+        if not reducer_abs.is_file():
+            raise errors.SpecInvalid(
+                f"run {specs[i].run_id!r} declares a custom reducer {reducer_rel!r} "
+                f"(from aggregate_defaults.aggregate_cmd {aggregate_cmd!r}) that is NOT "
+                f"on disk under the experiment repo (looked at {reducer_abs}). The "
+                "cluster reduce would die mid-harvest with 'no such file' (the run-14 "
+                "manual-scp class) — stage refused so you learn this now, at submit, "
+                "not hours later at aggregate. Commit or create the reducer at that "
+                "path, or fix aggregate_defaults.aggregate_cmd (a `python -m` module "
+                "reducer ships with the installed package and needs no repo file)."
+            )
+        if resolved is None:
+            resolved = (reducer_abs, reducer_rel)
+    return resolved
 
 
 def _is_runnable_executor(executor: str | None) -> bool:
@@ -3226,6 +3307,18 @@ def _submit_flow_batch_locked(
     # under REPO_DIR. A sidecar that can't be read contributes nothing (the probe
     # simply skips it) — the check is best-effort defense-in-depth.
     per_task_executors = _collect_per_task_executors(experiment_dir, specs, fresh_indices)
+    # S-REDUCE part b (spec §3.C.2, §6 row S6): resolve + stage-gate the run's
+    # declared custom reducer, then ship it as a content-hashed deploy item
+    # alongside the framework files. Gated on ``not skip_rsync_deploy`` for the
+    # SAME reason as the pre-stage smoke above: when the rsync+deploy arm is
+    # dropped (Phase-2 re-entry that already staged the reducer under Phase 1),
+    # there is nothing to ship and re-gating a path a prior phase already shipped
+    # would spuriously refuse a valid Phase 2.
+    reducer_item = (
+        None
+        if skip_rsync_deploy
+        else _resolve_reducer_deploy_item(experiment_dir, specs, fresh_indices)
+    )
     _run_shared_prelude(
         experiment_dir=experiment_dir,
         ssh_target=ssh_target,
@@ -3242,6 +3335,7 @@ def _submit_flow_batch_locked(
         skip_preflight=skip_preflight,
         skip_prelude_io=skip_prelude_io,
         per_task_executors=per_task_executors,
+        reducer_item=reducer_item,
     )
 
     # Per-spec submission work.

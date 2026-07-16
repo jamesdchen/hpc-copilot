@@ -85,6 +85,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
+| [aggregate-stream](aggregate-stream.md) | yes | ssh: `<parents>`; sync-pull: `<remote_path>/results/**/<summary>` | `hpc-agent aggregate-stream --spec <path> [--experiment-dir <dir>]` |
 | [apply-safe-defaults](apply-safe-defaults.md) | yes | _none_ | `hpc-agent apply-safe-defaults --spec <path>` |
 | [attention-queue](attention-queue.md) | yes | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` |
 | [audit-handoff](audit-handoff.md) | yes | _none_ | `hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]` |

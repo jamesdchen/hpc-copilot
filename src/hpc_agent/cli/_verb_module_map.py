@@ -18,6 +18,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'aggregate-flow': ('aggregate-flow', 'hpc_agent.ops.aggregate_flow'),
     'aggregate-preflight': ('aggregate-preflight', 'hpc_agent.ops.aggregate_preflight'),
     'aggregate-run': ('aggregate-run', 'hpc_agent.ops.aggregate_blocks'),
+    'aggregate-stream': ('aggregate-stream', 'hpc_agent.ops.aggregate.stream'),
     'append-decision': ('append-decision', 'hpc_agent.ops.decision.journal'),
     'apply-safe-defaults': ('apply-safe-defaults', 'hpc_agent.ops.submit.apply_safe_defaults'),
     'archive-dossier': ('archive-dossier', 'hpc_agent.ops.archive_dossier'),
