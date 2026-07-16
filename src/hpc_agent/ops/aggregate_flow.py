@@ -1650,10 +1650,21 @@ def _aggregate_flow_impl(
     summary_pull_error: str | None = None
     if pull_summaries:
         sl = out / "summaries"
+        # Finding 19 (run #12), leg C: scope the summaries pull to the run's OWN
+        # results subtree, the SAME call the sibling per-task / trace pulls make
+        # (:413, :576). Pulling the whole shared ``results/`` root drags every
+        # prior run's outputs through the transfer — the scp fallback cannot
+        # include-filter — turning a small summaries pull into the 1800s timeout
+        # finding 19 measured. Pure reuse of the one scoping definition; no new
+        # machinery. Falls back to ``results_subdir`` when the run declares no
+        # template (the helper's own contract), so a template-less run is
+        # byte-identical to the pre-scoping behavior.
         sp = rsync_pull(
             ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
-            remote_subdir=results_subdir,
+            remote_subdir=_run_scoped_results_subdir(
+                experiment_dir, run_id, record, results_subdir
+            ),
             local_dir=str(sl),
             include=[summary_glob] if summary_glob else None,
         )
