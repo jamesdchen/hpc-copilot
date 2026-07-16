@@ -13,6 +13,7 @@ and falls back to the legacy ``rsync_pull`` otherwise, normalizing both to the
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -98,7 +99,7 @@ def test_routes_through_tar_seam_when_present(monkeypatch):
     assert calls == {
         "ssh_target": "u@h",
         "remote_path": "/remote/results/exp",
-        "local_path": "/local/dst",
+        "local_path": Path("/local/dst"),
         "include_globs": ["metrics.json"],
     }
 
