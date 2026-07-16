@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -115,6 +116,119 @@ LOCAL_PULL_MIRROR_DIRNAMES: tuple[str, ...] = (
     PER_TASK_RESULTS_DIRNAME,
     PER_TASK_TRACES_DIRNAME,
 )
+#: The per-task staleness fingerprint sidecar the dispatcher stamps into each
+#: result dir on a successful promote (``execution/mapreduce/dispatch.py``,
+#: content = the submission ``cmd_sha``). The combine's per-task mirror is a
+#: persistent local cache keyed by task-id; comparing this fingerprint against
+#: the cached copy is what detects a repair/graft re-run that overwrote the
+#: source pieces (run-13 finding 13-addendum — the stale-table root cause).
+PER_TASK_CMD_SHA_FILENAME = ".hpc_cmd_sha"
+
+
+def _summary_task_dir(match: Path, summary_name: str) -> Path:
+    """The result dir owning a summary match — strips ALL of the (possibly
+    path-shaped) summary's components, mirroring the local ``_task_dir`` in
+    :func:`_per_task_metrics_reduce`. The dispatcher writes ``.hpc_cmd_sha`` at
+    this result-dir level, so this is where the fingerprint sits."""
+    for _ in range(len(PurePosixPath(summary_name).parts)):
+        match = match.parent
+    return match
+
+
+def _piece_fingerprint(task_dir: Path, summary: Path) -> str:
+    """The staleness fingerprint of one cached per-task piece.
+
+    Prefers the dispatcher's ``.hpc_cmd_sha`` sidecar (the submission cmd_sha —
+    the exact signal the COMPUTE side already compares, dispatch.py:959). Falls
+    back to an ``mtime_ns|size`` token over the cached summary when the sidecar
+    is absent (a legacy piece a dispatcher predating the stamp wrote, or a
+    transport that dropped it) so a torn overwrite is still detectable — the
+    fallback compare the finding calls for.
+    """
+    sha_file = task_dir / PER_TASK_CMD_SHA_FILENAME
+    if sha_file.is_file():
+        try:
+            val = sha_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            val = ""
+        if val:
+            return f"sha:{val}"
+    try:
+        st = summary.stat()
+    except OSError:
+        return "meta:unknown"
+    return f"meta:{st.st_mtime_ns}|{st.st_size}"
+
+
+def _mirror_piece_fingerprints(results_local: Path, summary_name: str) -> dict[str, str]:
+    """Map each cached per-task result dir (abs path str) → its fingerprint.
+
+    An empty map means "no cache to compare against" — the FIRST harvest (the
+    mirror dir does not exist yet), where nothing can be stale. The gate is a
+    pure no-op in that (common) case: no cached copy, no comparison, no evict.
+    """
+    out: dict[str, str] = {}
+    if not results_local.is_dir():
+        return out
+    for summary in results_local.rglob(summary_name):
+        if not summary.is_file():
+            continue
+        tdir = _summary_task_dir(summary, summary_name)
+        out[str(tdir)] = _piece_fingerprint(tdir, summary)
+    return out
+
+
+def _evict_stale_mirror_pieces(
+    results_local: Path, cached_fingerprints: dict[str, str], summary_name: str
+) -> list[int]:
+    """Remove cached per-task dirs whose SOURCE fingerprint moved; return their ids.
+
+    Compares the pre-pull cached fingerprint against the just-pulled one for the
+    SAME dir. A moved fingerprint means the source piece was refreshed since we
+    cached it (a repair/graft re-ran that task under a new cmd_sha) — the cached
+    summary the transport left may be a stale torn copy its size+mtime delta
+    skipped (there is no ``--delete``), so evict the whole task dir to force a
+    clean re-fetch (finding 13-addendum TRAP 2). Unchanged and newly-appeared
+    dirs are untouched, so a steady-state re-aggregate re-pulls nothing.
+    """
+    if not cached_fingerprints:
+        return []
+    fresh = _mirror_piece_fingerprints(results_local, summary_name)
+    refreshed: list[int] = []
+    for tdir_str, old_fp in cached_fingerprints.items():
+        new_fp = fresh.get(tdir_str)
+        if new_fp is None or new_fp == old_fp:
+            continue
+        tid = _task_id_from_dir(Path(tdir_str))
+        if tid is not None:
+            refreshed.append(tid)
+        shutil.rmtree(tdir_str, ignore_errors=True)
+    return sorted(set(refreshed))
+
+
+def _invalidate_waves_for_refreshed_tasks(
+    experiment_dir: Path, run_id: str, task_ids: list[int]
+) -> None:
+    """Mark the wave partials owning *task_ids* for a forced recombine.
+
+    A graft that refreshed a task's source piece invalidates any wave partial
+    combined over the STALE piece. Reuse the resubmit path's precedent
+    (``ops/recover_flow._invalidate_combined_waves_for_tasks``): map ids→waves
+    via the sidecar ``wave_map``, drop the touched waves from ``combined_waves``,
+    add them to ``failed_waves`` — the durable "needs a forced recombine" signal
+    ``ops/aggregate/combine.py`` reads. Best-effort and a no-op for a
+    wave_map-less run (the common no-combiner per-task shape), so a run that
+    never used waves is untouched.
+    """
+    if not task_ids:
+        return
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
+        sidecar = None
+    from hpc_agent.ops.recover_flow import _invalidate_combined_waves_for_tasks
+
+    _invalidate_combined_waves_for_tasks(experiment_dir, run_id, list(task_ids), sidecar)
 
 
 @dataclass(frozen=True)
@@ -497,12 +611,25 @@ def _per_task_metrics_reduce(
         )
     results_local = out / PER_TASK_RESULTS_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
+    # Staleness gate (run-13 finding 13-addendum): the per-task mirror is a
+    # PERSISTENT local cache keyed by task-id. A repair/graft re-run overwrites
+    # the SOURCE pieces under results/, but the transport's size+mtime delta can
+    # leave the stale cached summary in place (a torn overwrite whose size+mtime
+    # collide — there is no ``--delete``), and ``reduce_metrics`` then faithfully
+    # reproduces WRONG numbers from it (the run-13 stale-table root cause).
+    # Snapshot the cached per-task cmd_sha fingerprints BEFORE the pull; carry
+    # ``.hpc_cmd_sha`` in the include so the fingerprint lands on BOTH transports
+    # (the scp legacy fallback ignores include, so listing it is what makes the
+    # tar/rsync path deliver it — TRAP 1); after the pull, evict any task dir
+    # whose fingerprint moved and re-pull it clean.
+    include = [summary_name, PER_TASK_CMD_SHA_FILENAME]
+    cached_fingerprints = _mirror_piece_fingerprints(results_local, summary_name)
     pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=scoped_subdir,
         local_dir=str(results_local),
-        include=[summary_name],
+        include=include,
     )
     if pull.returncode != 0:
         stderr_tail = (pull.stderr or "").strip()
@@ -514,6 +641,33 @@ def _per_task_metrics_reduce(
             f"{summary_name} sidecars under {record.remote_path}/{results_subdir}/. "
             f"rsync_pull stderr: {stderr_tail[:300]}"
         )
+
+    # Evict any cached per-task dir whose source fingerprint moved (a graft
+    # re-ran it) and re-pull those dirs clean, then invalidate the wave partials
+    # they belong to. Empty ``cached_fingerprints`` (first harvest) → no-op, so
+    # the common single-pull path is untouched.
+    refreshed_task_ids = _evict_stale_mirror_pieces(
+        results_local, cached_fingerprints, summary_name
+    )
+    if refreshed_task_ids:
+        repull = _pull(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            remote_subdir=scoped_subdir,
+            local_dir=str(results_local),
+            include=include,
+        )
+        if repull.returncode != 0:
+            stderr_tail = (repull.stderr or "").strip()
+            raise errors.RemoteCommandFailed(
+                f"per-task reduce for run_id {run_id!r} evicted "
+                f"{len(refreshed_task_ids)} stale cached task dir(s) (refreshed "
+                f"source pieces — cmd_sha moved) but the clean re-pull failed "
+                f"(exit {repull.returncode}). Refusing to reduce over a mirror "
+                f"that mixes fresh and evicted pieces. rsync_pull stderr: "
+                f"{stderr_tail[:300]}"
+            )
+        _invalidate_waves_for_refreshed_tasks(experiment_dir, run_id, refreshed_task_ids)
 
     # Every directory under the pulled tree that carries the declared summary
     # file is a per-task result dir. reduce_metrics scans each for that sidecar
