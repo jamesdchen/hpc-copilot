@@ -1661,7 +1661,7 @@ def test_fused_verify_tail_reads_all_legs_in_one_ssh(monkeypatch: pytest.MonkeyP
     # Every leg parsed from the one read.
     assert bundle["stderr_tail"] == "line-one\nline-two"
     assert bundle["log_path"] == "/x/logs/p_canary.o42.1"
-    assert bundle["runtime"] == {"status": "present", "exit_code": 0}
+    assert bundle["runtime"] == {"status": "present", "exit_code": 0, "elapsed_sec": None}
     assert bundle["output"] == (True, "ok")
     assert bundle["fingerprint_sha"] == "deadbeefcafe"
 

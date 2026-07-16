@@ -1172,12 +1172,17 @@ def get_max_walltime_sec(
 
 
 # Conservative cold-start walltime (seconds) used when a cluster declares no
-# ``default_walltime_sec`` and no runtime prior exists yet. 4h matches the
-# CPU/ML resource default in the submit procedure and errs long on purpose:
-# under-asking gets the job killed at the walltime ceiling (the whole run
-# wasted), while over-asking only costs a little queue priority. The canary and
-# first real run establish a prior fast, after which the planner takes over.
-_COLD_START_WALLTIME_SEC = 14400
+# ``default_walltime_sec`` and no runtime prior exists yet. 2h is a modest guess
+# that still errs long enough to survive queue-wait jitter and a fatter-than-
+# expected first task: under-asking gets the job killed at the ceiling (the whole
+# run wasted), while over-asking only costs a little queue priority. The value is
+# further clamped to max_walltime_sec/4 in get_default_walltime_sec so a large-
+# ceiling cluster does not cold-start at a fat fraction of its max. The two-phase
+# canary MEASURES the real runtime and shrinks the ACTUAL array walltime
+# (ops/submit/canary_calibration.py), so this guess only governs the canary +
+# the very first ask, never the sized main array (run-14: a hand-picked 6h ask
+# inflated est_core_hours 36x over the measured runtime).
+_COLD_START_WALLTIME_SEC = 7200
 
 
 def get_default_walltime_sec(
@@ -1210,9 +1215,12 @@ def get_default_walltime_sec(
     ceiling = get_max_walltime_sec(cluster_config)
     raw = cluster_config.get("default_walltime_sec")
     if raw is None:
-        # No explicit cold-start ask: clamp the conservative floor to the
-        # cluster ceiling (a 1h-max test cluster must not get a 4h default).
-        return min(floor, ceiling)
+        # No explicit cold-start ask: the modest built-in floor, additionally
+        # clamped to a quarter of the cluster ceiling so a large-ceiling cluster
+        # never cold-starts at a fat fraction of its max (a 1h-max test cluster
+        # already can't exceed its ceiling). max(1, ...) keeps a tiny-ceiling
+        # cluster's ask positive.
+        return min(floor, max(1, ceiling // 4), ceiling)
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise errors.SpecInvalid(
             f"default_walltime_sec must be a positive int, got {raw!r} ({type(raw).__name__})"

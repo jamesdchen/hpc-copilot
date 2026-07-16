@@ -107,8 +107,86 @@ def _sge_time_flags(walltime_sec: int | None) -> list[str]:
     return ["-l", f"h_rt={_fmt_hms(int(walltime_sec))}"] if walltime_sec else []
 
 
-def _sge_mem_flags(mem_mb: int | None) -> list[str]:
-    return ["-l", f"h_data={int(mem_mb)}M"] if mem_mb else []
+# ── SGE/UGE memory semantics (run-14, hoffman2 live evidence 2026-07-16) ────
+# ``h_data`` differs from SLURM ``--mem`` on BOTH axes:
+#
+# * **Per-slot, not per-task.** ``-l h_data=XM -pe shared N`` grants (and
+#   queues for) N×X total. Emitting the spec's ``mem_mb`` verbatim made an
+#   ``mem_mb=16000, cpus=4`` ask queue as 64G — "queues terribly" — while the
+#   same spec on SLURM asked 16G. ``mem_mb`` is defined as the PER-TASK TOTAL
+#   (the backend-portable meaning); the SGE emitter divides it across slots.
+# * **Enforced against VIRTUAL memory, with a silent SIGKILL.** SLURM accounts
+#   resident/cgroup memory; UGE's h_data kills on vmem, which glibc malloc
+#   arenas + OpenMP thread arenas + arrow buffers inflate well beyond RSS
+#   (observed 3-5× before the MALLOC_ARENA_MAX/thread caps; ~1.5-2× after).
+#   A disclosed headroom FACTOR bridges the RSS-intent → vmem-enforced gap so
+#   an ask sized from measured RSS is not silently vmem-killed ~1min in with
+#   no traceback (two live canaries died exactly so at h_data=8000M).
+#
+# per-slot h_data = ceil(mem_mb × factor / slots). Factor default 2.0 (the
+# post-arena-cap residual gap), operator-tunable via HPC_SGE_VMEM_FACTOR
+# (set 1 to disable the headroom). The transformation is DISCLOSED via a
+# logger line whenever the emitted number differs from the spec's mem_mb.
+_SGE_VMEM_FACTOR_ENV = "HPC_SGE_VMEM_FACTOR"
+DEFAULT_SGE_VMEM_FACTOR = 2.0
+
+
+def sge_vmem_factor() -> float:
+    """The SGE vmem-headroom factor: env override, else the 2.0 default.
+
+    Unset / unparseable / non-positive falls back to the default — a
+    fat-fingered factor must never zero out a memory ask.
+    """
+    raw = os.environ.get(_SGE_VMEM_FACTOR_ENV, "").strip()
+    if not raw:
+        return DEFAULT_SGE_VMEM_FACTOR
+    try:
+        val = float(raw)
+    except ValueError:
+        return DEFAULT_SGE_VMEM_FACTOR
+    return val if val > 0 else DEFAULT_SGE_VMEM_FACTOR
+
+
+def sge_h_data_mb(mem_mb: int, slots: int | None) -> int:
+    """Per-slot ``h_data`` MB from a PER-TASK-TOTAL *mem_mb* (the one definition).
+
+    ``ceil(mem_mb × vmem_factor / slots)`` — every SGE mem emitter (the engine's
+    single-node + MPI paths, recover-flow's override renderer) routes through
+    this so the per-slot division and the vmem headroom can never drift apart.
+    """
+    import math
+
+    n = max(1, int(slots)) if slots else 1
+    return max(1, math.ceil(int(mem_mb) * sge_vmem_factor() / n))
+
+
+def _sge_mem_flags(mem_mb: int | None, slots: int | None = None) -> list[str]:
+    """SGE ``-l h_data=`` flags for a PER-TASK-TOTAL *mem_mb* across *slots*.
+
+    Discloses the translation (per-slot division + vmem headroom) via a logger
+    warning whenever the emitted per-slot number differs from the spec's
+    mem_mb, so the operator can audit what the scheduler was actually asked.
+    """
+    if not mem_mb:
+        return []
+    per_slot = sge_h_data_mb(int(mem_mb), slots)
+    if per_slot != int(mem_mb):
+        import logging
+
+        n = max(1, int(slots)) if slots else 1
+        logging.getLogger(__name__).warning(
+            "SGE mem translation: mem_mb=%d (per-task total) -> h_data=%dM per slot "
+            "(x%d slots = %dM total vmem cap; vmem headroom factor %g, "
+            "%s=<f> to tune). h_data is PER-SLOT and enforced against VIRTUAL "
+            "memory on UGE/SGE.",
+            int(mem_mb),
+            per_slot,
+            n,
+            per_slot * n,
+            sge_vmem_factor(),
+            _SGE_VMEM_FACTOR_ENV,
+        )
+    return ["-l", f"h_data={per_slot}M"]
 
 
 class ProfileBackend(HPCBackend):
@@ -288,7 +366,9 @@ class ProfileBackend(HPCBackend):
                 flags += ["-l", ",".join(parts)]
         else:  # sge
             flags += _sge_time_flags(walltime_sec)
-            flags += _sge_mem_flags(mem_mb)
+            # h_data is PER-SLOT: divide the per-task-total mem_mb across the
+            # ``-pe shared`` slots (+ the vmem headroom) — see sge_h_data_mb.
+            flags += _sge_mem_flags(mem_mb, cpus)
             if cpus:
                 flags += ["-pe", "shared", str(int(cpus))]
         return flags
@@ -349,7 +429,9 @@ class ProfileBackend(HPCBackend):
             if pe_name:
                 flags += ["-pe", str(pe_name), str(ranks)]
             flags += _sge_time_flags(walltime_sec)
-            flags += _sge_mem_flags(mem_mb)
+            # h_data is PER-SLOT and the PE grants ``ranks`` slots: divide the
+            # per-job-total mem_mb across them (+ vmem headroom).
+            flags += _sge_mem_flags(mem_mb, ranks)
         return flags
 
     # ------------------------------------------------------------------

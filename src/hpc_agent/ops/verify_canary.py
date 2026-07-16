@@ -490,7 +490,13 @@ def _parse_runtime_json(raw: str) -> dict[str, Any]:
       caller falls through to the unchanged success logic.
     * ``{"status": "unreadable", "detail": ...}`` — non-JSON / no ``exit_code`` /
       a non-int one (never mint a false failure from a read miss).
-    * ``{"status": "present", "exit_code": int}`` — parsed.
+    * ``{"status": "present", "exit_code": int, "elapsed_sec": int | None}`` —
+      parsed. ``elapsed_sec`` is the dispatcher's measured task wall-clock
+      (``dispatch.py`` ~:1224), threaded out so the two-phase gate can size the
+      main-array walltime against the MEASURED canary runtime
+      (:func:`hpc_agent.ops.submit.canary_calibration.calibrate_array_walltime`).
+      ``None`` when the field is absent / not a positive int — a read miss never
+      mints a false measurement.
     """
     import json
 
@@ -509,7 +515,13 @@ def _parse_runtime_json(raw: str) -> dict[str, Any]:
             "status": "unreadable",
             "detail": f"_runtime.json exit_code not an int: {parsed.get('exit_code')!r}",
         }
-    return {"status": "present", "exit_code": exit_code}
+    elapsed_raw = parsed.get("elapsed_sec")
+    elapsed_sec: int | None
+    if isinstance(elapsed_raw, bool) or not isinstance(elapsed_raw, int) or elapsed_raw <= 0:
+        elapsed_sec = None
+    else:
+        elapsed_sec = elapsed_raw
+    return {"status": "present", "exit_code": exit_code, "elapsed_sec": elapsed_sec}
 
 
 def _resolve_canary_checkpoint_dir(
@@ -1497,6 +1509,17 @@ def verify_canary(
     runtime = tail_bundle["runtime"]
     if _result_dir is not None and runtime is not None and runtime.get("status") == "present":
         canary_exit_code = int(runtime["exit_code"])
+        # Persist the canary's MEASURED task wall-clock onto its own sidecar so the
+        # two-phase gate can shrink the main-array walltime to the observed runtime
+        # (canary_calibration). Best-effort: a stamp failure never fails the gate —
+        # the array simply launches at the approved walltime, unchanged.
+        # _parse_runtime_json already normalised elapsed_sec to a positive int
+        # (or None on a read miss / absent field), so no measurement mints a stamp.
+        _canary_elapsed = runtime.get("elapsed_sec")
+        if isinstance(_canary_elapsed, int):
+            from hpc_agent.state.runs import stamp_canary_runtime
+
+            stamp_canary_runtime(experiment_dir, canary_run_id, elapsed_sec=_canary_elapsed)
         verdict = _classify_runtime_exit(
             canary_exit_code, canary_run_id=canary_run_id, result_dir=_result_dir
         )

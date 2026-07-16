@@ -160,9 +160,10 @@ class TestGetDefaultWalltimeSec:
 
     def test_floor_clamped_to_max_walltime(self):
         # A small-ceiling cluster never gets a cold-start ask above what its
-        # scheduler accepts — the floor is clamped to max_walltime_sec.
+        # scheduler accepts — clamped to max_walltime_sec AND (run-14 modest-
+        # default directive) to a quarter of the ceiling; 3600 -> 900, not 3600.
         cfg = {"max_walltime_sec": 3600}
-        assert get_default_walltime_sec(cfg) == 3600
+        assert get_default_walltime_sec(cfg) == 900
 
     def test_explicit_value_clamped_to_max_walltime(self):
         cfg = {"default_walltime_sec": 999999, "max_walltime_sec": 7200}
@@ -459,3 +460,26 @@ class TestResolveSshTargetPool:
         record = SimpleNamespace(cluster="carc", ssh_target="me@discovery1.usc.edu")
         # Config wins (the RULING-1 behavior) — resolves to the config host.
         assert resolve_ssh_target(record) == "me@discovery2.usc.edu"
+
+
+class TestColdStartWalltimeModestDefault:
+    """Run-14 directive: the cold-start guess is modest — 2h, further clamped to
+    a quarter of the cluster ceiling. The canary calibration
+    (ops/submit/canary_calibration.py) sizes the real array; this guess governs
+    only the canary + the very first ask."""
+
+    def test_large_ceiling_cluster_cold_starts_at_two_hours(self) -> None:
+        cfg = {"max_walltime_sec": 86400}
+        assert get_default_walltime_sec(cfg) == 7200  # min(7200, 21600, 86400)
+
+    def test_small_ceiling_cluster_clamps_to_quarter(self) -> None:
+        cfg = {"max_walltime_sec": 3600}
+        assert get_default_walltime_sec(cfg) == 900  # min(7200, 900, 3600)
+
+    def test_tiny_ceiling_stays_positive(self) -> None:
+        cfg = {"max_walltime_sec": 2}
+        assert get_default_walltime_sec(cfg) >= 1
+
+    def test_explicit_default_still_wins(self) -> None:
+        cfg = {"max_walltime_sec": 86400, "default_walltime_sec": 10800}
+        assert get_default_walltime_sec(cfg) == 10800

@@ -69,7 +69,7 @@ def stub_launch(monkeypatch: pytest.MonkeyPatch) -> list:
     """Replace the real Phase-2 submit with a stub — no SSH/scheduler."""
     calls: list = []
 
-    def _fake(experiment_dir, base):  # type: ignore[no-untyped-def]
+    def _fake(experiment_dir, base, *, canary_run_id=None):  # type: ignore[no-untyped-def]
         calls.append((experiment_dir, base))
         from hpc_agent.ops.submit_flow import SubmitFlowResult
 

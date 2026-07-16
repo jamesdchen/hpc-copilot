@@ -359,7 +359,9 @@ def _resource_default_disclosures(
 # ── S2 helpers ──────────────────────────────────────────────────────────────
 
 
-def _estimate_for_submit(base: SubmitFlowSpec) -> CostEstimate:
+def _estimate_for_submit(
+    base: SubmitFlowSpec, *, walltime_override: int | None = None
+) -> CostEstimate:
     """Compute the pre-dispatch core-hours footprint from the submit spec.
 
     ``total_tasks × walltime × cores`` — all three already live on the submit
@@ -369,15 +371,46 @@ def _estimate_for_submit(base: SubmitFlowSpec) -> CostEstimate:
     estimate's ``footprint_unknown`` property is what the brief/reason
     renderers branch on to say "unknown core-hours" instead of a false "0"
     (run #6: the human read a cold-start's defensive 0.0 as literal).
+
+    ``walltime_override`` (run-14): when the canary calibration shrank the array
+    walltime (:func:`_walltime_calibration`), the footprint the human CONSENTS to
+    at S2 must be computed off the value the array will actually request, not the
+    padded cold-start ceiling — the 36× ``est_core_hours`` inflation on run
+    ``causal_tune_tree_lgbm-7905102a`` distorted exactly this consent budget.
+    ``None`` keeps the spec's own walltime.
     """
     resources = base.resources
     walltime_s = resources.walltime_sec if (resources and resources.walltime_sec) else 0
+    if walltime_override is not None and walltime_override > 0:
+        walltime_s = walltime_override
     cores = resources.cpus if (resources and resources.cpus) else None
     return estimate_core_hours(
         total_tasks=base.total_tasks,
         walltime_s=walltime_s or 0,
         cores_per_task=cores,
     )
+
+
+def _walltime_calibration(experiment_dir: Path, base: SubmitFlowSpec, canary_run_id: str | None):
+    """Size the array walltime against the measured canary, for a brief disclosure.
+
+    Reads the canary's stamped measured wall-clock (``verify-canary`` wrote it to
+    the canary sidecar) and runs the ONE calibration kernel — the SAME definition
+    ``submit_and_verify._calibrated_base`` uses to actually shrink the launched
+    array (one-definition rule, two call sites: this one discloses, that one
+    applies). Returns a :class:`WalltimeCalibration`; ``applied`` is False and
+    ``disclosure`` None whenever there is nothing to shrink (no canary_run_id, no
+    measurement, no walltime, or an MPI job whose 2-rank canary is unrepresentative).
+    """
+    from hpc_agent.ops.submit.canary_calibration import calibrate_array_walltime
+    from hpc_agent.state.runs import read_canary_elapsed_sec
+
+    resources = base.resources
+    requested = resources.walltime_sec if resources else None
+    if resources is not None and resources.mpi is not None:
+        requested = None  # MPI canary wall-clock is not representative — never calibrate
+    elapsed = read_canary_elapsed_sec(experiment_dir, canary_run_id) if canary_run_id else None
+    return calibrate_array_walltime(canary_elapsed_sec=elapsed, requested_walltime_sec=requested)
 
 
 # ── S4 helpers ──────────────────────────────────────────────────────────────
@@ -676,8 +709,20 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
 
     sv = submit_and_verify(experiment_dir, spec=spec.submit, stop_after_canary=True)
 
-    # Cost estimate from the submit spec (cost.py untouched).
-    est = _estimate_for_submit(spec.submit.submit)
+    # Run-14: size the array walltime against the MEASURED canary runtime before
+    # estimating the footprint. The consent budget the human reads here MUST be
+    # computed off the walltime the array will actually request (the calibrated,
+    # shrunk value S3 applies via the SAME kernel), not the padded cold-start
+    # ceiling — otherwise est_core_hours inflates (run causal_tune_tree_lgbm-
+    # 7905102a: 36×) and distorts the overnight-consent conversation.
+    calibration = _walltime_calibration(experiment_dir, spec.submit.submit, sv.canary_run_id)
+
+    # Cost estimate from the submit spec (cost.py untouched), off the calibrated
+    # walltime when the canary proved the ask can shrink.
+    est = _estimate_for_submit(
+        spec.submit.submit,
+        walltime_override=calibration.walltime_sec if calibration.applied else None,
+    )
     brief: dict[str, Any] = {
         # run_id + cluster ride the brief so the relay renderer is self-contained
         # (design §5.3): the canonical line is rendered from the brief's OWN data.
@@ -713,6 +758,22 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     }
     if sv.verify_result is not None:
         brief["verify_result"] = sv.verify_result.model_dump(mode="json")
+
+    # Run-14 disclosure: when the measured canary let the array walltime shrink,
+    # surface the shrunk value + factor + canary basis so a `y` consents to the
+    # calibrated footprint. Key ABSENT when nothing was calibrated (no
+    # measurement / no walltime / MPI), so a non-calibrating brief stays
+    # byte-identical. The number the human reads == the number S3 requests (one kernel).
+    if calibration.disclosure is not None:
+        brief["walltime_calibration"] = {
+            "applied": calibration.applied,
+            "requested_walltime_sec": calibration.requested_walltime_sec,
+            "calibrated_walltime_sec": calibration.walltime_sec,
+            "canary_elapsed_sec": calibration.canary_elapsed_sec,
+            "safety_factor": calibration.safety_factor,
+            "floor_sec": calibration.floor_sec,
+            "disclosure": calibration.disclosure,
+        }
 
     if sv.deduped:
         return SubmitBlockResult(
@@ -759,11 +820,15 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     # When the gate HONOURED the #249 TTL cache, no fresh canary ran — say so in
     # the brief the operator reads (never render "canary green" for a skip).
     verdict_phrase = sv.canary_skipped_reason if sv.canary_skipped_reason else "canary green"
+    # Run-14: when the measured canary shrank the array walltime, the est above is
+    # already the calibrated footprint — append the one-line basis so the human
+    # sees WHY the number is what it is (and that the array won't over-ask).
+    calib_note = f" ({calibration.disclosure})" if calibration.applied else ""
     return SubmitBlockResult(
         block="s2",
         stage_reached="canary_verified",
         needs_decision=True,
-        reason=f"{verdict_phrase}, est. {est_phrase}; greenlight to submit & watch.",
+        reason=f"{verdict_phrase}, est. {est_phrase}{calib_note}; greenlight to submit & watch.",
         run_id=sv.run_id,
         brief=brief,
         next_block=_next_block(
@@ -893,6 +958,10 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         return result
 
     # 1. Phase-2: launch the main array (canary already verified/greenlit in S2).
+    # Compute the measured-canary walltime calibration for DISCLOSURE from the same
+    # kernel launch_main_array uses to APPLY the shrink (one definition, two sites):
+    # the array launched below requests exactly the walltime disclosed here.
+    s3_calibration = _walltime_calibration(experiment_dir, spec.submit.submit, spec.canary_run_id)
     main = launch_main_array(
         experiment_dir,
         spec=spec.submit,
@@ -933,6 +1002,25 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         "escalation_reason": mon.escalation_reason,
         "ticks": mon.ticks,
         "elapsed_seconds": mon.elapsed_seconds,
+        # Run-14: the measured-canary walltime the array actually requested (key
+        # absent when nothing was calibrated, so a non-calibrating brief is
+        # byte-identical). Disclosed here so the S3 terminal shows the array ran
+        # on the calibrated ceiling, not the padded cold-start ask.
+        **(
+            {
+                "walltime_calibration": {
+                    "applied": s3_calibration.applied,
+                    "requested_walltime_sec": s3_calibration.requested_walltime_sec,
+                    "calibrated_walltime_sec": s3_calibration.walltime_sec,
+                    "canary_elapsed_sec": s3_calibration.canary_elapsed_sec,
+                    "safety_factor": s3_calibration.safety_factor,
+                    "floor_sec": s3_calibration.floor_sec,
+                    "disclosure": s3_calibration.disclosure,
+                }
+            }
+            if s3_calibration.disclosure is not None
+            else {}
+        ),
         "monitor_arm": arm,
         "watchdog": _watchdog_brief(experiment_dir),
     }

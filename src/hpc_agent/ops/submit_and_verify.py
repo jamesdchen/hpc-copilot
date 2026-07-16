@@ -349,7 +349,48 @@ def _verify_second_canary_and_mint(
     return None
 
 
-def _launch_main_array(experiment_dir: Path, base: SubmitFlowSpec) -> SubmitFlowResult:
+def _calibrated_base(
+    experiment_dir: Path, base: SubmitFlowSpec, canary_run_id: str | None
+) -> SubmitFlowSpec:
+    """Return *base* with the array walltime shrunk to the MEASURED canary runtime.
+
+    The two-phase canary measured a full real task; ``verify-canary`` stamped its
+    wall-clock onto the canary sidecar (``canary_elapsed_sec``). Before the main
+    array launches, size its walltime against that measurement via the ONE
+    calibration kernel (shrink-only, never above the approved ceiling —
+    :func:`hpc_agent.ops.submit.canary_calibration.calibrate_array_walltime`).
+
+    No-op (returns *base* unchanged) whenever there is nothing to shrink: no
+    ``canary_run_id`` (a cache-skipped gate never ran a fresh canary), no stamped
+    measurement, no ``resources.walltime_sec`` to tighten, or an MPI job (its
+    canary is a shrunk 2-rank probe whose wall-clock is NOT representative of the
+    full multi-rank run). Best-effort by contract: calibration is an
+    optimization, never a correctness gate.
+    """
+    from hpc_agent.ops.submit.canary_calibration import calibrate_array_walltime
+    from hpc_agent.state.runs import read_canary_elapsed_sec
+
+    resources = base.resources
+    if resources is None or resources.walltime_sec is None or resources.mpi is not None:
+        return base
+    if not canary_run_id:
+        return base
+    elapsed = read_canary_elapsed_sec(experiment_dir, canary_run_id)
+    if elapsed is None:
+        return base
+    calibration = calibrate_array_walltime(
+        canary_elapsed_sec=elapsed,
+        requested_walltime_sec=resources.walltime_sec,
+    )
+    if not calibration.applied or calibration.walltime_sec is None:
+        return base
+    new_resources = resources.model_copy(update={"walltime_sec": calibration.walltime_sec})
+    return base.model_copy(update={"resources": new_resources})
+
+
+def _launch_main_array(
+    experiment_dir: Path, base: SubmitFlowSpec, *, canary_run_id: str | None = None
+) -> SubmitFlowResult:
     """Phase-2 of the two-phase gate: launch the main array after a verified canary.
 
     Extracted so both the fused path (``submit_and_verify`` continuing past the
@@ -358,7 +399,13 @@ def _launch_main_array(experiment_dir: Path, base: SubmitFlowSpec) -> SubmitFlow
     rsync+deploy+preflight Phase 1 already paid (#185/#275/#283). Those skips
     ride internal operator-trusted kwargs — "Phase 1 just deployed this tree" is
     a structural fact the code knows here — never agent-visible spec fields.
+
+    The main-array walltime is calibrated DOWN to the measured canary runtime
+    here (:func:`_calibrated_base`), the single seam both launch paths share, so
+    the array never requests a padded cold-start ceiling for a task the canary
+    proved short. Shrink-only — the approved walltime is the ceiling.
     """
+    base = _calibrated_base(experiment_dir, base, canary_run_id)
     return submit_flow(
         experiment_dir,
         spec=base.model_copy(update={"canary": False, "canary_only": False}),
@@ -455,7 +502,7 @@ def launch_main_array(
     array on code the canary never verified.
     """
     _assert_no_post_greenlight_drift(experiment_dir, spec.submit)
-    main_submit = _launch_main_array(experiment_dir, spec.submit)
+    main_submit = _launch_main_array(experiment_dir, spec.submit, canary_run_id=canary_run_id)
     return SubmitAndVerifyResult(
         run_id=main_submit.run_id,
         job_ids=list(main_submit.job_ids),
@@ -886,8 +933,10 @@ def submit_and_verify(
     # No ``skip_preflight`` as a spec field — preflight is operator-gated now
     # (#275 Fix 2); Phase 1's probe plus the #255 TTL cache cover the re-check.
     # The same deterministic call backs the block-split S3 path, so both share
-    # ``_launch_main_array``.
-    main_submit = _launch_main_array(experiment_dir, base)
+    # ``_launch_main_array`` (and its measured-canary walltime calibration).
+    main_submit = _launch_main_array(
+        experiment_dir, base, canary_run_id=canary_submit.canary_run_id
+    )
     return SubmitAndVerifyResult(
         run_id=main_submit.run_id,
         job_ids=list(main_submit.job_ids),

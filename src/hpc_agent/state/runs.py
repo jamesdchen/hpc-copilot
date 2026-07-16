@@ -1098,6 +1098,63 @@ def update_run_sidecar_job_ids(
     return target
 
 
+def stamp_canary_runtime(experiment_dir: Path, run_id: str, *, elapsed_sec: int) -> Path | None:
+    """Record a canary's MEASURED task wall-clock onto its own sidecar.
+
+    The two-phase canary is a full real task; the dispatcher writes its measured
+    ``elapsed_sec`` to the cluster-side ``_runtime.json``, and ``verify-canary``
+    reads that file at terminal. This stamp persists the measured value LOCALLY
+    (``.hpc/runs/<canary_run_id>.json`` → ``canary_elapsed_sec``) so the S2 brief
+    (est recompute) and the separate S3 launch process (walltime shrink) can read
+    the SAME basis deterministically without a second cluster round-trip
+    (:func:`hpc_agent.ops.submit.canary_calibration.calibrate_array_walltime`).
+
+    Best-effort by contract: calibration is an optimization, never a correctness
+    gate, so an absent sidecar (a deduped / cache-skipped canary that never got
+    one) or any write error returns ``None`` and the caller simply does not
+    calibrate — the array launches at the approved walltime exactly as before.
+    Rewrites in place under the shared sidecar lock, preserving every other field.
+    """
+    if elapsed_sec is None or int(elapsed_sec) <= 0:
+        return None
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        return None
+    from hpc_agent.infra.io import atomic_locked_update
+
+    value = int(elapsed_sec)
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            # Vanished between the existence check and the lock — nothing to stamp.
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        existing["canary_elapsed_sec"] = value
+        return existing
+
+    try:
+        atomic_locked_update(target, _mutate)
+    except (OSError, FileNotFoundError):
+        return None
+    return target
+
+
+def read_canary_elapsed_sec(experiment_dir: Path, run_id: str) -> int | None:
+    """The canary's stamped measured wall-clock (seconds), or ``None`` — never raises.
+
+    Read side of :func:`stamp_canary_runtime`. Best-effort by contract: a missing
+    sidecar, an old sidecar without the field, or a malformed / non-positive value
+    all yield ``None`` so a caller behaves exactly as it did before the field
+    existed (no calibration → launch at the approved walltime).
+    """
+    try:
+        raw = read_run_sidecar(experiment_dir, run_id).get("canary_elapsed_sec")
+    except Exception:  # noqa: BLE001 — best-effort reader; absence must equal pre-field behaviour
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw if raw > 0 else None
+
+
 def read_job_task_spans(experiment_dir: Path, run_id: str) -> dict[str, tuple[int, int]] | None:
     """The sidecar's recorded per-job task spans, or ``None`` — never raises.
 
