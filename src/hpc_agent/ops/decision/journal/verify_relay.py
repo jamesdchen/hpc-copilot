@@ -1534,6 +1534,167 @@ def _nb_nearest_slug(
     return best
 
 
+# A line-scoped label marking a WHOLE-AUDIT / template sha ("source module_sha",
+# "template module_sha") — never a section's. A hex on such a line is block-level:
+# it belongs to NO section, so it is attributed to none and skipped, never bound
+# to the first section that happens to follow it (the run-14 off-by-one).
+_NB_MODULE_SHA_LABEL_RE = re.compile(r"module[\s_-]?sha", re.IGNORECASE)
+
+
+def _nb_attribute_slug(
+    text: str, start: int, end: int, slug_spans: dict[str, list[tuple[int, int]]]
+) -> str | None:
+    """The section a sha-hex at ``[start, end)`` is ABOUT — bound to its OWN line.
+
+    The run-14 off-by-one (``causal_tune_tree`` audit): the audit-view digest
+    (``render_summary_markdown``) lists one section per line, each carrying that
+    section's trailing ``section_sha`` / ``view_sha`` — one newline ABOVE the NEXT
+    section's slug — and the top-of-doc carries the whole-view ``view_sha`` /
+    ``module_sha`` one line ABOVE the FIRST section. A nearest-in-both-directions
+    match (:func:`_nb_nearest_slug`) therefore drifted every section's shas onto
+    the FOLLOWING section and the module sha onto the first. Attribution here never
+    reaches FORWARD to a following slug:
+
+    * a hex on a WHOLE-AUDIT / template sha line (``module_sha``) is block-level —
+      it belongs to no section → None (skip, never a false section claim);
+    * else the slug on the hex's OWN line binds it (one line names one section, so
+      either direction WITHIN the line is safe);
+    * else the nearest PRECEDING slug (the block head the hex sits under, e.g. the
+      ``## section: <slug>`` header above a verbatim render's sha lines) within
+      :data:`_NB_PROXIMITY` binds it;
+    * else None — a hex with no slug on its line and none before it (the top-of-doc
+      whole-view ``view_sha``) is block-level: skip rather than misattribute to the
+      first section below. Prefer a skipped attribution to a wrong correction.
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end == -1:
+        line_end = len(text)
+    if _NB_MODULE_SHA_LABEL_RE.search(text[line_start:line_end]):
+        return None
+    # (1) a slug on the hex's OWN line — nearest such slug wins (one line ⇒ one
+    #     section, so a within-line match in either direction is not the off-by-one).
+    same: str | None = None
+    same_dist: int | None = None
+    for slug, spans in slug_spans.items():
+        for s, e in spans:
+            if e <= line_start or s >= line_end:
+                continue  # occurrence not on the hex's line
+            dist = start - e if e <= start else (s - end if s >= end else 0)
+            if same_dist is None or dist < same_dist:
+                same_dist, same = dist, slug
+    if same is not None:
+        return same
+    # (2) else the nearest PRECEDING slug (block head) — never a FOLLOWING one.
+    best: str | None = None
+    best_dist: int | None = None
+    for slug, spans in slug_spans.items():
+        for _s, e in spans:
+            if e <= start:
+                dist = start - e
+                if dist <= _NB_PROXIMITY and (best_dist is None or dist < best_dist):
+                    best_dist, best = dist, slug
+    return best
+
+
+def _nb_id_spans(text: str, audit_id: str) -> list[tuple[int, int]]:
+    """Every substring occurrence span of *audit_id* in *text* (mention anchors)."""
+    if not audit_id:
+        return []
+    out: list[tuple[int, int]] = []
+    i = text.find(audit_id)
+    while i != -1:
+        out.append((i, i + len(audit_id)))
+        i = text.find(audit_id, i + 1)
+    return out
+
+
+def _nb_span_distance(start: int, end: int, spans: list[tuple[int, int]]) -> int | None:
+    """The smallest char gap between ``[start, end)`` and any span, or None if empty."""
+    best: int | None = None
+    for s, e in spans:
+        if s <= end and e >= start:
+            dist = 0
+        elif e <= start:
+            dist = start - e
+        else:
+            dist = s - end
+        if best is None or dist < best:
+            best = dist
+    return best
+
+
+def _nb_nearest_span(start: int, end: int, spans: list[tuple[int, int]]) -> tuple[int, int] | None:
+    """The span nearest ``[start, end)`` (the claim's own slug occurrence), or None."""
+    best: tuple[int, int] | None = None
+    best_dist: int | None = None
+    for s, e in spans:
+        if s <= end and e >= start:
+            dist = 0
+        elif e <= start:
+            dist = start - e
+        else:
+            dist = s - end
+        if best_dist is None or dist < best_dist:
+            best_dist, best = dist, (s, e)
+    return best
+
+
+def _nb_claim_in_scope(
+    start: int,
+    end: int,
+    this_id_spans: list[tuple[int, int]],
+    sibling_id_spans: list[tuple[int, int]],
+) -> bool:
+    """True unless a SIBLING audit id is mentioned strictly NEARER this claim.
+
+    The run-14 cross-scope defect: the relay named two audits whose sections share
+    slug names (``causal_tune_linear`` + ``causal_tune_tree``, both with
+    ``data-selection`` / ``baseline`` / ...). :func:`verify_notebook_relay` runs
+    once PER mentioned audit over the WHOLE text, so the tree audit's shas — near
+    the shared slug names — were also attributed under the LINEAR scope and checked
+    against LINEAR's journal, emitting confident false corrections labelled
+    ``[causal_tune_linear]`` about tree's shas.
+
+    A claim is bound to the audit whose id is mentioned NEAREST it (its own
+    context), not to every audit that merely shares the text. With no sibling
+    mention the claim always stays in scope; a sibling mentioned strictly nearer
+    than this audit's own id means the claim belongs to that sibling and is skipped
+    here (it is checked when the sibling is the scope). A tie keeps the claim in
+    scope for both (the conservative direction: a genuinely-wrong claim is still
+    caught; the false-correction channel is the ONE-sided mis-scope this closes).
+    """
+    if not sibling_id_spans:
+        return True
+    sibling = _nb_span_distance(start, end, sibling_id_spans)
+    if sibling is None:
+        return True
+    mine = _nb_span_distance(start, end, this_id_spans)
+    if mine is None:
+        return False  # this audit's id is not mentioned near the claim; the sibling owns it
+    return sibling >= mine
+
+
+def _nb_claim_owned(
+    slug: str,
+    start: int,
+    end: int,
+    slug_spans: dict[str, list[tuple[int, int]]],
+    this_id_spans: list[tuple[int, int]],
+    sibling_id_spans: list[tuple[int, int]],
+) -> bool:
+    """True when THIS audit owns the claim about *slug* (cross-scope guard).
+
+    Anchored on the SLUG's own nearest occurrence (the section identity), NOT the
+    claim token: a sha at a digest line's END abuts the NEXT line — which may open
+    a sibling audit's block — so measuring from the token would hand this audit's
+    own claim to the sibling. The slug sits mid-line beside its audit-id mention,
+    so it is the stable anchor.
+    """
+    anchor = _nb_nearest_span(start, end, slug_spans.get(slug, [])) or (start, end)
+    return _nb_claim_in_scope(anchor[0], anchor[1], this_id_spans, sibling_id_spans)
+
+
 def _nb_hex_matches(token: str, candidates: Iterable[str]) -> bool:
     """True iff *token* equals or is a shared prefix of some candidate sha."""
     t = token.lower()
@@ -1666,7 +1827,11 @@ def _nb_resolve_sources(experiment_dir: Path, audit_id: str) -> tuple[Any | None
 
 
 def verify_notebook_relay(
-    experiment_dir: Path, audit_id: str, relay_text: str
+    experiment_dir: Path,
+    audit_id: str,
+    relay_text: str,
+    *,
+    other_audit_ids: Iterable[str] = (),
 ) -> VerifyRelayResult:
     """Audit *relay_text*'s claims about notebook audit *audit_id* (T11).
 
@@ -1697,6 +1862,14 @@ def verify_notebook_relay(
     never a contradiction — the hook drops it). Slugs are drawn from the current
     source AND the journal records (a signed-then-deleted section is still named).
     Read-only and fail-safe: a corrupt journal line is skipped by the reader.
+
+    *other_audit_ids* names the OTHER audits the same relay mentions (the Stop hook
+    passes the siblings). A status/sha claim sitting NEARER a sibling audit's id
+    than *audit_id*'s own mention belongs to that sibling and is skipped here — the
+    run-14 cross-scope guard (:func:`_nb_claim_in_scope`): two audits whose sections
+    share slug names (``causal_tune_linear`` / ``causal_tune_tree``) must each have
+    its shas checked against ITS OWN journal, never a sibling's. Empty by default,
+    so a single-audit relay is unchanged.
     """
     from hpc_agent.state import notebook_audit as nb
     from hpc_agent.state.decision_journal import read_decisions
@@ -1718,6 +1891,17 @@ def verify_notebook_relay(
     # Only slugs the relay actually mentions can carry a claim.
     slug_spans = {slug: spans for slug in slug_universe if (spans := _nb_slug_spans(relay, slug))}
 
+    # Cross-scope anchors (run-14): a claim is this audit's only when this audit's
+    # id is mentioned at least as near it as any sibling's — else the sibling owns
+    # it and it is checked when THAT audit is the scope.
+    this_id_spans = _nb_id_spans(relay, audit_id)
+    sibling_id_spans = [
+        span
+        for other in other_audit_ids
+        if other != audit_id
+        for span in _nb_id_spans(relay, other)
+    ]
+
     mismatches: list[RelayMismatch] = []
     claims_checked = 0
 
@@ -1733,6 +1917,10 @@ def verify_notebook_relay(
         slug = _nb_nearest_slug(m.start(), m.end(), slug_spans)
         if slug is None:
             continue  # not attributable to a section — module-level / noise
+        if not _nb_claim_owned(
+            slug, m.start(), m.end(), slug_spans, this_id_spans, sibling_id_spans
+        ):
+            continue  # a sibling audit's section (run-14 cross-scope guard)
         claims_checked += 1
         if parsed is None:
             mismatches.append(
@@ -1791,9 +1979,13 @@ def verify_notebook_relay(
         token = m.group(0)
         if not any(c in "abcdefABCDEF" for c in token):
             continue  # pure-decimal token — a number claim, not a sha
-        slug = _nb_nearest_slug(m.start(), m.end(), slug_spans)
+        slug = _nb_attribute_slug(relay, m.start(), m.end(), slug_spans)
         if slug is None:
-            continue  # a hex not attributed to a section — unverifiable, not surfaced
+            continue  # a hex bound to no section — block-level / module_sha (skip, run-14)
+        if not _nb_claim_owned(
+            slug, m.start(), m.end(), slug_spans, this_id_spans, sibling_id_spans
+        ):
+            continue  # a sibling audit's sha (run-14 cross-scope guard)
         claims_checked += 1
         if parsed is None:
             mismatches.append(

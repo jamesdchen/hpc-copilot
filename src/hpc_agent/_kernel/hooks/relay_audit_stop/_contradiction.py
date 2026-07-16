@@ -71,9 +71,17 @@ def _gather_violations(
     if audit_ids:
         from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
 
-        for audit_id in audit_ids[:_MAX_AUDITS_AUDITED]:
+        audited = audit_ids[:_MAX_AUDITS_AUDITED]
+        for audit_id in audited:
+            # The OTHER mentioned audits are passed so a claim sitting nearer a
+            # sibling's id is checked against ITS OWN journal, not this one's
+            # (run-14 cross-scope guard: ``causal_tune_linear`` vs
+            # ``causal_tune_tree`` share section slug names).
+            others = [a for a in audited if a != audit_id]
             try:
-                nb_result = verify_notebook_relay(experiment_dir, audit_id, relay_text)
+                nb_result = verify_notebook_relay(
+                    experiment_dir, audit_id, relay_text, other_audit_ids=others
+                )
             except Exception:
                 continue  # an audit we cannot check is a silent pass for that audit
             for m in nb_result.mismatches:

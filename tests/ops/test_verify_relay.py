@@ -1087,6 +1087,212 @@ def test_notebook_malformed_journal_line_skipped(tmp_path: Path) -> None:
     assert out.clean is True
 
 
+# ── run-14 DEFECT 1: sha→section attribution off-by-one (audit-view digest) ─────
+#
+# The audit-view DIGEST (``render_summary_markdown``) lists one section per line,
+# each carrying that section's trailing ``section_sha`` / ``view_sha`` — one
+# newline ABOVE the NEXT section's slug — and the top-of-doc carries the
+# whole-view ``view_sha`` / ``module_sha`` one line ABOVE the FIRST section. The
+# old nearest-in-both-directions attribution drifted every section's sha onto the
+# FOLLOWING section and the module sha onto ``data-selection`` (run-14,
+# ``causal_tune_tree`` audit). These tests pin the own-line binding + block-level
+# skip.
+
+_NB_MULTI_SOURCE = """# %%
+# hpc-audit-section: data-selection
+sel = load_rows(0)
+
+# %%
+# hpc-audit-section: target-construction
+tgt = build_target(1, 2, 3)
+
+# %%
+# hpc-audit-section: feature-construction
+feat = make_features("a", "b")
+
+# %%
+# hpc-audit-section: baseline
+base = fit_baseline(seed=42)
+"""
+
+_NB_MULTI_SLUGS = ("data-selection", "target-construction", "feature-construction", "baseline")
+
+
+def _nb_write_multi(tmp_path: Path) -> dict[str, str]:
+    """Interview + 4-section source; return ``{slug: full section_sha}`` (unsigned)."""
+    import json
+
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    (tmp_path / "multi.py").write_text(_NB_MULTI_SOURCE, encoding="utf-8")
+    (tmp_path / "interview.json").write_text(
+        json.dumps({"audited_source": {"source": "multi.py", "audit_id": _NB_AUDIT}}),
+        encoding="utf-8",
+    )
+    return {s.slug: s.section_sha for s in parse_percent_source(_NB_MULTI_SOURCE).sections}
+
+
+def _nb_digest(shas: dict[str, str], *, module_sha: str) -> str:
+    """The audit-view digest shape: header module shas, then one line per section."""
+    lines = [
+        "# Notebook audit view (metadata; bodies live in the render files + popup)",
+        "",
+        f"- view_sha: {'a' * 64}",
+        f"- source module_sha: {module_sha}",
+        f"- template module_sha: {module_sha}",
+        "",
+    ]
+    for slug in _NB_MULTI_SLUGS:
+        lines.append(
+            f"- {slug}  [standard] unsigned — section_sha {shas[slug]}, diff +0/-0, 0 assertion(s)"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def test_notebook_digest_shape_no_off_by_one_misattribution(tmp_path: Path) -> None:
+    """Each section's OWN section_sha on its OWN digest line verifies clean — the
+    old nearest match drifted every sha onto the following section (all four
+    distinct, so a one-off shift mismatches and would falsely correct)."""
+    shas = _nb_write_multi(tmp_path)
+    # A module sha that is NOT any section's sha — under the old logic it would
+    # attribute to data-selection (the first section, one line below) and flag.
+    relay = _nb_digest(shas, module_sha="b" * 64)
+
+    out = _nb_run(tmp_path, relay)
+    assert out.clean is True, [m.detail for m in out.mismatches]
+    assert [m for m in out.mismatches if m.kind == "number"] == []
+    # Every section's sha WAS checked (bound to its own line), not skipped.
+    assert out.claims_checked >= len(_NB_MULTI_SLUGS)
+
+
+def test_notebook_module_sha_not_misattributed_to_first_section(tmp_path: Path) -> None:
+    """A ``template module_sha`` line above the first section is block-level: it
+    belongs to no section and is skipped, never flagged against data-selection."""
+    shas = _nb_write_multi(tmp_path)
+    relay = (
+        f"- template module_sha: {'c' * 64}\n"
+        f"- data-selection  [standard] unsigned — section_sha {shas['data-selection']}\n"
+    )
+    out = _nb_run(tmp_path, relay)
+    assert out.clean is True, [m.detail for m in out.mismatches]
+
+
+def test_notebook_genuinely_wrong_sha_in_digest_still_flagged(tmp_path: Path) -> None:
+    """A WRONG hex on a section's own line is still corrected — and attributed to
+    THAT section, not the following one."""
+    shas = _nb_write_multi(tmp_path)
+    wrong = "deadbeef" * 8  # 64 hex, not any section's sha
+    lines = _nb_digest(shas, module_sha="b" * 64).splitlines()
+    # Corrupt feature-construction's sha in place (keep the other three correct).
+    lines = [
+        ln.replace(shas["feature-construction"], wrong)
+        if ln.startswith("- feature-construction")
+        else ln
+        for ln in lines
+    ]
+    out = _nb_run(tmp_path, "\n".join(lines) + "\n")
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1, [m.detail for m in out.mismatches]
+    assert num[0].claim == wrong
+    assert "feature-construction" in num[0].detail  # the RIGHT section, not baseline
+
+
+# ── run-14 DEFECT 2: cross-scope journal lookup (sibling audit shares slugs) ─────
+#
+# The relay named two audits whose sections share slug names
+# (``causal_tune_linear`` / ``causal_tune_tree``, both ``data-selection``); the
+# corrector ran once per audit over the WHOLE text, so the tree audit's shas —
+# near the shared slug — were also checked against the LINEAR journal, emitting
+# false corrections labelled ``[causal_tune_linear]``. The scope guard binds a
+# claim to the audit whose id is mentioned nearest it.
+
+_AUDIT_A = "causal_tune_linear"
+_AUDIT_B = "causal_tune_tree"
+
+_NB_SRC_A = """# %%
+# hpc-audit-section: data-selection
+sel = load_linear(0)
+"""
+_NB_SRC_B = """# %%
+# hpc-audit-section: data-selection
+sel = load_tree(999)
+"""
+
+
+def _nb_seed_via_journal(tmp_path: Path, audit_id: str, rel: str, text: str, slug: str) -> str:
+    """Seed an audit resolvable via the journal ``resolved.source`` fallback."""
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    (tmp_path / rel).write_text(text, encoding="utf-8")
+    sha = next(s.section_sha for s in parse_percent_source(text).sections if s.slug == slug)
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=nb.SIGN_OFF_BLOCK,
+        response=f"reviewed the {slug} section",
+        resolved={"audit_id": audit_id, "section": slug, "section_sha": sha, "source": rel},
+    )
+    return sha
+
+
+def _seed_two_audits(tmp_path: Path) -> tuple[str, str]:
+    a = _nb_seed_via_journal(tmp_path, _AUDIT_A, "src_a.py", _NB_SRC_A, "data-selection")
+    b = _nb_seed_via_journal(tmp_path, _AUDIT_B, "src_b.py", _NB_SRC_B, "data-selection")
+    assert a != b
+    return a, b
+
+
+def _two_audit_relay(a_sha: str, b_sha: str) -> str:
+    return (
+        f"Audit {_AUDIT_A}: data-selection is signed_current (section_sha {a_sha}).\n"
+        f"Audit {_AUDIT_B}: data-selection is signed_current (section_sha {b_sha}).\n"
+    )
+
+
+def test_notebook_sibling_audit_sha_not_checked_against_this_journal(tmp_path: Path) -> None:
+    """Verifying audit A with B as a sibling: B's data-selection sha (near B's id)
+    is bound to B and NOT flagged against A's journal."""
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
+
+    a_sha, b_sha = _seed_two_audits(tmp_path)
+    relay = _two_audit_relay(a_sha, b_sha)
+
+    out = verify_notebook_relay(tmp_path, _AUDIT_A, relay, other_audit_ids=[_AUDIT_B])
+    assert out.clean is True, [m.detail for m in out.mismatches]
+
+
+def test_notebook_cross_scope_defect_reproduces_without_the_guard(tmp_path: Path) -> None:
+    """Without the sibling set (the pre-fix call), B's sha IS falsely corrected
+    under A's scope — the run-14 defect this guard closes."""
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
+
+    a_sha, b_sha = _seed_two_audits(tmp_path)
+    relay = _two_audit_relay(a_sha, b_sha)
+
+    out = verify_notebook_relay(tmp_path, _AUDIT_A, relay)  # no other_audit_ids → no guard
+    false_corrections = [m for m in out.mismatches if m.kind == "number"]
+    assert false_corrections, "expected the pre-guard cross-scope false correction"
+    assert false_corrections[0].claim == b_sha
+
+
+def test_notebook_genuinely_wrong_claim_about_this_audit_still_flagged(tmp_path: Path) -> None:
+    """The guard never masks A's OWN wrong claim: a bad sha next to A's id fires."""
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
+
+    _seed_two_audits(tmp_path)
+    wrong = "cafe" * 16  # 64 hex, not A's sha
+    relay = (
+        f"Audit {_AUDIT_A}: data-selection is signed_current (section_sha {wrong}).\n"
+        f"Audit {_AUDIT_B}: nothing to say.\n"
+    )
+    out = verify_notebook_relay(tmp_path, _AUDIT_A, relay, other_audit_ids=[_AUDIT_B])
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim == wrong
+
+
 # ── supersession links are authoritative identifiers ──────────────────────────
 
 
