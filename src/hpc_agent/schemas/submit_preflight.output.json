@@ -71,6 +71,12 @@
       ],
       "default": null,
       "title": "Resolve Resources"
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Cache",
+      "description": "Present ONLY when this verdict was served from the submit-preflight TTL cache (latency rank 14) instead of re-running the fan-out. Carries {hit: true, cached_at, age_sec, ttl_sec, key, message}. Absent on a fresh run. HPC_NO_SUBMIT_PREFLIGHT_CACHE=1 disables the cache."
     }
   },
   "$defs": {

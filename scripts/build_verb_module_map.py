@@ -17,10 +17,14 @@ correctness-critical SoT. Regenerate after adding/renaming an ungrouped verb::
     uv run python scripts/build_verb_module_map.py --check    # CI/perf gate
     uv run python scripts/build_verb_module_map.py --write    # apply
 
-Only **ungrouped, handler-less** primitives are mapped: verb-grouped commands
-(``campaign status``, ``clusters list``) and ``handler=`` primitives (e.g.
-``capabilities``, which introspects the WHOLE registry) must take the full path,
-so they are intentionally excluded and simply fall back.
+Mapped verbs are **ungrouped** and EITHER handler-less OR a handler primitive
+that opts into the fast path via ``CliShape.fast_path_safe`` (rank 13). Excluded
+(they simply fall back to the full path): verb-grouped commands (``campaign
+status``, ``clusters list``) and registry-introspecting ``handler=`` primitives
+(``capabilities`` / ``describe`` read the WHOLE registry, which the fast path
+leaves unpopulated). ``install-commands`` is the first ``fast_path_safe``
+handler — its body copies bundled assets and never walks the registry, so it is
+byte-identical on the fast path.
 """
 
 from __future__ import annotations
@@ -72,9 +76,15 @@ def _render() -> str:
         shape = meta.cli
         if not isinstance(shape, CliShape):
             continue
-        # Grouped verbs nest under a parent subparser; handler primitives may
-        # introspect the whole registry — both must take the full path.
-        if shape.group is not None or shape.handler is not None:
+        # Grouped verbs nest under a parent subparser — always the full path.
+        if shape.group is not None:
+            continue
+        # Handler primitives take the full path UNLESS they opt in via
+        # ``fast_path_safe``: ``capabilities`` / ``describe`` read the WHOLE
+        # registry (which the fast path leaves unpopulated), but a self-contained
+        # handler like ``install-commands`` is byte-identical on the fast path
+        # (``dispatch_primitive`` routes handler primitives fine). See rank 13.
+        if shape.handler is not None and not shape.fast_path_safe:
             continue
         verb = _leaf_verb(name, shape)
         module = getattr(meta.func, "__module__", None)

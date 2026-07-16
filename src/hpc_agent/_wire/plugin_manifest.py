@@ -63,3 +63,27 @@ class PluginManifest(BaseModel):
             "with respect to the loader, not an opt-out switch."
         ),
     )
+    reshapes_core_verbs: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Which core (host) verbs this plugin's ``register_cli`` hook "
+            "OVERRIDES or reshapes the CLI parser for — the surface the "
+            "single-verb fast path must consult. Three states:\n\n"
+            "* ``None`` (unset — the default) — UNDECLARED. The host cannot "
+            "  tell what this plugin's ``register_cli`` touches, so it keeps "
+            "  the conservative pre-Item behaviour: a ``register_cli`` plugin "
+            "  disqualifies EVERY core verb from the fast path. Legacy "
+            "  plugins written before this field get exactly today's safety.\n"
+            "* ``()`` (empty tuple) — an EXPLICIT declaration that "
+            "  ``register_cli`` only ADDS new subcommands and reshapes NO core "
+            "  verb (the notebook-render case). Core verbs keep the fast path; "
+            "  the plugin's own new verbs miss ``VERB_MODULE_MAP`` and fall "
+            "  through on their own.\n"
+            "* a non-empty tuple — the plugin reshapes exactly these core "
+            "  verbs' parsers; only those verbs are forced onto the full walk, "
+            "  every other core verb stays fast.\n\n"
+            "Declaring a non-empty set requires ``cli_register=True`` (you "
+            "cannot reshape a verb without the hook); "
+            "``scripts/lint_plugin_manifests.py`` enforces the pair."
+        ),
+    )

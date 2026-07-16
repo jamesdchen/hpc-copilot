@@ -176,6 +176,17 @@ class CliShape:
     result_error: Callable[[Any], errors.HpcError | None] | None = None
     # Tier 2 escape hatch.
     handler: Callable[[argparse.Namespace], int] | None = None
+    # Opt a HANDLER primitive into the single-verb fast path (latency rank 13).
+    # The fast-path map (``scripts/build_verb_module_map.py``) excludes handler
+    # primitives by default because some — ``capabilities``, ``describe`` — read
+    # the WHOLE registry, which the fast path deliberately leaves unpopulated.
+    # A handler whose body is self-contained (does NOT introspect the registry
+    # beyond its own module) is safe to serve on the fast path and sets this to
+    # ``True``: the generator then maps it and ``build_single_verb_parser`` binds
+    # it (``dispatch_primitive`` routes handler primitives fine). Ignored for
+    # non-handler primitives (they are already fast-path-eligible). ``verify a
+    # guard can fire``: only ever read where ``handler is not None``.
+    fast_path_safe: bool = False
     # Verb-group support: when set, the primitive's CLI parser is nested
     # under a parent ``hpc-agent <group> ...`` subparser. The leaf verb
     # is the primitive name with ``f"{group}-"`` stripped, unless

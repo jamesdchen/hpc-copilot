@@ -140,9 +140,9 @@ def test_build_single_verb_parser_rejects_grouped_and_absent() -> None:
     assert build_single_verb_parser("campaign-status") is None
 
 
-def test_map_excludes_grouped_and_handler_verbs() -> None:
-    """The generated map never contains a grouped or handler primitive — those
-    must take the full path."""
+def test_map_never_contains_grouped_verbs() -> None:
+    """The generated map never contains a grouped primitive — those nest under a
+    parent subparser and must take the full path."""
     from hpc_agent._kernel.registry.primitive import get_registry
     from hpc_agent.cli._dispatch import CliShape
 
@@ -152,24 +152,52 @@ def test_map_excludes_grouped_and_handler_verbs() -> None:
         shape = registry[name].cli
         assert isinstance(shape, CliShape)
         assert shape.group is None, f"{name} is grouped but in the fast-path map"
-        assert shape.handler is None, f"{name} has a handler but in the fast-path map"
+
+
+def test_map_handler_entries_are_fast_path_safe() -> None:
+    """A handler primitive may only appear in the map when it opted in via
+    ``CliShape.fast_path_safe`` (rank 13). A registry-introspecting handler
+    (``capabilities`` / ``describe``) must NEVER be mapped — the fast path leaves
+    the registry unpopulated. (With the committed map still stale on this branch
+    the handler rows may be absent; when present they MUST be safe.)"""
+    from hpc_agent._kernel.registry.primitive import get_registry
+    from hpc_agent.cli._dispatch import CliShape
+
+    registry = get_registry()
+    for _verb, (name, _mod) in VERB_MODULE_MAP.items():
+        shape = registry[name].cli
+        assert isinstance(shape, CliShape)
+        if shape.handler is not None:
+            assert shape.fast_path_safe, (
+                f"{name} has a handler but is NOT fast_path_safe — it must take the full path"
+            )
 
 
 def test_generated_map_is_in_sync_with_registry() -> None:
-    """The committed VERB_MODULE_MAP matches what the registry yields now — a
-    stale map only costs speed (it falls back), but drift is worth catching."""
+    """The committed VERB_MODULE_MAP matches what the registry yields now.
+
+    DISCLOSED-RED on this branch (rank 13): the generator was extended to map
+    ``fast_path_safe`` handler primitives (``install-commands``), but the
+    regenerated ``_verb_module_map.py`` is deliberately NOT committed — the
+    integrator regens it at merge (``scripts/build_verb_module_map.py --write``).
+    Until then this pin is EXPECTED to fail with ``install-commands`` missing;
+    that is the visible signal the regen is pending, not a defect. A stale map
+    only costs speed (it falls back), never correctness."""
     from hpc_agent._kernel.registry.primitive import get_registry
     from hpc_agent.cli._dispatch import CliShape, _leaf_verb
 
     expected: dict[str, tuple[str, str]] = {}
     for name, meta in get_registry().items():
         shape = meta.cli
-        if not isinstance(shape, CliShape) or shape.group is not None or shape.handler is not None:
+        if not isinstance(shape, CliShape) or shape.group is not None:
+            continue
+        if shape.handler is not None and not shape.fast_path_safe:
             continue
         module = getattr(meta.func, "__module__", None)
         if module:
             expected[_leaf_verb(name, shape)] = (name, module)
 
     assert dict(VERB_MODULE_MAP) == expected, (
-        "verb-module map is stale; run `uv run python scripts/build_verb_module_map.py --write`"
+        "verb-module map is stale; run `uv run python scripts/build_verb_module_map.py --write` "
+        "(EXPECTED RED on the pkg/o7-dispatch branch until the integrator regens — see docstring)"
     )
