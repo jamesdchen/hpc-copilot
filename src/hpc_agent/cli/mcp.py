@@ -61,6 +61,7 @@ re-execution would be a correctness bug, not a slowdown.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 
@@ -123,6 +124,19 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
     from hpc_agent._kernel.extension.mcp_server import build_server
 
     engine_state = _enable_ssh_engine_default()
+
+    # Run-12 finding 13 (cp1252 mojibake) is enforced HERE, exactly once, while
+    # the process is still single-threaded: once ``serve()`` starts, the stdin
+    # reader thread is permanently blocked in ``readline()``, and a
+    # reconfigure-under-read returns a false EOF on Windows (the second-call
+    # connection-closed class, regression 17243a17). The per-dispatch
+    # reconfigure in ``cli.dispatch`` never sees the real streams over MCP —
+    # the in-process runner shields them (``_shield_real_stdin`` + redirects).
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                _reconfigure(encoding="utf-8")
 
     catalog = getattr(args, "catalog", "full")
     if catalog not in ("full", "tiered", "curated"):

@@ -70,6 +70,7 @@ response dict, and the subprocess runner is injectable.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import queue
@@ -477,7 +478,14 @@ def _in_process_deadline(argv: list[str]) -> Iterator[None]:
     pre-existing unbounded behavior stands — the seam is the load-bearing guard
     either way. Any handler + pending timer already installed (e.g. a signal-mode
     ``pytest-timeout``) is saved and restored on exit.
+
+    The win32 gate is a ``sys.platform`` comparison (not ``hasattr``) so mypy
+    running ON Windows narrows the POSIX-only ``signal`` attrs below to
+    unreachable instead of erroring; Linux mypy (CI) still checks them.
     """
+    if sys.platform == "win32":
+        yield
+        return
     can_arm = (
         hasattr(signal, "setitimer")
         and hasattr(signal, "SIGALRM")
@@ -500,6 +508,29 @@ def _in_process_deadline(argv: list[str]) -> Iterator[None]:
         # ms-scale call is negligible against any outer second-scale deadline).
         signal.setitimer(signal.ITIMER_REAL, prev_delay, prev_interval)
         signal.signal(signal.SIGALRM, prev_handler)
+
+
+@contextlib.contextmanager
+def _shield_real_stdin() -> Iterator[None]:
+    """In-process dispatch must never touch the REAL ``sys.stdin`` — it is the
+    JSON-RPC transport, with the reader thread blocked in ``readline()`` on it.
+    ``cli.dispatch._dispatch_main`` reconfigures ``sys.stdin`` to UTF-8 on every
+    invocation (run-12 finding 13); a ``reconfigure`` racing a blocked
+    cross-thread ``readline`` makes that read return a FALSE EOF on Windows,
+    killing the reader thread — the serve loop then exits cleanly after the
+    in-flight call, so the SECOND tools/call of every session met a dead server
+    (the 2026-07-16 notebook-record-config "Connection closed" incident;
+    regression commit 17243a17). Swap in an empty text buffer for the call's
+    duration; a verb that tries to READ stdin in-process sees EOF instead of
+    eating the transport's bytes. The session-level UTF-8 reconfigure lives in
+    ``cmd_mcp_serve``, before the reader thread exists.
+    """
+    prev = sys.stdin
+    sys.stdin = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdin = prev
 
 
 def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
@@ -552,7 +583,6 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     runner, which is why the parity test holds across a mutating + a workflow
     verb, not just ``find``.
     """
-    import io
     import traceback
 
     from hpc_agent.cli.dispatch import main as _cli_main
@@ -566,6 +596,7 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
             _in_process_deadline(argv),
             contextlib.redirect_stdout(out),
             contextlib.redirect_stderr(err),
+            _shield_real_stdin(),
         ):
             code = _cli_main(list(argv))
     except _InProcessDeadlineExceeded:

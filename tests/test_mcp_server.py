@@ -715,3 +715,91 @@ def test_get_prompt_serves_executable_start_instruction_not_slash_body() -> None
     body = M._read_command_md("submit-hpc")
     if body is not None:
         assert body.strip() != WORKFLOW_ENTRIES_BY_PROMPT["submit-hpc"].start_instruction
+
+
+# ─── 17243a17 regression: dispatch must never touch the JSON-RPC transport ────
+
+
+def test_in_process_runner_shields_real_stdin(monkeypatch) -> None:
+    """``cli.dispatch._dispatch_main`` reconfigures ``sys.stdin`` on EVERY
+    dispatch; over MCP the real stdin is the JSON-RPC transport, with the reader
+    thread blocked in ``readline()`` on it, and a reconfigure-under-read returns
+    a FALSE EOF on Windows — the reader dies, the serve loop exits cleanly after
+    the in-flight call, and the SECOND tools/call of every session meets a dead
+    server (regression 17243a17, the 2026-07-16 notebook-record-config
+    "Connection closed" incident). The runner must swap the real stdin out for
+    the call's duration. Fire path: a booby-trapped stdin whose ``reconfigure``
+    and ``readline`` both raise must survive a REAL dispatch untouched, and be
+    restored afterwards."""
+
+    class BoobyStdin:
+        def reconfigure(self, **_kw: object) -> None:
+            raise AssertionError("in-process dispatch touched the real stdin")
+
+        def readline(self) -> str:
+            raise AssertionError("in-process dispatch read the real stdin")
+
+    booby = BoobyStdin()
+    monkeypatch.setattr(M.sys, "stdin", booby)
+    code, out, err = M._in_process_cli_runner(["describe", "find"])
+    assert "touched the real stdin" not in err
+    assert "read the real stdin" not in err
+    assert code == 0, err
+    assert M.sys.stdin is booby, "the real stdin must be restored after the call"
+
+
+@pytest.mark.slow
+def test_serve_survives_sequential_tool_calls_over_real_pipes(tmp_path) -> None:
+    """The exact 17243a17 regression shape, pinned over REAL pipes: spawn
+    ``mcp-serve`` as a subprocess, dispatch one tools/call (whose in-process
+    dispatch used to reconfigure the transport stdin and false-EOF the reader
+    thread), then prove a SECOND request still gets a response and the server
+    is still alive. Guards any future per-dispatch fiddling with the real
+    streams, not just ``reconfigure``."""
+    import subprocess
+    import sys as _sys
+
+    proc = subprocess.Popen(
+        [_sys.executable, "-m", "hpc_agent", "mcp-serve"],
+        cwd=tmp_path,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    try:
+
+        def _send(obj: dict) -> None:
+            assert proc.stdin is not None
+            proc.stdin.write(json.dumps(obj) + "\n")
+            proc.stdin.flush()
+
+        def _recv() -> dict:
+            assert proc.stdout is not None
+            line = proc.stdout.readline()
+            assert line, "server closed the connection (reader thread died?)"
+            return json.loads(line)
+
+        _send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        assert _recv()["id"] == 1
+        _send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        # Call #1: a real verb — its in-process dispatch is the poison site.
+        _send(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "find", "arguments": {"spec": {}}},
+            }
+        )
+        assert _recv()["id"] == 2
+
+        # Call #2: the historical casualty — any request after the first verb.
+        _send({"jsonrpc": "2.0", "id": 3, "method": "ping"})
+        assert _recv()["id"] == 3
+        assert proc.poll() is None, "server must still be alive after two calls"
+    finally:
+        proc.kill()
+        proc.communicate(timeout=30)

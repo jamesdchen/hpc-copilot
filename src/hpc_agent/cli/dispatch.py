@@ -372,10 +372,14 @@ def _dispatch_main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy code page (cp1252) whose codec
     # cannot encode the ``→`` and box-drawing characters in our --help
     # text and catalog tables, raising UnicodeEncodeError on print_help().
-    # Force UTF-8 on the std streams up front — INCLUDING stdin: mcp-serve
-    # reads JSON-RPC lines from it, and a cp1252-decoded UTF-8 em-dash
-    # corrupts human text INSIDE the server before any file is written
-    # (run-#12 finding 13: the journaled goal's "â€"" mojibake).
+    # Force UTF-8 on the std streams up front. stdin is included for one-shot
+    # CLI use (piped spec text must decode as UTF-8, run-#12 finding 13) —
+    # but this loop must NEVER run against mcp-serve's real stdin: that is
+    # the JSON-RPC transport with a reader thread blocked in ``readline()``,
+    # and a reconfigure-under-read returns a false EOF on Windows, killing
+    # the server after the in-flight call (regression 17243a17). Over MCP the
+    # in-process runner swaps stdin out (``_shield_real_stdin``) and the
+    # session-level UTF-8 reconfigure happens once in ``cmd_mcp_serve``.
     for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _reconfigure = getattr(_stream, "reconfigure", None)
         if _reconfigure is not None:
