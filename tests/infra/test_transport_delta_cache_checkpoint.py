@@ -13,9 +13,12 @@ hash) then re-ships only the remainder.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -76,8 +79,6 @@ def test_cache_miss_on_mtime_and_content_change(tmp_path: Path) -> None:
 
     # Rewrite with different content AND bump mtime so the quick-check misses.
     f.write_text("v2 is longer")
-    import os
-
     st = f.stat()
     os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
 
@@ -98,8 +99,6 @@ def test_cache_miss_on_size_change_even_if_mtime_equal(tmp_path: Path) -> None:
     transport._build_local_manifest_cached(tmp_path, paths)  # seed cache
     st = f.stat()
     f.write_text("a much longer body than before")
-    import os
-
     os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))  # force mtime back to seeded value
 
     _, hashed, cached = transport._build_local_manifest_cached(tmp_path, paths)
@@ -302,9 +301,11 @@ def test_died_mid_push_retry_ships_only_the_remainder(tmp_path: Path, monkeypatc
     assert set(fake_remote) == set(names)  # tree now complete
 
 
-def test_push_manifest_write_is_crash_safe_temp_then_mv(tmp_path: Path) -> None:
-    """The remote manifest write lands in a temp sibling then atomically ``mv``-s
-    into place, so a torn checkpoint can never corrupt the live manifest."""
+def test_push_manifest_write_is_crash_safe_temp_then_replace(tmp_path: Path) -> None:
+    """The remote manifest write is a read-modify-write that lands in a temp
+    sibling then atomically ``os.replace``-s into place, so a torn checkpoint can
+    never corrupt the live manifest. The payload carries paths + pkg_version +
+    schema; the merger preserves any existing ``entries`` cache."""
     seen: dict[str, str] = {}
 
     def _capture(_target, remote_cmd, **_kw):  # noqa: ANN001
@@ -316,9 +317,301 @@ def test_push_manifest_write_is_crash_safe_temp_then_mv(tmp_path: Path) -> None:
             ssh_target="u@h", remote_path="/r", paths=["x", "y"], timeout=5.0
         )
     cmd = seen["cmd"]
-    assert f"> {transport._PUSH_MANIFEST_TMP_REL}" in cmd
-    assert f"mv -f {transport._PUSH_MANIFEST_TMP_REL} {transport._PUSH_MANIFEST_REL}" in cmd
-    # The live manifest is never a direct redirect target — it appears ONLY as
-    # the mv destination (a bare ``> <live> `` redirect, distinct from the
-    # ``> <live>.tmp`` one, must be absent).
-    assert f"> {transport._PUSH_MANIFEST_REL} " not in cmd
+    # The merger is base64-piped into python3 with the payload in HPC_PM_PAYLOAD;
+    # no path is a raw shell token, and the live manifest is never a direct
+    # redirect target (only the temp is, then os.replace swaps it).
+    assert "base64 -d" in cmd
+    assert "HPC_PM_PAYLOAD=" in cmd
+    assert cmd.rstrip().endswith("python3")
+    assert f"> {transport._PUSH_MANIFEST_REL}" not in cmd
+    # The merger source itself is crash-safe (temp + os.replace) and preserves entries.
+    merger = transport._prune._PUSH_MANIFEST_MERGE_PY
+    assert "os.replace(t,d)" in merger
+    assert "t=d+'.tmp'" in merger
+    assert "new['entries']=cur['entries']" in merger
+
+
+# --------------------------------------------------------------------------- #
+# Rank 5 — remote-side quick-check cache (snippet reads/writes .push_manifest.json)
+# --------------------------------------------------------------------------- #
+
+
+def _run_snippet(tree: Path, exclude: list[str]) -> dict:
+    """Execute the REAL deployed hash snippet under this interpreter, cwd=*tree*
+    (as the cluster runs it), and return its parsed stdout manifest+telemetry."""
+    snippet_file = tree.parent / "snippet.py"
+    snippet_file.write_text(transport._REMOTE_MANIFEST_SNIPPET, encoding="utf-8")
+    env = {
+        **os.environ,
+        "HPC_DELTA_EXCLUDES": json.dumps([p.rstrip("/") for p in exclude]),
+        "HPC_DELTA_CAP": str(transport._DELTA_MANIFEST_FILE_CAP),
+    }
+    proc = subprocess.run(
+        [sys.executable, str(snippet_file)],
+        cwd=str(tree),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert isinstance(result, dict)
+    return result
+
+
+def test_snippet_unchanged_tree_hashes_zero_files(tmp_path: Path) -> None:
+    """Fires-and-passes pin: a re-run over an UNCHANGED remote tree re-hashes ZERO
+    files — every sha comes from the cache the first run persisted. The cache lives
+    in ``.hpc/.push_manifest.json`` (schema 2, per-entry size+mtime_ns+sha256)."""
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    for rel, content in {"a.txt": "alpha", "sub/b.txt": "beta"}.items():
+        f = tree / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+    exclude = [".hpc/"]  # .hpc bookkeeping is never part of the hashed tree
+
+    cold = _run_snippet(tree, exclude)
+    assert cold["hashed"] == 2 and cold["cached"] == 0  # cold: everything hashed
+
+    # The snippet persisted a v2 cache alongside the tree.
+    doc = json.loads((tree / ".hpc" / ".push_manifest.json").read_text())
+    assert doc["manifest_schema"] == transport._prune._PUSH_MANIFEST_SCHEMA
+    assert {e["path"] for e in doc["entries"]} == {"a.txt", "sub/b.txt"}
+    assert all("mtime_ns" in e and "sha256" in e for e in doc["entries"])
+
+    warm = _run_snippet(tree, exclude)
+    assert warm["hashed"] == 0 and warm["cached"] == 2  # unchanged -> zero re-hash
+    # Same content identity either way.
+    assert {f["path"]: f["sha256"] for f in cold["files"]} == {
+        f["path"]: f["sha256"] for f in warm["files"]
+    }
+
+
+def test_snippet_rehashes_only_the_changed_file(tmp_path: Path) -> None:
+    """After a cold pass, editing ONE file re-hashes exactly it; the siblings are
+    reused from the cache (the whole point of the remote quick-check)."""
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (tree / name).write_text(name)
+    exclude = [".hpc/"]
+    _run_snippet(tree, exclude)  # seed the cache
+
+    changed = tree / "b.txt"
+    changed.write_text("b changed and longer")
+    st = changed.stat()
+    os.utime(changed, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))  # bump mtime
+
+    warm = _run_snippet(tree, exclude)
+    assert warm["hashed"] == 1  # only b.txt
+    assert warm["cached"] == 2  # a.txt + c.txt reused
+    sha = {f["path"]: f["sha256"] for f in warm["files"]}
+    assert sha["b.txt"] == hashlib.sha256(b"b changed and longer").hexdigest()
+
+
+def test_snippet_full_hashes_on_old_schema_manifest(tmp_path: Path) -> None:
+    """Fires-and-passes pin (mandatory back-compat): a v1 manifest an OLDER wheel
+    wrote (``{paths, pkg_version}`` — no ``manifest_schema``/``entries``) yields a
+    full re-hash with NO crash, and the snippet upgrades it to v2 while PRESERVING
+    the ``paths``/``pkg_version`` prune bookkeeping."""
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    (tree / "a.txt").write_text("alpha")
+    (tree / "b.txt").write_text("beta")
+    (tree / ".hpc" / ".push_manifest.json").write_text(
+        json.dumps({"paths": ["a.txt"], "pkg_version": "0.0.1"})
+    )
+    exclude = [".hpc/"]
+
+    out = _run_snippet(tree, exclude)
+    assert out["hashed"] == 2 and out["cached"] == 0  # old schema -> full hash
+
+    doc = json.loads((tree / ".hpc" / ".push_manifest.json").read_text())
+    assert doc["manifest_schema"] == transport._prune._PUSH_MANIFEST_SCHEMA  # upgraded
+    assert doc["paths"] == ["a.txt"]  # prune bookkeeping preserved
+    assert doc["pkg_version"] == "0.0.1"
+    assert {e["path"] for e in doc["entries"]} == {"a.txt", "b.txt"}
+
+
+def test_snippet_full_hashes_on_corrupt_manifest(tmp_path: Path) -> None:
+    """A corrupt/garbage manifest never crashes the snippet — empty cache, full
+    re-hash, and it is rewritten as a valid v2 doc (fail-open on an optimization)."""
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    (tree / "a.txt").write_text("alpha")
+    (tree / ".hpc" / ".push_manifest.json").write_text("{ this is not json ]")
+    exclude = [".hpc/"]
+
+    out = _run_snippet(tree, exclude)
+    assert out["hashed"] == 1 and out["cached"] == 0
+    doc = json.loads((tree / ".hpc" / ".push_manifest.json").read_text())
+    assert doc["manifest_schema"] == transport._prune._PUSH_MANIFEST_SCHEMA
+
+
+def test_snippet_does_not_write_cache_without_hpc_dir(tmp_path: Path) -> None:
+    """No ``.hpc/`` (a bare / test tree) -> the snippet emits its manifest but
+    writes NO cache file, so it never pollutes a tree that is not a real deploy."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "a.txt").write_text("alpha")
+    out = _run_snippet(tree, [])
+    assert out["hashed"] == 1
+    assert not (tree / ".hpc" / ".push_manifest.json").exists()
+
+
+def test_remote_cache_survives_the_write_push_manifest_rewrite(tmp_path: Path) -> None:
+    """End-to-end money pin for rank 5: the snippet writes the ``entries`` cache in
+    step 1; ``_write_push_manifest``'s merger (step 3, AFTER the snippet) updates
+    ``paths`` WITHOUT clobbering ``entries``; so the NEXT snippet still reuses the
+    cache. Proves the two writers of ``.push_manifest.json`` coexist."""
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    for name in ("a.txt", "b.txt"):
+        (tree / name).write_text(name)
+    exclude = [".hpc/"]
+
+    _run_snippet(tree, exclude)  # step 1: entries persisted, no paths yet
+
+    # step 3: run the REAL merger (as the ssh command would), updating paths.
+    merger = tmp_path / "merge.py"
+    merger.write_text(transport._prune._PUSH_MANIFEST_MERGE_PY)
+    new_fields = {"paths": ["a.txt", "b.txt"], "pkg_version": "9.9", "manifest_schema": 2}
+    payload = base64.b64encode(json.dumps(new_fields).encode()).decode()
+    subprocess.run(
+        [sys.executable, str(merger)],
+        cwd=str(tree),
+        env={**os.environ, "HPC_PM_PAYLOAD": payload},
+        check=True,
+        timeout=30,
+    )
+    doc = json.loads((tree / ".hpc" / ".push_manifest.json").read_text())
+    assert doc["paths"] == ["a.txt", "b.txt"]  # merger updated paths
+    assert doc["pkg_version"] == "9.9"
+    assert {e["path"] for e in doc["entries"]} == {"a.txt", "b.txt"}  # cache survived
+
+    # next push's snippet still reuses the surviving cache -> zero re-hash.
+    warm = _run_snippet(tree, exclude)
+    assert warm["hashed"] == 0 and warm["cached"] == 2
+
+
+def test_write_manifest_merger_preserves_entries_and_is_atomic(tmp_path: Path) -> None:
+    """Unit pin on the merger: it updates paths/pkg_version, PRESERVES an existing
+    ``entries`` list byte-for-byte, and leaves no ``.tmp`` behind (os.replace)."""
+    (tmp_path / ".hpc").mkdir()
+    entries = [{"path": "a.txt", "size": 5, "mtime_ns": 123, "sha256": "deadbeef"}]
+    (tmp_path / ".hpc" / ".push_manifest.json").write_text(
+        json.dumps(
+            {"paths": ["old"], "pkg_version": "0.0.1", "manifest_schema": 2, "entries": entries}
+        )
+    )
+    merger = tmp_path / "merge.py"
+    merger.write_text(transport._prune._PUSH_MANIFEST_MERGE_PY)
+    payload = base64.b64encode(
+        json.dumps({"paths": ["n1", "n2"], "pkg_version": "0.9", "manifest_schema": 2}).encode()
+    ).decode()
+    subprocess.run(
+        [sys.executable, str(merger)],
+        cwd=str(tmp_path),
+        env={**os.environ, "HPC_PM_PAYLOAD": payload},
+        check=True,
+        timeout=30,
+    )
+    doc = json.loads((tmp_path / ".hpc" / ".push_manifest.json").read_text())
+    assert doc["paths"] == ["n1", "n2"]
+    assert doc["pkg_version"] == "0.9"
+    assert doc["entries"] == entries  # preserved verbatim
+    assert not (tmp_path / ".hpc" / ".push_manifest.json.tmp").exists()  # atomic swap
+
+
+def test_write_manifest_merger_no_prior_file(tmp_path: Path) -> None:
+    """The merger on a fresh tree (no prior manifest) writes the new fields with no
+    ``entries`` key and no crash."""
+    (tmp_path / ".hpc").mkdir()
+    merger = tmp_path / "merge.py"
+    merger.write_text(transport._prune._PUSH_MANIFEST_MERGE_PY)
+    payload = base64.b64encode(
+        json.dumps({"paths": ["x"], "pkg_version": "1.0", "manifest_schema": 2}).encode()
+    ).decode()
+    subprocess.run(
+        [sys.executable, str(merger)],
+        cwd=str(tmp_path),
+        env={**os.environ, "HPC_PM_PAYLOAD": payload},
+        check=True,
+        timeout=30,
+    )
+    doc = json.loads((tmp_path / ".hpc" / ".push_manifest.json").read_text())
+    assert doc["paths"] == ["x"]
+    assert "entries" not in doc
+
+
+def test_snippet_schema_matches_prune_constant() -> None:
+    """The snippet hardcodes the schema int (it runs stdlib-only cluster-side and
+    cannot import); pin the lockstep with the authoritative constant."""
+    assert transport._prune._PUSH_MANIFEST_SCHEMA == 2
+    assert (
+        f"_SCHEMA = {transport._prune._PUSH_MANIFEST_SCHEMA}" in transport._REMOTE_MANIFEST_SNIPPET
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Rank 20 — parallel cold local hash (ThreadPool in _build_local_manifest_cached)
+# --------------------------------------------------------------------------- #
+
+
+def test_parallel_and_serial_hash_are_byte_identical(tmp_path: Path, monkeypatch) -> None:
+    """Determinism pin: the parallel cold hash produces a manifest AND a cache file
+    byte-for-byte identical to the serial path — the reassembly is input-ordered,
+    so worker-completion order never leaks into the output."""
+    for i in range(12):
+        (tmp_path / f"f{i:02d}.bin").write_bytes(bytes([i]) * (50 + i))
+    paths = [f"f{i:02d}.bin" for i in range(12)]
+
+    monkeypatch.setenv("HPC_DELTA_HASH_WORKERS", "1")  # serial
+    m_ser, hashed_ser, cached_ser = transport._build_local_manifest_cached(tmp_path, paths)
+    cache_ser = (tmp_path / transport._PUSH_HASH_CACHE_REL).read_bytes()
+
+    (tmp_path / transport._PUSH_HASH_CACHE_REL).unlink()  # force a cold parallel run
+
+    monkeypatch.setenv("HPC_DELTA_HASH_WORKERS", "8")  # parallel
+    m_par, hashed_par, cached_par = transport._build_local_manifest_cached(tmp_path, paths)
+    cache_par = (tmp_path / transport._PUSH_HASH_CACHE_REL).read_bytes()
+
+    assert hashed_ser == hashed_par == 12 and cached_ser == cached_par == 0
+    assert m_ser.digest == m_par.digest
+    assert [e.path for e in m_ser.entries] == [e.path for e in m_par.entries]
+    assert cache_ser == cache_par  # byte-identical cache write
+
+
+def test_hash_workers_bounds(monkeypatch) -> None:
+    """The pool is bounded 1..8 and never exceeds the miss count; the env override
+    is clamped on both ends."""
+    monkeypatch.delenv("HPC_DELTA_HASH_WORKERS", raising=False)
+    assert transport._delta._hash_workers(100) == 8  # default cap
+    assert transport._delta._hash_workers(3) == 3  # never above the miss count
+    assert transport._delta._hash_workers(0) == 1  # empty -> harmless 1
+    monkeypatch.setenv("HPC_DELTA_HASH_WORKERS", "2")
+    assert transport._delta._hash_workers(100) == 2
+    monkeypatch.setenv("HPC_DELTA_HASH_WORKERS", "999")
+    assert transport._delta._hash_workers(100) == 8  # clamped to max
+    monkeypatch.setenv("HPC_DELTA_HASH_WORKERS", "0")
+    assert transport._delta._hash_workers(100) == 1  # floored to 1
+
+
+def test_parallel_hash_still_reuses_cache_second_pass(tmp_path: Path, monkeypatch) -> None:
+    """A parallel cold pass seeds the cache; the second parallel pass over the
+    unchanged tree reuses every sha (the pool is only for MISSES)."""
+    monkeypatch.setenv("HPC_DELTA_HASH_WORKERS", "6")
+    for i in range(6):
+        (tmp_path / f"g{i}.txt").write_text(f"body-{i}")
+    paths = [f"g{i}.txt" for i in range(6)]
+    _, hashed1, cached1 = transport._build_local_manifest_cached(tmp_path, paths)
+    assert hashed1 == 6 and cached1 == 0
+
+    def _boom(_p: Path) -> str:
+        raise AssertionError("re-hashed a cached file under the parallel path")
+
+    with patch("hpc_agent.infra.manifest._sha256_of", _boom):
+        _, hashed2, cached2 = transport._build_local_manifest_cached(tmp_path, paths)
+    assert hashed2 == 0 and cached2 == 6
