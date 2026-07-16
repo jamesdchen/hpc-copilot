@@ -25,10 +25,13 @@ from hpc_agent.infra.ssh_slots import (
     SLOT_WAIT_MAX_SEC,
     acquire_slot,
     connection_slot,
+    reap_stale_slots,
     release_slot,
     resolve_max_connections,
     slot_paths,
 )
+
+_DEAD = lambda pid: False  # noqa: E731 — every claimant reads as a crashed holder
 
 HOST = "login.cluster.edu"
 TARGET = f"user@{HOST}"
@@ -554,3 +557,156 @@ class TestFailOpen:
             sleep=_no_sleep,
         )
         assert cp.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# run-14 slot starvation: a between-polls poller must not hoard a slot
+# ---------------------------------------------------------------------------
+
+
+class TestPollerDoesNotHoardAcrossIdleGaps:
+    """The 2026-07-16 run-14 failure and the fix it pins.
+
+    A ``status-watch`` holding a slot for its WHOLE life (the persistent-engine
+    Invariant-2 whole-life hold) + a concurrent harvest = N=2, and any third
+    fleet op starved with SshSlotWaitTimeout. The correct shape — the one the
+    one-shot seam already uses via ``connection_slot`` per call — is to
+    ACQUIRE-then-RELEASE per ssh call, so a mostly-idle poller holds no slot
+    between polls and a concurrent op can take it. These lock that contract.
+    """
+
+    def test_between_call_release_lets_a_concurrent_op_take_the_slot(self):
+        clock = FakeClock()
+        # A long-lived harvest keeps slot0 for the whole scenario (1 of N=2).
+        (_harvest,) = _claim_n(1, clock, first_pid=100)
+        # The poller takes the SECOND slot for ONE in-flight dial...
+        poll_tok = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=101, pid_alive=_ALIVE)
+        assert poll_tok is not None and poll_tok.exists()
+        # ...and RELEASES it between polls (the fix — not held across the idle gap).
+        release_slot(poll_tok, pid=101)
+        # A concurrent op (a second watcher / a retry) now claims it with NO wait.
+        # Under the whole-life hoard this raised SshSlotWaitTimeout instead.
+        third = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=102, pid_alive=_ALIVE)
+        assert third is not None and third.exists()
+
+    def test_two_in_flight_calls_still_bound_to_the_cap(self):
+        """The burst guard is INTACT: when both the poller and the harvest are
+        mid-dial (each holding a slot), the two IN-FLIGHT calls ARE the cap, so a
+        third concurrent connection attempt blocks — the MaxStartups burst the
+        limiter exists to prevent is still bounded to N=2."""
+        clock = FakeClock()
+        _claim_n(DEFAULT_MAX_CONNECTIONS, clock, first_pid=100)  # both mid-dial
+        slept: list[float] = []
+
+        def sleeper(seconds: float) -> None:
+            slept.append(seconds)
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=102, pid_alive=_ALIVE)
+        assert slept  # the third IN-FLIGHT attempt actually blocked (guard fired)
+
+    def test_repeated_poll_cycles_never_accumulate_a_held_slot(self):
+        """A poller looping many acquire/release cycles leaves NO residue: after
+        each per-call release the pool is empty, so it can never creep from 'one
+        slot per poll' toward 'a slot held for the whole watch'."""
+        clock = FakeClock()
+        for tick in range(25):
+            with connection_slot(
+                TARGET, clock=clock, sleep=_no_sleep, pid=700 + tick, pid_alive=_ALIVE
+            ) as tok:
+                assert tok is not None and tok.exists()  # held DURING the dial
+            assert not any(p.exists() for p in slot_paths(HOST))  # freed BETWEEN dials
+
+
+# ---------------------------------------------------------------------------
+# Proactive reaper: reclaim a hard-killed holder's leaked slot out-of-band
+# ---------------------------------------------------------------------------
+
+
+class TestReapStaleSlots:
+    def test_reaps_dead_pid_leaked_slots(self):
+        """FIRES: a hard-killed holder's slot (dead pid) is reclaimed proactively,
+        without waiting for a contended acquire on that host."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)  # slots held by pids 100, 101
+        assert all(p.exists() for p in slot_paths(HOST))
+        n = reap_stale_slots(TARGET, pid_alive=_DEAD)  # both holders read DEAD
+        assert n == 2
+        assert not any(p.exists() for p in slot_paths(HOST))
+
+    def test_never_reaps_a_live_holder(self):
+        """A slot whose holder pid is ALIVE (a warm engine connection, an
+        in-flight transfer) is a legitimate hold — never reaped."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)
+        n = reap_stale_slots(TARGET, pid_alive=_ALIVE)
+        assert n == 0
+        assert all(p.exists() for p in slot_paths(HOST))
+
+    def test_reaps_only_the_dead_holder_leaving_the_live_one(self):
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)  # slot0=pid100, slot1=pid101
+        # Only pid 100 crashed; pid 101 is still alive.
+        n = reap_stale_slots(TARGET, pid_alive=lambda pid: pid != 100)
+        assert n == 1
+        live = [p for p in slot_paths(HOST) if p.exists()]
+        assert len(live) == 1
+        assert json.loads(live[0].read_text(encoding="utf-8"))["pid"] == 101
+
+    def test_reaps_corrupt_slot_file(self):
+        paths = slot_paths(HOST)
+        paths[0].parent.mkdir(parents=True, exist_ok=True)
+        paths[0].write_text("{not json", encoding="utf-8")  # unreadable claim
+        n = reap_stale_slots(TARGET, pid_alive=_ALIVE)
+        assert n == 1
+        assert not paths[0].exists()
+
+    def test_global_reap_covers_every_host(self):
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)  # HOST: 2 slots
+        other = acquire_slot(
+            "user@other.cluster.edu", clock=clock, sleep=_no_sleep, pid=300, pid_alive=_ALIVE
+        )
+        assert other is not None
+        # No ssh_target ⇒ sweep ALL hosts. Every holder reads dead.
+        assert reap_stale_slots(pid_alive=_DEAD) == 3
+
+    def test_reaper_never_unlinks_the_reclaim_lock_file(self):
+        """The ``.slots.lock`` reclaim lock shares the naive ``<host>.slot*`` glob
+        prefix with the slot files; the reaper's integer-suffix filter must leave
+        it intact (deleting it would break the serialization the reclaim needs)."""
+        from hpc_agent.infra.ssh_slots import _reclaim_lock_path, _slot_dir
+
+        clock = FakeClock()
+        _claim_n(1, clock, first_pid=100)  # one dead-reapable slot
+        lock_path = _reclaim_lock_path(HOST)
+        _slot_dir().mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("", encoding="utf-8")  # a lock file present pre-sweep
+        n = reap_stale_slots(TARGET, pid_alive=_DEAD)
+        assert n == 1  # the slot file, and ONLY the slot file, was reclaimed
+        assert lock_path.exists()
+
+    def test_reap_is_noop_when_nothing_is_claimed(self):
+        assert reap_stale_slots(TARGET, pid_alive=_ALIVE) == 0
+        assert reap_stale_slots(pid_alive=_ALIVE) == 0  # global, empty dir
+
+    def test_reap_fails_open_on_a_broken_state_dir(self):
+        """A file squatting on the state-dir path ⇒ the sweep reclaims nothing
+        and never raises (protection layer, not a correctness gate)."""
+        from hpc_agent.state.run_record import _current_homedir
+
+        home = _current_homedir()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "_ssh_throttle").write_text("not a directory", encoding="utf-8")
+        assert reap_stale_slots(TARGET) == 0
+        assert reap_stale_slots() == 0
+
+    def test_reaped_slot_is_reclaimable_by_a_new_acquirer(self):
+        """End-to-end: after the janitor reclaims a leaked slot, a fresh acquirer
+        takes it with no wait — the capacity is genuinely returned to the pool."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)
+        assert reap_stale_slots(TARGET, pid_alive=_DEAD) == 2
+        tok = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=900, pid_alive=_ALIVE)
+        assert tok is not None and tok.exists()

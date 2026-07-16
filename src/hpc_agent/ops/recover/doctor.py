@@ -602,6 +602,33 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         with contextlib.suppress(Exception):
             heal_alerts.extend(_transport_drift_routing(now))
 
+        # Leaked ssh-slot reaper (run-14 slot starvation, 2026-07-16): a watcher
+        # or detached worker hard-killed mid-run leaks its per-host
+        # ``_ssh_throttle`` slot (its finally/atexit release never ran). The
+        # contention-time reaper in ssh_slots.acquire_slot only reclaims it when a
+        # NEW acquirer contends on that EXACT host, so until then a dead holder's
+        # slot keeps eating one of the N=2 per-host slots. The OS-scheduled
+        # self-heal seat is the right place to sweep it proactively: reap every
+        # DEAD-pid slot (pid-liveness only — a LIVE holder is never touched) so a
+        # leaked slot cannot starve a concurrent harvest/retry. Best-effort and
+        # local-only (no SSH); never breaks the watchdog scan.
+        with contextlib.suppress(Exception):
+            from hpc_agent.infra.ssh_slots import reap_stale_slots
+
+            reclaimed_slots = reap_stale_slots()
+            if reclaimed_slots:
+                heal_alerts.append(
+                    AlertRecord(
+                        ts=now,
+                        message=(
+                            f"reclaimed {reclaimed_slots} leaked ssh connection slot(s) "
+                            "under <journal home>/_ssh_throttle — a hard-killed holder's "
+                            "slot the contention-time reaper had not yet reclaimed (it "
+                            "was eating one of the per-host burst-limiter slots)."
+                        ),
+                    )
+                )
+
     # G5 preflight surface (latency plan B1): jsonschema is imported lazily now,
     # so a broken/absent install would only fail at first --spec validation deep
     # inside a flow. Probe it here (local, no SSH) and ride any failure on the

@@ -30,6 +30,27 @@ Mechanism — N claimable slots per host, shared across processes:
   the cheapest correct approximation. Cost: two long transfers to one host
   serialize a third; with N=2 that is acceptable pacing, and short control
   commands (the storm pattern) dominate.
+
+  **A long-lived holder must not HOARD a slot across idle gaps** (the
+  2026-07-16 run-14 starvation). A slot represents ONE concurrent in-flight
+  connection *attempt* — it is scoped to a single ssh call, and a
+  mostly-idle poller (a ``status-watch`` that dials the login node once per
+  poll tick, quiet in between) must ACQUIRE-then-RELEASE per call so the slot
+  is free between polls, not claimed for the poller's whole lifetime. The
+  one-shot ssh seam (:func:`hpc_agent.infra.ssh_circuit.guarded_call`) does
+  exactly this — one :func:`connection_slot` per attempt. The persistent
+  asyncssh engine (:mod:`hpc_agent.infra.ssh_engine`, default-ON since the
+  2026-07-16 rank-3 flip) is the exception: its Invariant 2 holds ONE slot
+  for a connection's whole lifetime (acquired at connect, released only at
+  close/idle-recycle), so an ACTIVE watch that keeps its engine connection
+  warm never lets that slot free — ``watch(1) + harvest(1) = N=2`` starves any
+  third fleet op (a second watcher, a retry) with :class:`SshSlotWaitTimeout`.
+  That whole-life hold is the engine's design, not this module's; the correct
+  shape is a slot held only for the in-flight window, which
+  :func:`connection_slot` already provides per call. The regression that pins
+  the safe pattern lives in ``tests/infra/test_ssh_slots.py`` (a between-calls
+  poller must not block a concurrent acquirer under N=2, while two IN-FLIGHT
+  calls still bound to the cap).
 * Waiters poll on a **flat sub-second interval** (P5, the 2026-07-16
   latency ruling): a fixed :data:`SLOT_POLL_BASE_SEC` cadence plus a
   **deterministic pid-derived jitter** (no ``random``; testable via injected
@@ -55,7 +76,12 @@ Mechanism — N claimable slots per host, shared across processes:
   holder RELEASES its own slot (ownership-bound, below); a dead holder's
   slot is reaped on liveness alone. Normal releases are ``finally`` unlinks,
   so only a hard kill leaks a slot, and pid-liveness reclaims that on the
-  next contended acquire.
+  next contended acquire. :func:`reap_stale_slots` is the PROACTIVE janitor
+  form of the same reclaim — an out-of-session sweep (wired into
+  ``doctor``'s opt-in self-heal seat) that unlinks every dead-pid/corrupt
+  slot across all hosts WITHOUT waiting for a contended acquire, so a slot a
+  taskkill'd watcher leaked cannot sit eating one of the N slots until the
+  next dial to that exact host.
 
   Scope of the pid-liveness reaper (honest limit): it assumes the claim's
   pid lives in the SAME pid namespace as the reader — true for the normal
@@ -105,6 +131,7 @@ __all__ = [
     "SLOT_WAIT_MAX_SEC",
     "acquire_slot",
     "connection_slot",
+    "reap_stale_slots",
     "release_slot",
     "resolve_max_connections",
     "slot_paths",
@@ -501,3 +528,82 @@ def connection_slot(
         # Release under the SAME pid the acquire claimed with (both default to
         # os.getpid()), so ownership verification recognises our own claim.
         release_slot(token, pid=pid)
+
+
+def _stale_slot_files(base: Path, safe: str) -> Iterator[Path]:
+    """Yield the ``<safe>.slot<i>`` files under *base* (never the ``.slots.lock``).
+
+    Slot files are ``<safe>.slot<digits>``; the reclaim lock is
+    ``<safe>.slots.lock``. Both match a naive ``<safe>.slot*`` glob, so the
+    integer-suffix check is what keeps the reaper from ever unlinking a live
+    lock file (which would break the very serialization the reclaim depends on).
+    """
+    prefix = f"{safe}.slot"
+    for path in sorted(base.glob(f"{safe}.slot*")):
+        if path.name[len(prefix) :].isdigit():
+            yield path
+
+
+def reap_stale_slots(
+    ssh_target: str | None = None,
+    *,
+    pid_alive: Callable[[int], bool] = _pid_alive,
+) -> int:
+    """Proactively reclaim leaked slot files whose holder is DEAD; return the count.
+
+    The contention-time reaper inside :func:`acquire_slot` reclaims a stale slot
+    only when a NEW acquirer contends on that EXACT host — so a slot a
+    hard-killed holder leaked (a taskkill'd ``status-watch`` / detached worker
+    whose ``finally``/``atexit`` release never ran) stays claimed until the next
+    dial to that host, needlessly eating one of the N per-host slots in the
+    meantime (a contributing factor in the 2026-07-16 run-14 slot starvation).
+    This is the out-of-session JANITOR form of that same reclaim: it unlinks
+    every dead-pid (or corrupt/unreadable) slot file across all hosts — or just
+    *ssh_target*'s host when given — under each host's reclaim lock (so it never
+    races a live :func:`acquire_slot`'s own reclaim).
+
+    Staleness is IDENTICAL to the acquire path (:func:`_claim_is_stale`):
+    PID-LIVENESS only, never a wall-clock TTL (the G4 shrink — a lease below the
+    worst legitimate hold over-admits). A slot whose holder pid is still ALIVE is
+    a legitimate hold (a warm engine connection, an in-flight transfer) and is
+    NEVER reaped — reclaiming it would evict a live claimant and over-admit a
+    connection to the very host the limiter protects. Fail-open: a
+    missing/broken state dir reclaims nothing and never raises.
+    """
+    base = _slot_dir()
+    try:
+        if not base.is_dir():
+            return 0
+        if ssh_target is not None:
+            host = _host(ssh_target)
+            if not host:
+                return 0
+            safe_names = {_safe_name(host)}
+        else:
+            safe_names = set()
+            for path in base.glob("*.slot*"):
+                cut = path.name.rfind(".slot")
+                if cut > 0:
+                    safe_names.add(path.name[:cut])
+    except OSError:
+        return 0
+
+    from hpc_agent.infra.io import advisory_flock
+
+    reclaimed = 0
+    for safe in sorted(safe_names):
+        try:
+            with advisory_flock(base / f"{safe}.slots.lock"):
+                for slot in _stale_slot_files(base, safe):
+                    # Re-check under the lock (a peer may have reclaimed it) so a
+                    # freshly-created live claim is never stolen.
+                    if not _claim_is_stale(slot, pid_alive=pid_alive):
+                        continue
+                    try:
+                        slot.unlink()
+                    except OSError:
+                        continue
+                    reclaimed += 1
+        except OSError:
+            continue  # fail-open per host: a broken lock never blocks the sweep
+    return reclaimed
