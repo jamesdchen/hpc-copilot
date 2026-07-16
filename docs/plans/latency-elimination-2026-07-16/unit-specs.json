@@ -1,0 +1,563 @@
+{
+  "program": "latency-elimination-2026-07-16",
+  "baseline": "main @ 94c0c484 (memo written at b7e03e9c)",
+  "wave0_rule": "Claim source of truth = `git status` re-run at dispatch time; every dirty file is claimed by in-flight work; units listing a claimed file hard-gate on its land and begin with an explicit rebase-first step (re-read the seam; docket line numbers are untrusted).",
+  "integration_protocol": "Per wave: merge unit branches in the stated order -> python scripts/regen_all.py --write ONCE -> ruff check --fix / ruff format / mypy src/hpc_agent -> targeted batteries incl. named -m slow legs -> push -> GitHub CI matrix green (Linux gates win32 skips) -> append the wave's enforcement-map rows to docs/internals/engineering-principles.md -> record wall-clock deltas in telemetry.md. Units never commit regenerated artifacts.",
+  "units": [
+    {
+      "unit_id": "1.0",
+      "wave": 0,
+      "title": "Shared test-fakes counting instrumentation (pre-wave, sequential)",
+      "claims": [],
+      "files": ["tests/_ssh_fakes.py", "tests/ops/monitor/conftest.py"],
+      "forbidden_files": ["src/hpc_agent/**"],
+      "design_constraints": [
+        "Land exec/dial/pull-cycle counters ONCE; all Wave-1/2 counting units consume read-only.",
+        "Any missing counter shape discovered mid-wave goes to the integrator; never edited on a unit branch."
+      ],
+      "acceptance_tests": ["Existing fake-consuming suites green unchanged; counters observable from a sample test."],
+      "test_batteries_to_run": ["tests/test_ssh_fakes_example.py", "tests/ops/monitor/", "tests/ops/aggregate/"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "1.1",
+      "wave": 1,
+      "title": "B1: lazy jsonschema + heavy-import lint + uv exclusion (sole ci.yml owner)",
+      "claims": ["cold.jsonschema-import-side-effect", "cold.registry-populated-by-importing-the-world (jsonschema leg)"],
+      "files": ["src/hpc_agent/meta/campaign/atoms/budget.py", "src/hpc_agent/meta/campaign/atoms/converged.py", "scripts/lint_lazy_heavy_imports.py (new)", "pyproject.toml", ".github/workflows/ci.yml", "doctor module (jsonschema-importable probe, locate at build)"],
+      "forbidden_files": ["src/hpc_agent/__init__.py"],
+      "design_constraints": [
+        "Owns ALL Wave-1 ci.yml edits (swarm A2); 1.3's smoke and 1.2's lint wiring are integrator lines, not this unit's scope creep.",
+        "G5: lazy import moves ImportError to first-validate; add doctor probe 'jsonschema importable' to keep a preflight-time surface.",
+        "New lint ships with its synthetic-violation fire test (repo standard)."
+      ],
+      "acceptance_tests": [
+        "python -X importtime -c \"import hpc_agent.meta.campaign.atoms.budget\" no longer pulls jsonschema at module scope.",
+        "Dev-venv (post rfc3987 purge, operator step) python -X importtime -c \"import jsonschema\" < 0.5s.",
+        "Lint red on a seeded module-level `import jsonschema`."
+      ],
+      "test_batteries_to_run": ["tests/meta/campaign/atoms/test_budget_accounting.py", "tests/meta/campaign/atoms/test_budget_ack.py", "tests/meta/campaign/atoms/test_campaign_atoms.py", "tests/meta/campaign/test_validate_campaign_workflow.py", "new lint fire test in tests/scripts/", "tests/contracts/ twin", "LINTS: lint_library_knowledge.py, lint_pure_files.py"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "1.2",
+      "wave": 1,
+      "title": "Fast-path prerequisites: --schema into CliShape.args + describe_cache store-guard + parser-truth lint",
+      "claims": ["prerequisite for cold.discovery-verbs-pay-walk-for-baked-data (technical premortem A1/A2)"],
+      "files": ["src/hpc_agent/cli/parser.py", "src/hpc_agent/cli/setup.py", "src/hpc_agent/state/describe_cache.py", "scripts/lint_parser_bake_truth.py (new)"],
+      "forbidden_files": [".github/workflows/ci.yml"],
+      "design_constraints": [
+        "Move the hand-added `--schema` (parser.py:168-181) into CliShape.args so the bake input is the whole truth (A2); regen at wave integration.",
+        "describe_cache.store() refuses when _REGISTRATION_DONE is false (A1 poisoning guard).",
+        "New lint forbids add_argument inside _register_from_registry outside _add_standard_args; ci.yml wiring done by the integrator.",
+        "NO fast_path_safe flags on describe/find in this unit — that is 2.1's fused scope."
+      ],
+      "acceptance_tests": [
+        "`describe <verb> --schema` works from the CliShape-driven parser (no hand add_argument remains).",
+        "A store() call under partial registration is refused (unit test).",
+        "Lint fires on a synthetic in-registry add_argument."
+      ],
+      "test_batteries_to_run": ["tests/cli/test_setup*.py", "tests/cli/test_fast_path_cache.py", "tests/scripts/test_regen_all.py", "tests/contracts/test_generated_merge_driver.py", "new lint fire test"],
+      "regen_required": true,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "1.3",
+      "wave": 1,
+      "title": "B3: PEP-562 lazy __init__ + eager-import smoke contract test (merges LAST; full-CI-matrix gate)",
+      "claims": ["cold.init-eager-import-floor"],
+      "files": ["src/hpc_agent/__init__.py", "tests/contracts/test_eager_import_smoke.py (new)"],
+      "forbidden_files": [".github/workflows/ci.yml"],
+      "design_constraints": [
+        "Smoke is a default-tier contract test, not a workflow step (covers 3.10/3.11/Windows legs; swarm A2/A13).",
+        "The eager smoke imports EVERY lazily-deferred symbol (guard-can-fire applied to the smoke itself).",
+        "__getattr__ serves underscore attrs (operations.py reads hpc_agent._PACKAGE_ROOT at module scope, G4) and raises honest AttributeError/ImportError, never swallows.",
+        "mypy TYPE_CHECKING mirror is load-bearing (lint_mirror_ledger).",
+        "Merge gate = full CI matrix; merges last in Wave 1 so a red bisects trivially."
+      ],
+      "acceptance_tests": [
+        "python -c \"import hpc_agent\" < 300ms (from ~0.9-1.3s); hpc_agent.__all__ byte-identical.",
+        "python -c \"import hpc_agent; hpc_agent._PACKAGE_ROOT\" green.",
+        "Eager smoke red when a deferred name is removed from it (seeded)."
+      ],
+      "test_batteries_to_run": ["tests/contracts/ (incl. new smoke)", "tests/cli/test_fast_dispatch.py", "tests/test_mcp_server.py (-m slow leg)", "tests/integration/test_dispatch_smoke.py", "LINTS: lint_mirror_ledger.py, lint_subject_init.py"],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 2: Lazy-root eager smoke covers every deferred symbol — fires when a __getattr__-deferred name is missing from the eager import test."]
+    },
+    {
+      "unit_id": "1.4",
+      "wave": 1,
+      "title": "P5: slot-release flat sub-second wakeup",
+      "claims": ["polling.slot-wakeup-lag"],
+      "files": ["src/hpc_agent/infra/ssh_slots.py"],
+      "forbidden_files": ["src/hpc_agent/infra/ssh_engine.py"],
+      "design_constraints": ["Slot-cap semantics unchanged; mechanism-only.", "Timing assertions xdist-load-tolerant or marked slow (swarm A8)."],
+      "acceptance_tests": ["Local harness (HPC_SSH_MAX_CONNECTIONS=1): wakeup lag after release < 0.6s at every hold duration (from ~4-8s). Pins FLIP: tests/infra/test_ssh_slots.py doubling-ladder assertions."],
+      "test_batteries_to_run": ["tests/infra/test_ssh_slots.py", "tests/infra/test_ssh_engine.py (-m slow leg)", "tests/infra/test_ssh_throttle.py if present"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "1.5",
+      "wave": 1,
+      "title": "F5: fetch_task_logs server-side loop with sentinel framing",
+      "claims": ["rt.serial-single-purpose-execs (F5 leg)"],
+      "files": ["src/hpc_agent/infra/cluster_logs.py"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "Remote helper is POSIX sh ONLY (E2); degrade to today's per-file path when the pinned-interpreter probe (agent B's) reports absent.",
+        "Sentinel-framed per-file sections (E3): a truncated stream after file k -> files k+1.. read SEVERED, never 'no log/empty log' (positive-evidence-ack, doctrine row L249).",
+        "Rebase-first on agent B's landed preamble seam (G3)."
+      ],
+      "acceptance_tests": ["FxJ log probe = ONE ssh exec (fake transport counts, via Unit 1.0); triage output unchanged; truncated-stream fire test reads severed-per-missing-file."],
+      "test_batteries_to_run": ["tests/ops/monitor/test_logs_atom.py", "tests/ops/monitor/test_summary.py", "tests/ops/recover/test_net_triage.py", "LINTS: lint_no_raw_ssh.py, lint_deploy_python_floor.py (if script ships), lint_remote_read_ack.py"],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 3: Fused-log severed-frame honesty — truncated multi-file stream reads severed-per-missing-file, never empty-logs."]
+    },
+    {
+      "unit_id": "1.6",
+      "wave": 1,
+      "title": "F6: single pull cycle for both canary samples",
+      "claims": ["rt.serial-single-purpose-execs (F6 leg)"],
+      "files": ["src/hpc_agent/ops/submit_and_verify.py"],
+      "forbidden_files": ["src/hpc_agent/ops/verify_canary.py"],
+      "design_constraints": ["The two samples' identities stay distinct (fingerprint admission untouched); -canary family exclusion (rows L271/L373) untouched."],
+      "acceptance_tests": ["Double-canary sample = ONE pull cycle (2 round-trips not 4, counted via Unit 1.0 fakes). Pins: tests/ops/aggregate/test_canary_verify.py pull-count expectations."],
+      "test_batteries_to_run": ["tests/ops/aggregate/test_canary_verify.py", "tests/ops/aggregate/test_pull_tar_seam.py", "tests/ops/aggregate/test_flow_incremental_pull.py"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "1.7",
+      "wave": 1,
+      "title": "H1: stop_multiplex fused Stop hooks + stdlib prefilter + settings migration + conformance surface",
+      "claims": ["percall.stop-hook-trio-interpreter-tax", "loop.per-turn-hook-tax"],
+      "files": ["src/hpc_agent/_kernel/hooks/stop_multiplex.py (new)", "src/hpc_agent/_kernel/hooks/skill_return_stop_guard.py", "src/hpc_agent/_kernel/hooks/decision_rendezvous_stop_guard.py", "src/hpc_agent/_kernel/hooks/relay_audit_stop/__main__.py", "src/hpc_agent/_kernel/hooks/utterance_capture.py", "src/hpc_agent/agent_assets.py", "src/hpc_agent/conformance/adapters/claude_code.py (or explicitly prove untouched)"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "GATED: relay_audit_stop/_contradiction.py is in-flight dirty at memo time — rebase-first on its land.",
+        "Multiplexer DISPATCHES; each guard's decision logic stays its own one definition; prefilter = syntactic necessary-conditions only, stdlib-only, never imports hpc_agent, never re-implements a guard predicate.",
+        "Fail toward running (technical F1): read sys.stdin.buffer, decode utf-8 errors='replace'; decode failure = fail-OPEN to all guards; per-guard isolation (A's exception still runs B/C and reports A); first-block-wins preserved; one guard blocking never suppresses another's accounting side-effects (relay-audit seat, row L250).",
+        "utterance_capture shim routes through the ONE frozen {ts, sha256, text} writer (row L443), adds no field.",
+        "Settings migration (technical F2): install_agent_assets removes the THREE legacy Stop entries by exact match in the same write (needles at agent_assets.py:114-116); doctor gains a duplicate-Stop-hook check. Corrected baseline: ~2.4-4.5s/turn, not 5.7-8s."
+      ],
+      "acceptance_tests": [
+        "One Stop event = ONE python process; no-op turn exits < 0.4s without importing hpc_agent.",
+        "NEW contract test: prefilter-negative => each guard individually no-op (necessary-condition equivalence).",
+        "Migration test: settings with the three old entries end with exactly one multiplex entry (absence of old three asserted).",
+        "Pins FLIP: tests/_kernel/hooks/test_skill_return_stop_guard.py, test_decision_rendezvous_hooks.py, test_relay_audit_stop.py (invocation shape), tests/cli/test_agent_assets_settings_hook.py."
+      ],
+      "test_batteries_to_run": ["ALL of tests/_kernel/hooks/", "tests/cli/test_agent_assets_settings_hook.py", "new trigger-equivalence contract test", "CONFORMANCE LANE: pytest -o addopts= -p no:cacheprovider -q src/hpc_agent/conformance/ --harness-adapter hpc_agent.conformance.adapters.claude_code:build"],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 4: Prefilter necessary-condition equivalence + stdlib-only pin — fires when any input a guard would act on fails the prefilter, or the prefilter imports hpc_agent / re-implements a guard predicate."]
+    },
+    {
+      "unit_id": "1.8",
+      "wave": 1,
+      "title": "F1: per-task harvest include-fold (metrics+trace+summaries in ONE pull cycle)",
+      "claims": ["rt.serial-single-purpose-execs (F1 leg)"],
+      "files": ["src/hpc_agent/ops/aggregate_flow.py"],
+      "forbidden_files": ["src/hpc_agent/infra/transport/**"],
+      "design_constraints": [".hpc_cmd_sha stays in the pull include (row L521 fires if dropped); canary-family exclusion survives the widened include."],
+      "acceptance_tests": ["Per-task fallback harvest = 1 pull cycle (2 round-trips, counted); all three artifact families present locally. Pins: tests/ops/aggregate/test_flow_gates.py, test_pull_tar_seam.py."],
+      "test_batteries_to_run": ["ENTIRE tests/ops/aggregate/ (flow tests interlock)"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "1.9",
+      "wave": 1,
+      "title": "P4-tier1: combine_wave takes a wave LIST (one exec per burst) — gated on in-flight monitor_flow land",
+      "claims": ["polling.serial-wave-combines-hol (tier 1)"],
+      "files": ["src/hpc_agent/ops/aggregate/combine.py", "src/hpc_agent/infra/transport/_combiner.py", "src/hpc_agent/ops/monitor_flow.py"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "GATED: ops/monitor_flow.py is claimed by in-flight agent B — dispatch only after Wave-0 land; rebase-first.",
+        "Per-wave ok/fail granularity in one JSON (honest accounting): a partial batch failure journals per-wave outcomes individually, no silent whole-batch verdict; wave-partial invalidation (row L521 combined_waves->failed_waves) survives batching.",
+        "Cluster-side combiner stays the shipped real reducer (one-definition).",
+        "E3: sentinel-framed batch output; missing end-sentinel -> per-wave fallback, never parse-and-trust truncation."
+      ],
+      "acceptance_tests": ["10-wave burst tick = 1 combine exec (counted); per-wave ok/fail journaled individually. Pins FLIP: tests/ops/aggregate/test_combine_wave_idempotent.py, tests/cli/test_aggregate.py, tests/ops/monitor/test_flow_announce.py."],
+      "test_batteries_to_run": ["tests/ops/aggregate/test_combine_wave_idempotent.py", "tests/cli/test_aggregate.py", "tests/ops/monitor/test_flow_announce.py", "tests/execution/mapreduce/test_combiner.py", "tests/execution/mapreduce/test_combiner_failures.py", "tests/ops/aggregate/test_cluster_side_reduce.py", "LINTS: lint_deploy_python_floor.py, lint_schema_versions.py"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "2.1",
+      "wave": 2,
+      "title": "B4+B5+B2 fused: baked hydration for describe/find/capabilities/mcp-serve/parser + narrow fast_path_safe opt-ins (MERGES FIRST in Wave 2)",
+      "claims": ["cold.registry-populated-by-importing-the-world", "cold.discovery-verbs-pay-walk-for-baked-data (narrow opt-in per verifier, NOT default flip)", "percall.registry-walk-tax-on-unmapped-verbs (merged: build_parser memo)", "cold.daemon-serves-all-surfaces (boot-time leg)"],
+      "files": ["src/hpc_agent/_kernel/registry/primitive.py", "src/hpc_agent/cli/dispatch.py", "src/hpc_agent/cli/parser.py", "src/hpc_agent/cli/setup.py", "src/hpc_agent/_kernel/extension/mcp_server.py", "scripts/bake_operations_json.py", "src/hpc_agent/state/describe_cache.py"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "A1: describe/find on the fast path MUST hydrate the catalog from the bake (or run full registration) before answering — never answer from the partial live registry; a fast-path-computed describe row is never store()d without _finalize_composes having run.",
+        "A2 prerequisite (unit 1.2) landed: bake = whole truth; no post-registration hand add_argument.",
+        "A3: baked answer gated on cached_cli_reshaping_verdict EXTENDED to 'any plugin contributing primitive_modules OR register_cli -> full walk' (dist-signature cache ~5ms is the key).",
+        "A4 + doctrine: staleness CONTENT-KEYED on the build fingerprint, never version-string; DIRTY source checkout -> always walk; any hydration mismatch -> walk + byte-identical output, never an error (mirrors _verb_module_map degradation contract).",
+        "A5: every open() of baked artifacts passes encoding='utf-8'; help-text arrow round-trip test on Windows CI.",
+        "B4-technical: plugin register_cli happens INSIDE the memoized parser build exactly once; memoized surface invoked twice asserts no duplicate registration.",
+        "fast_path_safe opt-in set is ENUMERATED with an equality-pin test (reviewed-edit pattern) so a later default-flip turns a test red; byte-identical-output contract vs full path.",
+        "Curated-catalog DERIVED property preserved: test_curated_catalog_is_derived_blocks_union_extras keeps firing against the baked answer (row L281); operations.json stays under the generated-merge-driver lockstep (row L507)."
+      ],
+      "acceptance_tests": [
+        "hpc-agent capabilities < 1.6s; describe/find subprocess wall < 1.6s (from ~5.2-7.1s); mcp-serve time-to-ready < 2.5s (from 7.5-8.7s).",
+        "CROSS-MODULE byte-diff cases mandatory: `describe submit-s1`, `find 'submit a batch'`, `describe <verb> --schema` fast-vs-full identical (A1/A2).",
+        "Seeded stale bake falls back to walk with identical output; fake plugin env forces walk output identical to today (test_fast_path_plugins case).",
+        "Warm in-proc describe stops re-paying ~286ms parser build."
+      ],
+      "test_batteries_to_run": ["tests/cli/test_fast_dispatch.py (+ -m slow wall-time leg)", "tests/cli/test_fast_path_cache.py", "tests/cli/test_fast_path_plugins.py", "tests/integration/test_dispatch_smoke.py", "tests/scripts/test_regen_all.py", "tests/test_mcp_curated.py", "tests/test_mcp_server.py (-m slow)", "tests/contracts/test_schema_roundtrip.py", "tests/contracts/test_generated_merge_driver.py", "CHECKS: bake_operations_json.py --check, build_schemas.py --check"],
+      "regen_required": true,
+      "enforcement_map_rows": [
+        "Row 1: Fast-path opt-in set is enumerated — equality pin on the fast_path_safe verb list; fires when a verb joins without the test moving or the default flips.",
+        "Row 5: Stale-bake content-keyed fallback — seeded stale bake -> walk, byte-identical; fires on version-string keying."
+      ]
+    },
+    {
+      "unit_id": "2.2",
+      "wave": 2,
+      "title": "WS-CANARY: liveness split ported to verify_canary (heavy report exactly once, at terminal)",
+      "claims": ["rt.canary-poll-full-reporter", "polling.canary-heavy-poll"],
+      "files": ["src/hpc_agent/ops/verify_canary.py"],
+      "forbidden_files": ["tests/infra/test_cluster_status_reporter.py", "src/hpc_agent/infra/cluster_status.py"],
+      "design_constraints": [
+        "ROUTE THROUGH, never copy: classify_polling/settle (row L244), stamp_watchdog_tick (row L253 — both-loops test extends to the new light loop), remote_activation seeding (rows L282/L287 — join the enumerated-consumer test).",
+        "rc-126/127 deterministic-env escalation parity: the LIGHT poll path preserves the deterministic/transient split OR the escalation provably fires at the terminal reporter — fire path: light-path rc-127 stream -> early escalation, never full-budget 'transient' (row L252).",
+        "MUST reproduce the vanished-job grace (verify_canary.py:1032-1053).",
+        "G1: the single terminal heavy report reuses the e79edc2c-pattern breaker deadline-wait + one retry (SshCircuitOpen carries host+deadline) — a breaker-open at terminal must not lose the verdict of a finished job.",
+        "Poll ticks issue only ssh_batch_scheduler_states / read_announcements; consumes infra/cluster_status.py + ops/monitor/announce.py APIs read-only.",
+        "Re-check the breaker-livelock narrative against agent B's landed ssh_circuit.py edits (swarm A1)."
+      ],
+      "acceptance_tests": [
+        "Fake-cluster canary run: heavy reporter invoked EXACTLY once, at terminal (counted in tests/ops/aggregate/test_canary_verify.py ONLY — not 2.5's reporter test).",
+        "Fast-failing canary still gets the vanished-job grace verdict.",
+        "Breaker-open-at-terminal test: verdict recovered after deadline-wait+retry.",
+        "Light-path rc-127 escalates early (fire test)."
+      ],
+      "test_batteries_to_run": ["tests/ops/aggregate/test_canary_verify.py (rebased on 1.6 pins)", "tests/ops/monitor/test_flow_liveness_gate.py", "tests/ops/monitor/test_flow_harvest.py", "tests/ops/monitor/test_reconcile_canary_pairing.py", "tests/ops/test_block_gate_and_speculate.py"],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 6: Light-poll deterministic-env escalation parity — rc-126/127 on the light path escalates early, never rides the budget."]
+    },
+    {
+      "unit_id": "2.3",
+      "wave": 2,
+      "title": "WS-INPROC: in-process spans for local/decision-only children; ssh + WATCH_VERBS + census waiter keep the subprocess seam",
+      "claims": ["cold.subprocess-fan-multiplies-the-floor", "percall.subprocess-spawn-vs-inproc-floor", "rt.process-per-verb-connection-churn (folded; churn narrative REFUTED)", "restructure.process-per-verb-daemon (roll-up, in-proc leg)"],
+      "files": ["src/hpc_agent/_kernel/lifecycle/block_drive.py", "src/hpc_agent/_kernel/lifecycle/drive.py", "src/hpc_agent/ops/submit_preflight.py", "src/hpc_agent/ops/aggregate_preflight.py", "src/hpc_agent/ops/status_preflight.py", "src/hpc_agent/ops/classify_axis_preflight.py", "src/hpc_agent/ops/_preflight_common.py"],
+      "forbidden_files": ["src/hpc_agent/cli/dispatch.py (entry seam is consumed, not redefined here)"],
+      "design_constraints": [
+        "Entry point = the existing MCP in-proc runner seam (_shield_real_stdin + stdout capture), NEVER cli.dispatch.main (technical D1, regression 17243a17); contract test runs a span in-process while a thread blocks on real stdin, asserts server-side stream untouched (Windows CI).",
+        "Explicit context object per span (run_id, block, cwd, env-overlay); _record_detached_failure_terminal + heartbeats take parameters, not os.environ (technical D2); lint pins in-process-eligible verbs to no os.chdir / os.environ writes.",
+        "In-process eligibility is a DECLARED ENUMERATED list; planted ssh-reaching/WATCH verb in the set turns test_src_subprocess_timeout_discipline red (carve-out encoded, not blanket-ban).",
+        "KEEP subprocess: ssh-shelling children (check-preflight, resolve-resources), WATCH_VERBS, and 2.6's per-host census waiter (named here so it cannot be inlined). Tree-kill doctrine rows L273-274; _in_process_deadline is a win32 no-op.",
+        "In-process child failure produces the IDENTICAL error envelope + the F14 re-park (a swallowed exception must not convert a park into a silent skip).",
+        "Mirror twin (swarm A6): block_drive.py:337 capture path mirrors drive._run_cli_step under lint_mirror_ledger — rebase on landed b7e03e9c, then either de-mirror with ledger update + pinning-test change or make the twin change in drive.py.",
+        "In-process dispatch of ops verbs from _kernel/lifecycle routes through the registry/dispatch surface (lint_subject_imports / lint_private_cross_package_imports)."
+      ],
+      "acceptance_tests": [
+        "block-drive tick chaining 2 local spans spawns 0 subprocesses (from 2); envelope/error capture identical; WATCH_VERBS + check-preflight/resolve-resources still spawn (asserted); measured tick wall -(N-1)x~1.3s.",
+        "Planted-violation contract test red.",
+        "Pins FLIP: tests/_kernel/lifecycle/test_block_drive.py, test_block_verb_deadlines.py, tests/contracts/test_src_subprocess_timeout_discipline.py."
+      ],
+      "test_batteries_to_run": ["ALL tests/_kernel/lifecycle/ (incl. test_driver_tick_stamp.py)", "tests/contracts/test_src_subprocess_timeout_discipline.py", "cross-consumer: tests/ops/attention/, tests/ops/status/test_snapshot_attention.py, tests/ops/monitor/test_blocks.py, tests/ops/aggregate/test_blocks.py, tests/meta/campaign/test_blocks.py, tests/ops/test_block_gate_and_speculate.py, preflight tests", "LINTS: lint_subject_imports.py, lint_private_cross_package_imports.py, lint_mirror_ledger.py"],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 7: In-process eligibility carve-out is enumerated — planted ssh/WATCH verb in the in-process set turns the subprocess-discipline contract red."]
+    },
+    {
+      "unit_id": "2.4",
+      "wave": 2,
+      "title": "F2+F7 transport unit (VERIFY-DURING-BUILD): pull-manifest stat cache + transfer-plane engine routing",
+      "claims": ["rt.pull-cycle-fixed-cost", "rt.transfer-plane-bypasses-engine (PLAUSIBLE-UNVERIFIED — gated)"],
+      "files": ["src/hpc_agent/infra/transport/__init__.py", "src/hpc_agent/infra/transport/_pull.py", "src/hpc_agent/infra/transport/_delta.py", "src/hpc_agent/infra/transport/_prune.py", "src/hpc_agent/infra/remote.py"],
+      "forbidden_files": ["src/hpc_agent/infra/clusters.py", "src/hpc_agent/ops/submit_flow.py"],
+      "design_constraints": [
+        "FIRST STEP (F7 gate): re-verify the raw-spawn inventory against agent B's LANDED clusters.py/submit_flow.py/host_retarget.py/monitor_flow.py (NOT transport files — swarm A1); abort legs already fixed; commit the verify memo with before/after dial counts.",
+        "E1: routed transfer-plane ops use the explicit preamble-free op class from agent B's seam; pinned test asserts byte-level command-line equality (no preamble text) post-routing.",
+        "Engine-seam laws extend, never relax (row L278): EngineUnavailable -> one-shot fallthrough; capture=False / streaming tar|ssh pipes NEVER consult the engine; one-shot leg stays on run_capture_bounded — test_transport_ssh_sites_route_through_bounded_runner UPDATED to assert the new route terminates in the bounded runner, never deleted/exempted.",
+        "D2 (doctrine, run-13 finding-13 class): manifest cache keys on .hpc_cmd_sha where present; stat only ever decides UNCHANGED — a cmd_sha move MUST evict even when mtime+size match; failures/severed reads never cached (success-only, breaker-invalidated posture); fire test mirrors tests/ops/aggregate/test_flow_stale_mirror.py.",
+        "G2: mtime(ns)+size; entries younger than a skew window count dirty; cache file temp+rename, per-run keyed, excluded from include-match; foreign-rows guard test."
+      ],
+      "acceptance_tests": [
+        "Warm S2 push <= 4 opens (from ~11-12 at 5 batches), fake-transport dial counts.",
+        "Re-aggregate over unchanged tree = stat-walk only; moved .hpc_cmd_sha with unchanged stat is NOT served from cache (fire test); severed read not cached.",
+        "F7 verify memo committed; preamble-free byte-equality test green.",
+        "Pins FLIP: tests/infra/test_transport_pull.py, test_remote_rsync_fallback.py, tests/ops/aggregate/test_cluster_side_reduce.py; lint_no_raw_ssh.py scope may extend."
+      ],
+      "test_batteries_to_run": ["tests/infra/test_transport_pull.py", "tests/infra/test_remote_rsync_fallback.py", "tests/infra/test_remote.py (-m slow)", "tests/ops/aggregate/test_cluster_side_reduce.py", "tests/ops/aggregate/test_pull_tar_seam.py", "tests/ops/aggregate/test_flow_incremental_pull.py", "tests/ops/aggregate/test_flow_stale_mirror.py", "tests/execution/mapreduce/test_combiner.py", "LINTS: lint_no_raw_ssh.py, lint_remote_read_ack.py, lint_deploy_python_floor.py"],
+      "regen_required": false,
+      "enforcement_map_rows": [
+        "Row 8: Pull-manifest cache content-keyed, success-only, evict-on-sha-move — fires when a moved .hpc_cmd_sha with unchanged stat is served from cache, or a failure/severed read is cached.",
+        "Row 9: Engine-seam laws extend to transfer-plane routes — EngineUnavailable falls through, capture=False never consults engine, one-shot leg stays on run_capture_bounded."
+      ]
+    },
+    {
+      "unit_id": "2.5",
+      "wave": 2,
+      "title": "F3: reporter emits rows_observed; min_rows gate computes both sets from ONE report (exclusive owner of cluster_status)",
+      "claims": ["rt.pull-cycle-fixed-cost (F3 leg)", "rt.serial-single-purpose-execs (reporter leg)"],
+      "files": ["src/hpc_agent/ops/aggregate_flow.py", "src/hpc_agent/execution/mapreduce/reduce/status.py (deployed remote reporter)", "src/hpc_agent/infra/cluster_status.py (EXCLUSIVE)", "tests/infra/test_cluster_status_reporter.py (EXCLUSIVE owner)"],
+      "forbidden_files": ["src/hpc_agent/ops/verify_canary.py"],
+      "design_constraints": [
+        "rows_observed exists NOWHERE yet (swarm A4) — real scope = deployed reporter emit side (Python 3.8 floor!) + cluster_status.py parse side + aggregate_flow consumer.",
+        "Severed single report reads UNKNOWN for BOTH row sets — never rows_observed=0 -> insufficient (wrap_with_ack/split_ack, row L249).",
+        "Version-skew fallback: old reporter (no rows_observed) -> two-call path, exercised by test.",
+        "Counts -> verdict still routes through classify (row L244).",
+        "Note: ops/aggregate_flow.py is also 1.8's file — cross-wave sequential, rebase on Wave-1 integration."
+      ],
+      "acceptance_tests": [
+        "min_rows gate = ONE reporter invocation (counted); old-reporter path takes the two-call fallback; severed report -> UNKNOWN both sets (fire test).",
+        "Pin dies: the two-ssh docstring pin at aggregate_flow.py:461 (tests/ops/aggregate/test_flow_gates.py)."
+      ],
+      "test_batteries_to_run": ["tests/ops/aggregate/test_flow_gates.py", "tests/infra/test_cluster_status_reporter.py", "tests/execution/mapreduce/test_status.py", "tests/execution/mapreduce/test_status_rollup.py", "tests/ops/monitor/test_batch_status.py", "LINTS: lint_deploy_python_floor.py (3.8), lint_schema_versions.py, lint_telemetry_labels.py"],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 10: Severed single-report reads UNKNOWN for both row sets — never rows_observed=0."]
+    },
+    {
+      "unit_id": "2.6",
+      "wave": 2,
+      "title": "P3(+P1 folded)+F4: per-host announce census waiter + remote bounded-wait + census-tick fold + dispatcher run-terminal marker (DATA only)",
+      "claims": ["polling.client-sleep-no-remote-wait", "polling.fleet-n-pollers", "rt.pull-cycle-fixed-cost (F4 leg)", "rt.pull-polling-vs-announce-push (umbrella, banked here once)", "polling.engine-idle-recycle-vs-backoff (falls out if long-poll ships)"],
+      "files": ["src/hpc_agent/ops/monitor/announce.py", "src/hpc_agent/ops/monitor_flow.py", "src/hpc_agent/ops/monitor/batch_status.py", "src/hpc_agent/ops/status_blocks.py", "src/hpc_agent/execution/mapreduce/dispatch.py"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "GATED on in-flight monitor_flow.py land; rebase-first.",
+        "C1: inotify FORBIDDEN (no cross-node fire on NFS/Lustre) — remote wait = sh poll loop (sleep 1-2s + ls/opendir forcing readdir revalidation); the win is moving the poll remote-side.",
+        "C4 (P1 folded into P3): exactly ONE waiter per HOST multiplexing all runs; runs on the engine's persistent asyncssh channel; declared preemptible to the slot limiter; ships as a WATCH_VERB subprocess (on 2.3's KEEP list; tree-killable). Long-poll deadline = current adaptive interval.",
+        "C2: a wake is a HINT, never a settle — settle read failing its ack re-enters the wait; announce reads within a settle sequence are sticky to the wake host (login pools x NFS attribute cache).",
+        "C3: run-terminal marker is temp-write + same-dir mv (or filename-encoded with census recounting per-task markers as truth); marker name joins the dispatcher/client vocab-equality pin in test_announce.py.",
+        "Doctrine row 11: marker wakes, NEVER settles — forged/premature terminal marker wakes the poller, real report reads non-terminal, run keeps watching (fire test, not prose).",
+        "Doctrine row 12: dispatcher marker writer lives in the standalone shipped file (Q3, cannot import the package); marker constant in lockstep pin with the control-plane reader (exit_no_output_constant pattern, row L256).",
+        "Doctrine row 13: the blocked wait routes through the ONE stamp_watchdog_tick definition (row L253) and the remote bounded-wait command goes through run_capture_bounded (row L274).",
+        "Ack-gated severed-vs-empty per run preserved in the fleet census fan-in; F4: census tick derives counts+ids from ONE ls of marker FILENAMES.",
+        "P2 (engine idle horizon) NOT built here — only if post-P1 telemetry shows residual (unit 3.2)."
+      ],
+      "acceptance_tests": [
+        "Fake announce dir: marker write wakes the waiter < 2s with zero intervening dials; fleet-of-3 census = 1 exec/tick (from 3-6).",
+        "Forged/premature terminal marker: wake but NO settle (fire test).",
+        "Severed-vs-empty distinction per run; watchdog stamped during the blocked wait (assertion, route-through named).",
+        "Pins FLIP: tests/ops/monitor/test_flow_adaptive_poll.py, test_announce.py, test_flow_announce.py, test_reconcile_announce.py, tests/ops/monitor/conftest.py fakes (via Unit 1.0)."
+      ],
+      "test_batteries_to_run": ["ENTIRE tests/ops/monitor/", "tests/ops/decision/test_overnight_self_heal.py", "tests/execution/mapreduce/test_dispatch.py", "tests/execution/mapreduce/test_dispatch_signal.py (-m slow; skips win32 — Linux CI gates)", "tests/ops/monitor/test_watchdog_stamp_contract.py", "tests/ops/status/", "LINTS: lint_deploy_python_floor.py, lint_schema_versions.py, lint_atomic_durable_writes.py, lint_telemetry_labels.py, lint_remote_read_ack.py"],
+      "regen_required": false,
+      "enforcement_map_rows": [
+        "Row 11: A marker wakes, never settles — forged/premature terminal marker -> real report still computes the verdict.",
+        "Row 12: Marker constant lockstep standalone-writer <-> control-plane reader.",
+        "Row 13: Long-poll routes through stamp_watchdog_tick + bounded runner."
+      ]
+    },
+    {
+      "unit_id": "3.1",
+      "wave": 3,
+      "title": "WS-SPEC: materialized successor specs (unconditional, run-14 #4 mandate) + dereference-by-run_id (consumption leg iff R3)",
+      "claims": ["loop.agent-as-spec-compiler", "percall.spec-file-forces-two-agent-roundtrips (superseded direction)", "run-14 finding #4 (submit-speculate shape failure = proof case)"],
+      "files": ["src/hpc_agent/infra/block_chain.py", "src/hpc_agent/_kernel/lifecycle/block_drive.py", "src/hpc_agent/ops/submit_blocks.py", "src/hpc_agent/_wire/workflows/submit_blocks.py", "src/hpc_agent/_wire/workflows/submit_speculate.py", "src/hpc_agent/ops/submit_speculate.py", "src/hpc_agent/slash_commands/skills/hpc-submit/SKILL.md", "slash_commands twin of SKILL.md"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "S1: extend _SUCCESSOR_SPEC_SHAPERS to gated successors — _park composes the COMPLETE proposed successor spec in code (MonitorFlowSpec is NOT in the marker; invocation_argv is agent-known -> shaper + derivation, invocation_argv optional/derivable) and MATERIALIZES it in the run sidecar; the brief carries it. Proceeds WITHOUT ruling.",
+        "S2 (iff R3): verbs accept {run_id} and dereference the sidecar — submit-speculate first, then the greenlight path.",
+        "Row 14: composer NEVER fills a REQUIRED_CALLER_FIELD — mirror overnight.py's 'cmd_sha is NEVER composed'; a hint lacking human-sourced goal/task_generator REFUSES, never fabricates (seeded fire test).",
+        "Row 15: dereference-by-run_id is EXCLUSIVE — simultaneous inline spec is refused, never merged (else the run-14 #4 class survives through the back door).",
+        "Row 16: sidecar spec sha-stamped at park; consumption recomputes and refuses on drift; if attestation-shaped it routes through state/attestation.py::bind (row L141 — no fifth recompute-and-compare).",
+        "Derived invocation_argv joins the CODE_DERIVED_FIELDS partition treatment (row L266 — bound, not copied).",
+        "Materialized spec must round-trip through the extra='forbid' models (SubmitS3Spec) — fixes the latent overnight auto-advance wedge.",
+        "Cross-wave file order on SKILL.md + block_drive: 3.1 -> 4a -> 5.1."
+      ],
+      "acceptance_tests": [
+        "Park at S2-terminal materializes a VALIDATING SubmitS3Spec file in the sidecar.",
+        "Overnight auto-advance integration test crosses S2->S3 without agent-authored JSON.",
+        "submit-speculate --run-id <id> (no inline spec) fires correctly; --run-id + inline spec REFUSED.",
+        "Field-less hint refuses; edited-after-park sidecar refused on sha drift.",
+        "Pins FLIP: tests/contracts/test_spec_hint_completeness.py, tests/_kernel/lifecycle/test_block_drive_specs.py, tests/ops/test_block_gate_and_speculate.py, tests/_wire/ schema pins (invocation_argv optional)."
+      ],
+      "test_batteries_to_run": ["tests/contracts/test_spec_hint_completeness.py", "tests/_kernel/lifecycle/test_block_drive_specs.py", "tests/ops/test_block_gate_and_speculate.py", "ALL tests/_wire/ (+ test_schema_models_roundtrip.py -m slow)", "tests/contracts/test_schema_roundtrip.py", "cross-consumer block-drive battery (as 2.3)", "CHECKS/LINTS: build_schemas.py --check, lint_wire_suffix.py, lint_schema_reachability.py, lint_skill_command_sync.py, lint_atomic_durable_writes.py, primitive doc templates"],
+      "regen_required": true,
+      "enforcement_map_rows": [
+        "Row 14: Successor-spec composer never fills a REQUIRED_CALLER_FIELD — field-less hint refuses, never fabricates.",
+        "Row 15: run_id dereference is exclusive — inline spec alongside --run-id refused, never merged.",
+        "Row 16: Park-time sha bind, consumption-time recompute — edited-after-park sidecar spec refused; routes through attestation.bind if attestation-shaped."
+      ]
+    },
+    {
+      "unit_id": "3.2",
+      "wave": 3,
+      "title": "P2: cadence-aware engine idle horizon (CONDITIONAL on post-P1 telemetry)",
+      "claims": ["polling.engine-idle-recycle-vs-backoff"],
+      "files": ["src/hpc_agent/infra/ssh_engine.py", "src/hpc_agent/ops/monitor_flow.py (next-use declaration threading)"],
+      "forbidden_files": [],
+      "design_constraints": ["Build ONLY if Wave-2 telemetry shows residual reconnect-per-poll after the long-poll ships.", "Engine stays opt-in/fallback (row L278 untouched)."],
+      "acceptance_tests": ["Declared 300s cadence keeps the connection across 2 polls (0 reconnects, from 1/poll); one-shot callers still recycled at 120s. Pins: tests/infra/test_ssh_engine.py IDLE_CLOSE sweep."],
+      "test_batteries_to_run": ["tests/infra/test_ssh_engine.py (+ -m slow)", "tests/ops/monitor/test_flow_adaptive_poll.py", "test_flow_poll_floor.py", "test_flow_poll_tolerance.py"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "3.3",
+      "wave": 3,
+      "title": "WS-DAEMON: warm daemon serves all surfaces (iff R4; opt-in HPC_CLI_DAEMON=1 first)",
+      "claims": ["cold.daemon-serves-all-surfaces", "restructure.process-per-verb-daemon (roll-up, daemon leg)"],
+      "files": ["src/hpc_agent/cli/mcp.py", "src/hpc_agent/_kernel/extension/mcp_server.py", "src/hpc_agent/cli/dispatch.py", "src/hpc_agent/cli/daemon_client.py (new)"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "RULING R4 gates; depends on WS-BAKE (fast boot).",
+        "D3 (doctrine): every daemon-dispatched journal append routes through the ONE infra/io.append_jsonl_line seam AND the RPC reply is written only after the seam's fsync returns (a lost post-ok:true greenlight is the worst journal corruption).",
+        "B2-technical: v1 SERIALIZES requests (single worker queue); per-request {cwd, env-allowlist} applied from the RPC; refuse calls whose critical env (HPC_JOURNAL_DIR, HPC_SSH_*) cannot be applied. Concurrency is explicitly OUT of this program (request-context accessor is v2).",
+        "B1-technical: handshake on FULL build fingerprint (full_version(), incl. git sha); refuse-and-fall-back + daemon SELF-EXIT on mismatch; launch via python -m (never the console-script .exe — WinError-32); release skill gains a stop-daemon step; doctor gains a fingerprint-skewed-daemon check.",
+        "B3-technical: pipe/mutex name embeds user + fingerprint; second instance detects and exits; argparse SystemExit caught per-RPC.",
+        "G6: dist-signature re-checked per RPC (~5ms) — editable-plugin verdict staleness.",
+        "env_actor resolves from the CALL's env through the one HPC_ACTOR seam (rows L438-441).",
+        "Hard fallback = guard-integrity law: daemon-unreachable degrades to inline, byte-identical — a dead daemon never means a silently skipped guard. Three-stream shield discipline (row L486)."
+      ],
+      "acceptance_tests": [
+        "Daemon up: hpc-agent read-decisions --help < 200ms end-to-end; daemon down: inline path byte-identical.",
+        "Kill daemon immediately after an append-decision reply: record durable on disk (D3 fire path).",
+        "Two sequential calls from different cwds land in DIFFERENT journals; actor from call env.",
+        "Version-skew test refuses, falls back, daemon self-exits."
+      ],
+      "test_batteries_to_run": ["tests/integration/test_dispatch_smoke.py (gains daemon leg)", "tests/test_mcp_curated.py", "tests/test_mcp_server.py (-m slow)", "tests/cli/ fast-path trio", "new daemon durability/cwd/actor tests", "conformance lane (both adapters)"],
+      "regen_required": false,
+      "enforcement_map_rows": [
+        "Row 17: Daemon append: one seam + reply-after-fsync — daemon killed post-reply leaves the record durable.",
+        "Row 18: Daemon per-call cwd/actor — cross-cwd calls hit different journals; actor resolves from call env through the one env_actor seam."
+      ]
+    },
+    {
+      "unit_id": "4a",
+      "wave": 4,
+      "title": "L1: fused commit+advance (block-drive --approve; rendezvous guard demoted to a backstop that provably still fires)",
+      "claims": ["loop.three-call-rendezvous"],
+      "files": ["src/hpc_agent/_kernel/lifecycle/block_drive.py", "src/hpc_agent/ops/decision/journal/__init__.py", "src/hpc_agent/_kernel/hooks/decision_rendezvous_stop_guard.py", "src/hpc_agent/slash_commands/skills/hpc-submit/SKILL.md", "slash_commands twin of SKILL.md"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "Mechanism-only, no ruling: the human still utters the y; fusion removes the agent's mechanical second call.",
+        "Row 19: --approve ROUTES THROUGH the one append_decision definition — every existing gate (bare-ack refusal, human-authorship on REQUIRED_CALLER_FIELDS, code-derived-field refusal row L266, token-exact prior-nudge row L288, unlock authorship row L299) fires identically on the fused path (fire test: fused path refuses each thing append-decision refuses).",
+        "Row 20: the demoted rendezvous Stop guard STILL FIRES on an unjournaled advance (verify-a-guard-can-fire applied to the demotion; else the demotion deleted the guard).",
+        "Sequences AFTER 3.1 (same files: block_drive, SKILL.md); 4b runs after 4a.",
+        "Consumes 3.1's materialized proposed spec."
+      ],
+      "acceptance_tests": [
+        "One --approve call journals the y (record shape byte-compatible with append-decision) AND returns the next parked brief; rendezvous guard no longer fires on the fused path; backstop fires on a seeded unjournaled advance.",
+        "Pins FLIP: tests/_kernel/hooks/test_decision_rendezvous_hooks.py, tests/ops/decision/test_overnight_wiring.py."
+      ],
+      "test_batteries_to_run": ["tests/_kernel/hooks/test_decision_rendezvous_hooks.py (against the FUSED multiplex from 1.7)", "tests/ops/decision/test_overnight_wiring.py", "tests/ops/decision/test_multi_human_gate.py", "tests/ops/test_decision_journal_primitives.py", "cross-consumer block-drive battery", "LINTS: lint_decision_content.py, lint_skill_command_sync.py, conformance lane, primitive doc + regen"],
+      "regen_required": true,
+      "enforcement_map_rows": [
+        "Row 19: --approve routes through the one append_decision — every append-decision refusal fires identically on the fused path.",
+        "Row 20: Demoted rendezvous backstop still fires on an unjournaled advance."
+      ]
+    },
+    {
+      "unit_id": "4b",
+      "wave": 4,
+      "title": "L2: worker-exit park (one-definition _park, second seat) + L3: code-fired speculative canary at S1 resolved-park (iff R2)",
+      "claims": ["loop.worker-exit-brief-round-trip", "loop.speculation-is-agent-remembered", "restructure.speculation-generalizes (canary subset)"],
+      "files": ["src/hpc_agent/ops/monitor/wait_detached.py", "src/hpc_agent/_kernel/lifecycle/detached.py", "src/hpc_agent/ops/submit_blocks.py"],
+      "forbidden_files": ["src/hpc_agent/_kernel/lifecycle/block_drive.py (4a's; sequence after)"],
+      "design_constraints": [
+        "Runs AFTER 4a. L2 needs no ruling; L3 needs R2.",
+        "Row 21: _park one-definition-two-seats with the import-location contract test (scope_gate/notebook_gate blessed pattern).",
+        "Row 22 (L3, iff R2): speculative fire reuses the #249 TTL/budget-of-1/breaker-invalidation cache as its ONE speculation-state definition (no second cache); stop_after_canary pinned UNSTRIPPABLE on the speculative path (fire: main array unreachable); nudge/moved-cmd_sha orphans it; required ambiguities -> skip (same rule as the skill).",
+        "Bank L2's win as '3 agent round-trips/run' (bogus 2-4s figure dropped; cursor-resume already shipped)."
+      ],
+      "acceptance_tests": [
+        "Detached worker exit leaves a pending-decision marker + brief (no driver tick needed); wait-detached returns {outcome, brief, relay, next_verb}; _park import-location contract test green.",
+        "L3: S1 resolved-park fires the speculative canary in code; nudge (cmd_sha move) orphans it; ambiguous walk skips it; journal untouched by the speculative fire.",
+        "Severance tests skip on win32 — Linux CI gates."
+      ],
+      "test_batteries_to_run": ["tests/ops/monitor/test_wait_detached.py", "tests/_kernel/lifecycle/test_detached_* (Linux CI gate)", "tests/ops/test_block_gate_and_speculate.py", "one-definition _park import-location contract test"],
+      "regen_required": false,
+      "enforcement_map_rows": [
+        "Row 21: _park one-definition-two-seats import-location pin.",
+        "Row 22: Speculative canary: one TTL-cache definition, stop_after_canary unstrippable, nudge orphans."
+      ]
+    },
+    {
+      "unit_id": "5.1",
+      "wave": 5,
+      "title": "L5: standing-consent collapse at all four gate sites (iff R1, WITH the D1 typed-minting bar)",
+      "claims": ["restructure.standing-consent-collapse"],
+      "files": ["src/hpc_agent/infra/block_chain.py", "src/hpc_agent/ops/block_gate.py", "src/hpc_agent/ops/overnight.py", "src/hpc_agent/ops/submit_blocks.py", "src/hpc_agent/ops/aggregate_blocks.py", "src/hpc_agent/slash_commands/skills/hpc-submit/SKILL.md", "slash_commands twin"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "RULING R1 gates. D1 minting bar is a constraint OF the grant: a bare y mints greenlight-only, byte-identical to today; minting a standing consent requires a typed phrase naming the boundary set; the minting utterance faces the typed-authorship check.",
+        "Row 23: all four sites route through the ONE assert_greenlit_or_consented gate (route-through enumeration test — no site re-derives consent locally); an anomaly/needs_decision terminator PARKS under a live consent (fire test — consent covers only the healthy chain); the spend-envelope disclosure is CODE-rendered from structured evidence (row L265 — the LLM never composes the spend line).",
+        "consume_boundary_under_consent stays the one 'live consent' definition; every consumption ledgered; revise-resolved/nudge revokes (cmd_sha binding).",
+        "Sequences after 3.1/4a on SKILL.md + submit_blocks; 5.3 sequences AFTER this unit (swarm A12)."
+      ],
+      "acceptance_tests": [
+        "Healthy-submit integration: ONE typed consent at S1 (expires_at+caps+cmd_sha) carries S2/S3/S4 with a ledgered ConsumptionOutcome each; bare y -> greenlight only, byte-identical (fire test); anomaly terminator still parks; nudge revokes.",
+        "Pins FLIP: tests/ops/decision/test_overnight_wiring.py, tests/ops/test_block_gate_and_speculate.py, gate-site tests asserting strict assert_greenlit_target at s2/s4/aggregate-run."
+      ],
+      "test_batteries_to_run": ["tests/ops/decision/test_overnight_wiring.py", "tests/ops/decision/test_overnight_consent.py", "tests/ops/test_block_gate_and_speculate.py", "tests/ops/aggregate/test_blocks.py", "tests/ops/monitor/test_blocks.py", "cross-consumer block-drive battery", "LINTS/CHECKS: lint_decision_content.py, build_schemas.py --check"],
+      "regen_required": true,
+      "enforcement_map_rows": ["Row 23: Consent gate — route-through at all four sites; anomaly parks under live consent; spend line code-rendered; bare y mints no consent (typed-authorship minting bar)."]
+    },
+    {
+      "unit_id": "5.2",
+      "wave": 5,
+      "title": "Breaker class-dependent cooldown (R6 — DEFER-recommended; build only after a classifier-telemetry run cycle)",
+      "claims": ["polling.breaker-fixed-cooldown"],
+      "files": ["src/hpc_agent/infra/ssh_circuit.py", "src/hpc_agent/ops/monitor/harvest_guard.py"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "RULING R6 gates; recommendation is DEFER one run cycle for classifier false-positive telemetry.",
+        "If granted: ~30-60s-to-first-probe ONLY for the preamble-degradation/load class (d3b1915f classifier, fires at cycle >=2); ban/connection-refused classes keep the FULL ladder; single bare probe, no session storm; must not regress row L523 (connection success never resets reopen_cycles).",
+        "REBASE on in-flight ssh_circuit.py (dirty at memo time)."
+      ],
+      "acceptance_tests": ["Load-class open (classifier-flagged, cycle >=2) probes at ~45s; ban-class keeps the full ladder (both directions asserted); reopen_cycles never reset by success."],
+      "test_batteries_to_run": ["tests/infra/ circuit tests", "tests/ops/monitor/test_harvest_guard.py"],
+      "regen_required": false,
+      "enforcement_map_rows": []
+    },
+    {
+      "unit_id": "5.3",
+      "wave": 5,
+      "title": "Speculation-eligibility law + S2-push/S4-pull prefire (iff R5; sequences AFTER 5.1)",
+      "claims": ["restructure.speculation-generalizes"],
+      "files": ["src/hpc_agent/_kernel/lifecycle/block_drive.py", "src/hpc_agent/_kernel/registry/primitive.py (eligibility flag)", "scripts/lint_speculation_eligibility.py (new)", ".github/workflows/ci.yml (lint wiring)"],
+      "forbidden_files": [],
+      "design_constraints": [
+        "RULING R5 gates; AFTER 5.1 (both flip pins in test_block_gate_and_speculate.py and alter gate semantics at the same sites — swarm A12).",
+        "The lint mechanizes ONLY the non-scheduler-mutating leg (SideEffect kind taxonomy); idempotent+content-keyed are ASSERTED semantics -> each eligible verb requires an ENUMERATED double-run/byte-identical fire test to join the flag set (row-L287 enumeration pattern).",
+        "Row 24 pin: speculative execution NEVER appends a decision record and NEVER records a block terminal — speculative S2 push leaves the journal byte-identical; greenlight stays the only path to scheduler mutation + journal advancement; _spec_sha move orphans prefired work.",
+        "Wire S2-push first, S4-pull second; speculative work runs low-priority under the slot limiter.",
+        "New lint lands with its synthetic-violation fire test."
+      ],
+      "acceptance_tests": ["Planted non-eligible verb with the flag -> lint red; per-verb double-run byte-identical tests enumerated; speculative S2 push: journal byte-identical (fire test); _spec_sha move orphans."],
+      "test_batteries_to_run": ["tests/ops/test_block_gate_and_speculate.py", "new eligibility-lint fire test", "per-verb idempotency fire tests", "tests/contracts/", "CHECKS: bake_operations_json.py --check"],
+      "regen_required": true,
+      "enforcement_map_rows": ["Row 24: Speculation-eligible = flag + kind-taxonomy lint + enumerated per-verb idempotency fire test + journal-byte-identical speculative execution."]
+    },
+    {
+      "unit_id": "5.4",
+      "wave": 5,
+      "title": "WS-AGENT: cluster-side campaign agent DESIGN DOC + digest schema (docs only; build is a follow-on program)",
+      "claims": ["restructure.cluster-campaign-agent"],
+      "files": ["docs/plans/latency-elimination-2026-07-16/cluster-agent-design.md (new)"],
+      "forbidden_files": ["src/**"],
+      "design_constraints": [
+        "SHIP the real hpc_agent reducer on-node (one-definition — never a stdlib reimplementation of combine); lifecycle kill at campaign-complete; install ladder degrades to today's polling; informed by WS-PUSH telemetry.",
+        "Doctrine mandate (i): env-fingerprint 'attestation' in the digest routes through state/attestation.py::bind/reduce or stops calling itself an attestation (row L141).",
+        "Doctrine mandate (ii): the digest is DATA — control-plane classify_polling/settle still compute every verdict; a cluster-computed verdict is never trusted directly (rows L244/L249 extended; marker-never-settles posture restated from 2.6/row 11)."
+      ],
+      "acceptance_tests": ["Design doc carries both doctrine mandates verbatim + the digest schema + the degrade ladder."],
+      "test_batteries_to_run": [],
+      "regen_required": false,
+      "enforcement_map_rows": ["Row 11 (restated): the WS-AGENT digest is data — a marker/digest wakes or informs, never settles; the control plane computes every verdict."]
+    }
+  ],
+  "rulings_needed": [
+    {"id": "R1", "unit": "5.1", "topic": "standing-consent collapse (4 gate sites, one typed consent for the healthy chain)", "amendment": "D1 typed-minting bar: bare y mints greenlight-only; consent minting requires a typed phrase naming the boundary set", "recommendation": "grant S4+aggregate-run unconditionally; S2/S3 contingent on code-rendered spend-envelope disclosure"},
+    {"id": "R2", "unit": "4b", "topic": "code-fired speculative canary at S1 resolved-park (scheduler submit with no agent action pre-greenlight)", "recommendation": "grant; skip on required ambiguities; stop_after_canary unstrippable; #249 TTL cache is the one speculation-state definition"},
+    {"id": "R3", "unit": "3.1", "topic": "consumption leg: thin {next_block, y} acts under the code-composed successor spec (relaxes block_chain.py:377-386)", "recommendation": "grant with the byte-stability sha pin; materialization leg ships regardless (run-14 #4 user mandate)"},
+    {"id": "R4", "unit": "3.3", "topic": "warm CLI daemon: opt-in vs default", "amendment": "D3 durability posture (one append seam + reply-after-fsync) is a condition of the grant", "recommendation": "opt-in HPC_CLI_DAEMON=1 for one run cycle, then default-flip ruling with live numbers (asyncssh-ladder precedent 445ce69a)"},
+    {"id": "R5", "unit": "5.3", "topic": "speculation-eligibility law (registry flag + lint + prefire of S2-push/S4-pull inside the review window)", "recommendation": "grant the law; per-verb enumerated idempotency fire tests mandatory (flag is a claim, not evidence); push first, pull second"},
+    {"id": "R6", "unit": "5.2", "topic": "breaker class-dependent cooldown for the load/preamble-degradation class", "recommendation": "DEFER one run cycle for classifier telemetry, then grant narrowly (single bare probe; ban class keeps the full ladder)"},
+    {"id": "R7", "unit": "none", "topic": "pre-resolve rendezvous / remote_path -> CODE_DERIVED_FIELDS", "recommendation": "DENY/DEFER — corrected gain ~2-4s agent-side; real consent-boundary change against the deliberate 627ae62e posture"}
+  ],
+  "declined": [
+    "percall.spec-file-forces-two-agent-roundtrips fix (b) --spec - stdin (contradicts run-14 anti-over-authoring; reopens finding-13/17; ~0 marginal gain)",
+    "Windows-Defender exclusion guidance (cold.trampoline-and-pyc-nonissues: gap did not reproduce)",
+    "percall.pylint-guard-mypy-per-edit (out-of-repo; operator note only, ~0.5-0.7s warm)"
+  ]
+}
