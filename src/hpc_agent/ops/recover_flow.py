@@ -163,7 +163,14 @@ def render_overrides_to_extra_flags(
             out += [f"--cpus-per-task={cpus}"]
     elif s == "sge":
         if isinstance(mem_mb, int) and mem_mb > 0:
-            out += ["-l", f"h_data={mem_mb}M"]
+            # ONE definition of the SGE mem translation (run-14): h_data is
+            # PER-SLOT and vmem-enforced, so the per-task-total mem_mb is
+            # divided across the ``-pe shared`` slots (+ the disclosed vmem
+            # headroom) via the same helper the engine's resource_flags uses.
+            from hpc_agent.infra.backends import sge_h_data_mb
+
+            slots = cpus if isinstance(cpus, int) and cpus > 0 else 1
+            out += ["-l", f"h_data={sge_h_data_mb(mem_mb, slots)}M"]
         if isinstance(walltime_sec, int) and walltime_sec > 0:
             out += ["-l", f"h_rt={_format_walltime(walltime_sec)}"]
         if isinstance(gpus, int) and gpus > 0:

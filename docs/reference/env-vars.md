@@ -149,6 +149,21 @@ shape); for **guaranteed** strict decode use vLLM or OpenAI.
 | `HPC_SSH_ENGINE` | (unset → `asyncssh`, on) | The persistent asyncssh-backed SSH engine — one held connection per host reused across round-trips instead of a cold connection per op (the `MaxStartups`-throttle / ban-risk root fix). **Default ON since the latency-audit rank-3 flip (2026-07-16)**: an unset/blank env selects the engine (ControlMaster is structurally broken on native Windows, so the one-shot path pays a 1-3s cold dial per exec). Set to `native` — or any unrecognised value — to select the one-shot binary path; `asyncssh` is the explicit opt-in. A hard fallback to the one-shot path still covers any engine trouble (unimportable asyncssh, breaker-refused connect, wedged command). See the module docstring for the full design and ban-safety invariants: `hpc_agent.infra.ssh_engine`. |
 | `HPC_SSH_IDLE_CLOSE_SEC` | `120` | Seconds an idle engine connection is held open before it self-closes and frees its per-host ssh slot. A background reaper thread enforces this even with no further activity, so a long-lived `mcp-serve` that ran one quick verb frees its slot ~2 min after last use instead of holding it until exit. Owned by `hpc_agent.infra.ssh_engine` (`IDLE_CLOSE_SEC`). |
 
+## Scheduler memory semantics (SGE/UGE)
+
+SGE/UGE `h_data` differs from SLURM `--mem` on both axes: it is **per-slot**
+(a `-pe shared N` job's total ask is N× the flag) and it is **enforced against
+virtual memory** with a silent SIGKILL (run-14, hoffman2: canaries died ~1min
+in with no traceback — glibc malloc arenas + OpenMP arenas inflate vmem well
+past RSS). The spec's `mem_mb` therefore means **per-task total**, and the SGE
+emitter derives `h_data = ceil(mem_mb × factor / slots)` per slot, disclosed
+via a logger line whenever the emitted number differs.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HPC_SGE_VMEM_FACTOR` | `2.0` | vmem-headroom factor bridging the RSS-intent → vmem-enforced gap in the SGE `h_data` translation (`infra.backends.sge_h_data_mb`). Set `1` to disable the headroom; unset/unparseable/non-positive falls back to the default. |
+| `HPC_MALLOC_ARENA_MAX` | `4` | Cluster-side (job_env): value exported as `MALLOC_ARENA_MAX` by the shared job preamble, capping glibc's per-thread malloc arenas (each reserves ~64MB of vmem). The single biggest vmem reduction for multi-threaded tasks on vmem-enforced schedulers, at effectively zero cost. Set `""` to leave `MALLOC_ARENA_MAX` unset. |
+
 ## Validation thresholds
 
 There are no env-var knobs for validators; per-rule overrides live in

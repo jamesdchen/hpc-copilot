@@ -148,6 +148,19 @@ export OPENBLAS_NUM_THREADS="${HPC_OPENBLAS_NUM_THREADS:-1}"
 export NUMEXPR_NUM_THREADS="${HPC_NUMEXPR_NUM_THREADS:-1}"
 export VECLIB_MAXIMUM_THREADS="${HPC_VECLIB_NUM_THREADS:-1}"
 
+# --- glibc malloc arena cap (vmem survival) ---
+# glibc malloc creates up to 8*ncores per-thread arenas, each reserving
+# ~64MB of VIRTUAL memory. On vmem-enforced schedulers (UGE/SGE h_data
+# kills on vmem, silently, with no traceback) a multi-threaded task
+# (xgboost/OpenMP + arrow buffers) inflates vmem 3-5x over RSS from
+# arena reservations alone — two run-14 canaries died exactly so ~1min
+# into data prep at h_data=8000M. Capping arenas at 4 removes most of
+# that inflation at effectively zero throughput cost. Override via
+# $HPC_MALLOC_ARENA_MAX in the spec's job_env; set "" to leave unset.
+if [ "${HPC_MALLOC_ARENA_MAX-4}" != "" ]; then
+    export MALLOC_ARENA_MAX="${HPC_MALLOC_ARENA_MAX:-4}"
+fi
+
 # --- Reproducibility env (fidelity vs. serial) ---
 # These defaults narrow the gap between an array task on a compute node
 # and the same task run serially on a workstation. They cost ~nothing

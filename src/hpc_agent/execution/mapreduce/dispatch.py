@@ -1224,6 +1224,28 @@ def main() -> None:
     elapsed_sec = max(0, int(round(time.monotonic() - started_at_mono)))
     ended_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+    # Peak RESIDENT memory of the reaped child tree (run-14 memory priors):
+    # ``getrusage(RUSAGE_CHILDREN).ru_maxrss`` is the max RSS across children
+    # this process has waited on — the just-reaped executor. Rides the runtime
+    # sidecar as ``peak_rss_mb`` so the canary can mint a MEMORY prior alongside
+    # the runtime one (and the operator can size mem_mb from a measurement
+    # instead of a guess). Best-effort + stdlib-only (this file ships standalone
+    # to the cluster): ``resource`` is Unix-only (absent on the Windows test
+    # lane) and ru_maxrss is KB on Linux — the surface this runs on.
+    peak_rss_mb: int | None = None
+    try:
+        # Unix-only module/attrs; mypy runs on the Windows dev lane where the
+        # stubs lack them — the runtime guard is the try/except itself.
+        import resource as _resource  # type: ignore[import-not-found]
+
+        _maxrss_kb = _resource.getrusage(  # type: ignore[attr-defined]
+            _resource.RUSAGE_CHILDREN  # type: ignore[attr-defined]
+        ).ru_maxrss
+        if _maxrss_kb and _maxrss_kb > 0:
+            peak_rss_mb = max(1, int(_maxrss_kb // 1024))
+    except Exception:  # noqa: BLE001 — telemetry only; never affects the task verdict
+        peak_rss_mb = None
+
     if returncode == 0:
         # Walk the WIP tree recursively so an executor that writes
         # nested subdirs (e.g. ``per_seed/seed_0/metric.csv``) promotes
@@ -1340,6 +1362,11 @@ def main() -> None:
             "ended_at": ended_at_iso,
             "elapsed_sec": int(elapsed_sec),
             "exit_code": int(returncode),
+            # Peak resident memory (MB) of the reaped executor tree — the
+            # canary's MEMORY-prior measurement (run-14). None where
+            # getrusage is unavailable; readers treat absence as "not
+            # measured", never a zero.
+            "peak_rss_mb": peak_rss_mb,
             "node": (
                 os.environ.get("SLURMD_NODENAME")
                 or os.environ.get("HOSTNAME")

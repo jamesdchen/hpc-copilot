@@ -242,12 +242,16 @@ class TestResourceFlags:
         assert b.resource_flags(None) == []
         assert b.resource_flags(_res()) == []
 
-    def test_sge_walltime_mem_cpus(self):
+    def test_sge_walltime_mem_cpus(self, monkeypatch):
         b = _sge()
         assert b.resource_flags(_res(walltime_sec=7200)) == ["-l", "h_rt=02:00:00"]
         assert b.resource_flags(_res(walltime_sec=90061)) == ["-l", "h_rt=25:01:01"]
+        # run-14: h_data is PER-SLOT + vmem-enforced — mem_mb (per-task total) is
+        # divided across -pe slots and grown by the disclosed vmem headroom
+        # (factor pinned for determinism): ceil(8192 * 2.0 / 4) = 4096M per slot.
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "2")
         flags = b.resource_flags(_res(mem_mb=8192, cpus=4))
-        assert "h_data=8192M" in flags
+        assert "h_data=4096M" in flags
         assert flags[flags.index("-pe") : flags.index("-pe") + 3] == ["-pe", "shared", "4"]
 
 

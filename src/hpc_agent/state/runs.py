@@ -1098,7 +1098,9 @@ def update_run_sidecar_job_ids(
     return target
 
 
-def stamp_canary_runtime(experiment_dir: Path, run_id: str, *, elapsed_sec: int) -> Path | None:
+def stamp_canary_runtime(
+    experiment_dir: Path, run_id: str, *, elapsed_sec: int, peak_rss_mb: int | None = None
+) -> Path | None:
     """Record a canary's MEASURED task wall-clock onto its own sidecar.
 
     The two-phase canary is a full real task; the dispatcher writes its measured
@@ -1123,12 +1125,17 @@ def stamp_canary_runtime(experiment_dir: Path, run_id: str, *, elapsed_sec: int)
     from hpc_agent.infra.io import atomic_locked_update
 
     value = int(elapsed_sec)
+    # Optional MEMORY measurement (run-14): the dispatcher's measured peak RSS
+    # (MB) rides the same stamp so mem asks can be sized from a measurement.
+    rss = int(peak_rss_mb) if (peak_rss_mb and int(peak_rss_mb) > 0) else None
 
     def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
         if existing is None:
             # Vanished between the existence check and the lock — nothing to stamp.
             raise FileNotFoundError(f"run sidecar not found: {target}")
         existing["canary_elapsed_sec"] = value
+        if rss is not None:
+            existing["canary_peak_rss_mb"] = rss
         return existing
 
     try:

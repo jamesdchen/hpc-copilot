@@ -36,7 +36,9 @@ __all__ = [
     "CATALOG",
     "CLASSIFIER_CATEGORIES",
     "CONDA_RUN_BLIND_CLASS",
+    "SGE_VMEM_KILL_CLASS",
     "classify_conda_run_blind",
+    "classify_sge_vmem_kill",
 ]
 
 
@@ -511,6 +513,103 @@ def classify_conda_run_blind(
             ),
         },
         "matched_pattern": _CONDA_RUN_RE.pattern,
+    }
+
+
+# ── SGE h_data vmem kill: a SILENT-DEATH signature (NOT a CATALOG row) ──────
+# Run-14 live evidence (hoffman2, 2026-07-16): UGE/SGE enforce ``h_data``
+# against VIRTUAL memory and deliver a plain SIGKILL — no traceback, no
+# "oom-kill" line, no dmesg echo in the task log. Two canaries died ~1min into
+# data prep at h_data=8000M with completely silent stderr (xgboost OpenMP
+# arenas + glibc malloc arenas + arrow buffers inflate vmem 3-5× over RSS); the
+# SAME spec ran fine on a SLURM cluster that accounts resident/cgroup memory.
+#
+# SEAM NOTE — why this does NOT ride ``classify()`` / ``CATALOG``: the
+# discriminating signal is the COMBINATION {SGE/UGE scheduler family, stderr
+# with NO failure content (no traceback / oom marker / retry-attempt line —
+# a job-level SIGKILL kills the whole shell before the retry loop can even log
+# attempt 2), death without a recorded completion, typically <2min in}. A
+# ``stderr_pattern`` row cannot match ABSENT text, and ``classify()`` never
+# sees the scheduler family. So — exactly like ``classify_conda_run_blind`` —
+# the signature lives at the closest seam that CAN see all the features: a
+# dedicated matcher the canary verifier / recover path invokes with the
+# family + stderr it just observed. HYPOTHESIS-grade by construction: the
+# verdict prose says "likely" and names the qacct confirmation
+# (``maxvmem`` vs the granted h_data × slots; ``failed 100``).
+SGE_VMEM_KILL_CLASS = "sge_vmem_kill_suspected"
+
+# Stderr content that names a DIFFERENT cause — its presence disqualifies the
+# silent-vmem-kill hypothesis (the death was not silent).
+_SGE_VMEM_DISQUALIFIERS = re.compile(
+    r"Traceback \(most recent call last\)|oom-kill|out of memory|MemoryError|"
+    r"Segmentation fault|ImportError|ModuleNotFoundError|"
+    # The preamble retry loop logging a second attempt means the FIRST failure
+    # returned control to the shell — a process-level error, not the job-level
+    # SIGKILL an h_data enforcement delivers.
+    r"\[hpc-agent\] attempt 2/",
+    re.I,
+)
+
+
+def classify_sge_vmem_kill(
+    *,
+    scheduler_family: str | None,
+    stderr: str | None,
+    elapsed_sec: int | None = None,
+    walltime_sec: int | None = None,
+) -> dict[str, Any] | None:
+    """Detect the SGE/UGE silent h_data-vmem-kill signature (hypothesis-grade).
+
+    Returns the ``{error_class, suggested_fix, matched_pattern}`` triple ONLY
+    when ALL hold:
+
+    * *scheduler_family* is ``sge`` (the only family whose default memory limit
+      is vmem-enforced with a silent SIGKILL),
+    * *stderr* carries NO content naming a different cause (no traceback / oom
+      marker / import error / a logged retry attempt — see the disqualifier
+      regex; an EMPTY tail is the canonical positive),
+    * when both are known, the death happened well inside the walltime
+      (``elapsed < walltime/2``) — a near-walltime death is the h_rt kill, a
+      different diagnosis. Unknown elapsed/walltime skips this check (the
+      observed live shape: the sidecar was never written, so nothing measured).
+
+    Returns ``None`` otherwise. ``retry_worthy=False`` in the fix: re-running
+    the same spec reproduces the kill; the remediation is a memory/vmem change.
+    """
+    if (scheduler_family or "").strip().lower() != "sge":
+        return None
+    if _SGE_VMEM_DISQUALIFIERS.search(stderr or ""):
+        return None
+    if (
+        elapsed_sec is not None
+        and walltime_sec is not None
+        and walltime_sec > 0
+        and elapsed_sec >= walltime_sec / 2
+    ):
+        return None
+    return {
+        "error_class": SGE_VMEM_KILL_CLASS,
+        "suggested_fix": {
+            "action": "increase-mem-or-reduce-vmem",
+            "retry_worthy": False,
+            "hint": (
+                "Silent death on an SGE/UGE cluster with no traceback and no error "
+                "marker — LIKELY the scheduler's h_data VIRTUAL-memory kill (UGE "
+                "SIGKILLs on vmem, which glibc malloc arenas + OpenMP thread arenas "
+                "inflate 3-5x over resident memory; the same spec can run fine under "
+                "SLURM's resident/cgroup accounting). CONFIRM with `qacct -j <job_id>`: "
+                "`maxvmem` at/above the granted h_data x slots and `failed 100` "
+                "corroborate; a near-walltime `ru_wallclock` refutes (that is the h_rt "
+                "kill). Remediations, in order: (1) ensure the job env caps arenas — "
+                "MALLOC_ARENA_MAX=4 and OMP_NUM_THREADS=<allocated cores> (the shared "
+                "preamble defaults both); (2) raise the spec's mem_mb (per-task total; "
+                "the SGE emitter divides it across -pe slots and applies the "
+                "HPC_SGE_VMEM_FACTOR headroom); (3) raise HPC_SGE_VMEM_FACTOR if the "
+                "workload's vmem/RSS ratio is genuinely high. Do NOT plain-retry — the "
+                "same spec reproduces the kill."
+            ),
+        },
+        "matched_pattern": None,
     }
 
 

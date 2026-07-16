@@ -515,13 +515,22 @@ def _parse_runtime_json(raw: str) -> dict[str, Any]:
             "status": "unreadable",
             "detail": f"_runtime.json exit_code not an int: {parsed.get('exit_code')!r}",
         }
-    elapsed_raw = parsed.get("elapsed_sec")
-    elapsed_sec: int | None
-    if isinstance(elapsed_raw, bool) or not isinstance(elapsed_raw, int) or elapsed_raw <= 0:
-        elapsed_sec = None
-    else:
-        elapsed_sec = elapsed_raw
-    return {"status": "present", "exit_code": exit_code, "elapsed_sec": elapsed_sec}
+
+    def _pos_int(value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return None
+        return int(value)
+
+    return {
+        "status": "present",
+        "exit_code": exit_code,
+        "elapsed_sec": _pos_int(parsed.get("elapsed_sec")),
+        # Peak resident memory (MB) the dispatcher measured for the reaped
+        # executor (run-14 memory priors). None = not measured, never zero.
+        "peak_rss_mb": _pos_int(parsed.get("peak_rss_mb")),
+        # The task's recorded gpu_type — keys the per-gpu prior bucket.
+        "gpu_type": (str(parsed.get("gpu_type")) if parsed.get("gpu_type") else None),
+    }
 
 
 def _resolve_canary_checkpoint_dir(
@@ -1432,6 +1441,36 @@ def verify_canary(
                 "failure_features": _failure_features(stderr_tail, log_path),
             }
 
+    # Silent-death hypothesis (run-14): on an SGE/UGE cluster, a canary that
+    # died with NO stderr content is LIKELY the h_data VIRTUAL-memory kill (UGE
+    # SIGKILLs on vmem, no traceback — two live canaries died so ~1min into
+    # data prep). The seam classifier (infra.failure_signatures) owns the
+    # signature; here we just look up the family and attach the hypothesis to
+    # the two verdict shapes a silent kill produces (completed_unknown /
+    # abandoned) so the operator gets the qacct confirmation + remediation
+    # instead of a bland "inspect the job log".
+    from hpc_agent.infra.backends import get_backend_class
+    from hpc_agent.infra.failure_signatures import classify_sge_vmem_kill
+
+    _sched_family: str | None
+    try:
+        # ``profile`` lives on ProfileBackend subclasses (every registered
+        # backend today); getattr keeps the base HPCBackend type honest.
+        _profile = getattr(get_backend_class(scheduler), "profile", None)
+        _sched_family = getattr(_profile, "family", None)
+    except Exception:  # noqa: BLE001 — a hint lookup must never fail the verdict
+        _sched_family = None
+    _vmem_hint = classify_sge_vmem_kill(scheduler_family=_sched_family, stderr=stderr_tail)
+
+    def _with_vmem_hint(details: str, features: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Attach the vmem-kill hypothesis to a silent-death envelope (or no-op)."""
+        if _vmem_hint is None:
+            return details, features
+        hinted = f"{details} LIKELY CAUSE (hypothesis): {_vmem_hint['suggested_fix']['hint']}"
+        if features.get("classified_error") is None:
+            features = {**features, "classified_error": _vmem_hint}
+        return hinted, features
+
     # The canary left the scheduler queue without ever recording a completion
     # and no stderr marker explains why (#193). We can't trust it as passed —
     # something ended the job (a fast non-zero exit that cleared the queue, a
@@ -1440,19 +1479,23 @@ def verify_canary(
     # so the two-phase gate refuses the main array and the agent investigates,
     # rather than the old behaviour of reporting ``timeout`` after 30 minutes.
     if job_vanished and int(last_summary.get("complete") or 0) < int(record.total_tasks):
-        return {
-            "ok": False,
-            "failure_kind": "completed_unknown",
-            "details": (
+        details, features = _with_vmem_hint(
+            (
                 f"canary {canary_run_id!r} left the scheduler queue without "
                 "recording a completion and no stderr marker explains why — it "
                 "finished or was killed too fast to observe. Refusing to pass the "
                 "canary; inspect the job log / scheduler accounting before "
                 f"submitting the main array (last summary: {last_summary})."
             ),
+            _failure_features(stderr_tail, log_path),
+        )
+        return {
+            "ok": False,
+            "failure_kind": "completed_unknown",
+            "details": details,
             "stderr_tail": stderr_tail,
             "metrics_fingerprint": None,
-            "failure_features": _failure_features(stderr_tail, log_path),
+            "failure_features": features,
         }
 
     # Optional output verification — read from the fused tail bundle (one ssh
@@ -1474,16 +1517,20 @@ def verify_canary(
     # Final check: complete == total_tasks, no failures.
     summary_failed = int(last_summary.get("failed") or 0)
     if summary_failed > 0:
-        return {
-            "ok": False,
-            "failure_kind": "abandoned",
-            "details": (
+        details, features = _with_vmem_hint(
+            (
                 f"canary {canary_run_id!r} reported failed={summary_failed} "
                 "but no recognized stderr marker found."
             ),
+            _failure_features(stderr_tail, log_path),
+        )
+        return {
+            "ok": False,
+            "failure_kind": "abandoned",
+            "details": details,
             "stderr_tail": stderr_tail,
             "metrics_fingerprint": None,
-            "failure_features": _failure_features(stderr_tail, log_path),
+            "failure_features": features,
         }
 
     # #351-3: positively read the canary task-0 ``exit_code`` before declaring
@@ -1513,13 +1560,56 @@ def verify_canary(
         # two-phase gate can shrink the main-array walltime to the observed runtime
         # (canary_calibration). Best-effort: a stamp failure never fails the gate —
         # the array simply launches at the approved walltime, unchanged.
-        # _parse_runtime_json already normalised elapsed_sec to a positive int
-        # (or None on a read miss / absent field), so no measurement mints a stamp.
+        # _parse_runtime_json already normalised elapsed_sec / peak_rss_mb to a
+        # positive int (or None on a read miss / absent field), so no
+        # measurement never mints a stamp or a prior sample.
         _canary_elapsed = runtime.get("elapsed_sec")
+        _canary_rss = runtime.get("peak_rss_mb")
         if isinstance(_canary_elapsed, int):
             from hpc_agent.state.runs import stamp_canary_runtime
 
-            stamp_canary_runtime(experiment_dir, canary_run_id, elapsed_sec=_canary_elapsed)
+            stamp_canary_runtime(
+                experiment_dir,
+                canary_run_id,
+                elapsed_sec=_canary_elapsed,
+                peak_rss_mb=_canary_rss if isinstance(_canary_rss, int) else None,
+            )
+            # Mint the canary's RUNTIME + MEMORY prior sample (run-14): the
+            # canary is a full real task measured before the array, so its
+            # elapsed + peak RSS seed ``runtimes/<profile>.<cluster>.json``
+            # for the next resolve — the array runs seed the same file via the
+            # combiner ingest, and append_sample dedups on (run_id, task_id).
+            # Scheduler-aware by keying: (profile, cluster) come off the
+            # journal record. Best-effort: prior minting never fails the gate.
+            try:
+                from hpc_agent.state.runtime_prior import append_sample
+
+                append_sample(
+                    experiment_dir,
+                    profile=record.profile,
+                    cluster=record.cluster,
+                    run_id=canary_run_id,
+                    task_id=0,
+                    # roll_up_quantiles drops gpu_type=="" samples; a CPU-only
+                    # task buckets under the honest literal "cpu".
+                    gpu_type=str(runtime.get("gpu_type") or "cpu"),
+                    node="",
+                    elapsed_sec=_canary_elapsed,
+                    exit_code=int(runtime["exit_code"]),
+                    cmd_sha=(str(_canary_sidecar.get("cmd_sha")) or None)
+                    if _canary_sidecar.get("cmd_sha")
+                    else None,
+                    peak_host_mem_mb=_canary_rss if isinstance(_canary_rss, int) else None,
+                    walltime_requested_sec=None,
+                )
+            except Exception:  # noqa: BLE001 — prior minting never fails the gate
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "canary %r runtime/memory prior sample not minted",
+                    canary_run_id,
+                    exc_info=True,
+                )
         verdict = _classify_runtime_exit(
             canary_exit_code, canary_run_id=canary_run_id, result_dir=_result_dir
         )

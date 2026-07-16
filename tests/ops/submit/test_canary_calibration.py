@@ -152,7 +152,9 @@ def test_parse_runtime_json_surfaces_elapsed() -> None:
     from hpc_agent.ops.verify_canary import _parse_runtime_json
 
     got = _parse_runtime_json('{"exit_code": 0, "elapsed_sec": 573}')
-    assert got == {"status": "present", "exit_code": 0, "elapsed_sec": 573}
+    assert got["status"] == "present"
+    assert got["exit_code"] == 0
+    assert got["elapsed_sec"] == 573
 
 
 def test_parse_runtime_json_elapsed_absent_or_bad_is_none() -> None:
@@ -284,3 +286,35 @@ def test_s2_uncalibrated_brief_is_byte_identical(tmp_path: Path) -> None:
 
     assert result.brief["est_core_hours"] == 21600.0  # 900 × 21600 × 4 / 3600
     assert "walltime_calibration" not in result.brief
+
+
+# ── run-14 memory measurement legs (peak RSS) ────────────────────────────────
+
+
+def test_parse_runtime_json_surfaces_peak_rss_and_gpu_type() -> None:
+    from hpc_agent.ops.verify_canary import _parse_runtime_json
+
+    got = _parse_runtime_json(
+        '{"exit_code": 0, "elapsed_sec": 573, "peak_rss_mb": 2048, "gpu_type": "a100"}'
+    )
+    assert got["peak_rss_mb"] == 2048
+    assert got["gpu_type"] == "a100"
+    # Absent / null / non-positive → None (not measured, never a fake zero).
+    assert _parse_runtime_json('{"exit_code": 0}')["peak_rss_mb"] is None
+    assert _parse_runtime_json('{"exit_code": 0, "peak_rss_mb": 0}')["peak_rss_mb"] is None
+    assert _parse_runtime_json('{"exit_code": 0, "gpu_type": ""}')["gpu_type"] is None
+
+
+def test_stamp_round_trips_peak_rss(tmp_path: Path) -> None:
+    from hpc_agent.state.runs import read_run_sidecar
+
+    _write_canary_sidecar(tmp_path)
+    stamp_canary_runtime(tmp_path, _CANARY_ID, elapsed_sec=612, peak_rss_mb=2048)
+    sidecar = read_run_sidecar(tmp_path, _CANARY_ID)
+    assert sidecar["canary_elapsed_sec"] == 612
+    assert sidecar["canary_peak_rss_mb"] == 2048
+    # No measurement → no key (absence != zero).
+    stamp_canary_runtime(tmp_path, f"{_CANARY_ID}", elapsed_sec=613, peak_rss_mb=None)
+    sidecar = read_run_sidecar(tmp_path, _CANARY_ID)
+    assert sidecar["canary_elapsed_sec"] == 613
+    assert sidecar["canary_peak_rss_mb"] == 2048  # prior stamp preserved

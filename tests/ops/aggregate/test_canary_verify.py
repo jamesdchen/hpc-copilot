@@ -1661,7 +1661,13 @@ def test_fused_verify_tail_reads_all_legs_in_one_ssh(monkeypatch: pytest.MonkeyP
     # Every leg parsed from the one read.
     assert bundle["stderr_tail"] == "line-one\nline-two"
     assert bundle["log_path"] == "/x/logs/p_canary.o42.1"
-    assert bundle["runtime"] == {"status": "present", "exit_code": 0, "elapsed_sec": None}
+    assert bundle["runtime"] == {
+        "status": "present",
+        "exit_code": 0,
+        "elapsed_sec": None,
+        "peak_rss_mb": None,
+        "gpu_type": None,
+    }
     assert bundle["output"] == (True, "ok")
     assert bundle["fingerprint_sha"] == "deadbeefcafe"
 
@@ -1874,3 +1880,128 @@ def test_fused_verify_tail_missing_ack_reads_as_miss(monkeypatch: pytest.MonkeyP
     assert bundle["stderr_tail"] == ""
     assert bundle["log_path"] is None
     assert bundle["runtime"] == {"status": "absent"}
+
+
+# ── run-14: SGE silent vmem-kill hint + canary runtime/memory prior mint ─────
+
+
+def test_completed_unknown_on_sge_attaches_vmem_kill_hypothesis(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A canary that vanished SILENTLY (empty stderr) on an SGE cluster carries
+    the h_data vmem-kill hypothesis: the details name the likely cause + the
+    qacct confirmation, and failure_features.classified_error is the seam
+    classifier's triple — instead of the bland 'inspect the job log'."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)  # cluster=hoffman2 → scheduler family sge
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={
+                "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+            },
+        ),
+        mock.patch(
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            # SILENT death: empty stderr — the observed live shape.
+            return_value=_tail_from([{"task_id": 0, "content": ""}]),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["failure_kind"] == "completed_unknown"
+    assert "LIKELY CAUSE (hypothesis)" in out["details"]
+    assert "h_data" in out["details"]
+    assert out["failure_features"]["classified_error"]["error_class"] == "sge_vmem_kill_suspected"
+
+
+def test_completed_unknown_with_traceback_gets_no_vmem_hint(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stderr naming a DIFFERENT cause disqualifies the hypothesis — the death
+    was not silent, so the envelope stays exactly as before run-14."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={
+                "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+            },
+        ),
+        mock.patch(
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            # Not a recognized _FAILURE_MARKERS token, but a vmem disqualifier:
+            # a logged retry attempt proves a process-level error, not SIGKILL.
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[hpc-agent] attempt 2/3: python -m train\n"}]
+            ),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["failure_kind"] == "completed_unknown"
+    assert "LIKELY CAUSE (hypothesis)" not in out["details"]
+
+
+def test_verified_canary_mints_runtime_and_memory_prior(tmp_path: Path, journal_home: Path) -> None:
+    """A verified canary whose _runtime.json carried elapsed + peak RSS mints a
+    runtime-prior sample under runtimes/<profile>.<cluster>.json (run-14: the
+    canary seeds BOTH the runtime and the memory prior before the array runs),
+    and stamps both measurements onto its own sidecar."""
+    from hpc_agent.ops.verify_canary import verify_canary
+    from hpc_agent.state.runs import read_canary_elapsed_sec, write_run_sidecar
+    from hpc_agent.state.runtime_prior import read_samples
+
+    _seed_canary(tmp_path)
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1-canary",
+        cmd_sha="feedface",
+        hpc_agent_version="0.0.0-test",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{run_id}/{task_id}",
+        task_count=1,
+        tasks_py_sha="",
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
+        ),
+        mock.patch(
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+                runtime={
+                    "status": "present",
+                    "exit_code": 0,
+                    "elapsed_sec": 573,
+                    "peak_rss_mb": 2048,
+                    "gpu_type": None,
+                },
+            ),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is True
+    # Sidecar stamp: both measurements.
+    assert read_canary_elapsed_sec(tmp_path, "r1-canary") == 573
+    # Prior sample: keyed (profile=p, cluster=hoffman2), CPU bucket, mem leg set.
+    samples = read_samples(tmp_path, profile="p", cluster="hoffman2")
+    assert len(samples) == 1
+    s = samples[0]
+    assert s["run_id"] == "r1-canary" and s["task_id"] == 0
+    assert s["elapsed_sec"] == 573
+    assert s["peak_host_mem_mb"] == 2048
+    assert s["gpu_type"] == "cpu"
+    assert s["cmd_sha"] == "feedface"

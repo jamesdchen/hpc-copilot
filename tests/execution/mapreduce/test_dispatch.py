@@ -1421,3 +1421,33 @@ class TestPartialReproductionInclude:
             dispatch.main()
         assert exc_info.value.code == 0
         assert (result_root / "1" / "metrics.json").read_text().strip() == "RAN"
+
+
+class TestRuntimeSidecarPeakRss:
+    """run-14 memory priors: the per-task ``_runtime.json`` carries the reaped
+    executor tree's peak RESIDENT memory (``peak_rss_mb``) so the canary can
+    mint a MEMORY prior alongside the runtime one. Best-effort: absence (no
+    getrusage on the platform) records ``None``, never a fake zero."""
+
+    @_posix_shell_executor
+    def test_runtime_sidecar_carries_peak_rss_mb(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo \'{"value": 1}\' > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        dispatch.main()
+
+        runtime = json.loads((result_root / "0" / "_runtime.json").read_text())
+        assert "peak_rss_mb" in runtime
+        rss = runtime["peak_rss_mb"]
+        # POSIX with getrusage: a real positive measurement (the reaped shell
+        # child); platforms without it record None (not 0 — absence != zero).
+        assert rss is None or (isinstance(rss, int) and rss >= 1)

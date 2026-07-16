@@ -149,14 +149,19 @@ class TestRenderOverridesToExtraFlags:
             "--cpus-per-task=8",
         ]
 
-    def test_sge_renders_mem_walltime_gpus_cpus(self):
+    def test_sge_renders_mem_walltime_gpus_cpus(self, monkeypatch):
+        # run-14: the SGE override renderer routes mem through the shared
+        # sge_h_data_mb helper — h_data is PER-SLOT + vmem-enforced, so the
+        # per-task-total mem_mb is divided across the -pe slots and grown by the
+        # disclosed vmem headroom. Pin the factor: ceil(32000 * 2.0 / 8) = 8000M.
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "2")
         flags = render_overrides_to_extra_flags(
             "sge",
             {"mem_mb": 32_000, "walltime_sec": 14400, "gpus": 2, "cpus": 8},
         )
         assert flags == [
             "-l",
-            "h_data=32000M",
+            "h_data=8000M",
             "-l",
             "h_rt=04:00:00",
             "-l",

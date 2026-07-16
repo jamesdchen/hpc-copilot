@@ -25,6 +25,7 @@ __all__ = [
     "register",
     "register_profile",
     "registered_backend_names",
+    "sge_h_data_mb",
     "template_ext_for",
 ]
 
@@ -901,6 +902,7 @@ def registered_backend_names() -> frozenset[str]:
 from hpc_agent.infra.backends._engine import (  # noqa: E402
     ProfileBackend,
     RemoteProfileBackend,
+    sge_h_data_mb,
 )
 
 

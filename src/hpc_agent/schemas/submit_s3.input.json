@@ -626,7 +626,7 @@
     },
     "SubmitResources": {
       "additionalProperties": false,
-      "description": "Scheduler resource asks emitted as qsub/sbatch flags.\n\nFirst-class in the submit spec (#146): the planning/validation layer\nalready resolves and validates walltime against history + cluster\nceilings, but before this the submission layer had nowhere to put the\nresult, so the resolved walltime was silently dropped and the job ran\non the cluster default. Every field is optional and opt-in — an\nomitted/empty ``resources`` block emits NO new scheduler flags, so the\ntemplate directives (and the cluster default) apply exactly as before.\n\nThe backend translates each set field into its scheduler's flag:\n\n* ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``\n* ``mem_mb``       → SGE ``-l h_data=<mem>M`` / SLURM ``--mem=<mem>M``\n* ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``\n\nThese override the corresponding directive baked into the job\ntemplate (a command-line flag beats a ``#$``/``#SBATCH`` line), which\nis the only way to vary a per-submission resource since SGE ``#$``\ndirectives cannot read env vars.",
+      "description": "Scheduler resource asks emitted as qsub/sbatch flags.\n\nFirst-class in the submit spec (#146): the planning/validation layer\nalready resolves and validates walltime against history + cluster\nceilings, but before this the submission layer had nowhere to put the\nresult, so the resolved walltime was silently dropped and the job ran\non the cluster default. Every field is optional and opt-in — an\nomitted/empty ``resources`` block emits NO new scheduler flags, so the\ntemplate directives (and the cluster default) apply exactly as before.\n\nThe backend translates each set field into its scheduler's flag:\n\n* ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``\n* ``mem_mb``       → SLURM ``--mem=<mem>M`` verbatim; SGE ``-l h_data=``\n  is PER-SLOT and vmem-enforced, so the emitter divides the per-task\n  total across the ``-pe shared`` slots and applies the disclosed\n  ``HPC_SGE_VMEM_FACTOR`` headroom (``infra.backends.sge_h_data_mb``)\n* ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``\n\nThese override the corresponding directive baked into the job\ntemplate (a command-line flag beats a ``#$``/``#SBATCH`` line), which\nis the only way to vary a per-submission resource since SGE ``#$``\ndirectives cannot read env vars.",
       "properties": {
         "walltime_sec": {
           "anyOf": [
@@ -653,7 +653,7 @@
             }
           ],
           "default": null,
-          "description": "Memory ask in MB. SGE -l h_data (per-slot) / SLURM --mem.",
+          "description": "Memory ask in MB, PER-TASK TOTAL on every backend. SLURM --mem verbatim; SGE -l h_data is per-slot and vmem-enforced, so the emitter derives h_data = ceil(mem_mb x HPC_SGE_VMEM_FACTOR / cpus) per slot (disclosed).",
           "title": "Mem Mb"
         },
         "cpus": {

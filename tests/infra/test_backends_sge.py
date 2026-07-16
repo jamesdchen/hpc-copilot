@@ -103,11 +103,82 @@ class TestResourceFlags:
         # >99h still renders (no two-digit-hour truncation).
         assert backend.resource_flags(self._res(walltime_sec=90061)) == ["-l", "h_rt=25:01:01"]
 
-    def test_mem_and_cpus(self, tmp_path):
+    def test_mem_and_cpus(self, tmp_path, monkeypatch):
+        # run-14 SGE mem semantics: h_data is PER-SLOT and vmem-enforced, so the
+        # per-task-total mem_mb is divided across the -pe slots and multiplied by
+        # the disclosed vmem headroom factor. Pin the factor so the assertion is
+        # deterministic regardless of the ambient HPC_SGE_VMEM_FACTOR.
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "2")
         backend = SGEBackend(script=str(tmp_path / "j.sh"))
         flags = backend.resource_flags(self._res(mem_mb=8192, cpus=4))
-        assert "-l" in flags and "h_data=8192M" in flags
+        # ceil(8192 * 2.0 / 4) = 4096M per slot → 4 slots × 4096 = 16384M total
+        # (2× the 8192 per-task ask, the headroom); NOT the old verbatim 8192M
+        # which, per-slot × 4, would have queued for 32G.
+        assert "-l" in flags and "h_data=4096M" in flags
+        assert "h_data=8192M" not in flags
         assert flags[flags.index("-pe") : flags.index("-pe") + 3] == ["-pe", "shared", "4"]
+
+
+class TestSgeMemTranslation:
+    """Fire-path coverage for the run-14 SGE h_data per-slot + vmem-headroom
+    translation (``sge_h_data_mb`` / ``sge_vmem_factor`` — the ONE definition
+    every SGE mem emitter routes through)."""
+
+    def _res(self, **kw):
+        from hpc_agent._wire.workflows.submit_flow import SubmitResources
+
+        return SubmitResources(**kw)
+
+    def test_divides_per_task_total_across_slots(self, monkeypatch):
+        # Factor 1 isolates the PER-SLOT division from the headroom: a
+        # per-task-total of 16000MB across 4 slots is 4000M per slot = 16G total,
+        # NOT 16000M per slot (= 64G, the queue-starvation bug).
+        from hpc_agent.infra.backends import sge_h_data_mb
+
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "1")
+        assert sge_h_data_mb(16000, 4) == 4000
+        # No PE (single slot): the whole ask lands on one slot.
+        assert sge_h_data_mb(16000, None) == 16000
+        assert sge_h_data_mb(16000, 1) == 16000
+
+    def test_vmem_headroom_applied_and_ceils(self, monkeypatch):
+        from hpc_agent.infra.backends import sge_h_data_mb
+
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "1.5")
+        # ceil(16000 * 1.5 / 4) = ceil(6000) = 6000M per slot.
+        assert sge_h_data_mb(16000, 4) == 6000
+        # ceil rounds a fractional per-slot value UP (never under-requests):
+        # ceil(1000 * 1.5 / 3) = ceil(500.0) = 500; ceil(1001*1.5/3)=ceil(500.5)=501.
+        assert sge_h_data_mb(1001, 3) == 501
+
+    def test_default_factor_is_the_disclosed_headroom(self, monkeypatch):
+        from hpc_agent.infra.backends._engine import DEFAULT_SGE_VMEM_FACTOR, sge_vmem_factor
+
+        monkeypatch.delenv("HPC_SGE_VMEM_FACTOR", raising=False)
+        assert sge_vmem_factor() == DEFAULT_SGE_VMEM_FACTOR
+
+    def test_env_override_and_bad_value_falls_back(self, monkeypatch):
+        from hpc_agent.infra.backends._engine import DEFAULT_SGE_VMEM_FACTOR, sge_vmem_factor
+
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "3.0")
+        assert sge_vmem_factor() == 3.0
+        # A fat-fingered / non-positive factor must never zero out a mem ask.
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "not-a-number")
+        assert sge_vmem_factor() == DEFAULT_SGE_VMEM_FACTOR
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "0")
+        assert sge_vmem_factor() == DEFAULT_SGE_VMEM_FACTOR
+
+    def test_translation_is_disclosed_via_warning(self, tmp_path, monkeypatch, caplog):
+        # The emitter WARNs whenever the emitted per-slot number differs from the
+        # spec's mem_mb, so the operator can audit what the scheduler was asked.
+        import logging
+
+        monkeypatch.setenv("HPC_SGE_VMEM_FACTOR", "2")
+        backend = SGEBackend(script=str(tmp_path / "j.sh"))
+        with caplog.at_level(logging.WARNING, logger="hpc_agent.infra.backends._engine"):
+            flags = backend.resource_flags(self._res(mem_mb=8192, cpus=4))
+        assert "h_data=4096M" in flags
+        assert any("SGE mem translation" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

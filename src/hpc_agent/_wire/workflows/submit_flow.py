@@ -121,7 +121,10 @@ class SubmitResources(BaseModel):
     The backend translates each set field into its scheduler's flag:
 
     * ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``
-    * ``mem_mb``       → SGE ``-l h_data=<mem>M`` / SLURM ``--mem=<mem>M``
+    * ``mem_mb``       → SLURM ``--mem=<mem>M`` verbatim; SGE ``-l h_data=``
+      is PER-SLOT and vmem-enforced, so the emitter divides the per-task
+      total across the ``-pe shared`` slots and applies the disclosed
+      ``HPC_SGE_VMEM_FACTOR`` headroom (``infra.backends.sge_h_data_mb``)
     * ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``
 
     These override the corresponding directive baked into the job
@@ -140,7 +143,12 @@ class SubmitResources(BaseModel):
     mem_mb: int | None = Field(
         default=None,
         gt=0,
-        description="Memory ask in MB. SGE -l h_data (per-slot) / SLURM --mem.",
+        description=(
+            "Memory ask in MB, PER-TASK TOTAL on every backend. SLURM --mem "
+            "verbatim; SGE -l h_data is per-slot and vmem-enforced, so the "
+            "emitter derives h_data = ceil(mem_mb x HPC_SGE_VMEM_FACTOR / "
+            "cpus) per slot (disclosed)."
+        ),
     )
     cpus: int | None = Field(
         default=None,

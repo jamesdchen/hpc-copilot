@@ -272,3 +272,36 @@ def test_preamble_warns_on_tmp_fallback(tmp_path: Path) -> None:
         # Don't leak the /tmp staging dir between test runs.
         if last_line.startswith("/tmp/hpc_agent_data_"):
             shutil.rmtree(last_line, ignore_errors=True)
+
+
+def test_preamble_caps_malloc_arenas_by_default(tmp_path: Path) -> None:
+    """run-14 vmem survival: the preamble exports MALLOC_ARENA_MAX=4 by default
+    (glibc per-thread arenas reserve ~64MB of vmem each; UGE/SGE h_data kills on
+    vmem), honours an override, and leaves the variable unset on the empty-string
+    opt-out — mirroring the HPC_PYTHON* guard idiom."""
+    # Default: 4.
+    proc = _run_with_preamble(
+        tmp_path,
+        nfs_data_dir="",
+        extra_assert='echo "ARENAS=${MALLOC_ARENA_MAX:-UNSET}"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "ARENAS=4" in proc.stdout
+    # Override via job_env.
+    proc = _run_with_preamble(
+        tmp_path,
+        nfs_data_dir="",
+        extra_setup="export HPC_MALLOC_ARENA_MAX=8",
+        extra_assert='echo "ARENAS=${MALLOC_ARENA_MAX:-UNSET}"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "ARENAS=8" in proc.stdout
+    # Empty-string opt-out leaves it unset.
+    proc = _run_with_preamble(
+        tmp_path,
+        nfs_data_dir="",
+        extra_setup='export HPC_MALLOC_ARENA_MAX=""',
+        extra_assert='echo "ARENAS=${MALLOC_ARENA_MAX:-UNSET}"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "ARENAS=UNSET" in proc.stdout

@@ -5,8 +5,10 @@ from __future__ import annotations
 from hpc_agent.infra.failure_signatures import (
     CATALOG,
     CONDA_RUN_BLIND_CLASS,
+    SGE_VMEM_KILL_CLASS,
     classify,
     classify_conda_run_blind,
+    classify_sge_vmem_kill,
 )
 
 
@@ -405,3 +407,75 @@ def test_conda_run_blind_does_not_fire_on_nonzero_rc() -> None:
         classify_conda_run_blind(command="conda run -n env python -m foo", stdout="", exit_code=1)
         is None
     )
+
+
+# ── SGE h_data vmem kill (silent-death signature; separate seam, run-14) ──────
+
+
+def test_sge_vmem_kill_fires_on_silent_death_on_sge() -> None:
+    """An SGE/UGE canary that died with EMPTY stderr is the h_data vmem-kill
+    hypothesis — retry_worthy False, remediation names the three levers."""
+    out = classify_sge_vmem_kill(scheduler_family="sge", stderr="")
+    assert out is not None
+    assert out["error_class"] == SGE_VMEM_KILL_CLASS
+    assert out["suggested_fix"]["retry_worthy"] is False
+    hint = out["suggested_fix"]["hint"]
+    # Names per-slot semantics + the arena cap + the headroom lever.
+    assert "MALLOC_ARENA_MAX" in hint
+    assert "HPC_SGE_VMEM_FACTOR" in hint
+    assert "qacct" in hint  # the confirmation path
+    assert "likely" in hint.lower()  # hypothesis-grade, not asserted fact
+
+
+def test_sge_vmem_kill_needs_the_sge_family() -> None:
+    """h_data is a Grid-Engine concept — a silent SLURM death is NOT this class
+    (SLURM accounts resident/cgroup memory, not vmem)."""
+    assert classify_sge_vmem_kill(scheduler_family="slurm", stderr="") is None
+    assert classify_sge_vmem_kill(scheduler_family=None, stderr="") is None
+
+
+def test_sge_vmem_kill_disqualified_by_a_named_cause() -> None:
+    """Any stderr content naming a DIFFERENT cause means the death was not
+    silent — the hypothesis is withdrawn (no false positive over a real bug)."""
+    for stderr in (
+        "Traceback (most recent call last):\n  File 'x.py'\nValueError: bad",
+        "slurmstepd: oom-kill event: killed process 123",
+        "MemoryError",
+        "ModuleNotFoundError: No module named 'xgboost'",
+        "Segmentation fault (core dumped)",
+    ):
+        assert classify_sge_vmem_kill(scheduler_family="sge", stderr=stderr) is None
+
+
+def test_sge_vmem_kill_disqualified_by_a_logged_retry_attempt() -> None:
+    """A logged second attempt means the first failure returned control to the
+    shell — a catchable process-level error, not the job-level SIGKILL an
+    h_data enforcement delivers (which kills the whole shell)."""
+    stderr = "[hpc-agent] attempt 1/3: python -m train\n[hpc-agent] attempt 2/3: python -m train"
+    assert classify_sge_vmem_kill(scheduler_family="sge", stderr=stderr) is None
+
+
+def test_sge_vmem_kill_disqualified_by_near_walltime_death() -> None:
+    """A death near the walltime is the h_rt (walltime) kill, a different
+    diagnosis — only a death WELL inside the walltime fits the vmem hypothesis."""
+    # elapsed >= walltime/2 → withdrawn.
+    assert (
+        classify_sge_vmem_kill(
+            scheduler_family="sge", stderr="", elapsed_sec=1900, walltime_sec=3600
+        )
+        is None
+    )
+    # A death early in the budget still fires.
+    out = classify_sge_vmem_kill(
+        scheduler_family="sge", stderr="", elapsed_sec=60, walltime_sec=3600
+    )
+    assert out is not None
+    assert out["error_class"] == SGE_VMEM_KILL_CLASS
+
+
+def test_sge_vmem_kill_fires_when_timing_unknown() -> None:
+    """The observed live shape: the sidecar was never written, so elapsed /
+    walltime are unknown — the timing guard is skipped, not treated as a
+    disqualifier."""
+    out = classify_sge_vmem_kill(scheduler_family="sge", stderr="")
+    assert out is not None and out["error_class"] == SGE_VMEM_KILL_CLASS
