@@ -139,3 +139,39 @@ they name), tokenizer precision (date fragments, unit-suffixed numbers,
 hyphenated count phrases), and dedup/rate-bounding so one relay never
 carries 10 corrections of which 9 are noise — a flood teaches the operator
 to ignore the gate (the false-positive cost IS a conduct-surface cost).
+
+## 9. Hand-authored chain spec at the fleet boundary + fabricated invocation_argv
+`[harness]` The demo python-composed .hpc/specs/submit-s3-fixmask.json from
+the s2 spec by hand, hit the spec_invalid refusal (missing
+invocation_argv — the one-shot skeleton feature worked), then PATCHED the
+field with a fabricated value ("/monitor-hpc <run>"). Hand-authored chain
+specs are the forbidden improvisation class (run-12 conduct item 13: the
+DRIVER composes successor specs — block-drive would have carried the real
+invocation_argv). Also the hand-rolled 230-iteration bash watch loop
+again (finding 5's class), re-armed after a stop. Relay correction
+issued; no new gate gap — the sanctioned surfaces exist and were
+bypassed. Worth noting for the conduct ledger: the append-decision
+greenlight itself was properly journaled (count 3, canary evidence
+attached).
+
+## 10. Breaker livelock on a degraded login node — probe succeeds, preamble times out, forever
+`[core]` Live (S3 worker 1af806fe, run causal_tune_linear_fixmask-82ba92e8):
+27 failed ssh attempts across 9+ monitor ticks to discovery2.usc.edu. The
+repeating cycle: 3 × 60s command timeouts (the full `cd && module load
+conda && source conda.sh && ...` preamble) → circuit OPENS 300s →
+half-open PROBE SUCCEEDS (connection-level) → circuit closes → same 3 ×
+60s timeouts → reopen. The breaker state machine LIVELOCKS: a cheap probe
+passing while the process-spawning preamble hangs is the DISCOVERY2
+FORK-EXHAUSTION SIGNATURE (run-12 finding 20 — the node with the pending
+CARC ticket; run 13 was scoped to discovery1/hoffman2 for exactly this
+reason), not a transport fault. The demo self-diagnosed "VPN flapping" —
+wrong: a VPN flap fails the probe too. Two defects: (a) resolve-at-use-
+time yielded discovery2 as the carc login FQDN with no health input —
+the resolver should prefer/rotate sibling login nodes and the journaled
+host-retarget verb exists for exactly this failover (this segment is its
+missed first live use); (b) the failure classifier HAS the signal
+(probe-OK + repeated command timeouts, N cycles) to classify NODE
+DEGRADATION and surface "suggest host-retarget <sibling>" in the
+transient-fault tick line, instead of riding the breaker forever. Also
+live confirmation of latency-audit rank 4: a preamble-free scheduler
+poll would not spawn conda at all on the poll path.
