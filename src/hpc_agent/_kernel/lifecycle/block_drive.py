@@ -1292,12 +1292,20 @@ def committed_greenlight_for_boundary(
     pre-existing behavior. ``aggregate-run``'s own greenlight gate still backstops a
     premature advance (it raises for a non-terminal run).
     """
-    effective_next_verb = next_verb
-    if effective_next_verb is None and block:
-        effective_next_verb = block_chain.chain_successor(block)
+    # BOTH vocabularies are accepted at a None-marker boundary: the raw None
+    # target (a greenlight with EMPTY resolved — the shape record 8 used and
+    # the attention queue pins) AND the chain-forward successor (the override
+    # shape records 4-7 used, which the raw predicate could never match — the
+    # run-13 wedge). Mapping ONLY to the successor would just invert the wedge.
+    boundary_targets: list[str | None] = [next_verb]
+    if next_verb is None and block:
+        mapped = block_chain.chain_successor(block)
+        if mapped is not None:
+            boundary_targets.append(mapped)
     for record in reversed(records):
-        if greenlight_targets_boundary(
-            record, next_verb=effective_next_verb, awaiting_since=awaiting_since
+        if any(
+            greenlight_targets_boundary(record, next_verb=t, awaiting_since=awaiting_since)
+            for t in boundary_targets
         ):
             resolved = record.get("resolved")
             return dict(resolved) if isinstance(resolved, dict) else {}
