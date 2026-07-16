@@ -246,3 +246,28 @@ concrete consumer). Note the layering: aggregate-check DID surface the
 integrity gap; the cost of overriding was paying the slow path — the
 gate worked, the incremental machinery to make the override cheap is
 what's missing.
+
+## 13-addendum. THE decisive mechanism: the combine's per-task cache is idempotent-by-task-id with an UNUSED staleness fingerprint on disk
+`[core]` Live close-out of the stale-table mystery: the cluster-side
+reduce DID run fresh (metrics_table.csv mtime Jul 15) but recombined from
+`_aggregated/<run>/_per_task_results/` — a cache keyed ONLY by task-id.
+The fixmask re-run overwrote the source pieces under results/, the cache
+kept the Jul-11 blown copies, and the fresh reduce faithfully reproduced
+the three exploded arms from stale inputs. The cache dirs carry
+`.hpc_cmd_sha` sidecars — the staleness fingerprint EXISTS and is never
+compared. Fix: the combine's skip-if-cached check compares the source
+piece's cmd_sha (fallback mtime+size) against the cached copy; mismatch →
+re-pull that task, invalidate the affected wave partial. This is finding
+13's "incremental combine" reduced to its minimal mechanical form — the
+fingerprint is already minted. Interim manual remedy (human-approved at
+the classifier boundary): quarantine the three stale arm dirs + old
+table, recombine — everything removed is derived cache, regenerable from
+results/.
+
+## 8-addendum. Second correction flood, same classes
+`[core]` Seven more code-appended corrections on the stale-table relay:
+date fragments again ('07-11'/'07-12' → '07','11','12'), `du -sh` output
+vs a journal byte-count ('886' vs 899), 'run-level' flagged as a
+run-id-shaped token, and 'timeout' as a state claim while quoting a log.
+Same three fix classes as finding 8; the flood rate (7-10 per relay) is
+now the dominant noise source at every decision boundary.
