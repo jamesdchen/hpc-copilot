@@ -1133,6 +1133,10 @@ def test_rejector_rate_bounds_correction_flood(
     from hpc_agent._wire.queries.verify_relay import RelayMismatch
 
     _seed_run(tmp_path, status="failed")
+    # Fabricated figures chosen ABOVE the seeded run's own numbers (total_tasks
+    # 10, core_hours 128, job 13610902): the hook now unions the run's real
+    # number corpus across mentions (run-14 hook/verb parity), so a flood value
+    # that happens to be a genuine source number would be legitimately dropped.
     flood = [
         RelayMismatch(
             claim=str(n),
@@ -1140,13 +1144,13 @@ def test_rejector_rate_bounds_correction_flood(
             detail=f"numeric claim '{n}' has no comparable value in any durable record",
             nearest_source_value=None,
         )
-        for n in range(10, 20)
+        for n in range(70010, 70020)
     ]
     monkeypatch.setattr(
         "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
         _fake_verify_returning(flood),
     )
-    numbers = " ".join(str(n) for n in range(10, 20))
+    numbers = " ".join(str(n) for n in range(70010, 70020))
     transcript = _transcript(tmp_path, f"Run {RUN_ID}: figures {numbers} in the report.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None and out["decision"] == "block"
@@ -1173,14 +1177,14 @@ def test_rate_bound_orders_state_before_number(
             detail=f"numeric claim '{n}' unsupported",
             nearest_source_value=None,
         )
-        for n in (10, 11, 12, 13)
+        for n in (70010, 70011, 70012, 70013)  # above the seeded run's own numbers
     ]
     monkeypatch.setattr(
         "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
         _fake_verify_returning(numbers),
     )
     transcript = _transcript(
-        tmp_path, f"Run {RUN_ID}'s greenlight is revoked; figures 10 11 12 13."
+        tmp_path, f"Run {RUN_ID}'s greenlight is revoked; figures 70010 70011 70012 70013."
     )
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None and out["decision"] == "block"
@@ -1255,6 +1259,8 @@ def test_completer_rate_bounds_flood_with_suppressed_tail(
 
     _activate_completer(monkeypatch)
     _seed_run(tmp_path, status="failed")
+    # Above the seeded run's own numbers (see the rejector flood test) so the
+    # run-14 union corpus does not legitimately drop one.
     flood = [
         RelayMismatch(
             claim=str(n),
@@ -1262,13 +1268,13 @@ def test_completer_rate_bounds_flood_with_suppressed_tail(
             detail=f"numeric claim '{n}' unsupported",
             nearest_source_value=None,
         )
-        for n in range(10, 20)
+        for n in range(70010, 70020)
     ]
     monkeypatch.setattr(
         "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
         _fake_verify_returning(flood),
     )
-    numbers = " ".join(str(n) for n in range(10, 20))
+    numbers = " ".join(str(n) for n in range(70010, 70020))
     transcript = _transcript(tmp_path, f"Run {RUN_ID}: figures {numbers}.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None and "decision" not in out
@@ -1349,3 +1355,99 @@ def test_state_claim_still_fires_on_bare_assertion(tmp_path: Path) -> None:
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None and out["decision"] == "block"
     assert "revoked/superseded" in out["reason"]
+
+
+# ─── run-14: hook/verb corpus parity (one corpus definition) ─────────────────
+
+
+def _seed_reduce(exp: Path, run_id: str, metrics: dict) -> None:
+    """Write ``_aggregated/<run_id>/metrics_aggregate.json`` — the reducer's output."""
+    d = exp / "_aggregated" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "metrics_aggregate.json").write_text(
+        json.dumps({"aggregated_metrics": metrics}), encoding="utf-8"
+    )
+
+
+def _hook_number_violations(exp: Path, relay: str, run_ids: list[str]) -> list:
+    """The rule-10 violations the HOOK gathers for *relay* over *run_ids*."""
+    from hpc_agent._kernel.hooks.relay_audit_stop._contradiction import _gather_violations
+
+    return _gather_violations(exp, relay, run_ids, [])
+
+
+def test_hook_passes_reduce_table_numbers_across_sibling_runs(tmp_path: Path) -> None:
+    """(a)+(d): a reduce table relayed with a sibling run also mentioned passes the
+    HOOK path — the number lives in the OWNING run's pulled reduce artifacts, so the
+    unified corpus recognises it — and the verb agrees (pinned equal). Before the
+    fix the sibling run (no reduce artifacts) flagged the identical numbers."""
+    from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
+    from hpc_agent.ops.decision.journal.verify_relay import verify_relay
+
+    _seed_run(tmp_path, status="complete")  # RUN_ID owns the reduce table
+    _seed_extra_run(tmp_path, "pi-run-2", status="complete")  # sibling, no reduce
+    _seed_reduce(tmp_path, RUN_ID, {"dm_stat": -15.4283, "n_rows": 437839})
+
+    # em-dash minus (sign carried separately) + standard 2dp rounding of -15.4283.
+    relay = f"Runs {RUN_ID} and pi-run-2 — reduce: DM stat ‒15.43 over 437839 rows."
+
+    viols = _hook_number_violations(tmp_path, relay, [RUN_ID, "pi-run-2"])
+    assert [v for v in viols if v.kind in ("number", "run_id")] == [], viols
+
+    verb = verify_relay(
+        experiment_dir=tmp_path,
+        spec=VerifyRelayInput(run_id=RUN_ID, relay_text=relay),
+    )
+    assert [m for m in verb.mismatches if m.kind in ("number", "run_id")] == []
+
+
+def test_hook_passes_two_dp_rounded_claim(tmp_path: Path) -> None:
+    """(b): a 2dp render of a reducer value passes the HOOK path (round-half at the
+    shown precision), not merely a prefix truncation."""
+    _seed_run(tmp_path, status="complete")
+    _seed_reduce(tmp_path, RUN_ID, {"pi": 3.14159, "rmse": 1290.4567})
+
+    relay = f"Run {RUN_ID}: pi 3.14, rmse 1290.46."  # 3.14159->3.14, 1290.4567->1290.46
+    viols = _hook_number_violations(tmp_path, relay, [RUN_ID])
+    assert [v for v in viols if v.kind == "number"] == [], viols
+
+
+def test_hook_flags_fabricated_number_without_misleading_citation(tmp_path: Path) -> None:
+    """(c): a genuinely fabricated number still fires — but with NO misleading
+    'journal:' neighbour when nothing is genuinely near (defect 3)."""
+    _seed_run(tmp_path, status="complete")
+    _seed_reduce(tmp_path, RUN_ID, {"dm_stat": -15.4283, "n_rows": 437839})
+
+    relay = f"Run {RUN_ID}: the statistic was 8123.5 overall."  # absent from every source
+    viols = _hook_number_violations(tmp_path, relay, [RUN_ID])
+    nums = [v for v in viols if v.kind == "number"]
+    assert len(nums) == 1
+    assert nums[0].claim == "8123.5"
+    # no far/unrelated neighbour is cited as evidence
+    assert nums[0].journal_value is None
+    assert "journal:" not in nums[0].text
+
+
+def test_hook_and_verb_pinned_equal_on_shared_fixture(tmp_path: Path) -> None:
+    """(d): the HOOK and the verb return the same numeric verdict on one fixture —
+    both clean on a faithful relay, both flagging the fabricated tail."""
+    from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
+    from hpc_agent.ops.decision.journal.verify_relay import verify_relay
+
+    _seed_run(tmp_path, status="complete")
+    _seed_reduce(tmp_path, RUN_ID, {"qlike": 29133.06, "n": 218894})
+
+    faithful = f"Run {RUN_ID}: qlike 29133.06 over 218894 samples."
+    fabricated = faithful + " Extra: 55501.9."
+
+    for relay, expect_clean in ((faithful, True), (fabricated, False)):
+        hook_nums = [
+            v for v in _hook_number_violations(tmp_path, relay, [RUN_ID]) if v.kind == "number"
+        ]
+        verb = verify_relay(
+            experiment_dir=tmp_path,
+            spec=VerifyRelayInput(run_id=RUN_ID, relay_text=relay),
+        )
+        verb_nums = [m for m in verb.mismatches if m.kind == "number"]
+        assert (not hook_nums) is expect_clean
+        assert bool(hook_nums) == bool(verb_nums)  # hook and verb agree

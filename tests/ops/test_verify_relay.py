@@ -391,6 +391,61 @@ def test_number_absent_from_reduce_artifacts_still_flagged(tmp_path: Path) -> No
     assert num[0].claim == "88888.5"
 
 
+# ── run-14 defect 2: display rounding + em-dash sign tolerance ──────────────────
+
+
+def test_display_rounding_of_source_value_is_clean(tmp_path: Path) -> None:
+    """A standard round-half render of a source value passes — not only a prefix
+    truncation. ``-15.4283`` relayed as ``15.43`` (2dp) reconciles."""
+    _seed_journal(tmp_path, dm_stat=-15.4283)
+    _seed_sidecar(tmp_path)
+
+    # both the truncation (15.428) and the ROUND (15.43) render pass now.
+    assert [m for m in _run(tmp_path, "DM stat 15.428.").mismatches if m.kind == "number"] == []
+    assert [m for m in _run(tmp_path, "DM stat 15.43.").mismatches if m.kind == "number"] == []
+    # a WRONG rounding (a digit the source never rounds to) still flags.
+    assert [m for m in _run(tmp_path, "DM stat 15.45.").mismatches if m.kind == "number"]
+
+
+def test_em_dash_minus_sign_carried_separately_is_clean(tmp_path: Path) -> None:
+    """An unsigned claim faces a negative source when the display minus is a
+    non-ASCII glyph the grammar drops (em-dash). Sign-insensitive for the UNSIGNED
+    claim only — an explicit ``-`` claim stays sign-sensitive (see the sign-flip
+    test)."""
+    _seed_journal(tmp_path, dm_stat=-15.4283)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The statistic was ‒15.43 (an em-dash minus).")
+    assert [m for m in out.mismatches if m.kind == "number"] == [], out.mismatches
+
+
+def test_corpus_loader_is_the_single_definition(tmp_path: Path) -> None:
+    """Route-through pin (defect 1): the verb AND the Stop hook both build the run
+    number corpus from ``collect_run_number_pool`` / ``_load_run_sources`` — a fork
+    that rebuilds it elsewhere turns this red."""
+    import inspect
+
+    from hpc_agent._kernel.hooks.relay_audit_stop import _contradiction
+    from hpc_agent.ops.decision.journal import verify_relay as vr
+
+    # the verb's number pool and the shared collector both route through the one
+    # loader + pooler.
+    assert "_load_run_sources" in inspect.getsource(vr.collect_run_number_pool)
+    assert "_pool_run_numbers" in inspect.getsource(vr.collect_run_number_pool)
+    assert "_pool_run_numbers" in inspect.getsource(vr.verify_relay)
+    assert "_load_run_sources" in inspect.getsource(vr.verify_relay)
+    # the hook consults the verb's collector — never its own corpus.
+    assert "collect_run_number_pool" in inspect.getsource(_contradiction._union_number_pool)
+
+    # and it actually works: the pool for a run carries its reduce-artifact numbers.
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_metrics_aggregate(tmp_path, {"qlike_sum": 29133.060892393198})
+    strings, floats = vr.collect_run_number_pool(tmp_path, RUN_ID)
+    assert "29133.060892393198" in strings
+    assert 128.0 in floats
+
+
 # ── run-12 finding 29: CSV reduce tables + scientific notation ─────────────────
 
 

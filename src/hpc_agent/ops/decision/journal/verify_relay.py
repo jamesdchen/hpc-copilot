@@ -182,6 +182,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import math
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -251,7 +252,7 @@ def _is_number_literal(s: str) -> bool:
 _SIZE_SUFFIX_RE = re.compile(r"[KMGTP]i?B?(?![A-Za-z])", re.IGNORECASE)
 
 
-def _normalize_num(raw: str) -> str:
+def normalize_num(raw: str) -> str:
     """Strip grouping commas and a trailing ``%`` — the compare-normal form."""
     return raw.replace(",", "").rstrip("%")
 
@@ -284,7 +285,7 @@ def _collect_source_numbers(obj: Any, strings: set[str], floats: list[float]) ->
     if isinstance(obj, bool):
         return
     if isinstance(obj, (int, float)):
-        strings.add(_normalize_num(str(obj)))
+        strings.add(normalize_num(str(obj)))
         floats.append(float(obj))
         return
     if isinstance(obj, str):
@@ -314,22 +315,53 @@ def _collect_source_numbers(obj: Any, strings: set[str], floats: list[float]) ->
         # SLURM jobs" — len(job_ids) — was struck as an unsupported numeric
         # claim, forcing a relay to enumerate all 27 ids instead of counting
         # them). Contribute the count alongside the members.
-        strings.add(_normalize_num(str(len(obj))))
+        strings.add(normalize_num(str(len(obj))))
         floats.append(float(len(obj)))
         for v in obj:
             _collect_source_numbers(v, strings, floats)
 
 
 def _add_num_token(raw: str, strings: set[str], floats: list[float]) -> None:
-    norm = _normalize_num(raw)
+    norm = normalize_num(raw)
     strings.add(norm)
     with contextlib.suppress(ValueError):
         floats.append(float(norm))
 
 
-def _match_number(raw: str, source_strings: set[str], source_floats: list[float]) -> bool:
-    """True iff the relay number *raw* is supported by some source number."""
-    norm = _normalize_num(raw)
+def _truncate_display(x: float, decimals: int) -> str:
+    """*x* truncated TOWARD ZERO to *decimals* places, formatted to that width.
+
+    A tiny sign-aware nudge before the truncation absorbs the float
+    representation that sits just under the intended value (``15.428 * 1000`` is
+    ``15427.999…`` and would truncate to ``15.427``), so a faithful truncation
+    reconciles.
+    """
+    factor = 10**decimals
+    scaled = x * factor
+    scaled += 1e-9 if scaled >= 0 else -1e-9
+    return f"{math.trunc(scaled) / factor:.{decimals}f}"
+
+
+def match_number(raw: str, source_strings: set[str], source_floats: list[float]) -> bool:
+    """True iff the relay number *raw* is supported by some source number.
+
+    A claim passes on an exact normalized-string match, on float equality (so
+    ``95`` == ``95.0``), on pure string-prefix truncation of a longer source
+    value (``3.14`` of ``3.1411`` — the finding-8 tolerance, kept intact), or —
+    the run-14 display tolerance — when it equals a source value ROUNDED
+    (round-half at the shown precision) OR TRUNCATED to the claim's shown
+    decimals. A standard 2dp render ``15.43`` of a source ``-15.4283`` therefore
+    reconciles where before only the prefix ``15.428`` did.
+
+    The rounding/truncation compare is sign-INSENSITIVE for an UNSIGNED claim
+    only: a leading minus drawn with a non-ASCII glyph (an em-dash ``—`` /
+    unicode-minus ``−``) the numeric grammar never captured leaves the token
+    unsigned, so ``15.43`` may legitimately face a negative source. An
+    explicitly-signed claim (``-0.42``) stays sign-SENSITIVE — an asserted sign
+    that contradicts the source is a real mismatch (bug-sweep #39,
+    ``test_sign_flip_still_flagged``).
+    """
+    norm = normalize_num(raw)
     if norm in source_strings:
         return True
     try:
@@ -339,13 +371,28 @@ def _match_number(raw: str, source_strings: set[str], source_floats: list[float]
         return True
     if any(f == val for f in source_floats):
         return True
-    # Truncation tolerance: a DECIMAL claim that is a string-prefix of a longer
-    # source value (``3.14`` of ``3.1411``). Requiring the ``.`` stops ``1``
-    # from "truncating" ``128``; requiring a strictly longer source stops the
-    # exact case (already handled) from double-counting.
-    if "." in norm:
-        for s in source_strings:
-            if len(s) > len(norm) and s.startswith(norm):
+    if "." not in norm:
+        return False
+    # Pure string-prefix truncation of a longer source value (``3.14`` of
+    # ``3.1411`` — finding-8; sign-sensitive by construction).
+    for s in source_strings:
+        if len(s) > len(norm) and s.startswith(norm):
+            return True
+    # Display rounding / truncation at the claim's shown precision — PLAIN
+    # decimals only. A scientific-notation claim (``4.585623e-11``) carries an
+    # exponent in its fractional part, so a fixed-point round would collapse it to
+    # ``0.000…`` and spuriously match a source 0; its exact / float-equality
+    # checks above already cover a faithful relay.
+    frac = norm.split(".", 1)[1]
+    if not frac.isdigit():
+        return False
+    decimals = len(frac)
+    claim_disp = f"{val:.{decimals}f}"
+    unsigned = not norm.lstrip().startswith("-")
+    for f in source_floats:
+        candidates = (f, abs(f)) if unsigned else (f,)
+        for c in candidates:
+            if f"{c:.{decimals}f}" == claim_disp or _truncate_display(c, decimals) == claim_disp:
                 return True
     return False
 
@@ -449,7 +496,7 @@ def _nearest_number(raw: str, source_floats: list[float]) -> str | None:
     if not source_floats:
         return None
     try:
-        val = float(_normalize_num(raw))
+        val = float(normalize_num(raw))
     except ValueError:
         return None
     nearest = min(source_floats, key=lambda f: abs(f - val))
@@ -978,6 +1025,112 @@ def _load_campaign_briefs(experiment_dir: Path, sidecar: Any) -> list[dict[str, 
         return []
 
 
+@dataclasses.dataclass
+class _RunSources:
+    """A run's loaded durable + number-only sources — the shared corpus bundle.
+
+    Assembled once by :func:`_load_run_sources` and consumed BOTH by the
+    ``verify-relay`` verb and (via :func:`collect_run_number_pool`) by the
+    relay-audit Stop hook, so the two can never disagree on which records a run
+    sources. ``source_objs`` feed every check (numbers, state, verification
+    evidence, keyed counts); ``number_only_objs`` (reduce artifacts + campaign
+    briefs, F-Q) feed the NUMBER pool only.
+    """
+
+    sources_consulted: list[str]
+    source_objs: list[Any]
+    number_only_objs: list[Any]
+    sidecar: dict[str, Any] | None
+    record: Any
+    record_dict: dict[str, Any] | None
+
+
+def _load_run_sources(experiment_dir: Path, run_id: str) -> _RunSources:
+    """Load THE run's durable + number-only sources — the ONE corpus definition.
+
+    The single loader the verb and the Stop hook both route through (run-14
+    hook/verb divergence: the verb passed a reduce-table relay CLEAN because it
+    loaded the run's pulled reduce artifacts, while the hook flagged the same
+    numbers auditing them under a sibling run whose scope never loaded them).
+    Honest ``sources_consulted`` order: decision_journal, run_sidecar,
+    run_record, briefs, then the number-only reduce_artifacts / campaign_briefs.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.runs import read_run_sidecar
+
+    experiment_dir = Path(experiment_dir)
+    sources_consulted: list[str] = []
+    source_objs: list[Any] = []
+
+    journal_records = read_decisions(experiment_dir, "run", run_id)
+    if journal_records:
+        sources_consulted.append("decision_journal")
+        source_objs.extend(journal_records)
+
+    sidecar: dict[str, Any] | None
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, ValueError):
+        sidecar = None
+    if sidecar is not None:
+        sources_consulted.append("run_sidecar")
+        source_objs.append(sidecar)
+
+    record = load_run(experiment_dir, run_id)
+    record_dict: dict[str, Any] | None = None
+    if record is not None:
+        record_dict = dataclasses.asdict(record)
+        sources_consulted.append("run_record")
+        source_objs.append(record_dict)
+
+    briefs = _load_briefs(experiment_dir, run_id)
+    if briefs:
+        sources_consulted.append("briefs")
+        source_objs.extend(briefs)
+
+    number_only_objs: list[Any] = []
+    reduce_artifacts = _load_reduce_artifacts(experiment_dir, run_id)
+    if reduce_artifacts:
+        sources_consulted.append("reduce_artifacts")
+        number_only_objs.extend(reduce_artifacts)
+    campaign_briefs = _load_campaign_briefs(experiment_dir, sidecar)
+    if campaign_briefs:
+        sources_consulted.append("campaign_briefs")
+        number_only_objs.extend(campaign_briefs)
+
+    return _RunSources(
+        sources_consulted=sources_consulted,
+        source_objs=source_objs,
+        number_only_objs=number_only_objs,
+        sidecar=sidecar,
+        record=record,
+        record_dict=record_dict,
+    )
+
+
+def _pool_run_numbers(src: _RunSources) -> tuple[set[str], list[float]]:
+    """The (strings, floats) number pool from a loaded :class:`_RunSources`."""
+    strings: set[str] = set()
+    floats: list[float] = []
+    for obj in (*src.source_objs, *src.number_only_objs):
+        _collect_source_numbers(obj, strings, floats)
+    return strings, floats
+
+
+def collect_run_number_pool(experiment_dir: Path, run_id: str) -> tuple[set[str], list[float]]:
+    """THE run's numeric corpus — every comparable source number as (strings, floats).
+
+    The single definition the ``verify-relay`` verb AND the relay-audit Stop hook
+    consume, routing through :func:`_load_run_sources` + :func:`_pool_run_numbers`
+    so a fork that rebuilds the corpus elsewhere turns the route-through pin test
+    red. The hook unions this over EVERY mentioned run so a number any run
+    legitimately sources (its pulled reduce artifacts) is never a contradiction
+    under a sibling run's scope — the run-14 hook/verb parity fix.
+    """
+    return _pool_run_numbers(_load_run_sources(experiment_dir, run_id))
+
+
 def _dedupe_mismatches(items: Iterable[RelayMismatch]) -> list[RelayMismatch]:
     seen: set[tuple[str, str, str, str | None]] = set()
     out: list[RelayMismatch] = []
@@ -1026,66 +1179,21 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         Never raised for a well-formed spec; the run_id shape is enforced at
         the wire boundary. Declared for registry honesty.
     """
-    from hpc_agent.state.decision_journal import read_decisions
-    from hpc_agent.state.journal import load_run
-    from hpc_agent.state.runs import read_run_sidecar
-
     experiment_dir = Path(experiment_dir)
     run_id = spec.run_id
     relay = spec.relay_text or ""
 
-    # ── load the authoritative sources (honest sources_consulted) ──────────────
-    sources_consulted: list[str] = []
-    source_objs: list[Any] = []
+    # ── load the authoritative sources (the ONE corpus definition; F-Q number-
+    #    only reduce artifacts / campaign briefs are folded in by the loader) ───
+    run_sources = _load_run_sources(experiment_dir, run_id)
+    sources_consulted = run_sources.sources_consulted
+    source_objs = run_sources.source_objs
+    sidecar = run_sources.sidecar
+    record = run_sources.record
+    record_dict = run_sources.record_dict
 
-    journal_records = read_decisions(experiment_dir, "run", run_id)
-    if journal_records:
-        sources_consulted.append("decision_journal")
-        source_objs.extend(journal_records)
-
-    sidecar: dict[str, Any] | None
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, ValueError):
-        sidecar = None
-    if sidecar is not None:
-        sources_consulted.append("run_sidecar")
-        source_objs.append(sidecar)
-
-    record = load_run(experiment_dir, run_id)
-    record_dict: dict[str, Any] | None = None
-    if record is not None:
-        record_dict = dataclasses.asdict(record)
-        sources_consulted.append("run_record")
-        source_objs.append(record_dict)
-
-    briefs = _load_briefs(experiment_dir, run_id)
-    if briefs:
-        sources_consulted.append("briefs")
-        source_objs.extend(briefs)
-
-    # ── number-only sources (F-Q) ──────────────────────────────────────────────
-    # Code-written, journal-adjacent artifacts whose numbers a verbatim
-    # completion relay legitimately carries. Fed to the NUMBER pool but NOT
-    # ``source_text`` / keyed counts / the run-state check — a campaign's own
-    # lifecycle words are not the run's recorded status.
-    number_only_objs: list[Any] = []
-    reduce_artifacts = _load_reduce_artifacts(experiment_dir, run_id)
-    if reduce_artifacts:
-        sources_consulted.append("reduce_artifacts")
-        number_only_objs.extend(reduce_artifacts)
-    campaign_briefs = _load_campaign_briefs(experiment_dir, sidecar)
-    if campaign_briefs:
-        sources_consulted.append("campaign_briefs")
-        number_only_objs.extend(campaign_briefs)
-
-    # ── build the compare pools ────────────────────────────────────────────────
-    source_num_strings: set[str] = set()
-    source_num_floats: list[float] = []
-    for obj in source_objs:
-        _collect_source_numbers(obj, source_num_strings, source_num_floats)
-    for obj in number_only_objs:
-        _collect_source_numbers(obj, source_num_strings, source_num_floats)
+    # ── build the compare pools (shared with the Stop hook via the same pool) ──
+    source_num_strings, source_num_floats = _pool_run_numbers(run_sources)
     has_source_numbers = bool(source_num_strings)
 
     # Verification evidence (``verified`` / ``canary green``) is value-semantic,
@@ -1217,7 +1325,7 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         is_job_candidate = (
             bool(job_ids)
             and bool(_BARE_JOB_DIGITS_RE.fullmatch(raw))
-            and not _match_number(raw, source_num_strings, source_num_floats)
+            and not match_number(raw, source_num_strings, source_num_floats)
         )
         consumed_spans.append((m.start(), m.end()))
         claims_checked += 1
@@ -1250,7 +1358,7 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                 )
             )
             continue
-        if not _match_number(raw, source_num_strings, source_num_floats):
+        if not match_number(raw, source_num_strings, source_num_floats):
             mismatches.append(
                 RelayMismatch(
                     claim=raw,
@@ -1284,7 +1392,7 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                 )
             )
             continue
-        if not _match_number(norm, source_num_strings, source_num_floats):
+        if not match_number(norm, source_num_strings, source_num_floats):
             mismatches.append(
                 RelayMismatch(
                     claim=surface,
@@ -2027,3 +2135,9 @@ def verify_notebook_relay(
         mismatches=mismatches,
         sources_consulted=sources_consulted,
     )
+
+
+# Back-compat aliases (pre-promotion names; cross-package consumers import the
+# public names — the private-import lint enforces it).
+_normalize_num = normalize_num
+_match_number = match_number
