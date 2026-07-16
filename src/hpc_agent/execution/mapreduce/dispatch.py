@@ -223,6 +223,34 @@ def _write_announcement(announce_root, run_id, task_id, *, state, exit_code, fin
         )
 
 
+def _ensure_announce_dir(announce_root, run_id):
+    """Best-effort EAGER creation of the per-run announce dir at run START.
+
+    Rank 6 (``docs/plans/latency-audit-2026-07-15``): the client's one-readdir
+    announce census keys its ``present`` capability signal off this directory
+    EXISTING. Historically the dir was born on the FIRST terminal marker, so the
+    whole window between submit and the first task finishing (queue wait plus the
+    first task's compute — potentially hours) fell back to the 20-25 min per-task
+    status-reporter walk (run-12 findings 20/24). Creating the dir the moment a
+    dispatcher STARTS — i.e. as soon as ANY array task begins executing — lets the
+    census own the lifecycle from that tick: ``present`` is True over an all-
+    ``missing`` (all-pending) census, which the client reads as "in flight,
+    nothing terminal yet" WITHOUT a walk. The queue-wait window (no task has
+    started, so no dir) stays covered by the scheduler-liveness probe.
+
+    Best-effort: a failure here NEVER changes the task's exit code — the terminal
+    ``_write_announcement`` (which also ``mkdir``s the dir) remains the backstop,
+    so a run whose eager create was denied still announces correctly on finish.
+    """
+    try:
+        (Path(announce_root) / run_id).mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001 — eager dir is best-effort
+        print(
+            f"[dispatch] WARN: could not pre-create announce dir for run {run_id}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
     """Write ``preempt: {at, grace_sec}`` to the per-task sidecar entry.
 
@@ -700,6 +728,16 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+
+    # Rank 6: create the per-run announce dir EAGERLY, the moment this dispatcher
+    # starts on a valid sidecar — BEFORE resolving the executor / spawning the
+    # task. The census leg's ``present`` signal then flips as soon as ANY array
+    # task begins executing, instead of waiting for the first terminal marker, so
+    # the client owns the run lifecycle from that tick and never falls back to the
+    # 20-25 min status-reporter walk during the first task's compute window.
+    # (Cluster-side change: takes effect only after a wheel refresh redeploys this
+    # dispatcher.)
+    _ensure_announce_dir(here / _ANNOUNCE_DIRNAME, run_id)
 
     executor = sidecar.get("executor")
     result_dir_template = sidecar.get("result_dir_template")

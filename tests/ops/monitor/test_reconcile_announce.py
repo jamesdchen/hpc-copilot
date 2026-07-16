@@ -113,10 +113,13 @@ def test_full_failed_routes_to_failure_settle(tmp_path, monkeypatch):
     assert harvests == ["failed"]
 
 
-def test_partial_does_not_settle_and_falls_through(tmp_path, monkeypatch):
+def test_partial_mid_flight_skips_reporter_walk(tmp_path, monkeypatch):
+    # Rank 19: a PARTIAL announcement on a still-alive run answers the mid-flight
+    # lifecycle question from the census + alive probe alone — the 20-25 min
+    # status-reporter WALK is NOT paid.
     reporter = _reporter_tripwire(monkeypatch)
     harvests = _count_harvests(monkeypatch)
-    # Jobs still alive on the scheduler → the fell-through probe keeps it live.
+    # Jobs still alive on the scheduler → mid-flight, census stands in for the walk.
     monkeypatch.setattr(recon, "_ssh_alive_job_ids", lambda **_kw: {"100", "200"})
     upsert_run(tmp_path, _record("mid_r3", total_tasks=4))
     _stub_announcements(monkeypatch, {"announced": 2, "complete": 2, "failed": 0, "missing": 2})
@@ -125,12 +128,43 @@ def test_partial_does_not_settle_and_falls_through(tmp_path, monkeypatch):
 
     # NEVER settle terminal from a partial announcement.
     assert result.status == "in_flight"
-    # Fell through to the probe (reporter WAS consulted).
-    assert reporter == ["status"]
-    # Progress evidence surfaced in last_status.
-    progress = (result.last_status or {}).get("task_announcements")
-    assert progress == {"announced": 2, "complete": 2, "failed": 0, "missing": 2}
+    # The reporter walk was SKIPPED — the pinned rank-19 behavior.
+    assert reporter == []
+    last = result.last_status or {}
+    # last_status is census-derived, and discloses the census as the stand-in.
+    assert last["status_source"] == "task_announcements"
+    assert last["verdict_source"] == "task_announcements"
+    assert last["complete"] == 2
+    assert last["pending"] == 2  # the two not-yet-terminal tasks (missing)
+    # Raw progress evidence still rides along under task_announcements.
+    assert last.get("task_announcements") == {
+        "announced": 2,
+        "complete": 2,
+        "failed": 0,
+        "missing": 2,
+    }
     assert harvests == []  # no terminal transition
+
+
+def test_partial_but_nothing_alive_walks_to_settle(tmp_path, monkeypatch):
+    # Rank 19 settle path: a PARTIAL census with NO live jobs is a terminal
+    # situation whose verdict needs per-task detail — so the reporter walk DOES
+    # run (the one announce-present tick that still walks), then settles.
+    reporter = _reporter_tripwire(monkeypatch)
+    harvests = _count_harvests(monkeypatch)
+    # Nothing alive on the scheduler.
+    monkeypatch.setattr(recon, "_ssh_alive_job_ids", lambda **_kw: set())
+    upsert_run(tmp_path, _record("gone_r5", total_tasks=4))
+    _stub_announcements(monkeypatch, {"announced": 2, "complete": 2, "failed": 0, "missing": 2})
+
+    result = recon.reconcile(tmp_path, "gone_r5", scheduler="sge")
+
+    # The walk ran because the settle verdict needs per-task evidence.
+    assert reporter == ["status"]
+    # The tripwire reporter reports zero complete → incomplete + nothing alive +
+    # no positive failure evidence → abandoned (the shared settle classifier).
+    assert result.status == "abandoned"
+    assert harvests == ["abandoned"]
 
 
 def test_zero_markers_is_old_path(tmp_path, monkeypatch):

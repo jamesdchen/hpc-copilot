@@ -300,6 +300,35 @@ def _gather_failure_features(
     }
 
 
+def _census_progress_summary(progress: dict[str, int]) -> dict[str, Any]:
+    """5-key mid-flight ``last_status`` derived from a PARTIAL announce census.
+
+    Rank 19 (``docs/plans/latency-audit-2026-07-15``): when a partial
+    announcement is present and the run is still in flight, the census
+    (``complete``/``failed``/``missing``) plus the cheap alive probe already
+    answer the lifecycle question, so reconcile SKIPS the per-task status-reporter
+    walk and builds ``last_status`` from these counts instead. Every not-yet-
+    terminal task is ``pending`` (``missing``) so the shared :func:`settle`
+    classifier reads the census as still-in-flight — a partial census must NEVER
+    settle terminal. ``status_source``/``verdict_source`` record that the
+    announcement census STOOD IN for the walk (the fallback-disclosure
+    semantics), so the brief and downstream readers can see the walk was skipped.
+
+    Shape parity with ``ops.monitor_flow._announce_status`` (the Phase-2 poll leg)
+    is deliberate — both project the same census onto the same 5-key summary.
+    """
+    missing = int(progress["missing"])
+    return {
+        "complete": int(progress["complete"]),
+        "failed": int(progress["failed"]),
+        "running": 0,
+        "pending": missing,
+        "unknown": 0,
+        "verdict_source": "task_announcements",
+        "status_source": "task_announcements",
+    }
+
+
 def _settle_from_announcements(
     experiment_dir: Path,
     run_id: str,
@@ -801,19 +830,36 @@ def _reconcile_one(
                     "failed": int(_announce["failed"]),
                     "missing": int(_announce["missing"]),
                 }
+        # Rank 19 (``docs/plans/latency-audit-2026-07-15``): a PARTIAL
+        # announcement already answers the mid-flight lifecycle question — the
+        # announce census (complete/failed/missing) plus the cheap alive probe
+        # suffice to say "still in flight, N complete". So when ANY announcement
+        # is present we SKIP the per-task status-reporter WALK (``_ssh_status_
+        # report`` — the 20-25 min run-12 findings 20/24 cost) and derive
+        # ``summary`` from the census. The walk still runs on the SETTLE path
+        # (nothing alive → a terminal verdict needs per-task failure evidence) and
+        # BYTE-IDENTICALLY on every announce-absent tick. A FULL announcement never
+        # reaches here (it returned terminal above). Pinned by
+        # tests/ops/monitor/test_reconcile_announce.py::
+        # test_partial_mid_flight_skips_reporter_walk.
+        skip_walk = announce_progress is not None
         with ThreadPoolExecutor(max_workers=3) as pool:
             _resolved_ssh_target = resolve_ssh_target(record)
-            fut_status = pool.submit(
-                _ssh_status_report,
-                ssh_target=_resolved_ssh_target,
-                remote_path=record.remote_path,
-                run_id=run_id,
-                job_ids=record.job_ids,
-                job_name=record.job_name,
-                file_glob=file_glob,
-                remote_activation=remote_activation_for_sidecar(
-                    _sidecar, fallback_cluster=getattr(record, "cluster", None)
-                ),
+            fut_status = (
+                None
+                if skip_walk
+                else pool.submit(
+                    _ssh_status_report,
+                    ssh_target=_resolved_ssh_target,
+                    remote_path=record.remote_path,
+                    run_id=run_id,
+                    job_ids=record.job_ids,
+                    job_name=record.job_name,
+                    file_glob=file_glob,
+                    remote_activation=remote_activation_for_sidecar(
+                        _sidecar, fallback_cluster=getattr(record, "cluster", None)
+                    ),
+                )
             )
             fut_waves = pool.submit(
                 _ssh_list_combined_waves,
@@ -827,31 +873,19 @@ def _reconcile_one(
                 scheduler=scheduler,
             )
 
-            try:
-                report = fut_status.result()
-                summary = dict(report.get("summary", {}))
-                reporter_failed = False
-            except Exception as exc:
-                summary = {"error": str(exc)}
-                warnings.append(f"status reporter: {exc}")
-                reporter_failed = True
-            summary["checked_at"] = utcnow_iso()
-            if isinstance(report.get("waves"), dict) and report["waves"]:
-                summary["waves"] = report["waves"]
-
-            # Each future has its own try/except: an SSH blip on any of them
-            # must not abort the journal update.  In particular, falling
-            # back to the *current* job_ids on the alive-check path is
-            # essential — defaulting to empty would mark a healthy run
-            # ``abandoned`` whenever the SSH check itself failed.
+            # Resolve the CHEAP probes first: the ``alive`` verdict decides whether
+            # the walk-skip holds (mid-flight) or the settle path must still walk.
+            # Each future has its own try/except: an SSH blip on any of them must
+            # not abort the journal update. In particular, falling back to the
+            # *current* job_ids on the alive-check path is essential — defaulting to
+            # empty would mark a healthy run ``abandoned`` whenever the SSH check
+            # itself failed.
+            alive_check_failed = False
             try:
                 combined = fut_waves.result()
             except Exception as exc:
                 combined = list(record.combined_waves)
                 warnings.append(f"wave list: {exc}")
-                alive_check_failed = False
-            else:
-                alive_check_failed = False
 
             try:
                 alive = fut_alive.result()
@@ -859,6 +893,56 @@ def _reconcile_one(
                 alive = list(record.job_ids)  # treat as still alive on error
                 warnings.append(f"alive check: {exc}")
                 alive_check_failed = True
+
+            if fut_status is not None:
+                # Announce-absent tick: the walk ran in PARALLEL — read it.
+                try:
+                    report = fut_status.result()
+                    summary = dict(report.get("summary", {}))
+                    reporter_failed = False
+                except Exception as exc:
+                    summary = {"error": str(exc)}
+                    warnings.append(f"status reporter: {exc}")
+                    reporter_failed = True
+            elif not alive:
+                # SETTLE path: the census is PARTIAL but nothing is alive — a
+                # terminal verdict needs the per-task failure evidence only the
+                # reporter walk carries (``_failed_evidence_task_ids`` /
+                # ``_gather_failure_features`` below). Run it now, synchronously —
+                # the pool's other probes have already returned. This is the ONE
+                # announce-present tick that still walks, and only to settle.
+                try:
+                    report = _ssh_status_report(
+                        ssh_target=_resolved_ssh_target,
+                        remote_path=record.remote_path,
+                        run_id=run_id,
+                        job_ids=record.job_ids,
+                        job_name=record.job_name,
+                        file_glob=file_glob,
+                        remote_activation=remote_activation_for_sidecar(
+                            _sidecar, fallback_cluster=getattr(record, "cluster", None)
+                        ),
+                    )
+                    summary = dict(report.get("summary", {}))
+                    reporter_failed = False
+                except Exception as exc:
+                    summary = {"error": str(exc)}
+                    warnings.append(f"status reporter: {exc}")
+                    reporter_failed = True
+            else:
+                # Mid-flight with a PARTIAL announcement: the census counts + the
+                # live ``alive`` probe ARE the lifecycle evidence — no walk. The
+                # census-derived summary records ``status_source ==
+                # "task_announcements"`` so the brief / downstream readers know the
+                # census stood in for the walk (fallback-disclosure preserved).
+                # ``fut_status is None`` only when ``skip_walk`` — which is exactly
+                # ``announce_progress is not None`` — so the narrowing holds.
+                assert announce_progress is not None
+                summary = _census_progress_summary(announce_progress)
+                reporter_failed = False
+            summary["checked_at"] = utcnow_iso()
+            if isinstance(report.get("waves"), dict) and report["waves"]:
+                summary["waves"] = report["waves"]
 
     # Crash-only Phase-1: a PARTIAL announcement is progress evidence. Threaded
     # in here (after the probe built ``summary``) so it rides the SAME persisted
