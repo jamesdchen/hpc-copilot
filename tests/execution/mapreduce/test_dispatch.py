@@ -314,6 +314,45 @@ class TestSkipPathAnnouncements:
         assert payload["state"] == "complete"
 
 
+class TestEagerAnnounceDir:
+    """Rank 6: the per-run announce dir is born at run START, not on the first
+    terminal marker — so the client's one-readdir census owns the lifecycle from
+    the tick a task begins executing, never falling back to the 20-25 min
+    status-reporter walk during the first task's compute window."""
+
+    def test_announce_dir_created_before_terminal_marker(self, tmp_path, monkeypatch):
+        # Use the self-recursion guard's early exit (exit 3): it aborts BEFORE
+        # spawning anything and BEFORE any _write_announcement, so the ONLY thing
+        # that could have created the announce dir is the eager pre-create. No
+        # executor spawn → platform-independent (no _posix_shell_executor mark).
+        hpc = _scaffold(
+            tmp_path,
+            executor="python3 .hpc/_hpc_dispatch.py",  # re-invokes dispatcher → exit 3
+            result_dir_template=str(tmp_path / "results" / "{task_id}"),
+            kwargs_per_task=[{}],
+            run_id="eager_run",
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "eager_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        # Tripwire: prove NO terminal marker was written on this early-exit path.
+        marker_writes: list[int] = []
+        monkeypatch.setattr(
+            dispatch, "_write_announcement", lambda *a, **k: marker_writes.append(1)
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        # Aborted at the self-recursion guard — before spawning, before any marker.
+        assert exc_info.value.code == dispatch._EXIT_NO_RUNNER
+        assert marker_writes == []
+        # Yet the census-owning announce dir already EXISTS — created eagerly.
+        assert (hpc / "announce" / "eager_run").is_dir()
+
+
 @_posix_shell_executor
 class TestDispatchStaleWipRetry:
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):
