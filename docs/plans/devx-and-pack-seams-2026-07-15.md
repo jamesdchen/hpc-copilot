@@ -206,3 +206,4 @@ B5 **Onboarding index** (S–M). The fresh-session read chain (CLAUDE.md →
   items still need maintainer rulings. Known corrections to this doc from
   the sweep: the generated file is `src/hpc_agent/operations.json` (not
   `config/`); A6's pattern alternation should include 'regen scripts'.
+- 2026-07-16 (late): Batch B RULED by maintainer — B1 YES (advisory diff→test fast lane; CI/full-suite gates unchanged), B2 per-section split + GENERATED index (maintainer delegated shape; severance risk avoided by splitting on the existing self-contained sections), B3 template + disjointness checker, B4 BUILD (module-scope import extraction + scheduled mutmut, sequenced AFTER latency wave-1 integration — shared seams), B5 folds into B2's index. B1-B3 dispatched same night.

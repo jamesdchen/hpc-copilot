@@ -1,0 +1,56 @@
+{
+  "program": "<program-name-and-date>",
+  "baseline": "main @ <sha> (memo written at <sha>)",
+  "authority": "ARCHITECT-MEMO.md (deltas) [+ DESIGN.md + premortems/ if present]",
+  "flag": "<opt-in flag if the program ships behind one, else omit>",
+  "wave0_rule": "Claim source of truth = `git status` re-run at dispatch time; every dirty file is claimed by in-flight work; units listing a claimed file hard-gate on its land and begin with an explicit rebase-first step.",
+  "integration_protocol": "Per wave: merge unit branches in the stated order -> python scripts/regen_all.py --write ONCE -> ruff check --fix / ruff format / mypy src/hpc_agent -> targeted batteries incl. named -m slow legs -> push -> GitHub CI matrix green -> append the wave's enforcement-map rows to docs/internals/engineering-principles.md -> record deltas in telemetry.md. Units never commit regenerated artifacts.",
+
+  "_field_schema": {
+    "unit_id": "string. Stable id used in the memo, wave plan, and enforcement-row assignment (e.g. '1.3', 'D-CORE').",
+    "wave": "string or int. Opaque grouping key; units sharing a wave dispatch in parallel and MUST be file-disjoint. The checker errors on same-wave file collisions and warns (with wave order) on cross-wave overlap. Be consistent within a package.",
+    "title": "string. One-line human title (matches the wave-plan line in the memo).",
+    "files": "string[]. The unit's EXCLUSIVE claim — every file/dir it may create or edit. No two same-wave units may share an entry. Mark brand-new paths with a ' (new)' suffix. Directories end in '/'. Prose annotations go in trailing parens; globs (test_io*.py) are allowed. THIS is what disjointness is checked on — keep it matching what the unit actually touches (drift = silent bug).",
+    "forbidden_files": "string[]. Files this unit must NOT touch even though they are nearby/tempting — usually another unit's exclusive claim or a seam owned elsewhere. Overlap with another unit's `files` is INTENTIONAL here (that is the point) and never an error.",
+    "design_constraints": "string[]. The binding calls from the memo's settled-design table that this unit builds to. One entry per constraint; cite the delta/finding (e.g. 'delta3', 'A1', 'row L521').",
+    "acceptance_tests": "string[]. Observable pass conditions — the fire paths and pin FLIPs that prove the unit did its job. Prefer 'X counted via fake', 'seeded Y goes red', 'pins FLIP: <test>'.",
+    "test_batteries_to_run": "string[]. The exact pre-push targeted test dirs/files + named lints/checks (matches the memo's §4 battery row). Never the full suite locally.",
+    "regen_required": "bool. True if the unit changes a generator input (CliShape, wire model, primitive, skill) so `regen_all.py --write` must run at wave integration.",
+    "merge_risk": "string. LOW | MEDIUM | HIGH — how hazardous this unit is to integrate (shared seam, last-in-queue on a hot file, elicitation machinery). Drives merge ordering and reviewer attention.",
+    "_optional": {
+      "claims": "string[]. (latency-style) The sweep-docket claim ids this unit closes.",
+      "enforcement_map_rows": "string[]. Verbatim enforcement-map row text(s) this unit owes at integration, fire path named."
+    }
+  },
+
+  "_EXAMPLE_delete_me": {
+    "unit_id": "1.3",
+    "wave": 1,
+    "title": "Example: PEP-562 lazy __init__ + eager-import smoke contract test (merges LAST; full-CI gate)",
+    "files": [
+      "src/hpc_agent/__init__.py",
+      "tests/contracts/test_eager_import_smoke.py (new)"
+    ],
+    "forbidden_files": [".github/workflows/ci.yml"],
+    "design_constraints": [
+      "Smoke is a default-tier contract test, not a workflow step (covers 3.10/3.11/Windows legs).",
+      "The eager smoke imports EVERY lazily-deferred symbol (guard-can-fire applied to the smoke itself).",
+      "__getattr__ serves underscore attrs and raises honest AttributeError/ImportError, never swallows.",
+      "Merge gate = full CI matrix; merges last in its wave so a red bisects trivially."
+    ],
+    "acceptance_tests": [
+      "python -c \"import hpc_agent\" < 300ms; hpc_agent.__all__ byte-identical.",
+      "Eager smoke red when a deferred name is removed from it (seeded)."
+    ],
+    "test_batteries_to_run": [
+      "tests/contracts/ (incl. new smoke)",
+      "tests/cli/test_fast_dispatch.py",
+      "tests/integration/test_dispatch_smoke.py",
+      "LINTS: lint_mirror_ledger.py, lint_subject_init.py"
+    ],
+    "regen_required": false,
+    "merge_risk": "MEDIUM"
+  },
+
+  "units": []
+}
