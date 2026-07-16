@@ -26,6 +26,33 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.sleep", lambda _: None)
 
 
+_VTAIL = "hpc_agent.ops.verify_canary._fused_verify_tail"
+
+
+def _tail_from(logs, *, runtime=None, output=None, fingerprint_sha=None):
+    """Build a fused-verify-tail bundle from the OLD ``fetch_task_logs`` shape.
+
+    RANK 18 folded the post-terminal tail (stderr tail + _runtime.json + optional
+    expect_output + optional sha) into ONE ssh (verify_canary's fused tail). These
+    unit tests drive the verdict logic by mocking that ONE seam instead of the
+    former per-read functions; this adapter maps a ``[{"task_id":0,"content":X}]``
+    stderr stub (and optional runtime/output/fingerprint legs) to the bundle the
+    verdict branches consume, so the existing stderr fixtures port verbatim.
+    """
+    content = ""
+    log_path = None
+    if logs and isinstance(logs[0], dict):
+        content = str(logs[0].get("content") or "")
+        log_path = logs[0].get("path")
+    return {
+        "stderr_tail": content,
+        "log_path": log_path,
+        "runtime": runtime,
+        "output": output,
+        "fingerprint_sha": fingerprint_sha,
+    }
+
+
 def _seed_canary(experiment: Path, run_id: str = "r1-canary") -> RunRecord:
     record = RunRecord(
         run_id=run_id,
@@ -53,8 +80,10 @@ def test_happy_path_no_failure_markers(tmp_path: Path, journal_home: Path) -> No
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -72,8 +101,8 @@ def test_dispatcher_failed_marker(tmp_path: Path, journal_home: Path) -> None:
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -92,10 +121,10 @@ def test_traceback_marker(tmp_path: Path, journal_home: Path) -> None:
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {"task_id": 0, "content": 'Traceback (most recent call last):\n  File "..."\n'}
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [{"task_id": 0, "content": 'Traceback (most recent call last):\n  File "..."\n'}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -113,13 +142,15 @@ def test_import_error_more_specific_than_traceback(tmp_path: Path, journal_home:
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": "Traceback (most recent call last):\nImportError: foo\n",
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": "Traceback (most recent call last):\nImportError: foo\n",
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -136,8 +167,8 @@ def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "Out of memory: kill process\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "Out of memory: kill process\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -154,12 +185,13 @@ def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_h
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] OK\n"}],
-        ),
-        mock.patch(
-            "hpc_agent.ops.aggregate.runner.verify_combiner_artifact",
-            return_value=(False, "is missing at /x/results/r1-canary/seed_0/metrics.json"),
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            # The expect_output existence check is now folded into the ONE fused
+            # tail ssh — its verdict rides the bundle's ``output`` leg.
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] OK\n"}],
+                output=(False, "is missing at /x/results/r1-canary/seed_0/metrics.json"),
+            ),
         ),
     ):
         out = verify_canary(
@@ -277,9 +309,11 @@ def test_vanished_canary_resolves_completed_unknown_fast(
             },
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
             # No stderr marker — the bland "left the queue" case.
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
@@ -320,10 +354,12 @@ def test_vanished_canary_bucketed_unknown_resolves_completed_unknown_fast(
             },
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
             # No stderr marker / no completion artifact — the bland "left the
             # queue too fast to observe" case.
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
@@ -363,8 +399,10 @@ def test_transient_unknown_then_progress_does_not_false_trigger(
             side_effect=lambda **_: {"summary": next(summaries)},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
@@ -401,8 +439,10 @@ def test_transient_all_zero_then_progress_does_not_false_trigger(
             side_effect=lambda **_: {"summary": next(summaries)},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
@@ -431,8 +471,8 @@ def test_vanished_canary_with_stderr_marker_prefers_the_marker(
             },
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "Out of memory: kill process\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "Out of memory: kill process\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
@@ -461,15 +501,17 @@ def test_failure_features_attached_on_dispatcher_failed(tmp_path: Path, journal_
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": "[dispatch] FAILED (exit 1)\n",
-                    "path": log_path,
-                    "job_id": "job_42",
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": "[dispatch] FAILED (exit 1)\n",
+                        "path": log_path,
+                        "job_id": "job_42",
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -500,16 +542,18 @@ def test_failure_features_classifies_uv_not_on_path(tmp_path: Path, journal_home
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": (
-                        "[dispatch] FAILED (exit 2)\n"
-                        "[template] HPC_RUNTIME=uv but 'uv' not on PATH\n"
-                    ),
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": (
+                            "[dispatch] FAILED (exit 2)\n"
+                            "[template] HPC_RUNTIME=uv but 'uv' not on PATH\n"
+                        ),
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -536,16 +580,18 @@ def test_failure_features_classifies_conda_command_not_found(
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": (
-                        "[dispatch] FAILED (exit 127)\n"
-                        "preamble.sh: line 12: conda: command not found\n"
-                    ),
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": (
+                            "[dispatch] FAILED (exit 127)\n"
+                            "preamble.sh: line 12: conda: command not found\n"
+                        ),
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -567,17 +613,19 @@ def test_failure_features_classifies_module_not_found_hpc_agent(
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": (
-                        "Traceback (most recent call last):\n"
-                        '  File "cli.py", line 1\n'
-                        "ModuleNotFoundError: No module named 'hpc_agent'\n"
-                    ),
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": (
+                            "Traceback (most recent call last):\n"
+                            '  File "cli.py", line 1\n'
+                            "ModuleNotFoundError: No module named 'hpc_agent'\n"
+                        ),
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -599,15 +647,18 @@ def test_failure_features_classifies_output_file_required(
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": (
-                        "executor.py: error: the following arguments are required: --output-file\n"
-                    ),
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": (
+                            "executor.py: error: the following arguments are "
+                            "required: --output-file\n"
+                        ),
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -629,13 +680,17 @@ def test_failure_features_classifies_undefined_var_expansion(
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[
-                {
-                    "task_id": 0,
-                    "content": ("executor.py: error: argument --samples: expected one argument\n"),
-                }
-            ],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [
+                    {
+                        "task_id": 0,
+                        "content": (
+                            "executor.py: error: argument --samples: expected one argument\n"
+                        ),
+                    }
+                ]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -656,8 +711,8 @@ def test_failure_features_none_on_ok_canary(tmp_path: Path, journal_home: Path) 
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] ok\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -754,7 +809,7 @@ def test_checkpoint_canary_ok_when_loadable(tmp_path: Path, journal_home: Path) 
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe_out)
         ) as m_ssh,
@@ -779,7 +834,7 @@ def test_checkpoint_canary_missing_fails_gate(tmp_path: Path, journal_home: Path
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run",
             return_value=_fake_ssh_completed(stdout='{"status": "missing"}'),
@@ -806,7 +861,7 @@ def test_checkpoint_canary_unloadable_fails_gate(tmp_path: Path, journal_home: P
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe)
         ),
@@ -831,7 +886,7 @@ def test_checkpoint_canary_probe_failure_is_reporter_unreachable(
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run",
             return_value=_fake_ssh_completed(returncode=1, stderr="No module named 'hpc_agent'"),
@@ -854,7 +909,7 @@ def test_checkpoint_canary_explicit_result_dir_override(tmp_path: Path, journal_
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run",
             return_value=_fake_ssh_completed(
@@ -886,7 +941,7 @@ def test_checkpoint_canary_unrenderable_template_raises(tmp_path: Path, journal_
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         pytest.raises(errors.SpecInvalid, match="checkpoint_result_dir"),
     ):
         verify_canary(
@@ -905,7 +960,7 @@ def test_checkpoint_mode_off_keeps_normal_marker_scan(tmp_path: Path, journal_ho
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
     assert out["ok"] is False
@@ -987,8 +1042,8 @@ def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_ho
     with (
         mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_fake_status),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] ok\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -1050,8 +1105,8 @@ def test_activation_derived_from_record_cluster_when_sidecar_bare(
     with (
         mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_fake_status),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] ok\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -1078,7 +1133,7 @@ def test_checkpoint_canary_petsc_structural_ok(tmp_path: Path, journal_home: Pat
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe_out)
         ),
@@ -1110,7 +1165,7 @@ def test_checkpoint_canary_petsc_unloadable_names_format(
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_PREEMPT_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe_out)
         ),
@@ -1190,25 +1245,22 @@ def test_nonzero_exit_in_runtime_json_fails_gate_and_is_not_cached(
     from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_fails")
-    runtime_json = '{"task_id": 0, "exit_code": 1, "elapsed_sec": 3}'
     with (
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        # The _runtime.json exit_code now rides the ONE fused tail ssh (RANK 18);
+        # its 'present' verdict is the bundle's ``runtime`` leg.
         mock.patch(
-            "hpc_agent.infra.remote.ssh_run",
-            return_value=_fake_ssh_completed(stdout=runtime_json),
-        ) as m_ssh,
+            _VTAIL,
+            return_value=_tail_from(_CLEAN_STDERR, runtime={"status": "present", "exit_code": 1}),
+        ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
     assert out["ok"] is False
     assert out["failure_kind"] == "nonzero_exit"
     assert "exit_code=1" in out["details"]
     assert "_runtime.json" in out["details"]
-    # The guard read the canary task-0 _runtime.json over SSH.
-    assert "_runtime.json" in m_ssh.call_args.args[0]
-    assert "results/r1-canary/task_0" in m_ssh.call_args.args[0]
     # failure_features carries the stderr tail for the operator.
     assert out["failure_features"] is not None
     # The poisoning check: a FAILING cmd_sha must NOT be cached as validated.
@@ -1225,15 +1277,13 @@ def test_zero_exit_in_runtime_json_passes_and_claims_exit_0(
     from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_ok")
-    runtime_json = '{"task_id": 0, "exit_code": 0, "elapsed_sec": 3}'
     with (
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
         mock.patch(
-            "hpc_agent.infra.remote.ssh_run",
-            return_value=_fake_ssh_completed(stdout=runtime_json),
+            _VTAIL,
+            return_value=_tail_from(_CLEAN_STDERR, runtime={"status": "present", "exit_code": 0}),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
@@ -1260,7 +1310,7 @@ def test_absent_runtime_json_falls_through_to_existing_logic(
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_CLEAN_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run",
             return_value=_fake_ssh_completed(stdout="__HPC_NO_RUNTIME__"),
@@ -1287,7 +1337,7 @@ def test_unreadable_runtime_json_falls_through_does_not_fail_canary(
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
         ),
-        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        mock.patch(_VTAIL, return_value=_tail_from(_CLEAN_STDERR)),
         mock.patch(
             "hpc_agent.infra.remote.ssh_run",
             return_value=_fake_ssh_completed(stdout="not json {{{"),
@@ -1315,8 +1365,8 @@ def test_nonzero_exit_guard_runs_after_existing_failure_paths(
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}]),
         ),
         mock.patch("hpc_agent.infra.remote.ssh_run") as m_ssh,
     ):
@@ -1398,8 +1448,10 @@ def test_fast_start_allzero_within_grace_is_not_falsely_vanished(
             side_effect=lambda **_: {"summary": next(summaries)},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from(
+                [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}]
+            ),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
@@ -1437,8 +1489,8 @@ def test_poll_loop_ramps_instead_of_flat_waiting(
             side_effect=[running, running, running, done],
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] task_id=0\n"}]),
         ),
     ):
         out = verify_canary(
@@ -1563,6 +1615,136 @@ def test_marker_scan_ssh_failure_does_not_yield_pass(
     assert out["failure_kind"] == "reporter_unreachable"
 
 
+def test_fused_verify_tail_reads_all_legs_in_one_ssh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RANK 18: the post-terminal tail (stderr + _runtime.json + expect_output +
+    sha) is read in ONE sentinel-sectioned ssh and parsed into the same fields the
+    verdict branches consume. One ssh_run call; every section parsed."""
+    from hpc_agent.ops.verify_canary import _fused_verify_tail
+
+    calls: list[str] = []
+    fused_out = (
+        "<<<HPC_VTAIL:TAIL>>>\n"
+        "FOUND\t/x/logs/p_canary.o42.1\n"
+        "line-one\nline-two\n"
+        "<<<HPC_VTAIL:RUNTIME>>>\n"
+        '{"task_id": 0, "exit_code": 0}\n'
+        "<<<HPC_VTAIL:OUTPUT>>>\n"
+        "OK\n"
+        "<<<HPC_VTAIL:FPRINT>>>\n"
+        "deadbeefcafe\n"
+    )
+
+    def _fake_ssh_run(cmd, *, ssh_target):  # noqa: ANN001
+        calls.append(cmd)
+        return _fake_ssh_completed(stdout=fused_out)
+
+    monkeypatch.setattr("hpc_agent.infra.remote.ssh_run", _fake_ssh_run)
+    bundle = _fused_verify_tail(
+        ssh_target="u@h",
+        remote_path="/x",
+        job_name="p_canary",
+        job_ids=["42"],
+        scheduler="sge",
+        result_dir="results/r1-canary/task_0",
+        expect_output="results/r1-canary/task_0/metrics.json",
+        fingerprint="results/r1-canary/task_0/metrics.json",
+    )
+    # ONE round trip for the whole tail.
+    assert len(calls) == 1
+    # And ONE script carrying all four sections + the candidate log path.
+    script = calls[0]
+    for name in ("TAIL", "RUNTIME", "OUTPUT", "FPRINT"):
+        assert f"<<<HPC_VTAIL:{name}>>>" in script
+    assert "_runtime.json" in script
+    assert "sha256sum" in script
+    # Every leg parsed from the one read.
+    assert bundle["stderr_tail"] == "line-one\nline-two"
+    assert bundle["log_path"] == "/x/logs/p_canary.o42.1"
+    assert bundle["runtime"] == {"status": "present", "exit_code": 0}
+    assert bundle["output"] == (True, "ok")
+    assert bundle["fingerprint_sha"] == "deadbeefcafe"
+
+
+def test_fused_verify_tail_torn_read_falls_through_safely(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A torn/failed fused read never mints a false verdict: an ssh error yields an
+    empty tail + runtime 'absent' (result_dir was requested) and unknown output/
+    fingerprint — exactly the per-call read-miss fall-through it replaced."""
+    from hpc_agent.ops.verify_canary import _fused_verify_tail
+
+    def _boom(cmd, *, ssh_target):  # noqa: ANN001
+        raise errors.RemoteCommandFailed("ssh died", returncode=255)
+
+    monkeypatch.setattr("hpc_agent.infra.remote.ssh_run", _boom)
+    bundle = _fused_verify_tail(
+        ssh_target="u@h",
+        remote_path="/x",
+        job_name="p_canary",
+        job_ids=["42"],
+        scheduler="sge",
+        result_dir="results/r1-canary/task_0",
+        expect_output=None,
+        fingerprint=None,
+    )
+    assert bundle["stderr_tail"] == ""
+    assert bundle["log_path"] is None
+    assert bundle["runtime"] == {"status": "absent"}
+    assert bundle["output"] is None
+    assert bundle["fingerprint_sha"] is None
+
+
+def _rc2_sidecar_not_found() -> errors.RemoteCommandFailed:
+    """The finding-7 poll failure: reporter rc 2 with a DETERMINISTIC structured
+    ``sidecar_not_found`` code (a ``-canary2`` sidecar the deploy never shipped)."""
+    return errors.RemoteCommandFailed(
+        "status reporter failed (rc=2): sidecar_not_found: .hpc/runs/r1-canary.json",
+        returncode=2,
+        reporter_error_code="sidecar_not_found",
+    )
+
+
+def test_deterministic_reporter_sidecar_not_found_escalates_early(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 7: 3 consecutive ``sidecar_not_found`` polls (rc 2, a file that will
+    NEVER appear by waiting) escalate BEFORE the budget — NOT the old 1800s spin —
+    to a ``reporter_unreachable`` verdict that names the reporter code, the sidecar
+    path polled (derived from the recorded run id), and the sibling sidecars that
+    DID ship. The sibling-ls runs exactly once (on escalation, not per poll)."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)  # far under the 1800s deadline → escalation
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    ls_calls: list[dict] = []
+
+    def _fake_ls(**kw):
+        ls_calls.append(kw)
+        return ["r1-canary.json"]  # the FIRST canary shipped; -canary2 did not
+
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=_rc2_sidecar_not_found(),
+        ),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_list_run_sidecars", side_effect=_fake_ls),
+        # The env-class marker scan must NOT run for a reporter-class escalation.
+        mock.patch("hpc_agent.infra.cluster_status.ssh_marker_scan") as m_scan,
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is False
+    assert out["failure_kind"] == "reporter_unreachable"
+    assert "sidecar_not_found" in out["details"]
+    assert ".hpc/runs/r1-canary.json" in out["details"]  # the polled path, disclosed
+    assert "r1-canary.json" in out["details"]  # the sibling that shipped
+    assert "3 consecutive" in out["details"]
+    assert len(ls_calls) == 1  # escalated on the 3rd poll, ls ran once
+    m_scan.assert_not_called()
+
+
 def test_transient_polls_ride_budget_not_early_failed(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1653,8 +1835,8 @@ def test_canary_loop_stamps_watchdog_liveness_each_poll(tmp_path: Path, journal_
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "hpc_agent.infra.cluster_logs.fetch_task_logs",
-            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+            "hpc_agent.ops.verify_canary._fused_verify_tail",
+            return_value=_tail_from([{"task_id": 0, "content": "[dispatch] ok\n"}]),
         ),
     ):
         out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)

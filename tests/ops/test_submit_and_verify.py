@@ -26,12 +26,14 @@ def _no_double_canary(monkeypatch: pytest.MonkeyPatch) -> None:
 
     These tests assert the two-phase gate's short-circuits + envelope shape; the
     determinism-fingerprint SECOND canary is its own concern (see
-    ``test_double_canary.py``). Patch ``_run_double_canary`` to a no-op that lets
-    the submit proceed (returns None) so ``verify_canary`` / ``submit_flow`` call
-    counts stay about the FIRST canary + main array only.
+    ``test_double_canary.py``). The RANK-8 split fires the second canary
+    concurrently (``_fire_second_canary_concurrent``) then verifies it
+    (``_verify_second_canary_and_mint``); stub the FIRE to return ``None`` so the
+    orchestration takes the single-canary path and ``verify_canary`` /
+    ``submit_flow`` call counts stay about the FIRST canary + main array only.
     """
     monkeypatch.setattr(
-        "hpc_agent.ops.submit_and_verify._run_double_canary",
+        "hpc_agent.ops.submit_and_verify._fire_second_canary_concurrent",
         lambda *_a, **_k: None,
     )
 

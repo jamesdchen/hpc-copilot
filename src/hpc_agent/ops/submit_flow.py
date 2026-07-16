@@ -2286,6 +2286,7 @@ def _fire_canary(
     backend_obj: HPCBackend,
     job_env_full: dict[str, str],
     boundary_index: int = 0,
+    ship_sidecar: bool = False,
 ) -> list[str]:
     """Mirror sidecar + qsub the 1-task canary + record it — the canary leg.
 
@@ -2302,6 +2303,15 @@ def _fire_canary(
     *canary_run_id*, and a fresh id (``-canary2``) simply never matches the
     completed first canary, so this leg always fires a genuinely new probe.
 
+    ``ship_sidecar`` (finding 7, RANK 1): ship the freshly-mirrored sidecar to the
+    cluster BEFORE the qsub. The FIRST canary's sidecar reaches the cluster on the
+    pre-rsync deploy; a SECOND canary fired POST-deploy (``fire_second_canary``)
+    has no transport, so without this its ``.hpc/runs/<run_id>-canary2.json`` never
+    ships and every status poll returns ``sidecar_not_found`` — the ~30-min
+    false-negative spin. Shipping before the qsub closes the race (the reporter
+    reads the sidecar only once the job RUNS). Left ``False`` for the pre-rsync
+    first-canary leg, whose sidecar already rides the deploy.
+
     Returns the parsed canary job ids.
     """
     # Mirror the main sidecar to <canary_run_id>.json so the canary dispatches
@@ -2310,6 +2320,21 @@ def _fire_canary(
     _mirror_canary_sidecar(
         experiment_dir, spec.run_id, canary_run_id, boundary_index=boundary_index
     )
+    if ship_sidecar:
+        # Post-deploy probe: ship the just-mirrored sidecar in its own ssh leg so
+        # the cluster-side reporter can read it (finding 7). BEFORE the qsub, so no
+        # poll can race a running job against a missing sidecar. Raises on a failed
+        # ship — a canary whose sidecar never landed would only spin the verifier.
+        from hpc_agent.infra.transport import push_run_sidecar
+        from hpc_agent.state.runs import run_sidecar_path
+
+        sidecar_path = run_sidecar_path(experiment_dir, canary_run_id)
+        push_run_sidecar(
+            ssh_target=spec.ssh_target,
+            remote_path=spec.remote_path,
+            run_id=canary_run_id,
+            content=sidecar_path.read_text(encoding="utf-8"),
+        )
     canary_env = dict(job_env_full)
     canary_env["HPC_RUN_ID"] = canary_run_id
     canary_env["HPC_TASK_COUNT"] = "1"
@@ -2430,6 +2455,9 @@ def fire_second_canary(
         backend_obj=backend_obj,
         job_env_full=job_env_full,
         boundary_index=boundary_index,
+        # Post-deploy leg: the second canary's sidecar rode no rsync, so ship it
+        # here before its qsub or the reporter reads a missing file (finding 7).
+        ship_sidecar=True,
     )
 
 

@@ -201,6 +201,83 @@ def test_deduped_submit_skips_the_double_canary(tmp_path: Path) -> None:
     m_mint.assert_not_called()
 
 
+def test_second_canary_fires_BEFORE_first_is_verified(tmp_path: Path) -> None:
+    """RANK 8: both canaries queue CONCURRENTLY — the second is fired BEFORE the
+    first is verified (not after), so the scheduler parallelizes their queue+run
+    instead of serializing a second full cycle. Proven by the call order: the
+    ``fire_second_canary`` lands ahead of the FIRST ``verify_canary``."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    order: list[str] = []
+
+    def _fire(*_a, **kw):
+        order.append(f"fire:{kw['canary_run_id']}")
+        return ["9999"]
+
+    def _verify(*_a, **kw):
+        order.append(f"verify:{kw['canary_run_id']}")
+        return _verify_env(ok=True)
+
+    with (
+        mock.patch(f"{_SAV}.submit_flow", return_value=_submit_env()),
+        mock.patch(f"{_SAV}.verify_canary", side_effect=_verify),
+        mock.patch(f"{_SAV}.fire_second_canary", side_effect=_fire),
+        mock.patch(f"{_SAV}._mint_double_canary_sample"),
+    ):
+        submit_and_verify(tmp_path, spec=_spec())
+
+    # The fire of -canary2 precedes the verify of the FIRST canary (concurrency).
+    assert order[0] == f"fire:{_MAIN}-canary2"
+    assert order[1] == f"verify:{_MAIN}-canary"
+    assert order[2] == f"verify:{_MAIN}-canary2"
+
+
+def test_failed_first_canary_does_not_verify_the_concurrent_second(tmp_path: Path) -> None:
+    """RANK 8: on a broken FIRST canary the concurrently-fired second is an orphan
+    — the main array is already blocked, so the second is NOT verified (one
+    verify_canary call), just closed. The first canary already proved the code
+    broken; a second verdict would be redundant SSH."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    with (
+        mock.patch(f"{_SAV}.submit_flow", return_value=_submit_env()) as m_submit,
+        mock.patch(
+            f"{_SAV}.verify_canary",
+            return_value=_verify_env(ok=False, failure_kind="nonzero_exit"),
+        ) as m_verify,
+        mock.patch(f"{_SAV}.fire_second_canary", return_value=["9999"]) as m_fire,
+        mock.patch(f"{_SAV}._mint_double_canary_sample") as m_mint,
+    ):
+        result = submit_and_verify(tmp_path, spec=_spec())
+
+    m_fire.assert_called_once()  # the second WAS fired concurrently...
+    m_verify.assert_called_once()  # ...but never verified — the first already failed
+    m_mint.assert_not_called()
+    assert m_submit.call_count == 1  # main array never launched
+    assert result.verified is False
+    assert result.failure_kind == "nonzero_exit"
+
+
+def test_fire_failure_degrades_to_single_canary(tmp_path: Path) -> None:
+    """RANK 8: if the second canary can't be FIRED (e.g. its sidecar ship raised),
+    the submit degrades to a single canary — the first is still verified on its own
+    merits and the main array launches; the n=2 sample simply doesn't mint."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    with (
+        mock.patch(f"{_SAV}.submit_flow", return_value=_submit_env()) as m_submit,
+        mock.patch(f"{_SAV}.verify_canary", return_value=_verify_env(ok=True)) as m_verify,
+        mock.patch(f"{_SAV}.fire_second_canary", side_effect=RuntimeError("ship failed")),
+        mock.patch(f"{_SAV}._mint_double_canary_sample") as m_mint,
+    ):
+        result = submit_and_verify(tmp_path, spec=_spec())
+
+    m_verify.assert_called_once()  # only the first canary was verified
+    m_mint.assert_not_called()  # no second execution → no n=2 sample
+    assert m_submit.call_count == 2  # the main array still launched
+    assert result.verified is True
+
+
 # --- the pull leg (rsync mocked) ---------------------------------------------
 
 

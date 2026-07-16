@@ -104,22 +104,35 @@ _WATCHDOG_STAMP_FLOOR_SEC = 10.0
 
 
 def _classify_poll_failure(exc: BaseException) -> str:
-    """Classify a poll-loop exception as ``"deterministic_env"`` or ``"transient"``.
+    """Classify a poll-loop exception as deterministic (escalate) or transient.
 
-    A :class:`errors.RemoteCommandFailed` whose remote ``returncode`` is 126
-    ("not executable") or 127 ("command not found") is the broken-env signature:
-    the SSH connection SUCCEEDED and the remote command deterministically failed
-    because the run's ``python`` / conda env is absent or wrong. Waiting will
-    never heal it, so the canary loop escalates fast on a run of these
-    (:data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL`). EVERYTHING else — an
-    :class:`OSError`/``TimeoutError`` transport blip, an
-    :class:`~hpc_agent.errors.SshUnreachable`, or a ``RemoteCommandFailed`` with
-    any other returncode — is ``"transient"`` and rides the wait budget (that
-    class belongs to the connection breaker). The returncode is read off the
-    exception attribute, never string-parsed from the message.
+    Returns one of three literals:
+
+    * ``"deterministic_env"`` — a :class:`errors.RemoteCommandFailed` whose remote
+      ``returncode`` is 126 ("not executable") or 127 ("command not found"): the
+      SSH connection SUCCEEDED and the remote command deterministically failed
+      because the run's ``python`` / conda env is absent or wrong.
+    * ``"deterministic_reporter"`` — the connection SUCCEEDED and the on-cluster
+      status reporter returned a STRUCTURED deterministic error
+      (:data:`errors.DETERMINISTIC_REPORTER_ERROR_CODES`: a run sidecar that was
+      never shipped / is unparseable, or a missing ``tasks.py``). Finding 7's
+      ~30-min false-negative spin: a ``-canary2`` sidecar the deploy never pushed
+      answered EVERY poll ``sidecar_not_found`` at rc 2 — previously "transient",
+      polled to the full budget against a file that will NEVER appear.
+
+    Both deterministic classes will never heal by waiting, so the canary loop
+    escalates fast on a run of them (:data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL`).
+    EVERYTHING else — an :class:`OSError`/``TimeoutError`` transport blip, an
+    :class:`~hpc_agent.errors.SshUnreachable`, an open breaker, or a
+    ``RemoteCommandFailed`` with any other returncode and no deterministic
+    reporter code — is ``"transient"`` and rides the wait budget (that class
+    belongs to the connection breaker). The returncode / reporter code are read
+    off the exception attributes, never string-parsed from the message.
     """
     if errors.is_deterministic_env_failure(exc):
         return "deterministic_env"
+    if errors.is_deterministic_reporter_failure(exc):
+        return "deterministic_reporter"
     return "transient"
 
 
@@ -197,6 +210,57 @@ def _canary_failed_envelope(
             "signature). Fix the cluster env (hpc-agent importable in the run's "
             "conda env) and inspect the per-task cluster log for the underlying "
             "error before submitting the main array."
+        ),
+        "stderr_tail": "",
+        "metrics_fingerprint": None,
+        "failure_features": _failure_features("", None),
+    }
+
+
+def _deterministic_reporter_envelope(
+    canary_run_id: str,
+    *,
+    reporter_code: str,
+    remote_path: str,
+    ssh_target: str,
+    consecutive: int,
+) -> dict[str, Any]:
+    """Build the escalated verdict for a DETERMINISTIC reporter fault (finding 7).
+
+    Reached when :data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL` consecutive polls
+    returned the SAME structured reporter error
+    (:data:`errors.DETERMINISTIC_REPORTER_ERROR_CODES` — a run sidecar the deploy
+    never shipped, a torn one, a missing ``tasks.py``): a file condition that will
+    NEVER appear by waiting, so escalate now instead of riding the 30-min budget.
+
+    The verdict DISCLOSES which sidecar path the reporter polled — derived from
+    the SAME recorded identity the submit wrote (``.hpc/runs/<run_id>.json``, the
+    one-definition rule), never re-derived — and which sibling sidecars actually
+    shipped remotely (a best-effort plain-``sh`` ``ls``), so a
+    ``sidecar_not_found`` on ``<run>-canary2`` reads "polled ``…canary2.json``;
+    present: ``…canary.json``" — the never-shipped-sidecar bug named at a glance
+    rather than a bland ``reporter_unreachable`` after a burned budget.
+    """
+    from hpc_agent.infra.cluster_status import ssh_list_run_sidecars
+
+    polled = f".hpc/runs/{canary_run_id}.json"
+    siblings = ssh_list_run_sidecars(ssh_target=ssh_target, remote_path=remote_path)
+    present = ", ".join(siblings) if siblings else "(none)"
+    return {
+        "ok": False,
+        "failure_kind": "reporter_unreachable",
+        "details": (
+            f"canary {canary_run_id!r}: the cluster-side status reporter returned "
+            f"a DETERMINISTIC error ({reporter_code!r}) on {consecutive} "
+            f"consecutive polls — a file/manifest condition that will NEVER heal by "
+            f"waiting, so the canary was escalated immediately instead of riding the "
+            f"full wait budget. The reporter polled {polled!r} (derived from the run "
+            f"id the submit recorded); sidecars present under .hpc/runs/ on the "
+            f"cluster: [{present}]. If the polled name is missing but a sibling "
+            f"(e.g. the first ``-canary``) is present, the canary's sidecar was "
+            f"minted locally but never SHIPPED to the cluster — re-run the submit so "
+            f"every canary sidecar is deployed before its job runs. The canary "
+            f"CANNOT be trusted as passed."
         ),
         "stderr_tail": "",
         "metrics_fingerprint": None,
@@ -411,62 +475,25 @@ def _classify_runtime_exit(
     )
 
 
-def _read_canary_exit_code(
-    *,
-    ssh_target: str,
-    remote_path: str,
-    result_dir: str,
-) -> dict[str, Any]:
-    """Read the canary task-0 ``_runtime.json`` ``exit_code`` over SSH.
+def _parse_runtime_json(raw: str) -> dict[str, Any]:
+    """Map a raw ``_runtime.json`` read to the ``{status: ...}`` verdict dict.
 
-    #351-3: ``verify_canary`` concluded success from scheduler-state +
-    result-file-presence + a 50-line stderr scan — it NEVER read the per-task
-    ``exit_code`` the dispatcher records to ``<result_dir>/_runtime.json``
-    (``dispatch.py`` ~:984/:1007). A canary that wrote a partial result file
-    then exited non-zero (e.g. a ``TypeError`` whose traceback fell outside the
-    fetched tail) was counted ``complete`` and passed. This positively reads the
-    recorded exit code so a non-zero exit fails the gate.
+    #351-3: the dispatcher records the per-task ``exit_code`` to
+    ``<result_dir>/_runtime.json`` (``dispatch.py`` ~:984/:1007); a canary that
+    wrote a partial result then exited non-zero (e.g. a ``TypeError`` whose
+    traceback fell outside the fetched tail) must FAIL the gate. The fused verify
+    tail (:func:`_fused_verify_tail`) reads that file in the same ssh as the stderr
+    tail; this is the ONE parse of its raw bytes into a verdict dict:
 
-    *result_dir* is the canary task-0 result dir (absolute, or relative to
-    *remote_path*); the ``_runtime.json`` lives directly under it. Mirrors the
-    SSH-read-of-a-per-task-result-dir pattern of :func:`_verify_remote_checkpoint`.
-
-    Returns one of:
-
-    * ``{"status": "present", "exit_code": int}`` — runtime read and parsed.
-    * ``{"status": "absent"}`` — no ``_runtime.json`` (a preamble crash BEFORE
-      the dispatcher writes it; the existing stderr / failed-count paths catch
-      that). The caller falls through to the unchanged success logic.
-    * ``{"status": "unreadable", "detail": ...}`` — ssh error / non-JSON /
-      no ``exit_code`` field. Also falls through (do NOT mint a false failure
-      from an unreadable sidecar — the existing paths already gate real crashes).
+    * ``{"status": "absent"}`` — empty or the ``__HPC_NO_RUNTIME__`` sentinel (a
+      preamble crash before the dispatcher wrote it — caught by other paths). The
+      caller falls through to the unchanged success logic.
+    * ``{"status": "unreadable", "detail": ...}`` — non-JSON / no ``exit_code`` /
+      a non-int one (never mint a false failure from a read miss).
+    * ``{"status": "present", "exit_code": int}`` — parsed.
     """
     import json
-    import shlex
 
-    from hpc_agent.infra.remote import ssh_run
-
-    target = result_dir
-    if not target.startswith("/"):
-        target = f"{remote_path.rstrip('/')}/{target.lstrip('/')}"
-    runtime_path = f"{target.rstrip('/')}/_runtime.json"
-    # Emit a sentinel for "file absent" so we distinguish a missing _runtime.json
-    # (preamble crash → fall through) from an unreadable one. ``cat`` on a missing
-    # file would just produce empty stdout; the marker makes absence unambiguous.
-    cmd = f"cat {shlex.quote(runtime_path)} 2>/dev/null || echo __HPC_NO_RUNTIME__"
-    try:
-        res = ssh_run(cmd, ssh_target=ssh_target)
-    except (errors.RemoteCommandFailed, OSError) as exc:
-        return {"status": "unreadable", "detail": f"ssh _runtime.json read raised: {exc}"}
-    if res.returncode != 0:
-        return {
-            "status": "unreadable",
-            "detail": (
-                f"remote _runtime.json read exited {res.returncode}: "
-                f"{(res.stderr or '').strip()[:200]}"
-            ),
-        }
-    raw = (res.stdout or "").strip()
     if not raw or raw == "__HPC_NO_RUNTIME__":
         return {"status": "absent"}
     try:
@@ -519,6 +546,184 @@ def _resolve_canary_checkpoint_dir(
             "rendered locally. Pass checkpoint_result_dir explicitly (the canary's "
             "task-0 result dir, relative to remote_path)."
         ) from None
+
+
+# Section sentinels for the fused post-terminal verify-tail read. Chosen so they
+# cannot collide with a log tail / JSON body / sha line.
+_VTAIL_SECS = ("TAIL", "RUNTIME", "OUTPUT", "FPRINT")
+
+
+def _vtail_marker(name: str) -> str:
+    return f"<<<HPC_VTAIL:{name}>>>"
+
+
+def _split_vtail_sections(stdout: str) -> dict[str, str]:
+    """Split the fused-tail stdout into ``{section_name: body}`` by its sentinels.
+
+    A section absent from the output (its marker never printed — a truncated
+    stream, or an optional section not requested) simply has no key; every caller
+    treats a missing section exactly like the old "read miss" (fall through, never
+    a false verdict), so a torn read degrades safely.
+    """
+    out: dict[str, str] = {}
+    parts = stdout.split("<<<HPC_VTAIL:")
+    for chunk in parts[1:]:
+        head, _, body = chunk.partition(">>>\n")
+        name = head.strip(">").strip()
+        if name in _VTAIL_SECS:
+            out[name] = body
+    return out
+
+
+def _fused_verify_tail(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    job_name: str,
+    job_ids: list[str],
+    scheduler: str,
+    result_dir: str | None,
+    expect_output: str | None,
+    fingerprint: str | None,
+) -> dict[str, Any]:
+    """Read the WHOLE post-terminal verify tail in ONE ssh round trip (RANK 18).
+
+    Once the poll loop breaks terminal, verification used to issue a CHAIN of
+    independent cold-SSH execs — stderr-tail fetch, ``cat _runtime.json``, an
+    optional ``expect_output`` existence/JSON test, an optional ``sha256sum`` — each
+    its own connection + handshake (no ControlMaster on native Windows; the broker
+    was deleted), 6–12 round trips per gated submit under the double canary. Every
+    byte is reachable in one shell, so fold them into ONE sentinel-sectioned
+    ``bash`` script and parse it back into the SAME fields the verdict branches
+    already consume. Verdict logic is unchanged — only the transport is batched.
+
+    (The checkpoint round-trip probe stays its OWN ssh: it needs remote ``python``
+    to deserialize a pickle, which no shell read can fold — and it is the rare
+    ``auto_resume_on_kill`` path, not this default tail.)
+
+    Returns ``{stderr_tail, log_path, runtime, output, fingerprint_sha}``:
+
+    * ``stderr_tail`` / ``log_path`` — the task-0 log tail (``fetch_task_logs``
+      semantics for a 1-task canary: try job_ids newest-first, first existing wins).
+    * ``runtime`` — :func:`_parse_runtime_json`'s dict (``present``/``absent``/
+      ``unreadable``) when *result_dir* is given, else ``None`` (skip the check).
+    * ``output`` — ``verify_combiner_artifact``'s ``(ok, detail)`` when
+      *expect_output* is given, else ``None``.
+    * ``fingerprint_sha`` — the sha when *fingerprint* is given and read, else
+      ``None`` (best-effort; a miss never fails the canary).
+
+    A missing section (torn stream / optional section unrequested) falls through
+    exactly like the per-call read miss it replaces — never a false verdict.
+    """
+    import json as _json
+    import shlex
+
+    from hpc_agent.infra import remote
+    from hpc_agent.infra.backends import get_backend_class
+
+    parts: list[str] = []
+
+    # --- TAIL: task-0 stderr, fetch_task_logs semantics (newest job_id first) ---
+    parts.append(f"echo {shlex.quote(_vtail_marker('TAIL'))}")
+    backend_cls = get_backend_class(scheduler)
+    candidates = [
+        backend_cls.stderr_log_path(remote_path, job_name, jid, 0)
+        for jid in reversed(job_ids or [])
+    ]
+    if candidates:
+        arms = []
+        for path in candidates:
+            q = shlex.quote(path)
+            arms.append(f"if [ -f {q} ]; then printf 'FOUND\\t%s\\n' {q}; tail -n 50 {q};")
+        parts.append(" el".join(arms) + " else echo MISSING; fi")
+    else:
+        parts.append("echo MISSING")
+
+    # --- RUNTIME: cat <result_dir>/_runtime.json (absence marker distinguishes
+    #     a preamble crash from an unreadable file), only when a dir was resolved ---
+    if result_dir is not None:
+        rt = result_dir
+        if not rt.startswith("/"):
+            rt = f"{remote_path.rstrip('/')}/{rt.lstrip('/')}"
+        runtime_path = f"{rt.rstrip('/')}/_runtime.json"
+        parts.append(f"echo {shlex.quote(_vtail_marker('RUNTIME'))}")
+        parts.append(f"cat {shlex.quote(runtime_path)} 2>/dev/null || echo __HPC_NO_RUNTIME__")
+
+    # --- OUTPUT: expect_output existence (+ JSON parse for .json) ---
+    if expect_output:
+        full_path = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
+        parts.append(f"echo {shlex.quote(_vtail_marker('OUTPUT'))}")
+        if expect_output.endswith(".json"):
+            py_src = f"import json,sys; json.load(open({_json.dumps(full_path)}))"
+            parts.append(
+                f"if [ ! -f {shlex.quote(full_path)} ]; then echo MISSING; "
+                f"else python3 -c {shlex.quote(py_src)} && echo OK || echo INVALID_JSON; fi"
+            )
+        else:
+            parts.append(f"[ -f {shlex.quote(full_path)} ] && echo OK || echo MISSING")
+
+    # --- FPRINT: sha256 of the fingerprint target (best-effort) ---
+    if fingerprint:
+        target = fingerprint
+        if not target.startswith("/"):
+            target = f"{remote_path.rstrip('/')}/{target.lstrip('/')}"
+        parts.append(f"echo {shlex.quote(_vtail_marker('FPRINT'))}")
+        parts.append(f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'")
+
+    script = "\n".join(parts)
+    stderr_tail = ""
+    log_path: str | None = None
+    runtime: dict[str, Any] | None = {"status": "absent"} if result_dir is not None else None
+    output: tuple[bool, str] | None = None
+    fingerprint_sha: str | None = None
+    try:
+        proc = remote.ssh_run(script, ssh_target=ssh_target)
+    except (errors.RemoteCommandFailed, OSError):
+        # A torn/failed tail read never mints a false verdict: an empty tail +
+        # runtime "absent" fall through to the unchanged success logic, exactly
+        # like the old per-call miss. Output/fingerprint stay unknown (None).
+        return {
+            "stderr_tail": stderr_tail,
+            "log_path": log_path,
+            "runtime": runtime,
+            "output": output,
+            "fingerprint_sha": fingerprint_sha,
+        }
+    secs = _split_vtail_sections(proc.stdout or "") if proc.returncode == 0 else {}
+
+    tail_body = secs.get("TAIL", "")
+    first_line, _, rest = tail_body.partition("\n")
+    if first_line.startswith("FOUND\t"):
+        log_path = first_line[len("FOUND\t") :].strip() or None
+        # Drop the trailing newline the section separator adds, mirroring the
+        # per-call tail (content is everything after the FOUND line).
+        stderr_tail = rest[:-1] if rest.endswith("\n") else rest
+
+    if result_dir is not None and "RUNTIME" in secs:
+        runtime = _parse_runtime_json(secs["RUNTIME"].strip())
+
+    if expect_output and "OUTPUT" in secs:
+        tok = secs["OUTPUT"].strip().splitlines()[-1] if secs["OUTPUT"].strip() else ""
+        full_path = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
+        if tok == "OK":
+            output = (True, "ok")
+        elif tok == "MISSING":
+            output = (False, f"is missing at {full_path}")
+        elif tok == "INVALID_JSON":
+            output = (False, f"at {full_path} is not valid JSON")
+        else:
+            output = (False, f"unrecognised verifier output: {tok[:200]!r}")
+
+    if fingerprint and "FPRINT" in secs:
+        fingerprint_sha = secs["FPRINT"].strip() or None
+
+    return {
+        "stderr_tail": stderr_tail,
+        "log_path": log_path,
+        "runtime": runtime,
+        "output": output,
+        "fingerprint_sha": fingerprint_sha,
+    }
 
 
 @primitive(
@@ -734,10 +939,8 @@ def verify_canary(
             f"the canary's output) or pass the canary's real result path."
         )
 
-    from hpc_agent.infra.cluster_logs import fetch_task_logs
     from hpc_agent.infra.cluster_status import ssh_status_report
     from hpc_agent.infra.clusters import remote_activation_for_sidecar
-    from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
     from hpc_agent.state.journal import (
         clear_poll_health,
         load_run,
@@ -904,7 +1107,17 @@ def verify_canary(
             last_poll_error = exc
             failure_class = _classify_poll_failure(exc)
             rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
-            if failure_class == "deterministic_env":
+            reporter_code = (
+                exc.reporter_error_code if isinstance(exc, errors.RemoteCommandFailed) else None
+            )
+            # BOTH deterministic classes (broken env rc 126/127 AND a structured
+            # deterministic reporter error — a never-shipped / torn sidecar, finding
+            # 7) share ONE consecutive counter and the ONE escalation threshold: a
+            # file/env condition that fails every poll identically will never heal
+            # by waiting, so escalate fast rather than ride the full budget. A
+            # transient poll resets the counter (that class belongs to the breaker).
+            deterministic = failure_class in ("deterministic_env", "deterministic_reporter")
+            if deterministic:
                 consecutive_env_polls += 1
             else:
                 consecutive_env_polls = 0
@@ -914,15 +1127,27 @@ def verify_canary(
             stamp_poll_health(
                 canary_run_id,
                 error_class=failure_class,
-                consecutive=(consecutive_env_polls if failure_class == "deterministic_env" else 1),
+                consecutive=(consecutive_env_polls if deterministic else 1),
                 returncode=rc,
                 experiment_dir=experiment_dir,
             )
             poll_health_dirty = True
-            if (
-                failure_class == "deterministic_env"
-                and consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL
-            ):
+            if deterministic and consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL:
+                # A deterministic reporter fault (finding 7: a ``-canary2`` sidecar
+                # that was never pushed answers EVERY poll ``sidecar_not_found``)
+                # gets its OWN escalated verdict that names the reporter code, the
+                # sidecar path it polled (derived from the recorded run id — the
+                # one-definition rule), and which sibling sidecars actually shipped
+                # — so the never-shipped-sidecar bug is legible at a glance instead
+                # of a bland reporter_unreachable after a burned budget.
+                if failure_class == "deterministic_reporter" and reporter_code is not None:
+                    return _deterministic_reporter_envelope(
+                        canary_run_id,
+                        reporter_code=reporter_code,
+                        remote_path=record.remote_path,
+                        ssh_target=resolve_ssh_target(record),
+                        consecutive=consecutive_env_polls,
+                    )
                 # A broken run env fails every poll the same way and will NEVER
                 # heal by waiting — escalate now instead of riding the full budget.
                 # Read the env-independent .hpc_failed markers with plain sh (it
@@ -1034,27 +1259,36 @@ def verify_canary(
             f"to guess 'slurm' and risk misrouting the SGE log fetch"
         )
 
-    from hpc_agent.state.runs import read_job_task_spans
-
-    logs = fetch_task_logs(
+    # RANK 18: fold the WHOLE post-terminal verify tail — stderr tail + cat
+    # _runtime.json + optional expect_output existence + optional sha256 — into ONE
+    # ssh round trip (:func:`_fused_verify_tail`) instead of 3–6 serial cold-SSH
+    # execs. The verdict branches below read from the pre-fetched bundle unchanged.
+    # A checkpoint canary needs only the tail here (its exit-code/output/fingerprint
+    # legs don't apply — it returns early on the checkpoint probe, a separate ssh
+    # that no shell read can fold), so its fused call carries only the TAIL section.
+    # The exit-code result dir is resolved from the sidecar template (task 0); an
+    # unrenderable template → None → the fused read skips the runtime section and
+    # the verdict falls through exactly as when _runtime.json is absent.
+    _exit_result_dir: str | None = None
+    if not verify_checkpoint:
+        try:
+            _exit_result_dir = _resolve_canary_checkpoint_dir(
+                _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
+            )
+        except errors.SpecInvalid:
+            _exit_result_dir = None
+    tail_bundle = _fused_verify_tail(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         job_name=record.job_name,
         job_ids=list(record.job_ids),
         scheduler=scheduler,
-        task_ids=[0],
-        lines=50,
-        # A 1-task canary is never waved, so its sidecar carries no spans and
-        # this resolves to None (the global probe) — threaded anyway so every
-        # fetch_task_logs call site shares one contract, and read_job_task_spans
-        # never raises.
-        job_task_spans=read_job_task_spans(experiment_dir, canary_run_id),
+        result_dir=None if verify_checkpoint else _exit_result_dir,
+        expect_output=None if verify_checkpoint else expect_output,
+        fingerprint=None if verify_checkpoint else fingerprint,
     )
-    stderr_tail = ""
-    log_path: str | None = None
-    if logs and isinstance(logs[0], dict):
-        stderr_tail = str(logs[0].get("content") or "")
-        log_path = logs[0].get("path") if isinstance(logs[0].get("path"), str) else None
+    stderr_tail = str(tail_bundle["stderr_tail"] or "")
+    log_path: str | None = tail_bundle["log_path"]
 
     # Checkpoint canary (#294 PR4): SWAP the success criteria. The canary was
     # SUPPOSED to be preempted (exit 130) after writing one checkpoint, so the
@@ -1188,13 +1422,10 @@ def verify_canary(
             "failure_features": _failure_features(stderr_tail, log_path),
         }
 
-    # Optional output verification.
-    if expect_output:
-        output_ok, output_detail = verify_combiner_artifact(
-            ssh_target=resolve_ssh_target(record),
-            remote_path=record.remote_path,
-            expect_output=expect_output,
-        )
+    # Optional output verification — read from the fused tail bundle (one ssh
+    # already covered existence + the .json parse; verdict logic unchanged).
+    if expect_output and tail_bundle["output"] is not None:
+        output_ok, output_detail = tail_bundle["output"]
         if not output_ok:
             return {
                 "ok": False,
@@ -1237,63 +1468,35 @@ def verify_canary(
     # result dir from the sidecar's result_dir_template; a template that needs a
     # per-task kwarg (unrenderable locally) is treated as "can't check" and falls
     # through, exactly like the absent case, rather than failing a real canary.
+    # The exit code came back in the SAME fused ssh as the stderr tail (its
+    # ``runtime`` bundle field; ``_exit_result_dir`` is the dir it was read from —
+    # ``None`` when the template couldn't render locally, exactly the old skip).
     canary_exit_code: int | None = None
-    try:
-        _result_dir = _resolve_canary_checkpoint_dir(
-            _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
+    _result_dir = _exit_result_dir
+    runtime = tail_bundle["runtime"]
+    if _result_dir is not None and runtime is not None and runtime.get("status") == "present":
+        canary_exit_code = int(runtime["exit_code"])
+        verdict = _classify_runtime_exit(
+            canary_exit_code, canary_run_id=canary_run_id, result_dir=_result_dir
         )
-    except errors.SpecInvalid:
-        _result_dir = None
-    if _result_dir is not None:
-        runtime = _read_canary_exit_code(
-            ssh_target=resolve_ssh_target(record),
-            remote_path=record.remote_path,
-            result_dir=_result_dir,
-        )
-        if runtime.get("status") == "present":
-            canary_exit_code = int(runtime["exit_code"])
-            verdict = _classify_runtime_exit(
-                canary_exit_code, canary_run_id=canary_run_id, result_dir=_result_dir
-            )
-            if verdict is not None:
-                kind, details = verdict
-                return {
-                    "ok": False,
-                    "failure_kind": kind,
-                    "details": details,
-                    "stderr_tail": stderr_tail,
-                    "metrics_fingerprint": None,
-                    "failure_features": _failure_features(stderr_tail, log_path),
-                }
+        if verdict is not None:
+            kind, details = verdict
+            return {
+                "ok": False,
+                "failure_kind": kind,
+                "details": details,
+                "stderr_tail": stderr_tail,
+                "metrics_fingerprint": None,
+                "failure_features": _failure_features(stderr_tail, log_path),
+            }
         # status in {"absent", "unreadable"} → fall through unchanged: the run
         # either crashed before _runtime.json (caught above) or we simply could
         # not read it, and we never mint a false failure from a read miss.
 
-    # Optional fingerprint. Best-effort: a fingerprint failure does NOT
-    # invalidate the canary (the run itself is fine; we just couldn't
-    # hash). Returns ``None`` when unavailable rather than raising.
-    # ``fingerprint`` is treated as an absolute remote path or a path
-    # relative to ``record.remote_path``; the caller is responsible for
-    # constructing it (the sidecar's ``result_dir_template`` plus
-    # ``tasks.resolve(0)`` is the canonical local-side derivation).
-    metrics_fingerprint: str | None = None
-    if fingerprint:
-        import shlex
-
-        from hpc_agent.infra.remote import ssh_run
-
-        target = fingerprint
-        if not target.startswith("/"):
-            target = f"{record.remote_path.rstrip('/')}/{target.lstrip('/')}"
-        try:
-            sha = ssh_run(
-                f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'",
-                ssh_target=resolve_ssh_target(record),
-            )
-            if sha.returncode == 0:
-                metrics_fingerprint = sha.stdout.strip() or None
-        except (errors.RemoteCommandFailed, OSError):
-            metrics_fingerprint = None
+    # Optional fingerprint — the sha256 already came back in the fused tail ssh.
+    # Best-effort: a fingerprint miss does NOT invalidate the canary (the run
+    # itself is fine; we just couldn't hash) — ``None`` when unavailable.
+    metrics_fingerprint: str | None = tail_bundle["fingerprint_sha"] if fingerprint else None
 
     # #249: record this cmd_sha as canary-validated so a re-submit of the SAME
     # cmd_sha within HPC_CANARY_TTL_SEC skips the redundant canary. Best-effort,

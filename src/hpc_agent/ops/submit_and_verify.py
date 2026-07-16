@@ -223,22 +223,29 @@ def _mint_double_canary_sample(
         )
 
 
-def _run_double_canary(
+def _fire_second_canary_concurrent(
     experiment_dir: Path,
     spec: SubmitAndVerifySpec,
     canary_submit: SubmitFlowResult,
-    first_verify: VerifyCanaryResult,
-) -> SubmitAndVerifyResult | None:
-    """Fire + verify the SECOND canary, then mint the n=2 determinism prior.
+) -> str | None:
+    """Fire the SECOND canary NOW so it queues CONCURRENTLY with the first (RANK 8).
 
-    Returns ``None`` to let the submit proceed (both canaries verified ok; the
-    sample is minted best-effort). Returns a BLOCKING :class:`SubmitAndVerifyResult`
-    (``verified=False``, empty ``job_ids``) when the second canary FAILS — the
-    same-code-passed-then-failed nondeterminism finding, blocking the main array
-    exactly like a failed first canary.
+    The two canaries are independent 1-task executions of the SAME command — the
+    n=2 determinism prior's two samples — and the diff consumer
+    (:func:`_mint_double_canary_sample`) reads both metrics order-independently, so
+    nothing requires serializing them. Firing the second here — right after Phase 1
+    deployed + fired the first, BEFORE the first is verified — lets the scheduler
+    parallelize both queue-waits + runtimes: the canary stage costs
+    ``max(two)`` instead of the old ``2×(queue+run+verify)`` (finding 2). Its
+    sidecar is SHIPPED in this leg (``fire_second_canary`` → ``ship_sidecar=True``,
+    finding 7) since Phase 1's rsync already ran.
 
-    ``HPC_NO_DOUBLE_CANARY=1`` (operator env, the ``HPC_NO_CANARY_SKIP`` idiom)
-    reverts to the single canary — no agent-reachable spec field disables it.
+    Returns the second canary's run id (verified later by
+    :func:`_verify_second_canary_and_mint`), or ``None`` when the double canary is
+    off (``HPC_NO_DOUBLE_CANARY=1``, the operator env idiom — no agent-reachable
+    spec field) or the fire failed. A FIRE failure degrades to a single canary
+    (warned, sample simply doesn't mint) rather than failing a submit whose first
+    canary is about to be verified on its own merits.
     """
     from hpc_agent.infra.env_flags import env_flag
 
@@ -246,13 +253,46 @@ def _run_double_canary(
         return None
 
     base = spec.submit
-    first_canary_run_id = canary_submit.canary_run_id  # ``<main>-canary``
     second_canary_run_id = f"{base.run_id}-canary2"
-    canary_job_ids = list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
+    try:
+        # Fresh ``-canary2`` id → submit_flow's existing-canary replay branch never
+        # reuses the completed first canary; ships its sidecar before the qsub.
+        fire_second_canary(experiment_dir, spec=base, canary_run_id=second_canary_run_id)
+    except Exception:  # noqa: BLE001 — a fire failure degrades to a single canary
+        import logging
 
-    # Fire the second execution — a fresh ``-canary2`` id, so submit_flow's
-    # existing-canary replay branch never reuses the completed first canary.
-    fire_second_canary(experiment_dir, spec=base, canary_run_id=second_canary_run_id)
+        logging.getLogger(__name__).warning(
+            "second canary %r could not be fired; proceeding with a single canary "
+            "(the n=2 determinism sample simply will not mint this submit)",
+            second_canary_run_id,
+            exc_info=True,
+        )
+        return None
+    return second_canary_run_id
+
+
+def _verify_second_canary_and_mint(
+    experiment_dir: Path,
+    spec: SubmitAndVerifySpec,
+    canary_submit: SubmitFlowResult,
+    second_canary_run_id: str,
+) -> SubmitAndVerifyResult | None:
+    """Verify the ALREADY-FIRED second canary, then mint the n=2 determinism prior.
+
+    Called after the FIRST canary verified ok. The second canary was fired
+    concurrently by :func:`_fire_second_canary_concurrent`, so by now it is
+    usually already terminal — this verify is a cheap terminal read, not a fresh
+    queue+run wait.
+
+    Returns ``None`` to let the submit proceed (both verified ok; the sample mints
+    best-effort). Returns a BLOCKING :class:`SubmitAndVerifyResult`
+    (``verified=False``, empty ``job_ids``) when the second canary FAILS — the
+    same-code-passed-then-failed nondeterminism finding, blocking the main array
+    exactly like a failed first canary.
+    """
+    base = spec.submit
+    first_canary_run_id = canary_submit.canary_run_id  # ``<main>-canary``
+    canary_job_ids = list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
 
     # Verify it the SAME way. Substitute the ``-canary2`` run_id by OMITTING
     # expect_output/fingerprint: a path built for ``-canary`` cannot contain
@@ -518,6 +558,18 @@ def submit_and_verify(
             verify_result=None,
         )
 
+    # THE DOUBLE CANARY, FIRED CONCURRENTLY (RANK 8, docs/design/
+    # determinism-fingerprint.md D-double-canary). Fire the SECOND canary
+    # (``<main>-canary2``) NOW — before verifying the first — so both 1-task jobs
+    # queue + run in PARALLEL instead of serially: the canary stage costs
+    # ``max(two)`` rather than ``2×(queue+run+verify)`` (finding 2). The n=2 diff
+    # consumer reads both metrics order-independently, so nothing requires
+    # ordering. Its sidecar ships in this leg (finding 7). ``None`` when the double
+    # canary is off (``HPC_NO_DOUBLE_CANARY=1``) or the fire failed (degrade to a
+    # single canary). A cache-skipped first canary never reaches here (Phase 1
+    # always fires a canary_only probe), so "skip skips BOTH executions" holds.
+    second_canary_run_id = _fire_second_canary_concurrent(experiment_dir, spec, canary_submit)
+
     # Verify the canary — THE GATE. #294 PR4: an auto_resume_on_kill run fired a
     # CHECKPOINT canary (HPC_CHECKPOINT_CANARY=1), so verification swaps to the
     # round-trip assertion (a loadable checkpoint survived the kill) instead of
@@ -543,6 +595,12 @@ def submit_and_verify(
         # empty: the main never went out. Close the canary record as failed so
         # it doesn't linger in_flight and false-flag as a stalled driver (§5).
         _mark_canary_terminal(experiment_dir, canary_submit.canary_run_id, status="failed")
+        # The second canary was fired concurrently (RANK 8) before this verdict —
+        # on a broken first canary it is now an orphaned probe; close its record so
+        # the §5 watchdog doesn't scan it as a live driver. No second verify: the
+        # first canary already proved the code broken, so the main stays blocked.
+        if second_canary_run_id is not None:
+            _mark_canary_terminal(experiment_dir, second_canary_run_id, status="failed")
         return SubmitAndVerifyResult(
             run_id=canary_submit.run_id,
             job_ids=[],
@@ -561,21 +619,23 @@ def submit_and_verify(
     # below are reached only past this point, so one call covers both).
     _mark_canary_terminal(experiment_dir, canary_submit.canary_run_id, status="complete")
 
-    # THE DOUBLE CANARY (docs/design/determinism-fingerprint.md, D-double-canary).
-    # The first canary verified ok — fire a SECOND canary (``<main>-canary2``),
-    # verify it the same way, and mint the n=2 determinism-fingerprint prior from
-    # the two executions' task-0 metrics. Placed HERE, past the first verify and
+    # THE DOUBLE CANARY, verify half (docs/design/determinism-fingerprint.md,
+    # D-double-canary). The first canary verified ok — verify the SECOND canary
+    # (fired concurrently above) and mint the n=2 determinism-fingerprint prior
+    # from the two executions' task-0 metrics. The second is usually already
+    # terminal by now (it queued in parallel with the first), so this is a cheap
+    # terminal read, not a fresh queue+run wait. Placed past the first verify and
     # before BOTH the stop_after_canary S2 return and the fused Phase-2 launch, so
-    # every fingerprint-minting submit runs it exactly once. A cache-skipped first
-    # canary never reaches this point (Phase 1 always fires a canary_only probe
-    # here, so the skip only bites the non-gated submit_flow path — the design's
-    # "skip skips BOTH executions" holds by construction). A FAILED second canary
+    # every fingerprint-minting submit runs it exactly once. A FAILED second canary
     # is a loud nondeterminism finding that blocks the main array exactly like a
-    # failed first canary (returns non-None). ``HPC_NO_DOUBLE_CANARY=1`` reverts
-    # to the single canary.
-    blocked = _run_double_canary(experiment_dir, spec, canary_submit, verify_result)
-    if blocked is not None:
-        return blocked
+    # failed first canary (returns non-None). ``second_canary_run_id is None``
+    # (double canary off or fire failed) skips straight to the single-canary path.
+    if second_canary_run_id is not None:
+        blocked = _verify_second_canary_and_mint(
+            experiment_dir, spec, canary_submit, second_canary_run_id
+        )
+        if blocked is not None:
+            return blocked
 
     # Canary verified. The block boundary (submit-s2): STOP before the main
     # array so the human can review "canary green, est N core-hours" and

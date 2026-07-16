@@ -27,7 +27,12 @@ from hpc_agent.infra.ssh_validation import parse_remote_json, split_ack
 if TYPE_CHECKING:
     from hpc_agent.infra.backends import HPCBackend
 
-__all__ = ["ssh_status_report", "ssh_batch_scheduler_states", "ssh_marker_scan"]
+__all__ = [
+    "ssh_status_report",
+    "ssh_batch_scheduler_states",
+    "ssh_marker_scan",
+    "ssh_list_run_sidecars",
+]
 
 # Pin the reporter to the *activated env's* interpreter. A CARC ``module load
 # python/X`` (or an Lmod auto-reload) hijacks a bare ``python`` on PATH even
@@ -61,6 +66,26 @@ def _reporter_error_from_stdout(stdout: str) -> str | None:
     first = errors[0]
     code, detail = first.get("code"), first.get("detail")
     return f"{code}: {detail}" if detail else (str(code) if code else None)
+
+
+def _reporter_error_code_from_stdout(stdout: str) -> str | None:
+    """Extract JUST the reporter's structured error ``code`` (not ``code: detail``).
+
+    The bare code (e.g. ``sidecar_not_found``) is what a poll loop keys on to
+    decide DETERMINISTIC-vs-transient
+    (:func:`hpc_agent.errors.is_deterministic_reporter_failure`), so it rides
+    first-class on the raised :class:`~hpc_agent.errors.RemoteCommandFailed` —
+    never re-parsed from the human-facing message. ``None`` when stdout is not the
+    structured error envelope or the first error carries no ``code``.
+    """
+    try:
+        errs = json.loads(stdout).get("errors") or []
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not errs:
+        return None
+    code = errs[0].get("code")
+    return str(code) if code else None
 
 
 # Sentinel that separates the reporter's JSON stdout from the piggy-backed
@@ -196,6 +221,11 @@ def ssh_status_report(
         raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {detail}",
             returncode=proc.returncode,
+            # Lift the reporter's structured code first-class so a poll loop can
+            # escalate a DETERMINISTIC reporter fault (a never-shipped / torn
+            # sidecar answers EVERY poll ``sidecar_not_found`` and will not heal by
+            # waiting — finding 7) FAST instead of riding the full wait budget.
+            reporter_error_code=_reporter_error_code_from_stdout(json_stdout),
         )
     # rc 0 but NO affirmative ack: a severed / truncated channel delivered a
     # clean-looking rc-0 read that never carried the reporter to completion
@@ -248,6 +278,26 @@ def ssh_marker_scan(*, ssh_target: str, remote_path: str, run_id: str) -> dict:
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     names = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
     return {"failed_markers": names, "count": len(names)}
+
+
+def ssh_list_run_sidecars(*, ssh_target: str, remote_path: str) -> list[str]:
+    """List the run-sidecar basenames present under ``<remote_path>/.hpc/runs/``.
+
+    Diagnostic-only, plain ``sh`` (no python, no activation — it must answer even
+    when the run env is broken). Used when a poll escalates on a DETERMINISTIC
+    ``sidecar_not_found``: naming which sidecar the reporter polled AND which
+    siblings actually shipped turns "reporter unreachable" into "the ``-canary2``
+    sidecar was never pushed; ``-canary`` is present" (finding 7's one-definition
+    remedy). Best-effort: a missing dir / ssh error returns ``[]`` (the caller
+    still discloses the polled path, just without the sibling list).
+    """
+    runs_dir = f"{remote_path.rstrip('/')}/.hpc/runs"
+    cmd = f"ls -1 {shlex.quote(runs_dir)}/ 2>/dev/null || true"
+    try:
+        proc = remote.ssh_run(cmd, ssh_target=ssh_target)
+    except (RemoteCommandFailed, OSError):
+        return []
+    return [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
 
 
 def ssh_batch_scheduler_states(
