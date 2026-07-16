@@ -930,10 +930,27 @@ def monitor_flow(
                         # (naming the hanging stage + the host-retarget/settle-run
                         # remedy) on the transient-fault tick instead of riding it.
                         degradation = None
+                        failed_over_to: str | None = None
                         if isinstance(exc, errors.SshCircuitOpen):
                             from hpc_agent.infra.ssh_circuit import degradation_advice_for_host
 
                             degradation = degradation_advice_for_host(exc.host, now=time.time())
+                            # FIX B (run-14): the active login node's circuit opened /
+                            # is preamble-degraded. If the run's cluster declares a
+                            # login_pool with a HEALTHY sibling, auto-fail-over to it as
+                            # a journaled, disclosed host-retarget (same cluster/jobs/
+                            # scratch — a mechanism, not a judgment call). A single-host
+                            # entry or an exhausted pool returns None → today's behavior
+                            # (ride the cooldown). The next poll targets the new host via
+                            # resolve_ssh_target once the in-memory record is reloaded.
+                            from hpc_agent.ops.host_retarget import pool_failover
+                            from hpc_agent.state.journal import load_run as _load_run
+
+                            failed_over_to = pool_failover(experiment_dir, run_id, now=time.time())
+                            if failed_over_to:
+                                reloaded = _load_run(experiment_dir, run_id)
+                                if reloaded is not None:
+                                    record = reloaded
                         logging.getLogger(__name__).warning(
                             "monitor_flow: transient ssh fault for run %s (tick %d): %s — %s%s",
                             run_id,
@@ -952,6 +969,8 @@ def monitor_flow(
                         }
                         if degradation:
                             poll_error_action["degradation"] = degradation
+                        if failed_over_to:
+                            poll_error_action["pool_failover_to"] = failed_over_to
                         _append_tick(
                             experiment_dir,
                             run_id,
@@ -983,7 +1002,7 @@ def monitor_flow(
                         # deadline → _circuit_wait_sec returns None → the floor interval.
                         circuit_wait = (
                             _circuit_wait_sec(exc, now=time.time())
-                            if isinstance(exc, errors.SshCircuitOpen)
+                            if isinstance(exc, errors.SshCircuitOpen) and not failed_over_to
                             else None
                         )
                         sleep_for = (

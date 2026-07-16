@@ -673,6 +673,33 @@ def _pre_stage_smoke_gate(
         )
 
 
+def _smoke_interpreter_disclosure(finding: Any) -> str:
+    """One-line disclosure naming the interpreter the LOCAL smoke ran under.
+
+    The dry-run-local smoke pins a bare ``python3``/``python`` executor token to
+    ``sys.executable`` (``_localize_interpreter``) so the LOCAL import check runs
+    under the interpreter guaranteed to import ``hpc_agent``, not PATH's python3.
+    The finding's ``command`` evidence carries the localized command; surface its
+    first token so the operator sees WHICH interpreter produced the result and is
+    not misled into treating a local-interpreter mismatch as a cluster bug.
+    """
+    command = str((getattr(finding, "evidence", None) or {}).get("command") or "").strip()
+    if not command:
+        return ""
+    # The localized first token is the interpreter: a quoted path
+    # (``"C:\\...\\python.exe" -m …`` — ``_localize_interpreter`` quotes
+    # sys.executable) or a bare/absolute token. Take the quoted span when present,
+    # else the first whitespace-delimited token.
+    if command.startswith('"') and command.count('"') >= 2:
+        interp = command[1 : command.index('"', 1)]
+    else:
+        interp = command.split(" ", 1)[0]
+    return (
+        f"Local smoke ran under the hpc-agent interpreter '{interp}' "
+        "(pinned to sys.executable, not PATH's python3)."
+    )
+
+
 def _smoke_one_executor(
     experiment_dir: Path,
     *,
@@ -721,13 +748,20 @@ def _smoke_one_executor(
     # smoke run emits at most one finding, so order is not load-bearing.
     for f in smoke_findings:
         tail = (f.evidence or {}).get("stderr_tail") or ""
+        # DISCLOSE the interpreter the smoke actually ran under (FIX C): the smoke
+        # is a LOCAL import sanity check, so a bare ``python3``/``python`` executor
+        # token is pinned to THIS process's interpreter (``sys.executable`` — the
+        # one guaranteed to import ``hpc_agent``), never PATH's python3 (which on a
+        # dev box may be a foreign msys/system interpreter). Surfacing it stops a
+        # false "cluster-only import" scare from a local-interpreter mismatch.
+        interp_note = _smoke_interpreter_disclosure(f)
         if f.code == "smoke_nonzero_exit":
             rc = (f.evidence or {}).get("returncode")
             raise errors.SpecInvalid(
                 f"pre-stage local smoke of run {spec.run_id!r} task 0 exited {rc} "
                 "BEFORE any transport ran — refusing to stage a broken executor "
-                "(notebook-audit item 7). The cluster would fail identically after "
-                "an expensive stage. Executor stderr (verbatim):\n"
+                f"(notebook-audit item 7). {interp_note} The cluster would fail "
+                "identically after an expensive stage. Executor stderr (verbatim):\n"
                 f"{tail}\n"
                 "Fix the executor so a local task-0 run exits 0, or set "
                 "pre_stage_smoke=false on the submit spec to skip this gate."
@@ -736,9 +770,10 @@ def _smoke_one_executor(
             raise errors.SpecInvalid(
                 f"pre-stage local smoke of run {spec.run_id!r} task 0 failed to "
                 "import a module BEFORE any transport ran (notebook-audit item 7). "
-                "This MAY be a local-env artifact — a dependency present only in the "
-                "cluster env, not a real bug; if so, set pre_stage_smoke=false on the "
-                "submit spec to skip this gate. Executor stderr (verbatim):\n"
+                f"{interp_note} This MAY be a local-env artifact — a dependency "
+                "present only in the cluster env, not a real bug; if so, set "
+                "pre_stage_smoke=false on the submit spec to skip this gate. "
+                "Executor stderr (verbatim):\n"
                 f"{tail}"
             )
 

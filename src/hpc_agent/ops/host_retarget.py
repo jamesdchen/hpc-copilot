@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
     from hpc_agent.state.run_record import RunRecord
 
-__all__ = ["host_retarget"]
+__all__ = ["host_retarget", "pool_failover"]
 
 
 def _cluster_scheduler_scratch(cfg: dict[str, object]) -> tuple[str, str]:
@@ -52,6 +52,153 @@ def _cluster_scheduler_scratch(cfg: dict[str, object]) -> tuple[str, str]:
         str(cfg.get("scheduler") or "").strip(),
         str(cfg.get("scratch") or "").strip(),
     )
+
+
+def _journal_and_patch_failover(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    new_cluster: str,
+    new_ssh_target: str,
+    old_cluster: str,
+    old_ssh_target: str,
+    reason: str,
+    kind: str,
+    proposal: str,
+    directed: bool,
+) -> dict[str, object]:
+    """The ONE definition of "record a login-node failover" (run-12 finding 23):
+    journal the move as a decision, then patch the record's ``cluster`` +
+    provenance ``ssh_target`` through the sanctioned locked ``update_run_record``.
+
+    Shared by the MANUAL ``host-retarget`` verb (``directed=True``,
+    ``kind="host-retarget"``, a cluster-KEY move) and the AUTOMATIC login-pool
+    failover (``kind="pool-failover"``, ``new_cluster == old_cluster`` — only the
+    host moves). Neither forks a second record-patching path: both journal the
+    same provenance shape and both mutate through the same locked RMW callback.
+    """
+    from hpc_agent.state.decision_journal import append_decision
+    from hpc_agent.state.journal import update_run_record
+
+    decision = append_decision(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=run_id,
+        block="host-retarget",
+        response="y",
+        proposal=proposal,
+        resolved={"cluster": new_cluster, "ssh_target": new_ssh_target},
+        provenance={
+            "directed": directed,
+            "kind": kind,
+            "old_cluster": old_cluster,
+            "new_cluster": new_cluster,
+            "old_ssh_target": old_ssh_target,
+            "new_ssh_target": new_ssh_target,
+            "reason": reason,
+        },
+    )
+
+    def _mutate(rec: RunRecord) -> None:
+        rec.cluster = new_cluster
+        rec.ssh_target = new_ssh_target
+
+    update_run_record(experiment_dir, run_id, _mutate)
+    return decision
+
+
+def pool_failover(experiment_dir: Path, run_id: str, *, now: float | None = None) -> str | None:
+    """Automatic, journaled, DISCLOSED failover to the next healthy login-pool
+    member — the mechanism side of run-13 finding 10 / run-14.
+
+    When the active login node is preamble-degraded (or its circuit is open) and
+    the run's cluster declares a ``login_pool`` with a HEALTHY untried member,
+    re-point the run at that member and journal it exactly as the manual verb
+    does (via :func:`_journal_and_patch_failover`). This is a MECHANISM, not a
+    judgment call: the pool serves the SAME cluster key, scheduler and scratch —
+    only the login node moves — so there is nothing for a human to decide, but
+    the patch is still journaled + disclosed (doctrine: automatic ≠ silent).
+
+    Returns the new ``user@host`` on success, or ``None`` when there is no
+    healthy sibling to move to (single-host entry, or the pool is EXHAUSTED —
+    every member degraded/open) — i.e. today's behavior is preserved untouched.
+    Best-effort: any lookup/journal error degrades to ``None`` rather than
+    raising into a caller's retry path.
+    """
+    from hpc_agent.infra.clusters import _effective_login_pool, load_clusters_config
+    from hpc_agent.infra.ssh_circuit import host_circuit_ok
+    from hpc_agent.state.journal import load_run
+
+    try:
+        record = load_run(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — best-effort; a bad journal must not raise here
+        return None
+    if record is None:
+        return None
+    cluster = str(getattr(record, "cluster", "") or "").strip()
+    if not cluster:
+        return None
+    try:
+        cfg = load_clusters_config().get(cluster) or {}
+    except Exception:  # noqa: BLE001 — a bad/missing config degrades to no-failover
+        return None
+    pool = _effective_login_pool(cfg)
+    if len(pool) < 2:
+        return None  # single-host cluster: today's behavior (nothing to fail over to)
+    user = str(cfg.get("user") or "").strip()
+    if not user:
+        return None
+    frozen = str(getattr(record, "ssh_target", "") or "")
+    current_host = frozen.rsplit("@", 1)[-1].strip() if frozen else ""
+
+    for candidate in pool:
+        if candidate == current_host:
+            continue
+        if not host_circuit_ok(candidate, now=now):
+            continue  # this sibling is itself open/degraded — keep looking
+        new_ssh_target = f"{user}@{candidate}"
+        reason = (
+            f"login-pool failover {current_host or '?'} → {candidate} "
+            "(active login node preamble-degraded / circuit-open)"
+        )
+        try:
+            _journal_and_patch_failover(
+                experiment_dir,
+                run_id=run_id,
+                new_cluster=cluster,  # SAME key — a login-node move, not a cluster move
+                new_ssh_target=new_ssh_target,
+                old_cluster=cluster,
+                old_ssh_target=frozen or resolve_target_or_empty(record),
+                reason=reason,
+                kind="pool-failover",
+                proposal=reason,
+                directed=False,  # mechanism: no human judgment
+            )
+        except Exception:  # noqa: BLE001 — best-effort in a retry path; never mask the fault
+            return None
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "pool-failover: run %s auto-failed-over %s → %s on cluster %r "
+            "(journaled); the degraded login node is skipped for this run",
+            run_id,
+            current_host or "?",
+            candidate,
+            cluster,
+        )
+        return new_ssh_target
+    return None  # pool exhausted — every sibling degraded/open → today's behavior
+
+
+def resolve_target_or_empty(record: RunRecord) -> str:
+    """Best-effort ``resolve_ssh_target`` for the failover journal's old-target
+    field; empty string on any error (this runs in a retry path)."""
+    from hpc_agent.infra.clusters import resolve_ssh_target
+
+    try:
+        return resolve_ssh_target(record)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 @primitive(
@@ -99,8 +246,7 @@ def host_retarget(experiment_dir: Path, *, spec: HostRetargetInput) -> HostRetar
        resolves the new host at use time.
     """
     from hpc_agent.infra.clusters import ClusterConfig, load_clusters_config, resolve_ssh_target
-    from hpc_agent.state.decision_journal import append_decision
-    from hpc_agent.state.journal import load_run, update_run_record
+    from hpc_agent.state.journal import load_run
 
     run_id = spec.run_id
     new_cluster = spec.cluster.strip()
@@ -175,33 +321,22 @@ def host_retarget(experiment_dir: Path, *, spec: HostRetargetInput) -> HostRetar
 
     old_ssh_target = str(getattr(record, "ssh_target", "") or "") or resolve_ssh_target(record)
 
-    # (a) Journal the failover as a DECISION — the provenance trail the hand-edit lacked.
-    decision = append_decision(
+    # Journal the failover as a DECISION (the provenance trail the hand-edit
+    # lacked) AND patch the record's cluster key + provenance ssh_target through
+    # the locked sanctioned RMW — the SHARED failover core (one definition; the
+    # automatic pool-failover routes through the same helper).
+    decision = _journal_and_patch_failover(
         experiment_dir,
-        scope_kind="run",
-        scope_id=run_id,
-        block="host-retarget",
-        response="y",
+        run_id=run_id,
+        new_cluster=new_cluster,
+        new_ssh_target=new_ssh_target,
+        old_cluster=old_cluster,
+        old_ssh_target=old_ssh_target,
+        reason=spec.reason or "login-node failover",
+        kind="host-retarget",
         proposal=(spec.reason or f"login-node failover {old_cluster or '?'} → {new_cluster}"),
-        resolved={"cluster": new_cluster},
-        provenance={
-            "directed": True,
-            "kind": "host-retarget",
-            "old_cluster": old_cluster,
-            "new_cluster": new_cluster,
-            "old_ssh_target": old_ssh_target,
-            "new_ssh_target": new_ssh_target,
-            "reason": spec.reason or "login-node failover",
-        },
+        directed=True,
     )
-
-    # (b) Patch the record's cluster key (+ its provenance ssh_target) — the locked
-    #     sanctioned RMW; every transport consumer then resolves the new host at use time.
-    def _mutate(rec: RunRecord) -> None:
-        rec.cluster = new_cluster
-        rec.ssh_target = new_ssh_target
-
-    update_run_record(experiment_dir, run_id, _mutate)
 
     return HostRetargetResult(
         stage_reached="host_retargeted",

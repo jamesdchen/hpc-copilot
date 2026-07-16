@@ -97,6 +97,17 @@ hoffman2:
 
 discovery:
   host: discovery2.usc.edu
+  # Login POOL (optional): additional login nodes that serve the SAME scheduler
+  # + scratch as `host`. When the active login node goes preamble-degraded (its
+  # `module load … && source …/conda.sh` control-plane preamble hangs on a
+  # degraded /apps mount — the run-13 finding-10 / run-14 signature) or its SSH
+  # circuit opens, an in-flight run AUTO-fails-over to the next healthy pool
+  # member as a journaled, disclosed host-retarget (same run, jobs, scratch;
+  # only the login node moves). Omit for single-host (unchanged). To make
+  # discovery1 the primary and keep discovery2 as the sibling, write instead:
+  #   host: discovery1.usc.edu
+  #   login_pool: [discovery2.usc.edu]
+  # login_pool: [discovery1.usc.edu]
   user: <your_user>
   scheduler: slurm
   account: <your_account>
@@ -104,6 +115,15 @@ discovery:
   modules: []
   conda_source: /apps/conda/miniforge3/25.3.0/etc/profile.d/conda.sh
   conda_envs: [<your_env>]
+  # Direct control-plane interpreter (optional, RECOMMENDED for CARC): the LOCAL
+  # commands run over SSH (status reporter, combiner, reduce, liveness, canary
+  # polls) then use this interpreter DIRECTLY and skip the `module load … &&
+  # source …/conda.sh && conda activate` ceremony entirely — that
+  # process-spawning preamble is exactly what hangs when /apps is degraded and
+  # killed every submit-s2 worker in run-14. The module/conda preamble still
+  # runs inside the generated JOB SCRIPT on compute nodes. A leading `~` is
+  # expanded by the REMOTE shell. Omit to keep the legacy preamble (disclosed).
+  # env_python: ~/.conda/envs/<your_env>/bin/python
   gpu_types: [a100, a40, v100, l40s]
   gpu_constraint: "a100|a40|v100|l40s"
   cold_start_mem_buffer: 0.15

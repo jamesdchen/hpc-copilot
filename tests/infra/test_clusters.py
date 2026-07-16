@@ -23,6 +23,7 @@ from hpc_agent.infra.clusters import (
     get_default_walltime_sec,
     get_max_walltime_sec,
     get_walltime_arbitrage,
+    remote_activation_for_sidecar,
     resolve_ssh_target,
 )
 
@@ -309,3 +310,152 @@ class TestResolveSshTarget:
             resolved = resolve_ssh_target(record)
         assert resolved == "frozen@adhoc.example.edu"
         assert "no derivable user@host" in caplog.text
+
+
+# ─── FIX A: preamble-free control plane (run-13 finding 10 / run-14) ──────────
+
+
+class TestControlPlaneDirectInterpreter:
+    """``remote_activation_for_sidecar`` composes the control-plane command with
+    NO module/conda ceremony when a DIRECT env interpreter is derivable, and
+    keeps the legacy preamble (backwards compatible, disclosed) when it is not.
+    """
+
+    def test_env_python_yields_preamble_free_prefix(self):
+        # An absolute env_python → the control-plane prefix is a bare PATH-prepend
+        # to the interpreter's bin dir; NO `module load`, `source .../conda.sh` or
+        # `conda activate` (the stages that hang on a degraded /apps mount).
+        import hpc_agent.infra.clusters as clusters_mod
+
+        direct = clusters_mod._control_plane_direct_prefix(
+            "/u/home/me/.conda/envs/harxhar/bin/python"
+        )
+        assert direct == 'export PATH=/u/home/me/.conda/envs/harxhar/bin:"$PATH" && '
+        assert "module load" not in direct
+        assert "conda.sh" not in direct
+        assert "conda activate" not in direct
+
+    def test_sidecar_env_python_composes_preamble_free_via_deriver(self):
+        # End-to-end through remote_activation_for_sidecar: an env_python pinned in
+        # the sidecar env wins and yields the preamble-free prefix.
+        prefix = remote_activation_for_sidecar(
+            {"env": {"env_python": "~/.conda/envs/harxhar/bin/python"}}
+        )
+        assert prefix == 'export PATH=~/.conda/envs/harxhar/bin:"$PATH" && '
+        # The `~` is emitted UNQUOTED so the REMOTE shell expands it (MSYS trap).
+        assert '"~' not in prefix
+
+    def test_no_env_python_keeps_legacy_preamble(self, tmp_path, monkeypatch):
+        # A cluster WITHOUT env_python keeps the module/conda preamble unchanged —
+        # backwards compatible (the breaker's preamble-degradation classifier still
+        # sees the module/conda markers for these clusters).
+        p = tmp_path / "clusters.yaml"
+        p.write_text(
+            yaml.safe_dump(
+                {
+                    "carc": {
+                        "scheduler": "slurm",
+                        "user": "me",
+                        "host": "discovery2.usc.edu",
+                        "conda_source": "/apps/anaconda3/etc/profile.d/conda.sh",
+                        "conda_envs": ["harxhar"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(p))
+        prefix = remote_activation_for_sidecar({"cluster": "carc"}, fallback_cluster="carc")
+        assert "source" in prefix and "conda.sh" in prefix
+        assert "conda activate" in prefix
+
+    def test_shell_unsafe_env_python_falls_back_to_preamble(self):
+        import hpc_agent.infra.clusters as clusters_mod
+
+        # A space (or any shell metachar) in the path → unsafe to emit unquoted →
+        # None → the caller keeps the legacy preamble.
+        assert clusters_mod._control_plane_direct_prefix("/opt/my env/bin/python") is None
+        # A bare interpreter with no directory component is also unusable.
+        assert clusters_mod._control_plane_direct_prefix("python") is None
+
+
+# ─── FIX B: login-pool aware use-time resolution ─────────────────────────────
+
+
+class TestResolveSshTargetPool:
+    """``resolve_ssh_target`` honors a per-run pool-member choice (the frozen
+    ssh_target's host, when it is a member of the cluster's login_pool) so an
+    automatic failover sticks across polls; single-host entries are unchanged."""
+
+    def _point_config_at(self, tmp_path, monkeypatch, mapping):
+        p = tmp_path / "clusters.yaml"
+        p.write_text(yaml.safe_dump(mapping), encoding="utf-8")
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(p))
+        return p
+
+    def test_pool_member_frozen_host_is_honored_over_default(self, tmp_path, monkeypatch):
+        # carc's default host is discovery2, but login_pool lists discovery1. A run
+        # that failed over has frozen ssh_target = me@discovery1 → resolve honors
+        # that member instead of snapping back to the config default discovery2.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {
+                "carc": {
+                    "scheduler": "slurm",
+                    "user": "me",
+                    "host": "discovery2.usc.edu",
+                    "login_pool": ["discovery1.usc.edu"],
+                }
+            },
+        )
+        record = SimpleNamespace(cluster="carc", ssh_target="me@discovery1.usc.edu")
+        assert resolve_ssh_target(record) == "me@discovery1.usc.edu"
+
+    def test_pool_default_host_still_resolves_when_not_failed_over(self, tmp_path, monkeypatch):
+        # No failover yet: frozen host == default host → same value; user stays
+        # config-driven.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {
+                "carc": {
+                    "scheduler": "slurm",
+                    "user": "me",
+                    "host": "discovery2.usc.edu",
+                    "login_pool": ["discovery1.usc.edu"],
+                }
+            },
+        )
+        record = SimpleNamespace(cluster="carc", ssh_target="me@discovery2.usc.edu")
+        assert resolve_ssh_target(record) == "me@discovery2.usc.edu"
+
+    def test_frozen_host_not_in_pool_falls_through_to_config(self, tmp_path, monkeypatch):
+        # The operator removed the old member from the pool → the frozen host is no
+        # longer a member → config-wins derivation returns the default host (RULING
+        # 1 control handed back to config).
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {
+                "carc": {
+                    "scheduler": "slurm",
+                    "user": "me",
+                    "host": "discovery2.usc.edu",
+                    "login_pool": ["discovery3.usc.edu"],
+                }
+            },
+        )
+        record = SimpleNamespace(cluster="carc", ssh_target="me@discovery1.usc.edu")
+        assert resolve_ssh_target(record) == "me@discovery2.usc.edu"
+
+    def test_single_host_entry_is_unchanged(self, tmp_path, monkeypatch):
+        # No login_pool → the pool branch is a strict no-op; config-wins as before.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {"carc": {"scheduler": "slurm", "user": "me", "host": "discovery2.usc.edu"}},
+        )
+        record = SimpleNamespace(cluster="carc", ssh_target="me@discovery1.usc.edu")
+        # Config wins (the RULING-1 behavior) — resolves to the config host.
+        assert resolve_ssh_target(record) == "me@discovery2.usc.edu"

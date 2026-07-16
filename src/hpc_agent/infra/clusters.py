@@ -13,6 +13,7 @@ from __future__ import annotations
 import difflib
 import logging
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,7 +89,20 @@ class ClusterConfig(BaseModel):
         default=None,
         description=(
             "Hostname / OpenSSH alias for the cluster. Combined with "
-            "``user`` to derive ``ssh_target``."
+            "``user`` to derive ``ssh_target``. When ``login_pool`` is also "
+            "set, this is the DEFAULT / first login node of the pool."
+        ),
+    )
+    login_pool: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional login-node hostnames that serve the SAME scheduler + "
+            "scratch as ``host`` (a login POOL for one cluster). When the SSH "
+            "circuit breaker classifies the active login node as "
+            "preamble-degraded (or its circuit opens) and a healthy pool member "
+            "exists, the run auto-fails-over to the next member as a journaled, "
+            "disclosed host-retarget — same run, jobs, scratch, scheduler; only "
+            "the login node moves. Empty (the default) = single-host, unchanged."
         ),
     )
     user: str | None = Field(
@@ -109,6 +123,23 @@ class ClusterConfig(BaseModel):
     conda_envs: list[str] = Field(
         default_factory=list,
         description="Conda env names to ``conda activate`` (in order) inside the preamble.",
+    )
+    env_python: str | None = Field(
+        default=None,
+        description=(
+            "Absolute (or ``~``-relative) path to the cluster env's DIRECT "
+            "Python interpreter, e.g. ``~/.conda/envs/<name>/bin/python`` or "
+            "``/u/local/apps/.../envs/<name>/bin/python``. When set, the LOCAL "
+            "control-plane commands run over SSH (status reporter, combiner, "
+            "reduce, liveness, canary polls) prepend this interpreter's bin dir "
+            "to PATH and skip the ``module load … && source …/conda.sh && conda "
+            "activate`` ceremony entirely — that process-spawning preamble is "
+            "exactly what hangs on a degraded /apps mount (run-13 finding 10 / "
+            "run-14 discovery2). The module/conda preamble still runs inside the "
+            "GENERATED JOB SCRIPT on compute nodes. Omit to keep the legacy "
+            "preamble on the control plane (disclosed). A ``~`` is expanded by "
+            "the REMOTE shell (never quoted here — the MSYS/tilde trap)."
+        ),
     )
     gpu_types: list[str] = Field(
         default_factory=list,
@@ -440,6 +471,35 @@ def resolve_ssh_target(record: RunRecord) -> str:
             frozen,
         )
         return frozen
+    # Pool-aware (login_pool): a per-run failover (pool_failover / host-retarget)
+    # patches the record's FROZEN ssh_target to the chosen POOL MEMBER. Honor it
+    # so the choice sticks at every use-time resolution instead of snapping back
+    # to the config default host. Gated to actual pools (host + ≥1 sibling); a
+    # single-host entry falls straight through to the config-wins derivation
+    # below unchanged (RULING 1). The user stays config-driven (host is the only
+    # per-run degree of freedom a pool grants); the member must still validate,
+    # and removing a member from the pool hands control back to config.
+    pool = _effective_login_pool(cfg)
+    frozen_host = frozen.rsplit("@", 1)[-1].strip() if frozen else ""
+    pool_user = str(cfg.get("user") or "").strip()
+    if len(pool) > 1 and frozen_host and frozen_host in pool and pool_user:
+        candidate = f"{pool_user}@{frozen_host}"
+        try:
+            from hpc_agent.infra.ssh_validation import validate_ssh_target as _validate
+
+            _validate(candidate)
+        except errors.SpecInvalid:
+            pass  # a bad member → fall through to the config-default derivation
+        else:
+            if frozen_host != pool[0]:
+                _log.info(
+                    "resolve_ssh_target: cluster %r active login-pool member is %r "
+                    "(default is %r) — using the per-run failover choice",
+                    cluster,
+                    frozen_host,
+                    pool[0],
+                )
+            return candidate
     try:
         live = ClusterConfig.model_validate(cfg).ssh_target
     except Exception as exc:  # noqa: BLE001 — a malformed entry must not break transport
@@ -732,6 +792,59 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
     return " && ".join(parts) + " && "
 
 
+# Conservative shell-safe charset for a bin dir emitted UNQUOTED into the
+# control-plane command. Unquoted is deliberate: an ``env_python`` may be
+# ``~``-relative, and the REMOTE shell must expand the ``~`` — ``shlex.quote``
+# would freeze it, and tilde-expansion does not happen inside double quotes
+# either (the MSYS/tilde trap). Only these chars are allowed through; anything
+# else (a space, a shell metachar) falls back to the legacy preamble rather than
+# risk an injection or a mis-expansion.
+_ENV_PYTHON_SAFE = re.compile(r"[A-Za-z0-9._~/+-]+")
+
+
+def _control_plane_direct_prefix(env_python: str) -> str | None:
+    """A preamble-FREE control-plane prefix that puts *env_python*'s bin dir on
+    PATH, or ``None`` when *env_python* is unusable (fall back to the preamble).
+
+    Returns ``export PATH=<bindir>:"$PATH" && `` so the command's literal
+    ``python``/``python3`` token resolves to the cluster env's interpreter with
+    NO ``module load`` / ``source …/conda.sh`` / ``conda activate`` — the
+    process-spawning ceremony that hangs on a degraded /apps mount (run-13
+    finding 10 / run-14). A leading ``~`` survives unquoted so the remote shell
+    (not the local MSYS one) expands it; a bin dir with any shell-unsafe
+    character yields ``None`` (legacy preamble, disclosed).
+
+    ``export PATH=~/x:"$PATH"`` expands the ``~`` because tilde-expansion DOES
+    fire after ``=`` (and after each ``:``) in an assignment word, even though it
+    would NOT inside the double quotes — hence only ``$PATH`` is quoted.
+    """
+    p = (env_python or "").strip()
+    if not p or "/" not in p:
+        return None
+    bindir = p.rsplit("/", 1)[0]
+    if not bindir:
+        return None
+    m = _ENV_PYTHON_SAFE.fullmatch(bindir)
+    if m is None:
+        return None
+    return f'export PATH={bindir}:"$PATH" && '
+
+
+def _effective_login_pool(cluster_cfg: dict[str, Any]) -> list[str]:
+    """The ordered, de-duplicated login-node pool for a cluster: ``[host,
+    *login_pool]`` with blanks/placeholders dropped.
+
+    Single-host entries (no ``login_pool``) return ``[host]`` (or ``[]`` when no
+    host) — so every pool-aware branch is a strict no-op for them.
+    """
+    out: list[str] = []
+    for h in [cluster_cfg.get("host"), *(cluster_cfg.get("login_pool") or [])]:
+        s = str(h or "").strip()
+        if s and s != "<your_host>" and s not in out:
+            out.append(s)
+    return out
+
+
 def remote_activation_for_sidecar(
     sidecar: dict[str, Any], *, fallback_cluster: str | None = None
 ) -> str:
@@ -792,6 +905,36 @@ def remote_activation_for_sidecar(
             cfg = load_clusters_config().get(cluster_key, {}) or {}
         except Exception:  # noqa: BLE001 — a bad/missing config must not break status/aggregate
             cfg = {}
+
+    # PREAMBLE-FREE control plane (run-13 finding 10 / run-14): when a DIRECT
+    # env interpreter is known (sidecar-pinned ``env_python`` wins, else the
+    # cluster's), the control-plane command needs no ``module load`` / ``source
+    # …/conda.sh`` / ``conda activate`` at all — that process-spawning ceremony
+    # is exactly what hung every submit-s2 worker on discovery2's degraded /apps
+    # mount. A PATH-prepend to the interpreter's bin dir makes the command's
+    # literal ``python``/``python3`` resolve to the env interpreter directly. The
+    # module/conda preamble still runs inside the GENERATED JOB SCRIPT on compute
+    # nodes (untouched), and a cluster with no derivable ``env_python`` keeps the
+    # legacy preamble below — disclosed on the log. Command-class disclosure via
+    # the module logger (the surface transport already discloses on, cf.
+    # resolve_ssh_target).
+    env_python = str(env.get("env_python") or cfg.get("env_python") or "").strip()
+    direct = _control_plane_direct_prefix(env_python)
+    if direct is not None:
+        _log.info(
+            "control-plane activation: DIRECT env interpreter %r (preamble-free — "
+            "no module/conda ceremony) for cluster %r",
+            env_python,
+            cluster_key or "<ad-hoc>",
+        )
+        return direct
+    if env_python:
+        _log.info(
+            "control-plane activation: env_python %r for cluster %r is not "
+            "shell-safe to emit — falling back to the legacy module/conda preamble",
+            env_python,
+            cluster_key or "<ad-hoc>",
+        )
 
     # Per-field precedence: the sidecar pin wins; the cluster back-fills what
     # the sidecar omitted; neither present → the field stays empty and

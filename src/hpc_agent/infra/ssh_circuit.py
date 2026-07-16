@@ -77,6 +77,7 @@ __all__ = [
     "effective_state",
     "guarded_call",
     "hanging_stage",
+    "host_circuit_ok",
     "is_preamble_degraded",
     "open_deadline",
     "record_connection_failure",
@@ -425,6 +426,23 @@ def degradation_advice_for_host(host: str, *, now: float | None = None) -> str |
     host, never the doc. Fail-open: an unreadable doc yields ``None``."""
     now = time.time() if now is None else now
     return degradation_advice(host, _read_doc(circuit_state_path(host)), now=now)
+
+
+def host_circuit_ok(host: str, *, now: float | None = None) -> bool:
+    """True when *host* looks USABLE right now: its breaker is not genuinely
+    open and it is not preamble-degraded (run-13 finding 10).
+
+    The read-only health predicate the login-pool failover uses to pick a
+    healthy sibling: a member with no breaker doc (never contacted), a closed
+    circuit, or a cooldown-lapsed ``half_open_eligible`` circuit is usable; a
+    genuinely-open circuit or a preamble-degraded one is NOT. Fail-open: an
+    unreadable doc reads as healthy (same read-seam honesty as
+    :func:`effective_state`)."""
+    now = time.time() if now is None else now
+    doc = _read_doc(circuit_state_path(host))
+    if effective_state(doc, now=now) == "open":
+        return False
+    return not is_preamble_degraded(doc, now=now)
 
 
 def _open_error(

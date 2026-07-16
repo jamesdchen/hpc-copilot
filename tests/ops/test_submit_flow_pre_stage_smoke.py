@@ -200,6 +200,39 @@ def test_opt_out_skips_a_would_be_refusal(tmp_path: Path) -> None:
     sf._pre_stage_smoke_gate(tmp_path, [spec], [0])
 
 
+def test_refusal_discloses_pinned_interpreter(tmp_path: Path) -> None:
+    """FIX C: a BARE ``python3`` executor token is pinned to ``sys.executable``
+    for the LOCAL smoke (an import sanity check), and the refusal DISCLOSES which
+    interpreter actually ran — so a local-interpreter mismatch is not mistaken for
+    a cluster bug."""
+    import sys
+
+    _write_tasks_py(tmp_path)
+    (tmp_path / "boom.py").write_text("raise SystemExit(1)\n")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        sf._smoke_one_executor(
+            tmp_path, spec=_spec(), executor="python3 boom.py", result_dir_template=_TEMPLATE
+        )
+    msg = str(ei.value)
+    assert "pinned to sys.executable" in msg
+    assert sys.executable in msg
+
+
+def test_smoke_interpreter_disclosure_extracts_first_token() -> None:
+    """The disclosure names the interpreter from the finding's command evidence,
+    handling both the quoted-path form and a bare token."""
+    from types import SimpleNamespace
+
+    quoted = SimpleNamespace(evidence={"command": '"C:\\a b\\python.exe" -m x'})
+    assert "C:\\a b\\python.exe" in sf._smoke_interpreter_disclosure(quoted)
+
+    bare = SimpleNamespace(evidence={"command": "/usr/bin/python3 x.py"})
+    assert "/usr/bin/python3" in sf._smoke_interpreter_disclosure(bare)
+
+    # No command evidence → empty disclosure (never crashes).
+    assert sf._smoke_interpreter_disclosure(SimpleNamespace(evidence={})) == ""
+
+
 def test_localize_interpreter_substitutes_bare_python() -> None:
     """Cluster-shaped ``python3 -m ...`` must run under THIS interpreter
     locally (run #11: PATH's python3 was msys64's, no hpc_agent, every smoke

@@ -189,3 +189,107 @@ def test_different_scratch_is_refused(tmp_path: Path, monkeypatch: Any) -> None:
         host_retarget(tmp_path, spec=HostRetargetInput(run_id=_RUN_ID, cluster="otherscratch"))
     assert "scratch" in str(exc.value)
     assert "retarget-run" in str(exc.value)
+
+
+# ── FIX B: automatic login-pool failover (run-14) ─────────────────────────────
+
+_POOL_CLUSTERS_YAML = """\
+carc:
+  scheduler: slurm
+  host: discovery2.usc.edu
+  login_pool: [discovery1.usc.edu]
+  user: me
+  scratch: /scratch/me
+solo:
+  scheduler: slurm
+  host: only.usc.edu
+  user: me
+  scratch: /scratch/me
+"""
+
+
+def _setup_pool(tmp_path: Path, monkeypatch: Any, *, cluster: str = "carc") -> Path:
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    clusters = tmp_path / "clusters.yaml"
+    clusters.write_text(_POOL_CLUSTERS_YAML, encoding="utf-8")
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(clusters))
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=_RUN_ID,
+            profile="exp",
+            cluster=cluster,
+            ssh_target="me@discovery2.usc.edu" if cluster == "carc" else "me@only.usc.edu",
+            remote_path="/scratch/me/exp",
+            job_name="exp",
+            job_ids=["42"],
+            total_tasks=2,
+            submitted_at="2026-07-16T00:00:00+00:00",
+            experiment_dir=str(tmp_path),
+            status="in_flight",
+            backend="slurm",
+            job_env={"HPC_CMD_SHA": "a" * 64},
+        ),
+    )
+    return tmp_path
+
+
+def test_pool_failover_moves_to_healthy_sibling_and_journals(tmp_path: Path, monkeypatch: Any):
+    """A circuit-open/degraded active host with a HEALTHY pool sibling → auto
+    failover: the record's ssh_target moves to the sibling, journaled + disclosed,
+    same cluster/jobs; resolve_ssh_target then returns the sibling."""
+    from hpc_agent.infra.clusters import resolve_ssh_target
+    from hpc_agent.ops.host_retarget import pool_failover
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.journal import load_run
+
+    _setup_pool(tmp_path, monkeypatch)
+
+    new_target = pool_failover(tmp_path, _RUN_ID)
+    assert new_target == "me@discovery1.usc.edu"
+
+    rec = load_run(tmp_path, _RUN_ID)
+    assert rec is not None
+    assert rec.cluster == "carc"  # SAME cluster key — only the login node moved
+    assert rec.ssh_target == "me@discovery1.usc.edu"
+    assert rec.job_ids == ["42"]  # jobs untouched
+    assert resolve_ssh_target(rec) == "me@discovery1.usc.edu"
+
+    decisions = read_decisions(tmp_path, "run", _RUN_ID)
+    assert len(decisions) == 1
+    prov = decisions[0]["provenance"]
+    assert prov["kind"] == "pool-failover"
+    assert prov["directed"] is False  # mechanism, no human judgment
+    assert prov["new_ssh_target"] == "me@discovery1.usc.edu"
+
+
+def test_pool_failover_none_when_sibling_also_degraded(tmp_path: Path, monkeypatch: Any):
+    """Pool EXHAUSTED (the only sibling is itself preamble-degraded) → None (no
+    patch, no journal): today's behavior is preserved."""
+    from hpc_agent.infra import ssh_circuit
+    from hpc_agent.ops.host_retarget import pool_failover
+    from hpc_agent.state.decision_journal import read_decisions
+
+    _setup_pool(tmp_path, monkeypatch)
+
+    # Drive discovery1's breaker into a preamble-degraded state (2 re-open cycles
+    # inside one incident window on a conda.sh-timeout detail).
+    detail = "ssh to me@discovery1.usc.edu timed out after 60s: source /apps/conda.sh"
+    for _ in range(6):
+        ssh_circuit.record_connection_failure("me@discovery1.usc.edu", detail=detail)
+    assert ssh_circuit.host_circuit_ok("discovery1.usc.edu") is False
+
+    assert pool_failover(tmp_path, _RUN_ID) is None
+    assert read_decisions(tmp_path, "run", _RUN_ID) == []
+
+
+def test_pool_failover_none_for_single_host_cluster(tmp_path: Path, monkeypatch: Any):
+    """A single-host cluster (no login_pool) → None (nothing to fail over to)."""
+    from hpc_agent.ops.host_retarget import pool_failover
+
+    _setup_pool(tmp_path, monkeypatch, cluster="solo")
+    assert pool_failover(tmp_path, _RUN_ID) is None
