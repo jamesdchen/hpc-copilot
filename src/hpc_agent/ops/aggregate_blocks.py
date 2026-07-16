@@ -43,7 +43,12 @@ from hpc_agent._wire.workflows.aggregate_blocks import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.aggregate.invariants import verify_aggregation_complete
-from hpc_agent.ops.aggregate_flow import aggregate_flow, per_task_fallback_reducible
+from hpc_agent.ops.aggregate_flow import (
+    aggregate_failure_memo_hit,
+    aggregate_flow,
+    per_task_fallback_reducible,
+    record_aggregate_failure,
+)
 from hpc_agent.ops.aggregate_preflight import aggregate_preflight
 from hpc_agent.ops.block_gate import assert_greenlit_target
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
@@ -250,6 +255,39 @@ def _reducibility_issue(experiment_dir: Path, run_id: str) -> dict[str, Any] | N
     }
 
 
+def _deterministic_failure_memo_issue(memo: dict[str, Any]) -> dict[str, Any]:
+    """Turn a cached deterministic-failure memo into a never-auto-masked decision.
+
+    Rank 17: a prior aggregate attempt with a BYTE-IDENTICAL (run definition,
+    remote tree) already failed — re-running would re-pay the >=1800s pull for
+    the same verdict. Surface the cached verdict as a decision point that CITES
+    the prior attempt (evidence-carrying, never a silent skip); the human either
+    accepts it or forces a fresh attempt (``HPC_AGGREGATE_IGNORE_MEMO=1``, or a
+    nudge that re-resolves the run — its ``cmd_sha`` change invalidates the memo).
+    """
+    prior = memo.get("prior_attempt") or {}
+    return {
+        "issue": "deterministic_failure_memo",
+        "detail": {
+            "recorded_at": memo.get("recorded_at"),
+            "error_code": memo.get("error_code"),
+            "error_category": memo.get("error_category"),
+            "error_message": memo.get("error_message"),
+            "prior_attempt": prior,
+            "tree_fingerprint": memo.get("tree_fingerprint"),
+        },
+        "recommendation": (
+            "a prior aggregate attempt with a byte-identical run definition AND "
+            "remote results tree already FAILED (see detail) — re-running would "
+            "re-pay the full results pull for the same verdict. Fix the underlying "
+            "cause (the tasks, the reducer, or the run spec) so the tree/definition "
+            "changes, or force a fresh attempt with HPC_AGGREGATE_IGNORE_MEMO=1 if "
+            "you believe the failure was transient."
+        ),
+        "auto_masked": False,
+    }
+
+
 # ── run helpers ───────────────────────────────────────────────────────────────
 
 
@@ -399,6 +437,17 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
         if reducibility is not None:
             integrity_issues = [*integrity_issues, reducibility]
 
+    # Deterministic-failure memo (rank 17): BEFORE greenlighting a reduce that
+    # would re-pay the >=1800s pull, check whether a byte-identical prior attempt
+    # (same run definition + remote tree fingerprint) already failed. Cheap-first
+    # — a run with no prior failure pays zero SSH; only a present memo spends one
+    # bounded fingerprint round-trip. Surfaced as a never-auto-masked decision
+    # citing the prior attempt; the force flag / a nudge overrides it.
+    if record is not None:
+        memo_hit = aggregate_failure_memo_hit(experiment_dir, run_id)
+        if memo_hit is not None:
+            integrity_issues = [*integrity_issues, _deterministic_failure_memo_issue(memo_hit)]
+
     brief["integrity_checked"] = integrity_checked
     brief["integrity_report"] = integrity_report
     brief["integrity_issues"] = integrity_issues  # never auto-masked (§2)
@@ -453,6 +502,32 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
             "run is clean to reduce; combine, reduce, and extract the results table.",
             run_id=run_id,
         ),
+    )
+
+
+def _deterministic_failure_memo_result(run_id: str, memo: dict[str, Any]) -> AggregateBlockResult:
+    """Return the cached deterministic-failure verdict as a needs-decision brief.
+
+    Rank 17: instead of re-paying the >=1800s pull, hand the human the prior
+    attempt's evidence and let them decide. ``needs_decision`` is True; the brief
+    carries the memo verbatim (never interpreted) plus the override path.
+    """
+    issue = _deterministic_failure_memo_issue(memo)
+    return AggregateBlockResult(
+        block="run",
+        stage_reached="integrity_review",
+        needs_decision=True,
+        reason=(
+            "a byte-identical prior aggregate attempt already FAILED — returning "
+            "the cached verdict instead of re-paying the full results pull. Fix "
+            "the cause or force a fresh attempt (HPC_AGGREGATE_IGNORE_MEMO=1)."
+        ),
+        run_id=run_id,
+        brief={
+            "run_id": run_id,
+            "deterministic_failure_memo": memo,
+            "integrity_issues": [issue],
+        },
     )
 
 
@@ -623,6 +698,15 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
     # so a scope locked in the window between this parent check and the child's reduce
     # is still caught. Fail-safe: a scope-less run passes silently.
     assert_scopes_unlocked(experiment_dir, spec.aggregate.run_id)
+    # Deterministic-failure memo (rank 17): BEFORE detaching a worker that would
+    # re-pay the >=1800s pull, check whether a byte-identical prior attempt (same
+    # run definition + remote tree) already failed. Cheap-first (a run with no
+    # prior failure pays zero SSH) and fires in the PARENT so the cached verdict
+    # returns instantly, never inside a detached child whose brief is invisible.
+    # The force flag / a nudge overrides it.
+    memo_hit = aggregate_failure_memo_hit(experiment_dir, spec.aggregate.run_id)
+    if memo_hit is not None:
+        return _deterministic_failure_memo_result(spec.aggregate.run_id, memo_hit)
     # Detach-by-contract (design §3): the gates above fired SYNCHRONOUSLY (gate →
     # detach — a gate failure surfaces here, loudly, never inside a detached child).
     if spec.detach:
@@ -646,13 +730,31 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
             run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
         )
 
-    agg = aggregate_flow(experiment_dir, spec=spec.aggregate)
+    # Deterministic-failure memo recording (rank 17): a reduce that fails at the
+    # pull/refuse surface (RemoteCommandFailed) is memoized keyed on the (run
+    # definition, remote tree) so an identical re-attempt returns instantly next
+    # time (the memo gate above serves it). Runs on THIS synchronous body — which
+    # is exactly what the detached child executes — so a detached failure is
+    # recorded too. Best-effort: recording never masks the real error, which is
+    # always re-raised.
+    try:
+        agg = aggregate_flow(experiment_dir, spec=spec.aggregate)
+    except errors.RemoteCommandFailed as exc:
+        record_aggregate_failure(experiment_dir, spec.aggregate.run_id, exc)
+        raise
 
     brief: dict[str, Any] = {
         "run_id": agg.run_id,
         "results_table": _results_table(agg.aggregated_metrics),
         "combined_waves": agg.combined_waves,
         "failed_waves": agg.failed_waves,
+        # Rank 9 (#254) disclosure: which reduce engine produced the numbers —
+        # ``cluster_final`` (the default: cross-wave reduce ran on the cluster,
+        # one KB pull), ``local_reduce`` / ``per_task_fallback`` (the local
+        # pull-and-reduce, i.e. the kill-switch or the cluster-final fallback),
+        # ``cluster_reduce`` / ``pure_api``. Surfaced so the human sees the
+        # transfer shape the harvest paid, and can spot a silent downgrade.
+        "reduce_path": agg.reduce_path,
         # Code-extracted error sweep — the deterministic failure digest the human
         # sizes their interpretation against (never the LLM's read of raw logs).
         "error_sweep": {

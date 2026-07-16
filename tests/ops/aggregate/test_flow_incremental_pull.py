@@ -41,6 +41,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def _force_local_reduce(monkeypatch):
+    """Pin these tests to the LOCAL ``_combiner/`` pull path they assert on.
+
+    Rank 9 (#254) made cluster-final reduce the DEFAULT for a wave_map run, which
+    would bypass the local ``_combiner/`` pull entirely; this module tests that
+    pull's include shape and mocks only ``rsync_pull``, so the kill switch keeps
+    it on the local path.
+    """
+    monkeypatch.setenv("HPC_CLUSTER_FINAL_REDUCE", "0")
+
+
 @pytest.fixture
 def experiment(tmp_path: Path) -> Path:
     d = tmp_path / "exp"

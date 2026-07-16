@@ -45,6 +45,7 @@ the same run_id is safe and cheap.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -65,10 +66,18 @@ from hpc_agent.execution.mapreduce.reduce.metrics import (
 )
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import resolve_ssh_target
-from hpc_agent.infra.io import atomic_write_json
+from hpc_agent.infra.io import append_jsonl_line, atomic_write_json
+from hpc_agent.infra.remote import ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.infra.transport import rsync_pull
+
+try:  # Rank 2 (pull-engine parity): O2 owns the seam; None until it merges.
+    from hpc_agent.infra.transport import (  # type: ignore[attr-defined,unused-ignore]
+        tar_ssh_pull as _tar_ssh_pull,
+    )
+except ImportError:  # pragma: no cover — exercised by the O2-merge integration
+    _tar_ssh_pull = None  # type: ignore[assignment]
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
@@ -80,7 +89,14 @@ from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_cmd_sha, read_run_sidecar, resolved_summary_artifact
 
-__all__ = ["aggregate_flow", "AggregateFlowResult", "per_task_fallback_reducible"]
+__all__ = [
+    "AggregateFlowResult",
+    "aggregate_failure_memo_hit",
+    "aggregate_flow",
+    "aggregate_memo_ignored",
+    "per_task_fallback_reducible",
+    "record_aggregate_failure",
+]
 
 #: Local pull-mirror destination names the aggregate flow MINTS under its ``out``
 #: dir when the cluster has no ``_combiner/`` and it falls back to pulling raw
@@ -99,6 +115,67 @@ LOCAL_PULL_MIRROR_DIRNAMES: tuple[str, ...] = (
     PER_TASK_RESULTS_DIRNAME,
     PER_TASK_TRACES_DIRNAME,
 )
+
+
+@dataclass(frozen=True)
+class _PullOutcome:
+    """The (returncode, stderr) shape every aggregate pull call site consumes.
+
+    A normalized façade so a call site's ``if pull.returncode != 0: … pull.stderr``
+    handling is identical whether the pull ran through the legacy ``rsync_pull``
+    (which already returns a ``CompletedProcess`` with these attrs) or O2's
+    ``tar_ssh_pull`` (which returns a ``PullResult``).
+    """
+
+    returncode: int
+    stderr: str
+
+
+def _pull(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    remote_subdir: str,
+    local_dir: str,
+    include: list[str] | None = None,
+) -> Any:
+    """Route an aggregate pull through O2's ``tar_ssh_pull`` seam when present.
+
+    Rank 2 (pull-engine parity): the pull side gets the push side's server-side
+    filtered ``find | tar c`` engine — one round trip that honours the include
+    filter (the legacy ``_scp_pull`` on the Windows control plane transfers the
+    WHOLE subtree because scp cannot include-filter). Until O2 merges the seam,
+    ``_tar_ssh_pull is None`` and this is byte-for-byte the legacy ``rsync_pull``
+    call — the aggregate flow is unchanged. ``HPC_AGGREGATE_TAR_PULL=0`` forces
+    the legacy path as a safety opt-out once the seam exists.
+
+    Returns whatever ``rsync_pull`` returns (a ``CompletedProcess``) on the legacy
+    path, or a :class:`_PullOutcome` normalized from ``tar_ssh_pull``'s
+    ``PullResult`` — both carry ``.returncode`` + ``.stderr`` so every call site is
+    untouched. ``rsync_pull`` is looked up on the module at call time, so existing
+    tests that monkeypatch it keep working on the legacy path.
+    """
+    if _tar_ssh_pull is None or os.environ.get("HPC_AGGREGATE_TAR_PULL") == "0":
+        return rsync_pull(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            remote_subdir=remote_subdir,
+            local_dir=local_dir,
+            include=include,
+        )
+    # tar_ssh_pull takes ONE joined remote path + a local_path; the include list
+    # becomes its server-side ``find`` globs (honoured, unlike scp).
+    remote_full = f"{remote_path.rstrip('/')}/{remote_subdir.strip('/')}".rstrip("/")
+    result = _tar_ssh_pull(
+        ssh_target=ssh_target,
+        remote_path=remote_full,
+        local_path=str(local_dir),
+        include_globs=include,
+    )
+    return _PullOutcome(
+        returncode=0 if result.ok else 1,
+        stderr=(result.stderr_tail or ""),
+    )
 
 
 def per_task_fallback_reducible(summary_name: str) -> bool:
@@ -133,6 +210,15 @@ class AggregateFlowResult:
     nonempty_failing_task_ids: list[int] | None = None
     columns_checked: bool = False
     column_violations: list[dict[str, Any]] | None = None
+    #: Which reduce engine produced ``aggregated_metrics`` (rank 9 disclosure).
+    #: ``"cluster_final"`` = the #254 cross-wave reduce ran ON THE CLUSTER and only
+    #: a single KB ``metrics_aggregate.json`` was pulled (the default when the
+    #: combiner is deployed and its activation resolves); ``"local_combiner"`` =
+    #: the wave partials were pulled and reduced locally (the fallback, or the
+    #: ``HPC_CLUSTER_FINAL_REDUCE=0`` opt-out); ``"cluster_reduce"`` / ``"pure_api"``
+    #: for those short-circuit branches. Surfaced verbatim in the aggregate brief
+    #: so the human sees which transfer shape the harvest paid.
+    reduce_path: str | None = None
     #: Per-scope PRIOR look counts recorded by this reduction —
     #: ``{tag: {"prior_looks": int, "distinct_lineages": int}}`` — or ``None``
     #: for a scope-less run (existing consumers untouched). Two plain integers
@@ -411,7 +497,7 @@ def _per_task_metrics_reduce(
         )
     results_local = out / PER_TASK_RESULTS_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
-    pull = rsync_pull(
+    pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=scoped_subdir,
@@ -575,7 +661,7 @@ def _ingest_task_traces(
     traces_local = out / PER_TASK_TRACES_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     try:
-        pull = rsync_pull(
+        pull = _pull(
             ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=scoped_subdir,
@@ -701,7 +787,7 @@ def _combiner_only_reduce(
     custom reducer; silently meaning would mask their intent).
     """
     include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
-    pull = rsync_pull(
+    pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir="_combiner",
@@ -933,7 +1019,7 @@ def _cluster_final_reduce(
     # the cluster-final arm of the same L2 gap. ``remote_subdir`` still names the
     # cluster-side ``_aggregated/<run_id>`` source dir; only the LOCAL sink flattens.
     agg_local = out
-    pull = rsync_pull(
+    pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=f"_aggregated/{run_id}",
@@ -1049,6 +1135,194 @@ def _record_scope_looks(
             reducer_block=reducer_block,
         )
     return out or None
+
+
+# ── deterministic-failure memo (latency audit rank 17) ────────────────────────
+#
+# An aggregate re-run whose (run definition, remote tree) is byte-identical to a
+# prior FAILED attempt returns the cached verdict as a needs-decision brief
+# INSTANTLY instead of re-paying the >=1800s pull. Run-12 paid two byte-identical
+# aggregate failures 89 and 61 min apart — the memo turns the second (and every
+# later) identical attempt into a one-round-trip fingerprint check.
+#
+# Design contract:
+#   * journal/state-backed — appended to ``.hpc/aggregate_memo/<run_id>.jsonl``
+#     via the one whole-line-atomic append seam.
+#   * evidence-carrying, never a silent skip — the cached verdict CITES the prior
+#     attempt's record (status, waves, the typed error) so the human sees WHY.
+#   * overridable — ``HPC_AGGREGATE_IGNORE_MEMO=1`` forces a re-run (the force
+#     flag), and a nudge that re-resolves the run rewrites its ``cmd_sha`` (part
+#     of the key) so the memo naturally misses.
+#   * conservative — the key binds a SUCCESSFULLY-computed remote tree
+#     fingerprint. If the tree can't be fingerprinted (network down), the memo is
+#     INERT: a failure with no provable tree is never recorded and never matched,
+#     so a transient outage can never block a later attempt.
+AGGREGATE_MEMO_IGNORE_ENV = "HPC_AGGREGATE_IGNORE_MEMO"
+#: Bound so a fingerprint probe can never itself become the latency it removes —
+#: the remote ``find`` is metadata-only (no file reads), seconds even at 2700
+#: tasks, vs the >=1800s pull it guards.
+_MEMO_FINGERPRINT_TIMEOUT_SEC = 60.0
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def aggregate_memo_ignored() -> bool:
+    """True when the human forced past the memo (``HPC_AGGREGATE_IGNORE_MEMO=1``)."""
+    return os.environ.get(AGGREGATE_MEMO_IGNORE_ENV) == "1"
+
+
+def _aggregate_memo_path(experiment_dir: Path, run_id: str) -> Path:
+    return experiment_dir / ".hpc" / "aggregate_memo" / f"{run_id}.jsonl"
+
+
+def _remote_tree_fingerprint(*, ssh_target: str, remote_path: str, subdir: str) -> str | None:
+    """One-round-trip content-independent fingerprint of the remote results subtree.
+
+    Lists every file's ``path|size|mtime`` under *subdir*, sorts + sha256s the
+    listing ON THE CLUSTER (bounded to a single 64-hex line regardless of tree
+    size — metadata only, no file reads). Returns the hex digest, or ``None`` on
+    ANY failure (unreachable host, missing GNU find/sha256sum, non-hex output) —
+    a ``None`` makes the whole memo inert, which is the safe direction: we only
+    ever cache/serve a verdict when the tree is PROVABLY unchanged.
+    """
+    sub = subdir.strip("/") or "."
+    # Metadata-only listing → deterministic ordering → single-line digest. All
+    # three tools are POSIX/GNU standard on a Linux login node; a BSD find (no
+    # -printf) simply errors and the memo goes inert.
+    cmd = (
+        f"cd {remote_path.rstrip('/')!r} 2>/dev/null && "
+        f"find {sub!r} -type f -printf '%p|%s|%T@\\n' 2>/dev/null | "
+        f"LC_ALL=C sort | sha256sum | cut -d' ' -f1"
+    )
+    try:
+        proc = ssh_run(
+            cmd,
+            ssh_target=ssh_target,
+            timeout=_MEMO_FINGERPRINT_TIMEOUT_SEC,
+            op="agg-memo-fp",
+        )
+    except (errors.HpcError, OSError, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    digest = (proc.stdout or "").strip()
+    return digest if _SHA256_RE.match(digest) else None
+
+
+def _aggregate_attempt_key(*, cmd_sha: str, tree_fingerprint: str) -> str:
+    """Stable key over the (resolved input spec, remote tree) pair.
+
+    ``cmd_sha`` is the run's tree fingerprint — the SoT for its resolved
+    definition; a nudge (revise-resolved) rewrites it, so the key naturally
+    invalidates. ``tree_fingerprint`` is the remote results subtree digest. A
+    byte-identical re-attempt reproduces both, hence the same key.
+    """
+    canonical = json.dumps(
+        {"cmd_sha": cmd_sha, "tree_fingerprint": tree_fingerprint},
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _read_aggregate_memo(experiment_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """Parse the run's memo ledger, newest last. Best-effort: a torn/absent
+    ledger yields ``[]`` (the memo optimization never gates on its own IO)."""
+    path = _aggregate_memo_path(experiment_dir, run_id)
+    if not path.is_file():
+        return []
+    entries: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            entries.append(rec)
+    return entries
+
+
+def _memo_tree_fingerprint_for(experiment_dir: Path, run_id: str, record: Any) -> str | None:
+    """Fingerprint the run's OWN scoped results subtree (the pull's real input)."""
+    return _remote_tree_fingerprint(
+        ssh_target=resolve_ssh_target(record),
+        remote_path=record.remote_path,
+        subdir=_run_scoped_results_subdir(experiment_dir, run_id, record, "results"),
+    )
+
+
+def aggregate_failure_memo_hit(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """Return the cached FAILED verdict for a byte-identical prior attempt, else ``None``.
+
+    Cheap-first: a local ledger read gates everything — a run with no prior
+    failure (the common case) pays ZERO SSH. Only when a memo exists do we spend
+    the one bounded fingerprint round-trip. The returned dict is the recorded
+    memo entry (evidence: prior status/waves/error) for the brief to cite.
+    Honours the ``HPC_AGGREGATE_IGNORE_MEMO`` force flag (returns ``None``).
+    """
+    if aggregate_memo_ignored():
+        return None
+    entries = _read_aggregate_memo(experiment_dir, run_id)
+    if not entries:
+        return None
+    record = load_run(experiment_dir, run_id)
+    if record is None or not backend_requires_ssh(record.backend):
+        return None
+    tree_fp = _memo_tree_fingerprint_for(experiment_dir, run_id, record)
+    if tree_fp is None:  # unprovable tree → memo inert
+        return None
+    key = _aggregate_attempt_key(
+        cmd_sha=read_run_cmd_sha(experiment_dir, run_id), tree_fingerprint=tree_fp
+    )
+    # Newest matching FAILED entry wins (scan from the end).
+    for rec in reversed(entries):
+        if rec.get("key") == key and rec.get("verdict") == "failed":
+            return rec
+    return None
+
+
+def record_aggregate_failure(experiment_dir: Path, run_id: str, error: Exception) -> None:
+    """Memoize a deterministic aggregate failure (best-effort, never raises).
+
+    Records only when the remote tree can be fingerprinted — a failure with no
+    provable tree (network down) is left un-memoized so it can never block a
+    later attempt. The entry carries the prior attempt's evidence so a future
+    hit's brief can cite it. Called from the block layer's failure path.
+    """
+    try:
+        record = load_run(experiment_dir, run_id)
+        if record is None or not backend_requires_ssh(record.backend):
+            return
+        tree_fp = _memo_tree_fingerprint_for(experiment_dir, run_id, record)
+        if tree_fp is None:
+            return
+        cmd_sha = read_run_cmd_sha(experiment_dir, run_id)
+        entry = {
+            "key": _aggregate_attempt_key(cmd_sha=cmd_sha, tree_fingerprint=tree_fp),
+            "verdict": "failed",
+            "run_id": run_id,
+            "cmd_sha": cmd_sha,
+            "tree_fingerprint": tree_fp,
+            "recorded_at": utcnow_iso(),
+            "error_code": getattr(error, "error_code", "internal"),
+            "error_category": getattr(error, "category", "internal"),
+            "error_message": str(error)[:500],
+            "prior_attempt": {
+                "status": getattr(record, "status", None),
+                "combined_waves": list(getattr(record, "combined_waves", []) or []),
+                "failed_waves": list(getattr(record, "failed_waves", []) or []),
+                "remote_path": getattr(record, "remote_path", None),
+            },
+        }
+        append_jsonl_line(_aggregate_memo_path(experiment_dir, run_id), entry)
+    except (errors.HpcError, OSError, ValueError):
+        # The memo is an optimization; a bookkeeping failure must never mask or
+        # replace the real aggregate error the caller is about to re-raise.
+        return
 
 
 def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
@@ -1447,6 +1721,7 @@ def _aggregate_flow_impl(
             aggregated_metrics=aggregated,
             summaries_dir_local=None,
             escalation_reason=None,
+            reduce_path="pure_api",
             scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
@@ -1528,6 +1803,7 @@ def _aggregate_flow_impl(
             # under ``combiner_dir_local`` already.
             summaries_dir_local=None,
             escalation_reason=None,
+            reduce_path="cluster_reduce",
             scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
@@ -1562,19 +1838,61 @@ def _aggregate_flow_impl(
             if record is None:  # pragma: no cover — defensive
                 raise errors.JournalCorrupt(f"record vanished for {run_id!r}")
 
-    # Obtain the aggregated metrics + the incomplete-wave set. By default this
-    # pulls the cluster ``_combiner/`` partials and reduces them locally; with
-    # ``HPC_CLUSTER_FINAL_REDUCE=1`` (#254) the cross-wave reduce runs ON THE
-    # CLUSTER and only the single KB ``metrics_aggregate.json`` is pulled —
-    # one RTT, not hundreds of wave_*.json transfers. Both paths yield the same
-    # ``(aggregated_metrics, incomplete_waves)``, so the rest of the flow is
-    # identical; the local path stays the default (opt-in, debug-reachable).
+    # Obtain the aggregated metrics + the incomplete-wave set. Rank 9 (#254): the
+    # cross-wave reduce now runs ON THE CLUSTER by DEFAULT — one RTT + a single KB
+    # ``metrics_aggregate.json`` pull instead of the hundreds of ``wave_*.json``
+    # transfers (re-paid on every re-aggregate) the local pull-and-reduce path
+    # costs. The standing ruling shape: eliminate the transfer rather than delta
+    # it. The env var is now the OPT-OUT debug knob:
+    #
+    #   * ``HPC_CLUSTER_FINAL_REDUCE=0`` — force the local pull-and-reduce (the
+    #     kill switch; e.g. to debug the combiner or on a login node whose
+    #     python3 cannot run the stdlib combiner).
+    #   * unset (default) — run cluster-final WHEN THE COMBINER IS DEPLOYED (the
+    #     run carries a wave_map → the combiner ``--final`` has partials to merge);
+    #     on ANY deterministic failure (too-old login python, activation
+    #     unresolved) fall back to the local reduce automatically — the fallback
+    #     chain the local path already is. A no-combiner ``@register_run`` sweep
+    #     (empty wave_map) has NO wave partials to reduce cluster-side, so it skips
+    #     straight to the local per-task fallback — no wasted cluster round-trip.
+    #   * ``HPC_CLUSTER_FINAL_REDUCE=1`` — legacy strict opt-in: run cluster-final
+    #     UNCONDITIONALLY with NO local fallback (a failure raises), for callers
+    #     that want to prove the cluster path end-to-end.
+    #
+    # Both paths yield the same ``(aggregated_metrics, incomplete_waves)`` so the
+    # rest of the flow is identical; ``reduce_path`` discloses which one ran.
     combiner_local = out / "_combiner"
-    if os.environ.get("HPC_CLUSTER_FINAL_REDUCE") == "1":
-        aggregated, incomplete_waves = _cluster_final_reduce(
-            experiment_dir, run_id, record=record, out=out
-        )
-    else:
+    kill_switch = os.environ.get("HPC_CLUSTER_FINAL_REDUCE")
+    reduce_path = "local_combiner"
+    aggregated = {}
+    incomplete_waves: list[int] = []
+    used_cluster_final = False
+    # "combiner deployed" = the run has waves (a wave_map): its partials are what
+    # the cluster ``--final`` merges. The strict opt-in ("1") overrides the gate.
+    attempt_cluster_final = kill_switch == "1" or (kill_switch != "0" and bool(wave_map_keys))
+    if attempt_cluster_final:
+        try:
+            aggregated, incomplete_waves = _cluster_final_reduce(
+                experiment_dir, run_id, record=record, out=out
+            )
+            reduce_path = "cluster_final"
+            used_cluster_final = True
+        except errors.RemoteCommandFailed as exc:
+            if kill_switch == "1":
+                # Strict opt-in: the caller asked to prove the cluster path — do
+                # not silently downgrade; re-raise the deterministic failure.
+                raise
+            # Default: disclose the downgrade and fall through to the local
+            # reduce. The cluster combiner isn't deployed / its login python3 is
+            # too old / activation didn't resolve — the local pull-and-reduce is
+            # the fallback that still produces the aggregate.
+            print(
+                f"[aggregate-flow] cluster-final reduce unavailable for run_id "
+                f"{run_id!r} — falling back to the local pull-and-reduce: "
+                f"{str(exc)[:200]}"
+            )
+
+    if not used_cluster_final:
         aggregated, incomplete_waves, reduce_source = _combiner_only_reduce(
             experiment_dir,
             run_id,
@@ -1589,14 +1907,18 @@ def _aggregate_flow_impl(
             # run #10 as a harvest gap. Absent/blank sidecar → metrics.json.
             summary_name=resolved_summary_artifact(sidecar_for_cmd),
         )
-        # Persist a durable local aggregate artifact on the DEFAULT path. The
+        reduce_path = reduce_source
+        # Persist a durable local aggregate artifact on the LOCAL-reduce path. The
         # combiner-only reduce (and its per-task fallback) return
         # ``aggregated_metrics`` inline and otherwise persist only the pulled
         # ``_combiner/wave_*.json`` partials — there is no single durable file a
         # later consumer (verify-reproduction, which diffs two runs) can
         # byte-read. Mirror the cluster-final path's
         # ``_aggregated/<run_id>/metrics_aggregate.json``. Best-effort: a failed
-        # write warns loudly and never aborts the harvest.
+        # write warns loudly and never aborts the harvest. (The cluster-final path
+        # pulls its OWN richer ``metrics_aggregate.json`` to the same canonical
+        # location, so it must NOT be routed through here — see
+        # :func:`_persist_local_aggregate`.)
         _persist_local_aggregate(
             out,
             run_id,
@@ -1650,10 +1972,21 @@ def _aggregate_flow_impl(
     summary_pull_error: str | None = None
     if pull_summaries:
         sl = out / "summaries"
-        sp = rsync_pull(
+        # Finding 19 (run #12), leg C: scope the summaries pull to the run's OWN
+        # results subtree, the SAME call the sibling per-task / trace pulls make
+        # (:413, :576). Pulling the whole shared ``results/`` root drags every
+        # prior run's outputs through the transfer — the scp fallback cannot
+        # include-filter — turning a small summaries pull into the 1800s timeout
+        # finding 19 measured. Pure reuse of the one scoping definition; no new
+        # machinery. Falls back to ``results_subdir`` when the run declares no
+        # template (the helper's own contract), so a template-less run is
+        # byte-identical to the pre-scoping behavior.
+        sp = _pull(
             ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
-            remote_subdir=results_subdir,
+            remote_subdir=_run_scoped_results_subdir(
+                experiment_dir, run_id, record, results_subdir
+            ),
             local_dir=str(sl),
             include=[summary_glob] if summary_glob else None,
         )
@@ -1764,5 +2097,6 @@ def _aggregate_flow_impl(
         nonempty_failing_task_ids=nonempty_failing,
         columns_checked=columns_checked,
         column_violations=column_violations,
+        reduce_path=reduce_path,
         scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
     )

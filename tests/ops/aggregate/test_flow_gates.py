@@ -37,6 +37,19 @@ def experiment(tmp_path: Path) -> Path:
     return d
 
 
+@pytest.fixture(autouse=True)
+def _force_local_reduce(monkeypatch):
+    """Pin these tests to the LOCAL pull-and-reduce path they exercise.
+
+    Rank 9 (#254) made cluster-final reduce the DEFAULT for a wave_map run; this
+    module tests the local ``_combiner/`` gate wiring and mocks only ``rsync_pull``,
+    so the kill switch keeps it on the local path (the cluster-final SSH is not
+    mocked here). Cluster-final has its own coverage in
+    ``test_flow_cluster_final_default.py``.
+    """
+    monkeypatch.setenv("HPC_CLUSTER_FINAL_REDUCE", "0")
+
+
 def _seed_run(experiment: Path, run_id: str = "r1") -> RunRecord:
     record = RunRecord(
         run_id=run_id,
