@@ -43,6 +43,7 @@ from typing import Any
 
 __all__ = [
     "PLUGIN_GROUP",
+    "cli_reshaping_verdict",
     "get_plugin_manifests",
     "load_plugins",
     "plugin_primitive_modules",
@@ -141,6 +142,48 @@ def register_plugin_cli(subparsers: Any) -> None:
         hook = getattr(plugin, "register_cli", None)
         if callable(hook):
             hook(subparsers)
+
+
+def cli_reshaping_verdict() -> tuple[bool, frozenset[str]]:
+    """Return the CLI single-verb fast-path verdict from the installed plugins.
+
+    The fast path (``hpc_agent.cli.dispatch``) imports only the one module a
+    mapped core verb needs, skipping the full registry walk — the sole place a
+    plugin ``register_cli`` hook reshapes a core verb's parser. So the fast path
+    must defer to the walk for any verb a plugin can reshape. This function
+    reduces the loaded plugin set to the two facts the per-verb gate needs:
+
+    * ``conservative_full_walk`` — ``True`` when at least one plugin exposes a
+      callable ``register_cli`` but does NOT declare (via its manifest's
+      ``reshapes_core_verbs``) which core verbs it reshapes. An UNDECLARED
+      reshaper could touch anything, so — exactly as before this field existed —
+      EVERY core verb falls back to the full walk. Legacy plugins (no manifest,
+      or a manifest predating the field) get today's conservative safety.
+    * ``reshaped_verbs`` — the union of every DECLARED reshaper's
+      ``reshapes_core_verbs``. When ``conservative_full_walk`` is ``False``,
+      only these named verbs take the full walk; every other core verb stays
+      fast — the add-only-plugin case (``reshapes_core_verbs=()``) contributes
+      nothing here, so core verbs keep the fast path.
+
+    A plugin with no callable ``register_cli`` cannot reshape any parser and is
+    ignored regardless of its manifest — its new primitives are absent from
+    ``VERB_MODULE_MAP`` and fall through on their own.
+    """
+    from hpc_agent._wire.plugin_manifest import PluginManifest
+
+    conservative = False
+    reshaped: set[str] = set()
+    for plugin in load_plugins():
+        if not callable(getattr(plugin, "register_cli", None)):
+            continue
+        manifest = getattr(plugin, "MANIFEST", None)
+        declared = manifest.reshapes_core_verbs if isinstance(manifest, PluginManifest) else None
+        if declared is None:
+            # Undeclared reshaper: cannot narrow → keep the conservative gate.
+            conservative = True
+            continue
+        reshaped.update(declared)
+    return conservative, frozenset(reshaped)
 
 
 def run_plugin_setup_actions(context: dict[str, Any]) -> dict[str, Any]:

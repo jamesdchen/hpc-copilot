@@ -119,30 +119,42 @@ def _strip_verb_group(argv: list[str]) -> list[str]:
     raise SystemExit(2)
 
 
-def _fast_dispatch_enabled() -> bool:
-    """Whether the single-verb fast path may run (opt-out + CLI-shaping gate).
+def _fast_dispatch_enabled(verb: str | None = None) -> bool:
+    """Whether the single-verb fast path may serve *verb* (opt-out + plugin gate).
 
     Disabled by ``HPC_AGENT_NO_FAST_CLI=1`` (a field kill switch for the
-    central path). Otherwise the fast path serves any verb present in
-    ``VERB_MODULE_MAP`` UNLESS an installed plugin can reshape a core verb's
-    CLI — in which case every verb must take the full :func:`build_parser`
-    walk that honours the reshaping.
+    central path). Otherwise the fast path serves *verb* UNLESS an installed
+    plugin can reshape THIS verb's CLI — in which case it must take the full
+    :func:`build_parser` walk that honours the reshaping. ``verb`` is the leaf
+    verb being dispatched (``argv[0]`` on the fast path); ``None`` asks the
+    coarse question "is the fast path available for *some* verb" (used by tests
+    and the kill-switch/no-plugin baselines).
 
-    Guard-can-fire analysis — WHY the earlier wholesale "any plugin installed →
-    full path" disable was safe to narrow. The plugin contract
+    Per-verb granularity (latency rank 13). The plugin contract
     (``_kernel/registry/plugins.py``) has exactly ONE hook handed the argparse
-    subparsers, ``register_cli`` (see
-    ``plugins.register_plugin_cli`` — the sole seam that can override or extend
-    a core verb's parser). A plugin that implements only the
-    primitive-registration hook (``primitive_modules``) contributes NEW verbs;
-    those are absent from ``VERB_MODULE_MAP``, so they miss the fast path and
-    fall through to the full walk on their own — such a plugin cannot alter a
-    core verb the fast path already serves. The remaining hooks
+    subparsers, ``register_cli`` (``plugins.register_plugin_cli`` — the sole
+    seam that can override or extend a core verb's parser). A plugin that
+    implements only the primitive-registration hook (``primitive_modules``)
+    contributes NEW verbs absent from ``VERB_MODULE_MAP``; they miss the fast
+    path and fall through on their own. The remaining hooks
     (``slash_command_assets`` / ``schema_assets`` / ``worker_prompt_assets`` /
-    ``run_setup_actions`` / ``MANIFEST``) never touch the parser. So the guard
-    that mattered — "a plugin may reshape a core verb's CLI" — fires ONLY for a
-    ``register_cli``-implementing plugin, and the fast path stays byte-identical
-    to the full path for core verbs as long as no such plugin is installed.
+    ``run_setup_actions``) never touch the parser. So the only guard that can
+    fire is "a ``register_cli`` plugin reshapes a core verb", and
+    :func:`hpc_agent._kernel.registry.plugins.cli_reshaping_verdict` reduces the
+    loaded set to exactly that:
+
+    * ``conservative`` — an UNDECLARED ``register_cli`` plugin (no manifest
+      ``reshapes_core_verbs``): it could touch anything, so EVERY verb takes the
+      full walk. This is the pre-manifest behaviour, preserved for back-compat.
+    * ``reshaped`` — the verbs DECLARED-reshaped by manifest-carrying plugins;
+      only those fall back. An add-only plugin declaring ``reshapes_core_verbs=()``
+      (e.g. ``hpc-agent-notebook-render``, which only ADDS a ``render``
+      subcommand) contributes nothing here, so core verbs stay fast — the win.
+
+    The verdict is read through
+    :func:`hpc_agent.cli._fast_path_cache.cached_cli_reshaping_verdict`, which
+    caches it across subprocesses keyed on the installed-distribution set so the
+    ``entry_points()`` scan is not re-paid every invocation.
 
     ``HPC_AGENT_DISABLE_PLUGINS=1`` short-circuits to allow — with plugins
     disabled none can reshape anything (``load_plugins`` honours the same var
@@ -156,14 +168,15 @@ def _fast_dispatch_enabled() -> bool:
     if os.environ.get("HPC_AGENT_DISABLE_PLUGINS") == "1":
         return True
     try:
-        from hpc_agent._kernel.registry.plugins import load_plugins
+        from hpc_agent.cli._fast_path_cache import cached_cli_reshaping_verdict
 
-        # Mirror register_plugin_cli's hook selection exactly: a plugin can
-        # reshape the CLI iff it exposes a callable ``register_cli``.
-        reshapes_cli = any(
-            callable(getattr(plugin, "register_cli", None)) for plugin in load_plugins()
-        )
-        return not reshapes_cli
+        conservative, reshaped = cached_cli_reshaping_verdict()
+        if conservative:
+            return False
+        # A specific verb only falls back when a plugin declares it reshaped;
+        # the coarse (verb is None) question answers "is the path available at
+        # all" — True whenever no plugin forces the wholesale disable.
+        return verb not in reshaped
     except Exception:  # noqa: BLE001 — a metadata hiccup must not break the CLI
         return False
 
@@ -182,7 +195,7 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     """
     if not argv or argv[0].startswith("-"):
         return None
-    if not _fast_dispatch_enabled():
+    if not _fast_dispatch_enabled(argv[0]):
         return None
     from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
 

@@ -77,6 +77,18 @@ def main() -> int:
                 "the plugin object exposes a callable register_cli "
                 "attribute that the host loader will invoke."
             )
+        # A plugin cannot reshape a core verb without the register_cli hook
+        # (the sole seam handed the argparse subparsers). A non-empty
+        # ``reshapes_core_verbs`` therefore implies ``cli_register=True`` — the
+        # fast-path gate (rank 13) trusts this declaration to keep core verbs
+        # fast, so an inconsistent pair must fail the lint.
+        if manifest.reshapes_core_verbs and not manifest.cli_register:
+            violations.append(
+                f"plugin {name!r}: manifest declares "
+                f"reshapes_core_verbs={tuple(manifest.reshapes_core_verbs)!r} "
+                "but cli_register=False — a plugin cannot reshape a core verb "
+                "without a register_cli hook."
+            )
 
     overlay_roots = plugin_worker_prompt_roots()
     advertised_overlays: set[str] = set()

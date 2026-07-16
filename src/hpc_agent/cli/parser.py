@@ -226,8 +226,15 @@ def build_single_verb_parser(primitive_name: str) -> argparse.ArgumentParser | N
 
     Returns ``None`` (caller falls back to the full path) when the primitive is
     absent, carries no :class:`CliShape`, or is verb-grouped — the fast path
-    only ever maps ungrouped, handler-less verbs, so this is a belt-and-braces
-    guard against a stale map, not an expected branch.
+    maps ungrouped verbs (handler-less, plus handler primitives that opt in via
+    ``CliShape.fast_path_safe``), so this is a belt-and-braces guard against a
+    stale map, not an expected branch.
+
+    A ``fast_path_safe`` handler primitive (e.g. ``install-commands``) IS built
+    here: ``_bind_dispatch`` wires the generic dispatcher, which routes a handler
+    primitive to ``shape.handler`` just as the full walk would. A handler that is
+    NOT marked safe (``capabilities`` / ``describe`` read the whole registry) is
+    still rejected — the fast path leaves the registry unpopulated.
     """
     from hpc_agent._kernel.registry.primitive import get_meta
 
@@ -236,7 +243,9 @@ def build_single_verb_parser(primitive_name: str) -> argparse.ArgumentParser | N
     except (KeyError, RuntimeError):
         return None
     shape = meta.cli
-    if not isinstance(shape, CliShape) or shape.group is not None or shape.handler is not None:
+    if not isinstance(shape, CliShape) or shape.group is not None:
+        return None
+    if shape.handler is not None and not shape.fast_path_safe:
         return None
 
     parser = _HpcArgumentParser(prog="hpc-agent")

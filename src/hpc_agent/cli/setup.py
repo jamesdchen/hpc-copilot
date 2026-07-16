@@ -65,6 +65,12 @@ def _emit_install_commands(args: argparse.Namespace) -> int:
             ),
         ),
         handler=_install_commands_handler,
+        # Fast-path safe (latency rank 13): the handler copies bundled assets
+        # into ~/.claude — it never introspects the registry, so serving it on
+        # the single-verb fast path is byte-identical, only faster. This verb
+        # rides EVERY submit-preflight, so the ~9 s full-walk tax it paid was
+        # per-submit dead weight.
+        fast_path_safe=True,
     ),
     agent_facing=True,
 )
