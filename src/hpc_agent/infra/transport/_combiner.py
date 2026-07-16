@@ -14,6 +14,7 @@ import subprocess
 
 from hpc_agent.infra.remote import ssh_run
 
+from ._disclose import run_with_stage_heartbeat
 from ._shared import _DEFAULT
 
 
@@ -58,9 +59,13 @@ def run_combiner(
         f"HPC_WAVE={wave} HPC_RUN_ID={run_id_q} "
         f"python3 .hpc/_hpc_combiner.py --wave {wave} --run-id {run_id_q}{force_flag}"
     )
-    if timeout is _DEFAULT:
-        return ssh_run(cmd, ssh_target=ssh_target)
-    return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
+
+    def _do() -> subprocess.CompletedProcess[str]:
+        if timeout is _DEFAULT:
+            return ssh_run(cmd, ssh_target=ssh_target)
+        return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
+
+    return run_with_stage_heartbeat(f"combine: wave {wave}", ssh_target, _do)
 
 
 def run_combiner_checked(
@@ -132,6 +137,10 @@ def run_final_reduce(
         f"HPC_RUN_ID={run_id_q} "
         f"python3 .hpc/_hpc_combiner.py --final --run-id {run_id_q}{force_flag}"
     )
-    if timeout is _DEFAULT:
-        return ssh_run(cmd, ssh_target=ssh_target)
-    return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
+
+    def _do() -> subprocess.CompletedProcess[str]:
+        if timeout is _DEFAULT:
+            return ssh_run(cmd, ssh_target=ssh_target)
+        return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
+
+    return run_with_stage_heartbeat("final reduce", ssh_target, _do)

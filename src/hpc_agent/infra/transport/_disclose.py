@@ -13,13 +13,16 @@ import contextlib
 import fnmatch
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any, Final
+from typing import IO, Any, Final, TypeVar
 
 from ._excludes import _effective_excludes, _path_excluded
+
+_T = TypeVar("_T")
 
 #: Payload size above which the pre-push disclosure escalates to a WARN line —
 #: run-#10 finding F-E: a 3.8G artifact tree rode a deploy silently into a
@@ -414,3 +417,77 @@ def _emit_progress(sent: int, total_bytes: int, start: float, current: float) ->
         f"({pct:.0f}%), elapsed {elapsed:.0f}s",
         file=sys.stderr,
     )
+
+
+#: Wall-clock heartbeat cadence for opaque blocking cluster-side stages — the
+#: per-wave combine and the final cross-wave reduce (run-13 finding 12c). Unlike
+#: the tar|ssh pipe there is NO byte stream to pump: each stage is a single
+#: blocking ``ssh_run`` on the login node, so a 25-minute combine emitted ZERO
+#: non-heartbeat lines and an active stage was indistinguishable from a hang from
+#: the detached-worker log. A periodic wall-clock line around the blocking call
+#: applies the >10s-progress rule to a byteless stage. Override via
+#: ``interval_sec`` in tests.
+_STAGE_HEARTBEAT_INTERVAL_SEC: Final[float] = 20.0
+
+
+def run_with_stage_heartbeat(
+    label: str,
+    host: str,
+    work: Callable[[], _T],
+    *,
+    interval_sec: float = _STAGE_HEARTBEAT_INTERVAL_SEC,
+    now: Callable[[], float] = time.monotonic,
+) -> _T:
+    """Run blocking *work* while emitting a wall-clock heartbeat (finding 12c).
+
+    Wraps an opaque single-shot blocking stage (the cluster-side combine or final
+    reduce — each one ``ssh_run`` with no incremental output) with:
+
+    * a **start** line — ``[transport] <label>: running on <host>`` — the moment
+      the stage begins, naming the wave/stage and host;
+    * a **heartbeat** line — ``[transport] <label>: still running on <host>, Ns
+      elapsed`` — every ~*interval_sec* for as long as *work* blocks, so an active
+      stage is legible from the tail-able worker log; and
+    * an **end** line — ``[transport] <label>: done|FAILED on <host>, Ns elapsed``
+      — carrying the outcome and total wall time.
+
+    The heartbeat runs on a daemon thread so *work* keeps the calling thread's
+    exact blocking/exception semantics: the value *work* returns is returned
+    verbatim, and any exception (including the ``TimeoutError`` a stage timeout
+    raises) propagates after the FAILED end line fires. Emission is best-effort
+    (stderr only, already the surface the ``[hb]`` lines reach) and never alters
+    *work*'s result.
+    """
+    start = now()
+    with contextlib.suppress(Exception):
+        print(f"[transport] {label}: running on {host}", file=sys.stderr, flush=True)
+    done = threading.Event()
+
+    def _beat() -> None:
+        while not done.wait(interval_sec):
+            with contextlib.suppress(Exception):
+                elapsed = now() - start
+                print(
+                    f"[transport] {label}: still running on {host}, {elapsed:.0f}s elapsed",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+    beater = threading.Thread(target=_beat, name="stage-heartbeat", daemon=True)
+    beater.start()
+    ok = False
+    try:
+        result = work()
+        ok = True
+        return result
+    finally:
+        done.set()
+        beater.join(timeout=max(interval_sec, 1.0))
+        with contextlib.suppress(Exception):
+            elapsed = now() - start
+            outcome = "done" if ok else "FAILED"
+            print(
+                f"[transport] {label}: {outcome} on {host}, {elapsed:.0f}s elapsed",
+                file=sys.stderr,
+                flush=True,
+            )

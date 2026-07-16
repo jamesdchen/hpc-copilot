@@ -109,6 +109,7 @@ from ._disclose import (
     _write_all,  # noqa: F401
     deploy_payload_summary,
     disclose_child_failure,  # noqa: F401
+    run_with_stage_heartbeat,  # noqa: F401
 )
 from ._excludes import (
     _GENERATED_SHIPPABLE,  # noqa: F401
