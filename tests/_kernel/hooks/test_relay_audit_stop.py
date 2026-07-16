@@ -971,14 +971,14 @@ def test_completer_bounces_on_poisoned_decision(
     pending proposal."""
     _activate_completer(monkeypatch, on_block=True)
     _seed_run(tmp_path, status="failed")
-    _pending_brief(tmp_path, content="resume at 999 core-hours")
-    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    _pending_brief(tmp_path, content="resume: the run is running")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running; ending.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None
     assert out["decision"] == "block"
     assert "poisoned decision" in out["reason"]
     assert RUN_ID in out["reason"]
-    assert "999" in out["reason"]
+    assert "running" in out["reason"]
 
 
 def test_completer_not_poisoned_when_brief_greenlit(
@@ -988,8 +988,8 @@ def test_completer_not_poisoned_when_brief_greenlit(
     the brief) is greenlit, not pending → the finding appends, never bounces."""
     _activate_completer(monkeypatch)
     _seed_run(tmp_path, status="failed")  # submit-s1 y stands at a 2026 ts
-    _pending_brief(tmp_path, content="resume at 999 core-hours", ts="2000-01-01T00:00:00+00:00")
-    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    _pending_brief(tmp_path, content="resume: the run is running", ts="2000-01-01T00:00:00+00:00")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running; ending.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None
     assert "decision" not in out  # greenlit brief → not poisoned → correction append
@@ -1007,9 +1007,9 @@ def test_completer_composes_block_and_append_when_block_display_confirmed(
     discharged and NOT re-stated in the block reason."""
     _activate_completer(monkeypatch, on_block=True)
     _seed_run(tmp_path, status="failed")
-    _pending_brief(tmp_path, content="resume at 999 core-hours")
+    _pending_brief(tmp_path, content="resume: the run is running")
     _seed_relay_due(tmp_path, state="passed")  # an omission on the notebook journal
-    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running; ending.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None
     assert out["decision"] == "block"
@@ -1031,9 +1031,9 @@ def test_completer_defers_completions_when_block_display_unconfirmed(
     discharged on a possibly-swallowed systemMessage)."""
     _activate_completer(monkeypatch, on_block=False)
     _seed_run(tmp_path, status="failed")
-    _pending_brief(tmp_path, content="resume at 999 core-hours")
+    _pending_brief(tmp_path, content="resume: the run is running")
     _seed_relay_due(tmp_path, state="passed")
-    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running; ending.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
     assert out is not None
     assert out["decision"] == "block"
@@ -1048,8 +1048,8 @@ def test_completer_forced_stop_appends_and_never_bounces(
     and a poisoned finding does NOT bounce (loop-safe: block-once)."""
     _activate_completer(monkeypatch)
     _seed_run(tmp_path, status="failed")
-    _pending_brief(tmp_path, content="resume at 999 core-hours")
-    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    _pending_brief(tmp_path, content="resume: the run is running")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running; ending.")
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript, stop_hook_active=True))
     assert out is not None
     assert "decision" not in out  # forced → poisoned does not re-bounce
@@ -1069,3 +1069,283 @@ def test_completer_dark_default_is_rejector_identical(
     assert out["decision"] == "block"
     assert "systemMessage" not in out
     assert _discharges(tmp_path) == []  # a rejector bounce discharges nothing
+
+
+# ─── finding 8: correction FLOOD rate-bound + cross-pass dedup ────────────────
+#
+# One fleet-boundary relay surfaced 7-10 code-appended corrections, ~9/10 noise
+# — a flood teaches the operator to ignore the gate. The surfaced set is deduped
+# across runs/passes then capped severity-first, with an explicit suppressed tail.
+
+
+def _seed_extra_run(exp: Path, run_id: str, *, status: str = "failed") -> None:
+    """A second journaled run so a relay can mention two runs at once."""
+    from hpc_agent.state.decision_journal import append_decision
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        exp,
+        RunRecord(
+            run_id=run_id,
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="u@h",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=["13610903"],
+            total_tasks=10,
+            submitted_at="2026-07-03T00:00:00+00:00",
+            experiment_dir=str(exp),
+            status=status,
+        ),
+    )
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block="submit-s1",
+        response="y",
+        evidence_digest={"canary": "green"},
+    )
+
+
+def _fake_verify_returning(mismatches: list) -> object:
+    """A ``verify_relay`` stand-in returning a fixed mismatch list for any run."""
+    from hpc_agent._wire.queries.verify_relay import VerifyRelayResult
+
+    def _fake(**_kw: object) -> VerifyRelayResult:
+        return VerifyRelayResult(
+            clean=False,
+            claims_checked=len(mismatches),
+            mismatches=list(mismatches),
+            sources_consulted=["run_record"],
+        )
+
+    return _fake
+
+
+def test_rejector_rate_bounds_correction_flood(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flood of 10 contradictions is capped to 3 surfaced + a suppressed tail
+    naming the remaining 7 — nothing silently hidden."""
+    from hpc_agent._wire.queries.verify_relay import RelayMismatch
+
+    _seed_run(tmp_path, status="failed")
+    flood = [
+        RelayMismatch(
+            claim=str(n),
+            kind="number",
+            detail=f"numeric claim '{n}' has no comparable value in any durable record",
+            nearest_source_value=None,
+        )
+        for n in range(10, 20)
+    ]
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning(flood),
+    )
+    numbers = " ".join(str(n) for n in range(10, 20))
+    transcript = _transcript(tmp_path, f"Run {RUN_ID}: figures {numbers} in the report.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    reason = out["reason"]
+    assert "3 mismatch(es)" in reason  # capped
+    assert "+7 more suppressed" in reason  # remainder named, not hidden
+    assert "rate-bounded" in reason
+
+
+def test_rate_bound_orders_state_before_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Over the cap, decision-state corrections outrank number ones: the 3
+    surfaced are the state claim + the two highest-severity remaining."""
+    from hpc_agent._wire.queries.verify_relay import RelayMismatch
+
+    _seed_run(tmp_path, status="failed")
+    # Four number mismatches from verify_relay; a decision-state (revoked) claim
+    # is added by the decision-state pass → 5 violations, cap 3.
+    numbers = [
+        RelayMismatch(
+            claim=str(n),
+            kind="number",
+            detail=f"numeric claim '{n}' unsupported",
+            nearest_source_value=None,
+        )
+        for n in (10, 11, 12, 13)
+    ]
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning(numbers),
+    )
+    transcript = _transcript(
+        tmp_path, f"Run {RUN_ID}'s greenlight is revoked; figures 10 11 12 13."
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    reason = out["reason"]
+    assert "3 mismatch(es)" in reason
+    assert "+2 more suppressed" in reason
+    # the decision-state claim (highest severity) is one of the 3 surfaced.
+    assert "revoked/superseded" in reason
+
+
+def test_cross_pass_dedup_collapses_repeated_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SAME claim flagged for two mentioned runs (distinct scope ids) is one
+    finding after dedup — the date-fragment-per-run flood class."""
+    from hpc_agent._wire.queries.verify_relay import RelayMismatch
+
+    _seed_run(tmp_path, status="failed")
+    _seed_extra_run(tmp_path, "pi-run-2")
+    same = [
+        RelayMismatch(
+            claim="07",
+            kind="number",
+            detail="numeric claim '07' has no comparable value in any durable record",
+            nearest_source_value=None,
+        )
+    ]
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning(same),
+    )
+    transcript = _transcript(tmp_path, f"Runs {RUN_ID} and pi-run-2: session 07-09 recorded.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    assert "1 mismatch(es)" in out["reason"]  # collapsed from 2 → 1
+    assert "suppressed" not in out["reason"]  # under the cap, no tail
+
+
+def test_completer_dedup_emits_correction_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Completer mode: a duplicate violation across two passes/runs is appended
+    exactly once (dedup runs before the append)."""
+    from hpc_agent._wire.queries.verify_relay import RelayMismatch
+
+    _activate_completer(monkeypatch)
+    _seed_run(tmp_path, status="failed")
+    _seed_extra_run(tmp_path, "pi-run-2")
+    same = [
+        RelayMismatch(
+            claim="07",
+            kind="number",
+            detail="numeric claim '07' unsupported",
+            nearest_source_value=None,
+        )
+    ]
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning(same),
+    )
+    transcript = _transcript(tmp_path, f"Runs {RUN_ID} and pi-run-2: session 07-09.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and "decision" not in out
+    assert out["systemMessage"].count("relay correction") == 1
+
+
+def test_completer_rate_bounds_flood_with_suppressed_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Completer mode: 10 corrections cap to 3 appended + a suppressed-count tail."""
+    from hpc_agent._wire.queries.verify_relay import RelayMismatch
+
+    _activate_completer(monkeypatch)
+    _seed_run(tmp_path, status="failed")
+    flood = [
+        RelayMismatch(
+            claim=str(n),
+            kind="number",
+            detail=f"numeric claim '{n}' unsupported",
+            nearest_source_value=None,
+        )
+        for n in range(10, 20)
+    ]
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning(flood),
+    )
+    numbers = " ".join(str(n) for n in range(10, 20))
+    transcript = _transcript(tmp_path, f"Run {RUN_ID}: figures {numbers}.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and "decision" not in out
+    msg = out["systemMessage"]
+    assert msg.count("relay correction") == 3  # capped
+    assert "7 more correction(s) suppressed" in msg
+
+
+# ─── finding 8e: quoting the gate's own rendered brief line must not fire ─────
+
+
+def test_state_claim_ignores_quoted_brief_decision_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decision-state verb inside a markdown blockquote that VERBATIM-QUOTES
+    the scope's persisted brief is the model quoting the gate's rendered output,
+    not asserting a decision event → the decision-state pass does not fire (8e).
+    verify_relay's own corpus handling of quoted lines is a separate concern
+    (another module) — neutralized here to isolate the guard."""
+    _seed_run(tmp_path, status="failed")  # standing greenlight; a bare assertion WOULD fire
+    quoted_line = f"Run {RUN_ID}'s greenlight was revoked pending re-canary."
+    _pending_brief(tmp_path, content=quoted_line)
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning([]),
+    )
+    transcript = _transcript(
+        tmp_path,
+        f"Relaying the decision brief verbatim:\n> {quoted_line}\nAwaiting your call.",
+    )
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_state_claim_ignores_verb_in_code_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same guard for a fenced code block quoting rendered output (8e)."""
+    _seed_run(tmp_path, status="failed")
+    quoted_line = f"Run {RUN_ID}: greenlight revoked, superseded by fixmask."
+    _pending_brief(tmp_path, content=quoted_line)
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning([]),
+    )
+    transcript = _transcript(
+        tmp_path,
+        f"The brief render read:\n\n```\n{quoted_line}\n```\n\nStanding by.",
+    )
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_state_claim_fires_on_fenced_fabrication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quote MARKUP alone never excuses a decision-state claim: a fenced line
+    that matches NO persisted brief text is a fresh assertion wearing quote
+    clothing — the self-quote laundering class — and still attributes/blocks."""
+    _seed_run(tmp_path, status="failed")  # standing greenlight
+    _pending_brief(tmp_path, content="proceed to s3 after canary evidence review")
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
+        _fake_verify_returning([]),
+    )
+    transcript = _transcript(
+        tmp_path,
+        f"Recapping:\n\n```\nRun {RUN_ID}'s greenlight was revoked overnight.\n```\n\nMoving on.",
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    assert "revoked/superseded" in out["reason"]
+
+
+def test_state_claim_still_fires_on_bare_assertion(tmp_path: Path) -> None:
+    """The guard is quote-scoped: the SAME sentence asserted in ordinary prose
+    (no quote/fence) still contradicts the standing greenlight → block."""
+    _seed_run(tmp_path, status="failed")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID}'s greenlight was revoked pending re-canary.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    assert "revoked/superseded" in out["reason"]

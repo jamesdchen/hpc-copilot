@@ -1101,3 +1101,181 @@ def test_unrelated_run_id_still_flagged_when_superseded_by_present(tmp_path: Pat
     rid = [m for m in out.mismatches if m.kind == "run_id"]
     assert len(rid) == 1
     assert rid[0].claim == "some-other-run7"
+
+
+# ── run-13 finding 8: the correction-flood classes ─────────────────────────────
+# (``_seed_brief`` is defined above, in the bug-sweep #12 section.)
+
+
+# ── (1a) bare month-day date fragments ─────────────────────────────────────────
+
+
+def test_bare_month_day_fragments_not_flagged(tmp_path: Path) -> None:
+    """Finding 8: a session reference '07-09'/'07-11' is a bare month-day date,
+    not two numeric claims ('07', '09'). The whole span is consumed."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Continuing session work from 07-09 and 07-11; the run is set.")
+    assert out.clean is True, out.mismatches
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable", "run_id")] == []
+
+
+def test_real_number_beside_month_day_still_flagged(tmp_path: Path) -> None:
+    """Counter: only the date fragment is consumed — a genuine unsupported number
+    on the same line still fires."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Session 07-09 consumed 999 core-hours.")
+    num = [m for m in out.mismatches if m.kind in ("number", "unverifiable")]
+    assert [m.claim for m in num] == ["999"]
+
+
+# ── (1b) hyphenated count phrases + run-level ──────────────────────────────────
+
+
+def test_hyphenated_count_phrase_not_flagged_as_run_id(tmp_path: Path) -> None:
+    """Finding 8: '300-task' is a count phrase, not a run-id-shaped token. The
+    '300' is a NUMBER audited against the corpus (here supplied by a brief)."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, summary="300 tasks planned for the fleet")
+
+    out = _run(tmp_path, "The 300-task fleet is ready to go.")
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    assert out.clean is True, out.mismatches
+
+
+def test_run_level_not_flagged_as_run_id(tmp_path: Path) -> None:
+    """Finding 8-addendum: 'run-level' is an English compound, not a run-id — the
+    narrowed 'run-' shortcut requires a digit in the suffix."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "This is a run-level summary of the fleet.")
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    assert out.clean is True, out.mismatches
+
+
+def test_id_shaped_token_still_flagged_after_narrowing(tmp_path: Path) -> None:
+    """Counter: the narrowing keeps a genuinely id-shaped token (a letter+digit
+    mixed segment) a run-id claim, and 'run-2' (run- + digit) still fires."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The sweep-9f3a1c2b run is queued; run-2 is separate.")
+    rid = sorted(m.claim for m in out.mismatches if m.kind == "run_id")
+    assert rid == ["run-2", "sweep-9f3a1c2b"]
+
+
+# ── (1c) 'timeout' / verification quoted from a log or the brief ───────────────
+
+
+def test_timeout_quoted_from_log_not_flagged_as_state(tmp_path: Path) -> None:
+    """Finding 8-addendum: 'timeout' quoted from a log line (a '[transport]' tag
+    on the line) is a restatement, not a lifecycle claim about the run."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(
+        tmp_path,
+        "The worker log ended with: `[transport] progress` then a command timeout.",
+    )
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_bare_timeout_state_still_flagged(tmp_path: Path) -> None:
+    """Counter: a bare 'timeout' claim (no log/quote context) contradicting the
+    recorded 'complete' still fires."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "The run hit a timeout.")
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "timeout"
+
+
+def test_canary_adjacent_verification_quote_skipped(tmp_path: Path) -> None:
+    """Finding 8: a 'verified'/'canary green' word ADJACENT to 'canary' quotes the
+    canary's own decision line — the guard now covers the verification families
+    (it fired only for lifecycle families before), so it is not misattributed to
+    the main run's status.
+
+    NOTE the test name deliberately avoids the substring 'verified'/'green': the
+    record's ``experiment_dir`` value (== the pytest tmp path, derived from the
+    test name) is scanned for verification evidence, so a name carrying 'verified'
+    would FALSELY evidence the claim and mask whether the guard actually fires (a
+    latent value-scan precision bug surfaced by this suite)."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "Quoting the brief: the canary was not verified.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_non_canary_verification_claim_still_flagged(tmp_path: Path) -> None:
+    """Counter: a 'verified' claim NOT adjacent to 'canary' and unevidenced still
+    fires — the verification guard is canary-scoped, not a blanket exemption. (Test
+    name avoids 'verified'/'green' for the reason given in the sibling test.)"""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "The run is verified and ready to submit.")
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "verified"
+
+
+# ── (1d) unit-suffixed sizes (du -sh) ──────────────────────────────────────────
+
+
+def test_unit_suffixed_size_not_flagged(tmp_path: Path) -> None:
+    """Finding 8-addendum: a 'du -sh'-style size ('886M') is a rounded human
+    figure, not a citable number — the mantissa + unit are consumed."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "du -sh reports 886M for the results tree.")
+    assert out.clean is True, out.mismatches
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable")] == []
+
+
+def test_bare_size_number_without_unit_still_flagged(tmp_path: Path) -> None:
+    """Counter: a bare number with no size unit is audited as before."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The results tree has 886 files.")
+    num = [m for m in out.mismatches if m.kind in ("number", "unverifiable")]
+    assert [m.claim for m in num] == ["886"]
+
+
+# ── (2) corpus completeness: a brief's rendered cost-line numbers are pooled ────
+
+
+def test_brief_cost_line_numbers_are_pooled(tmp_path: Path) -> None:
+    """Finding 8: a code-drafted brief's own cost line ('300 tasks × 4 cpus × 3h
+    = 3600 core-hours') verifies CLEAN. Its numbers (300, 4, 3, 3600) live only
+    in a STRING field that a hyphen ('core-hours') used to exclude WHOLESALE from
+    the number pool; per-token extraction pools them."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, cost="300 tasks × 4 cpus × 3h = 3600 core-hours")
+
+    out = _run(tmp_path, "Cost estimate: 300 tasks × 4 cpus × 3h = 3600 core-hours.")
+    assert out.clean is True, out.mismatches
+
+
+def test_number_absent_from_brief_string_still_flagged(tmp_path: Path) -> None:
+    """Counter: pooling a brief's string numbers does not lower the bar — a number
+    in NO field still fires."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, cost="300 tasks × 4 cpus × 3h = 3600 core-hours")
+
+    out = _run(tmp_path, "The fleet ran 500 tasks total.")
+    num = [m for m in out.mismatches if m.kind in ("number", "unverifiable")]
+    assert [m.claim for m in num] == ["500"]

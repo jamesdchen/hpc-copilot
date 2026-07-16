@@ -64,6 +64,7 @@ def _gather_violations(
                         claim=m.claim,
                         journal_value=m.nearest_source_value,
                         text=f"[{run_id}] {m.claim!r}: {m.detail}{nearest}",
+                        kind=m.kind,
                     )
                 )
 
@@ -86,6 +87,7 @@ def _gather_violations(
                         claim=m.claim,
                         journal_value=m.nearest_source_value,
                         text=f"[{audit_id}] {m.claim!r}: {m.detail}{nearest}",
+                        kind=m.kind,
                     )
                 )
 

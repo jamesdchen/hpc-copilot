@@ -43,6 +43,12 @@ class _Violation(NamedTuple):
     claim: str
     journal_value: str | None
     text: str
+    #: The mismatch/verb kind ("number" | "state" | "run_id" | "") — carried so
+    #: the emission-side rate-bound (finding 8) can rank corrections by severity
+    #: and the cross-pass dedup can key on it. Defaults empty (paraphrase /
+    #: audit-scope findings carry no per-claim kind); trailing + defaulted so
+    #: every existing keyword construction is unaffected.
+    kind: str = ""
 
 
 def _journal_runs_dir(experiment_dir: Path) -> Path:

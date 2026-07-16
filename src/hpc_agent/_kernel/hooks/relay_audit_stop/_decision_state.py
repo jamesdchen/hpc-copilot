@@ -22,6 +22,81 @@ _DECISION_STATE_NEGATIVE_RE = re.compile(r"\b(?:revoked|superseded)\b", re.IGNOR
 _MAX_STATE_CLAIM_FINDINGS = 5
 
 
+def _quoted_line_indices(lines: list[str]) -> set[int]:
+    """Indices of relay lines inside a blockquote (``> ...``) or code fence.
+
+    Quote MARKUP alone does not excuse a line from decision-state attribution —
+    a fenced line is excluded only when it is a GENUINE quote, i.e. its text
+    verbatim-matches the scope's own persisted brief (finding 8e's live case).
+    Otherwise fencing a fresh assertion would silently bypass the whole
+    decision-event audit — the self-quote laundering class (the run-10
+    "nineteen" evasion's shape). The genuine-quote check is
+    :func:`_is_genuine_quote`; this pass only finds the candidate lines.
+    """
+    quoted: set[int] = set()
+    in_fence = False
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            quoted.add(i)  # the fence marker line itself carries no claim
+            continue
+        if in_fence or stripped.startswith(">"):
+            quoted.add(i)
+    return quoted
+
+
+def _normalize_quote(text: str) -> str:
+    """Whitespace-collapsed, casefolded, markup-stripped form for quote matching."""
+    return " ".join(text.replace("`", " ").lstrip(" >").split()).casefold()
+
+
+def _brief_quote_blob(experiment_dir: Path, run_ids: list[str]) -> str:
+    """Normalized concatenation of every string the scopes' persisted briefs carry.
+
+    The brief store is the gate's own rendered proposal text — the only thing a
+    relay can legitimately QUOTE. Fail-open to empty (no readable briefs → no
+    line is excused, the audit runs as if unquoted — the safe direction).
+    """
+    try:
+        from hpc_agent.state.decision_briefs import read_briefs
+    except Exception:
+        return ""
+    parts: list[str] = []
+
+    def _walk(value: object) -> None:
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for v in value.values():
+                _walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                _walk(v)
+
+    for rid in run_ids:
+        try:
+            for record in read_briefs(experiment_dir, rid):
+                _walk(record)
+        except Exception:
+            continue
+    return _normalize_quote("\n".join(parts))
+
+
+def _is_genuine_quote(line: str, brief_blob: str) -> bool:
+    """True when the quoted *line*'s content really appears in the briefs' text.
+
+    An empty normalized line (bare fence marker, lone ``>``) carries no claim
+    and is trivially genuine; anything else must be a verbatim substring of the
+    scopes' persisted brief text. A fenced FABRICATION therefore attributes
+    normally — accounting by construction, no silent bypass.
+    """
+    norm = _normalize_quote(line)
+    if not norm:
+        return True
+    return bool(brief_blob) and norm in brief_blob
+
+
 def _decision_state_findings(
     experiment_dir: Path, relay_text: str, run_ids: list[str]
 ) -> list[_Violation]:
@@ -59,13 +134,17 @@ def _decision_state_findings(
     from hpc_agent.state.decision_journal import is_latest_committed_greenlight, read_decisions
 
     relay_lines = relay_text.splitlines()
+    quoted = _quoted_line_indices(relay_lines)
+    brief_blob = _brief_quote_blob(Path(experiment_dir), run_ids) if quoted else ""
     findings: list[_Violation] = []
     for scope_kind, scope_id in scopes:
         if len(findings) >= _MAX_STATE_CLAIM_FINDINGS:
             break
         pos_here = False
         neg_here = False
-        for line in relay_lines:
+        for line_no, line in enumerate(relay_lines):
+            if line_no in quoted and _is_genuine_quote(line, brief_blob):
+                continue  # a GENUINE quote of the scope's own brief is not a fresh claim (8e)
             if scope_id not in line:
                 continue  # proximity: the verb must share the scope id's line
             if _DECISION_STATE_POSITIVE_RE.search(line):
@@ -105,6 +184,7 @@ def _decision_state_findings(
                         f"[{scope_id}] decision-state claim (greenlit/journaled) has no "
                         "committed greenlight in the decision journal"
                     ),
+                    kind="state",
                 )
             )
         if (
@@ -128,6 +208,7 @@ def _decision_state_findings(
                         f"[{scope_id}] decision-state claim (revoked/superseded) has no "
                         f"supporting journal record — {detail}"
                     ),
+                    kind="state",
                 )
             )
     return findings

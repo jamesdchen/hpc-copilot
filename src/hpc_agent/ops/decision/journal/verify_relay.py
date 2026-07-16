@@ -42,9 +42,13 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   grammar, not a new exception at every classifier.
 
 * **Run-id / job-id tokens.** A token is "run-id-like" when it equals the run in
-  scope, starts with ``run-``, is timestamp-shaped (``\\d{8}-\\d{6}…``), or
-  carries a hyphen + a digit and is >= 8 chars — but NEVER when it is wholly a
-  numeric literal (the grammar decides). Each is matched against the
+  scope, starts with ``run-`` AND carries a digit after it (``run-2``; a plain
+  compound ``run-level`` is prose, not an id — run-13 finding 8-addendum), is
+  timestamp-shaped (``\\d{8}-\\d{6}…``), or carries a hyphen, is >= 8 chars, and
+  is id-SHAPED — a letter+digit-mixed segment (``d363e2a3``) or a >= 4-digit run,
+  NOT merely a ``<number>-<word>`` count phrase (``300-task`` — run-13 finding
+  8) — but NEVER when it is wholly a numeric literal (the grammar decides). Each
+  is matched against the
   authoritative id set (scope run_id + sidecar/record run_id, job_ids,
   parent_run_ids) by exact match or shared prefix (a short-sha reference passes).
   A run-id-like token matching nothing → ``run_id`` mismatch — EXCEPT the
@@ -231,6 +235,22 @@ def _is_number_literal(s: str) -> bool:
     return bool(_FULL_NUM_RE.fullmatch(s))
 
 
+# A byte/size UNIT suffix directly abutting a numeric literal — ``886M``,
+# ``1.2GiB``, ``9.9G``, ``500k`` — the ``du -sh`` / ``ls -lh`` human-readable
+# shape (run-13 finding 8-addendum). Such a figure is ROUNDED and unit-scaled
+# (``du``'s apparent-size vs a manifest's raw byte count differ by block
+# rounding — the live ``886M`` vs a journaled ``899``), so the bare mantissa can
+# never be reconciled against a source number and always draws a false positive.
+# The numeric pre-pass consumes the mantissa + this suffix and skips-with-
+# accounting. Disclosed tradeoff: this ALSO suppresses SI-count shorthand
+# (``2M rows``), an accepted, bounded loss — such suffixed figures are rounded
+# by construction (rarely the precise citable number the audit protects) and the
+# hook-side rate cap bounds any residual laundering. The ``(?![A-Za-z])`` guard
+# keeps ``886Million`` / ``5Tasks`` from reading as a unit (the letter must be a
+# standalone suffix, not the head of a word).
+_SIZE_SUFFIX_RE = re.compile(r"[KMGTP]i?B?(?![A-Za-z])", re.IGNORECASE)
+
+
 def _normalize_num(raw: str) -> str:
     """Strip grouping commas and a trailing ``%`` — the compare-normal form."""
     return raw.replace(",", "").rstrip("%")
@@ -268,10 +288,22 @@ def _collect_source_numbers(obj: Any, strings: set[str], floats: list[float]) ->
         floats.append(float(obj))
         return
     if isinstance(obj, str):
-        if _is_identifier_like(obj):
-            return
-        for m in _NUM_RE.finditer(obj):
-            _add_num_token(m.group(0), strings, floats)
+        # Extract number tokens PER whitespace-delimited token, skipping only the
+        # tokens that are THEMSELVES identifier-shaped (a run-id / job-id / date
+        # whose embedded digits are not numeric facts). Testing per-token, not
+        # over the whole string, is the run-13 finding 8 corpus fix: a free-text
+        # brief field ("300 tasks × 4 cpus × 3h = 3600 core-hours") was skipped
+        # WHOLESALE because it happens to contain a hyphen ("core-hours") AND a
+        # digit, so `_is_identifier_like` matched the entire string and NONE of
+        # its numbers (300, 4, 3600) reached the pool — a verbatim relay of the
+        # brief's own cost line then drew mismatches. Per-token, "core-hours"
+        # (no digit) is not id-like and "300"/"3600" are pooled, while a genuine
+        # single id token ("run-128") is still skipped intact.
+        for tok in obj.split():
+            if _is_identifier_like(tok):
+                continue
+            for m in _NUM_RE.finditer(tok):
+                _add_num_token(m.group(0), strings, floats)
         return
     if isinstance(obj, dict):
         for v in obj.values():
@@ -456,11 +488,46 @@ _ISO_DATETIME_RE = re.compile(
 # class stops at ``:`` / ``+``): the date, optionally with the hour attached.
 _ISO_DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}(?:T\d{2})?")
 
+# A BARE month-day date fragment — a session reference like ``07-09`` / ``07-11``
+# / ``07-12`` (run-13 findings 8 + 8-addendum). The full-year ISO consumer above
+# never sees it (no ``YYYY-`` prefix), so the numeric pre-pass split it into two
+# stray numeric claims (``07`` and ``09``) that no source number could verify.
+# The shape is a CALENDAR-VALID ``MM-DD`` (month ``01``-``12``, day ``01``-``31``,
+# both zero-padded) so a plain numeric range (``waves 3-4``) is not swept up; the
+# ``(?<![\d.:-])`` / ``(?![\d-])`` guards keep it from firing inside a larger date
+# or id (``2026-07-03``'s ``07-03`` is preceded by ``-``; ``07-03-alpha``'s is
+# followed by ``-``). The whole span is consumed and audited as NEITHER, exactly
+# like the ISO span. Residual (disclosed): a genuine ``Oct 20`` range written
+# ``10-20`` is also skipped — acceptable, a range is not a single numeric claim.
+_BARE_MONTH_DAY_RE = re.compile(r"(?<![\d.:-])(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?![\d-])")
+
+
+def _is_id_shaped(token: str) -> bool:
+    """True when *token* carries an id-STRENGTH signal, not merely hyphen+digit.
+
+    A run/job id has either a segment that MIXES letters and digits (a short sha
+    or suffix — ``d363e2a3``, ``s9``, ``v2``, ``run7``) or a digit run of id
+    length (>= 4 — a year ``2026``, a long counter). A plain ``<number>-<word>``
+    count phrase (``300-task``) or a ``run-<word>`` English compound
+    (``run-level``) carries neither, so it is NOT id-shaped (run-13 finding 8:
+    both flooded the relay as bogus run-id claims). Narrowing on this signal is
+    the vocabulary-carve-out precedent (``_registry_verb_names``) applied to the
+    id-shape heuristic itself.
+    """
+    for seg in re.split(r"[._-]", token):
+        if re.search(r"[A-Za-z]", seg) and re.search(r"\d", seg):
+            return True
+    return bool(re.search(r"\d{4,}", token))
+
 
 def _is_run_id_like(token: str, scope_run_id: str) -> bool:
     if token == scope_run_id:
         return True
-    if token.lower().startswith("run-"):
+    if token.lower().startswith("run-") and bool(re.search(r"\d", token[4:])):
+        # ``run-2`` / ``run-abc12`` — a ``run-`` prefix whose suffix carries a
+        # digit is a run-id. A plain compound (``run-level``, ``run-time`` —
+        # run-13 finding 8-addendum) has no digit after ``run-`` and falls
+        # through to the id-shape test below (which also rejects it).
         return True
     if _TS_PREFIX_RE.match(token):
         return True
@@ -475,7 +542,11 @@ def _is_run_id_like(token: str, scope_run_id: str) -> bool:
         # A faithful ISO date/timestamp quote, not a run-id claim (see
         # ``_ISO_DATETIME_RE``); its span is consumed by the ISO pre-pass.
         return False
-    return "-" in token and bool(re.search(r"\d", token)) and len(token) >= 8
+    # A hyphen/underscore-bearing token of id length AND id shape — narrowed from
+    # the old "any hyphen+digit, len>=8" rule that flagged hyphenated count
+    # phrases (``300-task``) as run-ids (run-13 finding 8). ``_is_id_shaped``
+    # already requires a digit, so the standalone digit check is redundant.
+    return "-" in token and _is_id_shaped(token) and len(token) >= 8
 
 
 def _id_matches(token: str, auth_ids: set[str]) -> bool:
@@ -691,6 +762,42 @@ def _is_canary_adjacent(text: str, start: int) -> bool:
     """
     lo = max(0, start - _CANARY_WINDOW)
     return "canary" in text[lo:start].lower()
+
+
+# A log-format tag ("[transport]", "[monitor]", "[canary]") — the signature of a
+# QUOTED machine log line as opposed to a fresh prose claim.
+_LOG_TAG_RE = re.compile(r"\[[a-z][a-z_]*\]")
+
+
+def _is_log_quote_context(text: str, start: int, end: int) -> bool:
+    """True when the state word at ``[start, end)`` is quoting machine log output.
+
+    A relay that QUOTES a worker/transport log line ("the log's final line reads
+    ``[transport] progress ... command timeout after 60s``") is restating machine
+    output, not asserting the run's lifecycle — flagging the quoted ``timeout``
+    against the recorded status is a false positive (run-13 finding 8-addendum:
+    ``timeout`` flagged while quoting the log). Two precise, same-line signals
+    (kept narrow to avoid suppressing real state claims, which almost never carry
+    either):
+
+    * a log-format bracket tag ("[transport]", "[monitor]") earlier on the line;
+    * the word sits inside a backtick span ("``...``" fenced log text) — an odd
+      number of backticks before it on the line with a closing backtick after.
+
+    Skip-with-accounting, mirroring :func:`_is_canary_adjacent`. Plain single /
+    double quotes are deliberately NOT treated as log context (they carry
+    ordinary prose emphasis — "the run \"failed\" as expected"), only the
+    unambiguous log-tag and backtick signals.
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end == -1:
+        line_end = len(text)
+    rel_start, rel_end = start - line_start, end - line_start
+    line = text[line_start:line_end]
+    if _LOG_TAG_RE.search(line[:rel_start]):
+        return True
+    return line[:rel_start].count("`") % 2 == 1 and "`" in line[rel_end:]
 
 
 # ── source loading ─────────────────────────────────────────────────────────────
@@ -988,6 +1095,14 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         # date-shaped token itself is exempted in _is_run_id_like.
         consumed_spans.append((m.start(), m.end()))
 
+    # ── (0b) bare month-day date fragments ("07-09", "07-11" — session refs) ───
+    for m in _BARE_MONTH_DAY_RE.finditer(relay):
+        # A calendar-valid MM-DD with no year prefix (run-13 findings 8 +
+        # 8-addendum): the ISO consumer misses it, so "07" and "09" would each
+        # read as an unsupported numeric claim. Consume the whole span; audited
+        # as neither id nor number, exactly like the ISO span.
+        consumed_spans.append((m.start(), m.end()))
+
     # ── (1) run-id / job-id tokens (first; their spans block number reads) ─────
     verb_names = _registry_verb_names()
     for m in _IDENT_RE.finditer(relay):
@@ -1038,6 +1153,16 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         if _is_conversational_number(relay, m.start(), m.end(), raw):
             # Chatter (list marker / ``~2 minutes``), not a fact. Not consumed:
             # a bare short int is invisible to the id classifiers anyway.
+            continue
+        size_suffix = _SIZE_SUFFIX_RE.match(relay, m.end())
+        if size_suffix is not None:
+            # A unit-suffixed size ("886M", "1.2GiB" — du -sh / ls -lh output) is
+            # a rounded, unit-scaled human figure, not a precise citable count
+            # (run-13 finding 8-addendum: "886" vs a journaled 899). Consume the
+            # mantissa + suffix and skip-with-accounting; see _SIZE_SUFFIX_RE for
+            # the disclosed SI-count tradeoff.
+            consumed_spans.append((m.start(), size_suffix.end()))
+            claims_checked += 1
             continue
         is_job_candidate = (
             bool(job_ids)
@@ -1200,12 +1325,25 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                     )
                 )
             continue
-        if family in _LIFECYCLE_FAMILIES and _is_canary_adjacent(relay, m.start()):
-            # Canary-adjacent lifecycle word ("canary failed"): a claim about
-            # the CANARY sibling, not the main run — skip-with-accounting rather
-            # than misattribute it to the main run's status (F-Q). Counted, not
+        if _is_canary_adjacent(relay, m.start()):
+            # Canary-adjacent state OR verification word ("canary failed", a
+            # quote of the brief's own "canary green"/"verified" decision line):
+            # a claim about the CANARY sibling, not the main run —
+            # skip-with-accounting rather than misattribute it to the main run's
+            # status (F-Q). Run-13 finding 8 closed the gap where verification
+            # families ("verified"/"canary_green") bypassed this guard (it fired
+            # only for _LIFECYCLE_FAMILIES), so a verbatim quote of the brief's
+            # canary decision flagged against the main status. Counted, not
             # flagged; NOT added to seen_state so a later non-canary use of the
             # same word is still checked.
+            claims_checked += 1
+            continue
+        if _is_log_quote_context(relay, m.start(), m.end()):
+            # A state word QUOTED from machine log output ("the log read
+            # `[transport] ... command timeout`") is a restatement of the log,
+            # not a fresh lifecycle claim (run-13 finding 8-addendum: "timeout"
+            # flagged while quoting the worker log). Same skip-with-accounting
+            # posture as the canary guard.
             claims_checked += 1
             continue
         if phrase in seen_state:

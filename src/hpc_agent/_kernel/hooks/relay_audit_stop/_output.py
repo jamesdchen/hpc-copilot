@@ -21,6 +21,66 @@ from ._shared import _AbsentMarker, _Violation
 _MAX_APPEND_ARTIFACT_BYTES = 8_000
 _MAX_APPEND_RENDER_FILES_SCANNED = 40
 
+# Per-relay correction rate bound (run-13 finding 8 + 8-addendum): one
+# fleet-boundary relay surfaced 7-10 code-appended corrections, ~9/10 noise — a
+# flood teaches the operator to ignore the gate, so the false-positive cost IS a
+# conduct-surface cost. The SURFACED set is deduped across runs/passes/audits
+# then capped; nothing is silently hidden (a "+K more suppressed" tail always
+# names the remainder, and ``verify-relay`` re-derives the full set on demand).
+_MAX_SURFACED_CORRECTIONS = 3
+
+# Severity order for the cap (higher surfaces first). A false/contradicted
+# DECISION-STATE claim ("revoked"/"greenlit" event that never happened) is the
+# most consequential to correct — it rewrites what the human believes was
+# decided; a wrong RUN_ID (misattribution) next; a wrong NUMBER last (the
+# highest-volume, lowest-signal class in the observed floods — date fragments,
+# unit-suffixed tokens). An empty/paraphrase kind ranks lowest.
+_KIND_SEVERITY = {"state": 3, "run_id": 2, "number": 1}
+
+# Strip a leading ``[scope-id] `` address so the SAME claim+detail flagged under
+# different scopes (a date fragment re-flagged once per mentioned run) collapses.
+_SCOPE_PREFIX_RE = re.compile(r"^\[[^\]]*\]\s*")
+
+
+def _dedupe_violations(violations: list[_Violation]) -> list[_Violation]:
+    """Collapse violations repeating the SAME claim across runs/passes/audits.
+
+    ``verify_relay``'s internal ``_dedupe_mismatches`` only dedups WITHIN one
+    run; the flood classes survive it because the same claim carries a distinct
+    scope id per mentioned run/pass. Keyed on (claim, kind, scope-stripped
+    detail) — identical findings under different scopes collapse to the first
+    occurrence; genuinely distinct details (different journal values) are kept.
+    Order-preserving.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    out: list[_Violation] = []
+    for v in violations:
+        detail = _SCOPE_PREFIX_RE.sub("", v.text, count=1)
+        key = (v.claim, v.kind, detail)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(v)
+    return out
+
+
+def _rate_bound(violations: list[_Violation]) -> tuple[list[_Violation], int]:
+    """Cap surfaced corrections at :data:`_MAX_SURFACED_CORRECTIONS`, severity-first.
+
+    Stable within a severity band (original order preserved), so the audit's
+    historical pass order (run rule-10 → notebook → paraphrase → decision-state)
+    breaks ties. Returns ``(kept, suppressed_count)``; the caller emits an
+    explicit tail for a non-zero suppressed count so nothing is silently hidden.
+    """
+    if len(violations) <= _MAX_SURFACED_CORRECTIONS:
+        return violations, 0
+    ranked = sorted(
+        enumerate(violations),
+        key=lambda iv: (-_KIND_SEVERITY.get(iv[1].kind, 0), iv[0]),
+    )
+    kept = [v for _, v in ranked[:_MAX_SURFACED_CORRECTIONS]]
+    return kept, len(violations) - len(kept)
+
 
 def _rejector_output(
     violations: list[_Violation], absent_markers: list[_AbsentMarker]
@@ -34,16 +94,23 @@ def _rejector_output(
     completer degrades to wherever the ``stop-hook-append`` capability is
     absent/unknown.
     """
-    findings = [v.text for v in violations]
+    surfaced, suppressed = _rate_bound(_dedupe_violations(violations))
+    findings = [v.text for v in surfaced]
     omissions = [am.omission_text for am in absent_markers]
     if not findings and not omissions:
         return None
 
     segments: list[str] = []
     if findings:
+        tail = (
+            f" (+{suppressed} more suppressed — rate-bounded to reduce flood; "
+            "run `hpc-agent verify-relay` for the full set)"
+            if suppressed
+            else ""
+        )
         segments.append(
             "hpc-agent relay audit (conduct rule 10): the final message contradicts "
-            f"the durable records — {len(findings)} mismatch(es): "
+            f"the durable records — {len(findings)} mismatch(es){tail}: "
             + "; ".join(findings)
             + ". Correct the relay to match the journal (verify with "
             "`hpc-agent verify-relay`) before ending the turn — never relay "
@@ -215,6 +282,11 @@ def _completer_output(
     """
     from hpc_agent.state.notebook_audit import DISCHARGED_BY_COMPLETER, record_relay_discharge
 
+    # Cross-pass dedup first (finding 8): collapse the same claim repeated across
+    # runs/passes before the poison split, so a flood of identical corrections
+    # cannot dodge the rate bound via distinct scope ids.
+    violations = _dedupe_violations(violations)
+
     corrections: list[_Violation] = []
     poisoned: list[_Violation] = []
     for v in violations:
@@ -228,6 +300,12 @@ def _completer_output(
             poisoned.append(v)
         else:
             corrections.append(v)
+
+    # Rate-bound the SURFACED corrections (finding 8): cap severity-first with an
+    # explicit suppressed-count tail. The poisoned bounce is NOT rate-bounded —
+    # it is the surviving hard-block and already narrowed by the pending-decision
+    # intersection.
+    corrections, suppressed = _rate_bound(corrections)
 
     # The judgment class (unanswered question / abandoned continuation) has NO
     # members in THIS hook — the sibling Stop guards own those bounces — so the
@@ -251,6 +329,12 @@ def _completer_output(
                 continue  # cannot record the discharge → do not claim it; leave owed
             append_parts.append(artifact)
         append_parts.extend(_compose_correction(v) for v in corrections)
+        if suppressed:
+            append_parts.append(
+                "hpc-agent relay audit — "
+                f"{suppressed} more correction(s) suppressed (rate-bounded to reduce "
+                "flood; conduct rule 10). Run `hpc-agent verify-relay` for the full set."
+            )
 
     out: dict[str, Any] = {}
     if append_parts:
