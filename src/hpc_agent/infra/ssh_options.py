@@ -48,6 +48,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Final
 
 __all__ = [
     "_local_openssh_supports_gcm",
@@ -871,3 +872,154 @@ def ssh_env() -> dict[str, str]:
     splices into an argv. Merge into ``os.environ`` for the rsync subprocess.
     """
     return _rsync_rsh_env()
+
+
+# --- tar-stream compression for the rsync-less tar|ssh legs (latency rank 7) -
+#
+# The rsync-less push/pull move bytes through a bare ``tar c | ssh | tar x``
+# pipe with NO compression: the transport-layer ``Compression=no`` default
+# (:func:`_ssh_crypto_opts`) was chosen for fast LAN links, but the live control
+# plane reaches the cluster over a ~2 MB/s VPN where payloads compress 2-4x
+# (latency-audit census A3). Compressing the tar stream at the SOURCE — where
+# tar sees the whole payload — is a far bigger lever than the SSH transport
+# codec, so it is the default on these legs. ``gzip`` is the default because it
+# is universal in both GNU tar and bsdtar (the native-Windows tar) and needs no
+# capability probe; ``zstd`` is an opt-in for operators who have confirmed a
+# zstd-capable tar on BOTH ends (better ratio + speed, no probe added on the hot
+# path); ``none`` is the fast-LAN opt-out. The create flag and the extract flag
+# are derived from ONE codec read in ONE process, so the two ends never
+# disagree. This is independent of ``HPC_SSH_COMPRESSION`` (the SSH transport
+# codec), which stays off — compressing once at the tar source supersedes it on
+# the VPN legs.
+_DEFAULT_TAR_STREAM_CODEC: Final[str] = "gzip"
+
+#: Codec name -> the ``tar`` create/extract flag it needs. gzip and zstd use the
+#: SAME flag on create and extract (``tar`` autodetects on extract, but the
+#: explicit flag is safe on both GNU tar and bsdtar); ``none`` adds no flag.
+_TAR_CODEC_FLAG: Final[dict[str, str | None]] = {
+    "gzip": "-z",
+    "zstd": "--zstd",
+    "none": None,
+}
+
+
+def tar_stream_codec() -> str:
+    """The tar-stream compression codec for the rsync-less tar|ssh legs.
+
+    Read live from ``HPC_TAR_STREAM_COMPRESSION`` (so tests / a mid-session
+    export take effect) and normalized to one of ``gzip`` / ``zstd`` / ``none``:
+
+    * ``gzip`` (default) / ``gz`` — universal; the VPN-friendly default.
+    * ``zstd`` / ``zst`` — opt-in; requires a zstd-capable ``tar`` on both ends.
+    * ``none`` / ``no`` / ``off`` / ``0`` / ``plain`` — the fast-LAN opt-out.
+
+    An unset value takes the default; an unrecognized value also falls to the
+    default (``gzip``) — the VPN-safe direction — rather than silently shipping
+    uncompressed. The literal ``default`` selects the built-in default too.
+    """
+    raw = (
+        (os.environ.get("HPC_TAR_STREAM_COMPRESSION") or _DEFAULT_TAR_STREAM_CODEC).strip().lower()
+    )
+    if raw in ("gzip", "gz", "default", ""):
+        return "gzip"
+    if raw in ("zstd", "zst"):
+        return "zstd"
+    if raw in ("none", "no", "off", "0", "plain"):
+        return "none"
+    print(
+        f"hpc-agent: unrecognized HPC_TAR_STREAM_COMPRESSION={raw!r} "
+        f"(want gzip / zstd / none); using {_DEFAULT_TAR_STREAM_CODEC!r}",
+        file=sys.stderr,
+    )
+    return _DEFAULT_TAR_STREAM_CODEC
+
+
+def tar_stream_flag() -> str | None:
+    """The ``tar`` compression flag for the current codec, or ``None`` for plain.
+
+    Applied IDENTICALLY to the remote ``tar c`` and the local ``tar x`` so the
+    two ends agree (both derive from the single :func:`tar_stream_codec` read).
+    """
+    return _TAR_CODEC_FLAG[tar_stream_codec()]
+
+
+# --- connect-failure retry hygiene (latency rank 25) -------------------------
+#
+# The general ssh backoff ladder (``infra.remote._BACKOFF_DELAYS_SEC``) spends
+# 3-5 attempts x 60s command budget before giving up — right for a post-connect
+# hang, but wasteful for a host that is simply unreachable, where ``ConnectTimeout``
+# (15s, :func:`_ssh_connect_opts`) already fail-fasts the TCP dial. A distinct,
+# tighter schedule for CONNECT failures cuts dead-host detection ~4x without
+# touching the command budgets: two attempts, each bounded by the 15s connect
+# timeout, then surface. The rsync-less transport legs (which run under the
+# breaker but not the command ladder) consume this for their own retry.
+_CONNECT_FAILURE_RETRY_DELAYS_SEC: Final[tuple[float, ...]] = (2.0,)
+
+#: stderr substrings that identify a TCP/connect-phase failure (as opposed to an
+#: authenticated command that failed): matched case-insensitively.
+_CONNECT_FAILURE_MARKERS: Final[tuple[str, ...]] = (
+    "connection refused",
+    "connection timed out",
+    "connection reset",
+    "connection closed",
+    "operation timed out",
+    "no route to host",
+    "network is unreachable",
+    "host is unreachable",
+    "could not resolve hostname",
+    "name or service not known",
+    "port 22: ",
+    "kex_exchange_identification",
+)
+
+#: rsync exit status 12 = protocol/stream error (a severed transfer, not a
+#: transient dial). Not connect-retry-safe: re-dialing does not fix a broken
+#: protocol negotiation, and the transport's own resumable-delta re-derives what
+#: landed on the next call.
+_RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = 12
+
+
+def connect_failure_retry_delays() -> tuple[float, ...]:
+    """The connect-failure retry schedule — one entry per RETRY (not attempts).
+
+    Two attempts total by default (one initial + one retry after 2s); each
+    attempt's TCP dial is separately bounded by ``ConnectTimeout`` (15s), so a
+    dead host is detected in ~2x15s instead of the command ladder's 3-5x60s.
+    """
+    return _CONNECT_FAILURE_RETRY_DELAYS_SEC
+
+
+def is_connect_failure(returncode: int, stderr: str | None) -> bool:
+    """True when a non-zero ssh/scp result looks like a TCP/connect-phase failure.
+
+    A connect failure is transient (the host may come back) and is the ONLY
+    class the tight connect-retry schedule re-tries. An authenticated command
+    that exited non-zero (a remote ``tar``/``find`` error) is NOT a connect
+    failure and is surfaced immediately.
+    """
+    if returncode == 0:
+        return False
+    blob = (stderr or "").lower()
+    return any(marker in blob for marker in _CONNECT_FAILURE_MARKERS)
+
+
+def is_retry_safe(returncode: int, stderr: str | None, *, spawn_error: bool = False) -> bool:
+    """Whether a failed transport leg is safe to retry (rank 25 classification).
+
+    ``retry_safe=False`` for the deterministic-won't-heal classes:
+
+    * ``spawn_error`` — a local ``FileNotFoundError``/ENOENT launching ``ssh`` /
+      ``tar`` (the binary is missing; retrying re-fails identically).
+    * rsync exit ``12`` (:data:`_RSYNC_PROTOCOL_ERROR_EXIT`) — a protocol/stream
+      error, not a re-dialable connect failure.
+
+    Otherwise a connect-phase failure (:func:`is_connect_failure`) is retry-safe;
+    any other non-zero is a remote-command failure the caller surfaces (the
+    transport's resumable delta handles a genuinely partial transfer on the next
+    call, so this classifier only gates the tight in-call connect retry).
+    """
+    if spawn_error:
+        return False
+    if returncode == _RSYNC_PROTOCOL_ERROR_EXIT:
+        return False
+    return is_connect_failure(returncode, stderr)

@@ -81,6 +81,13 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # wedge, 2026-07-05. See _BOUNDED_RUNNER_REQUIRED below.)
     # The engine stayed in transport/__init__.py when the module became a package.
     "src/hpc_agent/infra/transport/__init__.py": {"_tar_ssh_push"},
+    # ssh->tar streaming PULL (latency ranks 2 + 7): the inverse of
+    # `_tar_ssh_push`. The `ssh` Popen (the archive SOURCE) feeds the pump into
+    # `run_capture_bounded(tar_x_cmd, timeout_sec=timeout, stdin=...)` — the SINK
+    # — whose tree-kill reaps the ssh grandchild on the deadline; the paired
+    # `ssh_proc.wait(timeout=timeout)` and the except-arm `ssh_proc.kill()` bound
+    # the ssh half. Same discipline as `_tar_ssh_push`, mirrored for the pull.
+    "src/hpc_agent/infra/transport/_pull.py": {"_pull_transfer"},
     # Cluster-side dispatcher launching the user's payload: runtime is the
     # task's own runtime, bounded by the scheduler's wall-clock (h_rt /
     # --time) on the job, and heartbeat-monitored — a parent-side timeout
@@ -121,15 +128,21 @@ _GRANDFATHERED: set[tuple[str, str]] = set()
 # `run_capture_bounded` is actually wired. See
 # `test_transport_ssh_sites_route_through_bounded_runner`.
 _BOUNDED_RUNNER_REQUIRED: dict[str, set[str]] = {
-    # All six ssh/rsync/tar/scp sites are engine functions that stayed in
+    # The ssh/rsync/tar sites are engine functions that stayed in
     # transport/__init__.py when the module became a package.
     "src/hpc_agent/infra/transport/__init__.py": {
         "_remote_preclean",
         "_tar_ssh_push",
-        "_scp_pull",
         "rsync_push",
         "_rsync_deploy",
         "rsync_pull",
+    },
+    # The rsync-less PULL engine (latency ranks 2 + 7) replaced the old
+    # ``_scp_pull`` with a tar|ssh transfer + a small ssh manifest round-trip;
+    # both drive ssh as a GRANDCHILD and must ride the tree-kill bounded runner.
+    "src/hpc_agent/infra/transport/_pull.py": {
+        "_pull_transfer",
+        "_ssh_capture",
     },
 }
 

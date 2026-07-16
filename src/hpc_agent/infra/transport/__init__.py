@@ -11,12 +11,15 @@ import rsync_push``).
 
 This ``__init__`` is the transfer/deploy ENGINE seat: every function that
 drives a subprocess under a live ``transport.*`` patch — ``rsync_push`` /
-``rsync_pull`` / ``_tar_ssh_push`` / ``_scp_pull`` / ``deploy_runtime`` and
-their helpers — stays here, together with the module-level names tests patch
-through the namespace (``subprocess`` / ``shutil`` / ``sys`` / ``Path`` /
-``run_capture_bounded`` / ``ssh_run``). Six private leaf submodules
-(``_excludes`` / ``_disclose`` / ``_delta`` / ``_prune`` / ``_deploy_items`` /
-``_combiner``) plus ``_shared`` carve out the cohesive clusters; the re-export
+``rsync_pull`` / ``_tar_ssh_push`` / ``deploy_runtime`` and their helpers —
+stays here, together with the module-level names tests patch through the
+namespace (``subprocess`` / ``shutil`` / ``sys`` / ``Path`` /
+``run_capture_bounded`` / ``ssh_run``). The rsync-less PULL engine lives in the
+``_pull`` leaf (``tar_ssh_pull`` — the batched/resumable analogue of the batched
+push that replaced the old monolithic ``scp -r`` pull). Seven private leaf
+submodules (``_excludes`` / ``_disclose`` / ``_delta`` / ``_prune`` /
+``_deploy_items`` / ``_pull`` / ``_combiner``) plus ``_shared`` carve out the
+cohesive clusters; the re-export
 block below pulls every one of their symbols back onto this namespace so the
 public import path AND every cross-imported/patched private
 (``transport._build_deploy_items`` etc.) resolve exactly as before.
@@ -129,6 +132,19 @@ from ._prune import (
     _read_prior_push_manifest,  # noqa: F401
     _write_push_manifest,  # noqa: F401
 )
+from ._pull import (
+    PullResult,
+    _batch_remote_cmd,  # noqa: F401
+    _fallback_remote_cmd,  # noqa: F401
+    _find_filter_predicate,  # noqa: F401
+    _local_present_manifest,  # noqa: F401
+    _pull_batch_caps,  # noqa: F401
+    _pull_ship_batches,  # noqa: F401
+    _pull_transfer,  # noqa: F401
+    _pull_transfer_with_retry,  # noqa: F401
+    _remote_pull_manifest,  # noqa: F401
+    tar_ssh_pull,
+)
 from ._shared import _DEFAULT
 
 __all__ = [
@@ -137,6 +153,7 @@ __all__ = [
     "PROTECTED_OUTPUT_DIRS",
     "PROTECTED_RUNTIME_FILES",
     "DeployPayloadSummary",
+    "PullResult",
     "deploy_payload_summary",
     "deploy_runtime",
     "rsync_pull",
@@ -144,6 +161,7 @@ __all__ = [
     "run_combiner",
     "run_combiner_checked",
     "run_final_reduce",
+    "tar_ssh_pull",
 ]
 
 
@@ -615,65 +633,6 @@ def _tar_ssh_push(
     if move.returncode != 0:
         return move
     return transfer
-
-
-def _scp_pull(
-    *,
-    ssh_target: str,
-    remote_path: str,
-    remote_subdir: str,
-    local_dir: str | Path,
-    timeout: float | None,
-) -> subprocess.CompletedProcess[str]:
-    """Pull *remote_subdir* to *local_dir* via ``scp -r``.
-
-    Used as the rsync_pull fallback when rsync is absent. The *include*
-    filter is not honored (scp has no equivalent); callers passing a
-    restrictive include will receive the entire subdirectory. For the
-    payloads hpc-agent actually pulls (``_combiner/wave_*.json`` and
-    optional per-task summaries), this is acceptable.
-
-    ``scp -r`` copies the SOURCE DIRECTORY into the destination — it does NOT
-    honor rsync's trailing-slash "contents-only" semantics — so a naive
-    ``scp -r remote:.../<sub>/ local/<sub>`` lands the files one level too deep
-    at ``local/<sub>/<sub>/``. That is the double-nested ``_combiner/_combiner/``
-    that broke ``verify-aggregation-complete`` on Windows (where rsync is
-    absent, so the pull falls through here). To match :func:`rsync_pull`'s
-    layout, scp the directory into a temp staging dir (scp creates
-    ``<staging>/<sub>``) and move that dir's CONTENTS into *local_dir*.
-    """
-    sub = remote_subdir.strip("/").rsplit("/", 1)[-1]
-    # No trailing slash: scp copies the directory itself into the staging dir.
-    src = f"{ssh_target}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}"
-    dst_path = Path(local_dir)
-    dst_path.mkdir(parents=True, exist_ok=True)
-
-    with tempfile.TemporaryDirectory() as staging:
-        scp_cmd = [*ssh_argv("scp", extra_opts=["-r"]), src, staging]
-        try:
-            proc = run_capture_bounded(scp_cmd, timeout_sec=timeout)
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError(
-                f"scp pull from {ssh_target} timed out after {timeout}s: "
-                f"{_truncate(f'{src} -> {dst_path}')}"
-            ) from exc
-        if proc.returncode != 0:
-            # A VPN-severed scp left its "lost connection" story in proc.stderr
-            # that nobody recorded (run-#13 finding 2): flush it to the log now.
-            disclose_child_failure(what="scp pull", returncode=proc.returncode, stderr=proc.stderr)
-            return proc
-        # Flatten scp's dir-copy into local_dir so the result matches rsync's
-        # contents-only layout (local_dir/wave_*.json, not local_dir/<sub>/...).
-        staged = Path(staging) / sub
-        if staged.is_dir():
-            for item in staged.iterdir():
-                target = dst_path / item.name
-                if target.is_dir():
-                    shutil.rmtree(target)
-                elif target.exists():
-                    target.unlink()
-                shutil.move(str(item), str(target))
-        return proc
 
 
 def _prune_manifest_known_extras(
@@ -1364,18 +1323,32 @@ def rsync_pull(
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
     if not _have_rsync():
-        # Early return bypasses the _with_ssh_backoff wrap below, so route
-        # the scp fallback through the circuit breaker directly (the live
-        # pull path on native Windows, where rsync is absent).
-        return guarded_call(
-            ssh_target,
-            lambda: _scp_pull(
-                ssh_target=ssh_target,
-                remote_path=remote_path,
-                remote_subdir=remote_subdir,
-                local_dir=local_dir,
-                timeout=effective_timeout,
-            ),
+        # rsync-less path (the live native-Windows pull path): route to the
+        # content-hash PULL engine (:func:`tar_ssh_pull`), the batched/resumable
+        # analogue of the batched push (latency ranks 2 + 7). It replaces the old
+        # monolithic ``scp -r`` (:func:`_scp_pull`) that ignored the include
+        # filter and re-paid the whole transfer on any failure: the engine filters
+        # server-side, ships only the content-hash delta, and lands in resumable
+        # batches. ``tar_ssh_pull`` already runs under the per-host breaker + the
+        # tight connect-retry, so no extra ``guarded_call`` wrap here. The
+        # engine's :class:`PullResult` is adapted back to this function's
+        # ``CompletedProcess`` contract so every existing ``rsync_pull`` caller is
+        # unchanged. ``remote_subdir`` is joined onto ``remote_path`` because the
+        # engine pulls the CONTENTS of one remote dir (the contents-only layout
+        # rsync's trailing-slash source produces).
+        joined = f"{remote_path.rstrip('/')}/{remote_subdir.strip('/')}".rstrip("/")
+        result = tar_ssh_pull(
+            ssh_target=ssh_target,
+            remote_path=joined,
+            local_path=Path(local_dir),
+            include_globs=include,
+            timeout=effective_timeout,
+        )
+        return subprocess.CompletedProcess(
+            args=["tar_ssh_pull", joined],
+            returncode=0 if result.ok else 1,
+            stdout="",
+            stderr=result.stderr_tail,
         )
 
     filter_flags: list[str] = []
