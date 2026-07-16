@@ -368,10 +368,41 @@ def submit_preflight(
     non-skipped sub-call (either parallel arm included) returned ``ok:
     false`` — parallelising the two arms never swallows a failure.
     """
+    from hpc_agent import __version__ as _pkg_version
+    from hpc_agent.ops import _submit_preflight_cache as cache
+
     experiment_dir_path = (
         experiment_dir if isinstance(experiment_dir, Path) else Path(experiment_dir)
     )
     skip_list = list(skip or [])
+
+    # Rank 14: a PASSING verdict for this (cluster, framework version,
+    # clusters.yaml mtime) within the TTL is re-served WITHOUT re-running the
+    # fan-out — the second S1 per submit (and any re-submit in the window) skips
+    # the cold SSH probe + four spawns entirely. The hit is DISCLOSED in the
+    # returned ``cache`` block; a fail was never cached, so a red environment is
+    # never masked. ``HPC_NO_SUBMIT_PREFLIGHT_CACHE=1`` is the kill switch.
+    version = _pkg_version or ""
+    cache_key = cache.submit_preflight_cache_key(
+        cluster=cluster,
+        version=version,
+        clusters_mtime=cache.clusters_yaml_mtime_token(),
+    )
+    cached = cache.read_fresh_verdict(cache_key)
+    if cached is not None:
+        return cached
+
+    # Rank 14 (finer skip): ``install-commands`` copies bundled assets that
+    # change only on a package upgrade. When the wheel version stamp has not
+    # moved since the last copy, skip the sub-call even on a verdict-cache miss
+    # (e.g. a clusters.yaml edit that forces a fresh SSH probe). Never overrides
+    # a caller's explicit skip; recorded only after a real, successful copy.
+    install_skipped_fresh = "install-commands" not in skip_list and cache.install_commands_fresh(
+        version
+    )
+    if install_skipped_fresh:
+        skip_list.append("install-commands")
+
     resolve_kwargs: dict[str, Any] = {
         "profile": profile,
         "cmd_sha": cmd_sha,
@@ -394,7 +425,7 @@ def submit_preflight(
 
     overall = "fail" if any(not r["ok"] for r in by_name.values()) else "pass"
 
-    return {
+    result = {
         "overall": overall,
         "elapsed_total_sec": elapsed_total_sec,
         "install_commands": by_name.get("install-commands"),
@@ -402,3 +433,14 @@ def submit_preflight(
         "check_preflight": by_name.get("check-preflight"),
         "resolve_resources": by_name.get("resolve-resources"),
     }
+
+    if overall == "pass":
+        cache.record_verdict(cache_key, result)
+        # Stamp the install-commands version only when it actually RAN and
+        # succeeded this call (not when it was skipped-fresh, and not on failure)
+        # so the next submit's skip rests on a real, successful copy.
+        ic = by_name.get("install-commands")
+        if isinstance(ic, dict) and ic.get("ok"):
+            cache.record_install_commands(version)
+
+    return result
