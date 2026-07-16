@@ -26,7 +26,6 @@ def _legacy_pull_path(monkeypatch):
     monkeypatch.setenv("HPC_AGGREGATE_TAR_PULL", "0")
 
 
-
 def _write_wave(combiner_dir, wave, grid_points, errors=None):
     combiner_dir.mkdir(parents=True, exist_ok=True)
     (combiner_dir / f"wave_{wave}.json").write_text(
