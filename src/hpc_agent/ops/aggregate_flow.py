@@ -71,6 +71,13 @@ from hpc_agent.infra.remote import ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.infra.transport import rsync_pull
+
+try:  # Rank 2 (pull-engine parity): O2 owns the seam; None until it merges.
+    from hpc_agent.infra.transport import (  # type: ignore[attr-defined,unused-ignore]
+        tar_ssh_pull as _tar_ssh_pull,
+    )
+except ImportError:  # pragma: no cover — exercised by the O2-merge integration
+    _tar_ssh_pull = None  # type: ignore[assignment]
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
@@ -108,6 +115,67 @@ LOCAL_PULL_MIRROR_DIRNAMES: tuple[str, ...] = (
     PER_TASK_RESULTS_DIRNAME,
     PER_TASK_TRACES_DIRNAME,
 )
+
+
+@dataclass(frozen=True)
+class _PullOutcome:
+    """The (returncode, stderr) shape every aggregate pull call site consumes.
+
+    A normalized façade so a call site's ``if pull.returncode != 0: … pull.stderr``
+    handling is identical whether the pull ran through the legacy ``rsync_pull``
+    (which already returns a ``CompletedProcess`` with these attrs) or O2's
+    ``tar_ssh_pull`` (which returns a ``PullResult``).
+    """
+
+    returncode: int
+    stderr: str
+
+
+def _pull(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    remote_subdir: str,
+    local_dir: str,
+    include: list[str] | None = None,
+) -> Any:
+    """Route an aggregate pull through O2's ``tar_ssh_pull`` seam when present.
+
+    Rank 2 (pull-engine parity): the pull side gets the push side's server-side
+    filtered ``find | tar c`` engine — one round trip that honours the include
+    filter (the legacy ``_scp_pull`` on the Windows control plane transfers the
+    WHOLE subtree because scp cannot include-filter). Until O2 merges the seam,
+    ``_tar_ssh_pull is None`` and this is byte-for-byte the legacy ``rsync_pull``
+    call — the aggregate flow is unchanged. ``HPC_AGGREGATE_TAR_PULL=0`` forces
+    the legacy path as a safety opt-out once the seam exists.
+
+    Returns whatever ``rsync_pull`` returns (a ``CompletedProcess``) on the legacy
+    path, or a :class:`_PullOutcome` normalized from ``tar_ssh_pull``'s
+    ``PullResult`` — both carry ``.returncode`` + ``.stderr`` so every call site is
+    untouched. ``rsync_pull`` is looked up on the module at call time, so existing
+    tests that monkeypatch it keep working on the legacy path.
+    """
+    if _tar_ssh_pull is None or os.environ.get("HPC_AGGREGATE_TAR_PULL") == "0":
+        return rsync_pull(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            remote_subdir=remote_subdir,
+            local_dir=local_dir,
+            include=include,
+        )
+    # tar_ssh_pull takes ONE joined remote path + a local_path; the include list
+    # becomes its server-side ``find`` globs (honoured, unlike scp).
+    remote_full = f"{remote_path.rstrip('/')}/{remote_subdir.strip('/')}".rstrip("/")
+    result = _tar_ssh_pull(
+        ssh_target=ssh_target,
+        remote_path=remote_full,
+        local_path=str(local_dir),
+        include_globs=include,
+    )
+    return _PullOutcome(
+        returncode=0 if result.ok else 1,
+        stderr=(result.stderr_tail or ""),
+    )
 
 
 def per_task_fallback_reducible(summary_name: str) -> bool:
@@ -429,7 +497,7 @@ def _per_task_metrics_reduce(
         )
     results_local = out / PER_TASK_RESULTS_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
-    pull = rsync_pull(
+    pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=scoped_subdir,
@@ -593,7 +661,7 @@ def _ingest_task_traces(
     traces_local = out / PER_TASK_TRACES_DIRNAME
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     try:
-        pull = rsync_pull(
+        pull = _pull(
             ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=scoped_subdir,
@@ -719,7 +787,7 @@ def _combiner_only_reduce(
     custom reducer; silently meaning would mask their intent).
     """
     include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
-    pull = rsync_pull(
+    pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir="_combiner",
@@ -951,7 +1019,7 @@ def _cluster_final_reduce(
     # the cluster-final arm of the same L2 gap. ``remote_subdir`` still names the
     # cluster-side ``_aggregated/<run_id>`` source dir; only the LOCAL sink flattens.
     agg_local = out
-    pull = rsync_pull(
+    pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=f"_aggregated/{run_id}",
@@ -1913,7 +1981,7 @@ def _aggregate_flow_impl(
         # machinery. Falls back to ``results_subdir`` when the run declares no
         # template (the helper's own contract), so a template-less run is
         # byte-identical to the pre-scoping behavior.
-        sp = rsync_pull(
+        sp = _pull(
             ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=_run_scoped_results_subdir(
