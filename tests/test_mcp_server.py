@@ -803,3 +803,74 @@ def test_serve_survives_sequential_tool_calls_over_real_pipes(tmp_path) -> None:
     finally:
         proc.kill()
         proc.communicate(timeout=30)
+
+
+# ─── run-14 docket #2: a refusal must never reach the caller as empty output ──
+
+
+@pytest.mark.parametrize(
+    ("verb", "spec"),
+    [
+        # (a) An agent-COMPOSED notebook sign-off — no human utterance, and no
+        # matching interview.json audited_source block for this audit_id, so the
+        # gate refuses. Observed in the run-14 demo (2026-07-16).
+        (
+            "append-decision",
+            {
+                "scope_kind": "notebook",
+                "scope_id": "causal_tune_tree",
+                "block": "notebook-sign-off",
+                "response": "sign-off requested: feature-construction",
+                "resolved": {
+                    "audit_id": "causal_tune_tree",
+                    "section": "feature-construction",
+                    "section_sha": "c812ad563620a0d5d4509f72360e525a6368aec9",
+                    "view_sha": "deadbeef",
+                },
+            },
+        ),
+        # (b) A notebook-auto-clear whose spec carries the input_roots /
+        # source_roots the MUTATE verb refuses (adversarial review F2). Observed
+        # in the same demo; "removing the keys made it work".
+        (
+            "notebook-auto-clear",
+            {
+                "audit_id": "causal_tune_tree",
+                "source": "src/nb.py",
+                "template": "tpl/nb.py",
+                "input_roots": ["data"],
+                "source_roots": ["src"],
+            },
+        ),
+    ],
+)
+def test_refusal_specs_are_never_silent_over_mcp(tmp_path, verb, spec) -> None:
+    """The run-14 docket-#2 shape: two specs the demo saw print NOTHING. The
+    empty output was the 17243a17 second-call transport killer (fixed at
+    cf78e83e), NOT a per-verb silent refusal — every one of these refusals emits
+    a single-line ok:false JSON envelope. Pin that the REAL in-process runner
+    plus :func:`_tool_result` (the MCP tool-result contract) carry a visible,
+    parseable refusal for exactly the two verbs the transcript flagged, so a
+    future regression that eats a refusal for these verbs fires here.
+
+    Guards the CLI-side of the ``test_mcp_server_envelope_parity`` contract for
+    the refusal path: stdout is non-empty, parses as JSON, is ``ok:false`` with a
+    non-empty ``message``, and the MCP result is a non-empty ``isError`` payload
+    (never an empty ``content``)."""
+    (tmp_path / ".hpc" / "notebooks").mkdir(parents=True)
+    spec_path = tmp_path / f"{verb}.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    code, out, err = M._in_process_cli_runner(
+        [verb, "--spec", str(spec_path), "--experiment-dir", str(tmp_path)]
+    )
+    assert code != 0, f"{verb} refusal must exit non-zero (got {code}); stderr={err!r}"
+    assert out.strip(), f"{verb} refusal printed EMPTY stdout — the silent-refusal defect"
+    envelope = json.loads(out)
+    assert envelope.get("ok") is False
+    assert envelope.get("message", "").strip(), "a refusal must carry a human-readable reason"
+
+    result = M._tool_result(code, out, err)
+    assert result["isError"] is True
+    assert result["structuredContent"].get("ok") is False
+    assert result["content"] and result["content"][0].get("text", "").strip()
