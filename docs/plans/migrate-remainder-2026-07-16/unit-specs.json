@@ -1,0 +1,216 @@
+{
+  "program": "migrate-remainder-2026-07-16",
+  "baseline": "main @ c9cab681 (spec written at c9cab681, + parked uncommitted swarm edits)",
+  "authority": "SPEC.md (design + settled calls §6 + the reducer-disjointness contract §5); if SPEC.md contradicts a unit brief, THE SPEC WINS",
+  "flag": "none — a first-class gated recovery verb (the retarget-run family), default ON, actuates nothing without the human y",
+  "wave0_rule": "Claim source of truth = `git status` re-run at dispatch time. Every dirty file (SPEC.md §9) is claimed by in-flight work: the parked wave-1 aggregate/transport train, the CLI/regen surface, and the WS-DAEMON D-FSYNC/D-CONTEXT + relay scopes. Units listing an adjacent seam hard-gate on its land and begin with an explicit rebase-first step. No unit here edits a parked file — all new work is a new package + the non-parked backend-cancel + announce id-sibling seams.",
+  "integration_protocol": "Per wave: merge unit branches in the stated order -> python scripts/regen_all.py --write ONCE (M-BRIEF only) -> ruff check --fix / ruff format / mypy src/hpc_agent -> targeted batteries incl. named -m slow legs -> push -> GitHub CI matrix green -> append the wave's enforcement-map rows to docs/internals/engineering-principles.md. Units never commit regenerated artifacts.",
+
+  "units": [
+    {
+      "unit_id": "M-CENSUS",
+      "wave": "M1",
+      "title": "authoritative done-set census: per-task announced-id listing + status-reporter cross-check + wave/axis-aligned remainder partition",
+      "files": [
+        "src/hpc_agent/ops/migrate/__init__.py (new)",
+        "src/hpc_agent/ops/migrate/census.py (new)",
+        "src/hpc_agent/ops/monitor/announce.py",
+        "tests/ops/migrate/test_census.py (new)",
+        "tests/ops/monitor/test_announce_ids.py (new)"
+      ],
+      "forbidden_files": [
+        "src/hpc_agent/ops/aggregate_flow.py",
+        "src/hpc_agent/ops/monitor_flow.py",
+        "src/hpc_agent/infra/io.py",
+        "src/hpc_agent/state/journal.py",
+        "src/hpc_agent/state/index.py",
+        "src/hpc_agent/infra/cluster_status.py"
+      ],
+      "design_constraints": [
+        "SPEC.md §3 Step A + Δ1: `read_announced_task_ids` returns the SET of done ids (bounded `ls` of task_*.complete names), SAME ACK discipline as read_announcements (announce.py:52,86-96); an absent announce dir / no ACK REFUSES ('no per-task census'), never 'all undone'.",
+        "Δ2/[LIVE-1]: undone = range(total_tasks) − done_ids, intersected with the sidecar wave_map (built by build_wave_map, submit_flow.py:1177; ids->waves mapped as in recover_flow.py:299-314). When every undone id falls in WHOLE waves, emit the whole-wave task_range; else an arbitrary-id range.",
+        "Read-only cross-check against ssh_status_report (cluster_status.py:142) when the announce census is partial; a disagreement is SURFACED in the census result, never auto-masked (aggregate_blocks.py:451 integrity precedent).",
+        "announce.py edit is ADDITIVE (a sibling reader) — the ANNOUNCE_SUBPATH/state constants stay byte-identical (lockstep pin with dispatch.py, announce.py:35-44, tests/ops/monitor/test_announce.py).",
+        "Refuse an index-bounded target backend (uses_global_array_index=False, backends/__init__.py:187) that cannot express a non-contiguous remainder range — surface the range shape."
+      ],
+      "acceptance_tests": [
+        "fake announce dir with task_3/task_7.complete + total=10 -> done_ids={3,7}, undone has 8 ids, counted via fake ssh",
+        "wave_map bucket-major (waves of whole ranges): undone falls in whole waves -> wave-aligned task_range emitted",
+        "no announce dir / no ACK -> REFUSE (seeded), not zero-undone",
+        "announce census vs status-reporter disagreement -> surfaced field set, not masked"
+      ],
+      "test_batteries_to_run": [
+        "tests/ops/migrate/test_census.py",
+        "tests/ops/monitor/test_announce_ids.py",
+        "tests/ops/monitor/test_announce.py"
+      ],
+      "regen_required": false,
+      "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "M-KILL",
+      "wave": "M1",
+      "title": "range-aware cancel: build_cancel_cmd(job_ids, task_range) on the backend seam (SGE qdel -t / SLURM scancel _idx) + range-scoped kill",
+      "files": [
+        "src/hpc_agent/infra/backends/__init__.py",
+        "src/hpc_agent/infra/backends/sge.py",
+        "src/hpc_agent/infra/backends/slurm.py",
+        "src/hpc_agent/ops/monitor/kill.py",
+        "src/hpc_agent/_wire/actions/kill.py",
+        "tests/infra/backends/test_build_cancel_cmd.py (new)",
+        "tests/ops/monitor/test_kill_range.py (new)"
+      ],
+      "forbidden_files": [
+        "src/hpc_agent/ops/monitor/reconcile.py",
+        "src/hpc_agent/ops/aggregate_flow.py",
+        "src/hpc_agent/state/journal.py",
+        "src/hpc_agent/infra/io.py"
+      ],
+      "design_constraints": [
+        "Δ4/SPEC §2: close the documented BACKEND-CANCEL GAP (kill.py:14-21). Add `build_cancel_cmd(job_ids, task_range=None) -> str` as a staticmethod on the backend CLASS — SGE `qdel <jid> -t <range>` (sge.py), SLURM `scancel <jid>_<indices>` (slurm.py). _attempt_backend_cancel (kill.py:41-65) already probes for the builder off the class and lights up automatically — extend it to pass task_range.",
+        "Reuse the existing SUBMIT-side task_range grammar ('4,8,13-15', backends/__init__.py:537) as the cancel expression so submit and cancel speak ONE range vocabulary.",
+        "kill gains an optional task_range: a range kill cancels only those array indices and leaves the run in_flight (a PARTIAL kill by construction — kill.py:157-159 partial semantics unchanged); it NEVER routes through reconcile settle (that is a full-kill terminal transition, kill.py:149-185).",
+        "Honest count discipline preserved: verify which requested ids remain alive; count NOTHING gone when verification fails (kill.py:126-137).",
+        "Guard-can-fire: a range naming an index outside the array is refused (SpecInvalid) — the only place caught.",
+        "KillSpec gains `task_range: str | None` (extra=forbid), validated as a scheduler array expression."
+      ],
+      "acceptance_tests": [
+        "SGE backend: build_cancel_cmd(['12345'], '4,8,13-15') == 'qdel 12345 -t 4,8,13-15' (or the pinned exact string)",
+        "SLURM backend: build_cancel_cmd(['999'], '4,8,13-15') == 'scancel 999_[4,8,13-15]' (pinned)",
+        "range kill leaves run in_flight (partial), does NOT call reconcile settle",
+        "kill with no task_range = whole-run kill, byte-identical to today (pins hold)",
+        "out-of-array index range -> SpecInvalid (seeded)"
+      ],
+      "test_batteries_to_run": [
+        "tests/infra/backends/test_build_cancel_cmd.py",
+        "tests/ops/monitor/test_kill_range.py",
+        "tests/ops/monitor/test_kill.py",
+        "tests/infra/backends/"
+      ],
+      "regen_required": false,
+      "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "M-DERIVE",
+      "wave": "M2",
+      "title": "derived enumerated run: undone cells -> enumerated task_generator, PER-RUN-SCOPED materialization (not the singleton), parent lineage + ownership map",
+      "files": [
+        "src/hpc_agent/ops/migrate/derive.py (new)",
+        "src/hpc_agent/ops/migrate/ownership.py (new)",
+        "tests/ops/migrate/test_derive.py (new)",
+        "tests/ops/migrate/test_ownership.py (new)"
+      ],
+      "forbidden_files": [
+        "src/hpc_agent/ops/memory/interview.py",
+        "src/hpc_agent/state/runs.py",
+        "src/hpc_agent/state/journal.py",
+        "src/hpc_agent/_kernel/contract/layout.py",
+        "src/hpc_agent/ops/resolve_submit_inputs.py",
+        "src/hpc_agent/ops/migrate/census.py"
+      ],
+      "design_constraints": [
+        "SPEC §3 Step B: build items = [source.resolve(i) for i in undone_ids] (the exact task-kwargs cells), mint an InterviewSpec task_generator={kind:'enumerated', params:{items:[...]}} (_wire/actions/interview.py:76) with task_count=len(undone); the enumerated materializer stores items VERBATIM and asserts total()==task_count (interview.py:899-905,370-376).",
+        "Δ3/[LIVE-4] — THE SINGLETON HAZARD (SPEC §8): materialize the derived tasks.py to a PER-RUN path (.hpc/migrate/<derived_run_id>/tasks.py), the .hpc/wrappers/<run_name>.py per-run precedent — NEVER overwrite the shared .hpc/tasks.py (layout.py:85) that the source's cluster reporter reads (cluster_status.py:158). If per-run tasks are not yet plumbed through deploy+reporter, emit an EXPLICIT flip-back sequence disclosed in the derive result (restore source tasks.py before its next reporter read). Carry the clean run-14 per-run-materialization fix GATED/UNVERIFIED (no planned unit found).",
+        "Declare parents=[source_run_id] on the derived SubmitFlowSpec (submit_flow.py:326) so node_sha is DERIVED from the source sidecar (resolve_node_sha, runs.py:672); a missing source sidecar REFUSES (runs.py:709-716). The derived cmd_sha differs from the source (684 != 900) — a distinct identity, not a resume-reattach.",
+        "Δ5/[LIVE-2]: compute the ownership map {cell_key -> owning_run_id} (undone->derived, done->source), MECHANICALLY from the census (no LLM). Persist as a migrate-scoped artifact (.hpc/migrate/<derived_run_id>/ownership.json), NOT a run-sidecar write (the state-writer seam is parked/forbidden §9); disclose 'folds into the sidecar once the state-writer wave lands'.",
+        "This unit calls census.py as a READ dependency but must not edit it (M-CENSUS owns it)."
+      ],
+      "acceptance_tests": [
+        "684 undone cells -> enumerated tasks.py at .hpc/migrate/<rid>/tasks.py, total()==684, resolve(0)==first undone cell",
+        "the shared .hpc/tasks.py is BYTE-UNCHANGED after derive (singleton not touched) — seeded assertion",
+        "derived run declares parents=[source]; node_sha != source cmd_sha; missing source sidecar -> REFUSE",
+        "ownership map: every undone cell -> derived run_id, every done cell -> source run_id; union covers all 900 exactly once"
+      ],
+      "test_batteries_to_run": [
+        "tests/ops/migrate/test_derive.py",
+        "tests/ops/migrate/test_ownership.py",
+        "tests/ops/memory/test_interview_generator.py"
+      ],
+      "regen_required": false,
+      "merge_risk": "HIGH"
+    },
+    {
+      "unit_id": "M-HARVEST",
+      "wave": "M2",
+      "title": "multi-parent harvest: pull TWO parents' per-task results into one mirror, reduce with the ownership map (not the single-run run_id filter)",
+      "files": [
+        "src/hpc_agent/ops/migrate/harvest.py (new)",
+        "tests/ops/migrate/test_harvest_ownership.py (new)"
+      ],
+      "forbidden_files": [
+        "src/hpc_agent/ops/aggregate_flow.py",
+        "src/hpc_agent/execution/mapreduce/reduce/metrics.py",
+        "src/hpc_agent/infra/transport/_combiner.py",
+        "src/hpc_agent/infra/transport/_pull.py",
+        "src/hpc_agent/ops/aggregate/invariants.py"
+      ],
+      "design_constraints": [
+        "SPEC §3 Step F + §5: compose the EXISTING per-parent pull + reduce_metrics (metrics.py:134, value-keyed weighted-mean) in a NEW module — do NOT edit the parked aggregate_flow.py nor the reducer.",
+        "Δ5/[LIVE-2]: the single-run run_id F05 filter (metrics.py:265) is WRONG for two parents (it drops one whole parent). Replace it at the SELECTION boundary: read ownership.json and include, per cell key, EXACTLY the owner's result dir. A race-duplicated cell present under both run_ids resolves to its owner — n is never double-summed (metrics.py:101-102).",
+        "Set total = the UNION count (900). The cardinality gate (aggregate_flow.py:731) and invariants unexpected_tasks/missing (invariants.py:215, iterated over range(total)) then PASS iff ownership is exactly-once and FIRE on overlap — the safety net, not the primary guard.",
+        "Canary-family exclusion still applies per parent (sibling_run_ids, aggregate_flow.py:722-725 precedent) so a parent's -canary sibling never contaminates.",
+        "Reads M-DERIVE's ownership.json (a data contract, not a code import of derive.py)."
+      ],
+      "acceptance_tests": [
+        "source mirror (216 dirs) + derived mirror (684 dirs), disjoint cells -> one reduce over 900, weighted-mean matches a single-run reduce over the same 900 cells",
+        "SEEDED race: one cell present under BOTH run_ids -> ownership selects the owner, contributing cell counted ONCE (n not doubled)",
+        "overlap NOT covered by ownership -> cardinality/unexpected_tasks gate fires (seeded)",
+        "a parent's -canary sibling dir present -> excluded"
+      ],
+      "test_batteries_to_run": [
+        "tests/ops/migrate/test_harvest_ownership.py",
+        "tests/ops/aggregate/test_flow_trace_ingest.py",
+        "tests/execution/mapreduce/test_reduce_metrics.py"
+      ],
+      "regen_required": false,
+      "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "M-BRIEF",
+      "wave": "M3",
+      "title": "the migrate-remainder verb: compose census+derive+cost -> gated brief (needs_decision, next_block=submit-s2), canary-first ordered execution",
+      "files": [
+        "src/hpc_agent/ops/migrate/migrate_remainder.py (new)",
+        "src/hpc_agent/ops/migrate/cost.py (new)",
+        "src/hpc_agent/_wire/workflows/migrate_remainder.py (new)",
+        "docs/primitives/migrate-remainder.md (new)",
+        "tests/ops/migrate/test_migrate_remainder.py (new)"
+      ],
+      "forbidden_files": [
+        "src/hpc_agent/cli/parser.py",
+        "src/hpc_agent/cli/setup.py",
+        "src/hpc_agent/operations.json",
+        "src/hpc_agent/ops/submit_blocks.py",
+        "src/hpc_agent/ops/retarget_run.py",
+        "src/hpc_agent/ops/decision/journal/__init__.py",
+        "src/hpc_agent/ops/monitor/kill.py"
+      ],
+      "design_constraints": [
+        "HARD GATE: after M-CENSUS + M-DERIVE + M-KILL land, and after the parked cli/parser.py lands (the verb's Tier hook, if any, rebases onto it — parser.py is FORBIDDEN here).",
+        "Δ8/SPEC §3 Step D: @primitive verb='workflow', idempotent, idempotency_key='source_run_id', requires_ssh, agent_facing=True, side_effects=[writes the derived per-run tasks.py + ownership artifact; best-effort ssh census read]. Returns in SECONDS (MCP-safe, the retarget_run.py:315-323 contract) — actuates nothing.",
+        "Return needs_decision=True, a PERSISTED brief, next_block={'verb':'submit-s2','why':...,'spec_hint':{'run_id':<derived>}}, and stamp resolved['next_block']='submit-s2' so assert_greenlit_target reads it (block_gate.py:86; mirror retarget_run.py:326-328,357-374). submit-s2 is in GATED_BLOCKS (infra/block_chain.py:93) — reused, no new gated block.",
+        "Δ7/SPEC §3 Step C — cost.py: undone_count x calibrated per-task walltime x effective cores via read_canary_elapsed_sec(runs.py:1150) -> calibrate_array_walltime(canary_calibration.py:110, shrink-only) -> estimate_core_hours(cost.py:125); footprint_unknown honesty (cost.py:88) -> 'unknown core-hours', never a false 0. Disclose the prior is cluster-agnostic core-hours (no per-cluster speed field, clusters.py) and the target is cold-start (needs_canary).",
+        "Brief contents mirror submit-s2 (submit_blocks.py:726-758) + retarget: run_id(derived), cluster(target), migrated_from{run_id,cluster}, what-moves(undone count + wave/task_range), what-DIES(source remainder job_ids+range — killed ONLY after the derived canary is green), est_core_hours+footprint_unknown+cost_estimate, ownership_map digest, census disagreement.",
+        "Δ6/[LIVE-3] ORDERING: the y greenlights submit-s2 (stage+canary the DERIVED run). The source range-kill (M-KILL) fires ONLY after the S2 canary is verified GREEN — the verb itself kills nothing. This inverts retarget's supersede-first order (retarget_run.py:36-43), which is safe only for a whole-grid re-run; document the divergence.",
+        "Persist the brief via the append_brief/_persist_brief seam (submit_blocks.py:105) so the rule-9 provenance gate can diff the y (brief_provenance.py:67). THE only regen-forcing unit (new verb)."
+      ],
+      "acceptance_tests": [
+        "migrate-remainder{source_run_id, target_cluster} on a 216/900 source -> needs_decision=True, next_block=submit-s2, resolved['next_block']=='submit-s2', returns < 2s (no inline canary)",
+        "brief carries undone=684, est_core_hours from source-observed runtime, footprint_unknown honesty, what-dies range",
+        "same-cluster target -> REFUSE (nothing to migrate; route to revise/resubmit)",
+        "missing source sidecar / empty undone set -> REFUSE",
+        "the y through append-decision greenlights submit-s2 on the derived run (parity with retarget)",
+        "doc template present (check_no_pending_primitive_docs); operations.json regen clean"
+      ],
+      "test_batteries_to_run": [
+        "tests/ops/migrate/test_migrate_remainder.py",
+        "tests/cli/test_cli_completeness.py",
+        "tests/contracts/test_doc_frozen_counts.py",
+        "tests/scripts/test_regen_all.py",
+        "tests/_kernel/lifecycle/test_block_drive_specs.py"
+      ],
+      "regen_required": true,
+      "merge_risk": "HIGH"
+    }
+  ]
+}
