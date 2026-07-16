@@ -33,6 +33,8 @@ from hpc_agent.infra.clusters import resolve_ssh_target
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from hpc_agent.infra.backends import HPCBackend
+
 # Stderr substrings that signal a canary failure. Lowercased; matched
 # case-insensitively. Order matters for ``failure_kind`` reporting —
 # more specific markers first so e.g. an ImportError isn't reported as
@@ -186,16 +188,17 @@ def _canary_failed_envelope(
     *,
     markers: list[str],
     returncode: int | None,
-    consecutive: int,
 ) -> dict[str, Any]:
     """Build the ``canary_failed`` envelope from env-independent marker evidence.
 
-    Reached only on the deterministic broken-env escalation path when the
-    plain-``sh`` :func:`hpc_agent.infra.cluster_status.ssh_marker_scan` found the
-    dispatcher's ``.hpc_failed/<run_id>.<task>.failed`` terminal marker(s) —
-    POSITIVE proof the task ran and failed, surviving the broken env that blinded
-    the python status reporter. The marker basenames ride out as evidence in
-    ``details`` (the envelope shape is fixed by ``schemas/verify_canary.output``).
+    Reached only on the deterministic broken-env escalation path — at the ONE
+    terminal status reporter (:func:`_terminal_reporter_verdict`), whose rc 126/127
+    is the broken-env signature — when the plain-``sh``
+    :func:`hpc_agent.infra.cluster_status.ssh_marker_scan` found the dispatcher's
+    ``.hpc_failed/<run_id>.<task>.failed`` terminal marker(s) — POSITIVE proof the
+    task ran and failed, surviving the broken env that blinded the python status
+    reporter. The marker basenames ride out as evidence in ``details`` (the
+    envelope shape is fixed by ``schemas/verify_canary.output``).
     """
     names = ", ".join(markers) if markers else "(none)"
     return {
@@ -205,8 +208,8 @@ def _canary_failed_envelope(
             f"canary {canary_run_id!r} FAILED: the cluster-side dispatcher wrote "
             f"terminal failure marker(s) [{names}] under .hpc_failed/ — positive "
             f"proof the task ran and failed, read with a plain shell scan that "
-            f"survives the broken run env ({consecutive} consecutive status polls "
-            f"died rc={returncode}, the command-not-found/not-executable "
+            f"survives the broken run env (the terminal status reporter died "
+            f"rc={returncode}, the command-not-found/not-executable "
             "signature). Fix the cluster env (hpc-agent importable in the run's "
             "conda env) and inspect the per-task cluster log for the underlying "
             "error before submitting the main array."
@@ -223,12 +226,11 @@ def _deterministic_reporter_envelope(
     reporter_code: str,
     remote_path: str,
     ssh_target: str,
-    consecutive: int,
 ) -> dict[str, Any]:
     """Build the escalated verdict for a DETERMINISTIC reporter fault (finding 7).
 
-    Reached when :data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL` consecutive polls
-    returned the SAME structured reporter error
+    Reached when the ONE terminal status reporter
+    (:func:`_terminal_reporter_verdict`) returned a structured reporter error
     (:data:`errors.DETERMINISTIC_REPORTER_ERROR_CODES` — a run sidecar the deploy
     never shipped, a torn one, a missing ``tasks.py``): a file condition that will
     NEVER appear by waiting, so escalate now instead of riding the 30-min budget.
@@ -251,8 +253,8 @@ def _deterministic_reporter_envelope(
         "failure_kind": "reporter_unreachable",
         "details": (
             f"canary {canary_run_id!r}: the cluster-side status reporter returned "
-            f"a DETERMINISTIC error ({reporter_code!r}) on {consecutive} "
-            f"consecutive polls — a file/manifest condition that will NEVER heal by "
+            f"a DETERMINISTIC error ({reporter_code!r}) at the terminal poll "
+            f"— a file/manifest condition that will NEVER heal by "
             f"waiting, so the canary was escalated immediately instead of riding the "
             f"full wait budget. The reporter polled {polled!r} (derived from the run "
             f"id the submit recorded); sidecars present under .hpc/runs/ on the "
@@ -768,6 +770,195 @@ def _fused_verify_tail(
     }
 
 
+def _light_liveness_summary(
+    *,
+    record: Any,
+    backend_cls: type[HPCBackend],
+    canary_run_id: str,
+) -> dict[str, int]:
+    """LIGHT per-poll liveness for the canary — NO cluster-side python reporter.
+
+    The canary poll loop used to run the FULL status reporter every tick
+    (``ssh_status_report`` → ``python -m …reduce.status``, a per-task result-file
+    walk under the run's conda env) — a heavy cluster-side python invocation on
+    the critical path of every fresh submit. But the lifecycle verdict a poll
+    tick needs is only "is the job still alive, and did its task(s) reach a
+    terminal marker" — both answerable WITHOUT the run's python:
+
+    * :func:`hpc_agent.ops.monitor.announce.read_announcements` — a bare ``ls`` of
+      the dispatcher's per-task terminal markers (``complete``/``failed``),
+      present the instant the array starts (crash-only-monitoring Phase 1). When
+      present it is the FAST terminal signal (``missing == 0`` ⇒ every task
+      announced), mapped to the canonical 5-key summary exactly as
+      :func:`hpc_agent.ops.monitor_flow._announce_status` does (an unannounced
+      task ⇒ ``pending`` so a PARTIAL census stays in-flight).
+    * :func:`hpc_agent.infra.cluster_status.ssh_batch_scheduler_states` — ONE
+      ``qstat``/``squeue`` for liveness before the dispatcher has announced (a
+      still-queued run), folded via ``backend_cls.batch_status``. A job absent
+      from the live queue is terminal-by-absence (all-zero here → the caller's
+      vanished-grace arm), never a ``complete`` (``batch_status`` never emits it).
+
+    Returns the canonical 5-key ``{complete, failed, running, pending, unknown}``
+    the poll loop classifies through :func:`classify.classify_polling` (the ONE
+    count→verdict definition). This light read only decides WHEN to break; the
+    AUTHORITATIVE terminal summary is the ONE heavy reporter the caller runs once
+    the loop is terminal (:func:`_terminal_status_report`). Both light reads use
+    plain ``sh`` — a broken run env (rc 126/127) / a torn-sidecar reporter fault
+    can only surface at that single terminal reporter, where the finding-12/7
+    escalation now fires (:func:`_terminal_reporter_verdict`).
+    """
+    from hpc_agent._kernel.contract.vocabulary import TaskStatus
+    from hpc_agent.infra.cluster_status import ssh_batch_scheduler_states
+    from hpc_agent.ops.monitor.announce import read_announcements
+
+    census = read_announcements(
+        ssh_target=resolve_ssh_target(record),
+        remote_path=record.remote_path,
+        run_id=canary_run_id,
+        task_count=int(record.total_tasks),
+    )
+    if census.get("present"):
+        return {
+            "complete": int(census["complete"]),
+            "failed": int(census["failed"]),
+            "running": 0,
+            "pending": int(census["missing"]),
+            "unknown": 0,
+        }
+    # No announce dir yet — ONE scheduler-state query for liveness. A completed
+    # job has already left the queue (``batch_status`` never emits ``complete``),
+    # so an all-gone fold is all-zero here and the caller's vanished-grace arm
+    # owns the "job left the queue" verdict.
+    states = ssh_batch_scheduler_states(
+        ssh_target=resolve_ssh_target(record),
+        backend_cls=backend_cls,
+        job_ids=list(record.job_ids),
+    )
+    folded = backend_cls.batch_status(states)
+    running = sum(1 for v in folded.values() if v == TaskStatus.RUNNING.value)
+    pending = sum(1 for v in folded.values() if v == TaskStatus.PENDING.value)
+    failed = sum(1 for v in folded.values() if v == TaskStatus.FAILED.value)
+    return {
+        "complete": 0,
+        "failed": failed,
+        "running": running,
+        "pending": pending,
+        "unknown": 0,
+    }
+
+
+def _terminal_status_report(
+    *,
+    record: Any,
+    remote_activation: str,
+    log_dir: str,
+    file_glob: str,
+    canary_run_id: str,
+) -> dict[str, Any]:
+    """Run the ONE heavy status reporter at terminal, G1 breaker-wrapped.
+
+    The liveness split runs the FULL cluster-side reporter exactly ONCE — here,
+    after the light poll loop has broken terminal — to read the authoritative
+    per-task summary the verdict rests on. G1 (the e79edc2c terminal-harvest
+    pattern): a transient breaker trip (:class:`~hpc_agent.errors.SshCircuitOpen`)
+    at this single call must not lose a finished job's verdict, so we wait out one
+    BASE cooldown (the breaker names its own deadline via ``exc.deadline``) and
+    retry ONCE — the sanctioned half-open probe, not the hammering the breaker
+    forbids. A missing/doubled-cooldown deadline (the probe already failed, the
+    host is genuinely unhealthy) re-raises, exactly as
+    :func:`hpc_agent.ops.monitor.harvest_guard.harvest_on_terminal` does; the
+    caller then routes it to ``reporter_unreachable``.
+    """
+    from hpc_agent.infra.cluster_status import ssh_status_report
+    from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec
+
+    def _report() -> dict[str, Any]:
+        return ssh_status_report(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            run_id=canary_run_id,
+            job_ids=list(record.job_ids),
+            job_name=record.job_name,
+            log_dir=log_dir,
+            file_glob=file_glob,
+            remote_activation=remote_activation,
+        )
+
+    try:
+        return _report()
+    except errors.SshCircuitOpen as exc:
+        wait = _circuit_wait_sec(exc, now=time.monotonic())
+        if wait is None:
+            raise
+        time.sleep(wait)
+        return _report()
+
+
+def _terminal_reporter_verdict(
+    exc: Exception,
+    *,
+    record: Any,
+    canary_run_id: str,
+) -> dict[str, Any]:
+    """Escalated verdict when the ONE terminal status reporter raises (finding 12/7).
+
+    The liveness split moved the poll-failure escalation from a per-poll streak to
+    this single terminal call — the light poll loop can't produce rc 126/127 (it
+    never runs the run's python), so a broken run env / a torn-or-never-shipped
+    sidecar reporter fault can only surface HERE. Same three classes, same
+    loud+fast (never full-budget) posture, same envelopes as the retired per-poll
+    escalation:
+
+    * deterministic broken env (rc 126/127) → the env-independent ``.hpc_failed``
+      marker scan (plain ``sh``, survives the broken env): present ⇒ positive
+      ``canary_failed``; absent ⇒ ``reporter_unreachable`` (never-pass-unverified).
+    * a DETERMINISTIC structured reporter fault (a never-shipped/torn sidecar,
+      ``sidecar_not_found`` &c.) → the sidecar-disclosing ``reporter_unreachable``
+      envelope (finding 7).
+    * anything else transient → ``reporter_unreachable``: the reporter never
+      returned a readable status, so the run cannot be trusted as passed.
+    """
+    failure_class = _classify_poll_failure(exc)
+    rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
+    reporter_code = exc.reporter_error_code if isinstance(exc, errors.RemoteCommandFailed) else None
+    if failure_class == "deterministic_reporter" and reporter_code is not None:
+        return _deterministic_reporter_envelope(
+            canary_run_id,
+            reporter_code=reporter_code,
+            remote_path=record.remote_path,
+            ssh_target=resolve_ssh_target(record),
+        )
+    if failure_class == "deterministic_env":
+        from hpc_agent.infra.cluster_status import ssh_marker_scan
+
+        try:
+            scan = ssh_marker_scan(
+                ssh_target=resolve_ssh_target(record),
+                remote_path=record.remote_path,
+                run_id=canary_run_id,
+            )
+        except (errors.RemoteCommandFailed, OSError):
+            scan = {"failed_markers": [], "count": 0}
+        if int(scan.get("count") or 0) > 0:
+            return _canary_failed_envelope(
+                canary_run_id,
+                markers=list(scan.get("failed_markers") or []),
+                returncode=rc,
+            )
+        return _reporter_unreachable_envelope(
+            canary_run_id,
+            exc,
+            annotation=(
+                f"The terminal status reporter failed rc={rc} (the "
+                "command-not-found/not-executable broken-env signature); no "
+                ".hpc_failed marker was found for this run, so failure could not "
+                "be positively confirmed either — the canary is unverifiable, "
+                "not passed."
+            ),
+        )
+    return _reporter_unreachable_envelope(canary_run_id, exc)
+
+
 @primitive(
     name="verify-canary",
     verb="workflow",
@@ -981,8 +1172,8 @@ def verify_canary(
             f"the canary's output) or pass the canary's real result path."
         )
 
-    from hpc_agent.infra.cluster_status import ssh_status_report
     from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.ops.monitor.classify import classify_polling
     from hpc_agent.state.journal import (
         clear_poll_health,
         load_run,
@@ -1046,6 +1237,27 @@ def verify_canary(
         _canary_sidecar["cluster"] = record.cluster
     remote_activation = remote_activation_for_sidecar(_canary_sidecar)
 
+    # Resolve the scheduler UP FRONT (moved above the loop): the LIGHT liveness
+    # poll needs the backend to fold ``ssh_batch_scheduler_states`` tokens, and
+    # the post-terminal stderr fetch needs it too. Substring-matching the cluster
+    # name misroutes any cluster whose name lacks "slurm" (discovery, hoffman2,
+    # cascade, …) to the SGE template, so resolve from clusters.yaml or refuse.
+    from hpc_agent.infra.backends import get_backend_class
+    from hpc_agent.infra.clusters import load_clusters_config
+
+    try:
+        clusters_cfg = load_clusters_config()
+    except Exception:  # noqa: BLE001
+        clusters_cfg = {}
+    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler")
+    if not scheduler:
+        raise errors.SpecInvalid(
+            f"cannot resolve scheduler for canary cluster {record.cluster!r}: "
+            f"absent from clusters.yaml or missing a 'scheduler' key — refusing "
+            f"to guess 'slurm' and risk misrouting the SGE log fetch"
+        )
+    backend_cls = get_backend_class(scheduler)
+
     deadline = time.monotonic() + int(wait_budget_sec)
     last_summary: dict[str, Any] = {}
     last_poll_error: Exception | None = None
@@ -1077,22 +1289,20 @@ def verify_canary(
     # which stays the steady-state ceiling. See ``_CANARY_FAST_POLL_SEC``.
     _poll_ceiling = float(poll_interval_sec)
     effective_poll = _initial_poll_interval(poll_interval_sec)
-    # Finding 12 poll-loop honesty: split poll failures by class, escalate a
-    # deterministic broken env fast, and stamp liveness every poll so the sidecar
-    # never freezes at its submit stamp. Consecutive DETERMINISTIC (rc 126/127)
-    # failures escalate; a transient failure resets the counter and rides the
-    # budget (that class belongs to the connection breaker). The watchdog stamp is
-    # floored (≥ _WATCHDOG_STAMP_FLOOR_SEC) so the fast-start ramp doesn't churn
-    # the sidecar lock every 3s; poll-failure EVIDENCE (error class + count) is
-    # stamped under last_status.poll_health so status-snapshot shows "last N polls
-    # rc=127" instead of a frozen timestamp.
-    consecutive_env_polls = 0
+    # Finding 12 poll-loop honesty: the LIGHT poll (announce-census / one qstat)
+    # can only fail transiently — the deterministic broken-env (rc 126/127) /
+    # torn-sidecar escalation moved to the ONE terminal reporter below
+    # (_terminal_reporter_verdict). Liveness is still stamped every poll so the
+    # sidecar never freezes at its submit stamp; the watchdog stamp is floored
+    # (≥ _WATCHDOG_STAMP_FLOOR_SEC) so the fast-start ramp doesn't churn the
+    # sidecar lock every 3s, and transient poll-failure EVIDENCE (error class +
+    # rc) is stamped under last_status.poll_health so status-snapshot shows a
+    # live-but-struggling poller instead of a frozen timestamp.
     poll_health_dirty = False
     last_watchdog_stamp = float("-inf")
-    # No `while...else`: the budget-timeout / reporter-unreachable arm moved to the
-    # loop head (`if now >= deadline`) so the deterministic-env escalation can also
-    # return from inside the loop. A terminal ``break`` still falls through to the
-    # post-loop stderr fetch, exactly as before.
+    # No `while...else`: the budget-timeout / reporter-unreachable arm sits at the
+    # loop head (`if now >= deadline`). A terminal ``break`` falls through to the
+    # ONE heavy status reporter + the post-loop stderr fetch.
     while True:
         now = time.monotonic()
         if now >= deadline:
@@ -1126,104 +1336,33 @@ def verify_canary(
             )
             last_watchdog_stamp = now
         try:
-            report = ssh_status_report(
-                ssh_target=resolve_ssh_target(record),
-                remote_path=record.remote_path,
-                run_id=canary_run_id,
-                job_ids=list(record.job_ids),
-                job_name=record.job_name,
-                log_dir=log_dir,
-                file_glob=file_glob,
-                remote_activation=remote_activation,
+            summary = _light_liveness_summary(
+                record=record, backend_cls=backend_cls, canary_run_id=canary_run_id
             )
         except errors.TRANSIENT_TRANSPORT_ERRORS as exc:
-            # SshCircuitOpen (an HpcError, NOT an OSError) is raised when a
-            # transient blip trips the per-host breaker; without it here the
-            # canary gate crashes with an undeclared exception instead of riding
-            # the wait budget. _classify_poll_failure returns "transient" for
-            # everything that is not RemoteCommandFailed rc 126/127, so an
-            # open-circuit poll is recorded as last_poll_error and the loop rides
-            # the budget until the breaker heals or the budget elapses (then the
-            # got_report/last_poll_error arm returns reporter_unreachable). This
-            # also makes the docstring's "SshUnreachable is transient" limb live.
+            # The LIGHT poll (a bare ``ls`` announce-census / one ``qstat``) never
+            # runs the run's python, so it can only fail TRANSIENTLY — a broken run
+            # env (rc 126/127) or a torn/never-shipped sidecar reporter fault
+            # surfaces only at the ONE terminal reporter below
+            # (_terminal_reporter_verdict), never here. A transient blip rides the
+            # wait budget (that class belongs to the connection breaker); the
+            # budget-timeout arm above then returns reporter_unreachable.
+            # SshCircuitOpen (an HpcError, NOT an OSError) is in
+            # TRANSIENT_TRANSPORT_ERRORS, so an open-circuit poll rides the budget
+            # too instead of crashing the gate with an undeclared exception. Stamp
+            # the evidence under the DISTINCT poll_health key so status-snapshot
+            # shows a live-but-struggling poller, not a frozen submit-time stamp.
             last_poll_error = exc
             failure_class = _classify_poll_failure(exc)
             rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
-            reporter_code = (
-                exc.reporter_error_code if isinstance(exc, errors.RemoteCommandFailed) else None
-            )
-            # BOTH deterministic classes (broken env rc 126/127 AND a structured
-            # deterministic reporter error — a never-shipped / torn sidecar, finding
-            # 7) share ONE consecutive counter and the ONE escalation threshold: a
-            # file/env condition that fails every poll identically will never heal
-            # by waiting, so escalate fast rather than ride the full budget. A
-            # transient poll resets the counter (that class belongs to the breaker).
-            deterministic = failure_class in ("deterministic_env", "deterministic_reporter")
-            if deterministic:
-                consecutive_env_polls += 1
-            else:
-                consecutive_env_polls = 0
-            # Stamp the failure evidence (error class + consecutive count) under a
-            # DISTINCT key the lifecycle classifiers never read, so the sidecar
-            # reads "polling, last N polls rc=127" instead of a frozen timestamp.
             stamp_poll_health(
                 canary_run_id,
                 error_class=failure_class,
-                consecutive=(consecutive_env_polls if deterministic else 1),
+                consecutive=1,
                 returncode=rc,
                 experiment_dir=experiment_dir,
             )
             poll_health_dirty = True
-            if deterministic and consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL:
-                # A deterministic reporter fault (finding 7: a ``-canary2`` sidecar
-                # that was never pushed answers EVERY poll ``sidecar_not_found``)
-                # gets its OWN escalated verdict that names the reporter code, the
-                # sidecar path it polled (derived from the recorded run id — the
-                # one-definition rule), and which sibling sidecars actually shipped
-                # — so the never-shipped-sidecar bug is legible at a glance instead
-                # of a bland reporter_unreachable after a burned budget.
-                if failure_class == "deterministic_reporter" and reporter_code is not None:
-                    return _deterministic_reporter_envelope(
-                        canary_run_id,
-                        reporter_code=reporter_code,
-                        remote_path=record.remote_path,
-                        ssh_target=resolve_ssh_target(record),
-                        consecutive=consecutive_env_polls,
-                    )
-                # A broken run env fails every poll the same way and will NEVER
-                # heal by waiting — escalate now instead of riding the full budget.
-                # Read the env-independent .hpc_failed markers with plain sh (it
-                # works when python is gone): present → positive canary_failed;
-                # absent → still a loud reporter_unreachable (the scan proves
-                # FAILURE only; a marker-less blind run is never called passed).
-                from hpc_agent.infra.cluster_status import ssh_marker_scan
-
-                try:
-                    scan = ssh_marker_scan(
-                        ssh_target=resolve_ssh_target(record),
-                        remote_path=record.remote_path,
-                        run_id=canary_run_id,
-                    )
-                except (errors.RemoteCommandFailed, OSError):
-                    scan = {"failed_markers": [], "count": 0}
-                if int(scan.get("count") or 0) > 0:
-                    return _canary_failed_envelope(
-                        canary_run_id,
-                        markers=list(scan.get("failed_markers") or []),
-                        returncode=rc,
-                        consecutive=consecutive_env_polls,
-                    )
-                return _reporter_unreachable_envelope(
-                    canary_run_id,
-                    last_poll_error,
-                    annotation=(
-                        f"Escalated after {consecutive_env_polls} consecutive "
-                        f"deterministic broken-env polls (rc={rc}); no .hpc_failed "
-                        "marker was found for this run, so failure could not be "
-                        "positively confirmed either — the canary is unverifiable, "
-                        "not passed."
-                    ),
-                )
             time.sleep(effective_poll)
             effective_poll = _next_poll_interval(effective_poll, _poll_ceiling)
             continue
@@ -1233,38 +1372,36 @@ def verify_canary(
             # the sidecar no longer reads "polling, rc=127".
             clear_poll_health(canary_run_id, experiment_dir=experiment_dir)
             poll_health_dirty = False
-        last_summary = dict(report.get("summary") or {})
+        last_summary = dict(summary)
         complete = int(last_summary.get("complete") or 0)
         failed = int(last_summary.get("failed") or 0)
         running = int(last_summary.get("running") or 0)
         pending = int(last_summary.get("pending") or 0)
-        # Terminal: complete == total OR (failed > 0 and no running/pending).
-        if complete >= int(record.total_tasks) and record.total_tasks > 0:
-            break
-        if failed > 0 and running == 0 and pending == 0:
+        # Terminal detection routed through the ONE count→verdict definition
+        # (classify.classify_polling): COMPLETE (complete >= total) or FAILED (no
+        # live work + a failure) from the LIGHT census. ``None`` = keep polling.
+        # The AUTHORITATIVE terminal summary comes from the ONE heavy reporter run
+        # after the loop breaks (_terminal_status_report), not this light read.
+        state, _reason = classify_polling(summary, int(record.total_tasks))
+        if state is not None:
             break
         # Job absent from the scheduler's live view: no task is complete, failed,
-        # running, or pending — every remaining task sits in the reporter's
-        # ``unknown`` bucket. Count consecutive such polls; once they persist
-        # past the registration grace, the canary finished (or died) and left the
-        # queue — break fast as ``completed_unknown`` rather than time out. The
-        # stderr scan below still runs, so a real failure marker (OOM, traceback)
-        # is preferred over the bland unknown verdict.
+        # running, or pending. In the LIGHT poll this is an all-zero summary: no
+        # announce dir yet (census absent) AND the job is gone from the live
+        # scheduler queue (``batch_status`` emitted nothing). Count consecutive
+        # such polls; once they persist past the registration grace, the canary
+        # finished (or died) and left the queue — break fast as ``completed_unknown``
+        # rather than time out. The ONE terminal reporter + the stderr scan below
+        # still run, so a real failure marker (OOM, traceback) or a late-appearing
+        # completion is preferred over the bland unknown verdict.
         #
-        # F-L (run #10): this guard previously ALSO required ``unknown == 0``,
-        # but a gone 1-task canary is bucketed ``unknown == 1`` by the status
-        # reporter (a task that is neither complete, in a scheduler-FAILED
-        # accounting state, nor live in qstat lands in ``unknown`` —
-        # reduce/status.py). The five buckets sum to ``total_tasks``, so with the
-        # four active/terminal buckets at zero the remainder is ``unknown >= 1``
-        # for any ``total_tasks >= 1`` — making the all-zero condition
-        # unsatisfiable and the fast arm dead. A job dead on the scheduler in
-        # ~20s therefore rode the full 1800s budget to ``timeout`` (qacct
-        # evidence: job 13956468, exit_status 1). Dropping the ``unknown == 0``
-        # clause makes "all quiet ⇒ every task unknown" the signal; the
+        # The light path has no ``unknown`` bucket (the reduce-reporter's F-L
+        # over-bucketing of a gone 1-task canary as ``unknown == 1`` can't recur
+        # here — a job absent from qstat simply contributes nothing to the fold),
+        # so "all quiet ⇒ job left the queue" is the direct signal; the
         # registration grace still distinguishes the pre-qstat startup window
-        # (which reads unknown too, but resets the moment a task shows
-        # running/pending) from a job that truly left the queue.
+        # (also all-zero, but resets the moment a task shows running/pending) from
+        # a job that truly left the queue.
         if complete == 0 and failed == 0 and running == 0 and pending == 0:
             vanished_polls += 1
             if first_vanished_at is None:
@@ -1282,25 +1419,33 @@ def verify_canary(
         time.sleep(effective_poll)
         effective_poll = _next_poll_interval(effective_poll, _poll_ceiling)
 
-    # Fetch the canary's stderr tail (1 task, task_id=0).
-    # Resolve scheduler from clusters.yaml — substring-matching on the
-    # cluster name misroutes any cluster whose name doesn't literally
-    # contain "slurm" (discovery, hoffman2, cascade, …) to the SGE
-    # log-path template.
-    from hpc_agent.infra.clusters import load_clusters_config
-
+    # ── ONE heavy status reporter at terminal (the liveness split) ──
+    # The poll loop above issued only LIGHT liveness reads (announce-census / one
+    # qstat, no cluster-side python). Now that the run is terminal, read the
+    # AUTHORITATIVE per-task summary the verdict rests on with the FULL reporter —
+    # exactly ONCE. A DETERMINISTIC reporter fault (rc 126/127 broken env, a
+    # torn/never-shipped sidecar) can only surface here (the light reads never run
+    # the run's python) and escalates loud+fast via _terminal_reporter_verdict —
+    # the finding-12/finding-7 escalation, moved to this single call, never a
+    # full-budget spin. G1: a transient breaker trip is waited out + retried once
+    # inside _terminal_status_report so a finished job's verdict is never lost.
     try:
-        clusters_cfg = load_clusters_config()
-    except Exception:  # noqa: BLE001
-        clusters_cfg = {}
-    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler")
-    if not scheduler:
-        raise errors.SpecInvalid(
-            f"cannot resolve scheduler for canary cluster {record.cluster!r}: "
-            f"absent from clusters.yaml or missing a 'scheduler' key — refusing "
-            f"to guess 'slurm' and risk misrouting the SGE log fetch"
+        report = _terminal_status_report(
+            record=record,
+            remote_activation=remote_activation,
+            log_dir=log_dir,
+            file_glob=file_glob,
+            canary_run_id=canary_run_id,
         )
+    except errors.SshCircuitOpen as exc:
+        # G1 gave up (no deadline, or a doubled cooldown — the host is genuinely
+        # unhealthy): a finished job we cannot read is reporter_unreachable, loud.
+        return _reporter_unreachable_envelope(canary_run_id, exc)
+    except errors.TRANSIENT_TRANSPORT_ERRORS as exc:
+        return _terminal_reporter_verdict(exc, record=record, canary_run_id=canary_run_id)
+    last_summary = dict(report.get("summary") or {})
 
+    # Fetch the canary's stderr tail (1 task, task_id=0) — scheduler resolved above.
     # RANK 18: fold the WHOLE post-terminal verify tail — stderr tail + cat
     # _runtime.json + optional expect_output existence + optional sha256 — into ONE
     # ssh round trip (:func:`_fused_verify_tail`) instead of 3–6 serial cold-SSH

@@ -59,7 +59,7 @@ from hpc_agent.infra.ssh_options import (
 from hpc_agent.infra.ssh_throttle import throttle_connection
 from hpc_agent.infra.ssh_validation import validate_remote_path
 
-from ._delta import _DELTA_MANIFEST_FILE_CAP, _load_hash_cache, _store_hash_cache
+from ._delta import _DELTA_MANIFEST_FILE_CAP
 from ._disclose import _pump_with_progress, disclose_child_failure
 
 if TYPE_CHECKING:
@@ -278,42 +278,170 @@ def _remote_pull_manifest(
         return None
 
 
+# --- pull-manifest local stat cache (F2, run-13 finding-13 rows) -------------
+#
+# The pull's own local quick-check cache — a DEDICATED file (never the push's
+# ``.hpc/.push_hash_cache.json``: the two caches key different tree shapes and
+# must not collide), keyed per relpath -> (size, mtime_ns, sha256, cmd_sha), so
+# a re-aggregate over an unchanged local tree re-hashes NOTHING (a stat-walk).
+#
+# The three run-13 finding-13 hardenings the push snippet learned, brought to
+# the pull side (doctrine D2 / G2):
+#   * cmd_sha keying — the dispatcher stamps a ``.hpc_cmd_sha`` sidecar into each
+#     result dir on promote. A repair/graft that re-runs a task moves that sidecar
+#     but a torn overwrite can leave the sibling summary's (size, mtime_ns)
+#     colliding. Stat only ever decides UNCHANGED; a moved cmd_sha MUST evict the
+#     cached sha even when size+mtime match, or the pull-delta would judge the
+#     stale local copy content-identical and never re-pull it (the finding-13
+#     class, pull direction).
+#   * skew window — an entry whose file mtime is younger than the skew window
+#     counts DIRTY (re-hash): a torn write still in flight can share the prior
+#     mtime at coarse fs granularity, so a just-touched file is never trusted from
+#     stat alone.
+#   * success-only — a read that raises (a vanished/severed file) is dropped from
+#     BOTH the manifest and the cache; a failure is never cached as a value.
+# The cache is rebuilt fresh each call holding ONLY the current path set, so
+# foreign rows (a prior key set, a different run) drop out — a stale row can never
+# be served. Written atomically (temp+rename) and fail-open: any cache problem
+# degrades to a full re-hash, never a wrong sha.
+_PULL_HASH_CACHE_REL: Final[str] = ".hpc/.pull_hash_cache.json"
+_PULL_CACHE_VERSION: Final[int] = 1
+_PULL_CMD_SHA_FILENAME: Final[str] = ".hpc_cmd_sha"
+
+#: Skew window (ns): a cache entry whose file was modified within this window of
+#: NOW counts dirty and is re-hashed — stat alone cannot rule out a torn write in
+#: flight. Env-tunable (``HPC_PULL_CACHE_SKEW_SEC``, seconds) for ops + tests;
+#: 0 disables the guard (a pure stat cache).
+_PULL_CACHE_SKEW_SEC_DEFAULT: Final[float] = 2.0
+
+
+def _pull_cache_skew_ns() -> int:
+    """The pull-cache skew window in nanoseconds, env-tunable (>=0)."""
+    raw = os.environ.get("HPC_PULL_CACHE_SKEW_SEC")
+    if raw is None:
+        secs = _PULL_CACHE_SKEW_SEC_DEFAULT
+    else:
+        try:
+            secs = float(raw)
+        except ValueError:
+            secs = _PULL_CACHE_SKEW_SEC_DEFAULT
+    return max(0, int(secs * 1_000_000_000))
+
+
+def _load_pull_cache(root: Path) -> dict[str, dict[str, Any]]:
+    """Read the pull quick-check cache, or ``{}`` on any problem (fail-open).
+
+    A first pull, an unreadable/corrupt file, a wrong shape, or a schema-version
+    mismatch all collapse to an empty cache — the scan then full-re-hashes and
+    rewrites the cache. The cache is a pure optimization, never a correctness
+    input, so a discarded cache only costs a re-hash (never a wrong sha).
+    """
+    path = root / _PULL_HASH_CACHE_REL
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != _PULL_CACHE_VERSION:
+        return {}
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return {}
+    return entries
+
+
+def _store_pull_cache(root: Path, entries: dict[str, dict[str, Any]]) -> None:
+    """Persist the pull quick-check cache atomically (temp+rename), fail-open.
+
+    Only inside a real pull tree (``.hpc/`` creatable); a regenerable derived
+    artifact, so ``fsync`` is skipped (a crash that loses it only forces a
+    re-hash). A store failure never touches the manifest already returned.
+    """
+    from hpc_agent.infra.io import atomic_write_json
+
+    with contextlib.suppress(OSError):
+        atomic_write_json(
+            root / _PULL_HASH_CACHE_REL,
+            {"version": _PULL_CACHE_VERSION, "entries": entries},
+            fsync=False,
+        )
+
+
+def _dir_cmd_sha(dir_path: Path, memo: dict[Path, str]) -> str:
+    """The ``.hpc_cmd_sha`` fingerprint stamped in *dir_path*, or ``""`` if absent.
+
+    Memoized per directory so a dir of many summaries reads its sidecar once. An
+    unreadable/absent sidecar yields ``""`` (a legacy piece a pre-stamp
+    dispatcher wrote): the cmd_sha gate then never fires for it and the size+mtime
+    delta stands alone, exactly the finding's documented fallback.
+    """
+    cached = memo.get(dir_path)
+    if cached is not None:
+        return cached
+    try:
+        sha = (dir_path / _PULL_CMD_SHA_FILENAME).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        sha = ""
+    memo[dir_path] = sha
+    return sha
+
+
 def _local_present_manifest(local_path: Path, paths: list[str]) -> Any:
     """Content manifest of the files in *paths* that ALREADY exist under *local_path*.
 
     Only present files are hashed (absent ones are what the pull will fetch), so
     this is the pull inverse of :func:`._delta._build_local_manifest_cached`,
-    which hard-errors on a missing path. Reuses the local quick-check cache
-    (``._delta._load_hash_cache`` / ``_store_hash_cache``, imported read-only) so
-    a re-pull re-hashes only files whose (size, mtime_ns) changed.
+    which hard-errors on a missing path. Backed by the DEDICATED pull quick-check
+    cache (:func:`_load_pull_cache`) so a re-pull re-hashes ONLY files whose
+    ``(size, mtime_ns)`` moved — with the run-13 finding-13 hardenings: a moved
+    ``.hpc_cmd_sha`` evicts the cached sha even on a stat match, a file younger
+    than the skew window is re-hashed, and a severed read is cached by neither the
+    manifest nor the cache (success-only).
     """
     from hpc_agent.infra.manifest import FileEntry, Manifest, _sha256_of
 
-    cache = _load_hash_cache(local_path)
+    cache = _load_pull_cache(local_path)
     new_cache: dict[str, dict[str, Any]] = {}
     entries: list[Any] = []
+    skew_ns = _pull_cache_skew_ns()
+    now_ns = time.time_ns()
+    cmd_sha_memo: dict[Path, str] = {}
     for rel in paths:
         rel_posix = Path(rel).as_posix()
         full = local_path / rel
         if not full.is_file():
             continue
-        st = full.stat()
+        try:
+            st = full.stat()
+        except OSError:
+            continue  # severed read: neither manifested nor cached (success-only)
         size = st.st_size
         mtime_ns = st.st_mtime_ns
+        cmd_sha = _dir_cmd_sha(full.parent, cmd_sha_memo)
         prior = cache.get(rel_posix)
+        is_young = skew_ns > 0 and (now_ns - mtime_ns) < skew_ns
         if (
-            isinstance(prior, dict)
+            not is_young
+            and isinstance(prior, dict)
             and prior.get("size") == size
             and prior.get("mtime_ns") == mtime_ns
+            and prior.get("cmd_sha", "") == cmd_sha  # a moved cmd_sha evicts
             and isinstance(prior.get("sha256"), str)
         ):
             sha = str(prior["sha256"])
         else:
-            sha = _sha256_of(full)
+            try:
+                sha = _sha256_of(full)
+            except OSError:
+                continue  # severed read mid-hash: success-only, drop it
         entries.append(FileEntry(path=rel_posix, size=size, sha256=sha))
-        new_cache[rel_posix] = {"size": size, "mtime_ns": mtime_ns, "sha256": sha}
+        new_cache[rel_posix] = {
+            "size": size,
+            "mtime_ns": mtime_ns,
+            "sha256": sha,
+            "cmd_sha": cmd_sha,
+        }
     entries.sort(key=lambda e: e.path)
-    _store_hash_cache(local_path, new_cache)
+    _store_pull_cache(local_path, new_cache)
     return Manifest(entries=tuple(entries))
 
 

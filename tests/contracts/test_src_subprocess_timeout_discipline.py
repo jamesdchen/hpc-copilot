@@ -374,3 +374,104 @@ def test_bounded_runner_audit_fires() -> None:
     good = ast.parse("def push():\n    return run_capture_bounded(['ssh', 'x'], timeout_sec=60)\n")
     good_fn = next(n for n in ast.walk(good) if isinstance(n, ast.FunctionDef))
     assert _bounded_runner_audit(good_fn) == (False, True)
+
+
+# ── WS-INPROC in-process-eligibility carve-out (enforcement-map row 7) ──────────
+#
+# ``block_drive._IN_PROCESS_ELIGIBLE_VERBS`` names the block verbs a driver span
+# may dispatch IN-PROCESS instead of spawning a subprocess. The carve-out is
+# ENCODED, not blanket: an eligible verb must be a LOCAL, decision/state-only
+# block — it must NOT shell ssh (which would wedge the synchronous MCP server) nor
+# block on a watch/wait. This guard turns RED the instant an ssh-reaching or
+# WATCH verb is planted into the set.
+
+# Side-effect kinds that mean a verb reaches the cluster (ssh transport /
+# scheduler mutation / a remote sync). Any of these on an eligible verb is a
+# violation.
+_CLUSTER_SIDE_EFFECT_KINDS = {"ssh", "scheduler-submit", "sync-pull"}
+
+
+def _in_process_eligibility_violation(
+    verb: str, *, requires_ssh: bool, side_effect_kinds: set[str], is_watch: bool
+) -> str | None:
+    """Pure policy: why *verb* may NOT be in-process-eligible, or ``None`` if it may.
+
+    Split out so the fire path can exercise the rule without the live registry
+    (the same pure-scan / policy split the subprocess-discipline check uses).
+    """
+    if is_watch:
+        return f"{verb} is a WATCH verb — it blocks on a poll and must stay a subprocess"
+    if requires_ssh:
+        return f"{verb} declares requires_ssh — an ssh-shelling verb must stay a subprocess"
+    cluster = side_effect_kinds & _CLUSTER_SIDE_EFFECT_KINDS
+    if cluster:
+        return f"{verb} declares cluster side-effect(s) {sorted(cluster)} — must stay a subprocess"
+    return None
+
+
+def test_in_process_eligible_verbs_are_local_and_never_watch() -> None:
+    """No ssh-reaching / WATCH verb may sit in ``_IN_PROCESS_ELIGIBLE_VERBS``.
+
+    The planted-violation guard for the WS-INPROC carve-out: an in-process span
+    reuses the synchronous server's thread, so a member that shells ssh or blocks
+    on a watch would wedge it. Each member is validated against its LIVE primitive
+    metadata (declared side-effects + requires_ssh) and ``block_chain.WATCH_VERBS``.
+    """
+    from hpc_agent._kernel.lifecycle import block_drive
+    from hpc_agent._kernel.registry.primitive import get_meta, register_single_module
+    from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
+    from hpc_agent.infra import block_chain
+
+    violations: list[str] = []
+    for verb in sorted(block_drive._IN_PROCESS_ELIGIBLE_VERBS):
+        entry = VERB_MODULE_MAP.get(verb)
+        assert entry is not None, f"{verb} is not in VERB_MODULE_MAP — cannot dispatch in-process"
+        primitive_name, module_name = entry
+        register_single_module(module_name)
+        meta = get_meta(primitive_name)
+        shape = meta.cli
+        kinds = {se.kind for se in (meta.side_effects or [])}
+        reason = _in_process_eligibility_violation(
+            verb,
+            requires_ssh=bool(getattr(shape, "requires_ssh", False)),
+            side_effect_kinds=kinds,
+            is_watch=verb in block_chain.WATCH_VERBS,
+        )
+        if reason is not None:
+            violations.append("  " + reason)
+
+    assert not violations, (
+        "In-process-eligible block verb(s) reach the cluster or block on a watch — "
+        "the WS-INPROC carve-out is LOCAL/decision-only. Remove them from "
+        "_IN_PROCESS_ELIGIBLE_VERBS (they keep the subprocess seam):\n"
+        + "\n".join(violations)
+    )
+
+
+def test_in_process_eligibility_rule_fires_on_planted_ssh_and_watch() -> None:
+    """Fire path: an ssh-reaching or WATCH verb planted into the set is rejected."""
+    # An ssh-shelling verb (requires_ssh) is rejected.
+    assert _in_process_eligibility_violation(
+        "aggregate-check", requires_ssh=True, side_effect_kinds={"ssh"}, is_watch=False
+    )
+    # A scheduler-mutating verb is rejected on its side-effect alone.
+    assert _in_process_eligibility_violation(
+        "campaign-refill",
+        requires_ssh=False,
+        side_effect_kinds={"scheduler-submit"},
+        is_watch=False,
+    )
+    # A WATCH verb is rejected even with no declared side-effect.
+    assert _in_process_eligibility_violation(
+        "campaign-watch", requires_ssh=False, side_effect_kinds=set(), is_watch=True
+    )
+    # A genuinely local, decision-only verb is accepted.
+    assert (
+        _in_process_eligibility_violation(
+            "campaign-complete",
+            requires_ssh=False,
+            side_effect_kinds={"writes-campaign-state"},
+            is_watch=False,
+        )
+        is None
+    )

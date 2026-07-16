@@ -149,8 +149,19 @@ def test_local_present_manifest_hashes_only_present_files(tmp_path):
     assert paths == ["present.txt"]  # absent one silently skipped (it's what we'll pull)
 
 
+def _age_file(path: Path, seconds: float = 10.0) -> None:
+    """Backdate *path*'s mtime past the pull-cache skew window so a stat-match is
+    trusted from cache (a just-written file is treated as dirty by the skew guard)."""
+    import os
+
+    st = path.stat()
+    old = st.st_mtime - seconds
+    os.utime(path, (old, old))
+
+
 def test_local_present_manifest_reuses_cache(tmp_path, monkeypatch):
     (tmp_path / "f.txt").write_text("content")
+    _age_file(tmp_path / "f.txt")  # clear the skew window (pin flip: F2 skew guard)
     # First call hashes + writes the cache.
     m1 = _pull._local_present_manifest(tmp_path, ["f.txt"])
     sha = m1.entries[0].sha256
@@ -168,6 +179,107 @@ def test_local_present_manifest_reuses_cache(tmp_path, monkeypatch):
     m2 = _pull._local_present_manifest(tmp_path, ["f.txt"])
     assert m2.entries[0].sha256 == sha
     assert calls["n"] == 0  # size+mtime matched -> cached sha reused
+
+
+def test_local_present_manifest_young_file_rehashed(tmp_path, monkeypatch):
+    """G2 skew window: a file modified within the skew window counts DIRTY.
+
+    A just-written file (mtime ~ now) is never trusted from stat alone — a torn
+    write in flight can share the prior mtime at coarse fs granularity.
+    """
+    (tmp_path / "f.txt").write_text("content")  # NOT aged: young
+    _pull._local_present_manifest(tmp_path, ["f.txt"])  # seed cache
+    import hpc_agent.infra.manifest as manifest_mod
+
+    calls = {"n": 0}
+    real = manifest_mod._sha256_of
+    monkeypatch.setattr(
+        manifest_mod, "_sha256_of", lambda p: (calls.__setitem__("n", calls["n"] + 1), real(p))[1]
+    )
+    _pull._local_present_manifest(tmp_path, ["f.txt"])
+    assert calls["n"] == 1  # young -> re-hashed despite the stat match
+
+
+def test_local_present_manifest_moved_cmd_sha_evicts_on_stat_match(tmp_path):
+    """FIRES (D2, run-13 finding-13 pull direction): a moved ``.hpc_cmd_sha`` evicts
+    the cached sha even when size+mtime collide — the torn-overwrite class.
+
+    Mirrors tests/ops/aggregate/test_flow_stale_mirror.py: a repair/graft re-runs
+    a task, moving its cmd_sha sidecar, but a torn overwrite leaves the summary's
+    (size, mtime_ns) unchanged. The OLD stat-only cache would serve the stale sha
+    (the pull-delta then judges local==remote and never re-pulls); the cmd_sha
+    gate re-hashes, so the manifest reflects the file actually on disk.
+    """
+    import os
+
+    task = tmp_path / "task_0"
+    task.mkdir()
+    summary = task / "metrics.json"
+    summary.write_text('{"metric": 999.0}')  # the stale Jul-11 blown copy
+    (task / ".hpc_cmd_sha").write_text("a" * 64)
+    _age_file(summary)
+    m1 = _pull._local_present_manifest(tmp_path, ["task_0/metrics.json"])
+    stale_sha = m1.entries[0].sha256
+
+    # Torn overwrite: same byte length -> same size; restore mtime -> stat collides.
+    st = summary.stat()
+    summary.write_text('{"metric": 007.0}')  # fresh value, identical length
+    os.utime(summary, ns=(st.st_atime_ns, st.st_mtime_ns))
+    (task / ".hpc_cmd_sha").write_text("b" * 64)  # cmd_sha moved on the graft
+
+    m2 = _pull._local_present_manifest(tmp_path, ["task_0/metrics.json"])
+    assert summary.stat().st_mtime_ns == st.st_mtime_ns  # stat really did collide
+    assert m2.entries[0].sha256 != stale_sha  # evicted + re-hashed to the fresh value
+
+    # PASSES: an unchanged cmd_sha with an unchanged stat is served from cache.
+    m3 = _pull._local_present_manifest(tmp_path, ["task_0/metrics.json"])
+    assert m3.entries[0].sha256 == m2.entries[0].sha256
+
+
+def test_local_present_manifest_foreign_rows_dropped(tmp_path):
+    """G2 foreign-rows guard: a cache row for a path not in the current key set is
+    never served and drops out of the rewritten cache."""
+    import json as _json
+
+    (tmp_path / "keep.txt").write_text("keep")
+    _age_file(tmp_path / "keep.txt")
+    # Pre-seed the cache with a FOREIGN row (a path absent from this call's set).
+    hpc = tmp_path / ".hpc"
+    hpc.mkdir()
+    (hpc / ".pull_hash_cache.json").write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    "keep.txt": {"size": 4, "mtime_ns": 0, "sha256": "wrong", "cmd_sha": ""},
+                    "foreign.txt": {"size": 9, "mtime_ns": 9, "sha256": "x", "cmd_sha": ""},
+                },
+            }
+        )
+    )
+    manifest = _pull._local_present_manifest(tmp_path, ["keep.txt"])
+    assert [e.path for e in manifest.entries] == ["keep.txt"]  # foreign row never manifested
+    # The rewritten cache holds only the current key set.
+    doc = _json.loads((hpc / ".pull_hash_cache.json").read_text())
+    assert set(doc["entries"]) == {"keep.txt"}
+
+
+def test_local_present_manifest_severed_read_not_cached(tmp_path, monkeypatch):
+    """D2 success-only: a read that raises is cached by neither manifest nor cache."""
+    import json as _json
+
+    (tmp_path / "f.txt").write_text("content")
+    _age_file(tmp_path / "f.txt")
+    import hpc_agent.infra.manifest as manifest_mod
+
+    def _boom(_p):
+        raise OSError("VPN severed mid-hash")
+
+    monkeypatch.setattr(manifest_mod, "_sha256_of", _boom)
+    manifest = _pull._local_present_manifest(tmp_path, ["f.txt"])
+    assert manifest.entries == ()  # severed read -> not manifested
+    doc = _json.loads((tmp_path / ".hpc" / ".pull_hash_cache.json").read_text())
+    assert doc["entries"] == {}  # ... and not cached
 
 
 # --- delta orchestration (ssh transfer mocked) --------------------------------
@@ -481,6 +593,69 @@ def test_rsync_pull_still_uses_rsync_when_present(tmp_path):
             ssh_target="u@h", remote_path="/r", remote_subdir="_combiner", local_dir=tmp_path / "o"
         )
     assert run_mock.call_args[0][0][0] == "rsync"  # engine reroute is fallback-only
+
+
+# --- F7: transfer-plane bypasses the engine + preamble (byte-equality) --------
+#
+# The verify-during-build claim (rt.transfer-plane-bypasses-engine): agent B's
+# preamble-free control plane (env_python / remote_activation_for_sidecar) lives
+# in clusters.py/submit_flow.py/host_retarget.py/monitor_flow.py — the CONTROL
+# plane. Transfer-plane data ops (tar|ssh pull, the manifest round-trip) build
+# their remote command directly and spawn ssh via ssh_argv, never routing through
+# ssh_engine (capture-mode ssh_run only) nor prepending any conda/module preamble.
+# These pins keep it that way: a preamble token appearing in a transfer command,
+# or the manifest round-trip's argv diverging from the raw ssh_argv form, reds.
+
+_PREAMBLE_MARKERS = (
+    "conda activate",
+    "module load",
+    "hpc_preamble",
+    "source ",
+    "CONDA_SOURCE",
+    "HPC_AGENT_OP",  # build_remote_command's control-plane marker
+)
+
+
+def test_transfer_plane_remote_cmds_carry_no_preamble():
+    batch = _pull._batch_remote_cmd("/r/results", ["a.json", "sub/b.json"], "-z")
+    fallback = _pull._fallback_remote_cmd("/r/results", ["metrics.json"], None, "-z")
+    for cmd in (batch, fallback):
+        for marker in _PREAMBLE_MARKERS:
+            assert marker not in cmd, f"preamble token {marker!r} leaked into {cmd!r}"
+
+
+def test_manifest_round_trip_argv_is_raw_ssh_no_preamble(monkeypatch):
+    """Byte-level: the manifest ssh argv is exactly ssh_argv + target + raw cmd —
+    no engine channel, no preamble wrap between our command and ssh."""
+    from hpc_agent.infra.ssh_options import ssh_argv
+
+    captured = {}
+
+    def _fake_run(argv, *, timeout_sec, **_kw):
+        captured["argv"] = list(argv)
+        return _ok(stdout="")
+
+    monkeypatch.setattr(_pull, "run_capture_bounded", _fake_run)
+    monkeypatch.setattr(_pull, "run_with_named_pipe_retry", lambda fn: fn())
+    _pull._ssh_capture("u@h", "cd /r && echo hi", timeout=5, what="manifest")
+
+    argv = captured["argv"]
+    assert argv[:-2] == list(ssh_argv("ssh"))  # the raw ssh invocation, no engine
+    assert argv[-2] == "u@h"
+    assert argv[-1] == "cd /r && echo hi"  # command byte-identical, unpreambled
+    for marker in _PREAMBLE_MARKERS:
+        assert marker not in argv[-1]
+
+
+def test_transfer_plane_never_imports_engine_or_activation():
+    """The transfer-plane module must not route data ops through the ssh engine
+    or the control-plane activation seam (grep the source — a call would red)."""
+    import inspect
+
+    src = inspect.getsource(_pull)
+    assert "remote_activation_for_sidecar" not in src
+    assert "engine_ssh_run" not in src
+    assert "engine_enabled" not in src
 
 
 # --- integration: the REAL remote command strings against a local tree --------

@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import io
 import json
 import logging
 import os
@@ -55,7 +56,7 @@ from hpc_agent.state.journal import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from hpc_agent.ops.overnight import ConsumptionOutcome
@@ -92,6 +93,84 @@ _FRESH_ENTRY_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot", "aggr
 # (``AggregateCheckSpec.run_id`` is a required ``RunIdStrict``), so a bare tick
 # without one gets the clear skip, never a doomed ``SpecInvalid`` span.
 _FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot"})
+
+
+# ── in-process span eligibility (WS-INPROC) ─────────────────────────────────────
+#
+# The DECLARED, ENUMERATED set of block verbs a driver span may dispatch
+# IN-PROCESS (no ``python -m hpc_agent`` subprocess) — reusing the warm registry
+# instead of re-paying interpreter cold-start + the registry walk on every span.
+#
+# The carve-out is ENCODED, not blanket: a verb qualifies ONLY when it is a
+# LOCAL, decision/state-only block that never shells ssh and never blocks on a
+# watch/wait. Membership is pinned by
+# ``tests/contracts/test_src_subprocess_timeout_discipline.py`` — a member that
+# declares an ``ssh`` / scheduler side-effect, sets ``requires_ssh``, or joins
+# ``block_chain.WATCH_VERBS`` turns that contract RED (the planted-violation
+# guard). So the KEEP-subprocess seam holds for:
+#   * ssh-shelling children — ``submit-s1/s2/s4``, ``aggregate-check``/``-run``,
+#     ``status-snapshot`` (all declare a conditional ssh side-effect + require_ssh),
+#     and check-preflight / resolve-resources (preflight sub-calls);
+#   * WATCH_VERBS — ``submit-s3`` / ``status-watch`` / ``campaign-watch``;
+#   * 2.6's per-host census waiter (a WATCH_VERB subprocess, named so it cannot be
+#     inlined here).
+# Only ``campaign-greenlight`` (writes-campaign-state, local journal) and
+# ``campaign-complete`` (side_effects=[]) clear the bar today: both are cluster-free
+# state/decision blocks.
+_IN_PROCESS_ELIGIBLE_VERBS: frozenset[str] = frozenset({"campaign-greenlight", "campaign-complete"})
+
+
+@contextlib.contextmanager
+def _shield_stdin_for_span() -> Iterator[None]:
+    """Swap the REAL ``sys.stdin`` out for an empty buffer during an in-process span.
+
+    The block-drive tick itself may be running IN-PROCESS inside the MCP server
+    (``mcp_server._in_process_cli_runner``), whose reader thread is blocked in
+    ``readline()`` on the real ``sys.stdin`` (the JSON-RPC transport). A verb that
+    reads stdin in-process — or any code that reconfigures it — must never touch
+    that stream: a reconfigure-under-read returns a false EOF on Windows and kills
+    the reader thread (regression 17243a17). Swap in an empty ``StringIO`` for the
+    span's duration so an in-process verb sees EOF instead of eating the transport's
+    bytes; restore on exit. The same shielding the MCP in-proc runner seam applies,
+    reproduced locally (the runner is package-private to ``_kernel/extension`` and
+    cannot be imported across the package boundary).
+    """
+    import sys
+
+    prev = sys.stdin
+    sys.stdin = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdin = prev
+
+
+def _in_process_eligible(verb: str) -> bool:
+    """Whether *verb* may run as an in-process span (enumerated set + fast-path gate).
+
+    Members of :data:`_IN_PROCESS_ELIGIBLE_VERBS` run in-process UNLESS the single
+    -verb dispatch surface is unavailable for them — the same conditions the CLI
+    fast path defers on: the ``HPC_AGENT_NO_FAST_CLI`` kill switch, or an installed
+    plugin that can reshape this core verb's CLI (then only the full parser walk,
+    reached via the subprocess, honours the reshaping). Reuses the SAME
+    plugin-reshaping verdict the CLI fast path gates on so the two never diverge;
+    any hiccup falls back to the subprocess (byte-identical, just slower).
+    """
+    if verb not in _IN_PROCESS_ELIGIBLE_VERBS:
+        return False
+    if os.environ.get("HPC_AGENT_NO_FAST_CLI") == "1":
+        return False
+    if os.environ.get("HPC_AGENT_DISABLE_PLUGINS") == "1":
+        return True
+    try:
+        from hpc_agent.cli._fast_path_cache import cached_cli_reshaping_verdict
+
+        conservative, reshaped = cached_cli_reshaping_verdict()
+        if conservative:
+            return False
+        return verb not in reshaped
+    except Exception:  # noqa: BLE001 — a metadata hiccup falls back to the subprocess
+        return False
 
 
 # ── pure planning (no I/O) ─────────────────────────────────────────────────────
@@ -329,18 +408,113 @@ def _block_verb_argv(verb: str, spec_path: str, experiment_dir: Path) -> list[st
 _TIMEOUT_EXIT_CODE = 124
 
 
+def _run_block_verb_in_process(
+    verb: str, spec: dict[str, Any], experiment_dir: Path
+) -> tuple[dict[str, Any], int] | None:
+    """Dispatch an in-process-eligible block verb WITHOUT a subprocess (WS-INPROC).
+
+    Reuses the server's warm ``@primitive`` registry via the single-verb dispatch
+    surface (``register_single_module`` + ``build_single_verb_parser`` →
+    ``dispatch_primitive``), the SAME code path the CLI fast dispatch takes — so the
+    ``(exit_code, stdout-envelope)`` contract, and therefore the block Result, is
+    reproduced exactly, just without re-paying interpreter cold-start + the registry
+    walk. Routes through the registry/dispatch surface, never a direct
+    ``_kernel.lifecycle → ops/meta`` import.
+
+    Deliberately does NOT go through ``cli.dispatch.main`` (regression 17243a17): the
+    in-process seam is ``_shield_stdin_for_span`` + a NESTED stdout/stderr capture, so
+    the span's output never leaks into the driver's own envelope and the JSON-RPC
+    transport's real ``sys.stdin`` is never reconfigured under the blocked reader
+    thread. The detached-worker heartbeat + ``_record_detached_failure_terminal``
+    machinery ``main`` wraps is bypassed (it reads ``os.environ`` for a worker
+    identity an in-process span never carries).
+
+    Returns ``None`` — signalling the caller to fall back to the subprocess — only
+    for a STRUCTURAL ineligibility (verb absent from the fast-path map, a stale map
+    miss, no single-verb parser). A verb that actually RAN but FAILED returns
+    ``({}, code)`` with a non-zero ``code`` exactly like the subprocess path: an
+    in-process failure (a crash mid-span included) must produce the identical failed
+    -span envelope so the F14 re-park fires — a swallowed exception must never convert
+    a park into a silent skip.
+    """
+    from hpc_agent._kernel.registry.primitive import register_single_module
+    from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
+    from hpc_agent.cli.parser import build_single_verb_parser
+
+    entry = VERB_MODULE_MAP.get(verb)
+    if entry is None:
+        return None  # not fast-path-mapped → subprocess
+    primitive_name, module_name = entry
+    try:
+        register_single_module(module_name)
+        parser = build_single_verb_parser(primitive_name)
+    except ImportError:
+        return None  # stale map (module renamed/deleted) → subprocess
+    if parser is None:
+        return None  # grouped verb / non-safe handler → subprocess
+
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", prefix=f"{verb}-spec-", delete=False, encoding="utf-8"
+    ) as handle:
+        json.dump(spec, handle)
+        spec_path = handle.name
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        # The single-verb parser expects argv WITHOUT the ``hpc-agent`` prog token.
+        ns = parser.parse_args([verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)])
+        try:
+            with (
+                _shield_stdin_for_span(),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
+                # ``ns.func`` routes to ``dispatch_primitive`` (the parser binds it),
+                # which already maps a raised ``HpcError`` to an ``ok:false`` envelope
+                # + its exit code — the same translation the subprocess CLI applies.
+                code = ns.func(ns)
+        except SystemExit as exc:  # argparse / an explicit sys.exit inside a verb
+            code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        except Exception:  # noqa: BLE001 — F14: a crashed span is a FAILED span, never a silent skip
+            _log.warning(
+                "in-process block verb %s crashed mid-span — treating as a failed span", verb
+            )
+            return {}, 1
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(spec_path)
+
+    if code != 0:
+        _log.warning("in-process block verb %s failed (exit %s)", verb, code)
+        return {}, int(code)
+    try:
+        envelope = json.loads(out.getvalue())
+    except (json.JSONDecodeError, ValueError):
+        _log.warning("in-process block verb %s produced an unparseable envelope", verb)
+        return {}, 1
+    data = envelope.get("data")
+    return (data if isinstance(data, dict) else {}), 0
+
+
 def _run_block_verb(
     verb: str, spec: dict[str, Any], experiment_dir: Path
 ) -> tuple[dict[str, Any], int]:
-    """Run one ``hpc-agent <verb>`` block via the CLI and return ``(result, code)``.
+    """Run one ``hpc-agent <verb>`` block and return its ``(result, code)``.
 
-    Mirrors ``drive._run_cli_step`` (a temp spec file + subprocess), but CAPTURES
-    stdout so the driver can read the block's Result: the ``{block, stage_reached,
-    needs_decision, next_block, …}`` ``data`` block of the JSON envelope. Returns
-    an empty dict on a non-zero exit or an unparseable envelope (the caller treats
-    that as a failed span).
+    An in-process-eligible verb (:func:`_in_process_eligible` — a local,
+    decision/state-only block: ``campaign-greenlight`` / ``campaign-complete``) is
+    dispatched IN-PROCESS via :func:`_run_block_verb_in_process`, reusing the warm
+    registry. Every OTHER verb — ssh-shelling children, ``block_chain.WATCH_VERBS``,
+    2.6's per-host census waiter — CAPTURES stdout from a ``python -m hpc_agent``
+    SUBPROCESS so the driver can read the block's Result: the ``{block,
+    stage_reached, needs_decision, next_block, …}`` ``data`` block of the JSON
+    envelope. Both paths return an empty dict on a non-zero exit or an unparseable
+    envelope (the caller treats that as a failed span → the F14 re-park).
 
-    The wait is BOUNDED by the per-verb deadline from the block registry
+    This is where the WS-INPROC path DIVERGES from its twin ``drive._run_cli_step``:
+    that loop drives ssh-reaching flow verbs (``monitor-flow`` / ``aggregate-flow``)
+    and stays wholly on the subprocess seam.
+
+    The subprocess wait is BOUNDED by the per-verb deadline from the block registry
     (:func:`block_chain.verb_deadline_seconds` — watch-class blocks get their
     spec's own wall-clock budget + slack; everything else a class ceiling). The
     capture routes through ``infra.remote.capture_via_select``, the S2-wedge-fix
@@ -348,6 +522,12 @@ def _run_block_verb(
     bounded post-kill drain — see ``_capture_windows``). On expiry the child is
     killed and the span reports ``({}, _TIMEOUT_EXIT_CODE)``.
     """
+    if _in_process_eligible(verb):
+        in_proc = _run_block_verb_in_process(verb, spec, experiment_dir)
+        if in_proc is not None:
+            return in_proc
+        # Structural fall-through (stale map / no single-verb parser): subprocess.
+
     from hpc_agent.infra.remote import capture_via_select
 
     deadline = block_chain.verb_deadline_seconds(verb, spec)

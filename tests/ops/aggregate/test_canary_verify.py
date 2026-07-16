@@ -26,6 +26,43 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.sleep", lambda _: None)
 
 
+@pytest.fixture(autouse=True)
+def _light_poll_terminal(monkeypatch: pytest.MonkeyPatch):
+    """Default the LIGHT liveness poll to 'announce census present, every task
+    terminal' so the poll loop breaks terminal on the FIRST tick and the ONE heavy
+    ``ssh_status_report`` (each test's own mock) supplies the AUTHORITATIVE summary
+    the verdict rests on.
+
+    2.2 liveness split: the poll loop no longer runs the full status reporter per
+    tick — it issues only ``read_announcements`` (a bare ``ls`` census) and, before
+    the dispatcher announces, one ``ssh_batch_scheduler_states`` (``qstat``). Those
+    two light reads drive terminal detection; the heavy reporter runs exactly once
+    at terminal. This fixture mocks both light reads so the verdict-logic tests
+    (which mock ``ssh_status_report`` + ``_fused_verify_tail``) keep driving those
+    seams verbatim. Tests that exercise multi-poll dynamics / the vanished path
+    override these via their own ``monkeypatch``/``mock.patch``.
+    """
+    monkeypatch.setattr(
+        "hpc_agent.ops.monitor.announce.read_announcements",
+        lambda **_: {"present": 1, "announced": 1, "complete": 1, "failed": 0, "missing": 0},
+    )
+    monkeypatch.setattr(
+        "hpc_agent.infra.cluster_status.ssh_batch_scheduler_states",
+        lambda **_: {},
+    )
+
+
+def _census(*, present=1, complete=0, failed=0, missing=0):
+    """A ``read_announcements`` return dict for driving the LIGHT poll in a test."""
+    return {
+        "present": present,
+        "announced": complete + failed,
+        "complete": complete,
+        "failed": failed,
+        "missing": missing,
+    }
+
+
 _VTAIL = "hpc_agent.ops.verify_canary._fused_verify_tail"
 
 
@@ -301,6 +338,12 @@ def test_vanished_canary_resolves_completed_unknown_fast(
     _clk = itertools.count(0.0, 100.0)
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     with (
+        # 2.2: no announce dir + job gone from the scheduler ⇒ the light poll is
+        # all-zero, so the vanished-grace arm fires.
+        mock.patch(
+            "hpc_agent.ops.monitor.announce.read_announcements",
+            return_value=_census(present=0),
+        ),
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
             # Job absent from the scheduler: every live bucket zero.
@@ -345,6 +388,10 @@ def test_vanished_canary_bucketed_unknown_resolves_completed_unknown_fast(
     _clk = itertools.count(0.0, 100.0)
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     with (
+        mock.patch(
+            "hpc_agent.ops.monitor.announce.read_announcements",
+            return_value=_census(present=0),  # 2.2: light poll → vanished-grace arm
+        ),
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
             # The REAL reporter output for a gone 1-task canary: the vanished
@@ -1480,13 +1527,21 @@ def test_poll_loop_ramps_instead_of_flat_waiting(
     sleeps: list[float] = []
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.sleep", sleeps.append)
 
-    # Three in-flight polls, then complete on the fourth.
-    running = {"summary": {"complete": 0, "running": 1, "pending": 0, "failed": 0}}
+    # 2.2: the RAMP is driven by the LIGHT poll (read_announcements). Three
+    # in-flight census reads (a task still unannounced ⇒ pending), then a
+    # complete census on the fourth breaks terminal; the ONE heavy reporter runs
+    # once at terminal.
+    in_flight = _census(present=1, complete=0, missing=1)  # → pending=1, keep polling
+    done_census = _census(present=1, complete=1, missing=0)  # → COMPLETE, break
     done = {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
     with (
         mock.patch(
+            "hpc_agent.ops.monitor.announce.read_announcements",
+            side_effect=[in_flight, in_flight, in_flight, done_census],
+        ),
+        mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
-            side_effect=[running, running, running, done],
+            return_value=done,
         ),
         mock.patch(
             "hpc_agent.ops.verify_canary._fused_verify_tail",
@@ -1502,17 +1557,18 @@ def test_poll_loop_ramps_instead_of_flat_waiting(
     assert sleeps == [3.0, 6.0, 12.0]
 
 
-# ── Finding 12: poll-failure-class escalation + env-independent marker scan ───
+# ── Finding 12/7: poll-failure-class escalation at the ONE terminal reporter ───
 #
-# A canary on a cluster with a broken conda env dies rc 127 on a bare ``python``;
-# EVERY subsequent status poll dies the same way. That is DETERMINISTIC (it will
-# never heal by waiting), not a transient SSH blip, so the loop escalates after
-# ``_DETERMINISTIC_ENV_POLLS_TO_FAIL`` consecutive rc-126/127 polls instead of
-# riding the full 30-min budget. The escalation reads the env-independent
-# ``.hpc_failed`` markers with plain sh: present → positive ``canary_failed``;
-# absent → still a loud ``reporter_unreachable`` (the scan proves FAILURE only —
-# a marker-less blind run is never called passed). A TRANSIENT class resets the
-# counter and rides the budget (it belongs to the connection breaker).
+# 2.2 liveness split: the LIGHT poll (an ``ls`` census / one ``qstat``) never runs
+# the run's python, so a broken conda env (rc 127) / a torn-or-never-shipped
+# sidecar reporter fault can no longer stream across many polls — it surfaces at
+# the ONE terminal status reporter, which escalates loud+fast (never a full 30-min
+# budget spin), reusing the finding-12/7 envelopes. The escalation reads the
+# env-independent ``.hpc_failed`` markers with plain sh: present → positive
+# ``canary_failed``; absent → still a loud ``reporter_unreachable`` (the scan
+# proves FAILURE only — a marker-less blind run is never called passed). A
+# TRANSIENT terminal fault is a plain ``reporter_unreachable`` (no escalation
+# annotation, no marker scan) — that class belongs to the connection breaker.
 
 
 def _rc127() -> errors.RemoteCommandFailed:
@@ -1526,9 +1582,9 @@ def _rc127() -> errors.RemoteCommandFailed:
 def test_deterministic_env_rc127_escalates_early_with_marker(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """3 consecutive rc-127 polls → escalate BEFORE the budget; the plain-sh
-    marker scan finds a ``.hpc_failed`` marker → positive ``canary_failed`` with
-    the marker name + rc as evidence, and the scan is invoked exactly once."""
+    """2.2: the ONE terminal reporter hits rc 127 → escalate (never a full-budget
+    spin); the plain-sh marker scan finds a ``.hpc_failed`` marker → positive
+    ``canary_failed`` with the marker name + rc as evidence, scan invoked once."""
     import itertools
 
     from hpc_agent.ops.verify_canary import verify_canary
@@ -1561,9 +1617,9 @@ def test_deterministic_env_rc127_escalates_early_with_marker(
 def test_deterministic_env_rc127_escalates_early_without_marker(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same 3-rc-127 escalation, but NO ``.hpc_failed`` marker exists → the scan
-    can only prove failure, never success, so the verdict is a loud
-    ``reporter_unreachable`` (never a pass) annotated with the escalation
+    """Same terminal-reporter rc-127 escalation, but NO ``.hpc_failed`` marker
+    exists → the scan can only prove failure, never success, so the verdict is a
+    loud ``reporter_unreachable`` (never a pass) annotated with the escalation
     evidence — the never-pass-unverified posture."""
     import itertools
 
@@ -1584,7 +1640,9 @@ def test_deterministic_env_rc127_escalates_early_without_marker(
 
     assert out["ok"] is False
     assert out["failure_kind"] == "reporter_unreachable"
-    assert "Escalated after 3 consecutive" in out["details"]
+    # 2.2: the escalation fires at the ONE terminal reporter (rc 127), not a
+    # per-poll streak — the light poll never runs the run's python.
+    assert "terminal status reporter failed rc=127" in out["details"]
     assert "no .hpc_failed marker" in out["details"]
 
 
@@ -1712,11 +1770,11 @@ def _rc2_sidecar_not_found() -> errors.RemoteCommandFailed:
 def test_deterministic_reporter_sidecar_not_found_escalates_early(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Finding 7: 3 consecutive ``sidecar_not_found`` polls (rc 2, a file that will
-    NEVER appear by waiting) escalate BEFORE the budget — NOT the old 1800s spin —
-    to a ``reporter_unreachable`` verdict that names the reporter code, the sidecar
-    path polled (derived from the recorded run id), and the sibling sidecars that
-    DID ship. The sibling-ls runs exactly once (on escalation, not per poll)."""
+    """Finding 7 (2.2): the ONE terminal reporter returns a ``sidecar_not_found``
+    fault (rc 2, a file that will NEVER appear by waiting) → escalate immediately
+    — NOT the old 1800s spin — to a ``reporter_unreachable`` verdict that names the
+    reporter code, the sidecar path polled (derived from the recorded run id), and
+    the sibling sidecars that DID ship. The sibling-ls runs exactly once."""
     import itertools
 
     from hpc_agent.ops.verify_canary import verify_canary
@@ -1747,8 +1805,8 @@ def test_deterministic_reporter_sidecar_not_found_escalates_early(
     assert "sidecar_not_found" in out["details"]
     assert ".hpc/runs/r1-canary.json" in out["details"]  # the polled path, disclosed
     assert "r1-canary.json" in out["details"]  # the sibling that shipped
-    assert "3 consecutive" in out["details"]
-    assert len(ls_calls) == 1  # escalated on the 3rd poll, ls ran once
+    assert "at the terminal poll" in out["details"]  # 2.2: single terminal reporter
+    assert len(ls_calls) == 1  # escalated at the terminal reporter, ls ran once
     m_scan.assert_not_called()
 
 
@@ -1787,11 +1845,14 @@ def test_transient_polls_ride_budget_not_early_failed(
 def test_poll_health_evidence_stamped_under_distinct_key(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On a failed poll the loop stamps poll-failure evidence (error class +
-    consecutive count + rc) under ``last_status.poll_health`` so status-snapshot
-    renders 'polling, last N polls rc=127' instead of a frozen timestamp. The
-    evidence lives under a DISTINCT key — it MUST NOT inject any of the
-    complete/running/pending/failed/unknown counts ``classify.settle`` reads."""
+    """On a failed LIGHT poll the loop stamps poll-failure evidence (error class +
+    rc) under ``last_status.poll_health`` so status-snapshot renders a
+    live-but-struggling poller instead of a frozen timestamp. 2.2: the light poll
+    (an ``ls`` census / one ``qstat``) can only fail TRANSIENTLY — a broken-env rc
+    127 surfaces only at the ONE terminal reporter — so the stamped class is
+    ``transient``. The evidence lives under a DISTINCT key — it MUST NOT inject any
+    of the complete/running/pending/failed/unknown counts ``classify.settle``
+    reads."""
     import itertools
 
     from hpc_agent.ops.verify_canary import verify_canary
@@ -1801,22 +1862,21 @@ def test_poll_health_evidence_stamped_under_distinct_key(
     _clk = itertools.count(0.0, 1.0)
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
 
-    with (
-        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_rc127()),
-        mock.patch(
-            "hpc_agent.infra.cluster_status.ssh_marker_scan",
-            return_value={"failed_markers": [], "count": 0},
-        ),
+    # The LIGHT census read fails transiently (an ssh transport blip, rc 255) on
+    # every poll → the loop stamps poll_health and rides the budget.
+    with mock.patch(
+        "hpc_agent.ops.monitor.announce.read_announcements",
+        side_effect=errors.RemoteCommandFailed("announce read failed (rc=255)", returncode=255),
     ):
-        verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+        verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=3)
 
     rec = load_run(tmp_path, "r1-canary")
     assert rec is not None
     ph = rec.last_status.get("poll_health")
     assert ph is not None
-    assert ph["error_class"] == "deterministic_env"
-    assert ph["consecutive"] == 3
-    assert ph["returncode"] == 127
+    assert ph["error_class"] == "transient"
+    assert ph["consecutive"] == 1
+    assert ph["returncode"] == 255
     # Settle-safe: the evidence never wrote a count key settle()/classify_polling read.
     for count_key in ("complete", "running", "pending", "failed", "unknown"):
         assert count_key not in rec.last_status
@@ -1901,6 +1961,10 @@ def test_completed_unknown_on_sge_attaches_vmem_kill_hypothesis(
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     with (
         mock.patch(
+            "hpc_agent.ops.monitor.announce.read_announcements",
+            return_value=_census(present=0),  # 2.2: light poll → vanished-grace arm
+        ),
+        mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={
                 "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
@@ -1932,6 +1996,10 @@ def test_completed_unknown_with_traceback_gets_no_vmem_hint(
     _clk = itertools.count(0.0, 100.0)
     monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     with (
+        mock.patch(
+            "hpc_agent.ops.monitor.announce.read_announcements",
+            return_value=_census(present=0),  # 2.2: light poll → vanished-grace arm
+        ),
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={
@@ -2005,3 +2073,125 @@ def test_verified_canary_mints_runtime_and_memory_prior(tmp_path: Path, journal_
     assert s["peak_host_mem_mb"] == 2048
     assert s["gpu_type"] == "cpu"
     assert s["cmd_sha"] == "feedface"
+
+
+# ── 2.2 WS-CANARY: liveness split — heavy reporter EXACTLY once, at terminal ──
+#
+# The canary poll loop used to run the FULL cluster-side status reporter
+# (ssh_status_report → python -m …reduce.status) on EVERY tick. The liveness
+# split makes the loop issue only LIGHT reads per tick (read_announcements /
+# ssh_batch_scheduler_states — no cluster-side python) and run the heavy reporter
+# EXACTLY once, at terminal. rc 126/127 broken-env / torn-sidecar escalation
+# moves to that single terminal reporter (never a full-budget spin); a transient
+# breaker trip at it is waited out + retried once (G1) so a finished job's verdict
+# is never lost.
+
+
+def test_heavy_reporter_invoked_exactly_once_at_terminal(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """The FULL status reporter runs EXACTLY once — at terminal — while the poll
+    loop issues only LIGHT liveness reads. Drive several in-flight census polls,
+    then a complete census; count the heavy reporter calls (must be 1)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    reporter_calls: list[dict] = []
+
+    def _count_report(**kw):
+        reporter_calls.append(kw)
+        return {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
+
+    in_flight = _census(present=1, complete=0, missing=1)  # → pending=1, keep polling
+    done_census = _census(present=1, complete=1, missing=0)  # → COMPLETE, break
+    ann_calls: list[dict] = []
+
+    def _census_seq(**kw):
+        ann_calls.append(kw)
+        return [in_flight, in_flight, done_census][min(len(ann_calls) - 1, 2)]
+
+    sched_calls: list[dict] = []
+
+    def _sched(**kw):
+        sched_calls.append(kw)
+        return {}
+
+    with (
+        mock.patch("hpc_agent.ops.monitor.announce.read_announcements", side_effect=_census_seq),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_batch_scheduler_states", side_effect=_sched),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_count_report),
+        mock.patch(_VTAIL, return_value=_tail_from([{"task_id": 0, "content": "[dispatch] ok\n"}])),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is True
+    # The HEAVY reporter ran exactly once, at terminal — not per tick.
+    assert len(reporter_calls) == 1
+    # The LIGHT census was the per-tick driver (3 polls: 2 in-flight + 1 complete).
+    assert len(ann_calls) == 3
+    # The scheduler-state fallback never fired (the census was present every tick).
+    assert sched_calls == []
+
+
+def test_breaker_open_at_terminal_recovers_after_deadline_wait_and_retry(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G1: a transient ``SshCircuitOpen`` at the ONE terminal reporter must NOT
+    lose a finished job's verdict — ``_terminal_status_report`` waits out the
+    breaker deadline (``exc.deadline``) and retries ONCE (the sanctioned half-open
+    probe), after which the verdict is recovered."""
+    from hpc_agent.errors import SshCircuitOpen
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 1000.0)
+    slept: list[float] = []
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.sleep", slept.append)
+
+    breaker = SshCircuitOpen("breaker open for user@h until deadline")
+    breaker.host = "user@h"
+    breaker.deadline = 1060.0  # 60s past now(1000) → within the breaker wait cap
+    done = {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=[breaker, done]),
+        mock.patch(_VTAIL, return_value=_tail_from([{"task_id": 0, "content": "[dispatch] ok\n"}])),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is True  # verdict recovered after the ONE retry
+    assert out["failure_kind"] is None
+    # It waited out the breaker deadline (≈60s + slack) before the single retry.
+    assert slept and slept[-1] >= 60.0
+
+
+def test_broken_env_leaves_queue_escalates_at_terminal_reporter_not_budget(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken-env canary fails in its preamble and leaves the scheduler queue
+    with no announce dir → the LIGHT poll goes all-zero (vanished grace) → the ONE
+    terminal reporter hits rc 127 → escalate loud+fast (the ``.hpc_failed`` marker
+    scan proves failure → ``canary_failed``), NEVER the full wait budget."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 100.0)  # spans the 30s grace by the 2nd poll
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+    with (
+        mock.patch(
+            "hpc_agent.ops.monitor.announce.read_announcements",
+            return_value=_census(present=0),
+        ),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_rc127()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_marker_scan",
+            return_value={"failed_markers": ["r1-canary.0.failed"], "count": 1},
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is False
+    assert out["failure_kind"] == "canary_failed"
+    assert "rc=127" in out["details"]
+    assert "r1-canary.0.failed" in out["details"]

@@ -1161,3 +1161,106 @@ def test_consume_overnight_feeds_the_walltime_meter(
     bd._consume_overnight(tmp_path, "r1", "submit-s3")
     assert captured["spent_walltime"] == 36000.0
     assert captured["current_cmd_sha"] == "sha1"
+
+
+# ── WS-INPROC: in-process spans for local/decision-only children ────────────────
+
+
+def test_run_block_verb_dispatches_eligible_verb_in_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An in-process-eligible verb (campaign-complete) is dispatched in-process —
+    it NEVER spawns a subprocess (``capture_via_select`` is not called)."""
+    in_proc_calls: list[str] = []
+
+    def _spy_in_process(verb: str, _spec: Any, _exp: Any) -> tuple[dict[str, Any], int]:
+        in_proc_calls.append(verb)
+        return {"block": "complete", "stage_reached": "complete", "next_block": None}, 0
+
+    def _forbid_subprocess(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("an eligible verb must not spawn a subprocess")
+
+    monkeypatch.setattr(bd, "_run_block_verb_in_process", _spy_in_process)
+    monkeypatch.setattr("hpc_agent.infra.remote.capture_via_select", _forbid_subprocess)
+
+    result, code = bd._run_block_verb("campaign-complete", {"campaign_id": "c1"}, tmp_path)
+    assert code == 0
+    assert in_proc_calls == ["campaign-complete"]
+    assert result["stage_reached"] == "complete"
+
+
+def test_run_block_verb_spawns_subprocess_for_ineligible_verb(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An ssh-reaching / WATCH verb KEEPS the subprocess seam — the in-process
+    runner is never consulted for it (submit-s2 shells the canary + poll)."""
+
+    def _forbid_in_process(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("an ineligible verb must not dispatch in-process")
+
+    calls: list[list[str]] = []
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"data": {"block": "s2", "stage_reached": "canary_verified"}}'
+        stderr = ""
+
+    def _fake_capture(argv: list[str], **_k: Any) -> Any:
+        calls.append(argv)
+        return _Proc()
+
+    monkeypatch.setattr(bd, "_run_block_verb_in_process", _forbid_in_process)
+    monkeypatch.setattr("hpc_agent.infra.remote.capture_via_select", _fake_capture)
+
+    result, code = bd._run_block_verb("submit-s2", {"run_id": "r1"}, tmp_path)
+    assert code == 0
+    assert len(calls) == 1  # exactly one subprocess spawned
+    assert calls[0][:2] == ["hpc-agent", "submit-s2"]
+    assert result["stage_reached"] == "canary_verified"
+
+
+def test_in_process_span_real_dispatch_and_failure_is_a_failed_span(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end through the REAL in-process seam (no subprocess): campaign-complete
+    with an empty spec is rejected by its spec model, and the in-process path returns
+    the IDENTICAL failed-span shape ({}, non-zero) the subprocess path would — so the
+    F14 re-park still fires. Also proves 0 subprocesses: capture_via_select would
+    raise if the eligible verb fell through to the subprocess seam."""
+
+    def _forbid_subprocess(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("an eligible verb must dispatch in-process, not spawn")
+
+    monkeypatch.setattr("hpc_agent.infra.remote.capture_via_select", _forbid_subprocess)
+
+    result, code = bd._run_block_verb("campaign-complete", {}, tmp_path)
+    assert result == {}
+    assert code != 0  # SpecInvalid (missing campaign_id) → a failed span, never a silent skip
+
+
+def test_in_process_span_shields_and_restores_real_stdin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D1 regression 17243a17: an in-process span must swap the real ``sys.stdin``
+    out (an empty buffer) for its duration and RESTORE it on exit, so a blocked
+    cross-thread reader on the JSON-RPC transport is never reconfigured under-read.
+    """
+    import sys
+
+    monkeypatch.setattr("hpc_agent.infra.remote.capture_via_select", lambda *_a, **_k: None)
+    sentinel = sys.stdin  # the "server-side" stream
+
+    seen: dict[str, Any] = {}
+
+    def _spy_dispatch(verb: str, spec: Any, exp: Any) -> tuple[dict[str, Any], int]:
+        # During the span the shield is active; observe it, then run the real seam
+        # so the restore path is exercised.
+        with bd._shield_stdin_for_span():
+            seen["during"] = sys.stdin
+        return {}, 0
+
+    monkeypatch.setattr(bd, "_run_block_verb_in_process", _spy_dispatch)
+    bd._run_block_verb("campaign-complete", {"campaign_id": "c1"}, tmp_path)
+
+    assert seen["during"] is not sentinel  # shielded to an empty buffer mid-span
+    assert sys.stdin is sentinel  # restored afterward — the transport stream is untouched
