@@ -15,7 +15,7 @@ inside the venv.
 
 from __future__ import annotations
 
-import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -266,21 +266,35 @@ class TestConcurrentFanOut:
     def test_parallel_pair_overlaps_not_serial(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        # Each of the two slow arms sleeps ~0.4s; the instant prelude calls do
-        # not. Run serially that pair would cost ~0.8s; fanned out it is bounded
-        # by the slower arm (~0.4s). Assert well under the serial sum.
-        def slow(call: sp.SubCall, *, timeout_sec: float) -> dict[str, Any]:
-            if call.name in ("check-preflight", "resolve-resources"):
-                time.sleep(0.4)
+        # Structural overlap proof, NOT wall-clock (a `<0.7s` bound flaked on a
+        # loaded CI runner — 2026-07-16 windows leg): each slow arm signals it
+        # entered, then waits for the OTHER arm to enter too. Under fan-out both
+        # are in flight together and both waits succeed fast; under serial
+        # dispatch the first arm's wait times out (the second can't enter until
+        # the first returns), so exactly the overlap invariant (#277) fails.
+        entered = {
+            "check-preflight": threading.Event(),
+            "resolve-resources": threading.Event(),
+        }
+        other = {
+            "check-preflight": "resolve-resources",
+            "resolve-resources": "check-preflight",
+        }
+        overlapped: dict[str, bool] = {}
+
+        def rendezvous(call: sp.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+            if call.name in entered:
+                entered[call.name].set()
+                overlapped[call.name] = entered[other[call.name]].wait(timeout=10)
             return _ok_subresult()
 
-        monkeypatch.setattr(sp, "_run_subprocess", slow)
+        monkeypatch.setattr(sp, "_run_subprocess", rendezvous)
 
-        started = time.monotonic()
         result = sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.7, f"parallel pair did not overlap (elapsed={elapsed:.3f}s)"
+        assert overlapped == {"check-preflight": True, "resolve-resources": True}, (
+            f"arms were never in flight simultaneously — serial dispatch ({overlapped})"
+        )
         # Both arms ran and populated their slots.
         assert result["check_preflight"] is not None
         assert result["resolve_resources"] is not None
