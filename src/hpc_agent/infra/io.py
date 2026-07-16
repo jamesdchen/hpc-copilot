@@ -58,6 +58,7 @@ __all__ = [
 
 import contextlib
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -67,6 +68,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 def _replace_with_retry(src: str, dst: Path) -> None:
@@ -254,14 +257,65 @@ def atomic_replace_path(path: Path, *, fsync: bool = True) -> Iterator[Path]:
         raise
 
 
-def append_jsonl_line(path: Path, record: dict[str, Any], *, sort_keys: bool = True) -> None:
+def _has_torn_tail(path: Path) -> bool:
+    """True iff *path* exists, is non-empty, and its last byte is not ``\\n``.
+
+    A writer killed mid-append (power loss, ``kill -9``, a daemon watchdog's
+    ``os._exit``) can flush a partial final line with no trailing newline. The
+    next appender would land its bytes ONTO that torn tail, merging two records
+    into one unparseable line. Detecting the missing newline lets the seam close
+    the boundary first (see :func:`append_jsonl_line`).
+    """
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                return False
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) != b"\n"
+    except OSError:
+        return False
+
+
+def _find_dedup_record(path: Path, field: str, value: Any) -> dict[str, Any] | None:
+    """Return the first JSON-object line in *path* whose *field* equals *value*.
+
+    A tolerant scan (blank / corrupt / torn lines skipped, mirroring the
+    decision-journal reader) — a bad line never strands the dedup check. Returns
+    ``None`` when the file is unreadable or holds no matching record.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get(field) == value:
+            return obj
+    return None
+
+
+def append_jsonl_line(
+    path: Path,
+    record: dict[str, Any],
+    *,
+    sort_keys: bool = True,
+    fsync_required: bool = True,
+    dedup_key: tuple[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Append one JSON object as a line to *path* under an exclusive flock.
 
     The canonical JSONL-append discipline every append-only ledger in the
     package routes through — the decision journal / decision briefs / scope
     look ledger (``state/*``) AND the guaranteed-harvest marker
-    (``ops/monitor/harvest_guard``). One definition so the torn-line hazard
-    is fixed once:
+    (``ops/monitor/harvest_guard``). One definition so the torn-line hazard,
+    the durability contract, and replay dedup are each fixed once:
 
     * **append-only** — opens in ``"a"`` mode, so a write can never rewrite
       or truncate a prior record.
@@ -271,20 +325,89 @@ def append_jsonl_line(path: Path, record: dict[str, Any], *, sort_keys: bool = T
     * **crash-durable** — the line is ``flush``-ed and ``fsync``-ed so a
       source-of-truth record survives a crash mid-write.
 
-    ``sort_keys`` defaults to True (stable on-disk key order); pass ``default=str``
+    Durability (``fsync_required``)
+    -------------------------------
+    Default ``True``: an ``fsync`` ``OSError`` **raises**, so a caller never
+    gets an ack the bytes aren't on stable storage — "no ack without
+    durability" for source-of-truth ledgers (decision journal, briefs,
+    fingerprint samples, data trace / manifest, conformance receipts, and the
+    ops-side aggregate / reproduction / pack / overnight / heal ledgers, all of
+    which inherit this default). Pass ``fsync_required=False`` for a best-effort
+    marker (the guaranteed-harvest marker, the deploy-prune timeline) whose
+    caller contract is never-raise: the ``fsync`` ``OSError`` is suppressed and
+    the line is still written. This is the shared-seam change ruled 2026-07-16
+    (Δ-RULING-1, AFFIRMATIVE): the one-shot CLI now surfaces a source-of-truth
+    fsync failure as ``ok:false`` — byte-identical to before modulo that
+    durability fix.
+
+    First-append durability
+    ------------------------
+    Appending fsyncs the file but not the parent dir, so a brand-new ledger's
+    dirent could be lost to a crash even with the data blocks flushed. On the
+    append that CREATES the file, the parent dir is fsync-ed too (best-effort,
+    same NFS posture as the atomic writers).
+
+    Torn-line self-heal (Δ3 / state-concurrency F4)
+    -----------------------------------------------
+    Inside the lock, before writing, the seam checks the file's last byte: if
+    the file is non-empty and does not end in ``\\n``, it restores the line
+    boundary (writes a ``\\n`` first) and logs the torn tail. The torn record is
+    already lost, but it is isolated on its own line — a tolerant reader skips
+    it — and never poisons the record this call appends. One definition, so the
+    class is closed for every killer (power loss, ``kill -9``, watchdog shot).
+
+    Replay dedup (``dedup_key``, Δ2b)
+    ---------------------------------
+    When ``dedup_key=(field, value)`` is given, the append is guarded INSIDE the
+    lock: if the file already holds a JSON-object line whose *field* equals
+    *value*, NO line is written and that existing record dict is RETURNED (a
+    replay no-op). Otherwise a new line is appended. This makes a client-minted
+    ``request_id`` on the decision journal race-free against a concurrent
+    duplicate append (the run-#2 duplicate-greenlight class; the daemon
+    deadline-abandon double-append class).
+
+    ``sort_keys`` defaults to True (stable on-disk key order); ``default=str``
     is applied unconditionally so non-JSON-native values (``Path``, datetimes)
-    serialize rather than raising. Can raise ``OSError`` — a caller whose
-    contract is never-raise (e.g. a ``finally``-time harvest marker) must wrap
-    the call.
+    serialize rather than raising.
+
+    Returns ``None`` when a line was appended, or the pre-existing record dict
+    on a ``dedup_key`` replay hit. Callers that ignore the return (every
+    consumer but the decision journal) are unaffected.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, sort_keys=sort_keys, default=str) + "\n"
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with advisory_flock(lock_path, timeout_sec=120.0), path.open("a", encoding="utf-8") as fh:
-        fh.write(line)
-        fh.flush()
-        with contextlib.suppress(OSError):
-            os.fsync(fh.fileno())
+    torn = False
+    with advisory_flock(lock_path, timeout_sec=120.0):
+        existed = path.exists()
+        if dedup_key is not None and existed:
+            replayed = _find_dedup_record(path, dedup_key[0], dedup_key[1])
+            if replayed is not None:
+                return replayed
+        torn = _has_torn_tail(path) if existed else False
+        with path.open("a", encoding="utf-8") as fh:
+            if torn:
+                # Close the torn record's boundary so the two never merge.
+                fh.write("\n")
+            fh.write(line)
+            fh.flush()
+            if fsync_required:
+                os.fsync(fh.fileno())
+            else:
+                with contextlib.suppress(OSError):
+                    os.fsync(fh.fileno())
+        if not existed:
+            _fsync_dir(path.parent)
+    if torn:
+        # Report (never silently merge) — outside the lock to keep the critical
+        # section to the flock + write + fsync.
+        _log.warning(
+            "append_jsonl_line: restored a torn line boundary in %s "
+            "(a prior writer was killed mid-append; the torn record is isolated "
+            "on its own line and skipped by tolerant readers)",
+            path,
+        )
+    return None
 
 
 def _read_json_doc(path: Path) -> dict[str, Any] | None:

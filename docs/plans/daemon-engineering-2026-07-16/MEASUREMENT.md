@@ -1,0 +1,148 @@
+# MEASUREMENT — the stateless dispatch floor (R4 measure-then-decide)
+
+Protocol for `scripts/measure_dispatch_floor.py`, the harness that produces the
+evidence the maintainer's **ARCHITECT-MEMO sec 2a** ruling gates on. The script
+is the *evidence producer*; it does **not** rule. It measures the real per-call
+floor per surface on the primary Windows box and prints the numbers sec 2a names
+as the gate. A human applies step 3.
+
+## Why this exists (sec 2a, verbatim intent)
+
+> "if stateful warm processes are convenient but break constantly, perhaps the
+> best thing is to get the stateless CLI path latency down so much that the warm
+> start doesn't matter."
+
+Sec 2a amends R4:
+
+1. Latency waves 1–2 (the stateless program) land FIRST.
+2. Then MEASURE the real post-wave per-call floor per surface (hook, CLI verb,
+   block-drive span) on the primary Windows box — **including the irreducible
+   spawn + Defender/AV tax the census left unmeasured**.
+3. **DW1+ (the 13 units of daemon lifecycle machinery) builds ONLY if the
+   residual gap still justifies the program** — daemon warm call ≈ 15–20 ms vs
+   projected stateless floor. Otherwise the WS-DAEMON package stands as
+   design-of-record, shelved. This INVERTS the prior cut-line (which shipped
+   DW0–DW2 unconditionally).
+4. D-FSYNC extracts and builds NOW regardless (a correctness win for the
+   stateless path too) — it is **not** gated by this measurement.
+
+So this harness gates DW1+ only. It has no bearing on D-FSYNC.
+
+## When to run
+
+- **After latency waves 1–2 land AND a fresh wheel is installed** into
+  `.venv` (`importlib.metadata.version("hpc-agent")` reflects the post-wave
+  build). The whole point is to measure the *post-wave* stateless floor; a
+  pre-wave run is a baseline only, explicitly labelled as such.
+- On the **primary Windows box** (the box the memo names). The spawn + AV tax is
+  platform- and machine-specific; a number from another box does not gate.
+- On a **clean tree**. The script records `git rev-parse HEAD` and a
+  `git status --porcelain` dirty-line count and prints a loud banner when the
+  tree is dirty. A dirty-tree run is labelled `dirty=True` in the JSON and MUST
+  NOT be cited as a gate number — it is a mid-swarm smoke only.
+- Latency unit 1.3 (`hpc_agent/__init__` de-eagerment) is a HARD prerequisite of
+  the fast-path numbers (memo Δ17). If 1.3 has not landed, the `import` and
+  `fast_path` surfaces are inflated and the gate reading is not valid.
+
+## Usage
+
+```
+.venv/Scripts/python.exe scripts/measure_dispatch_floor.py
+.venv/Scripts/python.exe scripts/measure_dispatch_floor.py --runs 7 \
+    --fast-verb describe find --full-verb capabilities --out report.json
+```
+
+- `--runs N` — samples per surface (default 7). Report is median + min + all
+  samples per surface.
+- `--fast-verb …` — the verb argv treated as the fast-path surface (default
+  `describe find`). **Set this to the actual post-wave fast-path verb** if the
+  mapping changed.
+- `--full-verb …` — the full-registry-walk verb (default `capabilities`).
+- `--out PATH` — JSON report path (default: a timestamped file in the temp dir).
+- `--cold-claim` — assert this is the first run after a real reboot; labels
+  `boot_state: user-asserted-cold`. Do not pass it otherwise.
+
+Never uses ssh; never mutates the repo. The interpreter is whatever runs the
+script (`sys.executable`) — always launch it with `.venv/Scripts/python.exe`.
+
+## Surfaces measured
+
+| key | what | why |
+|-----|------|-----|
+| `bare` | `python -c pass` | irreducible spawn + Defender/AV tax, no import |
+| `bare2` | same spawn, 2nd series | spread vs `bare` **is** the spawn/AV variance signal |
+| `import` | `python -c "import hpc_agent"` | spawn + top-level package import |
+| `fast_path` | cold `hpc-agent <fast-verb>` in a fresh subprocess | the CLI-verb rung floor |
+| `full_walk` | cold `hpc-agent <full-verb>` | the full-registry-walk floor |
+| `hook` | `python -m …stop_multiplex` + minimal Stop payload on stdin | the per-turn hook rung floor (DRY — see caveats) |
+| `warm` | the fast-path verb WARM in-process (import once, warm-up call, then timed) | the reference floor a warm daemon approaches |
+
+Subprocess surfaces are **interleaved**: each round rotates the surface order so
+no single surface consistently pays (or dodges) the coldest filesystem state
+(defeats cache-warming order bias).
+
+## Which numbers gate what
+
+The **decision line** the script computes (sec 2a gate numbers):
+
+- **cold fast-path floor** (median of `fast_path`) — the headline stateless
+  number the daemon would replace.
+- **cold full-walk floor** (median of `full_walk`) — the heavier CLI rung.
+- **warm reference (measured)** vs the memo's **15–20 ms** band — the daemon's
+  warm-call target. Note: the measured warm number reflects whatever the chosen
+  verb costs warm in-process; if that verb re-walks per call it will exceed the
+  15–20 ms band, which is a *projection/target*, not a claim about this verb.
+- **per-turn hook cost** = `HOOKS_PER_TURN (3) × hook median` — a turn fires
+  ~3 hooks (UserPromptSubmit capture + Stop multiplex + a PostToolUse fence).
+- **spawn variance** = |bare − bare2| medians — the AV/spawn wildcard magnitude.
+- **residual gap vs warm band** = cold fast-path median − 20 ms.
+
+**The gate (sec 2a step 3):** DW1+ builds **iff** the residual gap — measured
+here post-wave — still justifies 13 units of lifecycle machinery, judged against
+the ≈15–20 ms daemon warm call. The script's `reading` field is advisory:
+- cold floor within ~1.5× the 20 ms band → residual gap SMALL → leans SHELVE.
+- cold floor well above the band → gap remains → the maintainer decides whether
+  it earns the machinery, **comparing against the projected post-wave target,
+  not the pre-wave baseline**.
+
+The script never emits the ruling. It emits the numbers and cites sec 2a.
+
+## Honest-reporting rules (baked into the harness)
+
+1. **Filesystem-cache warmth is NOT controlled.** This box has already imported
+   the tree (pytest, prior runs). `first_run_of_boot` is left `null` on purpose;
+   `boot_state` is `warm-uncontrolled` unless `--cold-claim` is passed after a
+   real reboot. We do not pretend to a cold-cache number we cannot honestly
+   produce.
+2. **The dirty tree is labelled, loudly.** `git HEAD` + dirty-line count go into
+   the JSON and a banner prints when dirty. A measurement taken mid-swarm is
+   visibly not a clean baseline — it is never silently trusted.
+3. **The hook surface is DRY.** The payload's `cwd` has no `.hpc` and
+   `HPC_JOURNAL_DIR` points at a nonexistent dir, so the Stop prefilter proves
+   every guard is a no-op and returns 0 **without importing the heavy guard
+   chain** — zero side effects, no journal writes. This measures the *no-op
+   per-turn hook floor* (interpreter + `stop_multiplex` import + stdin read),
+   which is the common case (most Stop events do no guard work). A
+   **guard-active** Stop pays an additional `import hpc_agent`-class cost on top;
+   estimate it as roughly `hook + (import − bare)`. The caveat travels in the
+   JSON (`surfaces.hook.caveat`).
+4. **Spawn/AV variance is surfaced, not hidden.** Measuring the bare spawn twice
+   and reporting both medians makes the AV wildcard a first-class number rather
+   than noise folded into a single figure.
+5. **Env fingerprint travels with every report** — timestamp, python version,
+   wheel version (`importlib.metadata`), box name, platform — so a number can
+   never be cited without its provenance.
+
+## Report schema
+
+JSON `schema: hpc.measure_dispatch_floor.v1`. Top-level keys: `runs_per_surface`,
+`env`, `git`, `boot_state`, `boot_state_note`, `first_run_of_boot`, `surfaces`
+(per-surface `median_ms` / `min_ms` / `max_ms` / `mean_ms` / `n` / `samples_ms`
+/ `desc`), `decision` (the gate numbers + advisory `reading` + `ruling_ref`).
+
+## Tests
+
+`tests/scripts/test_measure_dispatch_floor.py` — the statistics and report
+assembly are unit-tested with injected timings (no real spawns in CI). One
+`@pytest.mark.slow` smoke actually spawns the two cheapest surfaces (bare,
+import) once each and asserts sane bounds (>0, <60 s).

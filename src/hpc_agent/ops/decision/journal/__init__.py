@@ -233,6 +233,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
         resolved=resolved,
         provenance=spec.provenance,
         attestor_id=attestor_id,
+        request_id=_request_id_from_spec(spec),
     )
     count = len(_read_decisions(experiment_dir, spec.scope_kind, spec.scope_id))
     path = _decisions_path(experiment_dir, spec.scope_kind, spec.scope_id)
@@ -241,6 +242,22 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
         record=DecisionRecord.model_validate(record),
         count=count,
     )
+
+
+def _request_id_from_spec(spec: AppendDecisionInput) -> str | None:
+    """The client-minted replay ``request_id`` for this append, or ``None`` (Δ2b).
+
+    The daemon-RPC world (D-CORE / D-CLIENT) mints a ``request_id`` per mutating
+    call so a client-deadline-falls-inline retry replays instead of manufacturing
+    a duplicate greenlight (state-concurrency F2). Until that transport lands,
+    the standalone substrate sources the key from ``provenance["request_id"]`` —
+    the one already-free, no-schema-change channel on the frozen
+    :class:`AppendDecisionInput` (``extra="forbid"``; ``provenance`` is a
+    free-form dict). Absent / non-string / empty → ``None`` (byte-identical: no
+    ``request_id`` stamp, ordinary append).
+    """
+    rid = spec.provenance.get("request_id") if isinstance(spec.provenance, dict) else None
+    return rid if isinstance(rid, str) and rid else None
 
 
 def _default_next_block(experiment_dir: Path, spec: AppendDecisionInput) -> dict[str, Any] | None:

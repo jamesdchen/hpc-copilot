@@ -180,7 +180,9 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
     return campaign_dir(experiment_dir, scope_id) / "decisions.jsonl"
 
 
-def _append_jsonl_line(path: Path, record: dict[str, Any]) -> None:
+def _append_jsonl_line(
+    path: Path, record: dict[str, Any], *, dedup_key: tuple[str, Any] | None = None
+) -> dict[str, Any] | None:
     """Append one JSON object as a line to *path* under an exclusive flock.
 
     Thin wrapper over the canonical JSONL-append seam
@@ -188,8 +190,13 @@ def _append_jsonl_line(path: Path, record: dict[str, Any]) -> None:
     the flock + fsync + sort_keys discipline the decision journal, decision
     briefs, scope look ledger, and the guaranteed-harvest marker all share.
     Retained as the state-layer name the sibling ``state/*`` modules import.
+
+    Forwards the seam's ``dedup_key`` (replay dedup, Δ2b) and its return value:
+    ``None`` when a line was appended, or the pre-existing record on a replay
+    hit. The sibling ``state/*`` callers pass no ``dedup_key`` and ignore the
+    return (byte-identical to before).
     """
-    append_jsonl_line(path, record)
+    return append_jsonl_line(path, record, dedup_key=dedup_key)
 
 
 def append_decision(
@@ -204,6 +211,7 @@ def append_decision(
     resolved: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
     attestor_id: str | None = None,
+    request_id: str | None = None,
     ts: str | None = None,
 ) -> dict[str, Any]:
     """Append one ``y``/nudge exchange to a scope's decision journal.
@@ -223,8 +231,18 @@ def append_decision(
     actor under a >1-actor declaration; readers tolerate the extra key
     (forward-compat, no schema bump). Core never verifies who set it.
 
+    *request_id* is a CLIENT-MINTED replay-dedup key (Δ2b). When supplied it is
+    stamped into the record AND used as the seam's ``dedup_key``: a same-id
+    re-append inside the same journal is a **replay no-op** — no second line is
+    written and the ORIGINAL persisted record is returned. This closes the
+    run-#2 duplicate-greenlight class (two ``s1`` greenlights 32s apart) and the
+    daemon deadline-abandon double-append class race-free (the check runs under
+    the append seam's flock). ADDITIVE and default-``None``: absent → no
+    ``request_id`` key on disk, byte-identical to before. The dedup is scoped to
+    a single journal file (a ``request_id`` is unique per mutating call).
+
     Append-only: this never reads-modifies-writes a prior record; a second
-    call always adds a new line after the first.
+    call always adds a new line after the first (unless *request_id* replays).
 
     Raises :class:`errors.SpecInvalid` on a bad scope, an empty *block*, or
     an empty *response*.
@@ -252,7 +270,19 @@ def append_decision(
         # Additive, opaque, harness-asserted (MH3): stamped ONLY when a session
         # actor resolved under a >1-actor declaration. Absent → byte-identical.
         record["attestor_id"] = attestor_id
-    _append_jsonl_line(decisions_path(experiment_dir, scope_kind, scope_id), record)
+    if request_id is not None:
+        # Additive client-minted replay key (Δ2b): stamped so a same-id
+        # re-append is a replay no-op. Absent → byte-identical.
+        record["request_id"] = request_id
+    replayed = _append_jsonl_line(
+        decisions_path(experiment_dir, scope_kind, scope_id),
+        record,
+        dedup_key=("request_id", request_id) if request_id is not None else None,
+    )
+    # On a replay hit the seam wrote nothing and returned the ORIGINAL record;
+    # hand that back so the caller sees the first decision, never a duplicate.
+    if replayed is not None:
+        return replayed
     return record
 
 
