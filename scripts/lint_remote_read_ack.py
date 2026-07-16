@@ -107,6 +107,10 @@ _SKIP_RELPATH = "hpc_agent/infra/ssh_validation.py"
 # left sentinel-clean") + docs/plans/upstream-fixes-2026-07.md spec B3′.
 ALLOWLIST: frozenset[str] = frozenset(
     {
+        # memo fingerprint (O3, latency rank 17): validates stdout to EXACTLY one
+        # 64-hex line; any truncation/severed-channel deviation -> None -> the
+        # memo goes inert (never serves a cached verdict) - sentinel-clean.
+        "hpc_agent/ops/aggregate_flow.py::_remote_tree_fingerprint",
         # Advisory task-log fetch: reads log tails for human display, not a
         # run-state verdict; an empty/truncated read degrades to "no logs",
         # never a settled success.

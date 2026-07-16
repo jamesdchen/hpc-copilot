@@ -73,3 +73,18 @@ def test_reporter_code_absent_on_env_failure() -> None:
     NOT a reporter failure, and a reporter fault is NOT an env failure."""
     assert errors.is_deterministic_reporter_failure(_rcf(127)) is False
     assert errors.is_deterministic_env_failure(_reporter("sidecar_not_found")) is False
+
+
+def test_deterministic_codes_exist_in_reporter():
+    """MIRROR pin: every DETERMINISTIC_REPORTER_ERROR_CODES member is a code the
+    reporter (execution.mapreduce.reduce.status ``_emit_err`` call sites) actually
+    emits — a renamed/removed reporter code turns this red instead of silently
+    orphaning the escalation set (run-13 finding 7's fix substrate)."""
+    import inspect
+
+    from hpc_agent import errors
+    from hpc_agent.execution.mapreduce.reduce import status as reporter
+
+    src = inspect.getsource(reporter)
+    for code in errors.DETERMINISTIC_REPORTER_ERROR_CODES:
+        assert f'"{code}"' in src, f"reporter no longer emits {code!r}"

@@ -16,6 +16,17 @@ from hpc_agent.execution.mapreduce import combiner
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_partials
 
 
+@pytest.fixture(autouse=True)
+def _legacy_pull_path(monkeypatch):
+    """These tests pin REDUCE POLICY, not transport: they mock ``rsync_pull``.
+    After the O2 pull-parity merge the adapter prefers ``tar_ssh_pull`` when
+    importable, which would route around the mocks into the hermetic guard —
+    pin the legacy path (transport behavior is covered by the O2 transport
+    suite + the tar-seam tests)."""
+    monkeypatch.setenv("HPC_AGGREGATE_TAR_PULL", "0")
+
+
+
 def _write_wave(combiner_dir, wave, grid_points, errors=None):
     combiner_dir.mkdir(parents=True, exist_ok=True)
     (combiner_dir / f"wave_{wave}.json").write_text(

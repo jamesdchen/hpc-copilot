@@ -552,6 +552,11 @@ def _resolve_canary_checkpoint_dir(
 # cannot collide with a log tail / JSON body / sha line.
 _VTAIL_SECS = ("TAIL", "RUNTIME", "OUTPUT", "FPRINT")
 
+# Positive-evidence ack for the fused tail (finding-24 sentinel-ack rule): the
+# token proves the remote shell reached the END of the sectioned script, so a
+# truncated stream can never be parsed as a shorter-but-valid section set.
+_VTAIL_ACK_PREFIX = "__HPC_VTAIL_ACK__="
+
 
 def _vtail_marker(name: str) -> str:
     return f"<<<HPC_VTAIL:{name}>>>"
@@ -670,7 +675,9 @@ def _fused_verify_tail(
         parts.append(f"echo {shlex.quote(_vtail_marker('FPRINT'))}")
         parts.append(f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'")
 
-    script = "\n".join(parts)
+    from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
+
+    script = wrap_with_ack("\n".join(parts), _VTAIL_ACK_PREFIX)
     stderr_tail = ""
     log_path: str | None = None
     runtime: dict[str, Any] | None = {"status": "absent"} if result_dir is not None else None
@@ -689,7 +696,21 @@ def _fused_verify_tail(
             "output": output,
             "fingerprint_sha": fingerprint_sha,
         }
-    secs = _split_vtail_sections(proc.stdout or "") if proc.returncode == 0 else {}
+    clean, ack_rc = split_ack(proc.stdout or "", _VTAIL_ACK_PREFIX)
+    if ack_rc is None:
+        # No ack token = the remote shell never reached the end of the script
+        # (severed/truncated channel, finding-24 class). Treat exactly like the
+        # failed-read branch above: fall through with miss-shaped fields rather
+        # than parsing a possibly-torn stream (a torn RUNTIME section could mask
+        # a nonzero canary exit).
+        return {
+            "stderr_tail": stderr_tail,
+            "log_path": log_path,
+            "runtime": runtime,
+            "output": output,
+            "fingerprint_sha": fingerprint_sha,
+        }
+    secs = _split_vtail_sections(clean) if proc.returncode == 0 else {}
 
     tail_body = secs.get("TAIL", "")
     first_line, _, rest = tail_body.partition("\n")

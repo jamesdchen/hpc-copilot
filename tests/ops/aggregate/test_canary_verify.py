@@ -1632,6 +1632,7 @@ def test_fused_verify_tail_reads_all_legs_in_one_ssh(monkeypatch: pytest.MonkeyP
         "OK\n"
         "<<<HPC_VTAIL:FPRINT>>>\n"
         "deadbeefcafe\n"
+        "__HPC_VTAIL_ACK__=0\n"
     )
 
     def _fake_ssh_run(cmd, *, ssh_target):  # noqa: ANN001
@@ -1846,3 +1847,30 @@ def test_canary_loop_stamps_watchdog_liveness_each_poll(tmp_path: Path, journal_
     # Stamped for the canary run, carrying the next-poll cadence.
     assert stamps[0][0][0] == "r1-canary"
     assert "next_tick_seconds" in stamps[0][1]
+
+
+def test_fused_verify_tail_missing_ack_reads_as_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sentinel-ack (finding-24 class): stdout WITHOUT the trailing ack token —
+    a severed/truncated channel — must parse as the miss shape, never as a
+    shorter-but-valid section set (a torn RUNTIME could mask a nonzero exit)."""
+    from hpc_agent.ops.verify_canary import _fused_verify_tail
+
+    torn = "<<<HPC_VTAIL:TAIL>>>\nFOUND\t/x/logs/p.o1.1\npartial\n"
+
+    def _fake_ssh_run(cmd, *, ssh_target):  # noqa: ANN001
+        return _fake_ssh_completed(stdout=torn)
+
+    monkeypatch.setattr("hpc_agent.infra.remote.ssh_run", _fake_ssh_run)
+    bundle = _fused_verify_tail(
+        ssh_target="u@h",
+        remote_path="/x",
+        job_name="p",
+        job_ids=["1"],
+        scheduler="sge",
+        result_dir="results/r-canary/task_0",
+        expect_output=None,
+        fingerprint=None,
+    )
+    assert bundle["stderr_tail"] == ""
+    assert bundle["log_path"] is None
+    assert bundle["runtime"] == {"status": "absent"}

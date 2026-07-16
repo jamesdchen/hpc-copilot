@@ -169,7 +169,7 @@ def _pull(
     result = _tar_ssh_pull(
         ssh_target=ssh_target,
         remote_path=remote_full,
-        local_path=str(local_dir),
+        local_path=Path(local_dir),
         include_globs=include,
     )
     return _PullOutcome(

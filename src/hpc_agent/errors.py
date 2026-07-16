@@ -858,8 +858,9 @@ def is_deterministic_env_failure(exc: BaseException) -> bool:
 #: EVERY poll ``sidecar_not_found`` at rc 2, classified "transient", polled to
 #: deadline). These name a missing/torn sidecar or a missing ``tasks.py`` — none
 #: of which a retry fixes. Reporter codes NOT in this set (e.g. a transient
-#: ``synthetic_dict_error`` from a mid-write read) stay on the budget. Kept in
-#: lock-step with ``execution.mapreduce.reduce.status``'s ``_emit_err`` codes.
+#: ``synthetic_dict_error`` from a mid-write read) stay on the budget.
+# MIRROR: execution.mapreduce.reduce.status::_emit_err codes
+#   pinned-by tests/ops/test_poll_failure_rc124.py::test_deterministic_codes_exist_in_reporter
 DETERMINISTIC_REPORTER_ERROR_CODES: frozenset[str] = frozenset(
     {"sidecar_not_found", "sidecar_parse_error", "tasks_py_not_found"}
 )

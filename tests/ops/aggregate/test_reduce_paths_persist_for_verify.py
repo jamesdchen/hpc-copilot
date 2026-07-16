@@ -34,6 +34,17 @@ from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
 
+
+@pytest.fixture(autouse=True)
+def _legacy_pull_path(monkeypatch):
+    """These tests pin REDUCE POLICY, not transport: they mock ``rsync_pull``.
+    After the O2 pull-parity merge the adapter prefers ``tar_ssh_pull`` when
+    importable, which would route around the mocks into the hermetic guard —
+    pin the legacy path (transport behavior is covered by the O2 transport
+    suite + the tar-seam tests)."""
+    monkeypatch.setenv("HPC_AGGREGATE_TAR_PULL", "0")
+
+
 _ORIG = "orig-run"
 _REPRO = "repro-run"
 _METRICS = {"gp": {"pi": 3.14159, "n_samples": 1000}}
