@@ -1276,9 +1276,29 @@ def committed_greenlight_for_boundary(
 
     Unrelated records (a different block, a later overnight-consent / sign-off) are skipped.
     ``None`` when nothing concerns the boundary yet — still awaiting the human.
+
+    OVERRIDE-BOUNDARY MAP (run-13 ``causal_tune_linear-de448128`` wedge): a block that
+    parks a *decision* with no code-determined auto-successor records ``next_verb=None``
+    in its marker (``aggregate-check``'s ``not_ready`` / ``integrity_review`` parks —
+    ``SUCCESSORS`` is ``None`` there — hit while the run is non-terminal). But the human's
+    ``y`` at such a boundary is an OVERRIDE that greenlights the block's chain-forward
+    successor (``aggregate-run``), so the greenlight's ``resolved["next_block"]`` names a
+    verb the ``None`` marker target could never equal → ``greenlight_targets_boundary``
+    rejected every greenlight → a PERMANENT "awaiting" wedge (the driver kept reporting
+    "pending decision not yet committed" after the ``y`` was journaled). Map a ``None``
+    marker target through :func:`block_chain.chain_successor` HERE — the ONE seam the driver
+    and the Stop guard share — so both agree on the single greenlight target for the
+    boundary. A genuinely terminal park (no chain successor) keeps ``None`` and its
+    pre-existing behavior. ``aggregate-run``'s own greenlight gate still backstops a
+    premature advance (it raises for a non-terminal run).
     """
+    effective_next_verb = next_verb
+    if effective_next_verb is None and block:
+        effective_next_verb = block_chain.chain_successor(block)
     for record in reversed(records):
-        if greenlight_targets_boundary(record, next_verb=next_verb, awaiting_since=awaiting_since):
+        if greenlight_targets_boundary(
+            record, next_verb=effective_next_verb, awaiting_since=awaiting_since
+        ):
             resolved = record.get("resolved")
             return dict(resolved) if isinstance(resolved, dict) else {}
         if _same_boundary_nudge(record, block=block, awaiting_since=awaiting_since):

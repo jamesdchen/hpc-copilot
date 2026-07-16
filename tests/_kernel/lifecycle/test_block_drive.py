@@ -1084,6 +1084,45 @@ def test_committed_greenlight_not_superseded_by_unrelated_later_record() -> None
     assert out.get("next_block") == "submit-s3"
 
 
+def test_committed_greenlight_none_marker_target_maps_to_chain_successor() -> None:
+    """Run-13 wedge (``causal_tune_linear-de448128``): ``aggregate-check`` parked at
+    ``not_ready`` while its reconcile was still in flight, so the marker recorded
+    ``next_verb=None`` (``SUCCESSORS[("aggregate-check","not_ready")]`` is ``None``).
+    The human's ``y`` override greenlit ``aggregate-run`` — but the ``None`` marker target
+    could never equal ``aggregate-run``, so ``greenlight_targets_boundary`` rejected every
+    greenlight and the driver kept reporting 'pending decision not yet committed' FOREVER.
+    The boundary scan now maps a ``None`` marker target through ``chain_successor`` so the
+    greenlight naming the chain-forward block answers the boundary."""
+    records = [
+        _decision_record(
+            "y", next_block="aggregate-run", block="aggregate-check", ts="2026-07-11T23:00:00+00:00"
+        ),
+    ]
+    out = bd.committed_greenlight_for_boundary(
+        records, block="aggregate-check", next_verb=None, awaiting_since=_PARKED_AT
+    )
+    assert out is not None, "the override greenlight must answer the None-target park"
+    assert out.get("next_block") == "aggregate-run"
+
+
+def test_committed_greenlight_none_marker_terminal_park_still_none() -> None:
+    """A genuinely terminal park (parked block has NO chain successor) keeps the
+    pre-existing ``None`` target: no chain-forward block exists to override into, so an
+    override greenlight naming a downstream verb does not spuriously answer it."""
+    records = [
+        _decision_record(
+            "y", next_block="aggregate-run", block="aggregate-run", ts="2026-07-11T23:00:00+00:00"
+        ),
+    ]
+    # aggregate-run is last in ORDER["aggregate"] → chain_successor is None → no match.
+    assert (
+        bd.committed_greenlight_for_boundary(
+            records, block="aggregate-run", next_verb=None, awaiting_since=_PARKED_AT
+        )
+        is None
+    )
+
+
 def test_run_requested_walltime_from_sidecar() -> None:
     """F16: the S3 launch cost the consent's walltime_cap bounds = walltime_sec × task_count.
     Absent/non-numeric resources yield None (fall back to the ledger meter, no fabrication)."""

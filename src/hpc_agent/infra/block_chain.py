@@ -41,6 +41,7 @@ __all__ = [
     "WATCH_VERBS",
     "WATCH_BUDGET_SLACK_SEC",
     "successor_verb",
+    "chain_successor",
     "workflow_of",
     "block_index",
     "next_block_hint",
@@ -263,6 +264,35 @@ def successor_verb(current_verb: str, stage_reached: str) -> str | None:
     asserting it agrees with what each block module emits.
     """
     return SUCCESSORS.get((current_verb, stage_reached))
+
+
+def chain_successor(verb: str) -> str | None:
+    """Return the block immediately AFTER *verb* in its family's linear :data:`ORDER`.
+
+    DISTINCT from :func:`successor_verb`, which keys on the runtime ``stage_reached``
+    and returns ``None`` at a decision / human-branch stage. This is the STATIC
+    chain-forward block — the target a human OVERRIDE greenlight names when a block
+    parked a *decision* with no code-determined auto-successor.
+
+    The motivating case (run-13 ``causal_tune_linear-de448128``): ``aggregate-check``
+    parked at ``not_ready`` (its reconcile was still in flight, so the run was
+    non-terminal) whose ``SUCCESSORS`` entry is ``None`` — the marker recorded
+    ``next_verb=None``. But the human's ``y`` at that boundary is an override that
+    greenlights the only forward move, ``aggregate-run``. The boundary predicate
+    (:func:`block_drive.committed_greenlight_for_boundary`) maps a ``None`` marker
+    target through here so the greenlight's ``resolved["next_block"]`` and the parked
+    boundary agree on ONE target. Returns ``None`` for a verb that is last in its
+    family (a genuine terminal) or not a linear touchpoint (e.g. ``campaign-refill``).
+    """
+    family = WORKFLOW_OF.get(verb)
+    if family is None:
+        return None
+    order = ORDER.get(family, [])
+    try:
+        idx = order.index(verb)
+    except ValueError:
+        return None
+    return order[idx + 1] if idx + 1 < len(order) else None
 
 
 def workflow_of(verb: str) -> str:

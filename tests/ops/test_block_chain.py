@@ -67,6 +67,23 @@ def test_successor_verb_unknown_pair_is_none() -> None:
     assert successor_verb("no-such-verb", "resolved") is None
 
 
+def test_chain_successor_is_static_order_neighbor() -> None:
+    """``chain_successor`` = the next block in the family ORDER, independent of stage.
+
+    Unlike ``successor_verb`` (stage-keyed, ``None`` at a decision park), this is the
+    STATIC forward block — the target a human OVERRIDE greenlight names when a block
+    parked a decision with no code successor (run-13 ``aggregate-check`` not_ready wedge).
+    """
+    assert block_chain.chain_successor("aggregate-check") == "aggregate-run"
+    assert block_chain.chain_successor("submit-s1") == "submit-s2"
+    assert block_chain.chain_successor("submit-s3") == "submit-s4"
+    # Last-in-family terminals and non-linear touchpoints have no chain successor.
+    assert block_chain.chain_successor("aggregate-run") is None
+    assert block_chain.chain_successor("submit-s4") is None
+    assert block_chain.chain_successor("campaign-refill") is None
+    assert block_chain.chain_successor("no-such-verb") is None
+
+
 def test_successor_table_submit_family_values() -> None:
     """The submit family's deterministic chain, spelled out."""
     assert successor_verb("submit-s1", "resolved") == "submit-s2"
