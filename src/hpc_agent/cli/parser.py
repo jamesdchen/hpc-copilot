@@ -164,21 +164,13 @@ def _register_from_registry(sub: argparse._SubParsersAction) -> None:
 
         if shape.group is None:
             parser = sub.add_parser(verb, help=shape.help)
+            # Every flag comes from the primitive's CliShape (via
+            # ``_add_standard_args``), never a hand ``add_argument`` here — so the
+            # ``operations.json`` bake is the whole CLI truth (latency A2). The
+            # ``describe --schema`` flag that used to be spliced in here now lives
+            # in ``describe``'s CliShape.args; ``scripts/lint_parser_bake_truth.py``
+            # forbids reintroducing a hand-added flag in this walk.
             _add_standard_args(parser, shape)
-            # Move 2 (proving-run-2-hardening §3): `describe --schema` routes to
-            # the resolved input-schema CONTENT. Added on the subparser (not in
-            # the CliShape.args baked into operations.json) so it stays additive
-            # — no registry regen needed. Handler reads `args.schema`.
-            if name == "describe":
-                parser.add_argument(
-                    "--schema",
-                    action="store_true",
-                    help=(
-                        "Emit the verb's resolved input-schema JSON content "
-                        "(not just its filename), so callers never `find`/`cat` "
-                        "a schema file."
-                    ),
-                )
             _bind_dispatch(parser, name)
             continue
 

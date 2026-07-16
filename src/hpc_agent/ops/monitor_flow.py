@@ -59,7 +59,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.aggregate.combine import combine_waves
 from hpc_agent.ops.monitor.announce import read_announcements
 from hpc_agent.ops.monitor.classify import unresolved_unknown
 from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec, harvest_on_terminal
@@ -1064,56 +1064,70 @@ def monitor_flow(
 
             actions: list[dict[str, Any]] = []
 
-            # Combine newly-complete waves.
+            # Combine newly-complete waves — the whole BURST in ONE ssh exec
+            # (P4 tier-1: the serial-wave-combines head-of-line stall). Each
+            # wave still carries its own ``--force`` (a retry of a previously-
+            # failed wave forces; a fresh wave does not) and its outcome is
+            # journaled individually by ``combine_waves`` (honest per-wave
+            # accounting, no whole-batch verdict).
             if auto_combine_waves and wave_map:
                 newly_done = _newly_complete_waves(
                     last_status=last_status,
                     wave_map=wave_map,
                     already_combined=set(state.last_combined_waves),
                 )
+                batch_waves: list[int] = []
+                batch_forces: dict[int, bool] = {}
                 for wave in newly_done:
                     # Skip waves already escalated past combiner_max_retries
                     # (sentinel = 10**9). Without this, every tick would
-                    # re-call combine_wave on a permanently failed
-                    # wave, wasting SSH round-trips indefinitely.
+                    # re-combine a permanently failed wave, wasting the exec.
                     if state.combiner_attempts.get(wave, 0) >= _COMBINER_GIVE_UP_SENTINEL:
                         continue
                     attempt = state.combiner_attempts.get(wave, 0) + 1
                     state.combiner_attempts[wave] = attempt
-                    ok, _stdout, stderr = combine_wave(
+                    batch_waves.append(wave)
+                    batch_forces[wave] = attempt > 1
+                if batch_waves:
+                    combined = combine_waves(
                         experiment_dir,
                         run_id,
-                        wave=wave,
+                        waves=batch_waves,
+                        forces=batch_forces,
                         ssh_target=resolve_ssh_target(record),
                         remote_path=record.remote_path,
-                        force=(attempt > 1),
                     )
-                    if ok:
-                        actions.append({"kind": "combine_wave", "wave": wave, "attempt": attempt})
-                        state.last_combined_waves = sorted({*state.last_combined_waves, wave})
-                        # A wave that previously failed and now succeeds on retry
-                        # must drop off ``failed_waves`` — otherwise the returned
-                        # MonitorFlowResult reports the wave in BOTH lists and a
-                        # downstream consumer keying off the failure ledger
-                        # (escalation surfaces, campaign-loop auto-resubmit) acts
-                        # on a stale failure (v3 BUG-4V3-2).
-                        state.last_failed_waves = sorted(set(state.last_failed_waves) - {wave})
-                        diff["newly_combined_waves"].append(wave)
-                    else:
-                        actions.append(
-                            {
-                                "kind": "combine_wave_failed",
-                                "wave": wave,
-                                "attempt": attempt,
-                                "stderr_tail": (stderr or "").strip()[-500:],
-                            }
-                        )
-                        state.last_failed_waves = sorted({*state.last_failed_waves, wave})
-                        if attempt > combiner_max_retries:
-                            # Escalate: stop combining this wave but keep
-                            # watching the rest of the run. The caller's
-                            # envelope will surface failed_waves.
-                            state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
+                    for wave in batch_waves:
+                        ok, _stdout, stderr = combined.get(wave, (False, "", ""))
+                        attempt = state.combiner_attempts[wave]
+                        if ok:
+                            actions.append(
+                                {"kind": "combine_wave", "wave": wave, "attempt": attempt}
+                            )
+                            state.last_combined_waves = sorted({*state.last_combined_waves, wave})
+                            # A wave that previously failed and now succeeds on retry
+                            # must drop off ``failed_waves`` — otherwise the returned
+                            # MonitorFlowResult reports the wave in BOTH lists and a
+                            # downstream consumer keying off the failure ledger
+                            # (escalation surfaces, campaign-loop auto-resubmit) acts
+                            # on a stale failure (v3 BUG-4V3-2).
+                            state.last_failed_waves = sorted(set(state.last_failed_waves) - {wave})
+                            diff["newly_combined_waves"].append(wave)
+                        else:
+                            actions.append(
+                                {
+                                    "kind": "combine_wave_failed",
+                                    "wave": wave,
+                                    "attempt": attempt,
+                                    "stderr_tail": (stderr or "").strip()[-500:],
+                                }
+                            )
+                            state.last_failed_waves = sorted({*state.last_failed_waves, wave})
+                            if attempt > combiner_max_retries:
+                                # Escalate: stop combining this wave but keep
+                                # watching the rest of the run. The caller's
+                                # envelope will surface failed_waves.
+                                state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
 
             # Bounded-unknown watchdog (proving run #3, finding f): a run whose
             # remote workdir vanished mid-run can poll "unknown" indefinitely —

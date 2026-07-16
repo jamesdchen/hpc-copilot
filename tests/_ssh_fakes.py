@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
@@ -82,6 +84,36 @@ def ack_line(prefix: str, rc: int = 0) -> str:
     if prefix.endswith("="):
         return f"{prefix}{rc}\n"
     return f"{prefix}\n"
+
+
+# ── exec/dial counting instrumentation (latency-elimination Unit 1.0) ─────────
+# Landed ONCE here so every Wave-1/2 counting unit reads the SAME shapes
+# read-only (ARCHITECT-MEMO §12). A missing counter shape goes to the
+# integrator — it is never grown on a unit branch. The three named counters:
+#
+#   * exec  — one remote command execution (one ``ssh_run`` call).
+#   * dial  — one contact with a host. At this seam (the per-command ``ssh_run``
+#             boundary) the cold-dial-per-op baseline makes an exec and a dial
+#             coincide, so a dial is counted per exec and the useful lever is the
+#             per-host breakdown (:attr:`FakeSSH.dials_by_host`) plus the window
+#             helpers (:meth:`FakeSSH.mark` / :meth:`FakeSSH.execs_since`) that
+#             let a test assert "zero intervening dials" across a wait.
+#   * pull-cycle — one transport pull round-trip (one ``rsync_pull`` /
+#             ``tar_ssh_pull`` call), counted by :class:`FakePull`.
+
+
+@dataclass(frozen=True)
+class Call:
+    """One recorded ``ssh_run`` dispatch — command + the host it dialed + op tag.
+
+    :attr:`FakeSSH.sent` keeps the flat command-string history the existing
+    assertion helpers use; :attr:`FakeSSH.calls` is the structured parallel the
+    exec/dial counters read (``sent`` and ``calls`` stay length-locked).
+    """
+
+    cmd: str
+    ssh_target: str
+    op: str | None = None
 
 
 @dataclass
@@ -133,6 +165,7 @@ class FakeSSH:
     rules: list[_Rule] = field(default_factory=list)
     store: dict = field(default_factory=dict)
     sent: list[str] = field(default_factory=list)
+    calls: list[Call] = field(default_factory=list)
 
     def rule(self, needle: str, response: _Response) -> FakeSSH:
         """Append a rule; returns self so construction can chain."""
@@ -150,6 +183,7 @@ class FakeSSH:
         **_kw: object,
     ) -> subprocess.CompletedProcess[str]:
         self.sent.append(cmd)
+        self.calls.append(Call(cmd=cmd, ssh_target=ssh_target, op=op))
         response = self._match(cmd)
         if callable(response) and not isinstance(response, subprocess.CompletedProcess):
             response = response(cmd, self.store)
@@ -195,6 +229,39 @@ class FakeSSH:
         assert len(hits) == 1, f"expected exactly one {needle!r} command, got {len(hits)}"
         return hits[0]
 
+    # -- exec / dial counters (read-only; consumed by the counting units) ----
+    @property
+    def exec_count(self) -> int:
+        """Total remote command executions dispatched so far (one per call)."""
+        return len(self.calls)
+
+    @property
+    def dials_by_host(self) -> Counter[str]:
+        """Per-host dial breakdown — ``{ssh_target: n}``.
+
+        The "1/host" fleet assertions read this: a fold that collapses a
+        per-task/per-run fan-out to one contact per host shows up as each host's
+        count dropping to 1.
+        """
+        return Counter(c.ssh_target for c in self.calls)
+
+    @property
+    def execs_by_op(self) -> Counter[str | None]:
+        """Per-``op`` exec breakdown — ``{op_label: n}`` (``None`` = untagged)."""
+        return Counter(c.op for c in self.calls)
+
+    def mark(self) -> int:
+        """Snapshot the current exec count, for a window measurement.
+
+        Pair with :meth:`execs_since` to assert "zero intervening dials" across a
+        wait: ``m = fake.mark(); …wait…; assert fake.execs_since(m) == 0``.
+        """
+        return len(self.calls)
+
+    def execs_since(self, mark: int) -> int:
+        """How many execs (dials) landed since *mark* was taken."""
+        return len(self.calls) - mark
+
 
 def stateful_crontab(*, key: str = "crontab") -> Callable[[str, dict], subprocess.CompletedProcess]:
     """A stateful callable rule modelling a remote crontab read-modify-write.
@@ -223,3 +290,85 @@ def stateful_crontab(*, key: str = "crontab") -> Callable[[str, dict], subproces
 def rules(*pairs: Iterable[object]) -> list[_Rule]:
     """Sugar: ``rules(("crontab -l", Reply(rc=1)), …)`` → a rule list."""
     return [(str(needle), resp) for needle, resp in pairs]  # type: ignore[misc]
+
+
+# ── pull-cycle counting instrumentation (latency-elimination Unit 1.0) ────────
+
+
+@dataclass(frozen=True)
+class PullCall:
+    """One recorded transport pull round-trip.
+
+    Mirrors the keyword surface of ``infra.transport.rsync_pull`` /
+    ``tar_ssh_pull`` — the seam the fingerprint/harvest pulls go through (NOT
+    ``ssh_run``). ``include`` is captured as a tuple so :class:`PullCall` stays
+    hashable/comparable in assertions.
+    """
+
+    ssh_target: str
+    remote_path: str
+    remote_subdir: str
+    local_dir: str
+    include: tuple[str, ...] = ()
+
+
+@dataclass
+class FakePull:
+    """A counting stand-in for ``infra.transport.rsync_pull`` (the pull seam).
+
+    Each call records a :class:`PullCall` and returns success by default, so a
+    test can assert the *pull-cycle* count — e.g. the double-canary fold pulls
+    both samples in ONE cycle (2 round-trips, not 4). Signature-compatible with
+    ``rsync_pull``: ``monkeypatch.setattr(mod, "rsync_pull", FakePull(...))``.
+
+    A pull often has to *materialise* the file the caller then reads (a bare
+    rc-0 with no file on disk is the caller's "nothing pulled" raise, which is a
+    different case). Supply *responder* — ``callable(PullCall, store) ->
+    CompletedProcess | None`` — to write fixture files and/or return a custom
+    result; the default responder ``mkdir -p``'s *local_dir* (as the real
+    ``rsync_pull`` does) and returns rc-0. :attr:`store` is a plain dict the
+    responder may thread state through.
+    """
+
+    returncode: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    responder: Callable[[PullCall, dict], object] | None = None
+    store: dict = field(default_factory=dict)
+    pulls: list[PullCall] = field(default_factory=list)
+
+    def __call__(
+        self,
+        *,
+        ssh_target: str,
+        remote_path: str,
+        remote_subdir: str,
+        local_dir: str | Path,
+        include: list[str] | None = None,
+        timeout: object = None,
+        **_kw: object,
+    ) -> subprocess.CompletedProcess[str]:
+        call = PullCall(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            remote_subdir=remote_subdir,
+            local_dir=str(local_dir),
+            include=tuple(include or ()),
+        )
+        self.pulls.append(call)
+        if self.responder is not None:
+            result = self.responder(call, self.store)
+            if isinstance(result, subprocess.CompletedProcess):
+                return result
+        # Default: behave like a successful rsync_pull — the dest dir exists.
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        return completed(self.stdout, stderr=self.stderr, returncode=self.returncode)
+
+    @property
+    def pull_count(self) -> int:
+        """Total pull round-trips dispatched (the pull-cycle primitive)."""
+        return len(self.pulls)
+
+    def pulls_to(self, ssh_target: str) -> list[PullCall]:
+        """Every recorded pull that dialed *ssh_target*."""
+        return [p for p in self.pulls if p.ssh_target == ssh_target]

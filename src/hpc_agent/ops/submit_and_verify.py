@@ -81,20 +81,32 @@ def _mark_canary_terminal(experiment_dir: Path, canary_run_id: str | None, *, st
         )
 
 
-def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path:
-    """Pull a canary's task-0 ``metrics.json`` locally under the fingerprint pulls dir.
+@dataclass(frozen=True)
+class _CanaryTask0Pull:
+    """A canary's task-0 pull coordinates, rendered locally (no round-trip).
 
-    ``verify_canary`` only sha-fingerprints the metrics over SSH; the sample's
-    ``bind`` recompute needs the payload ON DISK. Reuse the
-    ``ops/aggregate_flow.py::_per_task_metrics_reduce`` rsync idiom: render the
-    canary's task-0 result dir from its sidecar ``result_dir_template`` and pull
-    ``metrics.json`` into ``_aggregated/_fingerprints/_pulls/<canary_run_id>/``
-    (T3's :func:`pulls_dir`). Returns the local ``metrics.json`` path. Raises on a
-    missing record / unrenderable template / failed pull / no file — the caller
-    treats any raise as "no sample this submit" (best-effort minting).
+    Where its task-0 summary artifact lives on the cluster: the ``ssh_target`` +
+    project ``remote_path`` its RunRecord carries, the ``result_subdir`` its
+    sidecar ``result_dir_template`` renders for task 0, and the declared
+    ``summary_name`` (F-J). :func:`_render_canary_task0_pull` builds it; the two
+    pull seams (:func:`_pull_canary_task0_metrics`, single;
+    :func:`_pull_both_canary_task0_metrics`, folded) turn one/both into rsync.
     """
-    from hpc_agent.infra.transport import rsync_pull
-    from hpc_agent.state.fingerprint_store import pulls_dir
+
+    ssh_target: str
+    remote_path: str
+    result_subdir: str
+    summary_name: str
+
+
+def _render_canary_task0_pull(experiment_dir: Path, canary_run_id: str) -> _CanaryTask0Pull:
+    """Render a canary's task-0 pull coordinates from its journal record + sidecar.
+
+    Pure local work — NO round-trip (the split that lets the double canary fold
+    both pulls into ONE cycle, F6). Raises on a missing record / absent template
+    / a template field the sidecar cannot supply — the pull callers treat any
+    raise as "no sample this submit" (best-effort minting).
+    """
     from hpc_agent.state.journal import load_run
     from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
@@ -133,25 +145,132 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
             f"canary {canary_run_id!r} result_dir_template {template!r} references "
             f"a field the sidecar cannot supply ({exc!r}) — cannot render task 0 locally"
         ) from exc
-    local = pulls_dir(experiment_dir, canary_run_id)
-    pull = rsync_pull(
+    return _CanaryTask0Pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
-        remote_subdir=result_subdir,
+        result_subdir=result_subdir,
+        summary_name=summary_name,
+    )
+
+
+def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path:
+    """Pull a canary's task-0 ``metrics.json`` locally under the fingerprint pulls dir.
+
+    ``verify_canary`` only sha-fingerprints the metrics over SSH; the sample's
+    ``bind`` recompute needs the payload ON DISK. Reuse the
+    ``ops/aggregate_flow.py::_per_task_metrics_reduce`` rsync idiom: render the
+    canary's task-0 result dir from its sidecar ``result_dir_template`` and pull
+    the declared summary artifact into
+    ``_aggregated/_fingerprints/_pulls/<canary_run_id>/`` (T3's :func:`pulls_dir`).
+    Returns the local artifact path. Raises on a missing record / unrenderable
+    template / failed pull / no file — the caller treats any raise as "no sample
+    this submit" (best-effort minting). The double-canary path instead folds both
+    canaries into ONE cycle via :func:`_pull_both_canary_task0_metrics`; this
+    single-canary seam stays for its direct callers/tests.
+    """
+    from hpc_agent.infra.transport import rsync_pull
+    from hpc_agent.state.fingerprint_store import pulls_dir
+
+    plan = _render_canary_task0_pull(experiment_dir, canary_run_id)
+    local = pulls_dir(experiment_dir, canary_run_id)
+    pull = rsync_pull(
+        ssh_target=plan.ssh_target,
+        remote_path=plan.remote_path,
+        remote_subdir=plan.result_subdir,
         local_dir=str(local),
-        include=[summary_name],
+        include=[plan.summary_name],
     )
     if pull.returncode != 0:
         raise errors.RemoteCommandFailed(
-            f"pull of {canary_run_id!r} task-0 {summary_name} failed (exit {pull.returncode}): "
-            f"{(pull.stderr or '').strip()[:200]}"
+            f"pull of {canary_run_id!r} task-0 {plan.summary_name} failed "
+            f"(exit {pull.returncode}): {(pull.stderr or '').strip()[:200]}"
         )
-    hits = sorted(p for p in local.rglob(summary_name) if p.is_file())
+    hits = sorted(p for p in local.rglob(plan.summary_name) if p.is_file())
     if not hits:
         raise errors.RemoteCommandFailed(
-            f"no {summary_name} pulled for canary {canary_run_id!r} under {result_subdir!r}"
+            f"no {plan.summary_name} pulled for canary {canary_run_id!r} "
+            f"under {plan.result_subdir!r}"
         )
     return hits[0]
+
+
+def _pull_both_canary_task0_metrics(
+    experiment_dir: Path,
+    *,
+    first_canary_run_id: str,
+    second_canary_run_id: str,
+    dest_run_id: str,
+) -> tuple[Path, Path]:
+    """Fetch BOTH canaries' task-0 summary artifacts in ONE pull cycle (F6).
+
+    The double canary's two 1-task executions are the SAME submission to the SAME
+    cluster: they share an ``ssh_target`` + project ``remote_path`` and differ
+    only by the ``-canary`` / ``-canary2`` run-id segment of their task-0 result
+    dirs. Pulling them one at a time (the old ``_pull_canary_task0_metrics`` × 2)
+    costs two transport round-trips — four under the native-Windows ``tar_ssh_pull``
+    engine (a manifest exec + a transfer each). Instead, render both task-0 dirs
+    locally (no round-trip), pull their common ancestor ONCE with an ``include``
+    per canary, and return the two landed artifact paths — halving the sample's
+    transport cost (latency-elimination F6) while the two payloads (hence the
+    sample's two compared identities) stay distinct on disk.
+
+    Both artifacts land under one ``_pulls/<dest_run_id>/`` root at the relative
+    path each canary's result dir resolves to (the run-id segment keeps them
+    apart). Raises on a missing record / unrenderable template / a host+remote_path
+    mismatch (the same-submission invariant broken) / failed pull / a missing
+    artifact — the caller (:func:`_mint_double_canary_sample`) treats any raise as
+    "no sample this submit" (best-effort minting).
+    """
+    import posixpath
+
+    from hpc_agent.infra.transport import rsync_pull
+    from hpc_agent.state.fingerprint_store import pulls_dir
+
+    plan_a = _render_canary_task0_pull(experiment_dir, first_canary_run_id)
+    plan_b = _render_canary_task0_pull(experiment_dir, second_canary_run_id)
+    # Same submission ⇒ same host + project root, so ONE cycle keys on one target.
+    # A mismatch (should be impossible by construction) fails the fold loudly
+    # rather than silently pulling the wrong host's tree; the best-effort catch
+    # turns it into "no sample", never a wrong sample.
+    if plan_a.ssh_target != plan_b.ssh_target or plan_a.remote_path != plan_b.remote_path:
+        raise errors.SpecInvalid(
+            "double-canary pull fold expects both canaries on the same host + remote_path "
+            f"(got {plan_a.ssh_target!r}:{plan_a.remote_path!r} vs "
+            f"{plan_b.ssh_target!r}:{plan_b.remote_path!r})"
+        )
+    sub_a = plan_a.result_subdir.strip("/")
+    sub_b = plan_b.result_subdir.strip("/")
+    file_a = posixpath.join(sub_a, plan_a.summary_name)
+    file_b = posixpath.join(sub_b, plan_b.summary_name)
+    # Pull the two files' common ancestor so the ONE cycle's server-side walk is
+    # scoped (typically ``results/``); the per-file includes are anchored to it.
+    common = posixpath.commonpath([sub_a, sub_b]) if sub_a and sub_b else ""
+    inc_a = posixpath.relpath(file_a, common) if common else file_a
+    inc_b = posixpath.relpath(file_b, common) if common else file_b
+    local = pulls_dir(experiment_dir, dest_run_id)
+    pull = rsync_pull(
+        ssh_target=plan_a.ssh_target,
+        remote_path=plan_a.remote_path,
+        remote_subdir=common,
+        local_dir=str(local),
+        include=sorted({inc_a, inc_b}),
+    )
+    if pull.returncode != 0:
+        raise errors.RemoteCommandFailed(
+            f"double-canary pull of {first_canary_run_id!r}+{second_canary_run_id!r} failed "
+            f"(exit {pull.returncode}): {(pull.stderr or '').strip()[:200]}"
+        )
+    path_a = local.joinpath(*inc_a.split("/"))
+    path_b = local.joinpath(*inc_b.split("/"))
+    for pth, rid, inc in (
+        (path_a, first_canary_run_id, inc_a),
+        (path_b, second_canary_run_id, inc_b),
+    ):
+        if not pth.is_file():
+            raise errors.RemoteCommandFailed(
+                f"no task-0 artifact pulled for canary {rid!r} under {inc!r}"
+            )
+    return path_a, path_b
 
 
 def _mint_double_canary_sample(
@@ -193,8 +312,12 @@ def _mint_double_canary_sample(
         data_sha = main_sidecar.get("data_manifest_sha")
         if data_sha:
             identity["data_sha"] = str(data_sha)
-        path_a = _pull_canary_task0_metrics(experiment_dir, first_canary_run_id)
-        path_b = _pull_canary_task0_metrics(experiment_dir, second_canary_run_id)
+        path_a, path_b = _pull_both_canary_task0_metrics(
+            experiment_dir,
+            first_canary_run_id=first_canary_run_id,
+            second_canary_run_id=second_canary_run_id,
+            dest_run_id=base.run_id,
+        )
         payload_a = json.loads(path_a.read_text(encoding="utf-8"))
         payload_b = json.loads(path_b.read_text(encoding="utf-8"))
         per_key = determinism.diff_metrics(payload_a, payload_b)

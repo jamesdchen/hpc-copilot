@@ -9,27 +9,41 @@ GPU selection, and array-batch dispatch driven by a user-written
 import importlib
 import importlib.util
 import warnings
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
-from hpc_agent._kernel.registry.primitive import (
-    PrimitiveMeta,
-    SideEffect,
-    get_meta,
-    get_registry,
-    primitive,
-    register_primitives,
-)
-from hpc_agent.infra.clusters import load_clusters_config
+# Static-checker mirror of the runtime-lazy surface (B3 / PEP 562). At runtime
+# ``JournalLayout``, ``load_clusters_config``, the primitive-registry symbols
+# and ``register_run`` are resolved on first access by ``__getattr__`` from the
+# ``_LAZY_PUBLIC`` table below — importing them eagerly here would drag
+# ``hpc_agent.infra`` (pydantic + yaml + transport, ~0.5s) and the kernel
+# registry into every ``import hpc_agent``, the cold-start tax B3 removes. mypy
+# cannot see through a module ``__getattr__``, so this ``TYPE_CHECKING`` block
+# gives it the real types for ``hpc_agent.<name>`` attribute access. It is a
+# load-bearing twin of ``_LAZY_PUBLIC``: the annotation below names the pinning
+# test that reds if the two drift.
+# MIRROR: hpc_agent.__init__::_LAZY_PUBLIC <-> this TYPE_CHECKING import block
+#   pinned-by tests/contracts/test_eager_import_smoke.py::test_type_checking_mirror
+if TYPE_CHECKING:
+    from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
+    from hpc_agent._kernel.registry.primitive import (
+        PrimitiveMeta,
+        SideEffect,
+        get_meta,
+        get_registry,
+        primitive,
+        register_primitives,
+    )
+    from hpc_agent.experiment_kit import register_run
+    from hpc_agent.infra.clusters import load_clusters_config
 
-try:
-    __version__ = _pkg_version("hpc-agent")
-except PackageNotFoundError:  # pragma: no cover — running from a non-installed checkout
-    __version__ = "0.0.0+unknown"
+# Package root. Cheap (``Path.resolve`` on ``__file__``) and read at module
+# scope by consumers (e.g. ``incorporation/build/executor.py``,
+# ``incorporation/build/tasks_py.py`` do ``from hpc_agent import _PACKAGE_ROOT``
+# during their own import), so it stays eager — never deferred to
+# ``__getattr__`` (G4: honest underscore-attr resolution, no import-time work).
+_PACKAGE_ROOT = Path(__file__).resolve().parent
 
 __all__ = [
     # Package root
@@ -67,7 +81,38 @@ __all__ = [
 # Unlike ``_MOVED``, no ``DeprecationWarning`` — this IS the current home.
 _LAZY_PUBLIC: dict[str, str] = {
     "register_run": "hpc_agent.experiment_kit.register_run",
+    # B3 (PEP 562): the documented-root symbols whose eager import used to
+    # drag ``hpc_agent.infra`` (pydantic/yaml/transport) and the kernel
+    # registry into every ``import hpc_agent``. Resolved on first access.
+    # These ARE the current home (no DeprecationWarning) — unlike ``_MOVED``.
+    "JournalLayout": "hpc_agent._kernel.contract.layout.JournalLayout",
+    "RepoLayout": "hpc_agent._kernel.contract.layout.RepoLayout",
+    "PrimitiveMeta": "hpc_agent._kernel.registry.primitive.PrimitiveMeta",
+    "SideEffect": "hpc_agent._kernel.registry.primitive.SideEffect",
+    "get_meta": "hpc_agent._kernel.registry.primitive.get_meta",
+    "get_registry": "hpc_agent._kernel.registry.primitive.get_registry",
+    "primitive": "hpc_agent._kernel.registry.primitive.primitive",
+    "register_primitives": "hpc_agent._kernel.registry.primitive.register_primitives",
+    "load_clusters_config": "hpc_agent.infra.clusters.load_clusters_config",
 }
+
+
+def _resolve_version() -> str:
+    """Look up the installed distribution version, lazily.
+
+    ``importlib.metadata`` pulls in ``email`` / ``zipfile`` (~0.15s cold), so
+    reading it eagerly at module load taxed every ``import hpc_agent``. Deferred
+    to first access of ``hpc_agent.__version__`` via ``__getattr__``; the result
+    is cached back into module globals so subsequent reads are free.
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        return _pkg_version("hpc-agent")
+    except PackageNotFoundError:  # pragma: no cover — running from a non-installed checkout
+        return "0.0.0+unknown"
+
 
 # Names moved out of the root namespace. The ``__getattr__`` shim below
 # resolves each one with a ``DeprecationWarning`` for one release;
@@ -140,20 +185,32 @@ _MOVED: dict[str, str] = {
 
 
 def __getattr__(name: str) -> Any:
-    """Resolve a moved-out name from its canonical home.
+    """Resolve a lazily-deferred, moved-out, or version attribute (PEP 562).
 
-    Item 6 trimmed the root :data:`__all__` to the integrator surface
-    documented in ``docs/reference/boundary-contract.md``. The 37
-    historical attributes that left the root are listed in
-    :data:`_MOVED`; importing one through ``hpc_agent.<name>`` (or
-    ``from hpc_agent import <name>``) still works for one release but
-    emits a :class:`DeprecationWarning` pointing the caller at the
-    canonical module path. Drop the shim in a future release.
+    Three cases, in order:
+
+    * :data:`_LAZY_PUBLIC` — current-home root symbols resolved on first
+      access (B3 defers their heavy imports out of ``import hpc_agent``); no
+      warning, this IS the canonical home.
+    * ``__version__`` — computed by :func:`_resolve_version` and cached back
+      into module globals so later reads skip ``importlib.metadata``.
+    * :data:`_MOVED` — historical attributes that left the root (item 6
+      trimmed :data:`__all__` to the boundary-contract surface); still
+      importable for one release with a :class:`DeprecationWarning` pointing
+      at the canonical module path. Drop the shim in a future release.
+
+    Any other name — including an unknown underscore attribute (G4) — raises
+    an honest :class:`AttributeError`; a broken target path surfaces the
+    underlying :class:`ImportError`/:class:`AttributeError` unswallowed.
     """
     public_target = _LAZY_PUBLIC.get(name)
     if public_target is not None:
         module_path, _, attr = public_target.rpartition(".")
         return getattr(importlib.import_module(module_path), attr)
+    if name == "__version__":
+        version = _resolve_version()
+        globals()["__version__"] = version
+        return version
     target = _MOVED.get(name)
     if target is None:
         raise AttributeError(f"module 'hpc_agent' has no attribute {name!r}")
@@ -165,8 +222,6 @@ def __getattr__(name: str) -> Any:
     module_path, _, attr = target.rpartition(".")
     return getattr(importlib.import_module(module_path), attr)
 
-
-_PACKAGE_ROOT = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
 # Framework subdirectory layout (.hpc/)

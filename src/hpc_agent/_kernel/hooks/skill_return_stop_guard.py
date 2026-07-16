@@ -1,11 +1,14 @@
 """``Stop`` hook — block ending the turn over an unfetched sub-skill return.
 
-This is *harness-mediated*, not a CLI ``@primitive``: Claude Code runs it as a
-``command`` hook wired into ``~/.claude/settings.json``'s ``hooks.Stop`` array
-(see :func:`hpc_agent.agent_assets.install_agent_assets`). It is invoked when
-the agent is about to end its turn, receives the Stop payload as JSON on
-**stdin**, and may emit ``{"decision": "block", "reason": ...}`` on **stdout**
-to make the agent continue instead.
+This is *harness-mediated*, not a CLI ``@primitive``. Since the Stop-hook fusion
+its ``build_hook_output`` is invoked IN-PROCESS by the fused dispatcher
+(:mod:`hpc_agent._kernel.hooks.stop_multiplex`), which reads the Stop payload once
+and hands the same parsed mapping to every Stop guard — one interpreter start for
+all three (#288). This guard's decision logic stays its own ONE definition; the
+multiplexer only dispatches. Its :func:`main` is retained for standalone ``-m``
+invocation. When invoked, it receives the Stop payload as JSON on **stdin** and
+may emit ``{"decision": "block", "reason": ...}`` on **stdout** to make the agent
+continue instead.
 
 Why it exists
 -------------

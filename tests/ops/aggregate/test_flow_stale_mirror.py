@@ -114,7 +114,10 @@ def test_fires_stale_cached_piece_is_refreshed(
     # Fresh value reduced — NOT the stale 999 the idempotent cache held.
     assert result == {_RUN_ID: {"metric": 7.0, "n_samples": 1}}
     # A second SUMMARY pull fired: the evict-then-clean-re-pull of the refreshed
-    # dir (the trailing trace pull for _trace.jsonl is a separate seam).
+    # dir. Since the F1 include-fold, ``_trace.jsonl`` rides the SAME include as
+    # the summary, so there is no longer a separate trailing trace pull — every
+    # cycle carrying ``metrics.json`` is a summary pull, and there are exactly two
+    # (initial + eviction re-pull).
     summary_pulls = [c for c in calls if "metrics.json" in (c["include"] or [])]
     assert len(summary_pulls) == 2
     # The fingerprint sidecar was requested on BOTH transports (TRAP 1).

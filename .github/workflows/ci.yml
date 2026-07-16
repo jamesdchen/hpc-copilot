@@ -194,6 +194,12 @@ jobs:
       - name: Lint no cross-package private-symbol imports
         if: matrix.python-version == '3.12'
         run: python scripts/lint_private_cross_package_imports.py
+      - name: Lint heavy libraries are imported lazily (cold-startup, plan B1)
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_lazy_heavy_imports.py
+      - name: Lint parser flags match the baked catalog (fast-path truth, unit 1.2)
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_parser_bake_truth.py
       - name: Check JSON schemas regenerated from Pydantic
         if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check

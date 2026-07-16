@@ -116,6 +116,27 @@ _ANSWER_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "answer_capture"
 _RELAY_AUDIT_NEEDLE = _HOOK_MODULE_PREFIX + "relay_audit_stop"
 _ALERT_COUNT_NEEDLE = _HOOK_MODULE_PREFIX + "alert_count"
 
+# ── Fused Stop hook (stop_multiplex) ─────────────────────────────────────────
+# The three legacy standalone ``Stop`` guards are fused into ONE interpreter start
+# by :mod:`hpc_agent._kernel.hooks.stop_multiplex`, so a Stop event costs one
+# Python start + one ``hpc_agent`` import instead of three (#288). The multiplex
+# entry names the three guard modules explicitly as command arguments, so the
+# fused entry's command STILL mentions each legacy needle — the capability probe
+# (keyed on ``_RELAY_AUDIT_NEEDLE``) and the re-find matcher
+# (:func:`_find_hook_entry_index`, substring on the module path) both keep
+# resolving against the fused entry with no change to their needle constants.
+_STOP_MULTIPLEX_NEEDLE = _HOOK_MODULE_PREFIX + "stop_multiplex"
+_SKILL_RETURN_STOP_NEEDLE = _HOOK_MODULE_PREFIX + "skill_return_stop_guard"
+_DECISION_RENDEZVOUS_STOP_NEEDLE = _HOOK_MODULE_PREFIX + "decision_rendezvous_stop_guard"
+# The guard dispatch order (also stated in ``stop_multiplex._DEFAULT_GUARDS``);
+# these become the fused command's arguments AND the legacy needles the migration
+# removes as standalone entries.
+_STOP_MULTIPLEX_GUARDS: tuple[str, ...] = (
+    _SKILL_RETURN_STOP_NEEDLE,
+    _DECISION_RENDEZVOUS_STOP_NEEDLE,
+    _RELAY_AUDIT_NEEDLE,
+)
+
 
 class _HookSpec(NamedTuple):
     """One hook to merge into ``settings.json``: result key, event, needle, shape.
@@ -143,12 +164,8 @@ class _HookSpec(NamedTuple):
 #   envelope the moment its ``emit-skill-return`` Bash call commits it (the Skill
 #   tool returns before the sub-skill body runs, so a Skill-matched hook can
 #   never see a fresh envelope).
-# * skill_return_stop_guard — Stop: blocks ending the turn while a committed
-#   envelope sits unfetched (deterministic backstop for the hand-back prose).
-# * decision_rendezvous_autofetch / _stop_guard — the ``block-drive`` pair
-#   generalizing the skill-return pair to the §5 y/nudge boundary: PostToolUse
-#   injects the brief a block-drive tick parked; Stop blocks the turn once a
-#   human ``y`` is committed but the driver has not advanced.
+# * decision_rendezvous_autofetch — PostToolUse: injects the brief a block-drive
+#   tick parked (the ``block-drive`` half of the rendezvous pair).
 # * scheduler_write_fence — PreToolUse: blocks mutating scheduler verbs
 #   (qsub/sbatch/qdel/scancel/qmod/qalter, ssh transport included) while
 #   read-only probes stay allowed (conduct rule 7; command-position analysis so
@@ -161,8 +178,11 @@ class _HookSpec(NamedTuple):
 # * answer_capture — PostToolUse(AskUserQuestion): captures TYPED selector answer
 #   text (never a click on an agent-authored option) as authorship evidence too
 #   (proving run #5).
-# * relay_audit_stop — Stop: audits the final assistant text against the journal
-#   via verify-relay, blocking the stop once on a contradiction (conduct rule 10).
+#
+# The THREE ``Stop`` guards — skill_return_stop_guard, decision_rendezvous_stop_guard,
+# and relay_audit_stop — are NOT in this tuple: they are fused into ONE Stop entry
+# by :func:`_merge_stop_multiplex_hook` (the ``stop_multiplex`` dispatcher), so a
+# Stop event costs one interpreter start, not three (#288).
 _HOOK_SPECS: tuple[_HookSpec, ...] = (
     _HookSpec(
         "settings_hook",
@@ -172,25 +192,11 @@ _HOOK_SPECS: tuple[_HookSpec, ...] = (
         ("emit-skill-return",),
     ),
     _HookSpec(
-        "settings_stop_hook",
-        "Stop",
-        _HOOK_MODULE_PREFIX + "skill_return_stop_guard",
-        None,
-        (),
-    ),
-    _HookSpec(
         "settings_rendezvous_hook",
         "PostToolUse",
         _HOOK_MODULE_PREFIX + "decision_rendezvous_autofetch",
         "Bash",
         ("block-drive",),
-    ),
-    _HookSpec(
-        "settings_rendezvous_stop_hook",
-        "Stop",
-        _HOOK_MODULE_PREFIX + "decision_rendezvous_stop_guard",
-        None,
-        (),
     ),
     _HookSpec(
         "settings_write_fence_hook",
@@ -218,13 +224,6 @@ _HOOK_SPECS: tuple[_HookSpec, ...] = (
         "PostToolUse",
         _ANSWER_CAPTURE_NEEDLE,
         "AskUserQuestion",
-        (),
-    ),
-    _HookSpec(
-        "settings_relay_audit_hook",
-        "Stop",
-        _RELAY_AUDIT_NEEDLE,
-        None,
         (),
     ),
 )
@@ -518,6 +517,132 @@ def _merge_hook_entry(
         claude_dir / "settings.json",
         path_key="settings_path",
         unparseable_extra={},
+        plan=plan,
+        dry_run=dry_run,
+    )
+
+
+def _stop_multiplex_command() -> str:
+    """The fused ``Stop`` hook command: ``<py> -m stop_multiplex <g1> <g2> <g3>``.
+
+    Names the three guard modules explicitly as arguments (the dispatch list AND
+    the legacy needles the capability probe keys on), so the fused entry's command
+    still mentions each of them.
+    """
+    py = _hook_python()
+    guards = " ".join(_STOP_MULTIPLEX_GUARDS)
+    return f"{py} -m {_STOP_MULTIPLEX_NEEDLE} {guards}"
+
+
+def _entry_mentions(entry: Any, needle: str) -> bool:
+    """True when *entry* has a ``command`` hook whose command mentions *needle*."""
+    if not isinstance(entry, dict):
+        return False
+    hooks = entry.get("hooks")
+    if not isinstance(hooks, list):
+        return False
+    for hook in hooks:
+        if (
+            isinstance(hook, dict)
+            and isinstance(hook.get("command"), str)
+            and needle in hook["command"]
+        ):
+            return True
+    return False
+
+
+def _is_legacy_standalone_stop(entry: Any) -> bool:
+    """True when *entry* is a LEGACY standalone Stop guard (pre-fusion), not the fused one.
+
+    A legacy entry mentions one of the three guard needles but NOT the
+    ``stop_multiplex`` needle. The fused entry mentions all three guard needles AND
+    the multiplex needle (its command lists them as args), so it is never
+    classified legacy — the migration removes only the pre-fusion standalone
+    entries, never the fused one it is installing.
+    """
+    if _entry_mentions(entry, _STOP_MULTIPLEX_NEEDLE):
+        return False
+    return any(_entry_mentions(entry, needle) for needle in _STOP_MULTIPLEX_GUARDS)
+
+
+def _merge_stop_multiplex_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
+    """Install the fused ``Stop`` hook, removing the three legacy standalone entries.
+
+    ONE atomic write on ``settings.json``'s ``hooks.Stop`` array (F2 — the
+    539c1cdc regression zone the memo names): the legacy standalone Stop guards
+    (``skill_return_stop_guard`` / ``decision_rendezvous_stop_guard`` /
+    ``relay_audit_stop``) are dropped and the single ``stop_multiplex`` entry is
+    added/healed in the same write, so an upgrade from the three-entry shape can
+    never leave a duplicate Stop guard behind. Every other ``Stop`` entry (a user's
+    own hook) and every other key is preserved verbatim.
+
+    Idempotent: with the fused entry already present byte-equal and no legacy left,
+    it is ``already-present``. Self-healing: a stale fused entry (moved venv) is
+    ``updated`` in place; a leftover legacy entry is removed and reported under
+    ``removed_legacy``.
+
+    Returns ``{settings_path, action, removed_legacy, wrote}`` where ``action`` is
+    ``"added"`` (fused entry newly appended) / ``"updated"`` (healed in place or a
+    legacy entry removed) / ``"already-present"`` / ``"skipped-unparseable"`` /
+    ``"dry-run-would-add"`` / ``"dry-run-would-update"``, and ``removed_legacy``
+    lists the legacy guard needles dropped.
+    """
+    entry = _hook_entry(_stop_multiplex_command(), matcher=None)
+
+    def plan(settings: dict[str, Any]) -> _MergeOutcome:
+        hooks = settings.get("hooks")
+        if not isinstance(hooks, dict):
+            hooks = {}
+        stop_entries = hooks.get("Stop")
+        if not isinstance(stop_entries, list):
+            stop_entries = []
+
+        kept = [e for e in stop_entries if not _is_legacy_standalone_stop(e)]
+        removed = [e for e in stop_entries if _is_legacy_standalone_stop(e)]
+        removed_needles = sorted(
+            {
+                needle
+                for e in removed
+                for needle in _STOP_MULTIPLEX_GUARDS
+                if _entry_mentions(e, needle)
+            }
+        )
+
+        existing_idx = _find_hook_entry_index(kept, _STOP_MULTIPLEX_NEEDLE)
+        multiplex_present_equal = existing_idx is not None and kept[existing_idx] == entry
+
+        if multiplex_present_equal and not removed:
+            return _MergeOutcome(False, settings, "", "", {}, {"removed_legacy": []})
+
+        new_stop = list(kept)
+        if existing_idx is None:
+            new_stop.append(entry)
+            write_action = "added"
+            dryrun_action = "dry-run-would-add"
+        else:
+            new_stop[existing_idx] = entry
+            write_action = "updated"
+            dryrun_action = "dry-run-would-update"
+        # A removal-only change (fused entry already correct) is an update.
+        if multiplex_present_equal and removed:
+            write_action = "updated"
+            dryrun_action = "dry-run-would-update"
+
+        hooks["Stop"] = new_stop
+        settings["hooks"] = hooks
+        return _MergeOutcome(
+            True,
+            settings,
+            write_action,
+            dryrun_action,
+            {"removed_legacy": removed_needles},
+            {"removed_legacy": []},
+        )
+
+    return _merge_json(
+        claude_dir / "settings.json",
+        path_key="settings_path",
+        unparseable_extra={"removed_legacy": []},
         plan=plan,
         dry_run=dry_run,
     )
@@ -1075,17 +1200,15 @@ def install_agent_assets(
             "agents_installed": [],
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
-            "settings_stop_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_rendezvous_hook": {"settings_path": "...", "action": "added",
                                          "wrote": <bool>},
-            "settings_rendezvous_stop_hook": {"settings_path": "...", "action": "added",
-                                              "wrote": <bool>},
             "settings_alert_count_hook": {"settings_path": "...", "action": "added",
                                           "wrote": <bool>},
             "settings_utterance_hook": {"settings_path": "...", "action": "added",
                                         "wrote": <bool>},
-            "settings_relay_audit_hook": {"settings_path": "...", "action": "added",
-                                          "wrote": <bool>},
+            "settings_stop_multiplex_hook": {"settings_path": "...", "action": "added",
+                                             "removed_legacy": ["...relay_audit_stop", ...],
+                                             "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
             "settings_deny": {"settings_path": "...", "action": "added",
@@ -1119,11 +1242,17 @@ def install_agent_assets(
 
     ``settings_hook`` reports the additive, idempotent merge of the
     skill-return autofetch ``PostToolUse`` hook into
-    ``<claude>/settings.json``, and ``settings_stop_hook`` the same for the
-    skill-return ``Stop`` guard — see :func:`_merge_hook_entry`. Each
+    ``<claude>/settings.json`` — see :func:`_merge_hook_entry`. Each
     ``action`` is ``"added"`` / ``"already-present"`` / ``"updated"`` /
     ``"skipped-unparseable"`` / ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
-    The full set of hooks wired (in order) is enumerated in :data:`_HOOK_SPECS`.
+    The full set of non-Stop hooks wired (in order) is enumerated in
+    :data:`_HOOK_SPECS`.
+
+    ``settings_stop_multiplex_hook`` reports the fused ``Stop`` hook merge — the
+    single ``stop_multiplex`` entry that dispatches all three Stop guards in one
+    interpreter start, installed while removing the three legacy standalone Stop
+    entries in the same write (see :func:`_merge_stop_multiplex_hook`). Its
+    ``removed_legacy`` lists the legacy guard needles dropped on an upgrade.
 
     ``settings_permissions`` reports the additive, idempotent merge of
     ``Skill(<name>)`` allow rules for every installed skill into
@@ -1175,6 +1304,13 @@ def install_agent_assets(
             needle=spec.needle,
             dry_run=dry_run,
         )
+
+    # Install the fused Stop hook (stop_multiplex), removing the three legacy
+    # standalone Stop entries in the same write (F2). This is the ONLY Stop-event
+    # writer — the three guards are no longer in _HOOK_SPECS.
+    hook_reports["settings_stop_multiplex_hook"] = _merge_stop_multiplex_hook(
+        target, dry_run=dry_run
+    )
 
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +

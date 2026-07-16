@@ -366,11 +366,13 @@ def test_census_leg_combines_waves_from_markers(
     )
     combined: list[int] = []
 
-    def _fake_combine(experiment_dir: Path, run_id: str, *, wave: int, **_kw: Any):
-        combined.append(wave)
-        return (True, "", "")
+    def _fake_combine(
+        experiment_dir: Path, run_id: str, *, waves: list[int], **_kw: Any
+    ) -> dict[int, tuple[bool, str, str]]:
+        combined.extend(waves)
+        return {w: (True, "", "") for w in waves}
 
-    monkeypatch.setattr(monitor_flow_module, "combine_wave", _fake_combine)
+    monkeypatch.setattr(monitor_flow_module, "combine_waves", _fake_combine)
 
     result = monitor_flow(
         experiment,
@@ -401,11 +403,13 @@ def test_census_leg_wave_bookkeeping_degrades_when_listing_unavailable(
     )
     combined: list[int] = []
 
-    def _fake_combine(experiment_dir: Path, run_id: str, *, wave: int, **_kw: Any):
-        combined.append(wave)
-        return (True, "", "")
+    def _fake_combine(
+        experiment_dir: Path, run_id: str, *, waves: list[int], **_kw: Any
+    ) -> dict[int, tuple[bool, str, str]]:
+        combined.extend(waves)
+        return {w: (True, "", "") for w in waves}
 
-    monkeypatch.setattr(monitor_flow_module, "combine_wave", _fake_combine)
+    monkeypatch.setattr(monitor_flow_module, "combine_waves", _fake_combine)
 
     result = monitor_flow(
         experiment,
@@ -416,6 +420,68 @@ def test_census_leg_wave_bookkeeping_degrades_when_listing_unavailable(
 
     assert result.lifecycle_state == LifecycleState.COMPLETE
     assert combined == []  # no waves block derived → no combine attempted
+
+
+def test_ten_wave_burst_is_one_combine_exec(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P4 tier-1 acceptance: a tick that finds a 10-wave BURST fires ``combine_waves``
+    exactly ONCE (one fused exec) with all ten waves — not ten serial calls — and
+    each wave lands in ``combined_waves`` (per-wave accounting)."""
+    wave_map = {str(w): [2 * w, 2 * w + 1] for w in range(10)}  # 10 waves, 20 tasks
+    _seed_record(experiment, total_tasks=20, job_ids=["1"])
+    _write_wave_sidecar_n(experiment, wave_map, task_count=20)
+    _walk_tripwire(monkeypatch)
+    _harvest_recorder(monkeypatch)
+    # Full-complete census (all 20 announced complete) → all ten waves complete.
+    _stub_census(monkeypatch, _present(20, 0, total=20))
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "_census_complete_task_ids",
+        lambda record, run_id: set(range(20)),
+    )
+
+    calls: list[list[int]] = []
+
+    def _fake_combine(
+        experiment_dir: Path, run_id: str, *, waves: list[int], **_kw: Any
+    ) -> dict[int, tuple[bool, str, str]]:
+        calls.append(list(waves))
+        return {w: (True, "", "") for w in waves}
+
+    monkeypatch.setattr(monitor_flow_module, "combine_waves", _fake_combine)
+
+    result = monitor_flow(
+        experiment,
+        spec=_spec(auto_combine_waves=True),
+        _sleep=lambda s: None,
+        _now=lambda: 0.0,
+    )
+
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+    # ONE fused combine exec for the whole burst — the head-of-line stall is gone.
+    assert len(calls) == 1
+    assert sorted(calls[0]) == list(range(10))
+    assert result.combined_waves == list(range(10))
+
+
+def _write_wave_sidecar_n(
+    experiment_dir: Path, wave_map: dict[str, list[int]], *, task_count: int
+) -> None:
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        experiment_dir,
+        run_id=_RUN_ID,
+        cmd_sha="0" * 64,
+        hpc_agent_version="0.10.26",
+        submitted_at="2026-07-12T09:00:00Z",
+        executor="python3 run.py",
+        result_dir_template="results/{task_id}",
+        task_count=task_count,
+        tasks_py_sha="1" * 64,
+        wave_map=wave_map,
+    )
 
 
 def test_pre_announce_falls_back_to_walk_disclosed(

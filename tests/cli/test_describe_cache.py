@@ -66,6 +66,24 @@ def test_emit_describe_second_call_hits_cache(monkeypatch, capsys):
     assert out1 == out2 and out1.strip()
 
 
+def test_store_refused_under_partial_registration(monkeypatch):
+    # A1 poisoning guard: the single-verb fast path leaves the registry PARTIAL
+    # (register_single_module sets the weaker _DISPATCH_READY latch, not
+    # _REGISTRATION_DONE). A describe resolved off a partial registry is
+    # wrong-but-plausible; store() must refuse to persist it, or every full-path
+    # reader is poisoned for the version's lifetime.
+    from hpc_agent._kernel.registry import primitive
+
+    monkeypatch.setattr(primitive, "_REGISTRATION_DONE", False)
+    describe_cache.store("submit-flow", {"kind": "primitive", "name": "submit-flow"})
+    # Nothing was written — restoring full registration still yields a miss.
+    monkeypatch.setattr(primitive, "_REGISTRATION_DONE", True)
+    assert describe_cache.load("submit-flow") is None
+    # And once full registration is in effect, store() persists as normal.
+    describe_cache.store("submit-flow", {"kind": "primitive", "name": "submit-flow"})
+    assert describe_cache.load("submit-flow") is not None
+
+
 def test_emit_describe_not_found_is_not_cached(monkeypatch):
     def _raise(*, name):
         raise ValueError(f"no skill or primitive named {name!r}")

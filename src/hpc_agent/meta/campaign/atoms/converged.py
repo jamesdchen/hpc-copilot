@@ -16,8 +16,6 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, get_args
 
-import jsonschema
-
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
 from hpc_agent.cli._dispatch import CliArg, CliShape
@@ -119,6 +117,8 @@ def campaign_converged(
       window." Good fit for fine-tuning campaigns where the first
       record isn't the answer. Requires ``2 * window`` history points.
     """
+    import jsonschema
+
     from hpc_agent.execution.mapreduce.reduce.history import prior
     from hpc_agent.meta.campaign.manifest import read_manifest
 

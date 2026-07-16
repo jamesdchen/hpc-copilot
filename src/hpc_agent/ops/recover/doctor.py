@@ -382,6 +382,40 @@ def _attention_summary(
     return needs_attention, line
 
 
+def _jsonschema_importable_probe(now: str) -> list[AlertRecord]:
+    """G5 preflight surface: is ``jsonschema`` importable at all (no SSH, local).
+
+    Latency plan B1 moved ``import jsonschema`` out of module scope and into the
+    functions that validate a ``--spec`` payload (the campaign atoms, the
+    contract schema loader). That kills the cold-startup cost, but it also moves
+    a broken / absent ``jsonschema`` install's ``ImportError`` from *import time*
+    (loud, immediate, on every CLI turn) to *first-validate time* (deep inside a
+    submit / campaign flow, after the human has already committed to a run). This
+    probe restores an early, local, no-SSH surface: attempt the import here and,
+    on failure, surface an alert so the operator sees the missing dependency at
+    ``doctor`` time instead of mid-run. Success returns ``[]`` (no noise). The
+    alert rides the envelope's ``alerts`` list for delivery; it does not flip
+    ``needs_attention`` on its own (a missing dep is a preflight advisory, not a
+    stalled driver) — consistent with the log-alert delivery contract.
+    """
+    try:
+        import jsonschema  # noqa: F401
+    except ImportError as exc:
+        return [
+            AlertRecord(
+                ts=now,
+                message=(
+                    "jsonschema is not importable "
+                    f"({exc}) — spec validation is lazy now (latency plan B1), so this "
+                    "would otherwise only surface at first --spec validation deep inside "
+                    "a submit/campaign flow. Reinstall hpc-agent's dependencies "
+                    "(e.g. `uv tool install --reinstall .` or `pip install -e '.[dev]'`)."
+                ),
+            )
+        ]
+    return []
+
+
 def _transport_drift_routing(now: str) -> list[AlertRecord]:
     """Route live transport-env drift to its heal class (detection + routing ONLY).
 
@@ -568,11 +602,18 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         with contextlib.suppress(Exception):
             heal_alerts.extend(_transport_drift_routing(now))
 
+    # G5 preflight surface (latency plan B1): jsonschema is imported lazily now,
+    # so a broken/absent install would only fail at first --spec validation deep
+    # inside a flow. Probe it here (local, no SSH) and ride any failure on the
+    # `alerts` list for delivery — like the dead-worker drafts, it does not flip
+    # needs_attention (a missing dep is a preflight advisory, not a stalled run).
+    jsonschema_alerts = _jsonschema_importable_probe(now)
+
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the
     # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
     # not log lines), while the dead workers get their own attention part.
-    alerts = log_alerts + dead_worker_alerts + heal_alerts
+    alerts = log_alerts + dead_worker_alerts + heal_alerts + jsonschema_alerts
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,

@@ -30,11 +30,19 @@ Mechanism — N claimable slots per host, shared across processes:
   the cheapest correct approximation. Cost: two long transfers to one host
   serialize a third; with N=2 that is acceptable pacing, and short control
   commands (the storm pattern) dominate.
-* Waiters back off with a **deterministic pid-derived jitter** (no
-  ``random``; testable via injected clock/sleep) on a doubling poll
-  interval, and give up after :data:`SLOT_WAIT_MAX_SEC` with
+* Waiters poll on a **flat sub-second interval** (P5, the 2026-07-16
+  latency ruling): a fixed :data:`SLOT_POLL_BASE_SEC` cadence plus a
+  **deterministic pid-derived jitter** (no ``random``; testable via injected
+  clock/sleep), and give up after :data:`SLOT_WAIT_MAX_SEC` with
   :class:`hpc_agent.errors.SshSlotWaitTimeout` — bounded by construction,
-  never a new wedge class. While waiting they re-consult the circuit
+  never a new wedge class. The cadence is *flat*, not a doubling back-off:
+  a doubling ladder that grew to seconds meant a slot freed just after a
+  poll was not noticed for the whole (grown) interval, so wakeup lag scaled
+  with hold duration — 4–8s on a long hold. A flat poll bounds wakeup lag
+  at :data:`SLOT_POLL_BASE_SEC` + :data:`SLOT_JITTER_MAX_SEC` (sub-second)
+  **independent of how long the slot was held**; the poll is a local
+  filesystem stat, not an SSH op, so a tight cadence adds no remote load.
+  While waiting they re-consult the circuit
   breaker: a circuit that opens turns the whole queue into fail-fast
   (an open breaker must not accumulate queued attempts).
 * A slot whose claimant crashed is reclaimed by PID-LIVENESS: the claim
@@ -94,7 +102,6 @@ __all__ = [
     "SLOT_DISCLOSE_INTERVAL_SEC",
     "SLOT_JITTER_MAX_SEC",
     "SLOT_POLL_BASE_SEC",
-    "SLOT_POLL_MAX_SEC",
     "SLOT_WAIT_MAX_SEC",
     "acquire_slot",
     "connection_slot",
@@ -111,16 +118,21 @@ DEFAULT_MAX_CONNECTIONS = 2
 #: the 2026-07-04 preflight probe already demonstrated.
 SLOT_WAIT_MAX_SEC = 120.0
 
-#: First poll interval for a waiter (doubles up to :data:`SLOT_POLL_MAX_SEC`).
-SLOT_POLL_BASE_SEC = 1.0
+#: Flat poll cadence for a waiter (P5, 2026-07-16 latency ruling). No
+#: doubling back-off: a waiter re-checks for a freed slot every
+#: :data:`SLOT_POLL_BASE_SEC` (+ jitter) for the whole wait, so wakeup lag
+#: after a release is bounded by this + :data:`SLOT_JITTER_MAX_SEC`,
+#: *independent of how long the slot was held*. Sub-second by construction:
+#: ``SLOT_POLL_BASE_SEC + SLOT_JITTER_MAX_SEC < 0.6`` (pinned by a fire-path
+#: test). Kept a local filesystem stat, not an SSH op, so a tight cadence
+#: adds no load to the remote host the limiter protects.
+SLOT_POLL_BASE_SEC = 0.3
 
-#: Poll-interval ceiling for waiters.
-SLOT_POLL_MAX_SEC = 8.0
-
-#: Maximum pid-derived jitter added to each waiter's poll interval, so a
+#: Maximum pid-derived jitter added to each waiter's flat poll interval, so a
 #: fleet that starts waiting together re-polls staggered instead of in
 #: lockstep. Derived from the pid (deterministic, testable) — not random.
-SLOT_JITTER_MAX_SEC = 1.0
+#: Bounded so ``SLOT_POLL_BASE_SEC + SLOT_JITTER_MAX_SEC`` stays sub-second.
+SLOT_JITTER_MAX_SEC = 0.2
 
 #: Seconds a blocked waiter waits before its FIRST periodic slot-hold
 #: disclosure to stderr. F-N (run #10): a process blocked ~15 min acquiring a
@@ -388,9 +400,12 @@ def acquire_slot(
     if pid is None:
         pid = os.getpid()
     jitter = (pid % _JITTER_MOD) / _JITTER_MOD * SLOT_JITTER_MAX_SEC
+    # Flat poll cadence (P5): a fixed per-waiter interval, NOT a doubling
+    # back-off — so a slot freed just after a poll is noticed within one flat
+    # interval regardless of how long it was held (wakeup lag < 0.6s).
+    poll = SLOT_POLL_BASE_SEC + jitter
     start = clock()
     deadline = start + SLOT_WAIT_MAX_SEC
-    interval = SLOT_POLL_BASE_SEC
     announced = False
     # F-N: a blocked waiter must not be silent. First disclosure lands after
     # SLOT_DISCLOSE_FIRST_SEC, then every SLOT_DISCLOSE_INTERVAL_SEC.
@@ -429,8 +444,7 @@ def acquire_slot(
         if now >= next_disclosure:
             _emit_slot_disclosure(host, limit, now=now, elapsed=now - start)
             next_disclosure = now + SLOT_DISCLOSE_INTERVAL_SEC
-        sleep(min(interval + jitter, max(0.0, deadline - now)))
-        interval = min(interval * 2.0, SLOT_POLL_MAX_SEC)
+        sleep(min(poll, max(0.0, deadline - now)))
 
 
 def release_slot(token: Path | None, *, pid: int | None = None) -> None:

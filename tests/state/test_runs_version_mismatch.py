@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 import warnings
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -64,10 +64,20 @@ def test_version_mismatch_silent_when_pkg_import_fails(
 
     # Force the deferred import inside read_run_sidecar to raise. The
     # function does ``from hpc_agent import __version__``; deleting the
-    # attribute makes the import raise ImportError on lookup.
-    pkg = sys.modules["hpc_agent"]
+    # attribute alone no longer suffices — the lazy root (PEP-562, latency
+    # unit 1.3) re-resolves deleted deferred names via module ``__getattr__``,
+    # so block that path too to make the import genuinely fail.
+    pkg: Any = sys.modules["hpc_agent"]
     original = pkg.__version__
     monkeypatch.delattr(pkg, "__version__")
+    _original_getattr = pkg.__getattr__
+
+    def _no_version(name: str):
+        if name == "__version__":
+            raise AttributeError(name)
+        return _original_getattr(name)
+
+    monkeypatch.setattr(pkg, "__getattr__", _no_version)
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")

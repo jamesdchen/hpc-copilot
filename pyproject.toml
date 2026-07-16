@@ -336,5 +336,22 @@ pytest_add_cli_args = [
 # [dependency-groups] dev list held a duplicate pytest-xdist pin and
 # the two would drift; removed 2026-07-09.
 
+[tool.uv]
+# Cold-startup exclusion (latency plan B1). ``jsonschema``'s optional
+# format-checkers pull the ``rfc3987`` family (``rfc3987-syntax``) for
+# ``format: iri/uri`` validation. hpc-agent depends on plain ``jsonschema``
+# (no ``[format]`` / ``[format-nongpl]`` extra) and never validates those
+# formats, so that package is never *required* here — but once it lands in an
+# environment (transitively, or from an unrelated tool) ``jsonschema`` imports
+# it eagerly, adding hundreds of ms to every ``import jsonschema``. The override
+# below carries an unsatisfiable marker, uv's idiom for "if anything requests
+# this, drop it": it pins the exclusion so a resolved env never re-acquires the
+# heavy format dep. Purging an already-installed copy from a dev venv is a
+# separate operator step (`uv pip uninstall rfc3987-syntax`).
+override-dependencies = [
+    "rfc3987-syntax; sys_platform == 'no-such-platform'",
+    "rfc3987; sys_platform == 'no-such-platform'",
+]
+
 [tool.uv.workspace]
 members = []

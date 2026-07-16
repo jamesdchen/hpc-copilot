@@ -1178,15 +1178,20 @@ def test_cluster_failures_buckets_missing_logs():
 
 
 def test_fetch_task_logs_returns_content_for_slurm():
-    """SLURM log path: <remote_path>/logs/<job>_<jid>_<tid+1>.err."""
-    captured: list[str] = []
+    """SLURM log path: <remote_path>/logs/<job>_<jid>_<tid+1>.err.
 
-    def fake_ssh_run(cmd, *, ssh_target, **_kw):
-        captured.append(cmd)
-        # First job_id attempt found.
-        return _completed(stdout="FOUND\nline1\nline2\nline3\n", returncode=0)
+    The probe is a single fused ssh exec; the fused fake evaluates its one
+    script against a path->content map (see tests._log_fakes)."""
+    from tests._log_fakes import fused_remote_fs
 
-    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
+    fake, _probed = fused_remote_fs({"/exp/logs/ml_12345_8.err": "line1\nline2\nline3"})
+    calls: list[str] = []
+
+    def counting(cmd, *, ssh_target, **kw):
+        calls.append(cmd)
+        return fake(cmd, ssh_target=ssh_target, **kw)
+
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=counting):
         logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -1197,6 +1202,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
             lines=50,
         )
 
+    assert len(calls) == 1  # F5: ONE round-trip, not one-per-candidate.
     assert len(logs) == 1
     entry = logs[0]
     assert entry["task_id"] == 7
@@ -1206,10 +1212,11 @@ def test_fetch_task_logs_returns_content_for_slurm():
 
 
 def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
-    def fake_ssh_run(cmd, *, ssh_target, **_kw):
-        return _completed(stdout="MISSING\n", returncode=0)
+    from tests._log_fakes import fused_remote_fs
 
-    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
+    fake, _probed = fused_remote_fs({})  # no file exists for any candidate
+
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake):
         logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -1223,16 +1230,14 @@ def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
 
 
 def test_fetch_task_logs_falls_back_to_earlier_job_id():
-    """When the latest job_id has no log, try the next-most-recent."""
-    sequence = [
-        _completed(stdout="MISSING\n", returncode=0),  # job 222 (newest)
-        _completed(stdout="FOUND\nold log\n", returncode=0),  # job 111
-    ]
+    """When the latest job_id has no log, try the next-most-recent — now within
+    the single fused script's newest-first arm chain."""
+    from tests._log_fakes import fused_remote_fs
 
-    def fake_ssh_run(cmd, *, ssh_target, **_kw):
-        return sequence.pop(0)
+    # Only the OLDER job 111's log exists; job 222 (newest, probed first) misses.
+    fake, probed = fused_remote_fs({"/exp/logs/ml_111_8.err": "old log"})
 
-    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake):
         logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -1244,16 +1249,16 @@ def test_fetch_task_logs_falls_back_to_earlier_job_id():
 
     assert logs[0]["job_id"] == "111"
     assert "old log" in logs[0]["content"]
+    # Newest-first: job 222 was probed and missed before falling back to 111.
+    assert probed == ["/exp/logs/ml_222_8.err", "/exp/logs/ml_111_8.err"]
 
 
 def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
-    captured: list[str] = []
+    from tests._log_fakes import fused_remote_fs
 
-    def fake_ssh_run(cmd, *, ssh_target, **_kw):
-        captured.append(cmd)
-        return _completed(stdout="FOUND\nbody\n", returncode=0)
+    fake, _probed = fused_remote_fs({"/exp/logs/ml.o12345.8": "body"})
 
-    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake):
         logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",

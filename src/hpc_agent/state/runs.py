@@ -571,7 +571,9 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     if isinstance(sidecar_version, str) and sidecar_version:
         _pkg_version: str | None
         try:
-            from hpc_agent import __version__ as _pkg_version
+            from hpc_agent import __version__ as _installed_version
+
+            _pkg_version = _installed_version
         except ImportError:  # circular/missing import → skip the observability warning
             _pkg_version = None
         if _pkg_version and sidecar_version != _pkg_version:

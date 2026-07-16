@@ -46,9 +46,7 @@ Defensiveness
 
 from __future__ import annotations
 
-import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -111,17 +109,17 @@ def main(argv: list[str] | None = None) -> int:
     (UserPromptSubmit stdout would be injected into the model's context —
     this hook's record must stay out-of-band). ``argv`` is accepted for
     symmetry and unused.
+
+    The payload is read through the ONE robust hook reader
+    (:func:`hpc_agent._kernel.hooks.stop_multiplex.read_stdin_payload` —
+    ``sys.stdin.buffer`` + utf-8 ``errors="replace"``), so a non-utf8 prompt byte
+    degrades to a replacement char rather than crashing the capture. The frozen
+    ``{ts, sha256, text}`` writer is untouched — this shim adds no field.
     """
     del argv
-    try:
-        raw = sys.stdin.read()
-    except OSError:
-        return 0
+    from hpc_agent._kernel.hooks.stop_multiplex import read_stdin_payload
 
-    try:
-        payload = json.loads(raw) if raw.strip() else None
-    except (json.JSONDecodeError, ValueError):
-        return 0
+    payload = read_stdin_payload()
 
     try:
         capture(payload)

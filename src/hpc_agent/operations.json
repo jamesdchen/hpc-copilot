@@ -762,7 +762,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent describe <name>",
+    "cli": "hpc-agent describe <name> [--schema]",
     "idempotent": true,
     "input_schema": null,
     "name": "describe",

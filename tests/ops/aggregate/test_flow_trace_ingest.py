@@ -1,23 +1,27 @@
 """Ingestion-at-harvest — data-trace **T4** (docs/design/data-trace.md).
 
 The per-task pull seam (``_per_task_metrics_reduce`` — the no-combiner
-weighted-mean fallback) additionally pulls each task's ``_trace.jsonl`` and
-moves it into the one canonical trace store via T1's ``ingest_trace`` (scope
-``("run", run_id)``). The trace is EVIDENCE, not a gate:
+weighted-mean fallback) folds each task's ``_trace.jsonl`` into the SAME pull as
+the metrics + ``.hpc_cmd_sha`` (F1 include-fold — one pull cycle, not a metrics
+pull then a separate trace pull over the identical ``results/`` subtree), then
+moves each trace into the one canonical store via T1's ``ingest_trace`` (scope
+``("run", run_id)``) reading it straight off the folded mirror. The trace is
+EVIDENCE, not a gate:
 
-* a cluster run with per-task ``_trace.jsonl`` → pulled + ingested + journaled;
+* a cluster run with per-task ``_trace.jsonl`` → folded-in + ingested + journaled;
 * absent trace files → silent, the harvest is byte-identical;
 * a torn / schema-invalid trace → ``ingest_trace`` refuses it (T1 strict) →
   a DISCLOSED skip, the harvest stays green;
 * no double-ingest on re-harvest (the persistent cluster copy is re-pulled
   every harvest; the store-existence guard makes the second ingest a no-op);
-* the seam fires AFTER the metrics pull and never blocks it (a trace pull
-  failure leaves the aggregate intact).
+* the ingest reads from the already-pulled mirror AFTER the metrics reduce and
+  never blocks it.
 
 ``rsync_pull`` is mocked exactly as ``test_flow_ssh_default_reducer``: the
-``_combiner`` pull 404s (combiner never ran); the ``results`` pull writes the
-per-task ``metrics.json`` fixtures for ``include=["metrics.json"]`` and the
-per-task ``_trace.jsonl`` fixtures for ``include=[TRACE_TRANSPORT_FILENAME]``.
+``_combiner`` pull 404s (combiner never ran); the ``results`` pull is the ONE
+folded cycle whose ``include`` carries ``metrics.json``, ``.hpc_cmd_sha`` AND
+``_trace.jsonl``, and it materialises both the per-task ``metrics.json`` and
+``_trace.jsonl`` fixtures.
 """
 
 from __future__ import annotations
@@ -117,15 +121,18 @@ def _rsync_stub(
     metrics: list[dict] | None,
     traces: dict[int, str] | None,
     *,
-    trace_pull_rc: int = 0,
-    trace_pull_raises: bool = False,
+    results_pull_rc: int = 0,
+    results_pull_raises: bool = False,
 ):
-    """rsync_pull stub: _combiner 404s; results writes metrics OR traces by include.
+    """rsync_pull stub: _combiner 404s; the ONE folded results pull writes both.
 
     ``metrics`` — one metrics.json per list index (task-<i>). ``traces`` — a
-    ``{task_index: file_text}`` map written as ``task-<i>/_trace.jsonl``.
-    ``trace_pull_rc`` non-zero simulates the trace-include pull failing (no
-    _trace.jsonl on the cluster); ``trace_pull_raises`` makes it raise OSError.
+    ``{task_index: file_text}`` map written as ``task-<i>/_trace.jsonl``. Both
+    ride the SAME ``results`` pull (F1 include-fold): its ``include`` names
+    ``metrics.json``, ``.hpc_cmd_sha`` and ``_trace.jsonl`` together, so the stub
+    materialises every fixture in one cycle rather than splitting on include.
+    ``results_pull_rc`` non-zero simulates the folded pull failing;
+    ``results_pull_raises`` makes it raise OSError.
     """
 
     def _stub(*_a, remote_subdir: str, local_dir: str, include=None, **_kw):
@@ -134,28 +141,25 @@ def _rsync_stub(
             return subprocess.CompletedProcess(
                 args=[], returncode=23, stdout="", stderr="No such file or directory (2)"
             )
-        if remote_subdir == "results" and include == [TRACE_TRANSPORT_FILENAME]:
-            if trace_pull_raises:
+        if remote_subdir == "results":
+            if results_pull_raises:
                 raise OSError("simulated transport explosion")
-            if trace_pull_rc != 0:
+            if results_pull_rc != 0:
                 return subprocess.CompletedProcess(
                     args=[],
-                    returncode=trace_pull_rc,
+                    returncode=results_pull_rc,
                     stdout="",
                     stderr="No such file or directory (2)",
                 )
-            dest.mkdir(parents=True, exist_ok=True)
-            for i, text in (traces or {}).items():
-                td = dest / f"task-{i}"
-                td.mkdir(parents=True, exist_ok=True)
-                (td / TRACE_TRANSPORT_FILENAME).write_text(text, encoding="utf-8")
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        if remote_subdir == "results":
             dest.mkdir(parents=True, exist_ok=True)
             for i, m in enumerate(metrics or []):
                 td = dest / f"task-{i}"
                 td.mkdir(parents=True, exist_ok=True)
                 (td / "metrics.json").write_text(json.dumps(m), encoding="utf-8")
+            for i, text in (traces or {}).items():
+                td = dest / f"task-{i}"
+                td.mkdir(parents=True, exist_ok=True)
+                (td / TRACE_TRANSPORT_FILENAME).write_text(text, encoding="utf-8")
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         dest.mkdir(parents=True, exist_ok=True)
         return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
@@ -201,11 +205,11 @@ def test_cluster_traces_pulled_ingested_and_journaled(journal_home, experiment, 
 
 
 def test_absent_traces_are_silent_harvest_identical(journal_home, experiment, monkeypatch):
-    """No _trace.jsonl on the cluster (trace pull 404s) → no store, no journal, same aggregate."""
+    """No _trace.jsonl in the tree (the folded include matched none) → no store, no journal."""
     _seed_run(experiment)
     _seed_sidecar_no_reducer(experiment)
 
-    monkeypatch.setattr(af_module, "rsync_pull", _rsync_stub(_metrics(), None, trace_pull_rc=23))
+    monkeypatch.setattr(af_module, "rsync_pull", _rsync_stub(_metrics(), None))
 
     result = aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
 
@@ -259,21 +263,64 @@ def test_no_double_ingest_on_reharvest(journal_home, experiment, monkeypatch):
     assert len(_data_trace_records(experiment)) == len(_PI_VALUES)
 
 
-def test_trace_pull_failure_never_blocks_the_metrics_harvest(journal_home, experiment, monkeypatch):
-    """The seam fires AFTER the metrics pull; a trace-pull explosion leaves the aggregate intact."""
-    _seed_run(experiment)
-    _seed_sidecar_no_reducer(experiment)
+def test_per_task_fallback_folds_metrics_trace_cmd_sha_into_one_pull_cycle(
+    journal_home, experiment, monkeypatch
+):
+    """F1 acceptance: metrics + ``.hpc_cmd_sha`` + ``_trace.jsonl`` ride ONE pull
+    cycle (was two — a metrics pull then a separate trace pull over the identical
+    ``results/`` subtree). All three families land in the single mirror, and the
+    trace is ingested from that mirror with NO extra round-trip.
+    """
+    from types import SimpleNamespace
 
-    monkeypatch.setattr(
-        af_module, "rsync_pull", _rsync_stub(_metrics(), None, trace_pull_raises=True)
+    pull_includes: list[list[str]] = []
+
+    def _counting_pull(*_a, remote_subdir: str, local_dir: str, include=None, **_kw):
+        pull_includes.append(list(include or []))
+        dest = Path(local_dir)
+        td = dest / "task-0"
+        td.mkdir(parents=True, exist_ok=True)
+        # The ONE folded pull delivers every family named in its include.
+        if include and "metrics.json" in include:
+            (td / "metrics.json").write_text(
+                json.dumps({"pi_estimate": 3.14159, "n_samples": 1}), encoding="utf-8"
+            )
+        if include and af_module.PER_TASK_CMD_SHA_FILENAME in include:
+            (td / af_module.PER_TASK_CMD_SHA_FILENAME).write_text("a" * 64, encoding="utf-8")
+        if include and TRACE_TRANSPORT_FILENAME in include:
+            (td / TRACE_TRANSPORT_FILENAME).write_text(_valid_trace_text(), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(af_module, "rsync_pull", _counting_pull)
+
+    record = SimpleNamespace(ssh_target="u@h", remote_path="/remote", total_tasks=1)
+    out = experiment / "agg_out"
+    result = af_module._per_task_metrics_reduce(
+        experiment,
+        _RUN_ID,
+        record=record,
+        out=out,
+        results_subdir="results",
+        summary_name="metrics.json",
     )
 
-    result = aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
-
-    # Metrics harvest succeeded despite the trace pull raising; no traces ingested.
-    assert result.aggregated_metrics[_RUN_ID]["pi_estimate"] == pytest.approx(_EXPECTED_MEAN)
-    assert result.aggregated_metrics[_RUN_ID]["n_samples"] == len(_PI_VALUES)
-    assert _data_trace_records(experiment) == []
+    # Exactly ONE pull cycle — the fold — not a metrics pull THEN a trace pull.
+    assert len(pull_includes) == 1
+    # Its include names all three artifact families.
+    assert set(pull_includes[0]) == {
+        "metrics.json",
+        af_module.PER_TASK_CMD_SHA_FILENAME,
+        TRACE_TRANSPORT_FILENAME,
+    }
+    # All three families landed locally from the single cycle: the summary +
+    # fingerprint stay in the mirror; the trace was MOVED on into the canonical
+    # store by the T4 ingest ("emission is transport"), so it lives there now.
+    task0 = out / af_module.PER_TASK_RESULTS_DIRNAME / "task-0"
+    assert (task0 / "metrics.json").is_file()
+    assert (task0 / af_module.PER_TASK_CMD_SHA_FILENAME).is_file()
+    # Metrics reduced AND the trace ingested from the folded mirror (no 2nd pull).
+    assert result[_RUN_ID]["pi_estimate"] == pytest.approx(3.14159)
+    assert trace_store_path(experiment, "run", _RUN_ID, 0).exists()
 
 
 def test_canary_sibling_trace_is_excluded(journal_home, experiment, monkeypatch):
@@ -289,7 +336,7 @@ def test_canary_sibling_trace_is_excluded(journal_home, experiment, monkeypatch)
 
     def _with_canary(*a, remote_subdir: str, local_dir: str, include=None, **kw):
         res = base(*a, remote_subdir=remote_subdir, local_dir=local_dir, include=include, **kw)
-        if remote_subdir == "results" and include == [TRACE_TRANSPORT_FILENAME]:
+        if remote_subdir == "results" and include and TRACE_TRANSPORT_FILENAME in include:
             cdir = Path(local_dir) / f"{_RUN_ID}-canary" / "task-0"
             cdir.mkdir(parents=True, exist_ok=True)
             (cdir / TRACE_TRANSPORT_FILENAME).write_text(_valid_trace_text(), encoding="utf-8")

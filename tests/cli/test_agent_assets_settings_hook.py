@@ -26,7 +26,13 @@ from pathlib import Path
 from hpc_agent.agent_assets import install_agent_assets
 
 _HOOK_MODULE = "hpc_agent._kernel.hooks.skill_return_autofetch"
-_STOP_MODULE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
+# The three legacy standalone Stop guards are fused into ONE ``stop_multiplex``
+# entry (#288). The installed Stop command names the multiplex module AND the
+# three guard modules (as args), so the fused entry's command mentions all four.
+_STOP_MODULE = "hpc_agent._kernel.hooks.stop_multiplex"
+_SKILL_RETURN_STOP_MODULE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
+_RENDEZVOUS_STOP_MODULE = "hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
+_RELAY_AUDIT_MODULE = "hpc_agent._kernel.hooks.relay_audit_stop"
 
 
 def _settings(claude_dir: Path) -> dict:
@@ -66,8 +72,8 @@ def test_creates_settings_json_when_absent(tmp_path: Path) -> None:
 
     assert result["settings_hook"]["action"] == "added"
     assert result["settings_hook"]["wrote"] is True
-    assert result["settings_stop_hook"]["action"] == "added"
-    assert result["settings_stop_hook"]["wrote"] is True
+    assert result["settings_stop_multiplex_hook"]["action"] == "added"
+    assert result["settings_stop_multiplex_hook"]["wrote"] is True
 
     settings = _settings(tmp_path)
     entries = _autofetch_entries(settings)
@@ -79,9 +85,14 @@ def test_creates_settings_json_when_absent(tmp_path: Path) -> None:
     # The bash pre-filter keeps non-emit Bash calls at builtin cost.
     assert "emit-skill-return" in entries[0]["hooks"][0]["command"]
 
+    # Exactly ONE fused Stop entry, and its command names each of the three
+    # guard modules (so the capability probe / re-find matcher still resolve).
     stop_entries = _stop_entries(settings)
     assert len(stop_entries) == 1
     assert "matcher" not in stop_entries[0]  # Stop has no tool to match
+    fused_command = stop_entries[0]["hooks"][0]["command"]
+    for guard in (_SKILL_RETURN_STOP_MODULE, _RENDEZVOUS_STOP_MODULE, _RELAY_AUDIT_MODULE):
+        assert guard in fused_command
 
 
 # ─── idempotency ────────────────────────────────────────────────────────────
@@ -90,13 +101,13 @@ def test_creates_settings_json_when_absent(tmp_path: Path) -> None:
 def test_rerun_does_not_duplicate_either_entry(tmp_path: Path) -> None:
     first = install_agent_assets(claude_dir=tmp_path)
     assert first["settings_hook"]["action"] == "added"
-    assert first["settings_stop_hook"]["action"] == "added"
+    assert first["settings_stop_multiplex_hook"]["action"] == "added"
 
     second = install_agent_assets(claude_dir=tmp_path)
     assert second["settings_hook"]["action"] == "already-present"
     assert second["settings_hook"]["wrote"] is False
-    assert second["settings_stop_hook"]["action"] == "already-present"
-    assert second["settings_stop_hook"]["wrote"] is False
+    assert second["settings_stop_multiplex_hook"]["action"] == "already-present"
+    assert second["settings_stop_multiplex_hook"]["wrote"] is False
 
     settings = _settings(tmp_path)
     assert len(_autofetch_entries(settings)) == 1
@@ -265,7 +276,7 @@ def test_unparseable_settings_is_not_clobbered(tmp_path: Path) -> None:
 
     assert result["settings_hook"]["action"] == "skipped-unparseable"
     assert result["settings_hook"]["wrote"] is False
-    assert result["settings_stop_hook"]["action"] == "skipped-unparseable"
+    assert result["settings_stop_multiplex_hook"]["action"] == "skipped-unparseable"
     # The original (invalid) content is preserved untouched.
     assert settings_path.read_text(encoding="utf-8") == "{ this is not valid json"
 
@@ -277,7 +288,7 @@ def test_non_object_settings_is_not_clobbered(tmp_path: Path) -> None:
     result = install_agent_assets(claude_dir=tmp_path)
 
     assert result["settings_hook"]["action"] == "skipped-unparseable"
-    assert result["settings_stop_hook"]["action"] == "skipped-unparseable"
+    assert result["settings_stop_multiplex_hook"]["action"] == "skipped-unparseable"
     assert json.loads(settings_path.read_text(encoding="utf-8")) == [1, 2, 3]
 
 
@@ -289,8 +300,8 @@ def test_dry_run_does_not_write_settings(tmp_path: Path) -> None:
 
     assert result["settings_hook"]["action"] == "dry-run-would-add"
     assert result["settings_hook"]["wrote"] is False
-    assert result["settings_stop_hook"]["action"] == "dry-run-would-add"
-    assert result["settings_stop_hook"]["wrote"] is False
+    assert result["settings_stop_multiplex_hook"]["action"] == "dry-run-would-add"
+    assert result["settings_stop_multiplex_hook"]["wrote"] is False
     assert not (tmp_path / "settings.json").exists()
 
 
@@ -365,26 +376,99 @@ def test_ask_user_question_answer_capture_hook_is_wired(tmp_path: Path) -> None:
     assert len(_entries_with_module(post, _HOOK_MODULE)) == 1
 
 
-# ─── Stop relay audit (conduct rule 10 staged → active) ─────────────────────
+# ─── Fused Stop hook (stop_multiplex) + legacy migration (#288) ─────────────
 
 
-def test_stop_relay_audit_hook_is_wired(tmp_path: Path) -> None:
+def test_fused_stop_hook_is_a_single_entry_naming_all_three_guards(tmp_path: Path) -> None:
+    """The single fused Stop entry carries the relay-audit needle (so the
+    capability probe still resolves it) AND the other two guard needles."""
     result = install_agent_assets(claude_dir=tmp_path)
-    assert result["settings_relay_audit_hook"]["action"] == "added"
-    assert result["settings_relay_audit_hook"]["wrote"] is True
+    assert result["settings_stop_multiplex_hook"]["action"] == "added"
+    assert result["settings_stop_multiplex_hook"]["wrote"] is True
+    assert result["settings_stop_multiplex_hook"]["removed_legacy"] == []
 
     settings = _settings(tmp_path)
-    entries = _entries_with_module(
-        settings["hooks"].get("Stop", []),
-        "hpc_agent._kernel.hooks.relay_audit_stop",
-    )
-    assert len(entries) == 1
-    assert "matcher" not in entries[0]  # Stop has no tool to match
+    stop = settings["hooks"]["Stop"]
+    # Exactly one Stop entry — the multiplex — and it is the only one bearing
+    # each guard needle (no standalone entries).
+    assert len(stop) == 1
+    assert len(_entries_with_module(stop, _STOP_MODULE)) == 1
+    for guard in (_SKILL_RETURN_STOP_MODULE, _RENDEZVOUS_STOP_MODULE, _RELAY_AUDIT_MODULE):
+        assert len(_entries_with_module(stop, guard)) == 1
+    assert "matcher" not in stop[0]  # Stop has no tool to match
 
-    # Idempotent on re-run, and the sibling Stop guards are untouched.
+    # Idempotent on re-run.
     second = install_agent_assets(claude_dir=tmp_path)
-    assert second["settings_relay_audit_hook"]["action"] == "already-present"
-    settings = _settings(tmp_path)
-    stop_entries = settings["hooks"]["Stop"]
-    assert len(_entries_with_module(stop_entries, "hpc_agent._kernel.hooks.relay_audit_stop")) == 1
-    assert len(_entries_with_module(stop_entries, _STOP_MODULE)) == 1
+    assert second["settings_stop_multiplex_hook"]["action"] == "already-present"
+    assert len(_settings(tmp_path)["hooks"]["Stop"]) == 1
+
+
+def test_legacy_three_standalone_stop_entries_migrate_to_one_multiplex(tmp_path: Path) -> None:
+    """A pre-fusion settings.json with the THREE standalone Stop guards ends with
+    exactly one multiplex entry and NONE of the three legacy standalone entries
+    (the 539c1cdc regression zone: an upgrade must never leave a duplicate)."""
+    settings_path = tmp_path / "settings.json"
+
+    def _legacy(module: str) -> dict:
+        return {"hooks": [{"type": "command", "command": f"/old/venv/python -m {module}"}]}
+
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {"hooks": [{"type": "command", "command": "echo bye"}]},  # user's own
+                        _legacy(_SKILL_RETURN_STOP_MODULE),
+                        _legacy(_RENDEZVOUS_STOP_MODULE),
+                        _legacy(_RELAY_AUDIT_MODULE),
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_stop_multiplex_hook"]["action"] in ("added", "updated")
+    assert result["settings_stop_multiplex_hook"]["wrote"] is True
+    # All three legacy guard needles were dropped in the same write.
+    assert set(result["settings_stop_multiplex_hook"]["removed_legacy"]) == {
+        _SKILL_RETURN_STOP_MODULE,
+        _RENDEZVOUS_STOP_MODULE,
+        _RELAY_AUDIT_MODULE,
+    }
+
+    stop = _settings(tmp_path)["hooks"]["Stop"]
+    # The user's own entry survives; exactly one fused entry; NO standalone legacy
+    # entries remain (each guard needle appears in exactly the one fused command).
+    assert {"hooks": [{"type": "command", "command": "echo bye"}]} in stop
+    assert len(_entries_with_module(stop, _STOP_MODULE)) == 1
+    for guard in (_SKILL_RETURN_STOP_MODULE, _RENDEZVOUS_STOP_MODULE, _RELAY_AUDIT_MODULE):
+        # The guard needle appears only inside the fused entry, never a standalone.
+        bearing = _entries_with_module(stop, guard)
+        assert len(bearing) == 1
+        assert _STOP_MODULE in bearing[0]["hooks"][0]["command"]
+
+    # Idempotent + stable: a second install neither re-adds nor re-removes.
+    second = install_agent_assets(claude_dir=tmp_path)
+    assert second["settings_stop_multiplex_hook"]["action"] == "already-present"
+    assert second["settings_stop_multiplex_hook"]["removed_legacy"] == []
+
+
+def test_stale_multiplex_command_is_healed_in_place(tmp_path: Path) -> None:
+    """A fused entry from a moved venv (stale interpreter path) is updated in
+    place, not duplicated."""
+    install_agent_assets(claude_dir=tmp_path)
+    settings_path = tmp_path / "settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    # Corrupt the interpreter path of the fused Stop command.
+    stop_cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+    settings["hooks"]["Stop"][0]["hooks"][0]["command"] = stop_cmd.replace(
+        stop_cmd.split(" -m ", 1)[0], "/moved/venv/python"
+    )
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_stop_multiplex_hook"]["action"] == "updated"
+    stop = _settings(tmp_path)["hooks"]["Stop"]
+    assert len(_entries_with_module(stop, _STOP_MODULE)) == 1

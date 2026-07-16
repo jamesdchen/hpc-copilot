@@ -19,8 +19,6 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-import jsonschema
-
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
@@ -77,6 +75,8 @@ def campaign_budget(
     matching field under ``budget`` in ``<campaign_dir>/manifest.json``
     if the manifest exists. Explicit CLI args always win.
     """
+    import jsonschema
+
     from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign
     from hpc_agent.meta.campaign.atoms.compute_spend import consumed_compute_for_campaign
     from hpc_agent.meta.campaign.manifest import read_manifest

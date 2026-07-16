@@ -32,6 +32,28 @@ def cache_disabled() -> bool:
     return os.environ.get("HPC_NO_DESCRIBE_CACHE") == "1"
 
 
+def _full_registration_done() -> bool:
+    """True only when the FULL primitive registry walk has completed.
+
+    ``describe`` output is stable *only against the whole registry*. The
+    single-verb CLI fast path leaves the registry PARTIAL — it imports one
+    module and sets the weaker ``_DISPATCH_READY`` latch, but NOT
+    ``_REGISTRATION_DONE`` (see ``register_single_module``). A ``describe``
+    resolved off a partial registry would be wrong-but-plausible; persisting it
+    here would POISON every full-path reader for the installed version's lifetime
+    (premortem A1). So the *store* side gates on the STRONG latch — the *load*
+    side stays as-is (a stale hit is impossible once storing is guarded).
+
+    Read as a module attribute (never ``from ... import _REGISTRATION_DONE``):
+    that honors the module-private boundary and keeps
+    ``lint_private_cross_package_imports`` quiet — the latch is an internal
+    registry signal, not a promoted API.
+    """
+    from hpc_agent._kernel.registry import primitive
+
+    return bool(getattr(primitive, "_REGISTRATION_DONE", False))
+
+
 def _pkg_version() -> str:
     """Installed ``hpc-agent`` version, or a stable placeholder when absent."""
     from importlib.metadata import PackageNotFoundError, version
@@ -79,8 +101,17 @@ def load(name: str) -> dict[str, Any] | None:
 
 
 def store(name: str, data: dict[str, Any]) -> None:
-    """Cache the ``describe`` data payload for *name* (best-effort, no-op if disabled)."""
+    """Cache the ``describe`` data payload for *name* (best-effort, no-op if disabled).
+
+    Refuses to persist under a PARTIAL registry (the single-verb fast path):
+    caching a payload computed off an incompletely-walked registry would serve
+    wrong-but-plausible ``describe`` output to every full-path reader for the
+    version's lifetime (premortem A1). Only the full walk yields the stable bytes
+    this cache promises, so ``store`` no-ops until ``_REGISTRATION_DONE``.
+    """
     if cache_disabled():
+        return
+    if not _full_registration_done():
         return
     path = _cache_path(name)
     if path is None:

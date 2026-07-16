@@ -12,7 +12,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.queries.doctor import DoctorSpec
-from hpc_agent.ops.recover.doctor import doctor
+from hpc_agent.ops.recover.doctor import _jsonschema_importable_probe, doctor
 from hpc_agent.state.decision_journal import append_decision
 from hpc_agent.state.journal import mark_pending_decision, stamp_tick, upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -561,3 +561,45 @@ def test_doctor_env_echo_empty_when_unset(tmp_path: Path, monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
     assert out["active_env_overrides"] == {}
+
+
+# --- G5: jsonschema-importable preflight probe (latency plan B1) --------------
+
+
+def test_jsonschema_probe_clean_when_importable() -> None:
+    """jsonschema is a hard dependency, so the probe is silent on a healthy env."""
+    assert _jsonschema_importable_probe("2026-07-16T00:00:00+00:00") == []
+
+
+def _break_jsonschema_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force ``import jsonschema`` to raise ImportError (simulate an absent dep)."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if name == "jsonschema" or name.startswith("jsonschema."):
+            raise ImportError("No module named 'jsonschema'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+
+def test_jsonschema_probe_fires_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing jsonschema surfaces one preflight alert naming the fix."""
+    _break_jsonschema_import(monkeypatch)
+    alerts = _jsonschema_importable_probe("2026-07-16T00:00:00+00:00")
+    assert len(alerts) == 1
+    assert "jsonschema is not importable" in alerts[0].message
+    assert "reinstall" in alerts[0].message.lower()
+
+
+def test_doctor_envelope_carries_jsonschema_alert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe rides the envelope's alerts list without flipping needs_attention."""
+    _break_jsonschema_import(monkeypatch)
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert any("jsonschema is not importable" in a["message"] for a in out["alerts"])
+    # A missing dep is a preflight advisory, not a stalled driver.
+    assert out["needs_attention"] is False

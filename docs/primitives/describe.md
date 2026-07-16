@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent describe <name>
+  cli: hpc-agent describe <name> [--schema]
   python: hpc_agent.cli.setup.describe
 exit_codes:
 - 0: ok

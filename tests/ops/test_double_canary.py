@@ -346,6 +346,56 @@ def test_pull_lands_metrics_under_pulls_dir(tmp_path: Path, monkeypatch) -> None
     assert pulls_dir(tmp_path, f"{_MAIN}-canary") in path.parents
 
 
+def test_both_canary_metrics_pull_folds_into_one_cycle(tmp_path: Path, monkeypatch) -> None:
+    """F6 (latency-elimination): BOTH canaries' task-0 metrics are fetched in ONE
+    pull cycle — a single ``rsync_pull`` covering their common ancestor with an
+    include per canary — not two round-trips (four under the tar engine). The two
+    payloads still land DISTINCTLY on disk so the sample compares two identities.
+    """
+    from pathlib import Path as _P
+
+    from hpc_agent.infra import transport
+    from hpc_agent.ops import submit_and_verify as sav
+    from hpc_agent.state.fingerprint_store import pulls_dir
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    _seed_canary(tmp_path, f"{_MAIN}-canary")
+    _seed_canary(tmp_path, f"{_MAIN}-canary2")
+
+    calls: list[dict] = []
+
+    def _fake_rsync(*, ssh_target, remote_path, remote_subdir, local_dir, include=None, **_kw):
+        calls.append({"remote_subdir": remote_subdir, "include": list(include or [])})
+        for rel in include or []:
+            dest = _P(local_dir).joinpath(*rel.split("/"))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps({"loss": 1.0}), encoding="utf-8")
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(transport, "rsync_pull", _fake_rsync)
+
+    path_a, path_b = sav._pull_both_canary_task0_metrics(
+        tmp_path,
+        first_canary_run_id=f"{_MAIN}-canary",
+        second_canary_run_id=f"{_MAIN}-canary2",
+        dest_run_id=_MAIN,
+    )
+
+    # ONE cycle covered BOTH canaries — the fold (2 round-trips, not 4).
+    assert len(calls) == 1
+    # Scoped to the two result dirs' common ancestor, anchored includes per canary.
+    assert calls[0]["remote_subdir"] == "results"
+    assert sorted(calls[0]["include"]) == [
+        f"{_MAIN}-canary/task_0/metrics.json",
+        f"{_MAIN}-canary2/task_0/metrics.json",
+    ]
+    # Both payloads landed distinctly under the dest run's pulls dir.
+    assert path_a.is_file() and path_b.is_file()
+    assert path_a != path_b
+    root = pulls_dir(tmp_path, _MAIN)
+    assert root in path_a.parents and root in path_b.parents
+
+
 # --- the mint leg (append_sample real, pull stubbed) -------------------------
 
 
@@ -369,16 +419,19 @@ def test_mint_appends_sample_with_double_canary_labels(tmp_path: Path, monkeypat
         remote_path="/remote",
     )
 
-    def _fake_pull(experiment_dir, canary_run_id):
-        d = fingerprint_store.pulls_dir(experiment_dir, canary_run_id)
+    def _fake_pull_both(experiment_dir, *, first_canary_run_id, second_canary_run_id, dest_run_id):
+        # F6: ONE folded pull returns BOTH canaries' task-0 payloads, landed
+        # distinctly under the dest run's pulls dir. A tiny float jitter between
+        # the two executions is the observed spread.
+        d = fingerprint_store.pulls_dir(experiment_dir, dest_run_id)
         d.mkdir(parents=True, exist_ok=True)
-        f = d / "metrics.json"
-        # A tiny float jitter between the two executions — the observed spread.
-        val = 1.0 if canary_run_id.endswith("-canary") else 1.0002
-        f.write_text(json.dumps({"loss": val, "steps": 10}), encoding="utf-8")
-        return f
+        fa = d / f"{first_canary_run_id}.json"
+        fb = d / f"{second_canary_run_id}.json"
+        fa.write_text(json.dumps({"loss": 1.0, "steps": 10}), encoding="utf-8")
+        fb.write_text(json.dumps({"loss": 1.0002, "steps": 10}), encoding="utf-8")
+        return fa, fb
 
-    monkeypatch.setattr(sav, "_pull_canary_task0_metrics", _fake_pull)
+    monkeypatch.setattr(sav, "_pull_both_canary_task0_metrics", _fake_pull_both)
 
     base = _submit_spec().model_copy(update={"run_id": "run-x"})
     sav._mint_double_canary_sample(
@@ -430,10 +483,10 @@ def test_mint_is_best_effort_a_pull_miss_never_raises(tmp_path: Path, monkeypatc
         remote_path="/remote",
     )
 
-    def _boom(experiment_dir, canary_run_id):
+    def _boom(experiment_dir, *, first_canary_run_id, second_canary_run_id, dest_run_id):
         raise RuntimeError("pull failed")
 
-    monkeypatch.setattr(sav, "_pull_canary_task0_metrics", _boom)
+    monkeypatch.setattr(sav, "_pull_both_canary_task0_metrics", _boom)
 
     base = _submit_spec().model_copy(update={"run_id": "run-y"})
     # Must NOT raise.

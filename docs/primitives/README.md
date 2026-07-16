@@ -110,7 +110,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
 | [decide-partial-handling](decide-partial-handling.md) | yes | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` |
 | [decide-resubmit](decide-resubmit.md) | yes | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` |
-| [describe](describe.md) | yes | _none_ | `hpc-agent describe <name>` |
+| [describe](describe.md) | yes | _none_ | `hpc-agent describe <name> [--schema]` |
 | [detect-entry-point](detect-entry-point.md) | yes | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` |
 | [dir-digest](dir-digest.md) | yes | ssh: `<cluster>` | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` |

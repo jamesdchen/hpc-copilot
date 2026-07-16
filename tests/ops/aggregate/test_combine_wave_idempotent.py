@@ -12,12 +12,14 @@ still land in ``failed_waves``.
 
 from __future__ import annotations
 
+import re
+import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
-from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.aggregate.combine import combine_wave, combine_waves
 from hpc_agent.state.journal import load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -224,3 +226,146 @@ def test_force_recombine_clears_failed_and_marks_combined(tmp_path: Path) -> Non
     assert record is not None
     assert record.combined_waves == [0]
     assert record.failed_waves == []
+
+
+# ── P4 tier-1: fused multi-wave combine (one ssh exec per burst) ──────────────
+
+
+class _FakeBatchSSH:
+    """A counting ``ssh_run`` stand-in that synthesizes the sentinel frame.
+
+    Reads the ``--wave N`` occurrences out of the outgoing fused command and
+    emits a ``__HPC_WAVE_BEGIN__/END__`` frame per wave (rc from *rc_by_wave*,
+    default 0) plus the trailing ``__HPC_BATCH_END__`` — unless *drop_batch_end*
+    is set, which models a truncated stream (the E3 fallback trigger).
+    """
+
+    def __init__(
+        self, rc_by_wave: dict[int, int] | None = None, *, drop_batch_end: bool = False
+    ) -> None:
+        self.rc_by_wave = rc_by_wave or {}
+        self.drop_batch_end = drop_batch_end
+        self.calls: list[str] = []
+
+    def __call__(self, cmd: str, *, ssh_target: str, **_kw: object) -> subprocess.CompletedProcess:
+        self.calls.append(cmd)
+        waves = [int(m) for m in re.findall(r"--wave (\d+)", cmd)]
+        lines: list[str] = []
+        for w in waves:
+            lines.append(f"__HPC_WAVE_BEGIN__ {w}")
+            rc = self.rc_by_wave.get(w, 0)
+            lines.append(
+                f"[combiner] wrote _combiner/wave_{w}.json"
+                if rc == 0
+                else f"[combiner] ERROR: boom in wave {w}"
+            )
+            lines.append(f"__HPC_WAVE_END__ {w} rc={rc}")
+        if not self.drop_batch_end:
+            lines.append("__HPC_BATCH_END__")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout="\n".join(lines) + "\n", stderr=""
+        )
+
+    @property
+    def exec_count(self) -> int:
+        return len(self.calls)
+
+
+def test_ten_wave_burst_is_one_ssh_exec(tmp_path: Path) -> None:
+    """10-wave burst = ONE fused ssh exec; every wave journaled combined."""
+    _seed_run(tmp_path)
+    fake = _FakeBatchSSH()
+    with patch("hpc_agent.infra.transport._combiner.ssh_run", fake):
+        results = combine_waves(
+            tmp_path,
+            _RUN_ID,
+            waves=list(range(10)),
+            ssh_target="user@host",
+            remote_path="/exp",
+        )
+
+    assert fake.exec_count == 1  # the whole burst rode one exec
+    assert all(results[w][0] for w in range(10))
+    record = load_run(tmp_path, _RUN_ID)
+    assert record is not None
+    assert record.combined_waves == list(range(10))
+    assert record.failed_waves == []
+
+
+def test_batch_partial_failure_journals_per_wave(tmp_path: Path) -> None:
+    """A partial batch failure journals per-wave outcomes individually — no silent
+    whole-batch verdict. Wave 2 fails (rc 1); the rest combine."""
+    _seed_run(tmp_path)
+    fake = _FakeBatchSSH(rc_by_wave={2: 1})
+    with patch("hpc_agent.infra.transport._combiner.ssh_run", fake):
+        results = combine_waves(
+            tmp_path,
+            _RUN_ID,
+            waves=[0, 1, 2, 3],
+            ssh_target="user@host",
+            remote_path="/exp",
+        )
+
+    assert fake.exec_count == 1
+    assert results[2][0] is False
+    assert results[0][0] is True
+    record = load_run(tmp_path, _RUN_ID)
+    assert record is not None
+    assert record.combined_waves == [0, 1, 3]
+    assert record.failed_waves == [2]  # honest per-wave accounting
+
+
+def test_batch_missing_end_sentinel_falls_back_per_wave(tmp_path: Path) -> None:
+    """E3 FIRE PATH: a truncated fused stream (no ``__HPC_BATCH_END__``) must NOT
+    be parse-and-trusted — combine_waves degrades to a per-wave ``combine_wave``
+    call for every affected wave rather than adopting a partial batch."""
+    _seed_run(tmp_path)
+    per_wave: list[int] = []
+
+    def _fake_single(*, wave: int, **_kw: object) -> tuple[bool, str, str]:
+        per_wave.append(wave)
+        return (True, "combined", "")
+
+    with (
+        patch("hpc_agent.infra.transport._combiner.ssh_run", _FakeBatchSSH(drop_batch_end=True)),
+        patch("hpc_agent.infra.transport.run_combiner_checked", side_effect=_fake_single),
+    ):
+        results = combine_waves(
+            tmp_path,
+            _RUN_ID,
+            waves=[0, 1, 2],
+            ssh_target="user@host",
+            remote_path="/exp",
+        )
+
+    # Every wave fell back to its own combine_wave (never adopted the truncation).
+    assert sorted(per_wave) == [0, 1, 2]
+    assert all(results[w][0] for w in (0, 1, 2))
+    record = load_run(tmp_path, _RUN_ID)
+    assert record is not None
+    assert record.combined_waves == [0, 1, 2]
+
+
+def test_batch_skips_journal_combined_wave_without_cluster(tmp_path: Path) -> None:
+    """A wave already recorded combined (no force) is an idempotent journal hit —
+    it is resolved with NO cluster contact and excluded from the fused exec."""
+    _seed_run(tmp_path, combined_waves=[0])
+    fake = _FakeBatchSSH()
+    with patch("hpc_agent.infra.transport._combiner.ssh_run", fake):
+        results = combine_waves(
+            tmp_path,
+            _RUN_ID,
+            waves=[0, 1],
+            ssh_target="user@host",
+            remote_path="/exp",
+        )
+
+    assert results[0][0] is True
+    assert "already combined (journal)" in results[0][1]
+    # The fused command combined ONLY the un-combined wave 1.
+    assert fake.exec_count == 1
+    assert "--wave 1" in fake.calls[0]
+    assert "--wave 0" not in fake.calls[0]
+    record = load_run(tmp_path, _RUN_ID)
+    assert record is not None
+    assert record.combined_waves == [0, 1]

@@ -101,17 +101,27 @@ __all__ = [
 
 #: Local pull-mirror destination names the aggregate flow MINTS under its ``out``
 #: dir when the cluster has no ``_combiner/`` and it falls back to pulling raw
-#: per-task sidecars: the metrics mirror (:func:`_per_task_metrics_reduce`) and
-#: the trace mirror (the data-trace T4 pull). ``out`` defaults under
-#: ``_aggregated/`` but a caller ``output_dir`` can place them at any depth — so
-#: these names are the SOURCE OF TRUTH for the deploy-exclude protection in
+#: per-task sidecars. Today there is ONE mirror: ``_per_task_results`` holds the
+#: per-task summaries, their ``.hpc_cmd_sha`` fingerprints, AND the folded-in
+#: ``_trace.jsonl`` files — the F1 include-fold lands all three in that single
+#: mirror in one pull cycle (data-trace T4 no longer mints a separate trace
+#: mirror). ``out`` defaults under ``_aggregated/`` but a caller ``output_dir``
+#: can place it at any depth — so these names are the SOURCE OF TRUTH for the
+#: deploy-exclude protection in
 #: :data:`hpc_agent.infra.transport.PROTECTED_OUTPUT_DIRS` (run-13 finding 4: an
 #: unexcluded ``_per_task_results`` mirror rode a code deploy back to the cluster
-#: as a 1.18 GB payload). The lockstep test ``tests/infra/test_pull_dest_excludes.py``
-#: fails if either name is renamed here without updating that exclude set.
+#: as a 1.18 GB payload). ``_per_task_traces`` is RETAINED in the exclude set as
+#: belt-and-suspenders (older harvests minted it, and re-excluding a name the
+#: fold no longer writes is harmless over-protection). The lockstep test
+#: ``tests/infra/test_pull_dest_excludes.py`` fails if either name is renamed
+#: here without updating that exclude set.
 PER_TASK_RESULTS_DIRNAME = "_per_task_results"
+#: Legacy per-task trace mirror — no longer minted (F1 folded traces into the
+#: results mirror), kept only so the deploy-exclude set still shields any mirror
+#: an older harvest left behind. See :data:`LOCAL_PULL_MIRROR_DIRNAMES`.
 PER_TASK_TRACES_DIRNAME = "_per_task_traces"
-#: Every stack-minted local pull destination, for the exclude lockstep pin.
+#: Every local pull-destination name shielded from the deploy exclude, for the
+#: lockstep pin (the live mirror plus the retained legacy name above).
 LOCAL_PULL_MIRROR_DIRNAMES: tuple[str, ...] = (
     PER_TASK_RESULTS_DIRNAME,
     PER_TASK_TRACES_DIRNAME,
@@ -622,7 +632,17 @@ def _per_task_metrics_reduce(
     # (the scp legacy fallback ignores include, so listing it is what makes the
     # tar/rsync path deliver it — TRAP 1); after the pull, evict any task dir
     # whose fingerprint moved and re-pull it clean.
-    include = [summary_name, PER_TASK_CMD_SHA_FILENAME]
+    #
+    # F1 include-fold (latency audit: serial single-purpose execs): the per-task
+    # ``_trace.jsonl`` (data-trace T4) rides the SAME include, so metrics, the
+    # cmd_sha fingerprint, AND the traces arrive in ONE pull cycle instead of a
+    # second single-purpose trace pull over the identical results/ subtree. The
+    # widened include still delivers ``.hpc_cmd_sha`` (the staleness gate is
+    # untouched) and the trace ingest below reads the folded-in files from
+    # ``results_local`` with NO extra round-trip. Canary-family exclusion is
+    # applied at reduce time and again at ingest time (both below), so the wider
+    # pull never lets a sibling's file contaminate either surface.
+    include = [summary_name, PER_TASK_CMD_SHA_FILENAME, TRACE_TRANSPORT_FILENAME]
     cached_fingerprints = _mirror_piece_fingerprints(results_local, summary_name)
     pull = _pull(
         ssh_target=resolve_ssh_target(record),
@@ -743,17 +763,13 @@ def _per_task_metrics_reduce(
             f"input to reduce — refusing to fabricate an aggregate. {detail}"
         )
 
-    # T4 ingestion-at-harvest (docs/design/data-trace.md §"Storage: emission
-    # is transport"): pull + ingest each task's ``_trace.jsonl`` beside the
-    # metrics harvest. Fires AFTER the metrics pull and NEVER blocks it — a
-    # trace pull/parse failure is disclosed, never a harvest failure.
-    _ingest_task_traces(
-        experiment_dir,
-        run_id,
-        record=record,
-        out=out,
-        results_subdir=results_subdir,
-    )
+    # T4 ingestion-at-harvest (docs/design/data-trace.md §"Storage: emission is
+    # transport"): the per-task ``_trace.jsonl`` files rode the folded include
+    # above, so they are ALREADY under ``results_local`` — ingest them straight
+    # from disk with NO second pull (F1 include-fold). Fires AFTER the metrics
+    # reduce and NEVER blocks it — an absent trace is silent, a torn one is a
+    # disclosed skip.
+    _ingest_traces_from_local(experiment_dir, run_id, results_local)
     return {run_id: aggregated}
 
 
@@ -772,27 +788,29 @@ def _task_id_from_dir(result_dir: Path) -> int | None:
     return int(m.group(0)) if m else None
 
 
-def _ingest_task_traces(
+def _ingest_traces_from_local(
     experiment_dir: Path,
     run_id: str,
-    *,
-    record: Any,
-    out: Path,
-    results_subdir: str,
+    traces_local: Path,
 ) -> dict[str, int]:
-    """Pull each task's ``_trace.jsonl`` and ingest it — data-trace **T4**.
+    """Ingest each task's already-pulled ``_trace.jsonl`` — data-trace **T4**.
 
-    Ingestion-at-harvest: the trace transport files the tasks emitted beside
-    their outputs are pulled (one extra rsync on the already-flowing per-task
-    seam) and moved into the one canonical store via :func:`ingest_trace`,
-    scope ``("run", run_id)``. Absence is the NORMAL shape for a non-emitting
-    run — silent, harvest identical.
+    Ingestion-at-harvest, F1 include-fold edition: the per-task ``_trace.jsonl``
+    files rode the SAME pull as the metrics (``_per_task_metrics_reduce`` widened
+    its ``include`` to carry :data:`TRACE_TRANSPORT_FILENAME` alongside the
+    summary + ``.hpc_cmd_sha``), so they already sit under *traces_local* — the
+    metrics mirror dir. This seam does NO pull of its own: it reads those files
+    and moves each into the one canonical store via :func:`ingest_trace`, scope
+    ``("run", run_id)``. Folding the transport (was a second single-purpose trace
+    pull over the identical ``results/`` subtree) removes one harvest round-trip;
+    a non-emitting run's include simply matched nothing, so absence is the NORMAL
+    shape and stays silent.
 
     NEVER blocks the harvest — the trace is EVIDENCE, not a gate. Every failure
     mode is DISCLOSED (skip-counted + logged), never raised:
 
-    * the trace pull failing (cluster hiccup / no ``_trace.jsonl`` anywhere —
-      rsync 404s the include) — the metrics harvest already succeeded, log+return;
+    * no ``_trace.jsonl`` anywhere (the folded include matched none) — the mirror
+      simply carries no trace files, so the loop is a silent no-op;
     * an absent trace for a task — silent (the task simply emitted none);
     * a torn / schema-invalid trace — :func:`ingest_trace` refuses it (T1 is
       strict; an invalid record never enters the trust chain), counted as a
@@ -806,39 +824,13 @@ def _ingest_task_traces(
     per T2's fallback rule, so there is no double-ingest there either.)
 
     Canary-family siblings are excluded exactly as the metrics reduce excludes
-    them — their ``_trace.jsonl`` shares the same ``results/`` subtree. Returns
-    a counts dict (the disclosure surface for tests/callers; no run gate).
+    them — their ``_trace.jsonl`` shares the same mirror subtree. Returns a counts
+    dict (the disclosure surface for tests/callers; no run gate).
     """
     log = logging.getLogger(__name__)
-    counts = {"pulled": 0, "ingested": 0, "skipped_existing": 0, "skipped_invalid": 0}
+    counts = {"found": 0, "ingested": 0, "skipped_existing": 0, "skipped_invalid": 0}
 
-    traces_local = out / PER_TASK_TRACES_DIRNAME
-    scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
-    try:
-        pull = _pull(
-            ssh_target=resolve_ssh_target(record),
-            remote_path=record.remote_path,
-            remote_subdir=scoped_subdir,
-            local_dir=str(traces_local),
-            include=[TRACE_TRANSPORT_FILENAME],
-        )
-    except OSError as exc:  # a transport-layer explosion is still just evidence
-        log.warning(
-            "data-trace T4: trace pull for run_id %r raised %s — harvest "
-            "unaffected, traces skipped",
-            run_id,
-            exc,
-        )
-        return counts
-    if pull.returncode != 0:
-        # Absence is NORMAL for a non-emitting run (the subtree carries no
-        # _trace.jsonl, rsync's include matches nothing) — DISCLOSE, never fail.
-        log.info(
-            "data-trace T4: no per-task _trace.jsonl pulled for run_id %r "
-            "(rsync exit %d) — traces skipped, harvest unaffected",
-            run_id,
-            pull.returncode,
-        )
+    if not traces_local.is_dir():
         return counts
 
     from hpc_agent.ops.monitor.reconcile import sibling_run_ids
@@ -850,7 +842,7 @@ def _ingest_task_traces(
         if p.is_file() and canary_ids.isdisjoint(p.parts)
     )
     for trace_path in trace_files:
-        counts["pulled"] += 1
+        counts["found"] += 1
         task = _task_id_from_dir(trace_path.parent)
         if task is None:
             log.warning(
@@ -890,15 +882,15 @@ def _ingest_task_traces(
         else:
             counts["ingested"] += 1
 
-    if counts["pulled"]:
+    if counts["found"]:
         log.info(
             "data-trace T4: run_id %r traces — %d ingested, %d already-present, "
-            "%d skipped-invalid (of %d pulled)",
+            "%d skipped-invalid (of %d found in the folded pull)",
             run_id,
             counts["ingested"],
             counts["skipped_existing"],
             counts["skipped_invalid"],
-            counts["pulled"],
+            counts["found"],
         )
     return counts
 

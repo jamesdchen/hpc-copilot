@@ -429,6 +429,21 @@ def _emit_describe(name: str) -> int:
                 "name",
                 help="A skill name (e.g. hpc-submit) or a primitive name (e.g. submit-flow).",
             ),
+            # Move 2 (proving-run-2-hardening §3): `describe --schema` routes to the
+            # RESOLVED input-schema CONTENT (not just the filename), so a caller
+            # blocked from `cat`/`python -c` never has to `find /` a schema file.
+            # Latency A2: it lives IN the CliShape.args so the operations.json bake
+            # is the whole truth (no hand `add_argument` in the parser walk that the
+            # bake can't see). The handler (`_describe_handler`) reads `args.schema`.
+            CliArg(
+                "--schema",
+                action="store_true",
+                help=(
+                    "Emit the verb's resolved input-schema JSON content "
+                    "(not just its filename), so callers never `find`/`cat` "
+                    "a schema file."
+                ),
+            ),
         ),
         handler=_describe_handler,
     ),

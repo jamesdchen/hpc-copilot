@@ -136,9 +136,44 @@ class TestCap:
 
         tok = acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=pid, pid_alive=_ALIVE)
         assert tok is not None and tok.exists()
-        # Deterministic backoff: base interval + pid jitter, then doubled.
+        # P5 flat cadence: base interval + pid jitter, and NO doubling — every
+        # poll waits the same flat interval, so a slot freed just after a poll is
+        # noticed within one interval no matter how long it was held (the old
+        # doubling ladder let wakeup lag grow to 4–8s on a long hold).
         assert slept[0] == pytest.approx(SLOT_POLL_BASE_SEC + _jitter(pid))
-        assert slept[1] == pytest.approx(SLOT_POLL_BASE_SEC * 2 + _jitter(pid))
+        assert slept[1] == pytest.approx(SLOT_POLL_BASE_SEC + _jitter(pid))
+
+    def test_flat_wakeup_bound_is_sub_second(self):
+        """P5 fire-path: the flat poll ceiling (base + max jitter) — the worst
+        wakeup lag any waiter can incur after a slot frees — is sub-second by
+        construction. This is the invariant the whole latency ruling turns on;
+        if a future edit raises either constant it must not cross 0.6s."""
+        assert SLOT_POLL_BASE_SEC + SLOT_JITTER_MAX_SEC < 0.6
+
+    @pytest.mark.parametrize("polls_held", [1, 5, 20, 100])
+    def test_wakeup_lag_is_flat_regardless_of_hold_duration(self, polls_held):
+        """P5: the sleep interval never grows with hold duration (the old
+        doubling ladder let it climb to 8s, so a long-held slot's release went
+        unnoticed for up to 8s). Hold the slot across ``polls_held`` waiter
+        polls, release, and assert EVERY sleep — including the last one before
+        the waiter claims — was the flat base+jitter, so the wakeup lag after
+        release is bounded by one flat interval at any hold duration."""
+        clock = FakeClock()
+        tokens = _claim_n(2, clock)
+        pid = 404
+        slept: list[float] = []
+
+        def sleeper(seconds: float) -> None:
+            slept.append(seconds)
+            clock.advance(seconds)
+            if len(slept) == polls_held:  # holder finishes after N waiter polls
+                release_slot(tokens[0], pid=100)
+
+        tok = acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=pid, pid_alive=_ALIVE)
+        assert tok is not None and tok.exists()
+        flat = SLOT_POLL_BASE_SEC + _jitter(pid)
+        assert all(s == pytest.approx(flat) for s in slept)  # never doubled
+        assert flat < 0.6  # each poll (hence the max wakeup lag) is sub-second
 
     def test_two_waiters_with_different_pids_desynchronize(self):
         """The point of pid-derived jitter: co-started waiters re-poll at

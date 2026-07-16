@@ -45,7 +45,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`decide-monitor-arm`](../primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `_(none)_` | — | — |
 | [`decide-partial-handling`](../primitives/decide-partial-handling.md) | ✓ | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` | `_(none)_` | — | — |
 | [`decide-resubmit`](../primitives/decide-resubmit.md) | ✓ | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` | `_(none)_` | — | — |
-| [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name>` | `_(none)_` | — | — |
+| [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name> [--schema]` | `_(none)_` | — | — |
 | [`detect-entry-point`](../primitives/detect-entry-point.md) | ✓ | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` | `_(none)_` | — | — |
 | [`dir-digest`](../primitives/dir-digest.md) | ✓ | ssh | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`discover-executors`](../primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `_(none)_` | — | — |
