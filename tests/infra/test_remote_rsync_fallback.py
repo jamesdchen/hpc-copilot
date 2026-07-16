@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hpc_agent.infra import transport
-from hpc_agent.infra.ssh_options import _scp_binary, _ssh_binary
+from hpc_agent.infra.ssh_options import _ssh_binary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -736,57 +736,36 @@ def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
     assert cmd[0] == "rsync"
 
 
-def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None:
+def test_rsync_pull_falls_back_to_tar_ssh_pull_when_rsync_missing(tmp_path: Path) -> None:
+    """The rsync-less pull now routes to the content-hash PULL engine
+    (``tar_ssh_pull``) instead of the old monolithic ``scp -r`` (latency ranks
+    2 + 7): it joins ``remote_subdir`` onto ``remote_path``, passes ``include``
+    through as ``include_globs``, and adapts the :class:`PullResult` back to the
+    ``CompletedProcess`` contract callers read. Full engine coverage lives in
+    tests/infra/test_transport_pull.py."""
+    captured: dict[str, object] = {}
+
+    def fake_engine(*, ssh_target, remote_path, local_path, include_globs, timeout):
+        captured.update(remote_path=remote_path, include_globs=include_globs)
+        return transport.PullResult(
+            ok=True, files_pulled=2, bytes_pulled=42, skipped_unchanged=0, stderr_tail=""
+        )
+
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.tar_ssh_pull", side_effect=fake_engine),
     ):
-        transport.rsync_pull(
+        proc = transport.rsync_pull(
             ssh_target="u@h",
             remote_path="/r",
             remote_subdir="_combiner",
             local_dir=tmp_path / "out",
+            include=["wave_*.json"],
         )
-    cmd = run_mock.call_args[0][0]
-    assert cmd[0] == _scp_binary()
-    assert "-r" in cmd
-    # scp receives the dir WITHOUT a trailing slash (it copies the dir itself
-    # into a staging area, which _scp_pull then flattens into local_dir — see
-    # test_scp_fallback_does_not_double_nest).
-    assert any(a == "u@h:/r/_combiner" for a in cmd)
+    assert proc.returncode == 0
+    assert captured["remote_path"] == "/r/_combiner"  # subdir joined onto the root
+    assert captured["include_globs"] == ["wave_*.json"]  # server-side include filter
     assert (tmp_path / "out").exists()
-
-
-def test_scp_fallback_does_not_double_nest(tmp_path: Path) -> None:
-    """scp -r copies the directory itself (not its contents); _scp_pull must
-    flatten the staging copy into local_dir so there is no ``_combiner/_combiner/``
-    nesting — the Windows (rsync-absent) aggregate bug that broke
-    verify-aggregation-complete."""
-    from pathlib import Path as _Path  # module-level import is TYPE_CHECKING-only
-
-    out = tmp_path / "_combiner"
-
-    def fake_scp(cmd, **kwargs):
-        # Emulate ``scp -r remote:.../_combiner <staging>`` creating
-        # ``<staging>/_combiner/wave_0.json`` (scp copies the dir, not contents).
-        staging = _Path(cmd[-1])
-        nested = staging / "_combiner"
-        nested.mkdir(parents=True, exist_ok=True)
-        (nested / "wave_0.json").write_text("{}", encoding="utf-8")
-        return _ok()
-
-    with (
-        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=fake_scp),
-    ):
-        transport.rsync_pull(
-            ssh_target="u@h",
-            remote_path="/r",
-            remote_subdir="_combiner",
-            local_dir=str(out),
-        )
-    assert (out / "wave_0.json").is_file()  # flattened into local_dir
-    assert not (out / "_combiner").exists()  # NOT double-nested
 
 
 def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
@@ -1381,13 +1360,24 @@ def _fail(stderr: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
 
 
-def test_scp_pull_discloses_child_stderr_on_nonzero(tmp_path: Path, capsys) -> None:
+def test_tar_ssh_pull_disclosure_flows_through_rsync_pull(tmp_path: Path) -> None:
+    """A failed rsync-less pull surfaces the engine's stderr tail through the
+    ``CompletedProcess`` the reroute adapts (the child-stderr disclosure itself
+    is the engine's concern — see tests/infra/test_transport_pull.py — this pins
+    the failure mapping at the ``rsync_pull`` boundary)."""
+
+    def fake_engine(**kwargs):
+        return transport.PullResult(
+            ok=False,
+            files_pulled=0,
+            bytes_pulled=0,
+            skipped_unchanged=0,
+            stderr_tail="ssh: Connection reset by peer\nlost connection",
+        )
+
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch(
-            "hpc_agent.infra.transport.run_capture_bounded",
-            return_value=_fail("scp: Connection reset by peer\nlost connection"),
-        ),
+        patch("hpc_agent.infra.transport.tar_ssh_pull", side_effect=fake_engine),
     ):
         proc = transport.rsync_pull(
             ssh_target="u@h",
@@ -1396,9 +1386,7 @@ def test_scp_pull_discloses_child_stderr_on_nonzero(tmp_path: Path, capsys) -> N
             local_dir=tmp_path / "out",
         )
     assert proc.returncode == 1
-    err = capsys.readouterr().err
-    assert "[transport] child scp pull exited 1" in err
-    assert "lost connection" in err  # the story nobody used to record
+    assert "lost connection" in proc.stderr  # the story is carried to the caller
 
 
 def test_disclose_child_failure_bounds_the_tail() -> None:
