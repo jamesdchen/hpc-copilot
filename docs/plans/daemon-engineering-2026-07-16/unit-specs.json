@@ -1,0 +1,134 @@
+{
+  "program": "daemon-engineering-2026-07-16 (WS-DAEMON v2)",
+  "authority": "ARCHITECT-MEMO.md (deltas) + DESIGN.md (architecture) + premortems/ (verbatim findings); latency-plan units 3.2/3.3 SUPERSEDED",
+  "flag": "HPC_CLI_DAEMON=1 (opt-in; default flip = separate ruling after a proving run)",
+  "integration_protocol": "ordered merge -> one regen_all --write per wave -> ruff/format/mypy -> per-unit batteries -> push -> CI matrix green -> enforcement rows -> telemetry deltas",
+  "units": [
+    {
+      "unit_id": "D-FSYNC", "wave": "DW0", "title": "append seam: fsync_required split + torn-line self-heal + request_id replay dedup substrate",
+      "files": ["src/hpc_agent/infra/io.py", "src/hpc_agent/state/decision_journal.py", "src/hpc_agent/state/decision_briefs.py", "src/hpc_agent/state/scopes.py", "src/hpc_agent/state/data_trace.py", "src/hpc_agent/state/data_manifest.py", "src/hpc_agent/state/fingerprint_store.py", "src/hpc_agent/state/conformance_store.py", "tests/state/", "tests/infra/test_io*.py"],
+      "forbidden_files": ["src/hpc_agent/state/journal.py"],
+      "design_constraints": ["DESIGN.md sec5 + memo delta3 (torn-line self-heal inside the lock; critical-section flag; lock-wait exempt from WEDGED clock)", "delta2b: client-minted request_id stamped into decision records; same-id re-append = replay no-op", "16-consumer classification TABLE is a deliverable (swarm finding 4); source-of-truth ledgers get fsync_required=True, best-effort markers keep suppression", "first-append parent-dir fsync", "BLOCKED-ON: delta-RULING-1 (shared-seam byte-identity amendment) — build behind acceptance of that ruling"],
+      "acceptance_tests": ["fsync-raises -> ok:false, no ack", "kill pre-fsync -> no record + clean retry; kill post-fsync/pre-reply -> record present, retry replay no-op", "planted torn tail -> subsequent daemon+inline records both parse, torn record reported", "same request_id twice -> one record"],
+      "test_batteries_to_run": ["tests/state/ (ALL)", "tests/ops/decision/", "tests/ops/monitor/test_harvest_guard.py", "tests/ops/aggregate/", "tests/_kernel/hooks/", "scripts/lint_atomic_durable_writes.py"],
+      "regen_required": false, "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "D-CORE", "wave": "DW1", "title": "daemon package core: transport/discovery/identity/lifecycle + serial Lane A wrapping McpServer.handle()",
+      "files": ["src/hpc_agent/_kernel/extension/daemon/__init__.py", "src/hpc_agent/_kernel/extension/daemon/transport.py", "src/hpc_agent/_kernel/extension/daemon/identity.py", "src/hpc_agent/_kernel/extension/daemon/lifecycle.py", "tests/daemon/"],
+      "forbidden_files": ["src/hpc_agent/_kernel/extension/mcp_server.py", "src/hpc_agent/cli/dispatch.py"],
+      "design_constraints": ["DESIGN.md sec1-3 + deltas: recv_bytes/send_bytes ONLY + AST lint + pickle-refusal + wrong-authkey fire tests (delta13)", "boot binds stdout/stderr to rolling log + rebinds sys streams + threading.excepthook to _DAEMON_LOG (delta4)", "instance flock = first statement pre-import; per-fingerprint spawn lock; discovery liveness = pid+started_at; activation negative-cache breaker; suspend-aware watchdog deltas; first-instance pipe semantics; ONE casefolded getpass.getuser() seam hashed 12-hex (delta11)", "editable/dirty installs daemon-INELIGIBLE v1 (delta9)", "Lane A enters below main() at _dispatch_main/_invoke_parsed altitude; faulthandler once at boot; admission refuses hpc_env containing HPC_DETACHED_* (delta14)", "drop queued-not-started RPCs on dead pipe at dequeue (delta2a)", "route-through inspect.getsource pin (delta13)", "daemon package never imports elicitation machinery + import pin (delta13)"],
+      "acceptance_tests": ["hello/skew/stale-file/single-instance/drain/idle fire paths", "pipe-soak twin of test_serve_survives_sequential_tool_calls_over_real_pipes", "envelope purity with planted chatty background thread + disconnecting client"],
+      "test_batteries_to_run": ["tests/daemon/", "tests/test_mcp_server.py", "scripts/lint_subject_imports.py", "scripts/lint_private_cross_package_imports.py", "scripts/lint_atomic_durable_writes.py"],
+      "regen_required": false, "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "D-CLIENT", "wave": "DW1", "title": "thin client: discover -> liveness -> bounded connect -> hello -> call -> inline fallback",
+      "files": ["src/hpc_agent/cli/daemon_client.py", "tests/daemon/test_client_fallback.py"],
+      "forbidden_files": [],
+      "design_constraints": ["imports _build_info (one definition); import-weight BUDGET contract test replaces 'stdlib-only' (-X importtime: no pydantic/_kernel.registry/infra.clusters) (delta6)", "hello sends ALL HPC_* verbatim; daemon partitions (delta6)", "bounded connect engineered so wedged daemon costs <= client deadline, never 20s (delta10)", "strips HPC_DETACHED_* (delta14)", "always materializes --experiment-dir (delta15)", "pid_alive/psutil decided loudly per delta6", "acceptance numbers GATED on latency unit 1.3 (delta17)"],
+      "acceptance_tests": ["dead/absent/mid-boot/deadline -> inline byte-identical vs _subprocess_cli_runner oracle", "import-weight budget test", "wedged-daemon dial bounded"],
+      "test_batteries_to_run": ["tests/daemon/test_client_fallback.py", "import-weight contract test"],
+      "regen_required": false, "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "D-CONTEXT", "wave": "DW1", "title": "per-call env/cwd threading: call_env() ContextVar + reader census + state guards",
+      "files": ["src/hpc_agent/infra/env_flags.py", "src/hpc_agent/state/journal.py", "src/hpc_agent/state/index.py", "src/hpc_agent/cli/setup.py", "tests/contracts/test_multi_human_boundary.py", "tests/contracts/test_env_reader_census.py"],
+      "forbidden_files": [],
+      "design_constraints": ["after D-FSYNC; cli/setup.py leg after latency 1.2", "call_env() defaults os.environ — behavior-identical when unset, pinned by full existing battery", "census allowlist = enumerated exempt buckets (deploy|worker|hook|lane-b-only) with justifications; untagged reader = red (delta18)", "census extends to subprocess(..., env= construction sites; **os.environ spread in daemon-reachable code = hit (delta5)", "journal/index cwd-fallback refuses loudly under the lane-set daemon marker contextvar (delta13/F9)", "Lane-A eligibility no-thread rule legislated here or in D-LANES — one owner (delta8)"],
+      "acceptance_tests": ["two calls, two cwds/envs -> two journals, actor from call env", "planted os.environ[HPC_] read outside seam -> census red", "daemon-marker journal fallback refusal fires"],
+      "test_batteries_to_run": ["tests/contracts/", "tests/state/", "tests/cli/ (full trio)", "tests/ops/recover/test_net_triage.py", "tests/ops/status/"],
+      "regen_required": false, "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "D-VERBS", "wave": "DW1", "title": "daemon-serve (Tier-3) + daemon-status/daemon-stop primitives + wire models + docs",
+      "files": ["src/hpc_agent/cli/daemon.py", "src/hpc_agent/cli/parser.py", "src/hpc_agent/_wire/workflows/daemon_status.py", "docs/primitives/"],
+      "forbidden_files": [],
+      "design_constraints": ["parser.py one-line Tier-3 hook AFTER latency 1.2 lands", "daemon-status works fast inline when daemon is DOWN (fast-path map verdict correct)", "reports honestly from discovery file + pid check (DESIGN sec6)", "curated-extras deferral allowed to D-SHIM if contention", "THE wave's only regen-forcing unit"],
+      "acceptance_tests": ["daemon-status up/down/stale outputs", "doc templates present (check_no_pending_primitive_docs)"],
+      "test_batteries_to_run": ["tests/cli/test_cli_completeness.py", "tests/contracts/test_doc_frozen_counts.py", "tests/scripts/test_regen_all.py", "tests/contracts/test_generated_merge_driver.py", "tests/cli/test_fast_dispatch.py", "tests/_wire/"],
+      "regen_required": true, "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "D-LANES", "wave": "DW2", "title": "lanes: bounded Lane-B subprocess, watchdog/WEDGED, busy-overflow, eligibility artifact + lint",
+      "files": ["src/hpc_agent/_kernel/extension/daemon/lanes.py", "scripts/lint_lane_a_eligibility.py", "tests/daemon/test_lanes.py", "tests/scripts/test_lint_lane_a_eligibility.py"],
+      "forbidden_files": [],
+      "design_constraints": ["v1 Lane A strictly NO-SSH (delta1)", "Lane B via run_capture_bounded, semaphore 4", "eligibility list = THE SAME artifact latency 2.3 consumes (one definition; coordinate ownership with integrator)", "eligibility legs mechanized: no ssh, no chdir, no threads (delta8), ceiling <= 20s, no HPC_DETACHED_*", "WEDGED prose cites the three real safety reasons (delta13/F12); critical-section deferral from D-FSYNC honored"],
+      "acceptance_tests": ["busy-overflow -> typed refusal + client inline", "planted slow verb -> concurrent client falls inline within deadline; WEDGED self-terminate", "planted chdir/thread verb -> lint red", "_refuse_blocking_over_mcp verified over the pipe"],
+      "test_batteries_to_run": ["tests/daemon/", "tests/contracts/test_src_subprocess_timeout_discipline.py", "scripts/lint_mirror_ledger.py"],
+      "regen_required": false, "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "D-POOL", "wave": "DW2", "title": "RESCOPED (delta1): transport-env snapshot + daemon_env_mismatch refusal + pool scaffolding DISABLED",
+      "files": ["src/hpc_agent/_kernel/extension/daemon/pool.py", "tests/daemon/test_env_mismatch.py"],
+      "forbidden_files": ["src/hpc_agent/infra/ssh_engine.py"],
+      "design_constraints": ["pool ships disabled behind its own future flag (delta-RULING-3)", "mismatch set = ALL engine-read env vars, census-derived not hand-listed (delta12)", "sequence after D-LANES if sharing daemon/__init__.py"],
+      "acceptance_tests": ["transport-var disagreement -> refusal + inline, disclosed"],
+      "test_batteries_to_run": ["tests/infra/test_ssh_engine.py", "tests/daemon/test_env_mismatch.py"],
+      "regen_required": false, "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "D-SUPERVISOR", "wave": "DW2", "title": "supervisor: launch dedup, watch table from _detached/ scan, wake fan-out (hint only), rolling log",
+      "files": ["src/hpc_agent/_kernel/extension/daemon/supervisor.py", "tests/daemon/test_supervisor.py"],
+      "forbidden_files": ["src/hpc_agent/_kernel/lifecycle/detached.py"],
+      "design_constraints": ["on-disk state authoritative; daemon crash loses only the reconstructable table (DESIGN sec3.3)", "wake-is-a-hint pinned: client settles from durable lease/terminal; subscription mechanism declared OUTSIDE Lane A (delta13/F10)", "detached spawns from daemon use call_env-derived base_env (delta5)"],
+      "acceptance_tests": ["daemon kill+respawn: detached worker survives, poll-detached reads it, table reconstructs from scan"],
+      "test_batteries_to_run": ["tests/daemon/test_supervisor.py", "tests/ops/monitor/test_wait_detached.py", "tests/_kernel/lifecycle/test_detached_*"],
+      "regen_required": false, "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "D-SOAK", "wave": "DW2", "title": "batteries + the windows CI daemon gate (built, not inherited)",
+      "files": ["tests/daemon/test_soak.py", "tests/daemon/test_concurrency.py", "tests/daemon/conftest.py", ".github/workflows/ci.yml"],
+      "forbidden_files": [],
+      "design_constraints": ["sole ci.yml owner for this program", "new REQUIRED test-windows-daemon job, 7-10 min budget, <=15 daemon spawns, session-scoped daemon fixture, 60s+ fixture boot deadlines, HPC_DAEMON_DIR conftest-autouse (delta16)", "seeded-fail verification that the gate can go red"],
+      "acceptance_tests": ["200-call soak alive at call 200", "N=8 mixed concurrent clients: envelope parity vs inline oracle, journal routing, zero cross-call bleed", "lock-discipline: post-RPC every .lock acquirable", "durability kill-pair"],
+      "test_batteries_to_run": ["tests/daemon/ (all, incl -m slow)"],
+      "regen_required": false, "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "D-HOOKS", "wave": "DW3-rung1", "title": "hooks as thin clients of their NAMED verbs (delta7) — after latency 1.7",
+      "files": ["src/hpc_agent/_kernel/hooks/stop_multiplex.py", "src/hpc_agent/_kernel/hooks/utterance_capture.py", "src/hpc_agent/_kernel/hooks/decision_rendezvous_autofetch.py", "src/hpc_agent/_kernel/hooks/skill_return_autofetch.py", "src/hpc_agent/_kernel/hooks/scheduler_write_fence.py"],
+      "forbidden_files": [],
+      "design_constraints": ["HARD GATE: after latency 1.7 integrates (files being rewritten there)", "per hook: name the verb that IS the body; new verbs agent_facing=False; hook-path/verb-path parity pinned (delta7)", "fire-and-forget activation: hook never pays boot (DESIGN sec6)", "fail-open discipline unchanged"],
+      "acceptance_tests": ["daemon up=pipe / down=inline byte-identical", "parity per hook verb", "measured per-turn hook wall-clock before/after"],
+      "test_batteries_to_run": ["tests/_kernel/hooks/ (ALL)", "tests/cli/test_agent_assets_settings_hook.py", "conformance lane claude_code adapter"],
+      "regen_required": false, "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "D-CLI", "wave": "DW3-rung2", "title": "_try_daemon_dispatch before _try_fast_dispatch — after latency 2.1",
+      "files": ["src/hpc_agent/cli/dispatch.py", "tests/cli/test_daemon_dispatch.py"],
+      "forbidden_files": [],
+      "design_constraints": ["HARD GATE: after latency 2.1", "flag + eligibility gated; ineligible/failed -> fall through untouched; fast path must not regress"],
+      "acceptance_tests": ["eligible verb via daemon <100ms warm; fallback byte-identical"],
+      "test_batteries_to_run": ["tests/cli/ fast-path trio", "tests/cli/test_cli_dispatcher_inline_parity.py", "tests/cli/test_envelope.py", "tests/integration/test_dispatch_smoke.py + daemon leg"],
+      "regen_required": false, "merge_risk": "MEDIUM"
+    },
+    {
+      "unit_id": "D-INSTALL", "wave": "DW3", "title": "doctor daemon check + release/install stop steps + live-lease disclosure",
+      "files": ["src/hpc_agent/ops/recover/doctor.py", "src/hpc_agent/agent_assets.py", "skills/release/SKILL.md"],
+      "forbidden_files": [],
+      "design_constraints": ["after 1.7 (agent_assets is its file)", "doctor: discovery-file enumeration, pid+started_at liveness, fingerprint skew flagged with stop command named; daemon-dir local/not-synced check (lifecycle L3)", "release daemon-stop step ALSO prints live detached leases as workers-on-old-code disclosure, never a block (lifecycle L5)"],
+      "acceptance_tests": ["doctor flags a seeded skewed daemon"],
+      "test_batteries_to_run": ["tests/ops/recover/test_doctor*.py", "tests/cli/test_agent_assets_*", "scripts/lint_skill_command_sync.py", "scripts/lint_skills.py"],
+      "regen_required": false, "merge_risk": "LOW"
+    },
+    {
+      "unit_id": "D-SHIM", "wave": "DW3-rung3", "title": "mcp-serve as thin shim; elicitation stays connection-local — after rungs 1-2 telemetry",
+      "files": ["src/hpc_agent/_kernel/extension/mcp_server.py", "src/hpc_agent/cli/mcp.py"],
+      "forbidden_files": [],
+      "design_constraints": ["TELEMETRY GATE: rungs 1-2 fallback-rate + latency lines recorded first", "shim keeps: transport, capability negotiation, elicitation machinery, blocking-verb refusals, heartbeats (DESIGN sec3.5/sec7)", "per-connection capability state", "pipe surface never declares elicitation; refusal envelope byte-identical (delta13/F8)"],
+      "acceptance_tests": ["E4 quartet re-pointed through the shim: refusal->popup->retry-once", "pipe-originated authorship refusal byte-identical to CLI"],
+      "test_batteries_to_run": ["tests/test_mcp_server.py (ALL, incl -m slow)", "tests/test_mcp_server_envelope_parity.py", "tests/test_mcp_curated.py", "all four test_mcp_elicitation_*.py", "conformance BOTH adapters"],
+      "regen_required": false, "merge_risk": "HIGH"
+    },
+    {
+      "unit_id": "D-DRIVE", "wave": "DW3-rung4", "title": "block-drive Lane-A-eligible spans via daemon — LAST in the block_drive queue",
+      "files": ["src/hpc_agent/_kernel/lifecycle/block_drive.py"],
+      "forbidden_files": [],
+      "design_constraints": ["HARD GATE: after latency 2.3 + 3.1 + 4a; schedule alone, dead last", "ssh/WATCH spans keep subprocess/detached seams (2.3 KEEP list binding)"],
+      "acceptance_tests": ["driver tick latency delta measured; span parity"],
+      "test_batteries_to_run": ["tests/_kernel/lifecycle/ (ALL)", "tests/ops/attention/", "tests/ops/status/test_snapshot_attention.py", "tests/ops/monitor/test_blocks.py", "tests/ops/aggregate/test_blocks.py", "tests/meta/campaign/test_blocks.py", "tests/ops/test_block_gate_and_speculate.py", "scripts/lint_mirror_ledger.py"],
+      "regen_required": false, "merge_risk": "HIGH"
+    }
+  ]
+}

@@ -137,3 +137,7 @@ Each landing unit owes its row(s) in `engineering-principles.md`'s enforcement m
 3. **Daemon durability/staleness** (B1/B2/D3) — lost human greenlights and stale code served indefinitely. Contained by R4 opt-in + fsync-before-reply + fingerprint self-exit; concurrency deliberately out of scope.
 4. **Hook fusion single point of failure** (F1/F2-technical) — one crash silencing the relay-audit integrity guard. Contained by fail-open decode + per-guard isolation + conformance lane + settings de-dup migration.
 5. **In-flight collision churn** (swarm A1 — already proven: the claim set changed between the premortem and this memo). Contained by the mechanized Wave-0 rule: `git status` at dispatch, dirty = claimed, rebase-first steps in every gated unit.
+
+## Drift log
+
+- 2026-07-16 late: units 3.2/3.3 (daemon) SUPERSEDED by docs/plans/daemon-engineering-2026-07-16/ (the R4 "fully engineer this" ruling; full design + 4-lens premortem + DW0-DW3 decomposition live there).
