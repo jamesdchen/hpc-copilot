@@ -977,15 +977,24 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
     # through the shared both-shape projector so a 20/20-terminal run reads as
     # complete and arms "none" instead of shearing off to a running-fallback
     # cron (run #8).
+    # ``invocation_argv`` is OPTIONAL (unit 3.1, run-14 #4): a code-composed
+    # successor spec cannot fabricate the agent-known argv, so arm the next tick
+    # ONLY when one was supplied — mirrors ``status_blocks``'s ``if
+    # spec.invocation_argv`` guard. When absent, no cron/loop tick is armed (the
+    # attended path re-invokes the block by hand).
     summary = summary_from_last_status(mon.last_status)
-    arm = decide_monitor_arm(
-        spec=DecideMonitorArmSpec(
-            run_id=main.run_id,
-            summary=summary,
-            total_tasks=main.total_tasks,
-            invocation_argv=spec.invocation_argv,
-            user_invoked_via_loop=spec.user_invoked_via_loop,
+    arm = (
+        decide_monitor_arm(
+            spec=DecideMonitorArmSpec(
+                run_id=main.run_id,
+                summary=summary,
+                total_tasks=main.total_tasks,
+                invocation_argv=spec.invocation_argv,
+                user_invoked_via_loop=spec.user_invoked_via_loop,
+            )
         )
+        if spec.invocation_argv
+        else None
     )
 
     brief: dict[str, Any] = {

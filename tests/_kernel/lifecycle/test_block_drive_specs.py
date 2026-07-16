@@ -319,6 +319,170 @@ def test_is_gated_matches_live_gate_callers() -> None:
 # ── campaign in-code chains: spec_hints already validate (ungated) ─────────────
 
 
+# ── run-14 #4: the driver MATERIALIZES the complete successor spec at park ──────
+
+
+def _s2_parks_at_s3_boundary(faked: dict[str, Any], resolved: dict[str, Any]) -> None:
+    """Set up the driver so it advances S1→S2, runs S2 (canary_verified), parks at S2→S3."""
+    committed = {**resolved, "next_block": "submit-s2"}
+    faked["pending"] = _pending(
+        current_verb="submit-s1", next_verb="submit-s2", input_spec=resolved
+    )
+    faked["committed"] = committed
+    faked["results"] = {
+        "submit-s2": {
+            "block": "s2",
+            "stage_reached": "canary_verified",
+            "needs_decision": True,
+            "run_id": _RUN_ID,
+            "brief": {"run_id": _RUN_ID},
+            "next_block": {
+                "verb": "submit-s3",
+                "why": "launch main + watch",
+                "spec_hint": {
+                    "run_id": _RUN_ID,
+                    "canary_run_id": f"{_RUN_ID}_canary",
+                    "canary_job_ids": ["12344"],
+                },
+            },
+        }
+    }
+
+
+def test_park_at_s2_boundary_materializes_validating_s3_spec_file(
+    faked: dict[str, Any], tmp_path: Path
+) -> None:
+    """Park at the S2→S3 gated boundary writes a VALIDATING SubmitS3Spec to the sidecar.
+
+    Run-14 #4: the driver composes S3's COMPLETE spec IN CODE (reusing S2's ``submit``
+    sub-spec, deriving ``monitor`` from run_id) and materializes it to the well-known
+    per-run path, byte-stably + sha-stamped. A CLI fallback dereferences THIS file
+    instead of re-authoring the spec.
+    """
+    from hpc_agent._wire.workflows.submit_blocks import SubmitS3Spec
+
+    _s2_parks_at_s3_boundary(faked, _valid_submit_s2_resolved())
+    result, code = run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb == "submit-s3"
+
+    # The file exists at the well-known path and validates as a SubmitS3Spec.
+    spec_path = tmp_path / ".hpc" / "specs" / "next" / f"{_RUN_ID}.submit-s3.json"
+    assert spec_path.exists(), "the S2→S3 boundary must materialize the successor spec file"
+    import json
+
+    on_disk = json.loads(spec_path.read_text(encoding="utf-8"))
+    SubmitS3Spec.model_validate(on_disk)  # the load-bearing assertion
+
+    # The parked marker carries the COMPLETE composed spec (not the minimal hint) +
+    # the Row-16 park-time sha stamp; and the brief discloses it.
+    parked = faked["parked"][0]
+    cursor = parked["resume_cursor"]
+    assert cursor["next_spec_hint"] == on_disk  # complete spec, not {run_id, canary...}
+    assert "monitor" in cursor["next_spec_hint"] and "submit" in cursor["next_spec_hint"]
+    assert parked["resume_cursor"]["next_spec_sha"] == bd.block_chain.successor_spec_sha(on_disk)
+    assert result.brief is not None
+    disclosure = result.brief["materialized_successor_spec"]
+    assert disclosure["verb"] == "submit-s3"
+    assert disclosure["sha256"] == cursor["next_spec_sha"]
+
+
+def test_materialized_s3_spec_file_is_byte_stable(faked: dict[str, Any], tmp_path: Path) -> None:
+    """Same inputs → same bytes (the R3 sha-pin foundation): re-materializing matches."""
+    _s2_parks_at_s3_boundary(faked, _valid_submit_s2_resolved())
+    run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    spec_path = tmp_path / ".hpc" / "specs" / "next" / f"{_RUN_ID}.submit-s3.json"
+    first = spec_path.read_bytes()
+
+    # Re-run the identical tick → identical bytes.
+    faked["parked"].clear()
+    faked["ran"].clear()
+    _s2_parks_at_s3_boundary(faked, _valid_submit_s2_resolved())
+    run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    assert spec_path.read_bytes() == first
+
+
+def test_park_refuses_to_materialize_when_caller_field_missing(
+    faked: dict[str, Any], tmp_path: Path
+) -> None:
+    """Row 14: a boundary that cannot SOURCE the successor's caller field materializes nothing.
+
+    The S2 acting spec is stripped of ``submit`` — the composer has nothing to reuse
+    for S3's required ``submit`` sub-spec — so NO file is written (refuse, never
+    fabricate) and the brief discloses the refusal; the boundary still parks.
+    """
+    resolved = _valid_submit_s2_resolved()
+    resolved.pop("submit", None)  # field-less predecessor
+    _s2_parks_at_s3_boundary(faked, resolved)
+    result, code = run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    spec_path = tmp_path / ".hpc" / "specs" / "next" / f"{_RUN_ID}.submit-s3.json"
+    assert not spec_path.exists()  # refused, never fabricated
+    assert result.brief is not None
+    assert "refused" in result.brief["materialized_successor_spec"]
+
+
+def test_overnight_auto_advance_crosses_s2_to_s3_without_agent_authored_json(
+    faked: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The overnight auto-advance runs S3 under the CODE-COMPOSED spec — the wedge, closed.
+
+    Before unit 3.1 the fresh gated-successor overnight consult chained into
+    ``submit-s3`` with the minimal ``spec_hint`` (``{run_id, canary...}``), which
+    bounced ``SubmitS3Spec``'s validator — a latent auto-advance wedge. Now it
+    advances under the composed COMPLETE spec (no agent-authored JSON), so the spec
+    the driver hands S3 validates.
+    """
+    from hpc_agent._wire.workflows.submit_blocks import SubmitS3Spec
+    from hpc_agent.ops import overnight
+
+    # No pending marker: a FRESH submit chain. S2 completes clean (needs_decision
+    # False) → the gated S3 successor is consulted against a live standing consent.
+    resolved = _valid_submit_s2_resolved()
+    faked["committed"] = None
+    faked["results"] = {
+        "submit-s2": {
+            "block": "s2",
+            "stage_reached": "canary_verified",
+            "needs_decision": False,  # clean → _chain consults the overnight consent
+            "run_id": _RUN_ID,
+            "brief": {"run_id": _RUN_ID},
+            "next_block": {
+                "verb": "submit-s3",
+                "why": "launch",
+                "spec_hint": {"run_id": _RUN_ID, "canary_run_id": f"{_RUN_ID}_canary"},
+            },
+        },
+        "submit-s3": {
+            "block": "s3",
+            "stage_reached": "watching_terminal",
+            "needs_decision": False,
+            "next_block": None,
+        },
+    }
+    consumed = overnight.ConsumptionOutcome(
+        True, overnight.ConsentDecision(True, "live", {}), {"consumed_block": "submit-s3"}
+    )
+    monkeypatch.setattr(bd, "_consume_overnight", lambda *_a, **_k: consumed)
+
+    # Drive a fresh submit chain starting at the S2 span (feed the S2 acting spec via
+    # a committed cursor so run_tick advances into submit-s2 first).
+    faked["pending"] = _pending(
+        current_verb="submit-s1", next_verb="submit-s2", input_spec=resolved
+    )
+    faked["committed"] = {**resolved, "next_block": "submit-s2"}
+    run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+
+    ran = {r["verb"]: r["spec"] for r in faked["ran"]}
+    assert "submit-s3" in ran, "the overnight consent must auto-advance into S3"
+    s3_spec = ran["submit-s3"]
+    # The spec the driver handed S3 is the COMPLETE composed one — it validates.
+    assert "monitor" in s3_spec and "submit" in s3_spec
+    SubmitS3Spec.model_validate(s3_spec)
+
+
 def test_campaign_chain_spec_hints_validate() -> None:
     """The two ungated campaign in-code hops emit specs their successor accepts."""
     from hpc_agent._wire.workflows.campaign_blocks import (

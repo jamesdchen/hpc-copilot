@@ -6,8 +6,7 @@
   "type": "object",
   "required": [
     "submit",
-    "monitor",
-    "invocation_argv"
+    "monitor"
   ],
   "additionalProperties": false,
   "properties": {
@@ -49,10 +48,17 @@
       "description": "The monitor-flow spec used to watch the main array to terminal/timeout."
     },
     "invocation_argv": {
-      "description": "The exact /monitor-hpc argv the next tick should re-invoke; stamped into decide-monitor-arm's cron args.",
-      "minLength": 1,
-      "title": "Invocation Argv",
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The exact /monitor-hpc argv the next tick should re-invoke; stamped into decide-monitor-arm's cron args. OPTIONAL (run-14 #4 materialization, unit 3.1): the code-composed successor spec cannot fabricate an agent-known argv (Row 14), so it is derivable/absent — when null, S3 skips arming the next tick (mirrors StatusWatchSpec.invocation_argv).",
+      "title": "Invocation Argv"
     },
     "user_invoked_via_loop": {
       "anyOf": [

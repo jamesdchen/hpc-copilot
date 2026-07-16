@@ -43,7 +43,7 @@ import logging
 import os
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hpc_agent._wire.workflows.block_drive import BlockDriveResult
 from hpc_agent.infra import block_chain
@@ -657,6 +657,161 @@ def _spec_model_field_names(verb: str) -> frozenset[str] | None:
     return frozenset(fields)
 
 
+# ── materialized successor specs (run-14 finding #4, unit 3.1) ──────────────────
+#
+# Run-14 #4 (USER-NAMED): every boundary MATERIALIZES its complete successor spec
+# as a FILE, so a CLI fallback = invoke-the-file, never re-author it (the S1→S2
+# re-transcription + submit-speculate shape failures are the motivating cases).
+# The composition doctrine is in ``block_chain.compose_successor_spec`` (never
+# fabricate a caller-owned field — Row 14); this is its I/O + validation half.
+# CONSUMPTION (a thin ``y`` running the successor UNDER the materialized spec,
+# and verbs dereferencing it by ``--run-id``) is the R3-gated leg, NOT built here.
+
+
+class _MaterializedSuccessor(NamedTuple):
+    """The outcome of composing + materializing a boundary's successor spec.
+
+    ``spec`` is the complete composed spec (``None`` when the composer refused —
+    Row 14 — or nothing was materialized); ``path`` the file it was written to
+    (``None`` on a refusal or write failure); ``sha`` the Row-16 park-time stamp
+    over the byte-stable bytes; ``refused`` the human-facing reason a boundary
+    could not materialize (disclosed in the brief), else ``None``.
+    """
+
+    spec: dict[str, Any] | None
+    path: Path | None
+    sha: str | None
+    refused: str | None
+
+
+def _successor_spec_path(experiment_dir: Path, run_id: str, successor: str) -> Path:
+    """The well-known per-run path a materialized successor spec is written to.
+
+    ``<experiment>/.hpc/specs/next/<run_id>.<block>.json`` (run-14 #4): a CLI
+    fallback dereferences THIS file instead of re-authoring the spec. Lives under
+    ``.hpc/`` (git-ignored per the repo layout), keyed by (run_id, successor).
+    """
+    return experiment_dir / ".hpc" / "specs" / "next" / f"{run_id}.{successor}.json"
+
+
+def _successor_spec_model(verb: str) -> Any:
+    """The successor verb's ``--spec`` pydantic model (for the round-trip validation).
+
+    Resolved through the primitive registry the same way
+    :func:`_spec_model_field_names` and ``cli/_dispatch`` do, so the validation the
+    materializer runs is byte-for-byte what a real ``--spec`` invocation would run.
+    ``None`` when the verb is unmapped or carries no spec model.
+    """
+    from hpc_agent._kernel.registry.primitive import get_meta, register_single_module
+    from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
+
+    entry = VERB_MODULE_MAP.get(verb)
+    if entry is None:
+        return None
+    primitive_name, module_name = entry
+    try:
+        register_single_module(module_name)
+        return getattr(get_meta(primitive_name).cli, "spec_model", None)
+    except Exception:  # noqa: BLE001 — a stale map entry must not crash the tick
+        return None
+
+
+def _compose_successor(
+    successor: str | None,
+    predecessor_spec: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Compose the successor's COMPLETE input spec, or ``None`` when it cannot (Row 14).
+
+    Delegates to ``block_chain.compose_successor_spec``, which reuses the
+    predecessor's own products (its input ``spec`` + the result ``brief``) and never
+    fabricates a caller-owned field. A :class:`block_chain.SuccessorSpecIncomplete`
+    (a required sub-spec the composer must not invent) yields ``None`` — the caller
+    then materializes nothing (refuse, never fabricate — the run-14 #4 class cannot
+    survive through a fabricated-default back door).
+    """
+    if not successor:
+        return None
+    brief = result.get("brief")
+    try:
+        return block_chain.compose_successor_spec(
+            successor,
+            spec_hint=_next_spec_hint(result),
+            predecessor_spec=predecessor_spec,
+            result_brief=brief if isinstance(brief, dict) else {},
+        )
+    except block_chain.SuccessorSpecIncomplete as exc:
+        _log.info(
+            "successor spec for %s not composed (refuse, never fabricate): %s", successor, exc
+        )
+        return None
+
+
+def _materialize_successor_spec(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    successor: str | None,
+    predecessor_spec: dict[str, Any],
+    result: dict[str, Any],
+) -> _MaterializedSuccessor:
+    """Compose + validate + write a successor spec to its well-known path (run-14 #4).
+
+    Composes the COMPLETE spec (:func:`block_chain.compose_successor_spec`, reusing
+    the predecessor's own products), then round-trips it through the successor's
+    ``extra="forbid"`` ``--spec`` model (a spec that would bounce the successor's own
+    validator is REFUSED, never materialized), writes it byte-stably
+    (:func:`hpc_agent.infra.io.atomic_write_json` = sorted-keys + fsync + replace),
+    and sha-stamps it (Row 16). A Row-14 composition refusal (a caller-owned field
+    the composer must not fabricate), a validation refusal, or a write failure each
+    yield an empty-or-partial outcome — with the refusal DISCLOSED — so a park never
+    crashes: materialization is a disclosure, never load-bearing for the park.
+    """
+    if not run_id or not successor:
+        return _MaterializedSuccessor(spec=None, path=None, sha=None, refused=None)
+    brief = result.get("brief")
+    try:
+        composed = block_chain.compose_successor_spec(
+            successor,
+            spec_hint=_next_spec_hint(result),
+            predecessor_spec=predecessor_spec,
+            result_brief=brief if isinstance(brief, dict) else {},
+        )
+    except block_chain.SuccessorSpecIncomplete as exc:
+        _log.info(
+            "successor spec for %s not composed (refuse, never fabricate): %s", successor, exc
+        )
+        return _MaterializedSuccessor(
+            spec=None,
+            path=None,
+            sha=None,
+            refused=f"{exc.missing} is caller-owned — not fabricated (run-14 #4)",
+        )
+    model = _successor_spec_model(successor)
+    if model is not None:
+        try:
+            model.model_validate(composed)
+        except Exception as exc:  # noqa: BLE001 — a non-validating spec is refused, not raised
+            _log.info(
+                "composed %s spec failed its own validator — refusing to materialize: %s",
+                successor,
+                exc,
+            )
+            return _MaterializedSuccessor(
+                spec=None, path=None, sha=None, refused="composed spec failed validation"
+            )
+    sha = block_chain.successor_spec_sha(composed)
+    path = _successor_spec_path(experiment_dir, run_id, successor)
+    try:
+        from hpc_agent.infra.io import atomic_write_json
+
+        atomic_write_json(path, composed)
+    except OSError as exc:
+        _log.warning("failed to write materialized successor spec for %s (%s)", successor, exc)
+        return _MaterializedSuccessor(spec=composed, path=None, sha=sha, refused=None)
+    return _MaterializedSuccessor(spec=composed, path=path, sha=sha, refused=None)
+
+
 # ── the tick ───────────────────────────────────────────────────────────────────
 
 
@@ -1007,7 +1162,13 @@ def _chain(
                     successor,
                 )
                 last_action = "chained"
-                spec = _next_spec_hint(result)
+                # run-14 #4: advance under the CODE-COMPOSED complete successor spec
+                # (never an agent-authored JSON), falling back to the minimal shaped
+                # hint only when the composer refused (Row 14). This is what un-wedges
+                # the overnight auto-advance across the S2→S3 gate — the raw hint
+                # bounced SubmitS3Spec's validator.
+                composed_next = _compose_successor(successor, spec, result)
+                spec = composed_next if composed_next is not None else _next_spec_hint(result)
                 verb = successor
                 continue
             _park(
@@ -1245,18 +1406,58 @@ def _park(
         _log.warning("cannot park %s without a run_id; brief not persisted", verb)
         return
     wf = workflow or block_chain.WORKFLOW_OF.get(verb)
+    # run-14 #4 (unit 3.1): MATERIALIZE the boundary's COMPLETE successor spec in
+    # code — reusing the predecessor's own products, never re-authoring — and stamp
+    # it byte-stably. The complete spec (when one could be composed) becomes the
+    # marker's ``next_spec_hint`` so an overnight auto-advance runs the successor
+    # with NO agent-authored JSON (the latent wedge: an incomplete hint bounced
+    # SubmitS3Spec's validator). A composer refusal (Row 14) falls back to the
+    # minimal shaped hint — the boundary still parks for the human.
+    materialized = _materialize_successor_spec(
+        experiment_dir,
+        run_id=run_id,
+        successor=successor,
+        predecessor_spec=spec,
+        result=result,
+    )
     resume_cursor: dict[str, Any] = {
         "workflow": wf,
         "run_id": run_id,
         "next_verb": successor,
         "current_verb": verb,
         # Driver-only additive keys (§4 routing): the inputs the block ran under
-        # and the successor's minimal spec skeleton, so the resume tick can diff
-        # and rebuild the next spec without re-reading the block.
+        # and the successor's spec, so the resume tick can diff and an overnight
+        # auto-advance can run the successor without re-reading the block.
         "input_spec": spec,
-        "next_spec_hint": _next_spec_hint(result),
+        "next_spec_hint": (
+            materialized.spec if materialized.spec is not None else _next_spec_hint(result)
+        ),
     }
+    if materialized.sha is not None:
+        # Row 16: sha-stamped at park; consumption (R3) recomputes + refuses on drift.
+        resume_cursor["next_spec_sha"] = materialized.sha
     brief = result.get("brief")
+    # Disclose the materialized successor spec in the brief the human/agent reads
+    # (run-14 #4: "the brief carries it") — a driver-copy disclosure only, NEVER
+    # written into the persisted decision-brief (like ``relay``), so it cannot
+    # poison the provenance gate's diff.
+    if isinstance(brief, dict) and (materialized.spec is not None or materialized.refused):
+        disclosure: dict[str, Any] = {"verb": successor}
+        if materialized.spec is not None:
+            disclosure["spec"] = materialized.spec
+            disclosure["sha256"] = materialized.sha
+            if materialized.path is not None:
+                disclosure["path"] = str(materialized.path)
+            disclosure["note"] = (
+                "code-composed COMPLETE successor spec (run-14 #4) — a CLI fallback "
+                "invokes THIS file, it never re-authors the spec."
+            )
+        elif materialized.refused:
+            disclosure["refused"] = materialized.refused
+        brief = {**brief, "materialized_successor_spec": disclosure}
+        # Carry the disclosure onto the caller's Result so the returned
+        # BlockDriveResult surfaces it to the human too.
+        result["brief"] = brief
     # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
     # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
     # submit-s2 (the qsub) — S1's resolve leg writes only the per-run sidecar.

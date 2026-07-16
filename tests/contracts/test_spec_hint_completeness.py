@@ -187,3 +187,163 @@ def test_gated_successor_hint_is_run_identity_skeleton(edge: tuple[str, str, str
     # greenlight brief and the successor's gate can name the same target.
     assert isinstance(spec_hint, dict)
     assert spec_hint.get("run_id") == _RUN_ID
+
+
+# ── run-14 finding #4: the driver COMPLETES a gated hint by REUSE, never fabrication ─
+#
+# Unit 3.1's materialization leg: a gated hint is a skeleton at the terminator
+# (above), but the DRIVER composes the COMPLETE successor spec at park by REUSING
+# the predecessor's own products (its input spec + result brief) —
+# ``block_chain.compose_successor_spec``. The composed spec MUST validate against
+# the successor's own ``--spec`` model (the run-#11 bounce class, now closed for
+# gated successors too), and the composer must NEVER fabricate a caller-owned field
+# (Row 14). This is the half the old skeleton-only invariant left to the human.
+
+
+def _valid_submit_flow() -> dict[str, Any]:
+    from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec, SubmitResources
+
+    return SubmitFlowSpec(
+        profile="ml",
+        cluster="hoffman2",
+        ssh_target="user@hoffman2.idre.ucla.edu",
+        remote_path="/u/scratch/exp",
+        job_name="ml",
+        run_id=_RUN_ID,
+        total_tasks=10,
+        backend="slurm",
+        script=".hpc/templates/cpu_array.sh",
+        job_env={"K": "v"},
+        canary=True,
+        resources=SubmitResources(walltime_sec=3600, cpus=4),
+    ).model_dump(mode="json")
+
+
+def _s2_predecessor_spec() -> dict[str, Any]:
+    from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
+    from hpc_agent._wire.workflows.submit_blocks import SubmitS2Spec
+    from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+
+    flow = SubmitFlowSpec.model_validate(_valid_submit_flow())
+    return SubmitS2Spec(
+        submit=SubmitAndVerifySpec(submit=flow, poll_interval_sec=1, wait_budget_sec=5),
+        detach=False,
+    ).model_dump(mode="json")
+
+
+# (successor, spec_hint, predecessor_spec, result_brief) that the driver composes
+# from at each GATED boundary — the REAL sources (predecessor input spec + brief),
+# not a strawman.
+_GATED_COMPOSITION_CASES: dict[str, dict[str, Any]] = {
+    # S2→S3: reuse S2's ``submit`` sub-spec + derive ``monitor`` from run_id.
+    "submit-s3": {
+        "spec_hint": {
+            "run_id": _RUN_ID,
+            "canary_run_id": _CANARY_RUN_ID,
+            "canary_job_ids": ["12344"],
+        },
+        "predecessor_spec": None,  # filled by _s2_predecessor_spec() below
+        "result_brief": {},
+    },
+    # S1→S2: reuse the SubmitFlowSpec S1's resolve leg BUILT (rides the brief).
+    "submit-s2": {
+        "spec_hint": {"run_id": _RUN_ID},
+        "predecessor_spec": {},
+        "result_brief": {"resolve": {"submit_spec": None}},  # filled below
+    },
+    # S3→S4: derive ``aggregate`` from the run identity.
+    "submit-s4": {
+        "spec_hint": {"run_id": _RUN_ID},
+        "predecessor_spec": {},
+        "result_brief": {},
+    },
+    # aggregate-check→aggregate-run: the check already emits the nested aggregate hint.
+    "aggregate-run": {
+        "spec_hint": {"aggregate": {"run_id": _RUN_ID}},
+        "predecessor_spec": {},
+        "result_brief": {},
+    },
+}
+
+
+def _composition_case(successor: str) -> dict[str, Any]:
+    case = {
+        k: (dict(v) if isinstance(v, dict) else v)
+        for k, v in _GATED_COMPOSITION_CASES[successor].items()
+    }
+    if successor == "submit-s3":
+        case["predecessor_spec"] = _s2_predecessor_spec()
+    if successor == "submit-s2":
+        case["result_brief"] = {"resolve": {"submit_spec": _valid_submit_flow()}}
+    return case
+
+
+@pytest.mark.parametrize("successor", sorted(_GATED_COMPOSITION_CASES))
+def test_gated_successor_composes_a_validating_spec(successor: str) -> None:
+    """The driver's code-composed gated spec fully validates against the successor model.
+
+    Run-14 #4: the composer REUSES the predecessor's own ``submit`` sub-spec (never
+    re-authoring it) and derives identity sub-shapes (``monitor`` from run_id), so a
+    plain ``y`` / overnight auto-advance runs the successor WITHOUT any agent-authored
+    JSON. The load-bearing assertion: the composed spec round-trips the successor's
+    ``extra="forbid"`` ``--spec`` validator.
+    """
+    assert block_chain.is_gated(successor)
+    case = _composition_case(successor)
+    composed = block_chain.compose_successor_spec(
+        successor,
+        spec_hint=case["spec_hint"],
+        predecessor_spec=case["predecessor_spec"],
+        result_brief=case["result_brief"],
+    )
+    model = _successor_spec_model(successor)
+    model.model_validate(composed)  # must not raise — the run-#11 bounce class, closed
+
+
+def test_composer_never_fabricates_a_required_caller_field() -> None:
+    """Row 14: a boundary that cannot SOURCE a caller-owned sub-spec REFUSES, never fabricates.
+
+    A field-less S2 predecessor (no ``submit``) means the composer has nothing to
+    reuse for S3's required ``submit`` — it must raise :class:`SuccessorSpecIncomplete`
+    (the caller then materializes nothing), never invent a ``submit`` with fabricated
+    ``goal`` / ``task_generator`` (the ``field_partition`` anti-pattern). Mirrors
+    ``overnight.py``'s "cmd_sha is NEVER composed".
+    """
+    with pytest.raises(block_chain.SuccessorSpecIncomplete) as ei:
+        block_chain.compose_successor_spec(
+            "submit-s3", spec_hint={"run_id": _RUN_ID}, predecessor_spec={}, result_brief={}
+        )
+    assert ei.value.missing == "submit"
+    # S1→S2 with a resolve leg that has not run (no submit_spec on the brief) refuses too.
+    with pytest.raises(block_chain.SuccessorSpecIncomplete):
+        block_chain.compose_successor_spec(
+            "submit-s2", spec_hint={"run_id": _RUN_ID}, predecessor_spec={}, result_brief={}
+        )
+
+
+def test_composed_spec_sha_is_byte_stable() -> None:
+    """Row 16 foundation: same inputs → same bytes → same sha (the R3 drift-pin base).
+
+    The park-time sha is computed over the SAME sorted-keys serialization
+    ``atomic_write_json`` writes, so a consumer that recomputes over the file's bytes
+    gets an identical stamp — and any edit-after-park moves it (drift is detectable).
+    """
+    case = _composition_case("submit-s3")
+    composed = block_chain.compose_successor_spec(
+        "submit-s3",
+        spec_hint=case["spec_hint"],
+        predecessor_spec=case["predecessor_spec"],
+        result_brief=case["result_brief"],
+    )
+    sha_a = block_chain.successor_spec_sha(composed)
+    # Recompose from scratch — a fresh dict with the same content — must match.
+    composed_again = block_chain.compose_successor_spec(
+        "submit-s3",
+        spec_hint=_composition_case("submit-s3")["spec_hint"],
+        predecessor_spec=_composition_case("submit-s3")["predecessor_spec"],
+        result_brief=_composition_case("submit-s3")["result_brief"],
+    )
+    assert block_chain.successor_spec_sha(composed_again) == sha_a
+    # An edit moves the sha — a post-park tamper is detectable at consumption (R3).
+    tampered = {**composed, "monitor": {"run_id": "ml_run_tampered0"}}
+    assert block_chain.successor_spec_sha(tampered) != sha_a

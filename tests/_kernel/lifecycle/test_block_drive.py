@@ -418,8 +418,12 @@ def test_run_tick_parks_sidecar_only_run_without_a_record_does_not_crash(
     assert result.action == "awaiting_decision"
     assert result.current_verb == "aggregate-check"
     assert result.next_verb == "aggregate-run"
-    # The brief still rode out to the human (disclosure survived) …
-    assert result.brief == {"terminal": True}
+    # The brief still rode out to the human (disclosure survived) … now also
+    # carrying the run-14 #4 materialized-successor-spec disclosure the driver
+    # composed for the aggregate-run boundary.
+    assert result.brief is not None
+    assert result.brief["terminal"] is True
+    assert result.brief["materialized_successor_spec"]["verb"] == "aggregate-run"
     # … but no durable marker was persisted (the raise swallowed, not appended).
     assert faked["parked"] == []
 
