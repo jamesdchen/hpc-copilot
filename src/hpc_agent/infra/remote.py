@@ -783,9 +783,10 @@ def ssh_run(
     # form; the original ``cmd`` is kept for the human-readable timeout message.
     remote_cmd = build_remote_command(cmd, timeout=effective_timeout, op=op)
 
-    # Command-channel outsourcing fast path (opt-in, HPC_SSH_ENGINE=asyncssh):
-    # run the command over a held asyncssh connection (library channel, typed
-    # errors) instead of a fresh cold handshake per call. Capture-mode only
+    # Command-channel outsourcing fast path (default ON; HPC_SSH_ENGINE=native
+    # opts back out — latency-audit rank-3 flip 2026-07-16): run the command over
+    # a held asyncssh connection (library channel, typed errors) instead of a
+    # fresh cold handshake per call. Capture-mode only
     # (streaming inherits the parent's fds, which the channel can't frame). ANY
     # engine trouble raises EngineUnavailable → fall straight through to the
     # one-shot path below, the permanent hard fallback. The engine is never

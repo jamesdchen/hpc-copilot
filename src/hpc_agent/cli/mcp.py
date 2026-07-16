@@ -18,20 +18,21 @@ the model's context for large catalogs.
 ``register(sub)`` is invoked from
 :func:`hpc_agent.cli.parser._register_tier3_modules`.
 
-Persistent SSH engine — default ON *only here* (memo §3)
---------------------------------------------------------
-``mcp-serve`` is the one verb that runs as a long-lived process, and so the one
-place a persistent SSH connection pays for itself: the outsourced command
+Persistent SSH engine — pinned explicit here (memo §3)
+------------------------------------------------------
+Since the latency-audit rank-3 flip (2026-07-16) the persistent asyncssh engine
+is default-ON process-wide (:func:`hpc_agent.infra.ssh_engine.engine_enabled` —
+an unset ``HPC_SSH_ENGINE`` now selects it). ``mcp-serve`` is still special: it
+is the one verb that runs as a long-lived process, and so the one place a
+persistent SSH connection AMORTISES across many commands — the outsourced command
 channel's idle sweeper + slot-held-while-open invariant
 (:mod:`hpc_agent.infra.ssh_engine` header, invariant 2) were hardened *from
 mcp-serve incidents* (the run-#10 F-B residual: an mcp-serve holding its per-host
-slot until process exit). Every other verb is one-shot, so the connection would
-open, serve a single command, and idle-close — no amortisation. Therefore
-:func:`cmd_mcp_serve` (and nowhere else — no import-time side effect) opts the
-engine in by default, honouring the engine's own opt-in constant
-(:data:`hpc_agent.infra.ssh_engine.ENGINE_ENV`) via ``setdefault`` so a
-user-preset value always wins, and skipping the injection entirely under
-``HPC_MCP_NO_SSH_ENGINE=1``.
+slot until process exit). So :func:`cmd_mcp_serve` (and nowhere else — no
+import-time side effect) PINS the engine value explicitly via ``setdefault`` — no
+longer to *turn it on* (the default already is) but to make the effective engine
+visible in every downstream env echo, honouring a user-preset value, and pinning
+``native`` under ``HPC_MCP_NO_SSH_ENGINE=1`` so that opt-out still disables it.
 
 Honest degradation — the engine is never load-bearing (verified today): ANY
 engine trouble raises :class:`hpc_agent.infra.ssh_engine.EngineUnavailable` — a
@@ -75,27 +76,40 @@ def _enable_ssh_engine_default() -> str:
 
     Returns the engine disposition for the stderr ready line, one of:
 
-    * ``"off"`` — the engine is not enabled: opted out of *our* injection via
+    * ``"off"`` — the engine is not enabled: opted out via
       ``HPC_MCP_NO_SSH_ENGINE=1`` AND no independent ``HPC_SSH_ENGINE=asyncssh``.
     * ``"user-set"`` — ``HPC_SSH_ENGINE`` was already set; ``setdefault`` is a
       no-op, so the user's choice (asyncssh *or* native/off) wins.
-    * ``"on"`` — env was unset; we default it to ``asyncssh``.
+    * ``"on"`` — env was unset; we make ``asyncssh`` explicit.
+
+    Since the latency-audit rank-3 flip (2026-07-16) the engine is default-ON
+    process-wide (:func:`ssh_engine.engine_enabled` — an unset env now selects
+    asyncssh), so mcp-serve's ``setdefault`` no longer *turns the engine on* —
+    it only PINS the value so every downstream env echo (doctor / status /
+    net-triage) discloses the effective engine instead of the silent default.
+    The ``HPC_MCP_NO_SSH_ENGINE=1`` opt-out therefore can no longer just skip
+    the injection (unset would still be ON): with no explicit user value it now
+    pins ``native`` so the opt-out genuinely disables the engine, preserving its
+    documented contract. A user-preset ``HPC_SSH_ENGINE`` still wins in either
+    branch.
 
     The label reflects the EFFECTIVE disposition, not the injection decision:
-    the opt-out suppresses only our ``setdefault``, it does not disable an engine
-    the operator turned on independently via ``HPC_SSH_ENGINE=asyncssh`` (the ssh
-    seam reads that env, not our opt-out — :func:`ssh_engine.engine_enabled`).
+    the opt-out does not disable an engine the operator turned on independently
+    via ``HPC_SSH_ENGINE=asyncssh`` (the ssh seam reads that env, not our opt-out).
     Reporting ``off`` while the engine is genuinely on would defeat the line's
     purpose ("why is MCP slow must be a measurement, not a mystery"), so under
     the opt-out we report the engine's real state.
-
-    Uses ``setdefault`` (not assignment) so user-preset always wins, per memo §3.
     """
     from hpc_agent.infra import ssh_engine
 
-    if os.environ.get(NO_SSH_ENGINE_ENV, "").strip() == "1":
-        return "user-set" if ssh_engine.engine_enabled() else "off"
     preset = ssh_engine.ENGINE_ENV in os.environ
+    if os.environ.get(NO_SSH_ENGINE_ENV, "").strip() == "1":
+        if preset:
+            return "user-set" if ssh_engine.engine_enabled() else "off"
+        # No user value + engine default-ON: pin native so the opt-out actually
+        # disables the engine (leaving the env unset would keep it on).
+        os.environ[ssh_engine.ENGINE_ENV] = "native"
+        return "off"
     os.environ.setdefault(ssh_engine.ENGINE_ENV, "asyncssh")
     return "user-set" if preset else "on"
 

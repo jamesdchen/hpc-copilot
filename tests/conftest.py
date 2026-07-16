@@ -278,3 +278,36 @@ def _hermetic_cluster_binaries(request: pytest.FixtureRequest) -> Iterator[None]
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = prev
+
+
+@pytest.fixture(autouse=True)
+def _default_native_ssh_engine() -> Iterator[None]:
+    """Pin the one-shot ``native`` SSH engine for every test that doesn't opt in.
+
+    The persistent asyncssh engine is default-ON in production since the
+    latency-audit rank-3 flip (2026-07-16) — an UNSET ``HPC_SSH_ENGINE`` selects
+    it (``hpc_agent.infra.ssh_engine.engine_enabled``). But the whole test suite
+    predates that flip and is written assuming the one-shot path: hundreds of
+    ``ssh_run`` capture tests stub the ONE-SHOT seam
+    (``remote.capture_via_select``) and never install a fake engine, so a
+    default-on engine would route them through a REAL ``asyncssh.connect`` to a
+    fake host before the one-shot fallback — non-hermetic and slow (the binary
+    shims above cannot shadow a Python library). Pinning ``native`` here keeps
+    the pre-flip test contract exactly.
+
+    Lowest precedence, setup-time, env-only (no ``monkeypatch`` — same
+    finalizer-order-neutrality rationale as ``_hermetic_cluster_binaries``): a
+    test that exercises the engine overrides it with its own
+    ``monkeypatch.setenv``/``delenv`` (e.g. ``tests/infra/test_ssh_engine.py``,
+    ``tests/cli/test_mcp_engine_default.py``), whose value wins for the body and
+    whose undo restores this pin before this fixture's own teardown.
+    """
+    saved = os.environ.get("HPC_SSH_ENGINE")
+    os.environ["HPC_SSH_ENGINE"] = "native"
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("HPC_SSH_ENGINE", None)
+        else:
+            os.environ["HPC_SSH_ENGINE"] = saved

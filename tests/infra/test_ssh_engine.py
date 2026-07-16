@@ -124,24 +124,34 @@ def engine() -> Iterator[_Engine]:
 # --- the opt-in facade -------------------------------------------------------
 
 
-def test_engine_disabled_by_default_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The public facade refuses when the opt-in flag is unset — the ssh seam
-    then uses its one-shot path, i.e. today's behaviour, unchanged."""
+def test_engine_enabled_by_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine is default-ON (latency-audit rank-3 flip, 2026-07-16): an UNSET
+    env selects it. ``HPC_SSH_ENGINE=native`` is the explicit one-shot opt-out."""
     monkeypatch.delenv(ssh_engine.ENGINE_ENV, raising=False)
+    assert ssh_engine.engine_enabled() is True
+
+    monkeypatch.setenv(ssh_engine.ENGINE_ENV, "native")
     assert ssh_engine.engine_enabled() is False
     with pytest.raises(EngineUnavailable):
+        # native selected → the facade refuses so the ssh seam uses one-shot.
         ssh_engine.engine_ssh_run("echo x", ssh_target="u@h", timeout=5)
 
 
 def test_engine_enabled_flag_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ssh_engine.ENGINE_ENV, "asyncssh")
     assert ssh_engine.engine_enabled() is True
-    for off in ("native", "", "1", "true", "yes", "ASYNCSSH "):
-        monkeypatch.setenv(ssh_engine.ENGINE_ENV, off)
-        # Only the exact lowercase token enables it (trailing space is stripped;
-        # "ASYNCSSH " lowercases+strips to "asyncssh" → enabled).
-        expected = off.strip().lower() == "asyncssh"
-        assert ssh_engine.engine_enabled() is expected
+    # Post-flip: unset/blank OR the exact 'asyncssh' token enables the engine;
+    # 'native' and any UNRECOGNISED value select the one-shot path (unknown
+    # values behave exactly as before the flip — off).
+    for val in ("native", "1", "true", "yes", "one-shot", "off", "bogus"):
+        monkeypatch.setenv(ssh_engine.ENGINE_ENV, val)
+        assert ssh_engine.engine_enabled() is False
+    for on in ("", " ", "asyncssh", "ASYNCSSH "):
+        monkeypatch.setenv(ssh_engine.ENGINE_ENV, on)
+        # blank strips to "" → default-on; "ASYNCSSH " lowercases+strips → on.
+        assert ssh_engine.engine_enabled() is True
+    monkeypatch.delenv(ssh_engine.ENGINE_ENV, raising=False)
+    assert ssh_engine.engine_enabled() is True  # truly unset → default-on
 
 
 def test_run_without_asyncssh_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,6 +161,19 @@ def test_run_without_asyncssh_raises_unavailable(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setenv(ssh_engine.ENGINE_ENV, "asyncssh")
     monkeypatch.setitem(sys.modules, "asyncssh", None)  # force ImportError on `import asyncssh`
+    with pytest.raises(EngineUnavailable):
+        ssh_engine.engine_ssh_run("echo x", ssh_target="u@h", timeout=5)
+
+
+def test_default_on_with_broken_asyncssh_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default (UNSET) path with an unimportable asyncssh degrades to the
+    one-shot fallback — EngineUnavailable, never an ImportError — so the flipped
+    default is never worse than one-shot even on a box without the ssh extra."""
+    import sys
+
+    monkeypatch.delenv(ssh_engine.ENGINE_ENV, raising=False)
+    assert ssh_engine.engine_enabled() is True  # default-on
+    monkeypatch.setitem(sys.modules, "asyncssh", None)  # force ImportError
     with pytest.raises(EngineUnavailable):
         ssh_engine.engine_ssh_run("echo x", ssh_target="u@h", timeout=5)
 

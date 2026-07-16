@@ -6,9 +6,11 @@ open invariant were hardened *from* mcp-serve incidents —
 ``hpc_agent.infra.ssh_engine`` header). These pin the four behaviours the memo
 names:
 
-* default-when-unset → the engine env is set to ``asyncssh`` and reported ``on``;
+* default-when-unset → the engine env is pinned ``asyncssh`` and reported ``on``;
 * user-preset env wins (``setdefault`` semantics) → reported ``user-set``;
-* opt-out wins (``HPC_MCP_NO_SSH_ENGINE=1``) → env untouched, reported ``off``;
+* opt-out wins (``HPC_MCP_NO_SSH_ENGINE=1``) → env pinned ``native`` (the engine
+  is default-ON process-wide since the 2026-07-16 flip, so the opt-out must PIN
+  native to genuinely disable it), reported ``off``;
 * no effect outside mcp-serve → importing/registering never touches the env.
 
 Plus the honest-degradation cite: an *unimportable* asyncssh raises
@@ -96,10 +98,16 @@ def test_user_preset_asyncssh_also_reports_user_set(
 
 
 def test_opt_out_wins(_clean_engine_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """HPC_MCP_NO_SSH_ENGINE=1 → env untouched, engine stays off, reports off."""
+    """HPC_MCP_NO_SSH_ENGINE=1 → env pinned native, engine off, reports off.
+
+    Post-flip the engine is default-ON when the env is unset, so the opt-out can
+    no longer just skip the injection (unset would still be on) — it PINS native
+    so the opt-out genuinely disables the engine.
+    """
     monkeypatch.setenv(mcp_cli.NO_SSH_ENGINE_ENV, "1")
     ready = _run_serve(monkeypatch)
-    assert ssh_engine.ENGINE_ENV not in __import__("os").environ
+    assert __import__("os").environ[ssh_engine.ENGINE_ENV] == "native"
+    assert ssh_engine.engine_enabled() is False
     assert "engine=off" in ready
 
 
@@ -173,7 +181,7 @@ def test_unimportable_asyncssh_falls_back_to_one_shot(
     def _no_asyncssh(name: str, *a: object, **k: object) -> object:
         if name == "asyncssh" or name.startswith("asyncssh."):
             raise ImportError("no asyncssh in this test")
-        return real_import(name, *a, **k)
+        return real_import(name, *a, **k)  # type: ignore[arg-type]
 
     monkeypatch.setattr(builtins, "__import__", _no_asyncssh)
 

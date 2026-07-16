@@ -26,14 +26,17 @@ Why the move is worth a dependency:
 
 Design, and the ban-safety invariants it preserves (each has a test):
 
-* **Opt-in + hard fallback.** OFF unless ``HPC_SSH_ENGINE=asyncssh`` (default
-  OFF until live-validated; ``"native"``/unset = off). Any engine trouble —
-  disabled, asyncssh unimportable, a breaker-refused open, a failed connect, a
-  wedged command, a dead channel — raises :class:`EngineUnavailable`, and the
-  caller (the ssh seam) falls straight back to the one-shot path. An engine
-  that misbehaves is never WORSE than today. NEVER a remote-command
-  correctness signal (a remote non-zero exit returns a normal
-  CompletedProcess).
+* **Default ON + hard fallback.** ON unless ``HPC_SSH_ENGINE=native`` (an UNSET
+  or blank env now selects the engine — the latency-audit rank-3 flip, 2026-07-16:
+  ControlMaster is structurally broken on native Windows, so the one-shot path
+  pays a 1-3s cold dial per exec). ``"native"`` — and any UNRECOGNISED value —
+  selects the one-shot binary path; only unset/blank or the exact ``"asyncssh"``
+  token enables the engine. Any engine trouble — disabled, asyncssh unimportable,
+  a breaker-refused open, a failed connect, a wedged command, a dead channel —
+  raises :class:`EngineUnavailable`, and the caller (the ssh seam) falls straight
+  back to the one-shot path. An engine that misbehaves is never WORSE than the
+  one-shot default. NEVER a remote-command correctness signal (a remote non-zero
+  exit returns a normal CompletedProcess).
 * **One loop thread.** asyncssh connections are not thread-safe off their
   loop, so ONE background daemon thread owns a single asyncio event loop
   (created lazily on first use). Every asyncssh op runs on it; sync callers
@@ -114,10 +117,14 @@ __all__ = [
     "shutdown_all",
 ]
 
-#: Env var selecting the SSH engine. Default OFF: a connection-layer change
-#: must be opted into (and proven on a quiet cluster) before it rides a
-#: ban-sensitive run. Only the exact value ``"asyncssh"`` enables it —
-#: ``"native"`` or unset keeps the one-shot / broker path.
+#: Env var selecting the SSH engine. Default ON (latency-audit rank-3 flip,
+#: 2026-07-16): an UNSET / blank env selects the persistent asyncssh engine,
+#: because the cold-dial-per-op one-shot path is the measured latency + ban-risk
+#: cost this run closes. ``HPC_SSH_ENGINE=native`` — and any UNRECOGNISED value —
+#: keeps the one-shot binary path; the exact value ``"asyncssh"`` also enables
+#: the engine (explicit opt-in). The persistent engine's historical severing
+#: bug (the run-12 idle reaper) and dispatched-guard are fixed at HEAD, which is
+#: what let the default flip. The hard one-shot fallback stays permanent.
 ENGINE_ENV = "HPC_SSH_ENGINE"
 
 #: Recycle a per-host connection that has gone QUIET for this many seconds so a
@@ -190,8 +197,20 @@ class EngineUnavailable(Exception):
 
 
 def engine_enabled() -> bool:
-    """True only when ``HPC_SSH_ENGINE=asyncssh`` opts the engine in."""
-    return os.environ.get(ENGINE_ENV, "").strip().lower() == "asyncssh"
+    """Whether the persistent asyncssh engine serves this process's ssh calls.
+
+    Default ON (latency-audit rank-3 flip, 2026-07-16): an UNSET or blank
+    ``HPC_SSH_ENGINE`` selects the engine. ``HPC_SSH_ENGINE=native`` — and any
+    UNRECOGNISED value — selects the one-shot binary path (unknown values behave
+    exactly as before the flip: off). ``"asyncssh"`` is the explicit opt-in and
+    also enables it. The permanent hard fallback (:class:`EngineUnavailable` →
+    one-shot) still covers an unimportable/misbehaving engine at run time, so
+    even the default-on path can never be worse than one-shot.
+    """
+    value = os.environ.get(ENGINE_ENV, "").strip().lower()
+    if not value:
+        return True
+    return value == "asyncssh"
 
 
 def classify_engine_failure(exc: BaseException) -> Literal["throttle", "fatal"]:
@@ -843,7 +862,10 @@ def engine_ssh_run(
     Never raises for a remote non-zero exit.
     """
     if not engine_enabled():
-        raise EngineUnavailable(f"engine disabled ({ENGINE_ENV} != 'asyncssh')")
+        raise EngineUnavailable(
+            f"engine disabled ({ENGINE_ENV}={os.environ.get(ENGINE_ENV, '')!r} "
+            "selects the one-shot native path)"
+        )
     try:
         import asyncssh  # noqa: F401 — importability probe; used lazily on the loop
     except ImportError as exc:
