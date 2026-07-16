@@ -1237,9 +1237,11 @@ def _seed_canary_with_sidecar_cmd_sha(
 ) -> None:
     """Journal record + canary sidecar carrying a real cmd_sha.
 
-    A non-empty cmd_sha is what drives ``record_canary_validated`` on the
-    success path (verify_canary.py ~:801) — the #351-3 tests need it to prove
-    a failing canary is NEVER cached.
+    A non-empty cmd_sha is what a canary carries into the #249 TTL cache. Since
+    B7 the cache is minted by ``submit_and_verify`` AFTER the full gate, never by
+    ``verify_canary`` itself — so a bare ``verify_canary`` call (below) verifies
+    the canary WITHOUT touching the cache. These tests still assert a failing
+    canary is never cached (the mint can only be reached past ``ok=True``).
     """
     from hpc_agent.state.runs import write_run_sidecar
 
@@ -1319,8 +1321,12 @@ def test_zero_exit_in_runtime_json_passes_and_claims_exit_0(
 ) -> None:
     """The positive side of the guard: when ``_runtime.json`` records
     ``exit_code: 0``, the canary passes AND the details string truthfully
-    claims 'exit 0' (it was actually read, not asserted blindly). The valid
-    cmd_sha IS cached for the skip optimisation (#249)."""
+    claims 'exit 0' (it was actually read, not asserted blindly).
+
+    B7: ``verify_canary`` itself does NOT mint the #249 cache — a single verify
+    is one leg of a canary PAIR, and minting mid-gate let a failed second canary
+    ride a poisoned cache. The mint moved to ``submit_and_verify`` past both
+    verdicts, so a bare ``verify_canary`` success leaves the cache untouched."""
     from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_ok")
@@ -1338,8 +1344,9 @@ def test_zero_exit_in_runtime_json_passes_and_claims_exit_0(
     assert out["failure_kind"] is None
     assert "exit 0" in out["details"]
     assert out["failure_features"] is None
-    # A genuinely-passing canary IS cached (the #249 skip optimisation still works).
-    assert _is_cmd_sha_cached("sha_ok") is True
+    # B7: minting is the gate's job (submit_and_verify), not a single verify's —
+    # a bare verify_canary success does NOT stamp the #249 skip cache.
+    assert _is_cmd_sha_cached("sha_ok") is False
 
 
 def test_absent_runtime_json_falls_through_to_existing_logic(

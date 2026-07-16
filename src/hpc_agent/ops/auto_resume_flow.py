@@ -145,6 +145,34 @@ def maybe_auto_resume(
     if record is None:
         return AutoResumeOutcome("escalate", f"no journal record for {run_id!r}")
 
+    # A run with an EXPLICIT human/agent kill on record is NEVER auto-resumable,
+    # regardless of how its tasks were tagged. The dispatcher's SIGTERM handler
+    # runs at signal time and cannot tell a user ``scancel``/``qdel`` from a real
+    # preemption — both land as exit 143/130 and stamp a per-task ``preempt``
+    # mark — so ``fetch_failures``' cluster-authoritative ``preempted_task_ids``
+    # (and the reporter's folded ids) look byte-identical for a deliberate kill
+    # and a real preemption. The control-plane discriminator is
+    # ``kill_requested_at``: it is stamped ONLY by the ``kill`` primitive
+    # (``record_kill_request``), NEVER by a preemption, so its presence is the
+    # unambiguous "a human asked for this run to die" signal that the pure
+    # ids-only gate cannot see. Consult it here — the seam the fix belongs on —
+    # rather than trying to distinguish kill from preempt at the (deployed,
+    # py3.8, signal-time) dispatcher, which structurally cannot.
+    #
+    # This does NOT interfere with a legitimate preemption cap-loop: a pure
+    # preemption never sets ``kill_requested_at``, so a genuinely-preempted run
+    # can still be resumed up to its cap. The only case it forces to escalate is
+    # a human manually re-submitting a previously-killed ``run_id`` and having it
+    # preempted — a rare edge that fails SAFE (an escalation the human resolves),
+    # never resurrecting work the human explicitly asked to stop.
+    if record.kill_requested_at:
+        return AutoResumeOutcome(
+            "escalate",
+            "kill was explicitly requested for this run "
+            f"(kill_requested_at={record.kill_requested_at!r}); not auto-resuming "
+            "a deliberately-killed run",
+        )
+
     # Cheap gate first: a run that did not opt in is never auto-resubmitted,
     # and we avoid an SSH round-trip for the common (opt-out) case.
     if not record.auto_resume_on_kill:

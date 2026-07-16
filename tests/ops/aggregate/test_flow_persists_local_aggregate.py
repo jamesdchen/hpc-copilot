@@ -198,7 +198,7 @@ def test_cluster_final_path_does_not_call_default_persist(journal_home, experime
     monkeypatch.setattr(
         af_module,
         "_cluster_final_reduce",
-        lambda *_a, **_kw: ({"g0": {"pi_estimate": 3.14, "n_samples": 1}}, []),
+        lambda *_a, **_kw: ({"g0": {"pi_estimate": 3.14, "n_samples": 1}}, [], []),
     )
     monkeypatch.setattr(af_module, "rsync_pull", _rsync_combiner_ok)
 

@@ -178,3 +178,8 @@ src/hpc_agent/ops/decision/journal/registration.py
 src/hpc_agent/ops/decision/journal/scope_lock.py
 src/hpc_agent/ops/decision/journal/signoff.py
 src/hpc_agent/ops/decision/journal/verify_relay.py
+src/hpc_agent/ops/migrate/harvest.py
+src/hpc_agent/ops/migrate/migrate_remainder.py
+src/hpc_agent/ops/migrate/ownership.py
+src/hpc_agent/infra/block_chain.py
+src/hpc_agent/ops/submit_blocks.py

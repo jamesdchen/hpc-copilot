@@ -40,6 +40,7 @@ from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids, reconcile
 from hpc_agent.state.journal import load_run, record_kill_confirmed, record_kill_request
 from hpc_agent.state.run_record import TERMINAL_STATUSES, RunRecord
+from hpc_agent.state.runs import read_job_task_spans
 
 
 def _range_indices(task_range: str) -> list[int]:
@@ -63,8 +64,76 @@ def _range_indices(task_range: str) -> list[int]:
     return out
 
 
+def _range_cancel_cmd(
+    builder: Any,
+    job_ids: list[str],
+    task_range: str,
+    spans: dict[str, tuple[int, int]],
+) -> str | None:
+    """Per-job LOCAL-index range cancel for a WAVED run.
+
+    A waved (over-cap, index-bounded) submit lays each batch down as its OWN
+    LOCAL ``1-<size>`` array plus a ``TASK_OFFSET`` (``HPCBackend.submit_plan``,
+    ``uses_global_array_index=False``), so a job's array subscripts are LOCAL —
+    NOT the run-global task ids the ``kill`` range guard validates against
+    ``[1, total_tasks]``. Fanning one global range across every wave job as a
+    LOCAL subscript (the old ``builder(job_ids, task_range)`` shape) cancels the
+    wrong local tasks in the wrong waves (or nothing) — the B4 over-cancel.
+
+    ``job_task_spans`` maps ``job_id`` → 0-based INCLUSIVE ``(first, last)``
+    global task-id window — the SAME map :func:`fetch_task_logs` routes log
+    probes through. For each requested GLOBAL 1-based index, find the covering
+    wave job and translate to its LOCAL 1-based ``ArrayIndex`` (``g0 - first +
+    1``, mirroring ``fetch_task_logs``' ``tid - first`` local id). A job ABSENT
+    from the map keeps the global index verbatim (single-array / resubmit-global
+    replays GLOBAL ids, matching ``fetch_task_logs``' spanless fallback). Each
+    job is then cancelled against ONLY its own undone locals via
+    :func:`build_cancel_cmd` (which further decomposes the per-job range for
+    single-range dialects), the per-job commands sequenced with ``;`` — the SAME
+    join ``build_cancel_cmd`` uses for its SGE segments, so a non-zero cancel on
+    an already-gone task never aborts a later wave's cancel.
+
+    Returns ``None`` when no job covers any requested index (nothing to dispatch).
+    """
+    from hpc_agent.ops.recover.batching import compact_task_ids
+
+    spanless = [j for j in job_ids if spans.get(j) is None]
+    per_job: dict[str, list[int]] = {}
+    for g1 in _range_indices(task_range):
+        g0 = g1 - 1  # global 1-based ArrayIndex -> 0-based global task id
+        matched = False
+        for job_id in job_ids:
+            span = spans.get(job_id)
+            if span is None:
+                continue
+            first, last = span
+            if first <= g0 <= last:
+                per_job.setdefault(job_id, []).append(g0 - first + 1)
+                matched = True
+                break
+        if not matched:
+            # No spanned wave covers it — offer it, as its GLOBAL index, to any
+            # spanless (global-indexed) job on the run.
+            for job_id in spanless:
+                per_job.setdefault(job_id, []).append(g1)
+    cmds: list[str] = []
+    for job_id in job_ids:  # preserve submit order
+        locals_ = per_job.get(job_id)
+        if not locals_:
+            continue
+        cmds.append(builder([job_id], compact_task_ids(sorted(set(locals_)))))
+    if not cmds:
+        return None
+    return " ; ".join(cmds)
+
+
 def _attempt_backend_cancel(
-    *, scheduler: str, ssh_target: str, job_ids: list[str], task_range: str | None = None
+    *,
+    scheduler: str,
+    ssh_target: str,
+    job_ids: list[str],
+    task_range: str | None = None,
+    job_task_spans: dict[str, tuple[int, int]] | None = None,
 ) -> tuple[bool, bool]:
     """Attempt scheduler cancellation THROUGH the backend seam, if one exists.
 
@@ -75,6 +144,13 @@ def _attempt_backend_cancel(
     class and dispatches it over the shared SSH transport. *task_range*, when set,
     scopes the cancel to those array indices (a PARTIAL cancel); ``None`` cancels
     the whole array.
+
+    *job_task_spans*, when supplied for a range cancel of a WAVED run, translates
+    each GLOBAL task index to its wave job's LOCAL ``ArrayIndex`` before emitting
+    the cancel (see :func:`_range_cancel_cmd`) so each wave cancels only its own
+    undone tasks instead of over-cancelling with a global-as-local subscript.
+    Absent (``None`` / empty — single-array, ≤cap, or resubmit-global runs) the
+    verbatim range fans across the job ids exactly as before.
     """
     if not job_ids:
         return (False, False)
@@ -84,7 +160,14 @@ def _attempt_backend_cancel(
     builder = getattr(backend_cls, "build_cancel_cmd", None)
     if not callable(builder):
         return (False, False)  # no cancel affordance on the seam
-    cmd = builder(job_ids, task_range)
+    if task_range is not None and job_task_spans:
+        cmd = _range_cancel_cmd(builder, job_ids, task_range, job_task_spans)
+        if cmd is None:
+            # No wave job covers any requested index. The seam IS available;
+            # dispatch nothing rather than a global-as-local over-cancel.
+            return (False, True)
+    else:
+        cmd = builder(job_ids, task_range)
     from hpc_agent.infra import remote
 
     remote.ssh_run(cmd, ssh_target=ssh_target)
@@ -161,11 +244,21 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
     # 2. Attempt cancellation through the backend seam. A ``task_range`` scopes
     #    the cancel to those array indices (a PARTIAL cancel); ``None`` cancels
     #    the whole array.
+    #    A waved run stamps per-job GLOBAL task windows in its sidecar; a range
+    #    cancel must translate the GLOBAL index to each wave's LOCAL ArrayIndex
+    #    (see ``_range_cancel_cmd``). ``read_job_task_spans`` returns ``None`` for
+    #    every non-waved run (single array / resubmit-global), leaving the cancel
+    #    byte-identical to before. Read spans only for a range cancel.
     cancel_attempted, cancel_available = _attempt_backend_cancel(
         scheduler=spec.scheduler,
         ssh_target=resolve_ssh_target(record),
         job_ids=job_ids,
         task_range=spec.task_range,
+        job_task_spans=(
+            read_job_task_spans(experiment_dir, spec.run_id)
+            if spec.task_range is not None
+            else None
+        ),
     )
 
     # 3. Verify against the scheduler: which requested ids are still alive?

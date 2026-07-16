@@ -472,6 +472,36 @@ def _verify_second_canary_and_mint(
     return None
 
 
+def _record_canary_gate_validated(base: SubmitFlowSpec) -> None:
+    """#249: record this ``cmd_sha`` as canary-validated after the FULL gate passed.
+
+    B7: minting moved here from ``verify_canary``'s per-canary success path.
+    ``verify_canary`` runs once PER canary; the old mint stamped the #249 TTL
+    cache on the FIRST canary's success — mid-gate — so a failed SECOND canary
+    blocked the main once, then a retry inside the 4h TTL cache-skipped BOTH
+    canaries on a ``cmd_sha`` that never fully validated. This site is reached
+    only past BOTH canary verdicts, so the cache reflects the whole gate.
+
+    Keyed on the SAME ``(cmd_sha, version, cluster)`` the readers compute —
+    :func:`_gated_canary_cache_decision` and ``submit_blocks._assert_canary_verified``
+    both read ``base.job_env['HPC_CMD_SHA']`` + ``base.cluster``; minting off the
+    same triple is what makes the skip hit (and never mints when there is no
+    ``HPC_CMD_SHA`` to key on). Best-effort: ``record_canary_validated`` swallows
+    its own write errors and no-ops when the cache is disabled.
+    """
+    from hpc_agent import __version__ as _pkg_version
+    from hpc_agent.state import canary_cache
+
+    cmd_sha = (base.job_env or {}).get("HPC_CMD_SHA") or ""
+    if not cmd_sha:
+        return
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(
+            cmd_sha=cmd_sha, version=_pkg_version or "", cluster=base.cluster
+        )
+    )
+
+
 def _calibrated_base(
     experiment_dir: Path, base: SubmitFlowSpec, canary_run_id: str | None
 ) -> SubmitFlowSpec:
@@ -1032,6 +1062,16 @@ def submit_and_verify(
         )
         if blocked is not None:
             return blocked
+
+    # #249 / B7: mint the canary-skip TTL cache ONLY here — past BOTH canary
+    # verdicts (a failed FIRST returns at the ``not verify_result.ok`` branch
+    # above; a failed SECOND returns the blocking result just above), so the
+    # cache reflects the FULL gate. The old mint sat in verify_canary's
+    # per-canary success path, so a failed second canary left the first verify's
+    # mint standing and a retry inside the 4h TTL cache-skipped both canaries on a
+    # cmd_sha that never fully validated. Reached before BOTH the stop_after_canary
+    # S2 return and the fused Phase-2 launch, so every verified gate mints once.
+    _record_canary_gate_validated(base)
 
     # Canary verified. The block boundary (submit-s2): STOP before the main
     # array so the human can review "canary green, est N core-hours" and

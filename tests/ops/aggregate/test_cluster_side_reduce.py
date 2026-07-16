@@ -162,10 +162,15 @@ def test_cluster_final_reduce_pulls_only_the_aggregate(tmp_path, monkeypatch):
     monkeypatch.setattr("hpc_agent.infra.transport.run_final_reduce", _fake_final_reduce)
     monkeypatch.setattr(af, "rsync_pull", _fake_pull)
 
-    aggregated, incomplete = af._cluster_final_reduce(tmp_path, "r1", record=record, out=out)
+    aggregated, incomplete, foreign = af._cluster_final_reduce(
+        tmp_path, "r1", record=record, out=out
+    )
 
     assert aggregated == {"a": {"acc": 0.86}}
     assert incomplete == [2]
+    # No cross-run clobber in this fixture (provenance has no
+    # skipped_foreign_waves) → the third return is empty (B1).
+    assert foreign == []
     # Single aggregate pull, NOT the wave_*.json tree.
     assert calls["pull"] == {
         "remote_subdir": "_aggregated/r1",

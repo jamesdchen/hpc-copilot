@@ -632,11 +632,46 @@ def report_status(
 # ---------------------------------------------------------------------------
 
 
+def _accept_result_file(match_str: str, *, min_rows: int) -> dict | None:
+    """Build the completion entry for a candidate result file, or ``None`` to reject.
+
+    Shared by the declared-summary gate and the any-file heuristic in
+    :func:`check_results_from_tasks`. Rejects a 0-byte regular file. For a
+    ``.csv`` counts data rows and — under ``min_rows > 0`` — demotes a
+    header-less / under-populated CSV to incomplete (the monitor's own gate).
+    ``rows_observed`` is emitted on EVERY accepted CSV so the aggregate
+    non-empty gate (F3) reads ONE ``min_rows=0`` report.
+    """
+    import csv
+
+    try:
+        if os.path.isfile(match_str) and os.path.getsize(match_str) <= 0:
+            return None
+    except OSError:
+        return None
+    if match_str.endswith(".csv"):
+        try:
+            with open(match_str, newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                row_count = sum(1 for _ in reader) if header is not None else 0
+        except OSError:
+            return None
+        if min_rows > 0 and (header is None or row_count < min_rows):
+            return None
+        entry: dict = {"status": "complete", "path": match_str, "rows_observed": row_count}
+        if min_rows > 0:
+            entry["csv_rows"] = row_count  # back-compat field
+        return entry
+    return {"status": "complete", "path": match_str}
+
+
 def check_results_from_tasks(
     tasks_data: dict,
     file_glob: str = "*",
     *,
     min_rows: int = 0,
+    summary_name: str | None = None,
 ) -> dict[int, dict]:
     """Mark tasks complete by checking each task's ``result_dir``.
 
@@ -653,21 +688,54 @@ def check_results_from_tasks(
     auto-resubmit in ``/status``.  Set ``min_rows > 0`` to opt into the
     stricter check that requires at least that many CSV data rows beyond
     the header.
-    """
-    import csv
 
+    ``summary_name`` (B2): when the run DECLARED a per-task summary artifact
+    (``sidecar.summary_artifact``, threaded from ``_main``), completion is keyed
+    on THAT specific file — matching the dispatcher, which promotes the summary
+    LAST precisely so a crash mid-promote leaves the task obviously incomplete
+    (dispatch.py ~:1297), and the combiner, which requires the summary and
+    excludes a task missing it. The prior any-file glob marked a task
+    ``complete`` on the FIRST promoted file, so a crash after some artifacts but
+    before the summary produced a permanent false ``complete`` that blocked
+    resubmit and dropped the task from the aggregate. ``None`` (no declared
+    summary — every run written before the field existed, and every run emitting
+    the historical ``metrics.json`` without declaring it) keeps the any-file
+    heuristic, byte-for-byte the prior behavior.
+    """
     results: dict[int, dict] = {}
-    for tid_str, entry in tasks_data.get("tasks", {}).items():
+    declared = (
+        summary_name.strip() if isinstance(summary_name, str) and summary_name.strip() else None
+    )
+    for tid_str, task_entry in tasks_data.get("tasks", {}).items():
         try:
             tid = int(tid_str)
         except (TypeError, ValueError):
             continue
-        result_dir_raw = entry.get("result_dir")
+        result_dir_raw = task_entry.get("result_dir")
         if not result_dir_raw:
             continue
         rdir = Path(result_dir_raw)
         if not rdir.is_dir():
             continue
+
+        if declared is not None:
+            # Declared-summary gate: the completion marker is exactly the
+            # summary file (``rdir / <summary>``; a path-shaped summary resolves
+            # relative to the result dir, mirroring the combiner). No other
+            # promoted file marks completion, so a mid-promote crash reads
+            # incomplete → the task stays resubmittable and is not dropped.
+            target = rdir / declared
+            try:
+                if not target.is_file():
+                    continue
+            except OSError:
+                continue
+            accepted = _accept_result_file(str(target), min_rows=min_rows)
+            if accepted is not None:
+                results[tid] = accepted
+            continue
+
+        # No declared summary → historical any-file heuristic (unchanged).
         for match in sorted(rdir.glob(file_glob)):
             match_str = str(match)
             if "_wip_" in match_str:
@@ -678,34 +746,10 @@ def check_results_from_tasks(
                 # counting it would mark an output-less task ``complete`` and
                 # mask the failure from the reporter/canary (finding 16).
                 continue
-            try:
-                if match.is_file() and match.stat().st_size <= 0:
-                    continue
-            except OSError:
-                continue
-            if match_str.endswith(".csv"):
-                # ALWAYS count rows (not just under ``min_rows > 0``) so the
-                # accepted entry carries ``rows_observed``: the aggregate
-                # non-empty gate (F3) derives its strict set from ONE lenient
-                # (``min_rows=0``) report instead of a second SSH round-trip.
-                try:
-                    with open(match_str, newline="", encoding="utf-8") as f:
-                        reader = csv.reader(f)
-                        header = next(reader, None)
-                        row_count = sum(1 for _ in reader) if header is not None else 0
-                except OSError:
-                    continue
-                # ``min_rows > 0`` still demotes an under-populated / header-less
-                # CSV to incomplete (the monitor's own gate), unchanged.
-                if min_rows > 0 and (header is None or row_count < min_rows):
-                    continue
-                entry = {"status": "complete", "path": match_str, "rows_observed": row_count}
-                if min_rows > 0:
-                    entry["csv_rows"] = row_count  # back-compat field
-                results[tid] = entry
+            accepted = _accept_result_file(match_str, min_rows=min_rows)
+            if accepted is not None:
+                results[tid] = accepted
                 break
-            results[tid] = {"status": "complete", "path": match_str}
-            break
     return results
 
 
@@ -721,6 +765,7 @@ def report_status_from_tasks(
     slurm_cluster: str | None = None,
     sge_user: str | None = None,
     min_rows: int = 0,
+    summary_name: str | None = None,
 ) -> dict:
     """Like :func:`report_status` but driven by a per-task dict.
 
@@ -740,7 +785,9 @@ def report_status_from_tasks(
     total = int(tasks_data.get("total_tasks", len(tasks_data.get("tasks", {}))))
     task_entries = tasks_data.get("tasks", {}) or {}
 
-    completed = check_results_from_tasks(tasks_data, file_glob=file_glob, min_rows=min_rows)
+    completed = check_results_from_tasks(
+        tasks_data, file_glob=file_glob, min_rows=min_rows, summary_name=summary_name
+    )
 
     if scheduler is None:
         # Pass a representative per-task result_dir so detect_scheduler can
@@ -1159,6 +1206,13 @@ def _main() -> int:
         slurm_cluster=args.slurm_cluster,
         sge_user=args.sge_user,
         min_rows=args.min_rows,
+        # B2: key completion on the run's DECLARED per-task summary artifact when
+        # present, so a crash mid-promote (dispatcher writes the summary LAST)
+        # reads incomplete instead of a false ``complete`` that blocks resubmit
+        # and drops the task from the aggregate. Raw sidecar value — an
+        # absent/blank declaration normalizes to the historical any-file
+        # heuristic inside ``check_results_from_tasks``.
+        summary_name=sidecar.get("summary_artifact"),
     )
     report["rollup"] = rollup_by_grid_point(report, tasks_data)
     report["waves"] = rollup_by_wave(report, tasks_data)

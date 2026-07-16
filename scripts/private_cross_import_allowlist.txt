@@ -83,3 +83,7 @@ ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _REFUSE
 ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _resolve_layer1
 ops/validate/dry_run_local.py :: hpc_agent.execution.mapreduce.dispatch :: _executor_reinvokes_dispatcher
 state/snapshot_cache.py :: hpc_agent.infra.ssh_circuit :: _safe_name
+ops/migrate/derive.py :: hpc_agent.ops.memory.interview :: _expected_count
+ops/migrate/derive.py :: hpc_agent.ops.memory.interview :: _materialize_tasks_py
+ops/monitor/kill.py :: hpc_agent.infra.backends.query :: _expand_task_range
+ops/verify_canary.py :: hpc_agent.ops.monitor.harvest_guard :: _circuit_wait_sec

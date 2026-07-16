@@ -243,3 +243,76 @@ def test_strict_opt_in_raises_on_cluster_final_failure(journal_home, experiment,
 
     with pytest.raises(errors.RemoteCommandFailed, match="cluster final-reduce"):
         aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
+
+
+def _cluster_final_with_foreign(monkeypatch, *, metrics: dict, skipped_foreign: list[int]) -> None:
+    """Wire cluster-final so the pulled aggregate discloses skipped_foreign_waves.
+
+    Simulates a cross-run clobber (B1): another run at the same remote_path
+    overwrote this run's ``_combiner/wave_<N>.json`` partials, so the cluster
+    ``--final`` DROPPED them (their run_id was foreign) and recorded them under
+    ``provenance.skipped_foreign_waves``. The resulting ``aggregated_metrics`` is
+    a partial, silently-smaller table.
+    """
+
+    def _final(*, ssh_target, remote_path, run_id, force, remote_activation):
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    def _pull(*_a, remote_subdir: str, local_dir: str, include=None, **_kw):
+        dest = Path(local_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        if remote_subdir.startswith("_aggregated"):
+            (dest / "metrics_aggregate.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": _RUN_ID,
+                        "aggregated_metrics": metrics,
+                        "provenance": {
+                            "incomplete_waves": [],
+                            "skipped_foreign_waves": skipped_foreign,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("hpc_agent.infra.transport.run_final_reduce", _final)
+    monkeypatch.setattr(af_module, "rsync_pull", _pull)
+
+
+def test_cross_run_clobber_escalates_not_silent(journal_home, experiment, monkeypatch):
+    """B1: a re-aggregate whose partials were clobbered by another run at the
+    shared _combiner/ must ESCALATE, never persist a partial table with
+    escalation_reason=None."""
+    monkeypatch.delenv("HPC_CLUSTER_FINAL_REDUCE", raising=False)
+    _seed(experiment, wave_map=_DEPLOYED)
+    _cluster_final_with_foreign(
+        monkeypatch, metrics={"a": {"acc": 0.86, "n_samples": 3}}, skipped_foreign=[2, 5]
+    )
+
+    result = aggregate_flow(
+        experiment, spec=AggregateFlowSpec(run_id=_RUN_ID, ensure_all_combined=False)
+    )
+
+    assert result.reduce_path == "cluster_final"
+    # The silent-wrong-table hole is closed: escalation fires and names the
+    # cross-run clobber + the exact dropped waves.
+    assert result.escalation_reason is not None
+    assert "cross_run_wave_clobber" in result.escalation_reason
+    assert "waves=2,5" in result.escalation_reason
+
+
+def test_no_clobber_does_not_escalate(journal_home, experiment, monkeypatch):
+    """Guard the fire path: with no skipped_foreign_waves the clobber escalation
+    stays silent (no false positive)."""
+    monkeypatch.delenv("HPC_CLUSTER_FINAL_REDUCE", raising=False)
+    _seed(experiment, wave_map=_DEPLOYED)
+    _cluster_final_ok(monkeypatch, metrics={"a": {"acc": 0.86, "n_samples": 3}})
+
+    result = aggregate_flow(
+        experiment, spec=AggregateFlowSpec(run_id=_RUN_ID, ensure_all_combined=False)
+    )
+
+    assert result.reduce_path == "cluster_final"
+    assert result.escalation_reason is None

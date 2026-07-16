@@ -2315,6 +2315,50 @@ def _refuse_prestamped_without_journal(experiment_dir: Path, spec: SubmitFlowSpe
     )
 
 
+def _refuse_prestamped_canary_without_journal(experiment_dir: Path, canary_run_id: str) -> None:
+    """B8/F47 for the canary: refuse a canary whose sidecar carries landed
+    job_ids but has NO journal record — the qsub→record crash window.
+
+    :func:`_fire_canary` pre-stamps the just-parsed canary job_ids onto the
+    canary sidecar (crash-safety) BEFORE :func:`submit_and_record` lands the
+    journal entry. A crash in that window leaves real scheduler ids on the sidecar
+    with no journal record; ``load_run`` (journal-only) then returns ``None``, so
+    the fresh-canary branch would re-qsub a DUPLICATE canary under the same
+    run_id — double-writing task 0 and orphaning the first job (the next pre-stamp
+    full-replaces the sidecar job_ids). Mirror the main array's F47 guard
+    (:func:`_refuse_prestamped_without_journal`): read the canary sidecar and,
+    when it carries landed ids with no journal record, refuse loudly.
+
+    The journal check is load-bearing, not mere precision: a #276
+    resubmittable-terminal CORPSE (``failed`` / ``abandoned``) legitimately
+    re-fires through the fresh branch, and its sidecar also carries (forensic)
+    job_ids — but it HAS a journal record, so ``load_run`` returns it and this
+    guard stays silent. Only the journal-less crash window trips the refusal. A
+    genuine FIRST fire has an empty/absent canary sidecar (ids land only via the
+    post-qsub pre-stamp), so this never fires on a clean submit.
+    """
+    from hpc_agent.state.runs import read_run_sidecar_or_empty
+
+    if load_run(experiment_dir, canary_run_id) is not None:
+        # Journal record present → #276 corpse re-fire or a live replay the caller
+        # already handled, not the crash window. Let the fresh fire proceed.
+        return
+    sidecar = read_run_sidecar_or_empty(experiment_dir, canary_run_id)
+    landed = [str(j) for j in (sidecar.get("job_ids") or [])]
+    if not landed:
+        return
+    raise errors.SpecInvalid(
+        f"canary run {canary_run_id!r} has a scheduler job already submitted "
+        f"(job_ids={landed}) recorded on its sidecar, but no journal record — a "
+        "prior submit qsub'd the canary and then crashed before recording it. "
+        "Re-submitting would launch a DUPLICATE canary under the same run_id "
+        "(double-writing task 0) and orphan the one above from every monitor/kill/"
+        "reconcile path. Reconcile the canary to rebuild its journal from the "
+        "sidecar (then verify/resume it), or kill the listed job and re-run fresh "
+        "— do not plain-resubmit."
+    )
+
+
 def _fire_canary(
     *,
     experiment_dir: Path,
@@ -2485,6 +2529,14 @@ def fire_second_canary(
         slurm_cluster=spec.slurm_cluster,
         scheduler_profile=spec.scheduler_profile,
     )
+    # B8: same qsub→record crash-window guard as the first-canary fresh branch.
+    # This leg always fires (no replay branch of its own), so a retry after a
+    # crash between the pre-stamp and the journal write for this
+    # ``<run_id>-canary2`` (or a boundary-heal ``-canary-b<idx>``) would qsub a
+    # DUPLICATE. Refuse when the sidecar already carries landed ids with no
+    # journal record. (The concurrent double-canary caller degrades a raised
+    # SpecInvalid to a single canary rather than a duplicate — still no dup.)
+    _refuse_prestamped_canary_without_journal(experiment_dir, canary_run_id)
     return _fire_canary(
         experiment_dir=experiment_dir,
         spec=spec,
@@ -2590,6 +2642,14 @@ def _submit_one_spec(
             canary_job_ids = list(existing_canary.job_ids)
             canary_done = True
         else:
+            # B8: before firing, distinguish a genuine fresh canary from the
+            # qsub→record CRASH WINDOW. The journal-keyed replay branch above
+            # misses it (a crash between _fire_canary's pre-stamp and its journal
+            # write leaves the canary sidecar carrying ids with no journal record,
+            # so ``existing_canary`` is None) — re-qsubbing here would duplicate
+            # the canary and orphan the first. Refuse loudly instead (F47 for the
+            # canary); a clean first submit / a #276 corpse re-fire pass through.
+            _refuse_prestamped_canary_without_journal(experiment_dir, canary_run_id)
             # Fresh canary: mirror the main sidecar + qsub the 1-task probe +
             # record it. Extracted to :func:`_fire_canary` so the determinism
             # fingerprint's SECOND canary (submit-and-verify's ``-canary2``) can

@@ -207,6 +207,86 @@ def test_in_bounds_range_at_the_ceiling_is_allowed(
     assert out["settled"] is False
 
 
+def _waved_spans(monkeypatch: pytest.MonkeyPatch, spans: dict[str, tuple[int, int]]) -> None:
+    """Make the run read as WAVED: stub the sidecar span reader kill consults."""
+    monkeypatch.setattr(kill_mod, "read_job_task_spans", lambda *_a, **_k: spans)
+
+
+def test_range_kill_waved_maps_global_index_to_the_covering_waves_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GLOBAL range index cancels ONLY the covering wave, at its LOCAL index (B4).
+
+    Two waves of 100: job ``801`` covers global tasks 0-99, job ``802`` covers
+    100-199. A range kill of GLOBAL index 150 (1-based ArrayIndex) lands wholly
+    inside wave 802 — it must emit ``scancel 802_[50]`` (0-based global 149 minus
+    the job's ``first`` 100, +1 for the 1-based local subscript) and NEVER touch
+    job 801. The old fan-out cancelled ``801_[150] 802_[150]`` — a
+    global-as-local over-cancel of the wrong tasks in the wrong wave.
+    """
+    sent = _capture_ssh(monkeypatch)
+    _patch_reconcile(monkeypatch)
+    upsert_run(tmp_path, _record("r1", job_ids=["801", "802"], total_tasks=200))
+    _waved_spans(monkeypatch, {"801": (0, 99), "802": (100, 199)})
+    monkeypatch.setattr(
+        kill_mod, "_ssh_alive_job_ids", lambda *, ssh_target, job_ids, scheduler: {"801", "802"}
+    )
+
+    out = kill(
+        experiment_dir=tmp_path,
+        spec=KillSpec(run_id="r1", scheduler="slurm", task_range="150"),
+    )
+
+    assert sent == ["scancel 802_[50]"]
+    assert out["backend_cancel_attempted"] is True
+    assert out["settled"] is False
+
+
+def test_range_kill_waved_splits_a_range_that_straddles_two_waves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A range spanning the wave boundary maps each side to its own job's locals.
+
+    GLOBAL 99-102 (1-based) straddles the 0-99 / 100-199 boundary: globals 99,100
+    are wave 801's LOCAL 99,100; globals 101,102 are wave 802's LOCAL 1,2. Each
+    wave cancels ONLY its own undone locals, sequenced with ``;``.
+    """
+    sent = _capture_ssh(monkeypatch)
+    _patch_reconcile(monkeypatch)
+    upsert_run(tmp_path, _record("r1", job_ids=["801", "802"], total_tasks=200))
+    _waved_spans(monkeypatch, {"801": (0, 99), "802": (100, 199)})
+    monkeypatch.setattr(
+        kill_mod, "_ssh_alive_job_ids", lambda *, ssh_target, job_ids, scheduler: {"801", "802"}
+    )
+
+    kill(
+        experiment_dir=tmp_path,
+        spec=KillSpec(run_id="r1", scheduler="slurm", task_range="99-102"),
+    )
+
+    assert sent == ["scancel 801_[99-100] ; scancel 802_[1-2]"]
+
+
+def test_non_waved_range_kill_unchanged_when_no_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-array run (no spans) keeps the verbatim global range fan-out."""
+    sent = _capture_ssh(monkeypatch)
+    _patch_reconcile(monkeypatch)
+    upsert_run(tmp_path, _record("r1", job_ids=["555"], total_tasks=100))
+    _waved_spans(monkeypatch, {})  # read_job_task_spans returns falsy → old path
+    monkeypatch.setattr(
+        kill_mod, "_ssh_alive_job_ids", lambda *, ssh_target, job_ids, scheduler: {"555"}
+    )
+
+    kill(
+        experiment_dir=tmp_path,
+        spec=KillSpec(run_id="r1", scheduler="slurm", task_range="4,8,13-15"),
+    )
+
+    assert sent == ["scancel 555_[4,8,13-15]"]
+
+
 def test_malformed_task_range_rejected_at_spec_construction() -> None:
     """KillSpec refuses a value that is not a scheduler array expression."""
     with pytest.raises(ValueError, match=r"scheduler array expression"):

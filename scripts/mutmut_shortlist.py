@@ -146,6 +146,7 @@ def _changed_paths(ref: str) -> set[str]:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     ).stdout
     return {line.strip() for line in out.splitlines() if line.strip()}

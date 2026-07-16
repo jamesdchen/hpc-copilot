@@ -88,7 +88,7 @@ __all__ = [
 DEFAULT_SUMMARY_NAME = "metrics.json"
 
 #: The LAST run of digits in a per-task result-dir NAME — the leaf ``task_<id>``
-#: / ``task-<id>`` the ``result_dir_template`` renders. Mirrors the single-run
+#: / ``task-<id>`` the ``result_dir_template`` renders. Like the single-run
 #: harvest's ``_TASK_DIR_RE`` (``aggregate_flow.py:796``): keyed on the leaf name
 #: only, so a run_id with digits elsewhere in the path never leaks into the id.
 _TASK_DIR_RE = re.compile(r"\d+(?!.*\d)")

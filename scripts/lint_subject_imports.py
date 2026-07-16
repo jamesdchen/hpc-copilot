@@ -213,6 +213,13 @@ def lint_file(
                 # ``from hpc_agent.<role> import <name>`` — subjects are
                 # directories, so neither is a subject crossing.
                 continue
+            if (own_subject, role, other) in WITHIN_ROLE_ALLOW:
+                # A SANCTIONED coordination reach: a subject whose whole job is
+                # to compose across subjects (the ``migrate`` remainder verb
+                # censuses ``monitor``, mints from ``memory``, costs via
+                # ``submit``, harvests via ``monitor``). Enumerated + ratcheting
+                # like ROLE_ROOT_ALLOW; a new reach earns an entry.
+                continue
             if (lineno, role, other) in seen:
                 continue
             seen.add((lineno, role, other))
@@ -451,6 +458,21 @@ def lint_directional(scan_root: Path, rule: DirectionalRule) -> list[tuple[Path,
 # the enumerated inventory of shared-helper compositions; it ratchets, so
 # a new root-file reach into a subject not listed here (and not declared
 # via ``composes=``) fails the lint until it earns an entry.
+# Sanctioned SUBJECT->SUBJECT coordination reaches (own_subject, role, other_subject).
+# A subject whose whole job is to compose across subjects earns entries here —
+# the ``migrate`` remainder verb (census<-monitor, derive<-memory, cost<-submit,
+# harvest<-monitor) and the kill<-recover batching reach. Ratchets like
+# ROLE_ROOT_ALLOW: a new cross-subject reach must be added deliberately.
+WITHIN_ROLE_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        ("migrate", "ops", "monitor"),
+        ("migrate", "ops", "memory"),
+        ("migrate", "ops", "submit"),
+        ("monitor", "ops", "recover"),
+    }
+)
+
+
 ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
     {
         ("aggregate_blocks.py", "ops", "aggregate"),
@@ -491,6 +513,7 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("submit_pipeline.py", "ops", "validate"),
         ("supersession.py", "ops", "monitor"),
         ("verify_canary.py", "ops", "aggregate"),
+        ("verify_canary.py", "ops", "monitor"),
         ("walk_submit_ambiguities.py", "ops", "submit"),
         ("write_run_sidecar.py", "ops", "monitor"),
     }

@@ -96,6 +96,38 @@ def test_find_predicate_slashed_include_uses_path():
     assert "-path ./sub/summary.json" in pred
 
 
+def test_find_predicate_slashed_include_matches_any_depth():
+    """B5 fire path (find twin): a path-shaped include must match at ANY nesting
+    depth, not only rel-rooted — so a per-task summary like
+    ``causal_tune_tree/metrics_table.csv`` living under ``task_0/`` is fetched.
+    The old predicate emitted only ``-path './<pat>'`` and silently excluded it."""
+    pred = _pull._find_filter_predicate(["causal_tune_tree/metrics_table.csv"], None)
+    # both the root-anchored AND the any-depth term are present, OR-joined.
+    assert "-path ./causal_tune_tree/metrics_table.csv" in pred
+    assert "-path './*/causal_tune_tree/metrics_table.csv'" in pred
+    assert " -o " in pred  # the two -path terms are alternatives
+
+
+def test_find_predicate_slashed_exclude_negates_any_depth():
+    """A slashed EXCLUDE denies the path at any depth too (both -path terms
+    negated + AND-joined), so the any-depth include twin can't be re-admitted."""
+    pred = _pull._find_filter_predicate(None, ["skip/big.csv"])
+    assert "! -path ./skip/big.csv" in pred
+    assert "! -path './*/skip/big.csv'" in pred
+
+
+def test_match_globs_slashed_pattern_matches_any_depth():
+    """B5 fire path (local count twin): the fallback's landed-set accounting must
+    count a path-shaped summary wherever it lands, matching the find/snippet twins."""
+    pat = "causal_tune_tree/metrics_table.csv"
+    # nested under a task dir -> matched at any depth.
+    assert _pull._match_globs(f"task_0/{pat}", [pat], None)
+    # still matched rel-rooted (the pre-existing behavior is preserved).
+    assert _pull._match_globs(pat, [pat], None)
+    # a sibling path is NOT matched.
+    assert not _pull._match_globs("task_0/other/metrics_table.csv", [pat], None)
+
+
 def test_find_predicate_exclude_negates():
     pred = _pull._find_filter_predicate(["*.json"], ["skip.json"])
     assert "! -name skip.json" in pred
@@ -134,9 +166,27 @@ def test_batch_remote_cmd_decodes_to_expected_names(tmp_path):
 
 def test_fallback_remote_cmd_filters_server_side_and_compresses():
     cmd = _pull._fallback_remote_cmd("/r/results", ["metrics.json"], None, "-z")
-    assert cmd.startswith("cd /r/results && find . -type f")
+    assert cmd.startswith('cd /r/results && T="$(mktemp)" && find . -type f')
     assert "-name metrics.json" in cmd
-    assert "-print0 | tar c -z --null --no-recursion -T - -f -" in cmd
+    # B6: enumeration lands in a temp file and short-circuits tar on a find
+    # failure (no `find | tar` pipe to swallow find's exit status).
+    assert '-print0 > "$T" &&' in cmd
+    assert 'tar c -z --null --no-recursion -T "$T" -f -' in cmd
+    assert '; rc=$?; rm -f "$T"; exit $rc' in cmd
+    assert "-print0 | tar" not in cmd  # the pipe that masked find failures is gone
+
+
+def test_fallback_remote_cmd_short_circuits_find_failure_before_tar():
+    """B6 fire path (structural): a failed enumeration must abort BEFORE tar
+    streams a truncated archive, and the command's exit status must be find's —
+    not the pipe's right-hand side. Assert the `&&` ordering + `exit $rc`."""
+    cmd = _pull._fallback_remote_cmd("/r", None, None, None)
+    find_at = cmd.index("find . -type f")
+    tar_at = cmd.index("tar c")
+    join_at = cmd.index('-print0 > "$T" &&')
+    # find ... > "$T" && tar ...  — the && sits between find's redirect and tar.
+    assert find_at < join_at < tar_at
+    assert cmd.rstrip().endswith("exit $rc")  # find's (or tar's) real status wins
 
 
 # --- local present manifest ---------------------------------------------------
@@ -401,7 +451,7 @@ def test_fallback_when_no_remote_manifest(tmp_path, capsys):
     assert result.files_pulled == 1  # only the include-matching file counted
     assert result.skipped_unchanged == 0  # no delta on the fallback
     # The fallback still filters server-side (find|tar), just without the delta.
-    assert record and record[0].startswith("cd /r && find . -type f")
+    assert record and record[0].startswith('cd /r && T="$(mktemp)" && find . -type f')
     assert "no delta" in capsys.readouterr().err
 
 
@@ -696,6 +746,74 @@ def test_integration_batch_cmd_pulls_exact_members(tmp_path):
     assert (dest / "a.json").read_text() == "content-a.json"
     assert (dest / "sub" / "b.json").read_text() == "content-sub/b.json"
     assert not (dest / "skip.csv").exists()  # not in the batch
+
+
+@_needs_posix_shell
+def test_integration_full_engine_pulls_nested_path_shaped_summary(tmp_path, monkeypatch):
+    """B5 fire path (real snippet): a path-shaped summary_artifact nested under
+    per-task dirs (the run-14 lgbm ``causal_tune_tree/metrics_table.csv`` shape)
+    must be enumerated by the REAL cluster-side manifest snippet + pulled. The
+    old root-anchored matcher returned it for NEITHER include variant, so the tar
+    pull silently excluded the very artifact it was told to fetch."""
+    remote = tmp_path / "remote"
+    # Each task ships its summary at <task>/causal_tune_tree/metrics_table.csv,
+    # plus a big CSV beside it that must NOT cross (the 1000x lever).
+    for task in ("task_0", "task_1"):
+        summary = remote / task / "causal_tune_tree" / "metrics_table.csv"
+        summary.parent.mkdir(parents=True, exist_ok=True)
+        summary.write_text(f"metric,{task}\n")
+        (remote / task / "trace.csv").write_text("x" * 100)
+    local = tmp_path / "local"
+
+    def fake_capture(ssh_target, remote_cmd, *, timeout, what):
+        return subprocess.run(
+            ["sh", "-c", remote_cmd], capture_output=True, text=True, timeout=timeout
+        )
+
+    def fake_transfer(*, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout):
+        _run_remote_to_local(remote_cmd, Path(local_path), codec_flag)
+        return _ok()
+
+    monkeypatch.setattr(_pull, "_ssh_capture", fake_capture)
+    monkeypatch.setattr(_pull, "_pull_transfer_with_retry", fake_transfer)
+
+    result = _pull.tar_ssh_pull(
+        ssh_target="u@h",
+        remote_path=str(remote),
+        local_path=local,
+        include_globs=["causal_tune_tree/metrics_table.csv"],
+    )
+    assert result.ok
+    assert result.files_pulled == 2  # both nested summaries crossed
+    assert (local / "task_0" / "causal_tune_tree" / "metrics_table.csv").is_file()
+    assert (local / "task_1" / "causal_tune_tree" / "metrics_table.csv").is_file()
+    assert not (local / "task_0" / "trace.csv").exists()  # the big CSV stayed put
+
+
+@_needs_posix_shell
+@pytest.mark.skipif(
+    hasattr(__import__("os"), "getuid") and __import__("os").getuid() == 0,
+    reason="root ignores directory permission bits, so find cannot be made to fail",
+)
+def test_integration_fallback_cmd_find_failure_is_not_masked(tmp_path):
+    """B6 fire path (real shell): a find that hits an unreadable subdir exits
+    non-zero; the fallback command must PROPAGATE that (exit $rc) instead of
+    letting a `find | tar` pipe report the truncated archive as success."""
+    import os
+
+    remote = tmp_path / "remote"
+    (remote / "ok.json").parent.mkdir(parents=True, exist_ok=True)
+    (remote / "ok.json").write_text("{}")
+    unreadable = remote / "locked"
+    unreadable.mkdir()
+    (unreadable / "hidden.json").write_text("{}")
+    os.chmod(unreadable, 0o000)  # find cannot descend -> non-zero exit
+    try:
+        cmd = _pull._fallback_remote_cmd(str(remote), None, None, None)
+        proc = subprocess.run(["sh", "-c", cmd], capture_output=True, timeout=30)
+        assert proc.returncode != 0  # the enumeration failure is surfaced, not swallowed
+    finally:
+        os.chmod(unreadable, 0o755)  # restore so tmp cleanup can recurse
 
 
 @_needs_posix_shell

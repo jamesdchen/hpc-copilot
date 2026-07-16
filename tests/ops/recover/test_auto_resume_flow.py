@@ -169,6 +169,68 @@ def test_empty_supplied_ids_falls_back_to_fetch(journal_home: Path, experiment: 
     assert outcome.task_ids == (0,)
 
 
+# ── explicit kill on record → escalate, never resurrect (B3) ──────────────
+
+
+def test_explicit_kill_never_auto_resumes_even_with_preempted_ids(
+    journal_home: Path, experiment: Path
+) -> None:
+    """A run with ``kill_requested_at`` stamped is a DELIBERATE kill, not a
+    preemption — even though the dispatcher's SIGTERM handler tagged its tasks
+    ``preempted`` (exit 143, byte-identical to a real preemption). The gate must
+    consult the control-plane discriminator and escalate, never resurrect."""
+    _seed_record(
+        experiment,
+        auto_resume_on_kill=True,
+        auto_resume_count=0,
+        kill_requested_at="2026-06-06T12:05:00+00:00",
+    )
+    rec = _Recorder()
+    fetch = _fetcher([0, 2])  # user scancel tagged these 'preempted'
+
+    outcome = maybe_auto_resume(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
+
+    assert outcome.action == "escalate"
+    assert "explicitly requested" in outcome.reason
+    assert rec.calls == []  # no resubmit put the killed run back on the cluster
+    assert _loaded_count(experiment) == 0
+
+
+def test_explicit_kill_short_circuits_before_the_cluster_fetch(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The kill discriminator is a cheap journal-only check — it must escalate
+    without the SSH round-trip, exactly like the opt-out short-circuit."""
+    _seed_record(experiment, kill_requested_at="2026-06-06T12:05:00+00:00")
+
+    def _boom(**kw: Any) -> dict[str, Any]:  # pragma: no cover - must not run
+        raise AssertionError("failures_fetcher called for a deliberately-killed run")
+
+    outcome = maybe_auto_resume(experiment, _RUN_ID, resubmit=_Recorder(), failures_fetcher=_boom)
+    assert outcome.action == "escalate"
+
+
+def test_explicit_kill_beats_even_pre_supplied_preempted_ids(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The lean path (monitor supplies fresh preempted ids off last_status) must
+    also be gated — the kill check precedes the supplied-ids branch."""
+    _seed_record(experiment, kill_requested_at="2026-06-06T12:05:00+00:00")
+    rec = _Recorder()
+
+    outcome = maybe_auto_resume(
+        experiment,
+        _RUN_ID,
+        preempted_task_ids=[0, 1],
+        resubmit=rec,
+        failures_fetcher=_fetcher([0, 1]),
+    )
+
+    assert outcome.action == "escalate"
+    assert "explicitly requested" in outcome.reason
+    assert rec.calls == []
+
+
 # ── opt-in ON + preempted + under cap → resume ────────────────────────────
 
 

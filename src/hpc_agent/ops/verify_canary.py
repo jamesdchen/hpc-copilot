@@ -1684,7 +1684,8 @@ def verify_canary(
     # non-zero (a TypeError whose traceback fell outside the fetched tail). The
     # dispatcher records the real exit code to ``<result_dir>/_runtime.json``
     # (dispatch.py ~:984/:1007); read it over SSH and fail the gate on a non-zero
-    # exit BEFORE record_canary_validated, so a failing cmd_sha is never cached.
+    # exit, so a failing canary returns ok=False and its cmd_sha never reaches the
+    # #249 TTL cache (minted by submit_and_verify AFTER the full gate — B7).
     #
     # ADDITIVE positive check, not a replacement: an ABSENT/unreadable
     # _runtime.json falls through to the unchanged logic (a preamble crash before
@@ -1777,19 +1778,14 @@ def verify_canary(
     # itself is fine; we just couldn't hash) — ``None`` when unavailable.
     metrics_fingerprint: str | None = tail_bundle["fingerprint_sha"] if fingerprint else None
 
-    # #249: record this cmd_sha as canary-validated so a re-submit of the SAME
-    # cmd_sha within HPC_CANARY_TTL_SEC skips the redundant canary. Best-effort,
-    # success-only — a failed canary never reaches here, so it is never cached.
-    _cmd_sha = str(_canary_sidecar.get("cmd_sha") or "")
-    if _cmd_sha:
-        from hpc_agent import __version__ as _pkg_version
-        from hpc_agent.state import canary_cache
-
-        canary_cache.record_canary_validated(
-            canary_cache.canary_cache_key(
-                cmd_sha=_cmd_sha, version=_pkg_version or "", cluster=record.cluster
-            )
-        )
+    # #249 TTL cache mint moved OUT of this per-canary success path (B7). This
+    # function verifies ONE canary; the gate fires a canary PAIR. Minting here
+    # stamped the cache on the FIRST canary's success — mid-gate — so a failed
+    # SECOND canary blocked the main once, then a retry inside the 4h TTL
+    # cache-skipped BOTH canaries on a cmd_sha that never fully validated. The
+    # mint now lives in submit_and_verify, reached only past BOTH canary verdicts
+    # (see ``_record_canary_gate_validated``), so the cache reflects the whole
+    # gate rather than a single verify.
 
     # #351-3: only claim "exit 0" when the exit code was ACTUALLY read as 0 from
     # _runtime.json. When the sidecar was absent/unreadable we never verified the

@@ -1137,7 +1137,7 @@ def _cluster_final_reduce(
     *,
     record: Any,
     out: Path,
-) -> tuple[dict[str, Any], list[int]]:
+) -> tuple[dict[str, Any], list[int], list[int]]:
     """Run the cross-wave reduce ON THE CLUSTER, pull only the aggregate (#254).
 
     Opt-in via ``HPC_CLUSTER_FINAL_REDUCE=1``. Invokes the combiner's ``--final``
@@ -1147,7 +1147,17 @@ def _cluster_final_reduce(
     combiner is stdlib-only, so the run's env activation is threaded through (a
     too-old login-node python3 would still fail) and the aggregate's
     ``aggregated_metrics`` is byte-for-byte what the local reduce produces.
-    Returns ``(aggregated_metrics, incomplete_waves)``.
+    Returns ``(aggregated_metrics, incomplete_waves, skipped_foreign_waves)``.
+
+    ``skipped_foreign_waves`` is the combiner's own count of ``_combiner/
+    wave_<N>.json`` partials it DROPPED because their embedded ``run_id`` names a
+    DIFFERENT run (F05): ``_combiner/`` is shared across run_ids at the same
+    ``remote_path`` (wave numbers are per-run 0-based, so a later run at the same
+    path clobbers this run's partials). A dropped wave's grid points are silently
+    absent from ``aggregated_metrics`` — a wrong, smaller table — so this list is
+    surfaced separately and escalated by the caller (B1: previously it was read
+    off the aggregate's provenance but never threaded up, so a cross-run clobber
+    persisted a partial number with ``escalation_reason=None``).
     """
     from hpc_agent.infra.clusters import remote_activation_for_sidecar
     from hpc_agent.infra.transport import run_final_reduce
@@ -1206,8 +1216,14 @@ def _cluster_final_reduce(
         ) from exc
 
     aggregated = data.get("aggregated_metrics") or {}
-    incomplete = (data.get("provenance") or {}).get("incomplete_waves") or []
-    return aggregated, [int(w) for w in incomplete]
+    provenance = data.get("provenance") or {}
+    incomplete = provenance.get("incomplete_waves") or []
+    skipped_foreign = provenance.get("skipped_foreign_waves") or []
+    return (
+        aggregated,
+        [int(w) for w in incomplete],
+        [int(w) for w in skipped_foreign],
+    )
 
 
 def _persist_local_aggregate(
@@ -2032,13 +2048,19 @@ def _aggregate_flow_impl(
     reduce_path = "local_combiner"
     aggregated = {}
     incomplete_waves: list[int] = []
+    # Waves the cluster ``--final`` DROPPED because their on-cluster partial
+    # carries a foreign run_id (a cross-run clobber at the shared ``_combiner/``
+    # — B1). Only the cluster-final path can observe this; the local reduce
+    # leaves it empty. Escalated below so a re-aggregate that silently shrank the
+    # table can never persist a wrong number with ``escalation_reason=None``.
+    foreign_clobbered_waves: list[int] = []
     used_cluster_final = False
     # "combiner deployed" = the run has waves (a wave_map): its partials are what
     # the cluster ``--final`` merges. The strict opt-in ("1") overrides the gate.
     attempt_cluster_final = kill_switch == "1" or (kill_switch != "0" and bool(wave_map_keys))
     if attempt_cluster_final:
         try:
-            aggregated, incomplete_waves = _cluster_final_reduce(
+            aggregated, incomplete_waves, foreign_clobbered_waves = _cluster_final_reduce(
                 experiment_dir, run_id, record=record, out=out
             )
             reduce_path = "cluster_final"
@@ -2239,6 +2261,17 @@ def _aggregate_flow_impl(
         escalation_parts.append(
             "partial_waves:metrics_unreadable_for_some_tasks:waves="
             + ",".join(str(w) for w in incomplete_waves)
+        )
+    if foreign_clobbered_waves:
+        # A cross-run clobber at the shared ``_combiner/`` (B1): the cluster
+        # final-reduce dropped these waves because their on-cluster partial was
+        # overwritten by ANOTHER run at the same remote_path, so this run's
+        # aggregate is silently missing their grid points. Distinct from
+        # ``partial_waves`` (unreadable metrics) — this is a different-run
+        # collision, not a per-task read miss.
+        escalation_parts.append(
+            "cross_run_wave_clobber:foreign_partials_dropped:waves="
+            + ",".join(str(w) for w in foreign_clobbered_waves)
         )
     if nonempty_failing:
         escalation_parts.append(

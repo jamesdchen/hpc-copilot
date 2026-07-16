@@ -167,7 +167,12 @@ _REMOTE_PULL_MANIFEST_SNIPPET = textwrap.dedent(
         def matches(pats, rel, name):
             for pat in pats:
                 if '/' in pat:
-                    if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(rel, pat + '/*'):
+                    # A slashed pattern matches the relpath at ANY depth (the
+                    # downstream rglob(summary_name) semantics), not only rooted
+                    # at the results root: pat itself, pat as a subtree prefix,
+                    # or pat nested under any parent dirs.
+                    if (fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(rel, pat + '/*')
+                            or fnmatch.fnmatch(rel, '*/' + pat)):
                         return True
                 elif fnmatch.fnmatch(name, pat):
                     return True
@@ -451,16 +456,26 @@ def _find_filter_predicate(
     """The ``find`` predicate honoring *include_globs* (allowlist) + *exclude*.
 
     A bare pattern filters the basename (``-name``); a slashed pattern the path
-    (``-path './<pat>'``). Every token is ``shlex.quote``-d so the login shell
-    passes the glob literally to ``find`` (find does its own globbing). Returns
-    the predicate string to splice after ``find . -type f``.
+    at ANY depth — both root-anchored (``-path './<pat>'``) and nested under any
+    parent (``-path './*/<pat>'``), so a path-shaped summary matches wherever it
+    lands under the results root (the downstream rglob semantics), not only at
+    the root. Every token is ``shlex.quote``-d so the login shell passes the glob
+    literally to ``find`` (find does its own globbing). Returns the predicate
+    string to splice after ``find . -type f``.
     """
 
     def _term(pat: str, negate: bool) -> str:
         pat = pat.rstrip("/")
-        flag = "-path" if "/" in pat else "-name"
-        arg = f"./{pat}" if flag == "-path" and not pat.startswith("./") else pat
-        return f"! {flag} {shlex.quote(arg)}" if negate else f"{flag} {shlex.quote(arg)}"
+        if "/" in pat:
+            core = pat[2:] if pat.startswith("./") else pat
+            rooted = shlex.quote(f"./{core}")
+            anydepth = shlex.quote(f"./*/{core}")
+            if negate:
+                # NOT(rooted OR any-depth) == NOT rooted AND NOT any-depth.
+                return f"! -path {rooted} ! -path {anydepth}"
+            return f"\\( -path {rooted} -o -path {anydepth} \\)"
+        arg = shlex.quote(pat)
+        return f"! -name {arg}" if negate else f"-name {arg}"
 
     parts: list[str] = []
     if include_globs:
@@ -653,7 +668,13 @@ def _match_globs(
         for pat in pats:
             pat = pat.rstrip("/")
             if "/" in pat:
-                if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(rel, pat + "/*"):
+                # Slashed pattern -> any-depth relpath match (twin of the remote
+                # snippet's matches() and _find_filter_predicate's -path terms).
+                if (
+                    fnmatch.fnmatch(rel, pat)
+                    or fnmatch.fnmatch(rel, pat + "/*")
+                    or fnmatch.fnmatch(rel, "*/" + pat)
+                ):
                     return True
             elif fnmatch.fnmatch(name, pat):
                 return True
@@ -750,14 +771,26 @@ def _fallback_remote_cmd(
 
     Still honors the include allowlist server-side (the 1000x lever) even when
     the delta manifest is unavailable — just without the delta/resume. ``find``
-    emits null-delimited names into ``tar c --null -T -`` (archive to stdout).
+    enumerates null-delimited names into a temp file that ``tar c --null -T``
+    consumes (archive to stdout).
+
+    The enumeration lands in a temp file rather than piping ``find | tar`` so a
+    failed enumeration cannot be masked: a pipe's exit status is the RIGHT side's
+    (login shells default ``pipefail`` off), so a find that hits a
+    permission-denied / stale-NFS subdir SKIPS that subtree, exits non-zero, yet
+    the pipe reads as success — a PARTIAL archive lands as ``ok=True`` and
+    finished tasks silently vanish from the aggregate. The ``&&`` short-circuit
+    makes a non-zero find abort BEFORE tar streams a truncated set, and
+    ``exit $rc`` propagates find's (or tar's) real status. Still one ssh
+    connection — one login node — like ``_batch_remote_cmd``.
     """
     q_rp = shlex.quote(remote_path)
     predicate = _find_filter_predicate(include_globs, exclude)
     codec = f" {codec_flag}" if codec_flag else ""
     return (
-        f"cd {q_rp} && find . -type f{predicate} -print0 | "
-        f"tar c{codec} --null --no-recursion -T - -f -"
+        f'cd {q_rp} && T="$(mktemp)" && '
+        f'find . -type f{predicate} -print0 > "$T" && '
+        f'tar c{codec} --null --no-recursion -T "$T" -f - ; rc=$?; rm -f "$T"; exit $rc'
     )
 
 

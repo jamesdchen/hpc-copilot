@@ -961,3 +961,76 @@ class TestCheckResultsIgnoresFrameworkArtifacts:
         (result_dir / "out.csv").write_text("v\n1\n")
         results = check_results(result_dir, total_tasks=1)
         assert 0 in results and results[0]["path"].endswith("out.csv")
+
+
+class TestDeclaredSummaryGate:
+    """B2: completion is keyed on the DECLARED summary artifact when present.
+
+    The dispatcher promotes the summary file LAST so a crash mid-promote leaves
+    the task obviously incomplete; the combiner requires the summary and excludes
+    a task missing it. The status reporter must agree — a crash that landed some
+    artifacts but not the summary must read INCOMPLETE (resubmittable), not a
+    false ``complete`` that blocks resubmit and drops the task from the aggregate.
+    """
+
+    def _tasks_data(self, *rdirs):
+        return {
+            "total_tasks": len(rdirs),
+            "tasks": {str(i): {"result_dir": str(rd)} for i, rd in enumerate(rdirs)},
+        }
+
+    def test_mid_promote_crash_is_incomplete_when_summary_declared(self, tmp_path):
+        rd = tmp_path / "task_0"
+        rd.mkdir()
+        # Some other artifact landed, but the declared summary did NOT (crash
+        # before the summary-last promote).
+        (rd / "partial_output.json").write_text('{"x": 1}')
+        data = self._tasks_data(rd)
+
+        # Any-file heuristic (no declared summary) — the pre-fix behaviour: the
+        # stray file falsely marks the task complete.
+        assert 0 in check_results_from_tasks(data)
+        # Declared summary gate: the task is correctly NOT complete.
+        assert check_results_from_tasks(data, summary_name="results_reduce.json") == {}
+
+    def test_present_summary_marks_complete(self, tmp_path):
+        rd = tmp_path / "task_0"
+        rd.mkdir()
+        (rd / "partial_output.json").write_text('{"x": 1}')
+        (rd / "results_reduce.json").write_text('{"acc": 0.9}')
+        data = self._tasks_data(rd)
+
+        out = check_results_from_tasks(data, summary_name="results_reduce.json")
+        assert 0 in out
+        assert out[0]["path"].endswith("results_reduce.json")
+
+    def test_zero_byte_summary_is_incomplete(self, tmp_path):
+        rd = tmp_path / "task_0"
+        rd.mkdir()
+        (rd / "results_reduce.json").write_text("")  # crash-truncated summary
+        data = self._tasks_data(rd)
+        assert check_results_from_tasks(data, summary_name="results_reduce.json") == {}
+
+    def test_undeclared_summary_keeps_any_file_heuristic(self, tmp_path):
+        rd = tmp_path / "task_0"
+        rd.mkdir()
+        (rd / "metrics.json").write_text('{"acc": 0.9}')
+        data = self._tasks_data(rd)
+        # summary_name None / blank → byte-for-byte the historical behaviour.
+        assert 0 in check_results_from_tasks(data)
+        assert 0 in check_results_from_tasks(data, summary_name=None)
+        assert 0 in check_results_from_tasks(data, summary_name="   ")
+
+    def test_path_shaped_summary_resolves_relative_to_result_dir(self, tmp_path):
+        rd = tmp_path / "task_0"
+        (rd / "sub").mkdir(parents=True)
+        (rd / "sub" / "metrics.json").write_text('{"acc": 0.9}')
+        data = self._tasks_data(rd)
+        out = check_results_from_tasks(data, summary_name="sub/metrics.json")
+        assert 0 in out
+        # A missing nested summary stays incomplete.
+        rd2 = tmp_path / "task_1"
+        rd2.mkdir()
+        (rd2 / "metrics.json").write_text('{"acc": 0.9}')
+        data2 = self._tasks_data(rd2)
+        assert check_results_from_tasks(data2, summary_name="sub/metrics.json") == {}
