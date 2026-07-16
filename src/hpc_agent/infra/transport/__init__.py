@@ -139,6 +139,7 @@ __all__ = [
     "DeployPayloadSummary",
     "deploy_payload_summary",
     "deploy_runtime",
+    "push_run_sidecar",
     "rsync_pull",
     "rsync_push",
     "run_combiner",
@@ -1129,6 +1130,34 @@ def _deploy_transfer(*, ssh_target: str, remote_path: str, items: list[_DeployIt
                 f"tar/ssh deploy to {ssh_target} failed (exit {result.returncode}): "
                 f"{(result.stderr or '').strip()[:300]}"
             )
+
+
+def push_run_sidecar(*, ssh_target: str, remote_path: str, run_id: str, content: str) -> None:
+    """Ship ONE run sidecar JSON to ``<remote_path>/.hpc/runs/<run_id>.json``.
+
+    The <1KB single-file write the double-canary's second probe needs (finding 7,
+    RANK 1): the first canary's sidecar reaches the cluster only because its mirror
+    rides the pre-rsync deploy, but ``fire_second_canary`` mints the ``-canary2``
+    sidecar AFTER deploy — with no transport, it never shipped, so every status
+    poll returned ``sidecar_not_found`` and the verifier spun the full 30-min
+    budget on a job that had COMPLETED in 97s. This gives that path its own leg:
+    base64-piped (mirrors :func:`_write_deploy_manifest`, so the JSON needs no
+    shell quoting), ``mkdir -p .hpc/runs`` first, one bounded ssh. RAISES on
+    failure (``OSError``/``TimeoutError``) — unlike the fail-open deploy manifest,
+    the caller MUST know the sidecar landed before the job runs, or the reporter
+    reads a missing file. ``run_id`` is filesystem-validated upstream; quoted
+    anyway.
+    """
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    root = shlex.quote(remote_path.rstrip("/"))
+    dst = shlex.quote(f".hpc/runs/{run_id}.json")
+    cmd = f"cd {root} && mkdir -p .hpc/runs && printf %s {shlex.quote(b64)} | base64 -d > {dst}"
+    _ssh_bounded(
+        ssh_target,
+        cmd,
+        timeout=SSH_TIMEOUT_SEC,
+        what=f"ship run sidecar {run_id!r} to {remote_path}",
+    )
 
 
 def _write_deploy_manifest(*, ssh_target: str, remote_path: str, content: str) -> None:

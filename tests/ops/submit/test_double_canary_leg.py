@@ -10,10 +10,30 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.fixture
+def ship_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Capture the second-canary sidecar SHIP (finding 7) instead of SSH-ing.
+
+    ``fire_second_canary`` ships the freshly-mirrored ``-canary2`` sidecar to the
+    cluster (``push_run_sidecar``) BEFORE the qsub, since Phase 1's rsync already
+    ran. Patch it at its transport home (``_fire_canary`` imports it lazily) so the
+    unit tests never touch a real host, and record each call's kwargs for the
+    finding-7 assertions.
+    """
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "hpc_agent.infra.transport.push_run_sidecar",
+        lambda **kw: calls.append(kw),
+    )
+    return calls
 
 
 def _spec() -> SubmitFlowSpec:
@@ -31,7 +51,9 @@ def _spec() -> SubmitFlowSpec:
     )
 
 
-def test_fire_second_canary_mirrors_sidecar_and_records(tmp_path: Path, monkeypatch) -> None:
+def test_fire_second_canary_mirrors_sidecar_and_records(
+    tmp_path: Path, monkeypatch, ship_calls: list[dict]
+) -> None:
     from hpc_agent.ops import submit_flow as sf
     from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
 
@@ -74,9 +96,19 @@ def test_fire_second_canary_mirrors_sidecar_and_records(tmp_path: Path, monkeypa
     assert recorded["run_id"] == "run-x-canary2"
     assert recorded["job_ids"] == ["777"]
     assert recorded["total_tasks"] == 1
+    # Finding 7: the -canary2 sidecar was SHIPPED (Phase 1's rsync already ran, so
+    # this leg must push it or the reporter reads a missing file and spins). One
+    # ship, to the right run id + remote path.
+    assert len(ship_calls) == 1
+    assert ship_calls[0]["run_id"] == "run-x-canary2"
+    assert ship_calls[0]["remote_path"] == "/remote"
+    assert ship_calls[0]["ssh_target"] == "user@h"
+    assert '"executor"' in ship_calls[0]["content"]  # the mirrored sidecar JSON
 
 
-def test_boundary_index_selects_named_task_kwargs(tmp_path: Path, monkeypatch) -> None:
+def test_boundary_index_selects_named_task_kwargs(
+    tmp_path: Path, monkeypatch, ship_calls: list[dict]
+) -> None:
     """A boundary-index canary dispatches the NAMED main task's frozen kwargs (§7.1).
 
     The Class-B heal re-verify samples the edge indices of a repaired range; the
@@ -114,7 +146,9 @@ def test_boundary_index_selects_named_task_kwargs(tmp_path: Path, monkeypatch) -
     assert sidecar["trial_params"] == [{"chunk": 3}]
 
 
-def test_default_canary_is_task0_byte_identical(tmp_path: Path, monkeypatch) -> None:
+def test_default_canary_is_task0_byte_identical(
+    tmp_path: Path, monkeypatch, ship_calls: list[dict]
+) -> None:
     """Omitting boundary_index keeps the historical task-0 canary (byte-identical)."""
     from hpc_agent.ops import submit_flow as sf
     from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
@@ -144,7 +178,9 @@ def test_default_canary_is_task0_byte_identical(tmp_path: Path, monkeypatch) -> 
     assert sidecar["trial_params"] == [{"chunk": 0}]  # task 0, exactly as before
 
 
-def test_canary_forces_digests_on_even_when_main_array_is_off(tmp_path: Path, monkeypatch) -> None:
+def test_canary_forces_digests_on_even_when_main_array_is_off(
+    tmp_path: Path, monkeypatch, ship_calls: list[dict]
+) -> None:
     """data-trace T3: the canary IS an identity run (canary-vs-local trace-diff),
     so it forces HPC_TRACE_DIGESTS=1 even when the main array's job_env carries
     the classifier's "0" (a large main array)."""
