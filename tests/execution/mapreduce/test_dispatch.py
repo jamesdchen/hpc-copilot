@@ -1443,7 +1443,9 @@ class TestRuntimeSidecarPeakRss:
         monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
         monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
 
-        dispatch.main()
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
 
         runtime = json.loads((result_root / "0" / "_runtime.json").read_text())
         assert "peak_rss_mb" in runtime
