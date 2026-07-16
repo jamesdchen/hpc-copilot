@@ -61,6 +61,7 @@ from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.infra.ssh_circuit import (
     OVERRIDE_ENV,
     circuit_state_path,
+    degradation_advice,
     effective_state,
     open_deadline,
 )
@@ -332,10 +333,14 @@ def _remediation_base(verdict: TriageVerdict, host: str, breaker: BreakerState) 
             f"the SSH circuit breaker for {host} is OPEN after "
             f"{breaker.consecutive_failures} consecutive connection failures — SSH "
             f"fails fast ON PURPOSE (ban-risk protection). Wait until "
-            f"{breaker.cooldown_until} for the automatic half-open probe, or — only "
-            f"if you know why the failures happened (e.g. a VPN flap you fixed) — "
-            f"override for this host with {OVERRIDE_ENV}={host}. Do not probe the "
-            f"host yourself meanwhile."
+            f"{breaker.cooldown_until} for the automatic half-open probe. If it keeps "
+            f"re-opening, a bare connect/echo is NOT proof the host is usable — a "
+            f"degraded module/conda preamble hangs while the connection succeeds "
+            f"(run-13 finding 10); prefer `host-retarget <sibling>` to a healthy "
+            f"login node of the same cluster. Override for this host with "
+            f"{OVERRIDE_ENV}={host} ONLY if you know why the failures happened (e.g. "
+            f"a VPN flap you fixed) AND the preamble itself verifies. Do not probe "
+            f"the host yourself meanwhile."
         )
     if verdict == "local_network_down":
         return (
@@ -356,7 +361,9 @@ def _remediation_base(verdict: TriageVerdict, host: str, breaker: BreakerState) 
         "at their border. A traceroute stalling at the cluster's edge discriminates "
         "border filtering from a dead host. Do NOT retry-storm (repeated probes are "
         "exactly what earns an IP ban); verify out-of-band (cluster status page, "
-        "operations mailing list) and wait."
+        "operations mailing list) and wait. If this login node stays dark, "
+        "`host-retarget <sibling>` moves an in-flight run to a healthy login node of "
+        "the same cluster without waiting on it."
     )
 
 
@@ -393,6 +400,15 @@ def _triage_host(
         tcp_ok, tcp_detail = _tcp_connect(host, SSH_PORT, spec.tcp_timeout_sec)
 
     verdict = _verdict(breaker=breaker, control_ok=control_ok, dns_ok=dns_ok, tcp_ok=tcp_ok)
+    remediation = _remediation(verdict, host, breaker)
+    # run-13 finding 10: a breaker that keeps re-opening while a cheap probe
+    # closes it is a DEGRADED preamble, not a transport fault — surface the
+    # host-retarget/settle-run remedy on top of the connectivity verdict. Read
+    # the raw doc (read-only, fail-open) since the wire BreakerState model does
+    # not carry the cycle counter.
+    advice = degradation_advice(host, _read_doc(circuit_state_path(host)), now=time.time())
+    if advice:
+        remediation += f" DEGRADATION: {advice}"
     return HostTriage(
         host=host,
         cluster=cluster,
@@ -402,7 +418,7 @@ def _triage_host(
         tcp_ok=tcp_ok,
         tcp_detail=tcp_detail,
         verdict=verdict,
-        remediation=_remediation(verdict, host, breaker),
+        remediation=remediation,
     )
 
 

@@ -65,16 +65,23 @@ if TYPE_CHECKING:
 __all__ = [
     "BASE_COOLDOWN_SEC",
     "CIRCUIT_THRESHOLD",
+    "DEGRADATION_CYCLE_THRESHOLD",
+    "INCIDENT_WINDOW_SEC",
     "MAX_COOLDOWN_SEC",
     "PROBE_CLAIM_TTL_SEC",
     "check_circuit",
     "circuit_state_path",
     "classify_connection_failure",
+    "degradation_advice",
+    "degradation_advice_for_host",
     "effective_state",
     "guarded_call",
+    "hanging_stage",
+    "is_preamble_degraded",
     "open_deadline",
     "record_connection_failure",
     "record_connection_success",
+    "sibling_clusters",
 ]
 
 #: Consecutive connection-level failures that open the circuit.
@@ -94,6 +101,39 @@ PROBE_CLAIM_TTL_SEC = 120.0
 #: Env var naming hosts whose OPEN circuit is explicitly bypassed
 #: (comma-separated). Per-host and explicit by design — no global kill switch.
 OVERRIDE_ENV = "HPC_SSH_CIRCUIT_OVERRIDE"
+
+#: Re-opens WITHIN one incident window that classify the host as PREAMBLE/NODE
+#: DEGRADED rather than transport-faulted (run-13 finding 10 + 10-addendum).
+#: The livelock signature: a cheap connection probe keeps CLOSING the circuit
+#: while the process-spawning ``module load … && source …/conda.sh`` preamble
+#: times out every real attempt (discovery2's degraded /apps mount) — so the
+#: breaker cycles open→(probe closes)→open forever. At this many opens inside
+#: :data:`INCIDENT_WINDOW_SEC` the classifier stops treating it as a transient
+#: transport blip and names the degradation + suggests ``host-retarget``. Two
+#: is deliberately early: it means the circuit has ALREADY re-opened after a
+#: close at least once — a VPN flap (which fails the probe too) never produces
+#: it, only the probe-OK/command-timeout split does.
+DEGRADATION_CYCLE_THRESHOLD = 2
+
+#: Opens farther apart than this belong to SEPARATE incidents, so the cycle
+#: counter (which a connection-level success deliberately does NOT reset, only
+#: this expiry does) starts fresh. Generous relative to the livelock's own
+#: cadence — each deceptive close wipes the cooldown back to
+#: :data:`BASE_COOLDOWN_SEC`, so the run-13 cycles were ~minutes apart — but far
+#: tighter than the days/weeks between genuinely unrelated opens.
+INCIDENT_WINDOW_SEC = 2 * MAX_COOLDOWN_SEC
+
+#: Substrings (matched case-insensitively against the timed-out command carried
+#: in ``last_failure.detail``) that NAME the hanging preamble stage. The wrapper
+#: ``TimeoutError`` message embeds the command
+#: (``ssh to … timed out after 60s: <cmd>``), so the stage that hung is
+#: recoverable by parsing it — no new plumbing. Ordered most-specific first.
+_PREAMBLE_STAGE_MARKERS: tuple[tuple[str, str], ...] = (
+    ("conda.sh", "the conda activation (`source …/conda.sh`)"),
+    ("conda activate", "the conda activation (`conda activate`)"),
+    ("module load", "the module subsystem (`module load`)"),
+    ("module purge", "the module subsystem (`module purge`)"),
+)
 
 # stderr markers that mean the CONNECTION itself failed — no TCP/SSH session
 # was established (or it was torn down at banner/kex time). Auth failures
@@ -169,6 +209,11 @@ def _fresh_doc(host: str) -> dict[str, Any]:
         "opened_at": None,
         "probe_claimed_at": None,
         "last_failure": None,
+        # run-13 finding 10: opens within one incident window. A connection-level
+        # success (the deceptive cheap probe) preserves this; only INCIDENT_WINDOW
+        # expiry resets it. >= DEGRADATION_CYCLE_THRESHOLD ⇒ preamble-degraded.
+        "reopen_cycles": 0,
+        "incident_started_at": None,
     }
 
 
@@ -223,6 +268,165 @@ def effective_state(
     return "open" if now < open_deadline(doc, now=now) else "half_open_eligible"
 
 
+# ── preamble / node degradation classification (run-13 finding 10) ───────────
+
+
+def _bump_cycle(doc: dict[str, Any], *, now: float) -> None:
+    """Increment the incident's open-cycle counter, resetting on window expiry.
+
+    Called on every transition INTO the open state (a fresh open or a half-open
+    re-open). The counter deliberately survives a connection-level success
+    (:func:`record_connection_success` carries it forward) — the run-13 livelock
+    is exactly a cheap probe closing the circuit between preamble timeouts, so
+    resetting on that success would erase the signal. Only the incident window
+    lapsing (a genuinely separate later incident) starts the count fresh.
+    """
+    prev = int(_float_or(doc.get("reopen_cycles"), 0))
+    started = doc.get("incident_started_at")
+    fresh_incident = (
+        prev <= 0 or started is None or (now - _float_or(started, now)) > INCIDENT_WINDOW_SEC
+    )
+    if fresh_incident:
+        doc["reopen_cycles"] = 1
+        doc["incident_started_at"] = now
+    else:
+        doc["reopen_cycles"] = prev + 1
+
+
+def hanging_stage(doc: dict[str, Any] | None) -> str | None:
+    """Name the timed-out preamble stage from ``last_failure.detail``, or ``None``.
+
+    The wrapper ``TimeoutError`` embeds the command it timed out on
+    (``ssh to … timed out after 60s: <cmd>``), so a degraded module/conda
+    preamble is recoverable by string-matching the recorded detail against
+    :data:`_PREAMBLE_STAGE_MARKERS`. ``None`` when no preamble marker survived
+    (the upstream ``remote._truncate`` caps the embedded command, so a very long
+    ``cd`` prefix can elide the marker — the caller falls back to a generic
+    "remote command preamble" phrasing).
+    """
+    if not isinstance(doc, dict):
+        return None
+    last = doc.get("last_failure")
+    detail = ""
+    if isinstance(last, dict):
+        detail = str(last.get("detail") or "")
+    blob = detail.lower()
+    for marker, stage in _PREAMBLE_STAGE_MARKERS:
+        if marker in blob:
+            return stage
+    return None
+
+
+def is_preamble_degraded(doc: dict[str, Any] | None, *, now: float) -> bool:
+    """True when *doc* shows the run-13 livelock: the circuit has re-opened
+    :data:`DEGRADATION_CYCLE_THRESHOLD`+ times inside one still-live incident
+    window. A stale counter from an OLD incident (its ``incident_started_at``
+    now beyond :data:`INCIDENT_WINDOW_SEC`) reads as NOT degraded — the host may
+    have recovered and no traffic has reset the file yet (the same read-seam
+    honesty as :func:`effective_state`)."""
+    if not isinstance(doc, dict):
+        return False
+    if int(_float_or(doc.get("reopen_cycles"), 0)) < DEGRADATION_CYCLE_THRESHOLD:
+        return False
+    started = doc.get("incident_started_at")
+    if started is None:
+        return False
+    return (now - _float_or(started, now)) <= INCIDENT_WINDOW_SEC
+
+
+# MIRROR: hpc_agent.ops.host_retarget::_cluster_scheduler_scratch pinned-by tests/infra/test_ssh_circuit.py::test_cluster_scheduler_scratch_lockstep_with_host_retarget  # noqa: E501
+def _cluster_scheduler_scratch(cfg: dict[str, Any]) -> tuple[str, str]:
+    """The ``(scheduler, scratch)`` pair from a raw ``clusters.yaml`` entry —
+    the failover-equivalence signature: a sibling login node must serve the
+    SAME scheduler + scratch, or it is a cluster MOVE, not a failover."""
+    return (
+        str(cfg.get("scheduler") or "").strip(),
+        str(cfg.get("scratch") or "").strip(),
+    )
+
+
+def sibling_clusters(host: str) -> list[str]:
+    """Cluster keys that are ``host-retarget`` siblings of *host*.
+
+    A sibling is any OTHER ``clusters.yaml`` entry whose ``(scheduler, scratch)``
+    matches the cluster(s) that resolve to *host* but whose login ``host``
+    differs — i.e. a healthy login node you can fail an in-flight run over to
+    without re-staging (``host-retarget`` keeps the same jobs/run_id/scratch).
+    Read-only and fail-open: any config error yields ``[]`` (→ the caller
+    suggests ``settle-run`` instead). The resolver itself is UNCHANGED — this
+    only NAMES candidates for the operator; no automatic rotation (deferred)."""
+    if not host:
+        return []
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        clusters = load_clusters_config()
+    except Exception:
+        return []
+    if not isinstance(clusters, dict):
+        return []
+    target_keys = {
+        name
+        for name, cfg in clusters.items()
+        if isinstance(cfg, dict) and str(cfg.get("host") or "").strip() == host
+    }
+    signatures = {
+        _cluster_scheduler_scratch(clusters[name])
+        for name in target_keys
+        if isinstance(clusters.get(name), dict)
+    }
+    if not signatures:
+        return []
+    sibs: set[str] = set()
+    for name, cfg in clusters.items():
+        if not isinstance(cfg, dict) or name in target_keys:
+            continue
+        other_host = str(cfg.get("host") or "").strip()
+        if other_host and other_host != host and _cluster_scheduler_scratch(cfg) in signatures:
+            sibs.add(str(name))
+    return sorted(sibs)
+
+
+def _retarget_suggestion(host: str) -> str:
+    """The mid-run remedy line: name real siblings, or fall back to settle-run."""
+    sibs = sibling_clusters(host)
+    if sibs:
+        joined = ", ".join(f"`host-retarget {s}`" for s in sibs)
+        return (
+            f"prefer failing over to a healthy sibling login node of the same "
+            f"cluster ({joined}) — same scheduler+scratch, jobs keep running"
+        )
+    return (
+        "no sibling login node shares this cluster's scheduler+scratch, so "
+        "`host-retarget` has no target — use `settle-run` with directed sacct "
+        "evidence to close the run out-of-preamble instead"
+    )
+
+
+def degradation_advice(host: str, doc: dict[str, Any] | None, *, now: float) -> str | None:
+    """The one-line degradation classification for *host*, or ``None`` if not
+    degraded. Names the hanging preamble stage, the cycle count, and the
+    ``host-retarget``/``settle-run`` remedy — the single string every surface
+    (the fail-fast envelope, the monitor tick, net-triage) appends."""
+    if not is_preamble_degraded(doc, now=now):
+        return None
+    cycles = int(_float_or((doc or {}).get("reopen_cycles"), 0))
+    stage = hanging_stage(doc) or "the remote command preamble"
+    return (
+        f"probe-OK but {stage} times out ({cycles} cycles) — likely node-local "
+        f"degradation (module subsystem / degraded mount), NOT a transport fault; "
+        f"a bare connect/echo 'verifies' nothing here. {_retarget_suggestion(host)}."
+    )
+
+
+def degradation_advice_for_host(host: str, *, now: float | None = None) -> str | None:
+    """:func:`degradation_advice` reading *host*'s breaker doc from disk — the
+    read-only entry point for consumers (monitor, net-triage) that hold only a
+    host, never the doc. Fail-open: an unreadable doc yields ``None``."""
+    now = time.time() if now is None else now
+    return degradation_advice(host, _read_doc(circuit_state_path(host)), now=now)
+
+
 def _open_error(
     host: str, doc: dict[str, Any], *, now: float, probe_in_flight: bool
 ) -> SshCircuitOpen:
@@ -233,11 +437,13 @@ def _open_error(
         detail = "a half-open probe is already in flight; failing fast until it resolves"
     else:
         detail = f"failing fast until {_iso(deadline)} (~{max(0.0, deadline - now):.0f}s)"
+    advice = degradation_advice(host, doc, now=now)
+    degradation = f" DEGRADATION: {advice}" if advice else ""
     err = SshCircuitOpen(
         f"ssh circuit for host '{host}' is OPEN after {failures} consecutive "
         f"connection-level failures (ban-risk protection: refusing to open more "
         f"connections that the cluster's intrusion filter would count); {detail}. "
-        f"Override for this host only with {OVERRIDE_ENV}={host}."
+        f"Override for this host only with {OVERRIDE_ENV}={host}.{degradation}"
     )
     # Structured context so consumers (harvest_on_terminal's bounded
     # wait-and-retry) never parse the message for the deadline.
@@ -336,6 +542,7 @@ def record_connection_failure(
     opened = reopened = False
     cooldown = BASE_COOLDOWN_SEC
     failures = 0
+    degradation = ""
     try:
         from hpc_agent.infra.io import advisory_flock, atomic_write_json
 
@@ -355,6 +562,7 @@ def record_connection_failure(
                     doc["consecutive_failures"] = (
                         int(_float_or(doc.get("consecutive_failures"), 0)) + 1
                     )
+                    _bump_cycle(doc, now=now)
                     reopened = True
             else:
                 failures = int(_float_or(doc.get("consecutive_failures"), 0)) + 1
@@ -365,9 +573,13 @@ def record_connection_failure(
                     doc["cooldown_sec"] = BASE_COOLDOWN_SEC
                     doc["probe_claimed_at"] = None
                     cooldown = BASE_COOLDOWN_SEC
+                    _bump_cycle(doc, now=now)
                     opened = True
             doc["last_failure"] = {"at": now, "detail": detail[:300]}
             failures = int(_float_or(doc.get("consecutive_failures"), 0))
+            if opened or reopened:
+                advice = degradation_advice(host, doc, now=now)
+                degradation = f" {advice}" if advice else ""
             atomic_write_json(path, doc)
     except OSError:
         return
@@ -376,7 +588,7 @@ def record_connection_failure(
         print(
             f"hpc-agent: ssh circuit for {host} {verb} after {failures} consecutive "
             f"connection failure(s) — failing fast for {cooldown:.0f}s to avoid an IP ban. "
-            f"Override with {OVERRIDE_ENV}={host}.",
+            f"Override with {OVERRIDE_ENV}={host}.{degradation}",
             file=sys.stderr,
             flush=True,
         )
@@ -408,7 +620,18 @@ def record_connection_success(ssh_target: str) -> None:
             if doc is None:
                 return
             was_open = doc.get("state") == "open"
-            atomic_write_json(path, _fresh_doc(host))
+            # Reset health, but CARRY the incident's open-cycle counter forward:
+            # this success may be the deceptive cheap probe that keeps closing the
+            # circuit between preamble timeouts (run-13 finding 10). A
+            # connection-level success cannot be told apart from a real
+            # full-command success at this seam, so it never resets the counter —
+            # only INCIDENT_WINDOW expiry (in _bump_cycle) does. A future
+            # command-class flag threaded through guarded_call could distinguish
+            # them and reset on a genuine command success (deferred).
+            fresh = _fresh_doc(host)
+            fresh["reopen_cycles"] = int(_float_or(doc.get("reopen_cycles"), 0))
+            fresh["incident_started_at"] = doc.get("incident_started_at")
+            atomic_write_json(path, fresh)
     except OSError:
         return
     if was_open:

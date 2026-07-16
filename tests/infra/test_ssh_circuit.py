@@ -475,6 +475,157 @@ class TestEffectiveState:
         assert ssh_circuit.open_deadline({"state": "open"}, now=50.0) == 50.0 + BASE_COOLDOWN_SEC
 
 
+HOST_CD = "cd /home/u/exp && module load conda && source /apps/conda/conda.sh && python run.py"
+
+
+def _preamble_timeout_detail() -> str:
+    """The shape guarded_call records for a wrapper TimeoutError: the ssh
+    message embeds the (truncated) command that hung — here the preamble."""
+    return f"ssh to {TARGET} timed out after 60s: {HOST_CD}"
+
+
+def _drive_one_livelock_cycle(clock: FakeClock, *, detail: str) -> None:
+    """Open the circuit on `detail` failures, let a cheap probe close it — one
+    full run-13 livelock cycle (open → deceptive connection-level close)."""
+    for _ in range(CIRCUIT_THRESHOLD):
+        record_connection_failure(TARGET, detail=detail, clock=clock)
+    clock.advance(BASE_COOLDOWN_SEC + 1)
+    check_circuit(TARGET, clock=clock)  # claim the half-open probe slot
+    record_connection_success(TARGET)  # the cheap probe closes the circuit
+
+
+class TestPreambleDegradation:
+    """run-13 finding 10/10-addendum: a cheap connection probe keeps CLOSING the
+    circuit while the module/conda preamble times out — the breaker livelocks.
+    The persisted cycle counter (which a connection-level success must NOT wipe)
+    is the signal that names the degradation and suggests host-retarget."""
+
+    def test_connection_success_preserves_the_reopen_cycle_counter(self):
+        """The deliverable pin: record_connection_success no longer wipes the
+        cycle counter (it used to `_fresh_doc` the whole thing away)."""
+        clock = FakeClock()
+        _drive_one_livelock_cycle(clock, detail=_preamble_timeout_detail())
+        doc = _state()
+        assert doc["state"] == "closed"  # the probe closed it
+        assert doc["consecutive_failures"] == 0  # health reset …
+        assert doc["reopen_cycles"] == 1  # … but the incident cycle survives
+
+    def test_two_cycles_classify_degradation_naming_the_preamble(self):
+        clock = FakeClock()
+        detail = _preamble_timeout_detail()
+        _drive_one_livelock_cycle(clock, detail=detail)  # cycle 1 → closed
+        for _ in range(CIRCUIT_THRESHOLD):  # cycle 2: preamble times out again
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        doc = _state()
+        assert doc["reopen_cycles"] == 2
+        assert ssh_circuit.is_preamble_degraded(doc, now=clock.now) is True
+        # The hanging stage is recovered from the recorded command.
+        assert ssh_circuit.hanging_stage(doc) == "the conda activation (`source …/conda.sh`)"
+        advice = ssh_circuit.degradation_advice(HOST, doc, now=clock.now)
+        assert advice is not None
+        assert "conda activation" in advice
+        assert "2 cycles" in advice
+        assert "node-local degradation" in advice
+
+    def test_module_load_stage_named_when_conda_marker_absent(self):
+        clock = FakeClock()
+        detail = f"ssh to {TARGET} timed out after 60s: cd /x && module load gcc && ./a.out"
+        _drive_one_livelock_cycle(clock, detail=detail)
+        for _ in range(CIRCUIT_THRESHOLD):
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        assert ssh_circuit.hanging_stage(_state()) == "the module subsystem (`module load`)"
+
+    def test_single_open_is_not_degraded(self):
+        """One open (a genuine transient blip that recovers) is below the
+        threshold — no false degradation classification."""
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)
+        doc = _state()
+        assert doc["reopen_cycles"] == 1
+        assert ssh_circuit.is_preamble_degraded(doc, now=clock.now) is False
+        assert ssh_circuit.degradation_advice(HOST, doc, now=clock.now) is None
+
+    def test_stale_incident_window_reads_not_degraded(self):
+        """A cycle counter from an OLD incident (window lapsed) is not a live
+        degradation — the host may have recovered with no traffic to reset the
+        file, the same read-seam honesty as effective_state."""
+        clock = FakeClock()
+        detail = _preamble_timeout_detail()
+        _drive_one_livelock_cycle(clock, detail=detail)
+        for _ in range(CIRCUIT_THRESHOLD):
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        doc = _state()
+        assert ssh_circuit.is_preamble_degraded(doc, now=clock.now) is True
+        # Far beyond the incident window: reads as not-degraded.
+        assert (
+            ssh_circuit.is_preamble_degraded(
+                doc, now=clock.now + ssh_circuit.INCIDENT_WINDOW_SEC + 1
+            )
+            is False
+        )
+
+    def test_open_error_message_carries_degradation_when_degraded(self):
+        clock = FakeClock()
+        detail = _preamble_timeout_detail()
+        _drive_one_livelock_cycle(clock, detail=detail)
+        for _ in range(CIRCUIT_THRESHOLD):  # cycle 2 → degraded + circuit open
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        with pytest.raises(SshCircuitOpen) as ei:
+            check_circuit(TARGET, clock=clock)
+        msg = str(ei.value)
+        assert "DEGRADATION" in msg
+        assert "conda activation" in msg
+
+    def test_fresh_incident_after_window_resets_cycle_count(self):
+        clock = FakeClock()
+        detail = _preamble_timeout_detail()
+        _drive_one_livelock_cycle(clock, detail=detail)  # cycle 1
+        for _ in range(CIRCUIT_THRESHOLD):  # cycle 2
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        assert _state()["reopen_cycles"] == 2
+        # Close, then a NEW open long after the window → fresh incident count.
+        clock.advance(BASE_COOLDOWN_SEC * 2 + 1)
+        check_circuit(TARGET, clock=clock)
+        record_connection_success(TARGET)
+        clock.advance(ssh_circuit.INCIDENT_WINDOW_SEC + 1)
+        _fail_n(clock, CIRCUIT_THRESHOLD)
+        assert _state()["reopen_cycles"] == 1
+
+    def test_sibling_clusters_named_when_config_has_a_match(self, monkeypatch):
+        from hpc_agent.infra import clusters as clusters_mod
+
+        cfg = {
+            "carc_disc2": {"host": HOST, "scheduler": "slurm", "scratch": "/scratch"},
+            "carc_disc1": {
+                "host": "discovery1.usc.edu",
+                "scheduler": "slurm",
+                "scratch": "/scratch",
+            },
+            "hoffman2": {"host": "h2.example", "scheduler": "sge", "scratch": "/u2"},
+        }
+        monkeypatch.setattr(clusters_mod, "load_clusters_config", lambda *a, **k: cfg)
+        assert ssh_circuit.sibling_clusters(HOST) == ["carc_disc1"]
+        clock = FakeClock()
+        detail = _preamble_timeout_detail()
+        _drive_one_livelock_cycle(clock, detail=detail)
+        for _ in range(CIRCUIT_THRESHOLD):
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        advice = ssh_circuit.degradation_advice(HOST, _state(), now=clock.now)
+        assert advice is not None and "host-retarget carc_disc1" in advice
+
+    def test_no_sibling_falls_back_to_settle_run(self, monkeypatch):
+        from hpc_agent.infra import clusters as clusters_mod
+
+        monkeypatch.setattr(clusters_mod, "load_clusters_config", lambda *a, **k: {})
+        clock = FakeClock()
+        detail = _preamble_timeout_detail()
+        _drive_one_livelock_cycle(clock, detail=detail)
+        for _ in range(CIRCUIT_THRESHOLD):
+            record_connection_failure(TARGET, detail=detail, clock=clock)
+        advice = ssh_circuit.degradation_advice(HOST, _state(), now=clock.now)
+        assert advice is not None and "settle-run" in advice
+
+
 def test_open_error_carries_structured_host_and_deadline():
     """The fail-fast error attaches ``host`` + ``deadline`` as structured
     attributes — consumers (``harvest_on_terminal``'s bounded wait-and-retry)
@@ -489,3 +640,25 @@ def test_open_error_carries_structured_host_and_deadline():
     bare = SshCircuitOpen("bare")
     assert bare.host == ""
     assert bare.deadline is None
+
+
+def test_cluster_scheduler_scratch_lockstep_with_host_retarget():
+    """The breaker's failover-equivalence signature stays in lock-step with
+    ``ops.host_retarget._cluster_scheduler_scratch`` (the MIRROR pin): both
+    must derive the identical ``(scheduler, scratch)`` pair from a raw
+    ``clusters.yaml`` entry, or sibling suggestions and the retarget gate
+    would disagree about what counts as a failover."""
+    from hpc_agent.ops.host_retarget import (
+        _cluster_scheduler_scratch as retarget_signature,
+    )
+
+    cases = [
+        {"scheduler": "slurm", "scratch": "/scratch1"},
+        {"scheduler": " sge ", "scratch": " /u/scratch "},
+        {"scheduler": None, "scratch": None},
+        {},
+        {"scheduler": "slurm"},
+        {"scratch": "/scratch1", "host": "x.usc.edu"},
+    ]
+    for cfg in cases:
+        assert ssh_circuit._cluster_scheduler_scratch(cfg) == retarget_signature(cfg)

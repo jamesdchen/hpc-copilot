@@ -177,6 +177,65 @@ def test_control_failure_outranks_open_breaker(probes: dict[str, Any]) -> None:
     assert out.hosts[0].breaker.state == "open"  # still surfaced as evidence
 
 
+# ─── run-13 finding 10: degraded-preamble livelock classification ────────────
+
+
+def _write_degraded_circuit(host: str = HOST, *, cycles: int = 2) -> None:
+    """A breaker doc carrying the run-13 livelock signal: it has re-opened
+    `cycles` times inside a live incident window while the module/conda preamble
+    times out (the deceptive cheap probe kept closing it)."""
+    path = circuit_state_path(host)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    doc: dict[str, Any] = {
+        "schema_version": 1,
+        "host": host,
+        "state": "open",
+        "consecutive_failures": 4,
+        "cooldown_sec": 300.0,
+        "opened_at": now,
+        "probe_claimed_at": None,
+        "last_failure": {
+            "at": now,
+            "detail": f"ssh to user@{host} timed out after 60s: "
+            "cd /x && module load conda && source /apps/conda/conda.sh && python run.py",
+        },
+        "reopen_cycles": cycles,
+        "incident_started_at": now,
+    }
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_breaker_open_remediation_carries_degradation_and_host_retarget(
+    probes: dict[str, Any],
+) -> None:
+    """A livelocking breaker (probe closes, preamble times out) yields the
+    breaker_open verdict AND the remediation names the degradation + the
+    host-retarget/settle-run remedy — not a bare-connect 'verification'."""
+    _write_degraded_circuit()
+    out = _one()
+    (h,) = out.hosts
+    assert h.verdict == "breaker_open_cooling"
+    assert "DEGRADATION" in h.remediation
+    assert "conda activation" in h.remediation
+    assert "2 cycles" in h.remediation
+    # The static breaker-open prose itself now steers to host-retarget and warns
+    # a bare connect/echo proves nothing on a degraded preamble.
+    assert "host-retarget" in h.remediation
+    assert "bare connect/echo" in h.remediation
+
+
+def test_breaker_open_without_degradation_has_no_degradation_note(
+    probes: dict[str, Any],
+) -> None:
+    """A single-open breaker (no livelock cycles) must NOT be mislabeled degraded."""
+    _write_circuit(HOST, failures=4)  # reopen_cycles absent → not degraded
+    out = _one()
+    (h,) = out.hosts
+    assert h.verdict == "breaker_open_cooling"
+    assert "DEGRADATION" not in h.remediation
+
+
 # ─── read-seam honesty: expired cooldown is NOT a stale OPEN ─────────────────
 
 

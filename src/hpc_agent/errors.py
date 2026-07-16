@@ -107,11 +107,19 @@ class SshCircuitOpen(HpcError):
     host: str = ""
     deadline: float | None = None
     remediation = (
-        "Wait for the cooldown deadline named in the message (a single probe "
-        "then re-checks the host), or verify the host is reachable out-of-band "
-        "and set HPC_SSH_CIRCUIT_OVERRIDE=<host> to explicitly bypass the "
-        "breaker for that host only. Inspect the recorded failures under "
-        "<journal home>/_ssh_circuit/<host>.json."
+        "Wait for the cooldown deadline named in the message — a single half-open "
+        "probe then re-checks the host. Do NOT 'verify reachability' with a bare "
+        "connect/echo: a cheap connection can SUCCEED while the module/conda "
+        "PREAMBLE that actually failed still hangs, and a degraded /apps mount "
+        "livelocks the breaker exactly that way (probe OK, command times out, "
+        "forever — run-13 finding 10). Verify with the SAME command class that "
+        "failed (run the run's `module load … && source …/conda.sh` preamble by "
+        "hand); if it hangs, prefer `hpc-agent host-retarget <sibling>` to fail "
+        "the in-flight run over to a healthy login node of the same cluster (same "
+        "scheduler+scratch, jobs keep running), or `settle-run` with directed "
+        "sacct evidence if no sibling exists. Set HPC_SSH_CIRCUIT_OVERRIDE=<host> "
+        "ONLY after the preamble itself verifies out-of-band. Inspect the recorded "
+        "failures (and their reopen_cycles) under <journal home>/_ssh_circuit/<host>.json."
     )
 
 

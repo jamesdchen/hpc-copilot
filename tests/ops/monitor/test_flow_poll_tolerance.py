@@ -242,6 +242,86 @@ def test_ssh_circuit_open_is_transient_survives_to_complete(
     assert harvested == ["complete"]
 
 
+def test_degraded_preamble_breaker_surfaces_host_retarget_on_the_tick(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run-13 finding 10: when the per-host breaker is livelocking on a degraded
+    module/conda preamble (a cheap probe keeps closing it), the monitor's
+    transient-fault tick must carry the classification + the host-retarget/
+    settle-run remedy — not just ride the breaker forever."""
+    import json
+    import time as _time
+
+    from hpc_agent.infra.ssh_circuit import circuit_state_path
+    from hpc_agent.ops.monitor.tick_log import _tick_log_path
+
+    _seed_record(experiment, ssh_target="user@dead.host")
+    # Seed a breaker doc for dead.host showing the degradation signal. The
+    # breaker (like production) is keyed on the wall clock, and the monitor
+    # reads the advice with the real time.time(), so the incident window must be
+    # anchored to real time — not the monitor's pinned virtual _now.
+    now = _time.time()
+    path = circuit_state_path("dead.host")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "host": "dead.host",
+                "state": "open",
+                "consecutive_failures": 4,
+                "cooldown_sec": 300.0,
+                "opened_at": now,
+                "probe_claimed_at": None,
+                "last_failure": {
+                    "at": now,
+                    "detail": "ssh to user@dead.host timed out after 60s: "
+                    "cd /x && module load conda && source /apps/conda/conda.sh && python run.py",
+                },
+                "reopen_cycles": 2,
+                "incident_started_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    breaker = errors.SshCircuitOpen("circuit open for dead.host")
+    breaker.host = "dead.host"
+    breaker.deadline = 0.0  # already past → the loop rides on
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "record_status",
+        _record_status_sequence(experiment, [breaker, _COMPLETE_STATUS]),
+    )
+    monkeypatch.setattr(monitor_flow_module, "_ingest_runtime_at_terminal", lambda *a, **k: 0)
+    monkeypatch.setattr(monitor_flow_module, "harvest_on_terminal", lambda *a, **k: None)
+
+    spec = MonitorFlowSpec(
+        run_id=_RUN_ID,
+        poll_interval_seconds=5,
+        wall_clock_budget_seconds=10_000,
+        auto_combine_waves=False,
+    )
+    result = monitor_flow(experiment, spec=spec, _sleep=lambda s: None, _now=lambda: 0.0)
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+
+    ticks = [
+        json.loads(line)
+        for line in _tick_log_path(experiment, _RUN_ID).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    degradation_notes = [
+        a["degradation"]
+        for t in ticks
+        for a in t.get("actions", [])
+        if isinstance(a, dict) and a.get("degradation")
+    ]
+    assert degradation_notes, "the degraded-preamble breaker tick carried no degradation note"
+    note = degradation_notes[0]
+    assert "conda activation" in note
+    assert "2 cycles" in note
+    assert "host-retarget" in note or "settle-run" in note
+
+
 def test_nonconsecutive_env_blips_reset_and_do_not_escalate(
     journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

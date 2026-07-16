@@ -923,8 +923,19 @@ def monitor_flow(
                         last_fingerprint = None
                         effective_interval = float(poll_interval_seconds)
                         over_budget = (_now() - started) >= wall_clock_budget_seconds
+                        # run-13 finding 10: an SshCircuitOpen that keeps re-opening
+                        # while a cheap probe closes it is a DEGRADED module/conda
+                        # preamble on this login node, not a transport fault — the
+                        # breaker would livelock forever. Surface the classification
+                        # (naming the hanging stage + the host-retarget/settle-run
+                        # remedy) on the transient-fault tick instead of riding it.
+                        degradation = None
+                        if isinstance(exc, errors.SshCircuitOpen):
+                            from hpc_agent.infra.ssh_circuit import degradation_advice_for_host
+
+                            degradation = degradation_advice_for_host(exc.host, now=time.time())
                         logging.getLogger(__name__).warning(
-                            "monitor_flow: transient ssh fault for run %s (tick %d): %s — %s",
+                            "monitor_flow: transient ssh fault for run %s (tick %d): %s — %s%s",
                             run_id,
                             state.ticks,
                             exc,
@@ -933,7 +944,14 @@ def monitor_flow(
                                 if over_budget
                                 else "waiting out the breaker cooldown, then retrying"
                             ),
+                            f" [DEGRADATION: {degradation}]" if degradation else "",
                         )
+                        poll_error_action: dict[str, Any] = {
+                            "kind": "poll_error",
+                            "error": str(exc),
+                        }
+                        if degradation:
+                            poll_error_action["degradation"] = degradation
                         _append_tick(
                             experiment_dir,
                             run_id,
@@ -943,7 +961,7 @@ def monitor_flow(
                                 "newly_failed": [],
                                 "newly_combined_waves": [],
                             },
-                            actions=[{"kind": "poll_error", "error": str(exc)}],
+                            actions=[poll_error_action],
                             lifecycle_state=LifecycleState.TIMEOUT if over_budget else "in_flight",
                             next_tick_seconds=None if over_budget else effective_interval,
                         )
