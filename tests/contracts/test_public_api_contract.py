@@ -96,7 +96,9 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         # non-breaking (no error_code change).
         "TRANSIENT_TRANSPORT_ERRORS",
         "TOLERANT_RECORD_READ_ERRORS",
+        "DETERMINISTIC_REPORTER_ERROR_CODES",
         "is_deterministic_env_failure",
+        "is_deterministic_reporter_failure",
         # ``from __future__ import annotations`` leaks ``annotations`` into
         # ``dir(module)``. Snapshotted verbatim so a future cleanup (e.g.
         # ``del annotations`` or dropping the future import) is a deliberate

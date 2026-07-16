@@ -1563,6 +1563,59 @@ def test_marker_scan_ssh_failure_does_not_yield_pass(
     assert out["failure_kind"] == "reporter_unreachable"
 
 
+def _rc2_sidecar_not_found() -> errors.RemoteCommandFailed:
+    """The finding-7 poll failure: reporter rc 2 with a DETERMINISTIC structured
+    ``sidecar_not_found`` code (a ``-canary2`` sidecar the deploy never shipped)."""
+    return errors.RemoteCommandFailed(
+        "status reporter failed (rc=2): sidecar_not_found: .hpc/runs/r1-canary.json",
+        returncode=2,
+        reporter_error_code="sidecar_not_found",
+    )
+
+
+def test_deterministic_reporter_sidecar_not_found_escalates_early(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 7: 3 consecutive ``sidecar_not_found`` polls (rc 2, a file that will
+    NEVER appear by waiting) escalate BEFORE the budget — NOT the old 1800s spin —
+    to a ``reporter_unreachable`` verdict that names the reporter code, the sidecar
+    path polled (derived from the recorded run id), and the sibling sidecars that
+    DID ship. The sibling-ls runs exactly once (on escalation, not per poll)."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)  # far under the 1800s deadline → escalation
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    ls_calls: list[dict] = []
+
+    def _fake_ls(**kw):
+        ls_calls.append(kw)
+        return ["r1-canary.json"]  # the FIRST canary shipped; -canary2 did not
+
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=_rc2_sidecar_not_found(),
+        ),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_list_run_sidecars", side_effect=_fake_ls),
+        # The env-class marker scan must NOT run for a reporter-class escalation.
+        mock.patch("hpc_agent.infra.cluster_status.ssh_marker_scan") as m_scan,
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is False
+    assert out["failure_kind"] == "reporter_unreachable"
+    assert "sidecar_not_found" in out["details"]
+    assert ".hpc/runs/r1-canary.json" in out["details"]  # the polled path, disclosed
+    assert "r1-canary.json" in out["details"]  # the sibling that shipped
+    assert "3 consecutive" in out["details"]
+    assert len(ls_calls) == 1  # escalated on the 3rd poll, ls ran once
+    m_scan.assert_not_called()
+
+
 def test_transient_polls_ride_budget_not_early_failed(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

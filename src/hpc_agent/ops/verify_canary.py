@@ -104,22 +104,35 @@ _WATCHDOG_STAMP_FLOOR_SEC = 10.0
 
 
 def _classify_poll_failure(exc: BaseException) -> str:
-    """Classify a poll-loop exception as ``"deterministic_env"`` or ``"transient"``.
+    """Classify a poll-loop exception as deterministic (escalate) or transient.
 
-    A :class:`errors.RemoteCommandFailed` whose remote ``returncode`` is 126
-    ("not executable") or 127 ("command not found") is the broken-env signature:
-    the SSH connection SUCCEEDED and the remote command deterministically failed
-    because the run's ``python`` / conda env is absent or wrong. Waiting will
-    never heal it, so the canary loop escalates fast on a run of these
-    (:data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL`). EVERYTHING else — an
-    :class:`OSError`/``TimeoutError`` transport blip, an
-    :class:`~hpc_agent.errors.SshUnreachable`, or a ``RemoteCommandFailed`` with
-    any other returncode — is ``"transient"`` and rides the wait budget (that
-    class belongs to the connection breaker). The returncode is read off the
-    exception attribute, never string-parsed from the message.
+    Returns one of three literals:
+
+    * ``"deterministic_env"`` — a :class:`errors.RemoteCommandFailed` whose remote
+      ``returncode`` is 126 ("not executable") or 127 ("command not found"): the
+      SSH connection SUCCEEDED and the remote command deterministically failed
+      because the run's ``python`` / conda env is absent or wrong.
+    * ``"deterministic_reporter"`` — the connection SUCCEEDED and the on-cluster
+      status reporter returned a STRUCTURED deterministic error
+      (:data:`errors.DETERMINISTIC_REPORTER_ERROR_CODES`: a run sidecar that was
+      never shipped / is unparseable, or a missing ``tasks.py``). Finding 7's
+      ~30-min false-negative spin: a ``-canary2`` sidecar the deploy never pushed
+      answered EVERY poll ``sidecar_not_found`` at rc 2 — previously "transient",
+      polled to the full budget against a file that will NEVER appear.
+
+    Both deterministic classes will never heal by waiting, so the canary loop
+    escalates fast on a run of them (:data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL`).
+    EVERYTHING else — an :class:`OSError`/``TimeoutError`` transport blip, an
+    :class:`~hpc_agent.errors.SshUnreachable`, an open breaker, or a
+    ``RemoteCommandFailed`` with any other returncode and no deterministic
+    reporter code — is ``"transient"`` and rides the wait budget (that class
+    belongs to the connection breaker). The returncode / reporter code are read
+    off the exception attributes, never string-parsed from the message.
     """
     if errors.is_deterministic_env_failure(exc):
         return "deterministic_env"
+    if errors.is_deterministic_reporter_failure(exc):
+        return "deterministic_reporter"
     return "transient"
 
 
@@ -197,6 +210,57 @@ def _canary_failed_envelope(
             "signature). Fix the cluster env (hpc-agent importable in the run's "
             "conda env) and inspect the per-task cluster log for the underlying "
             "error before submitting the main array."
+        ),
+        "stderr_tail": "",
+        "metrics_fingerprint": None,
+        "failure_features": _failure_features("", None),
+    }
+
+
+def _deterministic_reporter_envelope(
+    canary_run_id: str,
+    *,
+    reporter_code: str,
+    remote_path: str,
+    ssh_target: str,
+    consecutive: int,
+) -> dict[str, Any]:
+    """Build the escalated verdict for a DETERMINISTIC reporter fault (finding 7).
+
+    Reached when :data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL` consecutive polls
+    returned the SAME structured reporter error
+    (:data:`errors.DETERMINISTIC_REPORTER_ERROR_CODES` — a run sidecar the deploy
+    never shipped, a torn one, a missing ``tasks.py``): a file condition that will
+    NEVER appear by waiting, so escalate now instead of riding the 30-min budget.
+
+    The verdict DISCLOSES which sidecar path the reporter polled — derived from
+    the SAME recorded identity the submit wrote (``.hpc/runs/<run_id>.json``, the
+    one-definition rule), never re-derived — and which sibling sidecars actually
+    shipped remotely (a best-effort plain-``sh`` ``ls``), so a
+    ``sidecar_not_found`` on ``<run>-canary2`` reads "polled ``…canary2.json``;
+    present: ``…canary.json``" — the never-shipped-sidecar bug named at a glance
+    rather than a bland ``reporter_unreachable`` after a burned budget.
+    """
+    from hpc_agent.infra.cluster_status import ssh_list_run_sidecars
+
+    polled = f".hpc/runs/{canary_run_id}.json"
+    siblings = ssh_list_run_sidecars(ssh_target=ssh_target, remote_path=remote_path)
+    present = ", ".join(siblings) if siblings else "(none)"
+    return {
+        "ok": False,
+        "failure_kind": "reporter_unreachable",
+        "details": (
+            f"canary {canary_run_id!r}: the cluster-side status reporter returned "
+            f"a DETERMINISTIC error ({reporter_code!r}) on {consecutive} "
+            f"consecutive polls — a file/manifest condition that will NEVER heal by "
+            f"waiting, so the canary was escalated immediately instead of riding the "
+            f"full wait budget. The reporter polled {polled!r} (derived from the run "
+            f"id the submit recorded); sidecars present under .hpc/runs/ on the "
+            f"cluster: [{present}]. If the polled name is missing but a sibling "
+            f"(e.g. the first ``-canary``) is present, the canary's sidecar was "
+            f"minted locally but never SHIPPED to the cluster — re-run the submit so "
+            f"every canary sidecar is deployed before its job runs. The canary "
+            f"CANNOT be trusted as passed."
         ),
         "stderr_tail": "",
         "metrics_fingerprint": None,
@@ -904,7 +968,17 @@ def verify_canary(
             last_poll_error = exc
             failure_class = _classify_poll_failure(exc)
             rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
-            if failure_class == "deterministic_env":
+            reporter_code = (
+                exc.reporter_error_code if isinstance(exc, errors.RemoteCommandFailed) else None
+            )
+            # BOTH deterministic classes (broken env rc 126/127 AND a structured
+            # deterministic reporter error — a never-shipped / torn sidecar, finding
+            # 7) share ONE consecutive counter and the ONE escalation threshold: a
+            # file/env condition that fails every poll identically will never heal
+            # by waiting, so escalate fast rather than ride the full budget. A
+            # transient poll resets the counter (that class belongs to the breaker).
+            deterministic = failure_class in ("deterministic_env", "deterministic_reporter")
+            if deterministic:
                 consecutive_env_polls += 1
             else:
                 consecutive_env_polls = 0
@@ -914,15 +988,27 @@ def verify_canary(
             stamp_poll_health(
                 canary_run_id,
                 error_class=failure_class,
-                consecutive=(consecutive_env_polls if failure_class == "deterministic_env" else 1),
+                consecutive=(consecutive_env_polls if deterministic else 1),
                 returncode=rc,
                 experiment_dir=experiment_dir,
             )
             poll_health_dirty = True
-            if (
-                failure_class == "deterministic_env"
-                and consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL
-            ):
+            if deterministic and consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL:
+                # A deterministic reporter fault (finding 7: a ``-canary2`` sidecar
+                # that was never pushed answers EVERY poll ``sidecar_not_found``)
+                # gets its OWN escalated verdict that names the reporter code, the
+                # sidecar path it polled (derived from the recorded run id — the
+                # one-definition rule), and which sibling sidecars actually shipped
+                # — so the never-shipped-sidecar bug is legible at a glance instead
+                # of a bland reporter_unreachable after a burned budget.
+                if failure_class == "deterministic_reporter" and reporter_code is not None:
+                    return _deterministic_reporter_envelope(
+                        canary_run_id,
+                        reporter_code=reporter_code,
+                        remote_path=record.remote_path,
+                        ssh_target=resolve_ssh_target(record),
+                        consecutive=consecutive_env_polls,
+                    )
                 # A broken run env fails every poll the same way and will NEVER
                 # heal by waiting — escalate now instead of riding the full budget.
                 # Read the env-independent .hpc_failed markers with plain sh (it

@@ -41,7 +41,9 @@ __all__ = [
     "ModelEndpointError",
     "TRANSIENT_TRANSPORT_ERRORS",
     "TOLERANT_RECORD_READ_ERRORS",
+    "DETERMINISTIC_REPORTER_ERROR_CODES",
     "is_deterministic_env_failure",
+    "is_deterministic_reporter_failure",
 ]
 
 
@@ -236,6 +238,7 @@ class RemoteCommandFailed(HpcError):
         *,
         remediation: str | None = None,
         returncode: int | None = None,
+        reporter_error_code: str | None = None,
     ) -> None:
         # Carry the remote command's exit code as a first-class attribute so a
         # caller can split a DETERMINISTIC broken-env failure (rc 126 "not
@@ -247,6 +250,18 @@ class RemoteCommandFailed(HpcError):
         # legacy call site that predates this kwarg).
         super().__init__(message, remediation=remediation)
         self.returncode = returncode
+        # The cluster-side status reporter's STRUCTURED error code (its
+        # ``errors: [{code, detail}]`` envelope — ``sidecar_not_found`` /
+        # ``sidecar_parse_error`` / ``tasks_py_not_found`` / …), lifted first-class
+        # off the reporter's stdout so a poll loop can escalate a DETERMINISTIC
+        # reporter fault (a file/env condition that never heals by waiting — a
+        # sidecar that was never shipped, an unparseable one) FAST instead of
+        # riding the whole 30-min wait budget, again without string-parsing the
+        # message (see :func:`is_deterministic_reporter_failure` and
+        # ``ops.verify_canary._classify_poll_failure``). All reporter failures exit
+        # rc 2, so the code — not the rc — is the discriminator. ``None`` when the
+        # failure carried no structured reporter envelope (a plain transport rc).
+        self.reporter_error_code = reporter_error_code
 
 
 class ConfigInvalid(HpcError):
@@ -833,6 +848,45 @@ def is_deterministic_env_failure(exc: BaseException) -> bool:
     ``ops.verify_canary`` poll loops each consumed as a hand-copied twin.
     """
     return isinstance(exc, RemoteCommandFailed) and getattr(exc, "returncode", None) in (126, 127)
+
+
+#: The cluster-side status reporter's structured error codes that are
+#: DETERMINISTIC — a file/manifest condition that will NEVER heal by polling
+#: again, so a canary/monitor wait loop must escalate on a short run of them
+#: rather than ride the whole wall-clock budget (finding 7's ~30-min
+#: false-negative spin: a ``-canary2`` sidecar that was never shipped answered
+#: EVERY poll ``sidecar_not_found`` at rc 2, classified "transient", polled to
+#: deadline). These name a missing/torn sidecar or a missing ``tasks.py`` — none
+#: of which a retry fixes. Reporter codes NOT in this set (e.g. a transient
+#: ``synthetic_dict_error`` from a mid-write read) stay on the budget. Kept in
+#: lock-step with ``execution.mapreduce.reduce.status``'s ``_emit_err`` codes.
+DETERMINISTIC_REPORTER_ERROR_CODES: frozenset[str] = frozenset(
+    {"sidecar_not_found", "sidecar_parse_error", "tasks_py_not_found"}
+)
+
+
+def is_deterministic_reporter_failure(exc: BaseException) -> bool:
+    """True when *exc* is a DETERMINISTIC cluster-reporter fault that never heals.
+
+    The SSH connection SUCCEEDED and the on-cluster status reporter returned a
+    STRUCTURED error (its ``errors: [{code, detail}]`` envelope, exit rc 2) whose
+    ``code`` is in :data:`DETERMINISTIC_REPORTER_ERROR_CODES` — a run sidecar that
+    was never shipped / is unparseable, or a missing ``tasks.py``. Every identical
+    poll fails identically, so the wait loop escalates FAST (finding 7) instead of
+    spinning the full budget against a file that will never appear. The reporter
+    code is read off the exception attribute
+    (:attr:`RemoteCommandFailed.reporter_error_code`), never string-parsed from
+    the message — the one-definition twin of :func:`is_deterministic_env_failure`
+    for the reporter-envelope class (which keys on rc 126/127).
+
+    EVERYTHING else — a plain ``RemoteCommandFailed`` with no reporter code, a
+    reporter code outside the deterministic set, a dropped connection, an open
+    breaker — is transient and rides the budget (the breaker's domain).
+    """
+    return (
+        isinstance(exc, RemoteCommandFailed)
+        and getattr(exc, "reporter_error_code", None) in DETERMINISTIC_REPORTER_ERROR_CODES
+    )
 
 
 def _registry_remediation_with_placeholders(kind: str, placeholders: dict[str, str]) -> str:
