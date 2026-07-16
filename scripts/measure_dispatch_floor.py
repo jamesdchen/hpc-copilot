@@ -133,6 +133,7 @@ def time_subprocess(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     return time.perf_counter() - start
@@ -320,6 +321,7 @@ def git_state(repo_root: Path) -> dict[str, Any]:
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 check=False,
                 timeout=15,
             )

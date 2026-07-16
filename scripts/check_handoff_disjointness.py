@@ -323,6 +323,7 @@ def git_worktree_files(repo_root: Path) -> list[str]:
         ["git", "-C", str(repo_root), "status", "--porcelain", "-z"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if out.returncode != 0:

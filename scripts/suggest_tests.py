@@ -110,6 +110,7 @@ def changed_files(ref: str = "HEAD") -> list[Path]:
         cwd=REPO,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     ).stdout
     return [Path(line) for line in out.splitlines() if line.strip()]
