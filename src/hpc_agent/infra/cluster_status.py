@@ -28,11 +28,53 @@ if TYPE_CHECKING:
     from hpc_agent.infra.backends import HPCBackend
 
 __all__ = [
+    "rows_observed_from_report",
     "ssh_status_report",
     "ssh_batch_scheduler_states",
     "ssh_marker_scan",
     "ssh_list_run_sidecars",
 ]
+
+
+def rows_observed_from_report(
+    report: dict,
+) -> tuple[set[int], dict[int, int | None], bool]:
+    """Parse the reporter's ``rows_observed`` surface from ONE status report (F3).
+
+    Returns ``(complete_ids, rows_by_task, emits_rows_observed)``:
+
+    * ``complete_ids`` — 0-based task ids the report marks ``status == "complete"``.
+      Against a ``min_rows=0`` report this is the LENIENT complete set (a
+      header-only CSV still counts complete).
+    * ``rows_by_task`` — ``{tid: rows_observed}`` for each complete task. The
+      value is ``None`` for a non-CSV complete (no data-row count applies — it
+      passes any ``min_rows`` gate, mirroring the reporter's CSV-only demotion).
+    * ``emits_rows_observed`` — ``True`` when the report came from a reporter new
+      enough to carry the per-task field (top-level ``rows_observed_emitted``
+      marker). ``False`` ⇒ version skew: the caller must fall back to a second,
+      STRICT reporter call rather than read the missing field as zero rows.
+
+    A SEVERED single report never reaches this parser: :func:`ssh_status_report`
+    RAISES on a rc-0 read with no positive-evidence ack, so an UNKNOWN transport
+    is surfaced as an exception (UNKNOWN for BOTH row sets) — never parsed here
+    into ``rows_observed=0`` → every task insufficient (enforcement row: severed
+    single-report reads UNKNOWN for both row sets).
+    """
+    emits = bool(report.get("rows_observed_emitted"))
+    complete_ids: set[int] = set()
+    rows_by_task: dict[int, int | None] = {}
+    for tid_str, entry in (report.get("tasks") or {}).items():
+        if not (isinstance(entry, dict) and entry.get("status") == "complete"):
+            continue
+        try:
+            tid = int(tid_str)
+        except (TypeError, ValueError):
+            continue
+        complete_ids.add(tid)
+        observed = entry.get("rows_observed")
+        rows_by_task[tid] = int(observed) if isinstance(observed, int) else None
+    return complete_ids, rows_by_task, emits
+
 
 # Pin the reporter to the *activated env's* interpreter. A CARC ``module load
 # python/X`` (or an Lmod auto-reload) hijacks a bare ``python`` on PATH even

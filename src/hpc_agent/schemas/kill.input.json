@@ -17,9 +17,22 @@
       "type": "string"
     },
     "scheduler": {
-      "description": "Backend/scheduler name — needed to query the run's alive job IDs and (when the seam grows one) to build the cancel command.",
+      "description": "Backend/scheduler name — needed to query the run's alive job IDs and to build the cancel command dispatched through the backend seam.",
       "title": "Scheduler",
       "type": "string"
+    },
+    "task_range": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional scheduler array-index expression ('4,8,13-15', the same grammar as the submit task_range) scoping the kill to those array indices — a PARTIAL, range-scoped cancel that leaves the run in flight (SGE 'qdel <id> -t <range>', SLURM 'scancel <id>_[<range>]'). Omitted = whole-run kill.",
+      "title": "Task Range"
     }
   }
 }

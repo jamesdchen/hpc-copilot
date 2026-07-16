@@ -7,9 +7,16 @@ honest "N requested, N confirmed gone" count. Request → journaled → verified
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+import re
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from hpc_agent._wire._shared import RunIdStrict, Scheduler, SchedulerJobId
+
+# The submit-side task_range grammar: a comma list of ``n`` / ``n-m`` / ``n-m:s``
+# tokens (``"4,8,13-15"``). Cancel reuses this SAME vocabulary so submit and
+# cancel speak one range language (SPEC §2, Δ4).
+_TASK_RANGE_RE = re.compile(r"^\d+(?:-\d+(?::\d+)?)?(?:,\d+(?:-\d+(?::\d+)?)?)*$")
 
 
 class KillSpec(BaseModel):
@@ -21,9 +28,32 @@ class KillSpec(BaseModel):
     scheduler: Scheduler = Field(
         description=(
             "Backend/scheduler name — needed to query the run's alive job IDs and "
-            "(when the seam grows one) to build the cancel command."
+            "to build the cancel command dispatched through the backend seam."
         ),
     )
+    task_range: str | None = Field(
+        default=None,
+        description=(
+            "Optional scheduler array-index expression ('4,8,13-15', the same "
+            "grammar as the submit task_range) scoping the kill to those array "
+            "indices — a PARTIAL, range-scoped cancel that leaves the run "
+            "in flight (SGE 'qdel <id> -t <range>', SLURM 'scancel <id>_[<range>]'). "
+            "Omitted = whole-run kill."
+        ),
+    )
+
+    @field_validator("task_range")
+    @classmethod
+    def _validate_task_range(cls, v: str | None) -> str | None:
+        """Refuse a task_range that is not a well-formed array-index expression."""
+        if v is None:
+            return v
+        if not _TASK_RANGE_RE.match(v):
+            raise ValueError(
+                "task_range must be a scheduler array expression like '4,8,13-15' "
+                f"(a comma list of n / n-m / n-m:step), got {v!r}"
+            )
+        return v
 
 
 class KillResult(BaseModel):

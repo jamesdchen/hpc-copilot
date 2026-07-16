@@ -185,6 +185,17 @@ _ANNOUNCE_DIRNAME = "announce"
 _ANNOUNCE_STATE_COMPLETE = "complete"
 _ANNOUNCE_STATE_FAILED = "failed"
 
+# Run-level terminal WAKE marker (P3, docs/design/crash-only-monitoring.md). A
+# single well-known filename touched under ``.hpc/announce/<run_id>/`` whenever a
+# task announces a terminal state, so the client-side per-host census WAITER can
+# short-circuit its remote poll loop on ONE ``test -f`` rather than diffing the
+# whole marker inventory. DATA ONLY: it WAKES the poller, it NEVER settles the run
+# — the control plane always re-reads the per-task markers (the truth) after a
+# wake, so a premature touch just triggers a re-census. Kept in LOCK-STEP with the
+# control-plane reader ``hpc_agent.ops.monitor.announce.ANNOUNCE_RUN_TERMINAL``
+# (the standalone-boundary carve-out); pinned equal by test_announce.py.
+_ANNOUNCE_RUN_TERMINAL = ".run_terminal"
+
 
 def _write_announcement(announce_root, run_id, task_id, *, state, exit_code, finished_at):
     """Best-effort per-task terminal marker under ``<announce_root>/<run_id>/``.
@@ -219,6 +230,31 @@ def _write_announcement(announce_root, run_id, task_id, *, state, exit_code, fin
     except Exception as exc:  # noqa: BLE001 — announcement is best-effort
         print(
             f"[dispatch] WARN: failed to write terminal announcement for task {task_id}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _touch_run_terminal_marker(announce_root, run_id):
+    """Best-effort run-level terminal WAKE marker (P3, DATA only).
+
+    Writes ``<announce_root>/<run_id>/.run_terminal`` atomically (tmp + same-dir
+    rename) so the client's per-host census WAITER can break its remote poll loop
+    on ONE ``test -f`` instead of diffing the whole marker inventory. A wake is a
+    HINT, never a settle: the control plane always re-reads the per-task markers
+    (the truth) after a wake, so touching this on EVERY task's terminal (not only
+    the last) is correct and cheap — the census recount decides lifecycle. Never
+    raises: a failure here NEVER changes the task's exit code.
+    """
+    try:
+        run_dir = Path(announce_root) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        marker = run_dir / _ANNOUNCE_RUN_TERMINAL
+        tmp = run_dir / f"{_ANNOUNCE_RUN_TERMINAL}.{os.getpid()}.tmp"
+        tmp.write_text("1\n", encoding="utf-8")
+        os.replace(tmp, marker)
+    except Exception as exc:  # noqa: BLE001 — wake marker is best-effort
+        print(
+            f"[dispatch] WARN: could not touch run-terminal marker for run {run_id}: {exc}",
             file=sys.stderr,
         )
 
@@ -1430,6 +1466,10 @@ def main() -> None:
         exit_code=returncode,
         finished_at=ended_at_iso,
     )
+    # P3 wake hint: touch the run-level terminal marker so the per-host census
+    # waiter breaks its remote poll loop. DATA only — the client re-reads the
+    # per-task markers (the truth) to decide lifecycle.
+    _touch_run_terminal_marker(here / _ANNOUNCE_DIRNAME, run_id)
 
     sys.exit(returncode)
 

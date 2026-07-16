@@ -48,7 +48,10 @@ def test_unsafe_name_never_caches(monkeypatch):
 def test_emit_describe_second_call_hits_cache(monkeypatch, capsys):
     calls: list[str] = []
 
-    def _spy_describe(*, name):
+    def _spy_describe(*, name, _catalog=None):
+        # B4/B5: _emit_describe threads a hydrated catalog into describe() so the
+        # fast path never reads a partial registry. The cache still short-circuits
+        # the SECOND call before describe() runs.
         calls.append(name)
         return {"kind": "primitive", "name": name, "content": {"verb": "query"}}
 
@@ -85,7 +88,7 @@ def test_store_refused_under_partial_registration(monkeypatch):
 
 
 def test_emit_describe_not_found_is_not_cached(monkeypatch):
-    def _raise(*, name):
+    def _raise(*, name, _catalog=None):
         raise ValueError(f"no skill or primitive named {name!r}")
 
     monkeypatch.setattr(setup, "describe", _raise)

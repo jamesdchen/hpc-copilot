@@ -17,7 +17,11 @@ import pytest
 
 from hpc_agent.errors import RemoteCommandFailed
 from hpc_agent.infra import cluster_status
-from hpc_agent.infra.cluster_status import _reporter_error_from_stdout, ssh_status_report
+from hpc_agent.infra.cluster_status import (
+    _reporter_error_from_stdout,
+    rows_observed_from_report,
+    ssh_status_report,
+)
 
 _OK_ENVELOPE = json.dumps({"summary": {}, "tasks": {}, "rollup": {}, "errors": []})
 
@@ -206,3 +210,61 @@ def test_remote_deadline_rc124_no_ack_is_transient(monkeypatch):
     with pytest.raises(RemoteCommandFailed) as ei:
         _run()
     assert ei.value.returncode == 124
+
+
+# --- F3: rows_observed parse surface (single-report min_rows gate) -----------
+
+
+def test_rows_observed_from_report_parses_marker_completes_and_counts():
+    """A current reporter marks the report + carries per-task ``rows_observed``;
+    the parser returns the LENIENT complete set and each task's row count."""
+    report = {
+        "rows_observed_emitted": True,
+        "tasks": {
+            "0": {"status": "complete", "rows_observed": 5},
+            "1": {"status": "complete", "rows_observed": 0},  # header-only CSV
+            "2": {"status": "unknown"},
+        },
+    }
+    complete, rows_by_task, emits = rows_observed_from_report(report)
+    assert emits is True
+    assert complete == {0, 1}  # task 2 is not complete at min_rows=0
+    assert rows_by_task == {0: 5, 1: 0}
+
+
+def test_rows_observed_non_csv_complete_has_none_row_count():
+    """A non-CSV complete carries no ``rows_observed`` → None (never row-gated)."""
+    report = {
+        "rows_observed_emitted": True,
+        "tasks": {"0": {"status": "complete"}},  # non-CSV: no rows_observed key
+    }
+    complete, rows_by_task, emits = rows_observed_from_report(report)
+    assert complete == {0}
+    assert rows_by_task == {0: None}
+    assert emits is True
+
+
+def test_rows_observed_absent_marker_signals_version_skew():
+    """A reporter predating the field omits the marker → emits False, so the gate
+    knows to fall back to the second STRICT reporter call (never read absence as
+    zero rows)."""
+    report = {"tasks": {"0": {"status": "complete"}, "1": {"status": "complete"}}}
+    complete, rows_by_task, emits = rows_observed_from_report(report)
+    assert emits is False
+    assert complete == {0, 1}
+    assert rows_by_task == {0: None, 1: None}
+
+
+def test_severed_report_raises_before_rows_observed_parse(monkeypatch):
+    """Enforcement row 10: a severed single report is UNKNOWN for BOTH row sets.
+    ssh_status_report RAISES on a rc-0 read with no ack, so the report never
+    reaches the parser to be misread as ``rows_observed=0`` → all-tasks-empty."""
+    # A fully-valid-looking envelope carrying the marker but NO positive ack.
+    body = json.dumps(
+        {"rows_observed_emitted": True, "tasks": {"0": {"status": "complete"}}, "errors": []}
+    )
+    monkeypatch.setattr(
+        cluster_status.remote, "ssh_run", lambda cmd, *, ssh_target: _proc(0, stdout=body)
+    )
+    with pytest.raises(RemoteCommandFailed, match="channel severed|truncated"):
+        _run()

@@ -136,6 +136,12 @@ ALLOWLIST: frozenset[str] = frozenset(
         # terminal — the watch treats a missing announcement as "not yet",
         # not "done".
         "hpc_agent/ops/monitor/announce.py::read_announcements",
+        # Per-host BATCHED census (F4, latency-elimination 2.6): self-ack-gated on
+        # ``_BATCH_ACK`` (echoed only after the batch shell ran) — an absent batch
+        # ack degrades EVERY run to not-present (fall-through), never a spurious
+        # zero, so it carries the same severed-vs-empty protection as the per-run
+        # reader above; a missing per-run ``present`` row reads "not yet", not "done".
+        "hpc_agent/ops/monitor/announce.py::read_announcements_batch",
         # Affirmative-token remote-python resolution: the command ends
         # ``|| echo python3`` so a token is always emitted; absence is a
         # transport failure, not a settled empty answer.

@@ -456,24 +456,40 @@ def _nonempty_failing_task_ids(
 ) -> list[int]:
     """Return task ids whose CSV result has fewer than *min_rows* data rows.
 
-    Runs the cluster-side status reporter twice — once with ``--min-rows 0``
-    (a file with just a header still counts complete) and once with
-    ``--min-rows <min_rows>`` — and diffs the two ``complete`` task sets.
-    A task that is ``complete`` at min_rows=0 but NOT at min_rows=N wrote a
-    result file with too few real data rows: that is the precise
-    "wrote something, but no real data" signal Check 1 gates on.
+    ONE reporter invocation (F3): the cluster-side status reporter is run once
+    with ``--min-rows 0`` (a file with just a header still counts complete). A
+    reporter new enough to emit per-task ``rows_observed`` (the top-level
+    ``rows_observed_emitted`` marker) carries BOTH row sets in that single
+    report — the LENIENT complete set plus each complete task's observed
+    data-row count — so the STRICT set is derived locally with NO second SSH
+    round-trip. A task ``complete`` at min_rows=0 whose ``rows_observed`` falls
+    short of *min_rows* wrote a result file with too few real data rows: the
+    precise "wrote something, but no real data" signal Check 1 gates on. A
+    non-CSV complete (``rows_observed`` is ``None``) is never row-gated,
+    mirroring the reporter's CSV-only demotion.
+
+    VERSION SKEW: a deployed reporter predating ``rows_observed`` omits the
+    marker; the gate then falls back to the historical TWO-call diff — a second,
+    STRICT report (``--min-rows N``) whose own demotion drops the
+    under-populated tasks — instead of misreading the absent field as zero rows.
+
+    A SEVERED single report is UNKNOWN for BOTH sets: :func:`ssh_status_report`
+    RAISES on a rc-0 read with no positive-evidence ack, so the exception
+    propagates (UNKNOWN) rather than the missing ``rows_observed`` reading as
+    ``0`` → every task insufficient.
 
     *remote_activation* seeds the run's conda/module env exactly as every other
     reporter consumer does — without it the login-node reporter falls to bare
     ``python`` (rc=127 on conda clusters, the run-#7/#8 class); this Check-1
     reporter was an unseeded consumer (G6).
 
-    Pure read-only: two SSH round-trips, no cluster-side or local writes.
+    Pure read-only: ONE SSH round-trip on a current reporter (two on the
+    version-skew fallback), no cluster-side or local writes.
     """
-    from hpc_agent.infra.cluster_status import ssh_status_report
+    from hpc_agent.infra.cluster_status import rows_observed_from_report, ssh_status_report
 
-    def _complete_ids(rows: int) -> set[int]:
-        report = ssh_status_report(
+    def _report(rows: int) -> dict:
+        return ssh_status_report(
             ssh_target=ssh_target,
             remote_path=remote_path,
             run_id=run_id,
@@ -482,18 +498,22 @@ def _nonempty_failing_task_ids(
             min_rows=rows,
             remote_activation=remote_activation,
         )
-        out: set[int] = set()
-        for tid_str, entry in (report.get("tasks") or {}).items():
-            if isinstance(entry, dict) and entry.get("status") == "complete":
-                try:
-                    out.add(int(tid_str))
-                except (TypeError, ValueError):
-                    continue
-        return out
 
-    complete_lenient = _complete_ids(0)
-    complete_strict = _complete_ids(min_rows)
-    return sorted(complete_lenient - complete_strict)
+    # ONE lenient report. A severed channel raises inside ssh_status_report
+    # (rc-0-no-ack) → UNKNOWN for both sets, never rows_observed=0.
+    lenient_report = _report(0)
+    complete_lenient, rows_by_task, emits = rows_observed_from_report(lenient_report)
+    if not emits:
+        # Version skew: derive the strict set from a SECOND reporter call whose
+        # min_rows demotion drops the under-populated tasks (the historical path).
+        complete_strict, _rows, _emits = rows_observed_from_report(_report(min_rows))
+        return sorted(complete_lenient - complete_strict)
+    failing: list[int] = []
+    for tid in complete_lenient:
+        observed = rows_by_task.get(tid)
+        if observed is not None and observed < min_rows:
+            failing.append(tid)
+    return sorted(failing)
 
 
 def _combine_missing(

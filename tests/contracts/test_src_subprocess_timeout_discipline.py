@@ -443,8 +443,7 @@ def test_in_process_eligible_verbs_are_local_and_never_watch() -> None:
     assert not violations, (
         "In-process-eligible block verb(s) reach the cluster or block on a watch — "
         "the WS-INPROC carve-out is LOCAL/decision-only. Remove them from "
-        "_IN_PROCESS_ELIGIBLE_VERBS (they keep the subprocess seam):\n"
-        + "\n".join(violations)
+        "_IN_PROCESS_ELIGIBLE_VERBS (they keep the subprocess seam):\n" + "\n".join(violations)
     )
 
 

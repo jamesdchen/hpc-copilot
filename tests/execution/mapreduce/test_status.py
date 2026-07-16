@@ -12,6 +12,7 @@ from hpc_agent.execution.mapreduce.reduce.status import (
     check_results,
     check_results_from_tasks,
     report_status,
+    report_status_from_tasks,
 )
 
 
@@ -328,6 +329,67 @@ class TestHeaderOnlyCsv:
 
         strict = check_results_from_tasks(tasks_data, file_glob="*.csv", min_rows=1)
         assert 0 not in strict
+
+
+class TestRowsObservedEmit:
+    """F3: complete CSV entries carry ``rows_observed`` even under ``min_rows=0``,
+    and the report stamps the ``rows_observed_emitted`` capability marker — so the
+    aggregate non-empty gate reads ONE lenient report and derives the strict set
+    locally."""
+
+    def test_check_results_emits_rows_observed_at_min_rows_zero(self, tmp_path):
+        result_dir = tmp_path / "results"
+        task_dir = result_dir / "task_0"
+        task_dir.mkdir(parents=True)
+        (task_dir / "out.csv").write_text("a,b\n1,2\n3,4\n")  # 2 data rows
+
+        results = check_results(result_dir, total_tasks=1)  # min_rows=0 default
+
+        assert results[0]["status"] == "complete"
+        assert results[0]["rows_observed"] == 2
+
+    def test_check_results_header_only_reports_zero_rows_observed(self, tmp_path):
+        result_dir = tmp_path / "results"
+        task_dir = result_dir / "task_0"
+        task_dir.mkdir(parents=True)
+        (task_dir / "out.csv").write_text("a,b\n")  # header only
+
+        results = check_results(result_dir, total_tasks=1)
+
+        assert results[0]["status"] == "complete"
+        assert results[0]["rows_observed"] == 0
+
+    def test_check_results_from_tasks_emits_rows_observed(self, tmp_path):
+        task_result_dir = tmp_path / "task0"
+        task_result_dir.mkdir()
+        (task_result_dir / "out.csv").write_text("a,b\nx,y\n")  # 1 data row
+        tasks_data = {"total_tasks": 1, "tasks": {"0": {"result_dir": str(task_result_dir)}}}
+
+        results = check_results_from_tasks(tasks_data, file_glob="*.csv")
+
+        assert results[0]["rows_observed"] == 1
+
+    def test_non_csv_complete_has_no_rows_observed(self, tmp_path):
+        task_result_dir = tmp_path / "task0"
+        task_result_dir.mkdir()
+        (task_result_dir / "out.json").write_text("{}")
+        tasks_data = {"total_tasks": 1, "tasks": {"0": {"result_dir": str(task_result_dir)}}}
+
+        results = check_results_from_tasks(tasks_data, file_glob="*")
+
+        assert results[0]["status"] == "complete"
+        assert "rows_observed" not in results[0]
+
+    def test_report_status_from_tasks_stamps_capability_marker(self, tmp_path):
+        task_result_dir = tmp_path / "task0"
+        task_result_dir.mkdir()
+        (task_result_dir / "out.csv").write_text("a,b\n1,2\n")
+        tasks_data = {"total_tasks": 1, "tasks": {"0": {"result_dir": str(task_result_dir)}}}
+
+        report = report_status_from_tasks(tasks_data, job_ids=[], file_glob="*.csv")
+
+        assert report["rows_observed_emitted"] is True
+        assert report["tasks"]["0"]["rows_observed"] == 1
 
 
 # ─── Bug 1: report timestamps include explicit UTC offset ─────────────────

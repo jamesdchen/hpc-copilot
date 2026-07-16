@@ -60,7 +60,7 @@ from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.aggregate.combine import combine_waves
-from hpc_agent.ops.monitor.announce import read_announcements
+from hpc_agent.ops.monitor.announce import read_announcements, wait_for_announce_change
 from hpc_agent.ops.monitor.classify import unresolved_unknown
 from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec, harvest_on_terminal
 from hpc_agent.ops.monitor.reconcile import mark_terminal
@@ -179,6 +179,48 @@ _REPORTER_HEARTBEAT_SECONDS: float = _env_float("HPC_STATUS_REPORTER_HEARTBEAT_S
 # ``hpc_agent.errors`` (G7) — ``verify_canary`` consumes the same one, so the
 # twin that used to live here and drift per fix is retired.
 _is_deterministic_env_failure = errors.is_deterministic_env_failure
+
+
+def _announce_wait_enabled() -> bool:
+    """Is the P3 per-host remote census WAITER opted in for this process?
+
+    OFF by default (``HPC_ANNOUNCE_WAIT`` unset / falsey): the in-flight
+    continuation between census polls is the client-side ``_sleep`` exactly as
+    before, so every existing poll trace is byte-identical. When enabled, an
+    announce-leg tick replaces that local sleep with a REMOTE bounded wait — the
+    poll loop moves to the login node's filesystem client (:func:`wait_for_announce_change`),
+    so a marker WAKES the client instead of the client re-dialing every interval.
+    Gated (not default-on) because P3's win is only proven at cluster scale: the
+    Wave-2 telemetry gate (docs/plans/latency-elimination-2026-07-16) must confirm
+    the remote wait beats the adaptive-backoff dial before it becomes the default.
+    """
+    raw = os.environ.get("HPC_ANNOUNCE_WAIT", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _remote_census_wait(
+    record: Any,
+    run_id: str,
+    *,
+    deadline_seconds: float,
+    stamp: Any,
+) -> dict[str, object]:
+    """Block on the per-host announce WAITER for up to *deadline_seconds* (P3).
+
+    A thin call-site wrapper: resolves this run's ssh target + announce root and
+    long-polls the remote announce dir for a marker change (or the run-terminal
+    wake marker), stamping the §5 watchdog through *stamp* right before the single
+    blocking dial. A wake is a HINT — the caller re-censuses on the next tick; this
+    returns the waiter's ``{woke, acked, waited}`` signal unchanged. Best-effort:
+    any fault degrades to ``waited`` so the caller simply loops and re-reads.
+    """
+    return wait_for_announce_change(
+        ssh_target=resolve_ssh_target(record),
+        remote_path=record.remote_path,
+        run_ids=[run_id],
+        deadline_seconds=deadline_seconds,
+        stamp=stamp,
+    )
 
 
 #: Consecutive UNCHANGED census ticks with a non-empty ``missing`` bucket before
@@ -495,6 +537,7 @@ def monitor_flow(
     spec: MonitorFlowSpec,
     _sleep: Any = time.sleep,
     _now: Any = time.monotonic,
+    _wait: Any = _remote_census_wait,
 ) -> MonitorFlowResult:
     """Poll ``spec.run_id`` to terminal-or-budget; auto-combine waves; emit one result.
 
@@ -1472,10 +1515,30 @@ def monitor_flow(
                 lifecycle_state="in_flight",
                 next_tick_seconds=effective_interval,
             )
-            # §5 watchdog: stamp the deadline for the NEXT poll so a dead poller
-            # (incl. a detached S3 child) is caught by the doctor via a lapse.
-            _stamp_watchdog(experiment_dir, run_id, effective_interval)
-            _sleep(effective_interval)
+            # In-flight continuation. Default (P3 opt-out): stamp the §5 watchdog
+            # deadline for the NEXT poll — so a dead poller (incl. a detached S3
+            # child) is caught by the doctor via a lapse — then sleep the adaptive
+            # interval client-side. With the P3 per-host waiter enabled AND this
+            # tick resolved via the announce census, move the wait REMOTE-side: the
+            # login node long-polls its own filesystem for a marker change, so a
+            # finished task WAKES the client instead of the client re-dialing every
+            # interval. The waiter stamps the watchdog through the SAME
+            # ``_stamp_watchdog`` closure right before its single blocking dial
+            # (doctrine row 13), and a wake is only a HINT — the next loop iteration
+            # re-reads the census (the truth) and settles or keeps watching.
+            if _announce_wait_enabled() and announced_record is not None:
+                # Bind the interval into the closure explicitly (the stamp fires
+                # synchronously inside ``_wait`` before its dial, but ruff B023
+                # forbids capturing the loop variable by reference).
+                _wait(
+                    record,
+                    run_id,
+                    deadline_seconds=effective_interval,
+                    stamp=lambda ei=effective_interval: _stamp_watchdog(experiment_dir, run_id, ei),
+                )
+            else:
+                _stamp_watchdog(experiment_dir, run_id, effective_interval)
+                _sleep(effective_interval)
 
     finally:
         # Guaranteed harvest (design §5): every terminal path AND any

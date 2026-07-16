@@ -161,7 +161,7 @@ Each row links a self-contained section file. Sizes are approximate.
 | Section | Scope | Size |
 |---|---|---|
 | [The determinism boundary: judgment in the LLM, mechanism in verbs](principles/determinism-boundary.md) | Judgment stays in the LLM; every rule-fixed step is a composed verb, enforced by removing the affordance. | ~1.8k tokens |
-| [Lifecycle verdicts and run identity: one definition, named tests](principles/lifecycle-verdicts.md) | One definition per terminal-verdict / run-identity / run-execution decision, every call site routing through it. | ~19.6k tokens |
+| [Lifecycle verdicts and run identity: one definition, named tests](principles/lifecycle-verdicts.md) | One definition per terminal-verdict / run-identity / run-execution decision, every call site routing through it. | ~20.2k tokens |
 | [The registration kernel: the deployment-boundary attestation is mechanism-only](principles/registration-kernel.md) | The deploy-boundary promotion is one more attestation over the sealed dossier — mechanism-only, agnostic by five mechanisms. | ~1.4k tokens |
 | [The determinism fingerprint: measure, don't ask](principles/determinism-fingerprint.md) | A measured, confidence-labeled run-to-run spread — core measures and compares, never names a metric or invents a tolerance. | ~1.5k tokens |
 | [Domain packs: bind-as-data, trust content-addressed](principles/domain-packs.md) | Bind pack files by sha, gate on pack receipts, never run or interpret pack logic; plus the evidence-memory and challenge boundaries. | ~4.0k tokens |
@@ -170,6 +170,7 @@ Each row links a self-contained section file. Sizes are approximate.
 | [Repo mechanics: the generated-artifact merge driver keeps ours, never silently drops theirs](principles/repo-mechanics-merge-driver.md) | A keep-ours merge driver for 100%-generated files only; a partially generated file must never carry it. | ~0.6k tokens |
 | [The MCP in-process runner: never touch the real transport streams](principles/mcp-in-process-runner.md) | In-process dispatch swaps out all three real stdio streams; session stream reconfig happens once, before the reader thread exists. | ~0.6k tokens |
 | [Operational docs: counts are verified live, never frozen](principles/operational-docs-counts.md) | A digit count of a counted set equals its live source of truth or sits in a cited allowlist; plus the regen-debt-ledger status pin. | ~0.9k tokens |
+| [The CLI single-verb fast path: byte-identical to the full walk, or it must not run](principles/cli-fast-path.md) | Fast-path opt-in is an enumerated set; discovery verbs answer off the content-keyed bake or take the full walk — never a partial registry. | ~1.1k tokens |
 <!-- END GENERATED SECTION INDEX -->
 
 ## Drift log

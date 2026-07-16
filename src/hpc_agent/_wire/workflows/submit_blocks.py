@@ -237,11 +237,14 @@ class SubmitS3Spec(BaseModel):
     monitor: MonitorFlowSpec = Field(
         description="The monitor-flow spec used to watch the main array to terminal/timeout.",
     )
-    invocation_argv: str = Field(
-        min_length=1,
+    invocation_argv: str | None = Field(
+        default=None,
         description=(
             "The exact /monitor-hpc argv the next tick should re-invoke; stamped "
-            "into decide-monitor-arm's cron args."
+            "into decide-monitor-arm's cron args. OPTIONAL (run-14 #4 materialization, "
+            "unit 3.1): the code-composed successor spec cannot fabricate an "
+            "agent-known argv (Row 14), so it is derivable/absent — when null, S3 "
+            "skips arming the next tick (mirrors StatusWatchSpec.invocation_argv)."
         ),
     )
     user_invoked_via_loop: bool | None = Field(

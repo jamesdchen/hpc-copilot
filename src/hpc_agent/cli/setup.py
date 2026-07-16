@@ -248,6 +248,33 @@ def setup(
     return payload
 
 
+def _resolve_catalog() -> list[dict[str, Any]]:
+    """Return the operations catalog to answer ``describe`` / ``find`` against.
+
+    On the full path (the registry has been fully walked) this is the live
+    :func:`operations_catalog`. On the single-verb fast path the live registry is
+    PARTIAL — only the one module the verb needed was imported — and answering a
+    discovery verb off it would be wrong-but-plausible (premortem A1: a ``find``
+    silently matches ~4 rows, a ``describe`` of any other verb confidently
+    errors). So hydrate from the shipped ``operations.json`` bake instead — but
+    only when it is TRUSTWORTHY (``baked_catalog_usable`` is content-keyed on the
+    build fingerprint, so a stale source-checkout bake is never trusted). If the
+    bake is not trustworthy or cannot be read, refuse to answer off a partial
+    registry and complete the full walk. Either way the returned catalog is the
+    WHOLE truth, so the emitted envelope is byte-identical to the full path.
+    """
+    from hpc_agent._kernel.registry import primitive as _prim
+    from hpc_agent._kernel.registry.operations import operations_catalog
+
+    if not getattr(_prim, "_REGISTRATION_DONE", False):
+        if _prim.baked_catalog_usable():
+            baked = _prim.load_baked_catalog()
+            if baked is not None:
+                return baked
+        _prim.register_primitives()
+    return operations_catalog()
+
+
 def _describe_handler(args: argparse.Namespace) -> int:
     # Move 2 (proving-run-2-hardening §3): `--schema` routes an agent to the
     # RESOLVED input-schema content instead of the bare filename `describe`
@@ -267,23 +294,28 @@ def _valid_ref_name(name: str) -> bool:
     )
 
 
-def _did_you_mean(name: str) -> str:
+def _did_you_mean(name: str, catalog: list[dict[str, Any]] | None = None) -> str:
     """A `` Did you mean: a, b?`` suffix of close primitive-name matches, else ``''``.
 
     Mirrors the CLI parser's unknown-command suggester (:class:`_HpcArgumentParser`)
     so a not-found ``describe`` names candidate primitives instead of dead-ending.
+    *catalog* is threaded in by the fast path (a hydrated bake) so the suggestion
+    set is the WHOLE surface there too — byte-identical to the full path — rather
+    than the partial live registry.
     """
     import difflib
 
-    from hpc_agent._kernel.registry.operations import operations_catalog
+    if catalog is None:
+        from hpc_agent._kernel.registry.operations import operations_catalog
 
-    try:
-        names = [entry.get("name", "") for entry in operations_catalog()]
-    except RuntimeError:
-        # Registry not fully populated (partial fast-path / a monkeypatched
-        # unit test) — a suggestion is a nicety, never worth crashing the
-        # not-found envelope over.
-        return ""
+        try:
+            catalog = operations_catalog()
+        except RuntimeError:
+            # Registry not fully populated (partial fast-path / a monkeypatched
+            # unit test) — a suggestion is a nicety, never worth crashing the
+            # not-found envelope over.
+            return ""
+    names = [entry.get("name", "") for entry in catalog]
     close = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
     return f" Did you mean: {', '.join(close)}?" if close else ""
 
@@ -395,12 +427,18 @@ def _emit_describe(name: str) -> int:
         _ok(cached)
         return EXIT_OK
 
+    # Fast path (partial live registry): resolve against the hydrated bake, never
+    # the ~4-entry partial registry (premortem A1). ``_resolve_catalog`` returns
+    # the whole-truth catalog either way, so the emitted bytes match the full
+    # path. ``describe_cache.store`` still refuses under a partial registry, so a
+    # fast-path-computed row is never persisted (it would poison full-path readers).
+    catalog = _resolve_catalog()
     try:
-        data = describe(name=registry_name)
+        data = describe(name=registry_name, _catalog=catalog)
     except ValueError:
         return _err(
             error_code="spec_invalid",
-            message=f"no skill or primitive named {name!r}.{_did_you_mean(registry_name)}",
+            message=f"no skill or primitive named {name!r}.{_did_you_mean(registry_name, catalog)}",
             category="user",
             retry_safe=False,
         )
@@ -446,10 +484,20 @@ def _emit_describe(name: str) -> int:
             ),
         ),
         handler=_describe_handler,
+        # Fast-path safe via BAKED HYDRATION (latency B4/B5): the handler reads
+        # the operations catalog, which the single-verb fast path would leave
+        # partial — so ``_emit_describe`` hydrates the WHOLE catalog from the
+        # shipped ``operations.json`` bake (``_resolve_catalog``) before
+        # answering, never the ~4-entry partial registry (premortem A1). Output
+        # is byte-identical to the full walk; only the module-import tax is
+        # saved. ``describe --schema`` is steered back to the full path by
+        # ``_try_fast_dispatch`` (it resolves an ARBITRARY target verb's meta,
+        # which the fast path has not imported).
+        fast_path_safe=True,
     ),
     agent_facing=True,
 )
-def describe(*, name: str) -> dict[str, Any]:
+def describe(*, name: str, _catalog: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Resolve *name* to its content from package data.
 
     Resolution order:
@@ -462,6 +510,12 @@ def describe(*, name: str) -> dict[str, Any]:
     (Worker-prompt procedures — ``kind: "procedure"`` — were the bare-worker
     spawn transport's surface; deleted with it in the §6 worker removal. The
     block-drive skills are the workflow entry points now.)
+
+    *_catalog* lets the CLI fast path inject a hydrated bake so a partial live
+    registry is never consulted (premortem A1); when ``None`` the live
+    :func:`operations_catalog` is used (the full path). The resolution is
+    identical either way — only the catalog SOURCE differs — so the two paths
+    return byte-identical rows.
     """
     from importlib.resources import files
 
@@ -474,9 +528,12 @@ def describe(*, name: str) -> dict[str, Any]:
                 body = body[close + 4 :]
         return {"kind": "skill", "name": name, "content": body.strip()}
 
-    from hpc_agent._kernel.registry.operations import operations_catalog
+    if _catalog is None:
+        from hpc_agent._kernel.registry.operations import operations_catalog
 
-    for entry in operations_catalog():
+        _catalog = operations_catalog()
+
+    for entry in _catalog:
         if entry.get("name") == name:
             return {"kind": "primitive", "name": name, "content": entry}
 
@@ -484,7 +541,11 @@ def describe(*, name: str) -> dict[str, Any]:
 
 
 def _find_handler(args: argparse.Namespace) -> int:
-    _ok(find(query=args.query, limit=args.limit), name="find")
+    # Fast path resolves against the hydrated bake, never the partial live
+    # registry (premortem A1: a partial registry silently matches ~4 rows). The
+    # full path passes the same live catalog `find` would compute itself, so the
+    # emitted bytes are identical.
+    _ok(find(query=args.query, limit=args.limit, _catalog=_resolve_catalog()), name="find")
     return EXIT_OK
 
 
@@ -514,10 +575,18 @@ def _find_handler(args: argparse.Namespace) -> int:
             ),
         ),
         handler=_find_handler,
+        # Fast-path safe via BAKED HYDRATION (latency B4/B5): ``_find_handler``
+        # scans the WHOLE catalog, hydrated from the ``operations.json`` bake on
+        # the fast path (``_resolve_catalog``) so a partial registry never
+        # silently matches ~4 rows (premortem A1). Byte-identical to the full
+        # walk; only the import tax is saved.
+        fast_path_safe=True,
     ),
     agent_facing=True,
 )
-def find(*, query: str, limit: int = 15) -> dict[str, Any]:
+def find(
+    *, query: str, limit: int = 15, _catalog: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Search the operations catalog → a thin candidate list.
 
     The middle discovery tier between dumping the whole catalog
@@ -538,9 +607,12 @@ def find(*, query: str, limit: int = 15) -> dict[str, Any]:
     import difflib
     import re
 
-    from hpc_agent._kernel.registry.operations import operations_catalog
+    if _catalog is None:
+        from hpc_agent._kernel.registry.operations import operations_catalog
 
-    catalog = operations_catalog()
+        _catalog = operations_catalog()
+
+    catalog = _catalog
     needle = query.strip().lower()
     # Clamp negatives to 0 so a stray ``--limit -1`` returns nothing rather
     # than silently lopping the last row off via ``rows[:-1]``.

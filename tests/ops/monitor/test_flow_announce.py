@@ -513,6 +513,84 @@ def test_pre_announce_falls_back_to_walk_disclosed(
     assert result.last_status.get("status_source") == "status_reporter_walk"
 
 
+def test_announce_wait_moves_the_poll_remote_side_when_enabled(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P3 wiring: with ``HPC_ANNOUNCE_WAIT`` enabled, an announce-leg in-flight
+    tick waits REMOTE-side (the per-host waiter) instead of the client ``_sleep``
+    — the wait moved to the login node, so a marker wakes the client. The waiter
+    stamps the §5 watchdog before its blocking dial; the next tick re-censuses
+    (wake-is-a-hint) and settles."""
+    _seed_record(experiment)
+    _walk_tripwire(monkeypatch)
+    _harvest_recorder(monkeypatch)
+    monkeypatch.setenv("HPC_ANNOUNCE_WAIT", "1")
+    # Tick 1: partial (in-flight) → remote wait. Tick 2: full → settle COMPLETE.
+    _stub_census(monkeypatch, _present(2, 0), _present(4, 0))
+
+    waits: list[dict[str, Any]] = []
+    stamps: list[str] = []
+
+    def _fake_wait(record: Any, run_id: str, *, deadline_seconds: float, stamp: Any) -> dict:
+        stamp()  # the waiter stamps the watchdog before its (mocked) blocking dial
+        waits.append({"run_id": run_id, "deadline": deadline_seconds})
+        return {"woke": True, "acked": True, "waited": True}
+
+    def _stamp_recorder(experiment_dir: Path, run_id: str, secs: float) -> None:
+        stamps.append(run_id)
+
+    monkeypatch.setattr(monitor_flow_module, "_stamp_watchdog", _stamp_recorder)
+
+    sleeps: list[float] = []
+    result = monitor_flow(
+        experiment,
+        spec=_spec(),
+        _sleep=lambda s: sleeps.append(s),
+        _now=lambda: 0.0,
+        _wait=_fake_wait,
+    )
+
+    assert result.lifecycle_state == LifecycleState.COMPLETE
+    # The in-flight continuation went REMOTE-side, not the client sleep.
+    assert len(waits) == 1
+    assert waits[0]["run_id"] == _RUN_ID
+    assert sleeps == []  # no client-side sleep on the announce continuation
+    assert stamps == [_RUN_ID]  # watchdog stamped during the blocked wait
+
+
+def test_announce_wait_off_by_default_keeps_client_sleep(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opt-out invariant: with the flag UNSET the in-flight continuation is the
+    client ``_sleep`` exactly as before — the waiter is never reached, so every
+    existing poll trace is byte-identical."""
+    _seed_record(experiment)
+    _walk_tripwire(monkeypatch)
+    _harvest_recorder(monkeypatch)
+    monkeypatch.delenv("HPC_ANNOUNCE_WAIT", raising=False)
+    _stub_census(monkeypatch, _present(2, 0), _present(4, 0))
+
+    waits: list[str] = []
+    sleeps: list[float] = []
+
+    def _tripwire_wait(*_a: Any, **_k: Any) -> dict:
+        waits.append("wait")
+        return {"woke": False, "acked": True, "waited": True}
+
+    monitor_flow(
+        experiment,
+        spec=_spec(),
+        _sleep=lambda s: sleeps.append(s),
+        _now=lambda: 0.0,
+        _wait=_tripwire_wait,
+    )
+
+    assert waits == []  # waiter never reached
+    # The client sleep ran (one in-flight tick @ the connection-pacing floor, 10s
+    # — the requested 5s is below _MIN_POLL_INTERVAL_SECONDS).
+    assert sleeps == [10.0]
+
+
 def test_mixed_walks_until_first_marker_then_census(
     journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

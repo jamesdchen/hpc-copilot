@@ -181,6 +181,17 @@ def _fast_dispatch_enabled(verb: str | None = None) -> bool:
         return False
 
 
+# Discovery verbs whose handler reads the WHOLE operations catalog. They ARE
+# fast-path-eligible (``CliShape.fast_path_safe``) but only via BAKED HYDRATION:
+# their handlers rebuild the whole-truth catalog from the shipped
+# ``operations.json`` bake (never the partial live registry — premortem A1), so
+# the fast path may serve them only when that bake is trustworthy
+# (``baked_catalog_usable`` — content-keyed on the build fingerprint). A source
+# checkout (untrusted bake) or an unreadable bake steers them to the full walk,
+# byte-identical.
+_BAKED_HYDRATION_VERBS: frozenset[str] = frozenset({"describe", "find"})
+
+
 def _try_fast_dispatch(argv: list[str]) -> int | None:
     """Dispatch a single known ungrouped verb without the full registry walk.
 
@@ -189,14 +200,28 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     path. Falls back (returns ``None``) for: an empty argv, a leading global
     flag (``--version`` / top-level ``--help``), a verb absent from the
     generated map (grouped verbs, Tier-3 ``run`` / ``mcp-serve``, unknown
-    verbs), an installed CLI-shaping (``register_cli``) plugin, or any
-    stale-map miss. Every fallback path yields byte-identical behaviour to
-    before — only speed differs.
+    verbs), an installed CLI-shaping (``register_cli``) plugin, a discovery
+    verb whose baked catalog is not trustworthy (``describe`` / ``find`` in a
+    source checkout), ``describe --schema`` (resolves an arbitrary target verb's
+    meta the fast path has not imported), or any stale-map miss. Every fallback
+    path yields byte-identical behaviour to before — only speed differs.
     """
     if not argv or argv[0].startswith("-"):
         return None
     if not _fast_dispatch_enabled(argv[0]):
         return None
+    if argv[0] in _BAKED_HYDRATION_VERBS:
+        # ``describe --schema <verb>`` loads the input schema of an ARBITRARY
+        # target verb via its registry meta, which the single-verb fast path
+        # never imported — take the full walk so the meta is present.
+        if "--schema" in argv:
+            return None
+        from hpc_agent._kernel.registry.primitive import baked_catalog_usable
+
+        if not baked_catalog_usable():
+            # Untrusted / unreadable bake — resolving off the partial live
+            # registry would be wrong-but-plausible (A1). Full walk instead.
+            return None
     from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
 
     entry = VERB_MODULE_MAP.get(argv[0])

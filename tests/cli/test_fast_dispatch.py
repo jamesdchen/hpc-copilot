@@ -61,6 +61,111 @@ def test_fast_and_full_paths_are_byte_identical() -> None:
     assert '"spec_invalid"' in fast.stdout
 
 
+def _run_discovery(args: list[str], *, mode: str) -> subprocess.CompletedProcess[str]:
+    """Run a discovery verb (``describe`` / ``find``) in a fresh interpreter.
+
+    ``mode`` selects the path: ``"baked"`` forces the baked-hydration fast path
+    (``HPC_AGENT_FORCE_BAKED_CATALOG=1`` — a source checkout has no build
+    fingerprint, so the trust gate is off by default); ``"full"`` forces the
+    full registry walk via the kill switch. The describe cache is disabled so
+    the comparison exercises the catalog SOURCE (bake vs live), not a prior hit.
+    """
+    import os
+
+    env = dict(os.environ)
+    env["HPC_AGENT_DISABLE_PLUGINS"] = "1"
+    env["HPC_NO_DESCRIBE_CACHE"] = "1"
+    env.pop("HPC_AGENT_NO_FAST_CLI", None)
+    env.pop("HPC_AGENT_FORCE_BAKED_CATALOG", None)
+    if mode == "baked":
+        env["HPC_AGENT_FORCE_BAKED_CATALOG"] = "1"
+    elif mode == "full":
+        env["HPC_AGENT_NO_FAST_CLI"] = "1"
+    return subprocess.run(
+        [sys.executable, "-c", _RUNNER, *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["describe", "submit-s1"],  # a primitive contract
+        ["describe", "hpc-submit"],  # a skill (bake-independent path)
+        ["describe", "definitely-not-a-verb"],  # not-found + did-you-mean
+        ["describe", "submit-s1", "--schema"],  # --schema steers to full path
+        ["find", "submit a batch"],  # intent-phrase keyword scan
+        ["find", "reconcile"],  # fuzzy name match
+    ],
+)
+def test_discovery_baked_hydration_is_byte_identical_to_full_walk(args: list[str]) -> None:
+    """B4/B5 premortem A1: a fast-path ``describe`` / ``find`` served off the
+    hydrated ``operations.json`` bake is byte-identical to the full-walk answer —
+    never the ~4-entry partial registry. Proven cross-module (submit-s1's row,
+    the whole catalog for find's scan) so a partial-registry regression shows."""
+    baked = _run_discovery(args, mode="baked")
+    full = _run_discovery(args, mode="full")
+    assert baked.returncode == full.returncode
+    assert baked.stdout == full.stdout, f"fast/full drift for {args!r}"
+
+
+@pytest.mark.slow
+def test_seeded_stale_bake_falls_back_to_walk_byte_identical(tmp_path: object) -> None:
+    """Enforcement row 5: staleness is content-keyed on the BUILD FINGERPRINT,
+    not the version string. A source checkout carries no ``BUILD_SHA``, so its
+    (possibly stale) bake is NEVER trusted — ``describe`` / ``find`` walk. We
+    prove the walk ignores a deliberately-wrong seeded bake by comparing the
+    default (no-force) path to the kill-switch full path: identical, and NOT the
+    stale bake's content. A version-string key would wrongly trust the bake."""
+    import json
+    import os
+    from importlib.resources import files
+
+    bake_path = files("hpc_agent") / "operations.json"
+    original = bake_path.read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    catalog = json.loads(original)
+    # Corrupt one row's summary so a bake-trusting path would emit the poison.
+    poison = "STALE-BAKE-POISON-DO-NOT-SERVE"
+    for entry in catalog:
+        if entry.get("name") == "submit-s1":
+            entry["summary"] = poison
+    try:
+        bake_path.write_text(  # type: ignore[attr-defined]
+            json.dumps(catalog, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["HPC_AGENT_DISABLE_PLUGINS"] = "1"
+        env["HPC_NO_DESCRIBE_CACHE"] = "1"
+        # DEV default: BUILD_SHA is None and no force → the stale bake is untrusted.
+        env.pop("HPC_AGENT_FORCE_BAKED_CATALOG", None)
+        env.pop("HPC_AGENT_NO_FAST_CLI", None)
+        default = subprocess.run(
+            [sys.executable, "-c", _RUNNER, "describe", "submit-s1"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        env_full = dict(env)
+        env_full["HPC_AGENT_NO_FAST_CLI"] = "1"
+        full = subprocess.run(
+            [sys.executable, "-c", _RUNNER, "describe", "submit-s1"],
+            capture_output=True,
+            text=True,
+            env=env_full,
+            timeout=120,
+        )
+        assert default.stdout == full.stdout
+        assert poison not in default.stdout, "stale bake was trusted — content key failed"
+    finally:
+        bake_path.write_text(original, encoding="utf-8")  # type: ignore[attr-defined]
+
+
 @pytest.mark.slow
 def test_fast_path_help_matches_full() -> None:
     """``<verb> --help`` is identical fast vs full (the fast path builds the
@@ -100,6 +205,79 @@ def test_kill_switch_disables_fast_path(monkeypatch: pytest.MonkeyPatch) -> None
     assert _fast_dispatch_enabled() is False
     # Even a mapped verb defers when the kill switch is set.
     assert _try_fast_dispatch(["monitor-flow"]) is None
+
+
+def test_fast_path_safe_opt_in_set_is_pinned() -> None:
+    """Enforcement row 1: the ``fast_path_safe`` opt-in set is ENUMERATED. This
+    equality pin (reviewed-edit pattern) is the canary — a verb joining the set
+    without a reviewer moving this literal, or a later default-flip that makes
+    every handler ``fast_path_safe``, turns it red. install-commands (rank 13)
+    plus the B4/B5 baked-hydration discovery verbs are the whole set; a
+    registry-introspecting handler (``capabilities``) is deliberately absent."""
+    from hpc_agent._kernel.registry.primitive import get_registry
+    from hpc_agent.cli._dispatch import CliShape
+
+    safe = {
+        name
+        for name, meta in get_registry().items()
+        if isinstance(meta.cli, CliShape) and meta.cli.fast_path_safe
+    }
+    assert safe == {"install-commands", "describe", "find"}
+
+
+def test_baked_catalog_usable_is_content_keyed_on_build_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enforcement row 5: the discovery verbs trust the bake keyed on the BUILD
+    FINGERPRINT (``_build_info.BUILD_SHA``), never the version string. A source
+    checkout has ``BUILD_SHA is None`` — so the bake is untrusted even though
+    ``__version__`` is set (a version-string key would wrongly trust it). A wheel
+    stamps ``BUILD_SHA`` and gets the win; the force env is a test/opt-in seam."""
+    import hpc_agent
+    import hpc_agent._build_info as bi
+    from hpc_agent._kernel.registry.primitive import baked_catalog_usable
+
+    monkeypatch.delenv("HPC_AGENT_FORCE_BAKED_CATALOG", raising=False)
+    assert hpc_agent.__version__  # a version string exists...
+    monkeypatch.setattr(bi, "BUILD_SHA", None)
+    assert baked_catalog_usable() is False  # ...yet the untrusted bake is NOT used.
+    monkeypatch.setattr(bi, "BUILD_SHA", "deadbeef")
+    assert baked_catalog_usable() is True  # a stamped wheel trusts its shipped bake.
+    monkeypatch.setattr(bi, "BUILD_SHA", None)
+    monkeypatch.setenv("HPC_AGENT_FORCE_BAKED_CATALOG", "1")
+    assert baked_catalog_usable() is True  # the explicit test/opt-in seam.
+
+
+def test_build_parser_memoized_and_registers_plugins_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The build_parser memo (warm in-proc win): a second call on an unchanged
+    registry returns the SAME parser without re-running plugin ``register_cli``;
+    a registry change (bumped generation) invalidates the cache."""
+    import hpc_agent._kernel.registry.plugins as plugins_mod
+    import hpc_agent._kernel.registry.primitive as primitive_mod
+    from hpc_agent.cli import parser as parser_mod
+
+    parser_mod._reset_parser_memo()
+    calls = {"n": 0}
+    original = plugins_mod.register_plugin_cli
+
+    def _counting(sub: object) -> None:
+        calls["n"] += 1
+        return original(sub)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(plugins_mod, "register_plugin_cli", _counting)
+    p1 = parser_mod.build_parser()
+    p2 = parser_mod.build_parser()
+    assert p1 is p2, "memo should return the same parser on an unchanged registry"
+    assert calls["n"] == 1, "plugin register_cli must run exactly once under the memo"
+
+    # A generation bump (any registry mutation) forces a rebuild.
+    primitive_mod._bump_generation()
+    p3 = parser_mod.build_parser()
+    assert p3 is not p1, "a registry change must invalidate the memo"
+    assert calls["n"] == 2
+    parser_mod._reset_parser_memo()
 
 
 def test_stale_map_pointing_at_missing_module_defers_not_crashes(

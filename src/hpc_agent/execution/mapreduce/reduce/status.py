@@ -161,21 +161,30 @@ def check_results(
     rdir = Path(result_dir).resolve()
 
     def _accept_csv(path_str: str) -> dict | None:
-        """Return status dict for a CSV path, or None if it fails the check."""
+        """Return status dict for a CSV path, or None if it fails the check.
+
+        ``rows_observed`` (the CSV data-row count beyond the header) is emitted
+        on EVERY accepted CSV, not just under ``min_rows > 0``: the aggregate
+        non-empty gate (F3) reads ONE lenient (``min_rows=0``) report and
+        derives the strict set from these per-task counts locally, instead of a
+        second SSH round-trip. ``min_rows > 0`` still demotes an under-populated
+        CSV to incomplete here (the monitor's own gate), unchanged.
+        """
         try:
             if os.path.getsize(path_str) <= 0:
                 return None
-            if min_rows <= 0:
-                return {"status": "complete", "path": path_str}
             with open(path_str, newline="", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 header = next(reader, None)
-                if header is None:
-                    return None
-                row_count = sum(1 for _ in reader)
-                if row_count < min_rows:
-                    return None
-            return {"status": "complete", "path": path_str, "csv_rows": row_count}
+                row_count = sum(1 for _ in reader) if header is not None else 0
+            # A header-less (yet non-zero-byte) file only fails the STRICT gate;
+            # under ``min_rows=0`` a non-empty file stays complete as before.
+            if min_rows > 0 and (header is None or row_count < min_rows):
+                return None
+            status = {"status": "complete", "path": path_str, "rows_observed": row_count}
+            if min_rows > 0:
+                status["csv_rows"] = row_count  # back-compat field
+            return status
         except OSError:
             return None
 
@@ -600,6 +609,11 @@ def report_status(
         "summary": summary,
         "errors": errors,
         "resource_usage": reduce_resource_usage(tasks),
+        # F3 capability marker: this reporter carries per-task ``rows_observed``
+        # on complete CSVs, so the aggregate non-empty gate derives BOTH row
+        # sets from ONE report. A reporter predating the field omits this key,
+        # which is exactly the version-skew signal the gate falls back on.
+        "rows_observed_emitted": True,
     }
     if err_paths:
         report["err_log_paths"] = err_paths
@@ -669,24 +683,27 @@ def check_results_from_tasks(
                     continue
             except OSError:
                 continue
-            if min_rows > 0 and match_str.endswith(".csv"):
+            if match_str.endswith(".csv"):
+                # ALWAYS count rows (not just under ``min_rows > 0``) so the
+                # accepted entry carries ``rows_observed``: the aggregate
+                # non-empty gate (F3) derives its strict set from ONE lenient
+                # (``min_rows=0``) report instead of a second SSH round-trip.
                 try:
                     with open(match_str, newline="", encoding="utf-8") as f:
                         reader = csv.reader(f)
                         header = next(reader, None)
-                        if header is None:
-                            continue
-                        row_count = sum(1 for _ in reader)
-                        if row_count < min_rows:
-                            continue
-                    results[tid] = {
-                        "status": "complete",
-                        "path": match_str,
-                        "csv_rows": row_count,
-                    }
-                    break
+                        row_count = sum(1 for _ in reader) if header is not None else 0
                 except OSError:
                     continue
+                # ``min_rows > 0`` still demotes an under-populated / header-less
+                # CSV to incomplete (the monitor's own gate), unchanged.
+                if min_rows > 0 and (header is None or row_count < min_rows):
+                    continue
+                entry = {"status": "complete", "path": match_str, "rows_observed": row_count}
+                if min_rows > 0:
+                    entry["csv_rows"] = row_count  # back-compat field
+                results[tid] = entry
+                break
             results[tid] = {"status": "complete", "path": match_str}
             break
     return results
@@ -828,6 +845,10 @@ def report_status_from_tasks(
         "summary": summary,
         "errors": errors,
         "resource_usage": reduce_resource_usage(tasks),
+        # F3 capability marker (see report_status): this reporter carries
+        # per-task ``rows_observed``, so the aggregate non-empty gate reads ONE
+        # min_rows=0 report. Absent ⇒ version skew ⇒ two-call fallback.
+        "rows_observed_emitted": True,
     }
     if err_paths:
         report["err_log_paths"] = err_paths

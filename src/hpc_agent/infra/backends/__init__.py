@@ -273,15 +273,24 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement parse_alive_output")
 
     @staticmethod
-    def build_cancel_cmd(job_ids: list[str]) -> str:
+    def build_cancel_cmd(
+        job_ids: list[str], task_range: str | None = None, *, cluster: str | None = None
+    ) -> str:
         """Shell command that requests cancellation of *job_ids* on the scheduler.
 
         The cancel affordance the ``kill`` mutator dispatches through the seam
         (:func:`hpc_agent.ops.monitor.kill._attempt_backend_cancel`). It only
         *requests* cancellation — confirmed-gone-ness is decided separately by
         the alive-check verification (:meth:`build_alive_check_cmd` +
-        :meth:`parse_alive_output`), never by this command's exit code. Default
-        raises so an unmigrated backend is loud, matching the other builders.
+        :meth:`parse_alive_output`), never by this command's exit code.
+
+        *task_range* (``"4,8,13-15"``, the same submit-side array-index grammar
+        as :meth:`submit_one`'s ``task_range``) scopes the cancel to those array
+        indices of each id — SGE ``qdel <id> -t <range>``, SLURM
+        ``scancel <id>_[<range>]``. ``None`` cancels the whole array/job. A
+        range cancel is a PARTIAL cancel by construction: the array job stays in
+        the queue with its remaining tasks. Default raises so an unmigrated
+        backend is loud, matching the other builders.
         """
         raise NotImplementedError("backend does not implement build_cancel_cmd")
 

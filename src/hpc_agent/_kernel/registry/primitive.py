@@ -62,6 +62,8 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import json
+import os
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
@@ -143,6 +145,32 @@ _REGISTRY: dict[str, PrimitiveMeta] = {}
 # ``register_primitives`` still early-returns only on the full latch.
 _REGISTRATION_DONE: bool = False
 _DISPATCH_READY: bool = False
+
+# Monotonic counter bumped on every mutation of ``_REGISTRY`` (a decoration, a
+# ``_finalize_composes`` apply, a fast-path single-module import, a test reset).
+# The CLI parser memo (``hpc_agent.cli.parser.build_parser``) keys its cache on
+# this so a warm in-process caller (the MCP in-proc runner) stops re-paying the
+# ~286 ms registry-walk + argparse-tree build on every tool call, while any
+# registry change still forces a rebuild — the cache can never serve a parser
+# that omits a just-registered verb (latency rank: build_parser memo).
+_GENERATION: int = 0
+
+
+def _bump_generation() -> None:
+    global _GENERATION
+    _GENERATION += 1
+
+
+def registry_generation() -> int:
+    """Return the current registry generation (bumped on any ``_REGISTRY`` change).
+
+    Consumers memoize registry-derived artifacts keyed on this integer: a match
+    means the registry is byte-for-byte the one the artifact was built against,
+    a mismatch forces a rebuild. Cheap (a module-global read), so a hot path can
+    check it per call without paying the artifact's build cost on a cache hit.
+    """
+    return _GENERATION
+
 
 # Pending string-name composes waiting for lazy resolution. Populated by
 # the decorator; drained by :func:`_finalize_composes` after every
@@ -266,6 +294,7 @@ def primitive(
         )
         _REGISTRY[name] = meta
         func._primitive_meta = meta  # type: ignore[attr-defined]
+        _bump_generation()
         return func
 
     return decorator
@@ -384,6 +413,8 @@ def _finalize_composes() -> None:
         with _ctx.suppress(AttributeError, TypeError):
             new_meta.func._primitive_meta = new_meta  # type: ignore[attr-defined]
     _PENDING_COMPOSES.clear()
+    if staged:
+        _bump_generation()
 
 
 def register_primitives() -> None:
@@ -488,6 +519,63 @@ def get_meta(name: str) -> PrimitiveMeta:
     return _REGISTRY[name]
 
 
+def baked_catalog_usable() -> bool:
+    """True when the shipped ``operations.json`` bake may be TRUSTED as the catalog.
+
+    The CLI discovery verbs (``describe`` / ``find``) can answer off the baked
+    operations catalog instead of walking ~100 modules to repopulate the live
+    registry — but ONLY when the bake is guaranteed to match the running code.
+    The content key is the BUILD FINGERPRINT, never the version string
+    (:data:`hpc_agent._build_info.BUILD_SHA` is stamped into the wheel's build
+    tree at build time and travels WITH the code): a built wheel ships its bake
+    and its code from the same commit, so the bake is authoritative. A source
+    checkout leaves ``BUILD_SHA`` ``None`` — its ``operations.json`` may be stale
+    against un-regenerated edits — so it always pays the full walk (devs pay
+    1.3 s; wheels get the win). Two installs of the same *version* whose source
+    diverged are therefore distinguished (a version-string key would wrongly
+    trust the stale bake — the failure this fingerprint key exists to prevent).
+
+    ``HPC_AGENT_FORCE_BAKED_CATALOG=1`` forces trust (exercises the hydration
+    path from a source checkout under test); it is a test/opt-in seam, not a
+    correctness gate — a mismatched bake still yields byte-identical output
+    because the resolution is the same and the bake was generated from the same
+    catalog projection.
+    """
+    if os.environ.get("HPC_AGENT_FORCE_BAKED_CATALOG") == "1":
+        return True
+    from hpc_agent._build_info import BUILD_SHA
+
+    return BUILD_SHA is not None
+
+
+def load_baked_catalog() -> list[dict[str, Any]] | None:
+    """Load the shipped ``operations.json`` bake as the operations catalog, or ``None``.
+
+    Reads the package-data snapshot ``hpc_agent/operations.json`` (written by
+    ``scripts/bake_operations_json.py`` — the deterministic projection of the
+    ``@primitive`` registry, core-only, sorted by ``(verb, name)``) via
+    ``importlib.resources`` so a wheel install resolves it without a filesystem
+    path. The rows are byte-for-byte the ``operations_catalog()`` projection the
+    full registry walk would produce (no plugin installed — the fast path is
+    gated off when any plugin contributes primitive modules or reshapes a verb),
+    so a caller can resolve ``describe`` / ``find`` off this list identically to
+    the live path, without importing the world.
+
+    Opportunistic: any read/parse/shape problem returns ``None`` so the caller
+    falls back to the full walk (byte-identical, only slower) — never an error.
+    """
+    try:
+        from importlib.resources import files
+
+        text = (files("hpc_agent") / "operations.json").read_text(encoding="utf-8")
+        data = json.loads(text)
+    except (OSError, ValueError, ModuleNotFoundError, TypeError):
+        return None
+    if not isinstance(data, list) or not all(isinstance(entry, dict) for entry in data):
+        return None
+    return data
+
+
 def _reset_for_tests() -> None:
     """Test helper: clear the registry and reset the registration latch.
 
@@ -499,3 +587,4 @@ def _reset_for_tests() -> None:
     _PENDING_COMPOSES.clear()
     _REGISTRATION_DONE = False
     _DISPATCH_READY = False
+    _bump_generation()

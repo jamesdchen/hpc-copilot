@@ -11,14 +11,17 @@ subset verified gone, and (5) reports the honest "N requested, N confirmed gone"
 Request → journaled → verified → surfaced. The count never claims more than the
 scheduler confirms.
 
-BACKEND-CANCEL GAP: the backend seam does not today expose a cancel-command
-builder — no ``build_cancel_cmd`` staticmethod exists on the backend base class.
-This primitive therefore implements the journaled-intent + verify-gone + honest
-half; :func:`_attempt_backend_cancel` detects the *absence* of the affordance and
-reports it (``backend_cancel_available=False``) rather than fabricating a
-``scancel``/``qdel`` string or importing a concrete backend. When a backend later
-grows ``build_cancel_cmd(job_ids) -> str``, the cancel path lights up
-automatically.
+The backend seam exposes a cancel-command builder
+(``build_cancel_cmd(job_ids, task_range=None) -> str``): whole-run cancel
+(``scancel``/``qdel`` over every id) and — with a ``task_range`` — a range-scoped
+PARTIAL cancel (SGE ``qdel <id> -t <range>``, SLURM ``scancel <id>_[<range>]``)
+that leaves the array in the queue with its remaining tasks.
+:func:`_attempt_backend_cancel` probes the builder off the *class* (never a
+concrete backend) and dispatches over the shared SSH transport. A range cancel is
+PARTIAL by construction: it never settles the run through reconcile (that is the
+full-kill terminal transition), and the honest "N requested, N confirmed gone"
+count still comes only from the alive-check verification, never from the cancel
+command's exit code.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.kill import KillResult, KillSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.backends.query import _expand_task_range
 from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids, reconcile
@@ -38,17 +42,39 @@ from hpc_agent.state.journal import load_run, record_kill_confirmed, record_kill
 from hpc_agent.state.run_record import TERMINAL_STATUSES, RunRecord
 
 
+def _range_indices(task_range: str) -> list[int]:
+    """Expand the submit-side task_range grammar ('4,8,13-15') into its indices.
+
+    Reuses :func:`hpc_agent.infra.backends.query._expand_task_range` — the SAME
+    per-token expander the scheduler ingest uses — so cancel and submit share one
+    range vocabulary. Raises :class:`errors.SpecInvalid` on a token the grammar
+    cannot parse (``KillSpec`` already rejects a malformed expression, so this is
+    the belt-and-suspenders half for a directly-constructed spec).
+    """
+    out: list[int] = []
+    for token in task_range.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        expanded = _expand_task_range(token)
+        if not expanded:
+            raise errors.SpecInvalid(f"kill: unparseable task_range token {token!r}")
+        out.extend(expanded)
+    return out
+
+
 def _attempt_backend_cancel(
-    *, scheduler: str, ssh_target: str, job_ids: list[str]
+    *, scheduler: str, ssh_target: str, job_ids: list[str], task_range: str | None = None
 ) -> tuple[bool, bool]:
     """Attempt scheduler cancellation THROUGH the backend seam, if one exists.
 
-    Returns ``(attempted, available)``. The seam does not today expose a
-    cancel-command builder, so this reports ``(False, False)`` — the honest
-    no-op half — without fabricating a cancel string or importing a concrete
-    backend. When a backend grows ``build_cancel_cmd(job_ids) -> str``, this
-    builds it off the *class* (never a concrete backend) and dispatches it over
-    the shared SSH transport, lighting the cancel path up with no other change.
+    Returns ``(attempted, available)``. Probes ``build_cancel_cmd`` off the
+    *class* (never a concrete backend); a backend that has not migrated the seam
+    (no callable builder) reports ``(False, False)`` — the honest no-op half —
+    without fabricating a cancel string. When present, builds the command off the
+    class and dispatches it over the shared SSH transport. *task_range*, when set,
+    scopes the cancel to those array indices (a PARTIAL cancel); ``None`` cancels
+    the whole array.
     """
     if not job_ids:
         return (False, False)
@@ -57,8 +83,8 @@ def _attempt_backend_cancel(
     backend_cls = get_backend_class(scheduler)
     builder = getattr(backend_cls, "build_cancel_cmd", None)
     if not callable(builder):
-        return (False, False)  # no cancel affordance on the seam yet
-    cmd = builder(job_ids)
+        return (False, False)  # no cancel affordance on the seam
+    cmd = builder(job_ids, task_range)
     from hpc_agent.infra import remote
 
     remote.ssh_run(cmd, ssh_target=ssh_target)
@@ -109,6 +135,20 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
         raise errors.SpecInvalid(f"kill: no journal record for run_id {spec.run_id!r}")
     job_ids = list(record.job_ids)
 
+    # 0. Range guard (the ONE place an out-of-array index is caught). A
+    #    range kill cancels only the named array indices; an index outside the
+    #    run's array [1, total_tasks] is a request the scheduler cannot honor
+    #    (1-based ArrayIndex space, like every scheduler ingest here), so refuse
+    #    it BEFORE journaling any intent or touching the scheduler.
+    if spec.task_range is not None:
+        hi = record.total_tasks
+        out_of_range = [i for i in _range_indices(spec.task_range) if i < 1 or i > hi]
+        if out_of_range:
+            raise errors.SpecInvalid(
+                f"kill: task_range index {out_of_range[0]} is outside the array "
+                f"[1, {hi}] of run {spec.run_id!r} ({hi} tasks)"
+            )
+
     # 1. Journal the INTENT first — durable even if we die mid-kill (§5).
     requested_at = utcnow_iso()
     record_kill_request(
@@ -118,9 +158,14 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
         experiment_dir=experiment_dir,
     )
 
-    # 2. Attempt cancellation through the backend seam (no-op today; flagged).
+    # 2. Attempt cancellation through the backend seam. A ``task_range`` scopes
+    #    the cancel to those array indices (a PARTIAL cancel); ``None`` cancels
+    #    the whole array.
     cancel_attempted, cancel_available = _attempt_backend_cancel(
-        scheduler=spec.scheduler, ssh_target=resolve_ssh_target(record), job_ids=job_ids
+        scheduler=spec.scheduler,
+        ssh_target=resolve_ssh_target(record),
+        job_ids=job_ids,
+        task_range=spec.task_range,
     )
 
     # 3. Verify against the scheduler: which requested ids are still alive?
@@ -168,8 +213,13 @@ def kill(*, experiment_dir: Path, spec: KillSpec) -> dict[str, Any]:
     #    marked terminal and the terminal harvest fired") must not claim a
     #    settle that didn't happen — callers would skip the re-reconcile the
     #    run still needs. So derive it from the reconciled record's status.
+    #
+    #    A RANGE kill (``spec.task_range``) is a PARTIAL cancel by construction:
+    #    only some array indices were cancelled and the run keeps its remaining
+    #    tasks in flight, so it NEVER settles through reconcile regardless of
+    #    what the (job-id-granular) alive check reports.
     settled = False
-    if confirmed_gone and not still_alive:
+    if spec.task_range is None and confirmed_gone and not still_alive:
         try:
             settled_record = reconcile(experiment_dir, spec.run_id, scheduler=spec.scheduler)
         except Exception as exc:  # noqa: BLE001 — reconcile is best-effort; never mask the kill

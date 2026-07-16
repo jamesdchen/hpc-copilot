@@ -869,7 +869,9 @@ class ProfileBackend(HPCBackend):
         return alive_sge
 
     @classmethod
-    def build_cancel_cmd(cls, job_ids: list[str], *, cluster: str | None = None) -> str:
+    def build_cancel_cmd(
+        cls, job_ids: list[str], task_range: str | None = None, *, cluster: str | None = None
+    ) -> str:
         """Shell command that requests cancellation of *job_ids* (kill seam).
 
         SLURM cancels via ``scancel <id> <id> ...``; SGE and the PBS family
@@ -882,6 +884,18 @@ class ProfileBackend(HPCBackend):
         ever dispatched. The command only *requests* cancellation: gone-ness is
         confirmed by the alive-check verification, not by its exit code.
 
+        *task_range* (the submit-side array-index grammar ``"4,8,13-15"``, the
+        SAME expression :meth:`submit_one` accepts, so submit and cancel speak
+        ONE range vocabulary) scopes the cancel to those array indices of each
+        id — SGE ``qdel <id> -t <range>``, SLURM ``scancel <id>_[<range>]``.
+        ``None`` cancels the whole array/job (byte-identical to the pre-range
+        command). A range cancel is a PARTIAL cancel by construction: the array
+        job stays in the queue with its remaining tasks, so ``kill`` never
+        settles a range cancel through reconcile. The range is emitted verbatim
+        (already validated by :class:`~hpc_agent._wire.actions.kill.KillSpec`);
+        it carries no shell metacharacters (digits / ``,`` / ``-`` / ``:`` are
+        all shell-safe) so it needs no quoting.
+
         *cluster* (#F37) mirrors :meth:`build_alive_check_cmd`: a federated
         ``scancel -M <cluster>`` so the cancel reaches the member ``sbatch
         --clusters=`` submitted to. Default ``None`` leaves the command
@@ -892,8 +906,17 @@ class ProfileBackend(HPCBackend):
         ids = " ".join(shlex.quote(str(j)) for j in job_ids)
         if cls.profile.family == "slurm":
             m = f"-M {shlex.quote(cluster)} " if cluster else ""
+            if task_range is not None:
+                # Per-id ``<id>_[<indices>]`` — scancel's array-subscript form.
+                targets = " ".join(f"{shlex.quote(str(j))}_[{task_range}]" for j in job_ids)
+                return f"scancel {m}{targets}"
             return f"scancel {m}{ids}"
         # sge / pbspro / torque all cancel via ``qdel <id> <id> ...``.
+        if task_range is not None:
+            # SGE addresses array tasks with ``-t <range>`` (the submit ``-t``
+            # dialect); the PBS families reuse it in this codepath (no PBS range
+            # cancel is exercised today).
+            return f"qdel {ids} -t {task_range}"
         return f"qdel {ids}"
 
     @classmethod

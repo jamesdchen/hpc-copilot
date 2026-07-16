@@ -157,12 +157,30 @@ def test_build_single_verb_parser_builds_fast_path_safe_handler() -> None:
     assert callable(ns.func)
 
 
-def test_registry_introspecting_handlers_stay_excluded() -> None:
-    """``capabilities`` / ``describe`` read the whole registry — never fast-pathed."""
+def test_capabilities_stays_excluded_from_fast_path() -> None:
+    """``capabilities`` reads the whole registry (subcommands + backends + plugin
+    manifests + live cluster keys) — it is NOT baked-hydratable, so it stays off
+    the fast path even after B4/B5 opened describe/find via the bake."""
     from hpc_agent.cli.parser import build_single_verb_parser
 
     assert build_single_verb_parser("capabilities") is None
-    assert build_single_verb_parser("describe") is None
+
+
+def test_describe_find_are_fast_path_safe_via_baked_hydration() -> None:
+    """B4/B5: ``describe`` / ``find`` now opt into the fast path — their handlers
+    rebuild the WHOLE catalog from the ``operations.json`` bake instead of
+    walking the world, so the single-verb parser BUILDS them (previously
+    rejected as registry-introspecting handlers)."""
+    from hpc_agent._kernel.registry.primitive import get_meta
+    from hpc_agent.cli._dispatch import CliShape
+    from hpc_agent.cli.parser import build_single_verb_parser
+
+    for verb in ("describe", "find"):
+        shape = get_meta(verb).cli
+        assert isinstance(shape, CliShape)
+        assert shape.handler is not None
+        assert shape.fast_path_safe is True, f"{verb} must be fast_path_safe (B4/B5)"
+        assert build_single_verb_parser(verb) is not None
 
 
 def test_generator_maps_fast_path_safe_handler() -> None:

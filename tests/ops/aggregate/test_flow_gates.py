@@ -174,6 +174,152 @@ def test_min_rows_all_pass_no_failing_ids(journal_home, experiment):
     assert result.nonempty_failing_task_ids == []
 
 
+# --- F3: ONE reporter invocation on a current reporter -----------------------
+
+
+def _single_report(tasks: dict) -> dict:
+    """A current-reporter report: carries the marker + per-task rows_observed."""
+    return {"rows_observed_emitted": True, "tasks": tasks, "summary": {}}
+
+
+def test_min_rows_single_report_one_invocation(journal_home, experiment):
+    """A reporter that emits ``rows_observed`` lets the gate derive BOTH row sets
+    from ONE lenient (min_rows=0) report — exactly one ssh_status_report call."""
+    _seed_run(experiment)
+    _seed_sidecar(experiment)
+    spec = AggregateFlowSpec(run_id="r1", ensure_all_combined=False, min_rows=3)
+
+    calls: list[int] = []
+
+    def fake_ssh_status_report(*, min_rows, **_kw):
+        calls.append(min_rows)
+        # task 1 has 5 real rows (passes), task 2 wrote a header-only CSV (0).
+        return _single_report(
+            {
+                "1": {"status": "complete", "rows_observed": 5},
+                "2": {"status": "complete", "rows_observed": 0},
+            }
+        )
+
+    with (
+        mock.patch.object(af_module, "rsync_pull", side_effect=_ok_rsync),
+        mock.patch.object(af_module, "reduce_partials", return_value={}),
+        mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=fake_ssh_status_report,
+        ),
+    ):
+        result = aggregate_flow(experiment, spec=spec)
+
+    assert calls == [0], "current reporter must be invoked exactly ONCE (min_rows=0)"
+    assert result.nonempty_rows_checked is True
+    assert result.nonempty_failing_task_ids == [2]
+    assert "empty_result_rows:tasks=2" in (result.escalation_reason or "")
+
+
+def test_min_rows_non_csv_complete_never_row_gated(journal_home, experiment):
+    """A non-CSV complete (rows_observed None) is never demoted by the gate."""
+    _seed_run(experiment)
+    _seed_sidecar(experiment)
+    spec = AggregateFlowSpec(run_id="r1", ensure_all_combined=False, min_rows=3)
+
+    def fake_ssh_status_report(*, min_rows, **_kw):
+        return _single_report(
+            {
+                "1": {"status": "complete", "rows_observed": 9},
+                "2": {"status": "complete"},  # non-CSV → no rows_observed
+            }
+        )
+
+    with (
+        mock.patch.object(af_module, "rsync_pull", side_effect=_ok_rsync),
+        mock.patch.object(af_module, "reduce_partials", return_value={}),
+        mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=fake_ssh_status_report,
+        ),
+    ):
+        result = aggregate_flow(experiment, spec=spec)
+
+    assert result.nonempty_failing_task_ids == []
+
+
+def test_min_rows_old_reporter_two_call_fallback(journal_home, experiment):
+    """Version skew: a reporter that omits the ``rows_observed_emitted`` marker
+    forces the historical TWO-call diff (a lenient + a strict report)."""
+    _seed_run(experiment)
+    _seed_sidecar(experiment)
+    spec = AggregateFlowSpec(run_id="r1", ensure_all_combined=False, min_rows=3)
+
+    calls: list[int] = []
+
+    def fake_ssh_status_report(*, min_rows, **_kw):
+        calls.append(min_rows)
+        # No marker (old reporter): demotion happens reporter-side per min_rows.
+        if min_rows == 0:
+            tasks = {"1": {"status": "complete"}, "2": {"status": "complete"}}
+        else:
+            tasks = {"1": {"status": "complete"}, "2": {"status": "unknown"}}
+        return {"tasks": tasks, "summary": {}}
+
+    with (
+        mock.patch.object(af_module, "rsync_pull", side_effect=_ok_rsync),
+        mock.patch.object(af_module, "reduce_partials", return_value={}),
+        mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=fake_ssh_status_report,
+        ),
+    ):
+        result = aggregate_flow(experiment, spec=spec)
+
+    assert calls == [0, 3], "old reporter must take the two-call (lenient+strict) fallback"
+    assert result.nonempty_failing_task_ids == [2]
+
+
+def test_min_rows_severed_report_is_unknown_not_all_failing(journal_home, experiment):
+    """Enforcement row 10: a severed single report is UNKNOWN for BOTH row sets.
+    ssh_status_report raises; the gate propagates it (UNKNOWN) rather than read a
+    missing rows_observed as ``0`` → every task insufficient."""
+    from hpc_agent.errors import RemoteCommandFailed
+
+    _seed_run(experiment)
+    _seed_sidecar(experiment)
+    spec = AggregateFlowSpec(run_id="r1", ensure_all_combined=False, min_rows=3)
+
+    def fake_ssh_status_report(*, min_rows, **_kw):
+        raise RemoteCommandFailed(
+            "status reporter channel severed / output truncated: rc 0 but no "
+            "positive-evidence ack (__HPC_STATUS_ACK__)",
+            returncode=0,
+        )
+
+    with (
+        mock.patch.object(af_module, "rsync_pull", side_effect=_ok_rsync),
+        mock.patch.object(af_module, "reduce_partials", return_value={}),
+        mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=fake_ssh_status_report,
+        ),
+        pytest.raises(RemoteCommandFailed, match="channel severed"),
+    ):
+        aggregate_flow(experiment, spec=spec)
+
+
+def test_nonempty_gate_docstring_is_one_invocation_not_two_ssh():
+    """Pin the F3 contract at the source: the gate docstring no longer promises
+    the reporter is run 'twice' / 'two SSH round-trips' unconditionally — a
+    current reporter is ONE invocation, the two-call path is the skew fallback."""
+    doc = af_module._nonempty_failing_task_ids.__doc__ or ""
+    assert "ONE reporter invocation" in doc
+    assert "two SSH round-trips" not in doc
+    # The historical unconditional-twice wording is gone.
+    assert "reporter twice" not in doc
+
+
 # ---------------------------------------------------------------------------
 # Check 2 — expected columns + non-NaN metric
 # ---------------------------------------------------------------------------

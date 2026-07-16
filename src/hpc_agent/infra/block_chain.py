@@ -28,6 +28,8 @@ Terminology:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -48,6 +50,9 @@ __all__ = [
     "is_gated",
     "recovery_arm_verb",
     "verb_deadline_seconds",
+    "SuccessorSpecIncomplete",
+    "compose_successor_spec",
+    "successor_spec_sha",
 ]
 
 
@@ -396,6 +401,175 @@ def _complete_spec_hint(successor: str, spec_hint: dict[str, Any]) -> dict[str, 
     """
     shaper = _SUCCESSOR_SPEC_SHAPERS.get(successor)
     return shaper(spec_hint) if shaper is not None else spec_hint
+
+
+# ── materialized successor specs (run-14 finding #4: no LLM over-authoring) ─────
+#
+# Run-14 #4 (USER-NAMED): every boundary must MATERIALIZE its complete successor
+# spec as a FILE, so a CLI fallback = invoke-the-file, never re-author it. The
+# motivating failures were the S1→S2 re-transcription (the agent hand-rebuilt the
+# submit spec at the boundary and dropped fields) and the submit-speculate shape
+# failure (migrate-remainder-2026-07-16/SPEC.md precedent notes). The composer
+# below builds a successor's COMPLETE input spec IN CODE by REUSING what the
+# predecessor already produced — never fabricating a caller-owned field.
+#
+# THE composition doctrine (enforcement rows 14–16):
+#   * Row 14 — the composer NEVER fills a REQUIRED_CALLER_FIELD. A boundary that
+#     cannot source a required caller-owned sub-spec (the run's ``submit`` /
+#     ``goal`` / ``task_generator``) RAISES :class:`SuccessorSpecIncomplete`; the
+#     caller then materializes NOTHING (refuse, never fabricate — the
+#     ``ops/submit/field_partition`` anti-pattern this exists to kill). Mirrors
+#     ``overnight.py``'s "cmd_sha is NEVER composed".
+#   * Row 16 — the composed spec is sha-stamped at park (:func:`successor_spec_sha`
+#     over the byte-stable sorted-keys JSON); consumption recomputes and refuses on
+#     drift (the R3 leg — NOT built here). Same inputs → same bytes → same sha.
+
+
+class SuccessorSpecIncomplete(Exception):
+    """A complete successor spec cannot be composed without fabricating a caller field.
+
+    Row 14: the composer reuses what the predecessor produced and derives identity
+    sub-shapes (``monitor`` from ``run_id``), but a REQUIRED_CALLER_FIELD it cannot
+    source — the run's ``submit`` sub-spec, ``goal`` / ``task_generator`` — is never
+    invented. When one is missing the composer raises this; the materialization
+    caller refuses (no file written), so the run-14 #4 over-authoring class cannot
+    survive through a fabricated-default back door.
+    """
+
+    def __init__(self, successor: str, missing: str) -> None:
+        self.successor = successor
+        self.missing = missing
+        super().__init__(
+            f"cannot compose a complete {successor!r} spec: {missing!r} is a caller-owned "
+            "field the composer must not fabricate (run-14 #4) — refuse, do not materialize."
+        )
+
+
+def _compose_submit_s2_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """S1→S2: reuse the ``submit-and-verify`` spec S1's resolve leg BUILT (never re-author).
+
+    The SubmitFlowSpec is composed by ``resolve-submit-inputs`` and rides the S1
+    result brief (``brief["resolve"]["submit_spec"]``) — the exact S1→S2
+    re-transcription case run-14 #4 names. A boundary whose resolve leg has not run
+    (the PRE-RESOLVE brief, run_id unminted) carries no ``submit_spec`` → refuse.
+    """
+    resolve = result_brief.get("resolve")
+    submit_flow = resolve.get("submit_spec") if isinstance(resolve, dict) else None
+    if not isinstance(submit_flow, dict):
+        raise SuccessorSpecIncomplete("submit-s2", "submit")
+    return {"submit": {"submit": submit_flow}}
+
+
+def _compose_submit_s3_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """S2→S3: reuse S2's ``submit`` sub-spec + derive the ``monitor`` shape from run_id.
+
+    THE proof case. ``SubmitS3Spec`` requires ``submit`` (the SAME submit-and-verify
+    spec S2 ran — pulled VERBATIM from the predecessor's own input spec, never
+    re-authored) and ``monitor`` (a ``MonitorFlowSpec`` whose only required field is
+    ``run_id`` — the identity reshape ``_wrap_run_id_under`` encodes). ``invocation_argv``
+    is agent-known and now OPTIONAL on the model, so the composer omits it (never
+    fabricates it). The canary ids ride the hint.
+    """
+    submit = predecessor_spec.get("submit")
+    if not isinstance(submit, dict):
+        raise SuccessorSpecIncomplete("submit-s3", "submit")
+    run_id = spec_hint.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise SuccessorSpecIncomplete("submit-s3", "run_id")
+    composed: dict[str, Any] = {"submit": submit, "monitor": {"run_id": run_id}}
+    for key in ("canary_run_id", "canary_job_ids"):
+        value = spec_hint.get(key)
+        if value is not None:
+            composed[key] = value
+    return composed
+
+
+def _compose_submit_s4_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """S3→S4: derive the ``aggregate`` shape from the run identity.
+
+    ``SubmitS4Spec`` requires ``aggregate`` (an ``AggregateFlowSpec`` whose only
+    required field is ``run_id``). No caller-owned field is fabricated — the harvest
+    reads the run's own outputs — so a run_id is all the composer needs.
+    """
+    run_id = spec_hint.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise SuccessorSpecIncomplete("submit-s4", "run_id")
+    return {"aggregate": {"run_id": run_id}}
+
+
+def _compose_aggregate_run_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """aggregate-check→aggregate-run: the check already emits the nested ``aggregate`` hint.
+
+    ``aggregate-check`` composes ``spec_hint={"aggregate": {"run_id": ...}}`` at its
+    ``ready`` terminator, so the complete spec is the hint itself. Fall back to
+    deriving ``aggregate`` from a flat ``run_id`` when a caller passed one.
+    """
+    agg = spec_hint.get("aggregate")
+    if isinstance(agg, dict) and agg.get("run_id"):
+        return {"aggregate": dict(agg)}
+    run_id = spec_hint.get("run_id")
+    if isinstance(run_id, str) and run_id:
+        return {"aggregate": {"run_id": run_id}}
+    raise SuccessorSpecIncomplete("aggregate-run", "aggregate.run_id")
+
+
+# Gated successor verb → the composer that builds its COMPLETE input spec from the
+# predecessor's own products (input spec + result brief) + code-derived identity
+# shapes. An ungated successor is absent here: its ``spec_hint`` is already the
+# complete shaped spec (``_complete_spec_hint`` ran at ``next_block_hint`` time), so
+# :func:`compose_successor_spec` returns it verbatim.
+_GATED_SPEC_COMPOSERS: dict[str, Any] = {
+    "submit-s2": _compose_submit_s2_spec,
+    "submit-s3": _compose_submit_s3_spec,
+    "submit-s4": _compose_submit_s4_spec,
+    "aggregate-run": _compose_aggregate_run_spec,
+}
+
+
+def compose_successor_spec(
+    successor: str,
+    *,
+    spec_hint: Mapping[str, Any],
+    predecessor_spec: Mapping[str, Any] | None = None,
+    result_brief: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compose *successor*'s COMPLETE input spec in code (run-14 #4 materialization).
+
+    For a GATED successor (:data:`_GATED_SPEC_COMPOSERS`) the composer reuses the
+    predecessor's own products — its input ``spec`` and the result ``brief`` — plus
+    code-derived identity shapes, never fabricating a caller-owned field (Row 14 —
+    a boundary that cannot source one raises :class:`SuccessorSpecIncomplete`). For
+    an UNGATED successor the ``spec_hint`` is already the complete shaped spec, so it
+    is returned verbatim. Pure: computes the spec dict, writes nothing (the
+    materialization I/O + validation live in the block-drive caller).
+    """
+    composer = _GATED_SPEC_COMPOSERS.get(successor)
+    if composer is None:
+        return dict(spec_hint)
+    composed: dict[str, Any] = composer(
+        dict(spec_hint), dict(predecessor_spec or {}), dict(result_brief or {})
+    )
+    return composed
+
+
+def successor_spec_sha(spec: Mapping[str, Any]) -> str:
+    """A byte-stable identity for a composed successor *spec* (Row 16 sha-pin).
+
+    SHA-256 over the sorted-keys JSON — the SAME serialization
+    :func:`hpc_agent.infra.io.atomic_write_json` writes, so the sha stamped at park
+    is exactly the sha a consumer recomputes over the materialized file's bytes.
+    Same inputs → same bytes → same sha: the byte-stability the R3 drift-refuse leg
+    builds on (that recompute-and-refuse is NOT this function's job — it only stamps).
+    """
+    return hashlib.sha256(json.dumps(spec, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 def is_gated(verb: str) -> bool:

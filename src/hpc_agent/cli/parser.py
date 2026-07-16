@@ -250,13 +250,27 @@ def build_single_verb_parser(primitive_name: str) -> argparse.ArgumentParser | N
     return parser
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the top-level ``hpc-agent`` argparse tree.
+# Process-lifetime memo of the built parser, keyed on the registry generation
+# (:func:`hpc_agent._kernel.registry.primitive.registry_generation`). A warm
+# in-process caller — the MCP in-proc runner drives ``cli.dispatch.main`` on
+# every tool call — rebuilt this ~70-verb argparse tree (and re-ran every plugin
+# ``register_cli`` hook) each time, ~286 ms of dead work per call. Keying on the
+# generation means the cache serves the same parser whenever the registry is
+# unchanged and rebuilds the instant a verb is registered/removed/reset, so a
+# stale tree can never omit a just-registered verb. An argparse parser holds no
+# per-parse mutable state (``parse_args`` builds a fresh Namespace), so reusing
+# one instance across calls is safe.
+_PARSER_MEMO: tuple[int, argparse.ArgumentParser] | None = None
 
-    Every verb comes from either the registry walk (a primitive's
-    :class:`CliShape`) or a Tier 3 module's ``register(sub)``.
-    Plugins register last so they can override / extend core verbs.
-    """
+
+def _reset_parser_memo() -> None:
+    """Drop the cached parser (test seam; the generation key auto-invalidates)."""
+    global _PARSER_MEMO
+    _PARSER_MEMO = None
+
+
+def _build_parser_uncached() -> argparse.ArgumentParser:
+    """Construct a fresh top-level parser (no memo). See :func:`build_parser`."""
     parser = _HpcArgumentParser(
         prog="hpc-agent",
         description=(
@@ -275,6 +289,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_plugin_cli(sub)
 
+    return parser
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build (or return the memoized) top-level ``hpc-agent`` argparse tree.
+
+    Every verb comes from either the registry walk (a primitive's
+    :class:`CliShape`) or a Tier 3 module's ``register(sub)``.
+    Plugins register last so they can override / extend core verbs — and,
+    because the result is memoized on the registry generation, plugin
+    ``register_cli`` runs EXACTLY ONCE per registry state (a second call with
+    the registry unchanged returns the cached parser without re-registering).
+    """
+    global _PARSER_MEMO
+    from hpc_agent._kernel.registry.primitive import registry_generation
+
+    if _PARSER_MEMO is not None and _PARSER_MEMO[0] == registry_generation():
+        return _PARSER_MEMO[1]
+    parser = _build_parser_uncached()
+    # Read the generation AFTER building: a plugin ``register_cli`` (or any
+    # import side effect during the build) that registers a primitive bumps the
+    # generation, and stamping the post-build value means the next call with a
+    # now-settled registry hits the cache instead of rebuilding forever.
+    _PARSER_MEMO = (registry_generation(), parser)
     return parser
 
 
