@@ -148,3 +148,4 @@ Each landing unit owes its row(s) in `engineering-principles.md`'s enforcement m
 - **R2 APPROVED**: S1 resolve fires the speculative canary itself (code-composed, sidecar-dereferenced, disclosed, auto-killed on spec-changing nudge). Unit 4b unblocked.
 - **R5 APPROVED**: speculation-eligibility is a mechanized enumerated law (idempotent + content-keyed + non-scheduler-mutating, per-verb idempotency fire tests); each verb adoption remains its own decision.
 - Still pending: R3 (spec-consumption byte-stability leg — present at 3.1 dispatch); R6/R7 keep their in-plan DEFER/DENY recommendations.
+- **R3 APPROVED with sha pin** (maintainer, 2026-07-16): consumption keyed to the materialized spec file's sha recorded in the brief — the spec the human saw provably equals the spec that executes; mismatch refuses loudly. With R1(+D1)/R2/R5 earlier and R4 amended, EVERY ruling in the latency program is now resolved (R6 defer, R7 deny/defer stand as recommended).
