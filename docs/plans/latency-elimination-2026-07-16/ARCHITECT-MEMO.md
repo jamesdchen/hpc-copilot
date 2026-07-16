@@ -141,3 +141,10 @@ Each landing unit owes its row(s) in `engineering-principles.md`'s enforcement m
 ## Drift log
 
 - 2026-07-16 late: units 3.2/3.3 (daemon) SUPERSEDED by docs/plans/daemon-engineering-2026-07-16/ (the R4 "fully engineer this" ruling; full design + 4-lens premortem + DW0-DW3 decomposition live there).
+
+## Drift log addendum — 2026-07-16 late rulings
+
+- **R1 APPROVED with D1** (maintainer, typed): ONE standing consent per run, minted ONLY by a typed bounds-naming utterance via the offered-hint popup (bare y never mints), covers chain-forward advances while every check is green; any deviation parks. Unit 5.1 unblocked.
+- **R2 APPROVED**: S1 resolve fires the speculative canary itself (code-composed, sidecar-dereferenced, disclosed, auto-killed on spec-changing nudge). Unit 4b unblocked.
+- **R5 APPROVED**: speculation-eligibility is a mechanized enumerated law (idempotent + content-keyed + non-scheduler-mutating, per-verb idempotency fire tests); each verb adoption remains its own decision.
+- Still pending: R3 (spec-consumption byte-stability leg — present at 3.1 dispatch); R6/R7 keep their in-plan DEFER/DENY recommendations.
