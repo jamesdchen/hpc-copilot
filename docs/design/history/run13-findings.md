@@ -209,3 +209,40 @@ therefore about the ask being accepted mid-livelock, not a hook hole. Secondary:
 relay-audit corpus did not fire on the ad-hoc numbers (they name no
 run_id scope) — the finding-8 corpus work should consider unscoped
 numeric tables in relays.
+
+## 12. Remote combine/harvest emits no progress — and the breaker-override remediation prose misleads on degraded preambles
+`[core]` Live (aggregate-run workers 9246ef1d + 490d4248): (a) the first
+worker refused correctly (typed ssh_circuit_open — the S3 saga's open
+breaker); (b) the demo followed the refusal's OWN remediation text
+("verify reachable out-of-band, then HPC_SSH_CIRCUIT_OVERRIDE") — but a
+bare `echo` reachability probe proves connection, not the degraded
+preamble, so the prose licenses exactly the grind-without-fail-fast the
+breaker exists to prevent (it worked out tonight only because the
+preamble degradation had passed); (c) the second worker then ran 25+ min
+with ZERO non-heartbeat lines — the cluster-side combine + harvest pull
+stage has no progress disclosure at all (the >10s-progress-file rule,
+unapplied to this stage), making an active transfer indistinguishable
+from a hang from the outside. Fixes: progress lines for combine + pull
+stages (the O2 pull engine already carries them — wire the aggregate
+worker's stages through); remediation prose for circuit_open should say
+"verify with the SAME command class that failed (the preamble), not a
+bare connect" and prefer naming host-retarget.
+
+## 13. Repair/graft runs have no first-class support — the combine walks 2,700 payloads because the grafts invalidate nothing
+`[core]+[operation]` Live: run 13's fixmask repair re-ran 300 bad arms
+under a NEW run id (causal_tune_linear_fixmask-82ba92e8) grafted
+in-place into run de448128's results tree — a real research pattern
+(localize → fix → re-run the subset → re-aggregate). The machinery has
+no notion of it: the grafted pieces sit outside the original run's wave
+bookkeeping (whose wave_map was also never written — the aggregate-check
+missing_waves issue the human overrode), so the combiner cannot use wave
+partials and falls back to reading all 2,700 task-dir payloads — the
+metadata walk the announce kernel killed for STATUS reappears for the
+COMBINE, by necessity. The status walks are resolved; the payload walk
+needs the incremental-combine shape: per-piece fingerprints, partial
+invalidation scoped to the waves the grafts touch, recombine only those
+(canon-bump / temporal-scan backlog class — this finding is its first
+concrete consumer). Note the layering: aggregate-check DID surface the
+integrity gap; the cost of overriding was paying the slow path — the
+gate worked, the incremental machinery to make the override cheap is
+what's missing.
