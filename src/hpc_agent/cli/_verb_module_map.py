@@ -72,6 +72,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'host-retarget': ('host-retarget', 'hpc_agent.ops.host_retarget'),
     'inspect-deployment': ('inspect-deployment', 'hpc_agent.ops.inspect_deployment'),
     'inspect-parallel-axes': ('inspect-parallel-axes', 'hpc_agent.ops.inspect_parallel_axes'),
+    'install-commands': ('install-commands', 'hpc_agent.cli.setup'),
     'interview': ('interview', 'hpc_agent.ops.memory.interview'),
     'kill': ('kill', 'hpc_agent.ops.monitor.kill'),
     'list-in-flight': ('list-in-flight', 'hpc_agent.ops.monitor.list_in_flight'),
