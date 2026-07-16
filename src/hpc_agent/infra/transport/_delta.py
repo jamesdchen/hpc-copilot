@@ -16,6 +16,7 @@ import json
 import shlex
 import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -40,16 +41,37 @@ _DELTA_ENV_KILL = "HPC_NO_DEPLOY_DELTA"
 #: The self-contained python the DEPLOYED runtime runs cluster-side to hash its
 #: own tree — the "remote side hashes its deployed tree, shipped back as a hash
 #: manifest" half of item 6b. Stdlib-only so it runs under any cluster ``python3``
-#: without the framework installed; base64-piped over one ssh round-trip so no
-#: quoting of the source is needed. It mirrors :func:`_path_excluded` and
-#: :class:`Manifest`'s content-hash exactly, so local and remote agree on both
-#: the file set and each file's identity. Emits ``{"files": [...]}`` (the
-#: :meth:`Manifest.from_dict` shape); prints nothing — routing the caller to the
-#: full-copy fallback — on any error, a first/absent tree, or a file count past
-#: the cap.
+#: without the framework installed (kept under the ``DEPLOY_PYTHON_FLOOR`` = 3.8
+#: bar the ``scripts/lint_deploy_python_floor.py`` scanner enforces); base64-piped
+#: over one ssh round-trip so no quoting of the source is needed. It mirrors
+#: :func:`_path_excluded` and :class:`Manifest`'s content-hash exactly, so local
+#: and remote agree on both the file set and each file's identity. Emits
+#: ``{"files": [...]}`` (the :meth:`Manifest.from_dict` shape, plus ignored
+#: ``hashed``/``cached`` telemetry counts); prints nothing — routing the caller
+#: to the full-copy fallback — on any error, a first/absent tree, or a file count
+#: past the cap.
+#:
+#: Remote-side quick-check cache (rank 5, the exact mirror of the local finding-6
+#: cache in :func:`_build_local_manifest_cached`): the snippet reads the
+#: ``entries`` list persisted in ``.hpc/.push_manifest.json`` (schema
+#: :data:`_PUSH_MANIFEST_SCHEMA`, each entry ``(path, size, mtime_ns, sha256)``)
+#: and reuses a prior sha whenever the file's ``(size, mtime_ns)`` has not moved
+#: since that manifest — so a re-push re-hashes ONLY the files that actually
+#: changed instead of the whole tree (~12 min MEASURED per S2 push at run-13
+#: scale). An absent / old-schema / corrupt manifest yields an empty cache and a
+#: full re-hash: mandatory back-compat with the manifests older wheels wrote (the
+#: cluster carries them today). After a clean walk (never a cap breach) the
+#: snippet writes its freshly-observed ``entries`` back, preserving the ``paths``
+#: / ``pkg_version`` prune bookkeeping the control plane owns (see
+#: :func:`hpc_agent.infra.transport._write_push_manifest`), atomically (temp +
+#: ``os.replace``), and only inside a real deploy tree (``.hpc/`` present) so a
+#: test / bare tree is never polluted. The write is best-effort: a failure never
+#: touches the stdout manifest already emitted.
 _REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
     """
     import os, sys, json, hashlib, fnmatch
+    _MREL = '.hpc/.push_manifest.json'
+    _SCHEMA = 2  # keep in lockstep with _PUSH_MANIFEST_SCHEMA in _prune.py
     try:
         pats = [str(p).rstrip('/') for p in json.loads(os.environ.get('HPC_DELTA_EXCLUDES', '[]'))]
         cap = int(os.environ.get('HPC_DELTA_CAP', '100000'))
@@ -71,7 +93,25 @@ _REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
                         return True
             return False
 
+        # Quick-check cache: reuse a prior sha when (size, mtime_ns) has not moved.
+        prior = {}
+        prior_doc = {}
+        try:
+            with open(_MREL) as _cf:
+                prior_doc = json.load(_cf)
+            if isinstance(prior_doc, dict) and prior_doc.get('manifest_schema') == _SCHEMA:
+                for e in prior_doc.get('entries', []):
+                    try:
+                        prior[e['path']] = (int(e['size']), int(e['mtime_ns']), str(e['sha256']))
+                    except (KeyError, TypeError, ValueError):
+                        pass
+        except Exception:
+            prior_doc = {}
+
         files = []
+        cache = []
+        hashed = 0
+        cached = 0
         for dp, dirs, names in os.walk('.'):
             rel = '' if dp == '.' else os.path.relpath(dp, '.').replace(os.sep, '/')
             base = tuple(rel.split('/')) if rel else ()
@@ -81,20 +121,51 @@ _REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
                 if excluded(parts):
                     continue
                 full = os.path.join(dp, n)
-                if not os.path.isfile(full):
-                    continue
                 try:
-                    h = hashlib.sha256()
-                    with open(full, 'rb') as fh:
-                        for chunk in iter(lambda: fh.read(1048576), b''):
-                            h.update(chunk)
-                    size = os.path.getsize(full)
+                    st = os.stat(full)
                 except OSError:
                     continue
-                files.append({'path': '/'.join(parts), 'size': size, 'sha256': h.hexdigest()})
+                if not os.path.isfile(full):
+                    continue
+                size = st.st_size
+                mtime_ns = st.st_mtime_ns
+                key = '/'.join(parts)
+                hit = prior.get(key)
+                if hit is not None and hit[0] == size and hit[1] == mtime_ns:
+                    sha = hit[2]
+                    cached += 1
+                else:
+                    try:
+                        h = hashlib.sha256()
+                        with open(full, 'rb') as fh:
+                            for chunk in iter(lambda: fh.read(1048576), b''):
+                                h.update(chunk)
+                        sha = h.hexdigest()
+                    except OSError:
+                        continue
+                    hashed += 1
+                files.append({'path': key, 'size': size, 'sha256': sha})
+                cache.append({'path': key, 'size': size, 'mtime_ns': mtime_ns, 'sha256': sha})
                 if len(files) > cap:
                     sys.exit(0)  # too big -> no output -> caller ships the whole tree
-        sys.stdout.write(json.dumps({'files': files}))
+        sys.stdout.write(json.dumps({'files': files, 'hashed': hashed, 'cached': cached}))
+        # Persist the cache back (preserving the prune bookkeeping keys), atomically,
+        # only inside a real deploy tree. Best-effort: never affects the emitted manifest.
+        try:
+            if os.path.isdir('.hpc'):
+                out = {}
+                if isinstance(prior_doc, dict):
+                    for k in ('paths', 'pkg_version'):
+                        if k in prior_doc:
+                            out[k] = prior_doc[k]
+                out['manifest_schema'] = _SCHEMA
+                out['entries'] = cache
+                _tmp = _MREL + '.tmp'
+                with open(_tmp, 'w') as _wf:
+                    json.dump(out, _wf)
+                os.replace(_tmp, _MREL)
+        except Exception:
+            pass
     except Exception:
         pass
     """
@@ -125,6 +196,27 @@ _HASH_CACHE_VERSION: Final[int] = 1
 #: for ops + tests via ``HPC_DELTA_BATCH_MAX_FILES`` / ``HPC_DELTA_BATCH_MAX_BYTES``.
 _DELTA_BATCH_MAX_FILES: Final[int] = 2000
 _DELTA_BATCH_MAX_BYTES: Final[int] = 256 * 1024 * 1024  # 256 MiB
+
+
+#: Cold-hash parallelism (rank 20). Cache-miss files hash on a small
+#: ThreadPoolExecutor — ``hashlib`` releases the GIL during the C digest, so N-way
+#: hashing of a cold 39,374-file / 9.9 GB tree (~37 min serial, MEASURED run-13)
+#: drops to ~6-10 min. Bounded 1..8 and never above the miss count;
+#: ``HPC_DELTA_HASH_WORKERS`` overrides for ops/tests (set 1 to pin the serial
+#: path). The parallel and serial paths produce a byte-identical cache + manifest
+#: (results are reassembled in input order), pinned by
+#: ``tests/infra/test_transport_delta_cache_checkpoint.py``.
+_DELTA_HASH_WORKERS_DEFAULT: Final[int] = 8
+_DELTA_HASH_WORKERS_MAX: Final[int] = 8
+
+
+def _hash_workers(n_misses: int) -> int:
+    """Bounded worker count for the cold-hash pool: 1..8, never above *n_misses*."""
+    from hpc_agent.infra.remote import _env_int
+
+    want = _env_int("HPC_DELTA_HASH_WORKERS", _DELTA_HASH_WORKERS_DEFAULT)
+    want = max(1, min(_DELTA_HASH_WORKERS_MAX, want))
+    return min(want, n_misses) if n_misses > 0 else 1
 
 
 def _delta_batch_caps() -> tuple[int, int]:
@@ -235,10 +327,11 @@ def _build_local_manifest_cached(root: Path, paths: list[str]) -> tuple[Any, int
     from hpc_agent.infra.manifest import FileEntry, Manifest, _sha256_of
 
     cache = _load_hash_cache(root)
-    entries: list[Any] = []
-    new_cache: dict[str, dict[str, Any]] = {}
-    n_hashed = 0
-    n_cached = 0
+    # Pass 1 — stat every path and split cache HITS from cache MISSES. The plan is
+    # kept in input order so the entries + cache write below are byte-identical
+    # regardless of the order the parallel hashes complete (the determinism pin).
+    plan: list[tuple[str, Path, int, int, str | None]] = []
+    misses: list[tuple[str, Path]] = []
     for rel in paths:
         rel_posix = Path(rel).as_posix()
         full = root / rel
@@ -254,10 +347,39 @@ def _build_local_manifest_cached(root: Path, paths: list[str]) -> tuple[Any, int
             and prior.get("mtime_ns") == mtime_ns
             and isinstance(prior.get("sha256"), str)
         ):
-            sha = str(prior["sha256"])
+            plan.append((rel_posix, full, size, mtime_ns, str(prior["sha256"])))
+        else:
+            plan.append((rel_posix, full, size, mtime_ns, None))
+            misses.append((rel_posix, full))
+
+    # Pass 2 — hash the misses. ``hashlib`` releases the GIL during the C digest,
+    # so a small ThreadPoolExecutor turns the cold whole-tree hash from CPU-serial
+    # into I/O+hash-parallel (rank 20). ``ex.map`` yields results in submission
+    # order, so zipping it back against ``misses`` is order-safe.
+    sha_by_rel: dict[str, str] = {}
+    if misses:
+        workers = _hash_workers(len(misses))
+        if workers <= 1:
+            for rel_posix, full in misses:
+                sha_by_rel[rel_posix] = _sha256_of(full)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for (rel_posix, _full), sha in zip(
+                    misses, pool.map(_sha256_of, [f for _r, f in misses]), strict=True
+                ):
+                    sha_by_rel[rel_posix] = sha
+
+    # Pass 3 — assemble in input order (deterministic) then sort the manifest.
+    entries: list[Any] = []
+    new_cache: dict[str, dict[str, Any]] = {}
+    n_hashed = 0
+    n_cached = 0
+    for rel_posix, _full, size, mtime_ns, cached_sha in plan:
+        if cached_sha is not None:
+            sha = cached_sha
             n_cached += 1
         else:
-            sha = _sha256_of(full)
+            sha = sha_by_rel[rel_posix]
             n_hashed += 1
         entries.append(FileEntry(path=rel_posix, size=size, sha256=sha))
         new_cache[rel_posix] = {"size": size, "mtime_ns": mtime_ns, "sha256": sha}
@@ -286,10 +408,11 @@ def _local_push_manifest(local_path: str | Path, exclude: list[str]) -> Any:
         file=sys.stderr,
     )
     manifest, n_hashed, n_cached = _build_local_manifest_cached(root, paths)
+    workers = _hash_workers(n_hashed) if n_hashed else 0
     print(
         f"[transport] content-hash scan done ({len(paths)} file(s); hashed "
-        f"{n_hashed} changed, {n_cached} from cache); comparing against the "
-        "remote manifest",
+        f"{n_hashed} changed ({workers} worker(s)), {n_cached} from cache); "
+        "comparing against the remote manifest",
         file=sys.stderr,
     )
     return manifest
@@ -355,4 +478,30 @@ def _remote_push_manifest(
         )
     except (TimeoutError, OSError):
         return None
-    return _parse_remote_push_manifest(getattr(proc, "stdout", "") or "")
+    raw = getattr(proc, "stdout", "") or ""
+    manifest = _parse_remote_push_manifest(raw)
+    if manifest is not None:
+        _disclose_remote_scan(raw)
+    return manifest
+
+
+def _disclose_remote_scan(stdout: str) -> None:
+    """One ``[transport]`` line naming the remote quick-check cache result (rank 5).
+
+    Reads the ``hashed`` / ``cached`` telemetry the snippet appends to its JSON so
+    the remote-scan cost is legible in the log — the "hashed N, M from cache" twin
+    of the local scan line, proving the cache spared a whole-tree re-hash. Fail-open
+    (pure telemetry): a missing/garbled count never affects the push.
+    """
+    with contextlib.suppress(Exception):
+        data = json.loads(stdout)
+        if not isinstance(data, dict):
+            return
+        hashed = data.get("hashed")
+        cached = data.get("cached")
+        if isinstance(hashed, int) and isinstance(cached, int):
+            print(
+                f"[transport] remote content-hash scan done (hashed {hashed} changed, "
+                f"{cached} from cache); the delta ships only what actually differs",
+                file=sys.stderr,
+            )
