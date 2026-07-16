@@ -2,6 +2,7 @@
   "program": "daemon-engineering-2026-07-16 (WS-DAEMON v2)",
   "authority": "ARCHITECT-MEMO.md (deltas) + DESIGN.md (architecture) + premortems/ (verbatim findings); latency-plan units 3.2/3.3 SUPERSEDED",
   "flag": "HPC_CLI_DAEMON=1 (opt-in; default flip = separate ruling after a proving run)",
+  "program_gate": "RULED 2026-07-16 (measure-then-decide, ARCHITECT-MEMO sec 2a): D-FSYNC builds NOW standalone; every other unit gates on the post-wave-1/2 stateless-floor measurement justifying the residual gap",
   "integration_protocol": "ordered merge -> one regen_all --write per wave -> ruff/format/mypy -> per-unit batteries -> push -> CI matrix green -> enforcement rows -> telemetry deltas",
   "units": [
     {

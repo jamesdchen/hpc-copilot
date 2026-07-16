@@ -51,6 +51,31 @@ carried verbatim in the premortem files and bound to their unit's constraints.
 | Δ17 | `hpc_agent/__init__` eagerness sinks the hook-head win (swarm finding 2) | Latency unit 1.3 is a HARD prerequisite of D-CLIENT's acceptance numbers (code may merge earlier; the <200ms claim may not). |
 | Δ18 | HPC_*-reader census is 70 sites / append seam has 16 consumers (swarm findings 3, 4) | Census allowlist starts with enumerated exempt buckets (`deploy|worker|hook|lane-b-only`, one-line justification each); untagged reader = red. D-FSYNC's deliverable includes the 16-consumer classification table; its battery covers every consumer's test dir. |
 
+## 2a. RULED 2026-07-16 (maintainer): MEASURE-THEN-DECIDE — the daemon gates on the stateless floor
+
+The maintainer's framing: "if stateful warm processes are convenient but
+break constantly, perhaps the best thing is to get the stateless CLI path
+latency down so much that the warm start doesn't matter." Amendment to R4,
+ruled same night:
+
+1. Latency waves 1–2 (the stateless program) land FIRST — already sequenced.
+2. Then MEASURE the real post-wave per-call floor per surface (hook, CLI
+   verb, block-drive span) on the primary Windows box, including the
+   irreducible spawn+Defender tax the census left unmeasured.
+3. **DW1+ builds ONLY if the residual gap still justifies the program**
+   (daemon warm call ≈15–20ms vs projected stateless ≈300–700ms; the
+   marginal win must earn 13 units of lifecycle machinery). Otherwise the
+   package stands as design-of-record, shelved. This INVERTS the prior
+   cut-line (which shipped DW0–DW2 unconditionally).
+4. **D-FSYNC extracts and builds NOW, standalone** — the append-seam
+   durability fix (fsync-before-ack on source-of-truth ledgers, torn-line
+   self-heal, request_id replay dedup) is a correctness win for the
+   stateless path too and fixes the duplicate-greenlight class observed
+   live in run-14. Consequence, disclosed: Δ-RULING-1 is thereby resolved
+   AFFIRMATIVE — the one-shot CLI also starts surfacing source-of-truth
+   fsync failures as errors ("byte-identical modulo the shared durability
+   fix, ruled 2026-07-16"); row 313's language amends in the same wave.
+
 ## 2. Rulings needed from the maintainer (carry to the popup, offered-hint style)
 
 - **Δ-RULING-1 (doctrine F4):** the `fsync_required` split changes the SHARED
