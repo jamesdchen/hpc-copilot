@@ -16,6 +16,7 @@ __all__ = [
     "parse_iso_utc",
     "parse_iso_utc_or_none",
     "status_age_seconds",
+    "humanize_age_sec",
 ]
 
 
@@ -77,3 +78,19 @@ def status_age_seconds(last_status: dict | None) -> int | None:
         return None
     delta = utcnow() - ts
     return max(0, int(delta.total_seconds()))
+
+
+def humanize_age_sec(sec: int | float) -> str:
+    """Compact human age string for *sec* seconds: ``45s`` / ``37m`` / ``2h 5m``.
+
+    Used by disclosure lines that name how long ago something happened (e.g. the
+    gated canary-skip "validated 37m ago"). Negative inputs clamp to ``0s``.
+    """
+    s = max(0, int(sec))
+    if s < 60:
+        return f"{s}s"
+    minutes = s // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, rem_min = divmod(minutes, 60)
+    return f"{hours}h {rem_min}m" if rem_min else f"{hours}h"

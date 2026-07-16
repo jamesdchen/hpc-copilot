@@ -40,3 +40,22 @@ def test_real_estimate_renders_number() -> None:
         "s2", "canary_verified", _brief(est_core_hours=12.5, footprint_unknown=False)
     )
     assert "12.5 core-hours" in line
+
+
+def test_cache_skip_never_renders_canary_green() -> None:
+    """A #249 TTL-cache skip carries its disclosure onto the VERBATIM relay
+    line — 'canary green' for a canary that never ran would read as a fresh
+    pass (the mandatory-disclosure ruling)."""
+    reason = (
+        "canary skipped: cmd_sha 82ba92e8 validated 37m ago on carc (HPC_NO_CANARY_SKIP=1 to force)"
+    )
+    line = render_relay("s2", "canary_verified", _brief(canary_skipped_reason=reason))
+    assert "canary green" not in line
+    assert "canary skipped: cmd_sha 82ba92e8" in line
+    assert "HPC_NO_CANARY_SKIP=1" in line
+
+
+def test_real_canary_pass_still_renders_green() -> None:
+    """No skip reason on the brief → the ordinary 'canary green' line."""
+    line = render_relay("s2", "canary_verified", _brief())
+    assert "canary green" in line

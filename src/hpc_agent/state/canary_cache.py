@@ -48,6 +48,8 @@ __all__ = [
     "DEFAULT_TTL_SEC",
     "cache_disabled",
     "canary_cache_key",
+    "canary_validated_age_sec",
+    "canary_validated_at",
     "is_canary_validated_fresh",
     "record_canary_validated",
 ]
@@ -143,26 +145,55 @@ def _parse_iso(value: Any) -> datetime | None:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def is_canary_validated_fresh(key: str, *, now: datetime | None = None) -> bool:
-    """True when *key* has a recorded successful canary still within its TTL.
+def canary_validated_at(key: str, *, now: datetime | None = None) -> datetime | None:
+    """The recorded ``validated_at`` timestamp for *key* when still within TTL, else None.
 
-    ``False`` on disabled, absent, malformed, or expired — every "not positively
-    fresh" case means "run the canary", the safe default.
+    Same "positively fresh" gate as :func:`is_canary_validated_fresh` (disabled /
+    absent / malformed / expired all yield ``None`` — every "not positively
+    fresh" case means "run the canary", the safe default), but returns the parsed
+    ``validated_at`` datetime so a caller can (a) render the age and (b) compare
+    it against LATER cluster-drift events. The gated submit-s2 skip couples this
+    to the ssh circuit breaker: a breaker OPEN recorded after this timestamp
+    invalidates the boot proof even inside the 4h TTL (latency-audit #10 event
+    invalidation).
     """
     if cache_disabled():
-        return False
+        return None
     entry = _read_cache().get(key)
     if not isinstance(entry, dict):
-        return False
+        return None
     validated_at = _parse_iso(entry.get("validated_at"))
     if validated_at is None:
-        return False
+        return None
     ttl = entry.get("ttl_sec")
     if not isinstance(ttl, int) or ttl <= 0:
         ttl = DEFAULT_TTL_SEC
     now = now or datetime.now(timezone.utc)
     age = (now - validated_at).total_seconds()
-    return 0 <= age < ttl
+    return validated_at if 0 <= age < ttl else None
+
+
+def canary_validated_age_sec(key: str, *, now: datetime | None = None) -> int | None:
+    """Age in seconds of *key*'s validation when fresh, else ``None``.
+
+    Builds on :func:`canary_validated_at` (same freshness gate); returns the int
+    age the gated skip disclosure names ("validated <age> ago").
+    """
+    now = now or datetime.now(timezone.utc)
+    validated_at = canary_validated_at(key, now=now)
+    if validated_at is None:
+        return None
+    return max(0, int((now - validated_at).total_seconds()))
+
+
+def is_canary_validated_fresh(key: str, *, now: datetime | None = None) -> bool:
+    """True when *key* has a recorded successful canary still within its TTL.
+
+    ``False`` on disabled, absent, malformed, or expired — every "not positively
+    fresh" case means "run the canary", the safe default. One definition of the
+    freshness gate: delegates to :func:`canary_validated_at`.
+    """
+    return canary_validated_at(key, now=now) is not None
 
 
 def record_canary_validated(key: str) -> None:

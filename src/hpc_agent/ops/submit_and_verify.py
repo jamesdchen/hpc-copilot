@@ -23,6 +23,7 @@ Paths:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -38,6 +39,7 @@ from hpc_agent.ops.submit_flow import SubmitFlowResult, fire_second_canary, subm
 from hpc_agent.ops.verify_canary import verify_canary
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
     from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
@@ -467,6 +469,213 @@ def launch_main_array(
     )
 
 
+@dataclass(frozen=True)
+class _GatedCanaryCacheDecision:
+    """The gated submit-s2 canary decision against the #249 TTL cache.
+
+    ``skip=True`` → honour the cache: skip the canary, ``reason`` is the mandatory
+    disclosure line (fallback-inventory S1), ``validated_age_sec`` the age.
+    ``skip=False`` with a ``reason`` → a fresh cache hit was IGNORED by event
+    invalidation (an ssh-breaker incident on the host after the validation
+    timestamp); ``reason`` is the why-line to disclose while the canary runs
+    anyway. A ``None`` decision (see :func:`_gated_canary_cache_decision`) means
+    the cache was not consulted / not fresh — the ordinary canary runs, no
+    disclosure.
+    """
+
+    skip: bool
+    reason: str | None
+    validated_age_sec: int | None
+
+
+def _disclose_canary(message: str) -> None:
+    """Surface a canary-cache disclosure to the operator (logger + stderr).
+
+    Mirrors ``submit_flow._disclose_smoke``: a degrade that changes freshness
+    must SAY so at the moment it degrades (the run-#11 'disclose, don't hide'
+    lesson). Used for the event-invalidation 'cache hit ignored' path, where the
+    canary runs anyway and there is no skip-result field to carry the why-line.
+    """
+    import logging
+    import sys
+
+    logging.getLogger(__name__).warning(message)
+    print(message, file=sys.stderr, flush=True)
+
+
+def _breaker_incident_after_validation(host: str, validated_at: datetime) -> str | None:
+    """READ-ONLY event invalidation: was the host disturbed since *validated_at*?
+
+    The #249 skip trusts a 4h TTL, which is time-only and blind to a cluster that
+    DEGRADED inside the window (the S1 blind spot: the key excludes env state).
+    Couple — read-only, no writes, no purge plumbing — to the ssh circuit breaker
+    (``infra.ssh_circuit``): if the breaker OPENED, or a still-live
+    preamble-degradation incident STARTED, on *host* AFTER the cached canary's
+    validation, the boot proof is stale and the gated path must re-run the canary.
+
+    Returns a why-line (for disclosure) when such an incident is recorded, else
+    ``None`` (honour the cache). Fail-open by breaker doctrine: an absent /
+    unreadable state file, or one with no post-validation event, yields ``None``
+    — the breaker is a protection layer, never a correctness gate, so its silence
+    never blocks the cache decision we'd make without events.
+    """
+    import json
+    import time
+
+    from hpc_agent.infra import ssh_circuit
+
+    try:
+        path = ssh_circuit.circuit_state_path(host)
+        doc = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    validated_epoch = validated_at.timestamp()
+    now = time.time()
+    opened_at = doc.get("opened_at")
+    incident_at = doc.get("incident_started_at")
+    candidates: list[tuple[float, str]] = []
+    # A breaker currently OPEN whose last open is after the validation — the host
+    # started failing connections since we proved the runtime boots.
+    if isinstance(opened_at, (int, float)) and float(opened_at) > validated_epoch:
+        candidates.append((float(opened_at), "the ssh circuit breaker opened"))
+    # A live preamble-degradation incident (module/conda hang livelock) that began
+    # after the validation — the exact "env drifted inside the TTL" anatomy.
+    if (
+        ssh_circuit.is_preamble_degraded(doc, now=now)
+        and isinstance(incident_at, (int, float))
+        and float(incident_at) > validated_epoch
+    ):
+        candidates.append((float(incident_at), "a preamble-degradation incident started"))
+    if not candidates:
+        return None
+    event_epoch, what = min(candidates, key=lambda c: c[0])
+    from hpc_agent.infra.time import humanize_age_sec
+
+    delay = humanize_age_sec(event_epoch - validated_epoch)
+    return (
+        f"canary cache hit ignored: {what} on {host} {delay} after validation "
+        "— the cluster may have drifted since the boot proof; running the canary"
+    )
+
+
+def _gated_canary_cache_decision(base: SubmitFlowSpec) -> _GatedCanaryCacheDecision | None:
+    """The gated submit-s2 canary decision against the #249 TTL cache + events.
+
+    submit-flow's own #249 arm never fires under the two-phase gate: Phase 1
+    forces ``canary_only=True``, which ``_canary_decision`` reads as "always
+    canary." So the gate re-ran a canary even when this exact
+    ``(cmd_sha, version, cluster)`` was canary-validated within the 4h TTL — the
+    latency-audit #10 finding. This honours the SAME cache the fused submit-flow
+    path does, at the gate, with the mandatory disclosure (fallback-inventory S1)
+    AND read-only EVENT invalidation (an ssh-breaker incident since validation
+    invalidates the boot proof).
+
+    Returns:
+
+    * ``None`` — run the ordinary canary, no disclosure. The operator forced it
+      (``HPC_AGENT_ALWAYS_CANARY`` / ``HPC_NO_CANARY_SKIP``), the spec forced it
+      (``force_canary``), the spec carries no ``cmd_sha`` to key on, or the cache
+      is absent / stale / expired.
+    * ``skip=True`` — honour the cache: skip the canary, ``reason`` = the S1
+      disclosure line, ``validated_age_sec`` = the age.
+    * ``skip=False`` with a ``reason`` — a fresh hit was IGNORED by a
+      post-validation breaker incident; run the canary and disclose the why-line.
+    """
+    from hpc_agent import __version__ as _pkg_version
+    from hpc_agent.infra.time import humanize_age_sec
+    from hpc_agent.ops.submit_flow import _always_canary
+    from hpc_agent.state import canary_cache
+
+    # Operator/spec forces — reuse the ungated arm's overrides, do not mint new
+    # knobs (HPC_NO_CANARY_SKIP is honoured inside canary_cache via cache_disabled).
+    if _always_canary() or getattr(base, "force_canary", False):
+        return None
+    cmd_sha = (base.job_env or {}).get("HPC_CMD_SHA") or ""
+    if not cmd_sha or canary_cache.cache_disabled():
+        return None
+    key = canary_cache.canary_cache_key(
+        cmd_sha=cmd_sha, version=_pkg_version or "", cluster=base.cluster
+    )
+    validated_at = canary_cache.canary_validated_at(key)
+    if validated_at is None:
+        return None  # absent / stale / expired → run the canary
+    age_sec = canary_cache.canary_validated_age_sec(key) or 0
+
+    # Read-only event invalidation (latency-audit #10 refinement): a breaker
+    # incident on the host SINCE the validation timestamp rejects the fresh hit.
+    host = base.ssh_target.rsplit("@", 1)[-1].strip()
+    ignored = _breaker_incident_after_validation(host, validated_at) if host else None
+    if ignored is not None:
+        return _GatedCanaryCacheDecision(skip=False, reason=ignored, validated_age_sec=age_sec)
+
+    reason = (
+        f"canary skipped: cmd_sha {cmd_sha[:8]} validated {humanize_age_sec(age_sec)} "
+        f"ago on {base.cluster} (HPC_NO_CANARY_SKIP=1 to force)"
+    )
+    return _GatedCanaryCacheDecision(skip=True, reason=reason, validated_age_sec=age_sec)
+
+
+def _gated_cache_skip_result(
+    experiment_dir: Path,
+    base: SubmitFlowSpec,
+    decision: _GatedCanaryCacheDecision,
+    *,
+    stop_after_canary: bool,
+) -> SubmitAndVerifyResult:
+    """Build the verified=True result for an honoured #249 gate skip.
+
+    STAGES the tree without a canary — the prelude (rsync+deploy) + sidecar
+    mirror still run via a ``canary_only`` submit-flow whose canary decision is
+    overridden to skip — so S3's skip-rsync-deploy launch lands on a FRESH tree
+    (the cache key excludes remote_path, so the tree is not assumed present). The
+    cached validation stands in for a green canary: ``verified=True`` with
+    ``canary_run_id=None`` and the disclosure on ``canary_skipped_reason`` — a
+    state DISTINCT from a ``canary=false`` opt-out (``verified=False``) and a
+    failed canary. For the fused path a canary-free main array launches directly.
+    """
+    reason = decision.reason
+    age = decision.validated_age_sec
+    if stop_after_canary:
+        # Stage only (prelude + sidecar mirror), no canary, no main — canary_only
+        # holds main back; the override skips the probe. S3 launches later.
+        staged = submit_flow(
+            experiment_dir,
+            spec=base.model_copy(update={"canary": True, "canary_only": True}),
+            _canary_decision_override=(False, reason),
+        )
+        return SubmitAndVerifyResult(
+            run_id=staged.run_id,
+            job_ids=[],
+            total_tasks=staged.total_tasks,
+            deduped=staged.deduped,
+            canary_run_id=None,
+            canary_job_ids=None,
+            verified=True,
+            failure_kind=None,
+            verify_result=None,
+            canary_skipped_reason=reason,
+            validated_age_sec=age,
+        )
+    # Fused path: canary=false stages AND launches the main array in one call
+    # (no canary probe) — the cached validation is the go-ahead.
+    main = submit_flow(experiment_dir, spec=base.model_copy(update={"canary": False}))
+    return SubmitAndVerifyResult(
+        run_id=main.run_id,
+        job_ids=list(main.job_ids),
+        total_tasks=main.total_tasks,
+        deduped=main.deduped,
+        canary_run_id=None,
+        canary_job_ids=None,
+        verified=True,
+        failure_kind=None,
+        verify_result=None,
+        canary_skipped_reason=reason,
+        validated_age_sec=age,
+    )
+
+
 @primitive(
     name="submit-and-verify",
     verb="workflow",
@@ -535,6 +744,23 @@ def submit_and_verify(
             failure_kind=None,
             verify_result=None,
         )
+
+    # Latency-audit #10 / fallback-inventory S1: the two-phase GATE must HONOUR
+    # the #249 canary TTL cache. Phase 1 forces canary_only=True, which submit-
+    # flow reads as "always canary", so the gate re-ran a canary even for a
+    # cmd_sha canary-validated within the 4h TTL on this cluster. On a fresh hit
+    # (and no post-validation ssh-breaker incident — read-only event
+    # invalidation), skip the canary here: the cached validation stands in for a
+    # green canary, with the mandatory disclosure + structured age so the skip is
+    # never silent and is distinguishable from a canary=false opt-out.
+    cache_decision = _gated_canary_cache_decision(base)
+    if cache_decision is not None and cache_decision.skip:
+        return _gated_cache_skip_result(
+            experiment_dir, base, cache_decision, stop_after_canary=stop_after_canary
+        )
+    if cache_decision is not None and cache_decision.reason:
+        # Fresh hit IGNORED by event invalidation — disclose why, run the canary.
+        _disclose_canary(cache_decision.reason)
 
     # Phase 1 — submit ONLY the canary; the main array does NOT launch yet.
     canary_submit = submit_flow(

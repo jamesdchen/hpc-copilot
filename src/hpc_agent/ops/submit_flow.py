@@ -2135,6 +2135,7 @@ def submit_flow(
     spec: SubmitFlowSpec,
     _skip_preflight: bool | None = None,
     _skip_rsync_deploy: bool | None = None,
+    _canary_decision_override: tuple[bool, str | None] | None = None,
 ) -> SubmitFlowResult:
     """Execute the full submit pipeline and emit a single result.
 
@@ -2183,6 +2184,7 @@ def submit_flow(
         spec=batch_spec,
         _skip_preflight=_skip_preflight,
         _skip_rsync_deploy=_skip_rsync_deploy,
+        _canary_decision_override=_canary_decision_override,
     )[0]
 
 
@@ -2818,6 +2820,7 @@ def submit_flow_batch(
     spec: SubmitFlowBatchSpec,
     _skip_preflight: bool | None = None,
     _skip_rsync_deploy: bool | None = None,
+    _canary_decision_override: tuple[bool, str | None] | None = None,
 ) -> list[SubmitFlowResult]:
     """Submit N specs that share ``(ssh_target, remote_path)`` in one shot.
 
@@ -2898,6 +2901,7 @@ def submit_flow_batch(
             rsync_excludes=rsync_excludes,
             skip_preflight=skip_preflight,
             skip_rsync_deploy=skip_rsync_deploy,
+            canary_decision_override=_canary_decision_override,
         )
 
 
@@ -2914,8 +2918,20 @@ def _submit_flow_batch_locked(
     rsync_excludes: list[str] | None,
     skip_preflight: bool,
     skip_rsync_deploy: bool,
+    canary_decision_override: tuple[bool, str | None] | None = None,
 ) -> list[SubmitFlowResult]:
-    """Body of :func:`submit_flow_batch`, executed under the per-repo lock."""
+    """Body of :func:`submit_flow_batch`, executed under the per-repo lock.
+
+    ``canary_decision_override`` (single-spec use only — the ``submit_flow``
+    wrapper's path) pins the ``(run_canary, skip_reason)`` decision for the
+    fresh spec instead of consulting :func:`_canary_decision`. The gated
+    submit-s2 skip (``ops.submit_and_verify``) uses it to STAGE the tree
+    (prelude + sidecar mirror still run) while skipping the canary probe on a
+    fresh TTL cache hit — the ``canary_only`` no-main return then holds, so S3
+    launches onto a freshly-deployed tree. Threaded to BOTH the pre-rsync
+    sidecar-mirror gate and the post-rsync canary leg so they never disagree
+    (the same one-decision invariant F50 protects for the computed path).
+    """
     # Auto-cleanup: drop sidecars from earlier failed batches before doing
     # anything else. Without this, a half-baked sidecar from yesterday's
     # rate-limited submit would still surface to find_run_by_cmd_sha and
@@ -3045,7 +3061,12 @@ def _submit_flow_batch_locked(
     # ran under the pre-rsync 'skip'), which dies sidecar_not_found — and with
     # afterok drops the whole sweep. One decision, both seats.
     canary_decisions: dict[int, tuple[bool, str | None]] = {
-        i: _canary_decision(specs[i]) for i in fresh_indices
+        i: (
+            canary_decision_override
+            if canary_decision_override is not None
+            else _canary_decision(specs[i])
+        )
+        for i in fresh_indices
     }
 
     # Guarantee the cluster-required per-run sidecar exists for every

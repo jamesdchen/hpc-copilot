@@ -688,6 +688,12 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
         "verified": sv.verified,
         "failure_kind": sv.failure_kind,
         "deduped": sv.deduped,
+        # Latency-audit #10 / fallback-inventory S1: when the gate HONOURED the
+        # #249 canary TTL cache (no fresh probe fired), the operator reads WHY
+        # here — the disclosure line + the validated age. Null on the ordinary
+        # canary-ran path, so a skip is never silent.
+        "canary_skipped_reason": sv.canary_skipped_reason,
+        "validated_age_sec": sv.validated_age_sec,
         "est_core_hours": est.est_core_hours,
         "est_gpu_hours": est.est_gpu_hours,
         # Unknown-footprint honesty (run #6): the defensive 0.0 above must
@@ -750,11 +756,14 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
         if est.footprint_unknown
         else f"{est.est_core_hours:g} core-hours"
     )
+    # When the gate HONOURED the #249 TTL cache, no fresh canary ran — say so in
+    # the brief the operator reads (never render "canary green" for a skip).
+    verdict_phrase = sv.canary_skipped_reason if sv.canary_skipped_reason else "canary green"
     return SubmitBlockResult(
         block="s2",
         stage_reached="canary_verified",
         needs_decision=True,
-        reason=f"canary green, est. {est_phrase}; greenlight to submit & watch.",
+        reason=f"{verdict_phrase}, est. {est_phrase}; greenlight to submit & watch.",
         run_id=sv.run_id,
         brief=brief,
         next_block=_next_block(

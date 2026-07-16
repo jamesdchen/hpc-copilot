@@ -138,3 +138,24 @@ class SubmitAndVerifyResult(BaseModel):
             "when canary was skipped or submit was deduped."
         ),
     )
+    canary_skipped_reason: str | None = Field(
+        default=None,
+        description=(
+            "Code-rendered disclosure naming WHY the two-phase GATE skipped the "
+            "canary (latency-audit #10 / fallback-inventory S1): the #249 TTL "
+            "cache hit — this exact (cmd_sha, version, cluster) was canary-"
+            "validated within the 4h window, so the gate honours it instead of "
+            "re-running the probe. verified=True with canary_run_id=None then "
+            "means 'cached validation stood in', DISTINCT from a canary=false "
+            "opt-out (verified=False) and from a failed canary. Null when a canary "
+            "actually ran or was opted out. A gated skip is never silent."
+        ),
+    )
+    validated_age_sec: int | None = Field(
+        default=None,
+        description=(
+            "Age in seconds of the cached canary validation the gate honoured "
+            "(the structured form of canary_skipped_reason's '<age> ago'). Null "
+            "unless canary_skipped_reason is set."
+        ),
+    )

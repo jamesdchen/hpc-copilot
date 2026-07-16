@@ -208,6 +208,18 @@ def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
 
     # S2 — stage & canary.
     if stage == "canary_verified":
+        # A #249 TTL-cache skip is NEVER rendered as "canary green" (the
+        # mandatory-disclosure ruling): the verbatim relay line must carry the
+        # skip reason + the force knob, or the operator reads a canary that
+        # never ran as a fresh pass.
+        skip_reason = brief.get("canary_skipped_reason")
+        if isinstance(skip_reason, str) and skip_reason:
+            return _line(
+                skip_reason,
+                cluster,
+                run_id,
+                tail=" — greenlight to submit & watch.",
+            )
         est = brief.get("est_core_hours")
         # Unknown-footprint honesty (run #6): the S2/retarget briefs stamp
         # footprint_unknown=True when the kernel returned its defensive 0.0
