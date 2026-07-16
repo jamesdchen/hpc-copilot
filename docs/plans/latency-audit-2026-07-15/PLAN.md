@@ -98,3 +98,13 @@ reduce CPU at 2700-task scale.
 ## Drift log
 
 - 2026-07-15: banked from the fleet audit. Nothing executed.
+- 2026-07-16: BOTH maintainer rulings RULED and built same-session: rank 3
+  = FLIP NOW (unset HPC_SSH_ENGINE selects asyncssh; `native` opts out; the
+  mcp opt-out pins native; suite hermeticity via the autouse native pin) —
+  the run-13 close satisfied the scope-by-constraint trigger. Rank 10 =
+  HONOR #249 on the gated path, 4h TTL **plus event invalidation** (a
+  breaker open / preamble-degradation incident on the cluster AFTER the
+  cached validation timestamp rejects the hit, read-only breaker coupling),
+  mandatory disclosure line, HPC_NO_CANARY_SKIP=1 reused. Ruled by the
+  user in the 2026-07-16 dev session; the TTL-shape reasoning (benefit
+  front-loaded, drift risk linear, events beat time) is recorded there.
