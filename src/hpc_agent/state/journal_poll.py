@@ -83,7 +83,7 @@ def poll_until_terminal(
     experiment_dir: Path,
     run_id: str,
     *,
-    poll_interval_seconds: float = 30.0,
+    poll_interval_seconds: float = 2.0,
     timeout_seconds: float = 86400.0,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
@@ -102,6 +102,15 @@ def poll_until_terminal(
 
     A negative or zero *poll_interval_seconds* is clamped to a small floor so a
     misconfigured caller can't busy-spin on the journal directory.
+
+    Rank 21 (poll-loop constant hygiene): the default cadence is 2s, matching the
+    pid-based sibling ``ops.monitor.wait_detached`` (``wait-detached``, a 2s pid
+    probe). The read is a local millisecond journal load, so a 30s interval bought
+    nothing but up to 30s of dead air between the detached runner's terminal write
+    and the orchestrator noticing it. The EVENT-DRIVEN rendezvous — block on the
+    detached worker's lease pid, then read the journal ONCE — is
+    ``wait-detached``; this timed poller is the cluster-free fallback for callers
+    that cannot await a pid.
     """
     interval = max(float(poll_interval_seconds), 1.0)
     deadline = now() + max(float(timeout_seconds), 0.0)
