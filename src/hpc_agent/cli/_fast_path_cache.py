@@ -52,9 +52,9 @@ def cache_disabled() -> bool:
 
 def _cache_path() -> Path:
     """Global cache file under the journal home (honours ``HPC_JOURNAL_DIR``)."""
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    return _current_homedir() / "_fast_path_verdict_cache.json"
+    return current_homedir() / "_fast_path_verdict_cache.json"
 
 
 def installed_dist_signature() -> str:

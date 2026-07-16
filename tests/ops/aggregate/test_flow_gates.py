@@ -48,6 +48,8 @@ def _force_local_reduce(monkeypatch):
     ``test_flow_cluster_final_default.py``.
     """
     monkeypatch.setenv("HPC_CLUSTER_FINAL_REDUCE", "0")
+    # Same reasoning for the O2 tar-pull adapter: these tests mock rsync_pull.
+    monkeypatch.setenv("HPC_AGGREGATE_TAR_PULL", "0")
 
 
 def _seed_run(experiment: Path, run_id: str = "r1") -> RunRecord:

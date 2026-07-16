@@ -85,9 +85,9 @@ def _ttl_sec() -> int:
 
 def _cache_path() -> Path:
     """Global cache file under the journal home (honours ``HPC_JOURNAL_DIR``)."""
-    from hpc_agent.state.run_record import _current_homedir
+    from hpc_agent.state.run_record import current_homedir
 
-    return _current_homedir() / "_submit_preflight_cache.json"
+    return current_homedir() / "_submit_preflight_cache.json"
 
 
 def _clusters_yaml_path() -> Path | None:

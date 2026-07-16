@@ -29,6 +29,15 @@ from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
 
+
+@pytest.fixture(autouse=True)
+def _legacy_pull_path(monkeypatch):
+    """These tests pin SCOPE/RIGOR flow and mock only ``rsync_pull``; pin the
+    legacy pull path so the O2 tar adapter does not route around the mocks
+    (transport coverage lives in the O2 suite + the tar-seam tests)."""
+    monkeypatch.setenv("HPC_AGGREGATE_TAR_PULL", "0")
+
+
 if TYPE_CHECKING:
     pass
 
