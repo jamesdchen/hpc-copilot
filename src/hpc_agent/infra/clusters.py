@@ -830,12 +830,13 @@ def _control_plane_direct_prefix(env_python: str) -> str | None:
     return f'export PATH={bindir}:"$PATH" && '
 
 
-def _effective_login_pool(cluster_cfg: dict[str, Any]) -> list[str]:
+def effective_login_pool(cluster_cfg: dict[str, Any]) -> list[str]:
     """The ordered, de-duplicated login-node pool for a cluster: ``[host,
     *login_pool]`` with blanks/placeholders dropped.
 
     Single-host entries (no ``login_pool``) return ``[host]`` (or ``[]`` when no
-    host) — so every pool-aware branch is a strict no-op for them.
+    host) — so every pool-aware branch is a strict no-op for them. Public:
+    consumed cross-package by ``ops.host_retarget.pool_failover``.
     """
     out: list[str] = []
     for h in [cluster_cfg.get("host"), *(cluster_cfg.get("login_pool") or [])]:
@@ -843,6 +844,9 @@ def _effective_login_pool(cluster_cfg: dict[str, Any]) -> list[str]:
         if s and s != "<your_host>" and s not in out:
             out.append(s)
     return out
+
+
+_effective_login_pool = effective_login_pool  # back-compat alias (pre-promotion name)
 
 
 def remote_activation_for_sidecar(

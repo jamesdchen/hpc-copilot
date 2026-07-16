@@ -125,7 +125,7 @@ def pool_failover(experiment_dir: Path, run_id: str, *, now: float | None = None
     Best-effort: any lookup/journal error degrades to ``None`` rather than
     raising into a caller's retry path.
     """
-    from hpc_agent.infra.clusters import _effective_login_pool, load_clusters_config
+    from hpc_agent.infra.clusters import effective_login_pool, load_clusters_config
     from hpc_agent.infra.ssh_circuit import host_circuit_ok
     from hpc_agent.state.journal import load_run
 
@@ -142,7 +142,7 @@ def pool_failover(experiment_dir: Path, run_id: str, *, now: float | None = None
         cfg = load_clusters_config().get(cluster) or {}
     except Exception:  # noqa: BLE001 — a bad/missing config degrades to no-failover
         return None
-    pool = _effective_login_pool(cfg)
+    pool = effective_login_pool(cfg)
     if len(pool) < 2:
         return None  # single-host cluster: today's behavior (nothing to fail over to)
     user = str(cfg.get("user") or "").strip()
