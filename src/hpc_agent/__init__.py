@@ -38,6 +38,11 @@ if TYPE_CHECKING:
     from hpc_agent.experiment_kit import register_run
     from hpc_agent.infra.clusters import load_clusters_config
 
+    # ``__version__`` resolves lazily through ``__getattr__`` (typed ``Any``);
+    # declare its real type here so ``from hpc_agent import __version__``
+    # consumers (e.g. conformance/report.py) stay ``str``-typed under mypy.
+    __version__: str
+
 # Package root. Cheap (``Path.resolve`` on ``__file__``) and read at module
 # scope by consumers (e.g. ``incorporation/build/executor.py``,
 # ``incorporation/build/tasks_py.py`` do ``from hpc_agent import _PACKAGE_ROOT``
