@@ -45,6 +45,7 @@ the same run_id is safe and cheap.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -65,7 +66,8 @@ from hpc_agent.execution.mapreduce.reduce.metrics import (
 )
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import resolve_ssh_target
-from hpc_agent.infra.io import atomic_write_json
+from hpc_agent.infra.io import append_jsonl_line, atomic_write_json
+from hpc_agent.infra.remote import ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.infra.transport import rsync_pull
@@ -80,7 +82,14 @@ from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_cmd_sha, read_run_sidecar, resolved_summary_artifact
 
-__all__ = ["aggregate_flow", "AggregateFlowResult", "per_task_fallback_reducible"]
+__all__ = [
+    "AggregateFlowResult",
+    "aggregate_failure_memo_hit",
+    "aggregate_flow",
+    "aggregate_memo_ignored",
+    "per_task_fallback_reducible",
+    "record_aggregate_failure",
+]
 
 #: Local pull-mirror destination names the aggregate flow MINTS under its ``out``
 #: dir when the cluster has no ``_combiner/`` and it falls back to pulling raw
@@ -1058,6 +1067,194 @@ def _record_scope_looks(
             reducer_block=reducer_block,
         )
     return out or None
+
+
+# ── deterministic-failure memo (latency audit rank 17) ────────────────────────
+#
+# An aggregate re-run whose (run definition, remote tree) is byte-identical to a
+# prior FAILED attempt returns the cached verdict as a needs-decision brief
+# INSTANTLY instead of re-paying the >=1800s pull. Run-12 paid two byte-identical
+# aggregate failures 89 and 61 min apart — the memo turns the second (and every
+# later) identical attempt into a one-round-trip fingerprint check.
+#
+# Design contract:
+#   * journal/state-backed — appended to ``.hpc/aggregate_memo/<run_id>.jsonl``
+#     via the one whole-line-atomic append seam.
+#   * evidence-carrying, never a silent skip — the cached verdict CITES the prior
+#     attempt's record (status, waves, the typed error) so the human sees WHY.
+#   * overridable — ``HPC_AGGREGATE_IGNORE_MEMO=1`` forces a re-run (the force
+#     flag), and a nudge that re-resolves the run rewrites its ``cmd_sha`` (part
+#     of the key) so the memo naturally misses.
+#   * conservative — the key binds a SUCCESSFULLY-computed remote tree
+#     fingerprint. If the tree can't be fingerprinted (network down), the memo is
+#     INERT: a failure with no provable tree is never recorded and never matched,
+#     so a transient outage can never block a later attempt.
+AGGREGATE_MEMO_IGNORE_ENV = "HPC_AGGREGATE_IGNORE_MEMO"
+#: Bound so a fingerprint probe can never itself become the latency it removes —
+#: the remote ``find`` is metadata-only (no file reads), seconds even at 2700
+#: tasks, vs the >=1800s pull it guards.
+_MEMO_FINGERPRINT_TIMEOUT_SEC = 60.0
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def aggregate_memo_ignored() -> bool:
+    """True when the human forced past the memo (``HPC_AGGREGATE_IGNORE_MEMO=1``)."""
+    return os.environ.get(AGGREGATE_MEMO_IGNORE_ENV) == "1"
+
+
+def _aggregate_memo_path(experiment_dir: Path, run_id: str) -> Path:
+    return experiment_dir / ".hpc" / "aggregate_memo" / f"{run_id}.jsonl"
+
+
+def _remote_tree_fingerprint(*, ssh_target: str, remote_path: str, subdir: str) -> str | None:
+    """One-round-trip content-independent fingerprint of the remote results subtree.
+
+    Lists every file's ``path|size|mtime`` under *subdir*, sorts + sha256s the
+    listing ON THE CLUSTER (bounded to a single 64-hex line regardless of tree
+    size — metadata only, no file reads). Returns the hex digest, or ``None`` on
+    ANY failure (unreachable host, missing GNU find/sha256sum, non-hex output) —
+    a ``None`` makes the whole memo inert, which is the safe direction: we only
+    ever cache/serve a verdict when the tree is PROVABLY unchanged.
+    """
+    sub = subdir.strip("/") or "."
+    # Metadata-only listing → deterministic ordering → single-line digest. All
+    # three tools are POSIX/GNU standard on a Linux login node; a BSD find (no
+    # -printf) simply errors and the memo goes inert.
+    cmd = (
+        f"cd {remote_path.rstrip('/')!r} 2>/dev/null && "
+        f"find {sub!r} -type f -printf '%p|%s|%T@\\n' 2>/dev/null | "
+        f"LC_ALL=C sort | sha256sum | cut -d' ' -f1"
+    )
+    try:
+        proc = ssh_run(
+            cmd,
+            ssh_target=ssh_target,
+            timeout=_MEMO_FINGERPRINT_TIMEOUT_SEC,
+            op="agg-memo-fp",
+        )
+    except (errors.HpcError, OSError, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    digest = (proc.stdout or "").strip()
+    return digest if _SHA256_RE.match(digest) else None
+
+
+def _aggregate_attempt_key(*, cmd_sha: str, tree_fingerprint: str) -> str:
+    """Stable key over the (resolved input spec, remote tree) pair.
+
+    ``cmd_sha`` is the run's tree fingerprint — the SoT for its resolved
+    definition; a nudge (revise-resolved) rewrites it, so the key naturally
+    invalidates. ``tree_fingerprint`` is the remote results subtree digest. A
+    byte-identical re-attempt reproduces both, hence the same key.
+    """
+    canonical = json.dumps(
+        {"cmd_sha": cmd_sha, "tree_fingerprint": tree_fingerprint},
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _read_aggregate_memo(experiment_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """Parse the run's memo ledger, newest last. Best-effort: a torn/absent
+    ledger yields ``[]`` (the memo optimization never gates on its own IO)."""
+    path = _aggregate_memo_path(experiment_dir, run_id)
+    if not path.is_file():
+        return []
+    entries: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            entries.append(rec)
+    return entries
+
+
+def _memo_tree_fingerprint_for(experiment_dir: Path, run_id: str, record: Any) -> str | None:
+    """Fingerprint the run's OWN scoped results subtree (the pull's real input)."""
+    return _remote_tree_fingerprint(
+        ssh_target=resolve_ssh_target(record),
+        remote_path=record.remote_path,
+        subdir=_run_scoped_results_subdir(experiment_dir, run_id, record, "results"),
+    )
+
+
+def aggregate_failure_memo_hit(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """Return the cached FAILED verdict for a byte-identical prior attempt, else ``None``.
+
+    Cheap-first: a local ledger read gates everything — a run with no prior
+    failure (the common case) pays ZERO SSH. Only when a memo exists do we spend
+    the one bounded fingerprint round-trip. The returned dict is the recorded
+    memo entry (evidence: prior status/waves/error) for the brief to cite.
+    Honours the ``HPC_AGGREGATE_IGNORE_MEMO`` force flag (returns ``None``).
+    """
+    if aggregate_memo_ignored():
+        return None
+    entries = _read_aggregate_memo(experiment_dir, run_id)
+    if not entries:
+        return None
+    record = load_run(experiment_dir, run_id)
+    if record is None or not backend_requires_ssh(record.backend):
+        return None
+    tree_fp = _memo_tree_fingerprint_for(experiment_dir, run_id, record)
+    if tree_fp is None:  # unprovable tree → memo inert
+        return None
+    key = _aggregate_attempt_key(
+        cmd_sha=read_run_cmd_sha(experiment_dir, run_id), tree_fingerprint=tree_fp
+    )
+    # Newest matching FAILED entry wins (scan from the end).
+    for rec in reversed(entries):
+        if rec.get("key") == key and rec.get("verdict") == "failed":
+            return rec
+    return None
+
+
+def record_aggregate_failure(experiment_dir: Path, run_id: str, error: Exception) -> None:
+    """Memoize a deterministic aggregate failure (best-effort, never raises).
+
+    Records only when the remote tree can be fingerprinted — a failure with no
+    provable tree (network down) is left un-memoized so it can never block a
+    later attempt. The entry carries the prior attempt's evidence so a future
+    hit's brief can cite it. Called from the block layer's failure path.
+    """
+    try:
+        record = load_run(experiment_dir, run_id)
+        if record is None or not backend_requires_ssh(record.backend):
+            return
+        tree_fp = _memo_tree_fingerprint_for(experiment_dir, run_id, record)
+        if tree_fp is None:
+            return
+        cmd_sha = read_run_cmd_sha(experiment_dir, run_id)
+        entry = {
+            "key": _aggregate_attempt_key(cmd_sha=cmd_sha, tree_fingerprint=tree_fp),
+            "verdict": "failed",
+            "run_id": run_id,
+            "cmd_sha": cmd_sha,
+            "tree_fingerprint": tree_fp,
+            "recorded_at": utcnow_iso(),
+            "error_code": getattr(error, "error_code", "internal"),
+            "error_category": getattr(error, "category", "internal"),
+            "error_message": str(error)[:500],
+            "prior_attempt": {
+                "status": getattr(record, "status", None),
+                "combined_waves": list(getattr(record, "combined_waves", []) or []),
+                "failed_waves": list(getattr(record, "failed_waves", []) or []),
+                "remote_path": getattr(record, "remote_path", None),
+            },
+        }
+        append_jsonl_line(_aggregate_memo_path(experiment_dir, run_id), entry)
+    except (errors.HpcError, OSError, ValueError):
+        # The memo is an optimization; a bookkeeping failure must never mask or
+        # replace the real aggregate error the caller is about to re-raise.
+        return
 
 
 def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
