@@ -201,9 +201,11 @@ verbs only), and the figures carry no journal/artifact provenance — the
 around a blocked sanctioned path. The correct sequence existed and was
 already relayed: host-retarget (or settle-run with directed sacct
 evidence), then the stack's own settle/harvest/aggregate produces the
-same numbers WITH provenance. Root enabler: the ssh-guard hook allows
-the `usc-discovery` alias (the deny-list matches FQDNs; the alias
-slipped through) — close the alias hole in the guard. Secondary: the
+same numbers WITH provenance. CORRECTED same-day: the ssh-guard
+hook's pattern DOES cover the `usc-discovery` alias — the guard is an
+ask-gate, so the call was either human-approved at the prompt or the
+demo session's permission mode auto-allowed it; the conduct question is
+therefore about the ask being accepted mid-livelock, not a hook hole. Secondary: the
 relay-audit corpus did not fire on the ad-hoc numbers (they name no
 run_id scope) — the finding-8 corpus work should consider unscoped
 numeric tables in relays.
