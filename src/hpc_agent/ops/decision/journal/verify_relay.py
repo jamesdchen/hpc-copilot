@@ -683,6 +683,37 @@ _STATE_RE = re.compile(
 # not as a serialized JSON key — bug-sweep #12).
 _VERIFICATION_NEEDLE: dict[str, str] = {"verified": "verified", "canary_green": "green"}
 
+# A PATH-valued key: a ``[._-]``-delimited segment that names a filesystem path
+# (``remote_path``, ``experiment_dir``, ``result_dir_template``,
+# ``run_sidecar_path``, ``render_path``, ``relpath``). Such a key's value is a
+# path — never a verification verdict — so it must not feed the verification
+# corpus (run-13 latent false-NEGATIVE: a dir named ``.../verified/...`` or a
+# ``render_path`` like ``results/verified/green_run.json`` vouched for a
+# fabricated ``verified`` / ``canary green`` claim). Segment-EQUALITY (not
+# substring) so ``profile`` — which ends in ``file`` — is NOT mistaken for a
+# path key; the value-semantic ``profile`` label stays in the corpus.
+_PATH_KEY_SEGMENTS = frozenset(
+    {"path", "paths", "dir", "dirs", "file", "files", "relpath", "folder"}
+)
+
+# A path-SHAPED string TOKEN: it carries a directory separator (``/`` or ``\``)
+# or a filename-extension tail (``green_run.json``, ``metrics.csv``). A
+# verification VERDICT is a bare word (``verified`` / ``green`` / ``COMPLETED``)
+# and never carries either, so a token of this shape is a filesystem path
+# fragment — not evidence. Tested PER whitespace token (mirroring the
+# ``_collect_source_numbers`` per-token corpus fix, run-13 finding 8) so a
+# genuine ``canary green — see results/x.json`` still evidences ``green`` (the
+# word token) while the ``results/x.json`` token is dropped. The extension tail
+# requires a LETTER lead (``\.[A-Za-z]``) so a decimal (``3.14``) is never
+# mistaken for a file. Catches the path-valued fields whose KEY name does not
+# announce a path (``summary_artifact`` = ``metrics.json``).
+_PATH_SHAPED_TOKEN_RE = re.compile(r"[/\\]|\.[A-Za-z][A-Za-z0-9]*$")
+
+
+def _is_path_key(key: str) -> bool:
+    """True when *key* names a filesystem-path field (segment-equality)."""
+    return any(seg in _PATH_KEY_SEGMENTS for seg in re.split(r"[._\-]", key.lower()))
+
 
 def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
     """Gather the verification needles a durable record actually EVIDENCES.
@@ -697,9 +728,25 @@ def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
       evidences ``green``); or
     * a KEY containing it maps to boolean ``True`` (``verified: true`` evidences
       ``verified``; ``verified: false`` must NOT).
+
+    Value-semantic ALSO means PATH-valued fields don't count (run-13 latent): a
+    string that is a filesystem path is never a verification verdict, but a path
+    like ``results/verified/green_run.json`` (a ``render_path`` value, or an
+    ``experiment_dir`` under a ``.../verified/...`` tree) contains the needle as
+    an incidental substring and would falsely vouch for the claim — a false
+    NEGATIVE that survives a fabricated ``verified`` / ``canary green`` relay.
+    Path values are excluded two ways, mirroring the tokenizer-precision work in
+    ``539c1cdc``: a path-valued KEY (:func:`_is_path_key`) is skipped whole, and
+    within any string VALUE each path-SHAPED token (:data:`_PATH_SHAPED_TOKEN_RE`)
+    is dropped before the needle test — so a genuine verdict word sitting beside
+    a path in the same free-text value still counts.
     """
     if isinstance(obj, dict):
         for k, v in obj.items():
+            if isinstance(k, str) and _is_path_key(k):
+                # A path-valued field: its value is a filesystem path, never a
+                # verification verdict. Skip the whole subtree.
+                continue
             if isinstance(k, str) and v is True:
                 kl = k.lower()
                 for needle in _VERIFICATION_NEEDLE.values():
@@ -712,10 +759,13 @@ def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
             _collect_verification_evidence(v, out)
         return
     if isinstance(obj, str):
-        s = obj.lower()
-        for needle in _VERIFICATION_NEEDLE.values():
-            if needle in s:
-                out.add(needle)
+        for tok in obj.split():
+            if _PATH_SHAPED_TOKEN_RE.search(tok):
+                continue  # a filesystem path fragment, never a verdict
+            tl = tok.lower()
+            for needle in _VERIFICATION_NEEDLE.values():
+                if needle in tl:
+                    out.add(needle)
 
 
 def _classify_state(

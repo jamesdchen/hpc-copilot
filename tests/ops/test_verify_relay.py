@@ -765,6 +765,52 @@ def test_canary_green_evidenced_by_string_value_passes(tmp_path: Path) -> None:
     assert [m for m in out.mismatches if m.kind == "state"] == []
 
 
+# ── run-13 latent: path-VALUED fields don't evidence a verification claim ──────
+
+
+def test_path_valued_key_does_not_evidence_verified_claim(tmp_path: Path) -> None:
+    """Run-13 latent false-NEGATIVE: a path VALUE under a path-announcing KEY
+    (``render_path`` = ``results/verified/green_run.json``) carries 'verified' /
+    'green' only as an incidental substring — it must NOT vouch for a fabricated
+    verification claim. The value-semantic collector skips path-valued keys."""
+    _seed_journal(tmp_path, render_path="results/verified/green_run.json")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False, failure_kind="canary_failed")
+
+    out = _run(tmp_path, "run-1 is verified and canary green.")
+    assert out.clean is False
+    state_claims = {m.claim.lower() for m in out.mismatches if m.kind == "state"}
+    assert "verified" in state_claims  # path did not rescue the fabricated claim
+    assert any("green" in c for c in state_claims)
+
+
+def test_path_shaped_token_under_plain_key_does_not_evidence(tmp_path: Path) -> None:
+    """The path-SHAPED token guard: a path value under a key that does NOT
+    announce a path (``note``) is still dropped token-by-token, so an incidental
+    ``.../verified/...`` path fragment never evidences the claim — while a genuine
+    verdict word in the same free-text value would survive."""
+    _seed_journal(tmp_path, note="artifact at results/verified/green_run.json")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False)
+
+    out = _run(tmp_path, "run-1 is verified.")
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "verified"
+
+
+def test_plain_string_value_verdict_still_evidences(tmp_path: Path) -> None:
+    """Counter (no NEW false positive): a value-semantic verdict word under a plain
+    key (``canary_status`` = ``verified``) still evidences a 'verified' relay — the
+    path guards touch only path-keyed or path-shaped values, not a bare word."""
+    _seed_journal(tmp_path, canary_status="verified")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False)
+
+    out = _run(tmp_path, "run-1 is verified.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
 # ── bug-sweep #39: negative source metrics relayed verbatim ────────────────────
 
 
