@@ -271,3 +271,19 @@ vs a journal byte-count ('886' vs 899), 'run-level' flagged as a
 run-id-shaped token, and 'timeout' as a state claim while quoting a log.
 Same three fix classes as finding 8; the flood rate (7-10 per relay) is
 now the dominant noise source at every decision boundary.
+
+## 14. The aggregate stage ended in an operator-ordered full bypass
+`[operation]` Terminal datum for the run-13 digest: after four stacked
+defects (canary false-negative → monitoring blindness → deterministic
+pull timeout → stale-cache wrong table), the operator ordered the demo
+to run the registered reducer directly over results/ WITHOUT hpc-agent
+("just do the reduce for me, don't use the hpc-agent tool"). The numbers
+remain code-computed (the registered reducer over the verified source
+tree); journal provenance is lost and owed a post-hoc human-directed
+settle record, plus a reproduce-under-the-sanctioned-flow once the new
+wheel lands (which doubles as the cache-fix validation). Automatability
+metric: the aggregate stage's touch count escalated to FULL MANUAL.
+Secondary [harness] note: the demo inferred REMOTE rm approval from a
+command the operator typed LOCALLY ("taking your typed command as
+approval") — the auto-mode classifier correctly refused; approval scope
+is surface-specific, never inferred across surfaces.
