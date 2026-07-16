@@ -42,6 +42,7 @@ _EXPECTED_ORDER = (
     "build_primitive_index",
     "build_operations_index",
     "build_verb_module_map",
+    "build_principles_index",
     "check_no_pending_primitive_docs",
 )
 
@@ -62,7 +63,7 @@ def test_steps_argv_map_matches_script_flag_semantics() -> None:
     """The per-script argv absorbs the scripts' inconsistent flag semantics:
     index scripts take bare argv in --write; check_no_pending takes none."""
     argv_by_stem = {stem: (chk, wrt) for stem, chk, wrt in _MOD._STEPS}
-    # --check is uniform across the six generators.
+    # --check is uniform across the seven generators.
     for stem in _EXPECTED_ORDER[:-1]:
         assert argv_by_stem[stem][0] == ("--check",), stem
     # The index scripts recognise only --check; --write is expressed as bare.
@@ -74,6 +75,7 @@ def test_steps_argv_map_matches_script_flag_semantics() -> None:
         "bake_operations_json",
         "build_primitive_frontmatter",
         "build_verb_module_map",
+        "build_principles_index",
     ):
         assert argv_by_stem[stem][1] == ("--write",), stem
     # check_no_pending is always a check (no flags, both modes).

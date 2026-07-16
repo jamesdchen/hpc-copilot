@@ -13,7 +13,7 @@ bare-argv semantics (``build_schemas`` previews a diff, the index scripts
 WRITE, ``build_verb_module_map`` checks-without-writing), so a single entry
 point must not inherit that ambiguity — the caller states intent explicitly.
 
-The seven steps run as **subprocesses of the current interpreter** (never
+The eight steps run as **subprocesses of the current interpreter** (never
 in-process imports) in the dependency order below. Subprocess isolation
 matches exactly how pre-commit and CI invoke them today, so behaviour is
 provably unchanged, and it sidesteps the env-timing / registry-cache
@@ -33,7 +33,11 @@ Order (WS1 DC1, verified against the scripts):
 5. ``build_operations_index``   — subprocess ``capabilities`` -> ``docs/generated/operations.md``.
 6. ``build_verb_module_map``    — registry-only CLI fast-path map (order-free;
    placed sixth for determinism).
-7. ``check_no_pending_primitive_docs`` — LAST, so a freshly scaffolded stub fails
+7. ``build_principles_index``   — regenerates the section listing in
+   ``docs/internals/engineering-principles.md`` from the ``principles/<slug>.md``
+   frontmatter; registry-free (reads only the section files), so its only
+   ordering constraint is that it precede the pending-docs check.
+8. ``check_no_pending_primitive_docs`` — LAST, so a freshly scaffolded stub fails
    loudly (correct: the human must fill the body).
 
 Failure policy (both modes): run EVERY step regardless of failures, print one
@@ -42,7 +46,7 @@ beats a truncated report for a ~20s, seven-step run — in ``--check`` one run
 surfaces ALL drift; in ``--write`` a failed earlier step only makes later
 diffs loud, never silently wrong.
 
-``REGEN_SCRIPTS`` is the module-level canonical list of the seven steps (the
+``REGEN_SCRIPTS`` is the module-level canonical list of the eight steps (the
 tuple other units probe — e.g. a count gate — since the pre-commit hooks may
 collapse to one). It is the single source of truth for the pipeline order.
 """
@@ -75,6 +79,7 @@ _STEPS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("build_primitive_index", ("--check",), ()),
     ("build_operations_index", ("--check",), ()),
     ("build_verb_module_map", ("--check",), ("--write",)),
+    ("build_principles_index", ("--check",), ("--write",)),
     ("check_no_pending_primitive_docs", (), ()),
 )
 
@@ -92,6 +97,7 @@ REGEN_SCRIPTS: tuple[str, ...] = (
     "build_primitive_index",
     "build_operations_index",
     "build_verb_module_map",
+    "build_principles_index",
     "check_no_pending_primitive_docs",
 )
 assert tuple(stem for stem, _check, _write in _STEPS) == REGEN_SCRIPTS

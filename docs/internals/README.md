@@ -11,7 +11,8 @@ notes, recipes for adding internals, and architecture deep-dives. They are
 |---|---|
 | [`adding-a-primitive.md`](adding-a-primitive.md) | Step-by-step recipe for landing a new wire-surface primitive (atom or workflow). |
 | [`audit-history.md`](audit-history.md) | Sweep-by-sweep log of the multi-agent repo audits — the bug sweeps and the structural / drift "organization" sweep — recording what each fixed, what was deliberately deferred, and how the severity tail fell. |
-| [`engineering-principles.md`](engineering-principles.md) | Cross-cutting judgment rules — "verify a guard can fire" and the four-question library-knowledge boundary test — with the enforcement map naming the lint/test that holds each line. Replaced the repo `CLAUDE.md`. |
+| [`engineering-principles.md`](engineering-principles.md) | INDEX to the cross-cutting judgment rules. Carries the two unsplittable judgment rules in full — "verify a guard can fire" and the four-question library-knowledge boundary test — plus a GENERATED listing of the per-section enforcement maps under [`principles/`](principles/). Replaced the repo `CLAUDE.md`. |
+| [`principles/`](principles/) | The per-section engineering-principle files the index links — each a self-contained prose + enforcement map (the lint/test naming each line's source of truth) + drift log. The index's listing is regenerated from these by `scripts/build_principles_index.py` (a `regen_all` step). |
 | [`engineering-principles-history.md`](engineering-principles-history.md) | Narrative & drift-log *history* companion to `engineering-principles.md` — the per-incident context (not normative CI) kept off the normative page. |
 | [`harness-contract.md`](harness-contract.md) | The normative spec a conforming HARNESS implements — the out-of-band human-utterance log (with the frozen write API), the relay/verbatim enforcement point, and backgrounding/wake. Claude Code is one implementation; the v1.5 jupytext render is intended to be a second. The vendor-lock-in defense for the notebook-audit substrate. |
 | [`experiment-contract.md`](experiment-contract.md) | The canonical answer to "what is an hpc-agent experiment?" — the `@register_run`-decorated typed function that every "notebook"/"script" doc is a specific shape of. The boundary between the framework and the caller's code. |
@@ -23,6 +24,7 @@ notes, recipes for adding internals, and architecture deep-dives. They are
 | [`state-model.md`](state-model.md) | What state files exist, what each contains, which primitives read/write them. Per-user state under `~/.claude/hpc/<repo>/`; per-experiment state under `<exp>/.hpc/`. |
 | [`submit-sequence.md`](submit-sequence.md) | End-to-end walkthrough from `/submit-hpc` typed in chat to results landing in `aggregated.json`. Traces the slash → skill → bare worker → primitives → cluster pipeline. |
 | [`sync-checklist.md`](sync-checklist.md) | Invariants between the slash-command surface and the `hpc-agent` CLI — what must stay aligned when either changes. |
+| [`suggest-tests.md`](suggest-tests.md) | The ADVISORY diff → test-selection tool (`scripts/suggest_tests.py`) for agent inner loops — mirror-path + import-graph + cross-consumer mapping. Advisory only: the full suite stays mandatory at CI/release; unmapped files surface loudly. |
 
 ## When to add a doc here
 
