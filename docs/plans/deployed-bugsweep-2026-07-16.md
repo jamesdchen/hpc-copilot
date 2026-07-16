@@ -1,0 +1,53 @@
+# Deployed-code bug sweep — 2026-07-16 (8 CONFIRMED, Opus-verified)
+
+Found by a Fable-finder/Opus-verify sweep of cluster-deployed + recovery paths (the mutmut-blind, test-hard class). All PRE-EXISTING, none from the night latency/migrate work.
+
+## B1 [HIGH] Cross-run wave-partial overwrite makes re-aggregate of the older run silently drop waves with no escalation
+- **Site:** src/hpc_agent/ops/aggregate_flow.py:1209
+- **Failure:** Every link verified by code-read. (1) `_combiner/` is genuinely shared across run_ids: run_combiner/run_final_reduce cd to remote_path (not remote_path/run_id) and write/pull relative `_combiner/wave_N.json` (transport/_combiner.py:78,156,203; aggregate_flow.py:959). Wave numbers are per-run 0-based, so distinct runs collide on filenames; campaign_refill.py:186 reuses remote_path across new run_ids. (2) Run C overwrites run B's wave_N.json via the F05 branch (combiner.py:480) or the force harvest path. (3) `_missing_waves` (aggregate_flow.py:390, call 1992) trusts record.combined_waves, so run
+- **Fix sketch:** Treat overwritten-away waves as incomplete: (a) in _cluster_final_reduce (aggregate_flow.py:1209) union provenance.skipped_foreign_waves into the returned incomplete set so escalation fires; (b) in aggregate_flow's ensure_all_combined step, don't treat journal combined_waves as proof the partial exists — recombine any wave whose on-cluster wave_<N>.json run_id != run_id (the combiner already re-reads run_id there); or structurally, have the per-wave combiner write run-scoped partials (_combiner/<run_id>/wave_<N>.json) so runs can never clobber each other.
+
+## B2 [MEDIUM] Reporter marks a task complete on any promoted file, ignoring the dispatcher's summary-last completion marker — a mid-promote crash yields a permanent false 'complete' that blocks resubmission and silently drops the task from the aggregate
+- **Site:** src/hpc_agent/execution/mapreduce/reduce/status.py:671
+- **Failure:** CONFIRMED by reading the full chain across three modules.
+
+Asymmetry proven: dispatch.py:1297-1299 deliberately promotes summary_name LAST (comment 1343-1348: "a crash before that point leaves the task obviously incomplete"); dispatch.py:998-1006 keys the idempotency skip on result_dir/summary_name; combiner.py:536-538 requires summary_name and excludes a missing one from grid_points/tasks_read (604) WITHOUT aborting the combine. But check_results_from_tasks (status.py:671-708) marks a task complete on the FIRST non-framework, non-empty glob match under file_glob='*' and NEVER consults summary
+- **Fix sketch:** Thread the sidecar's resolved summary_artifact into check_results_from_tasks from _main (the sidecar is already in hand) and key completion on that file when declared — matching the dispatcher and combiner's definition; when no summary is declared, keep the current any-file heuristic. Minimal version: demote to 'unknown' any task whose matched file set lacks summary_name so the resubmit surface sees it.
+
+## B3 [HIGH] Auto-resume resurrects a deliberately killed run: the gate never consults kill_requested_at, and a user kill is classified 'preempted'
+- **Site:** src/hpc_agent/ops/auto_resume_flow.py:150
+- **Failure:** Every link verified by reading. (1) maybe_auto_resume (auto_resume_flow.py:150) and the decision core decide_auto_resume_from_ids (recovery/auto_resume.py:95-121) gate ONLY on auto_resume_on_kill / preempted-ids-nonempty / count<cap — never kill_requested_at or kill_confirmed_at. grep confirms kill_requested_at is read only in state/run_story.py and ops/monitor/summary.py, not the resume path. (2) monitor_flow.py:1237-1314 terminal-FAILED hook gates solely on record.auto_resume_on_kill; is_kill_confirmed appears only at line 662 for announce-census leg selection, and requires FULL confirmation
+- **Fix sketch:** In maybe_auto_resume (or decide_auto_resume_from_ids' caller), escalate when record.kill_requested_at is set and not superseded by a later submit/resubmit timestamp — e.g. `if record.kill_requested_at: return AutoResumeOutcome('escalate', 'kill was explicitly requested for this run; not auto-resuming')`. The journal already carries the discriminator; nothing reads it on this path.
+
+## B4 [HIGH] Range-scoped kill applies a global-validated index as a local array index to every wave job, silently killing unnamed healthy tasks (or cancelling nothing)
+- **Site:** src/hpc_agent/ops/monitor/kill.py:143
+- **Failure:** CONFIRMED at the code level (no live cluster available; verified by reading the full path + the offset scheme + the untested multi-job gap).
+
+Chain:
+- kill.py:143-149 validates each task_range index against the run-GLOBAL space [1, record.total_tasks]; total_tasks is the global task count (submit_flow.py:1695), and a multi-wave submit stores EVERY wave's job id in record.job_ids (submit_flow.py:1716 -> SubmitResult.job_ids).
+- _attempt_backend_cancel (kill.py:66-91,164-169) passes the full job_ids list + verbatim task_range to build_cancel_cmd.
+- build_cancel_cmd (_engine.py:931 SLURM `scancel
+- **Fix sketch:** kill already has the mapping tool fetch_failures uses: read_job_task_spans(experiment_dir, run_id). When spans exist (waved run), translate the global range per job — cancel index (g - offset) only against the job whose window covers g — or, minimally, refuse task_range when len(record.job_ids) > 1 with spans present, instead of fanning one local range across all jobs.
+
+## B5 [HIGH] Path-shaped summary_artifact never matches the tar pull include filter: slashed patterns are root-anchored while every consumer expects any-depth
+- **Site:** src/hpc_agent/infra/transport/_pull.py:170
+- **Failure:** Reproduced the anchoring: matches() slashed-pattern branch (_pull.py:167-174) fails for 'estimator_x/task_3/sub/metrics.json' vs include 'sub/metrics.json' (both the bare pattern and the pat+'/*' variant return False), while bare '.hpc_cmd_sha'/'_trace.jsonl' match the basename at any depth. The find fallback _find_filter_predicate (_pull.py:448-471) has the identical root-anchoring — the existing test_find_predicate_slashed_include_uses_path asserts exactly '-path ./sub/summary.json' (no any-depth variant). The tar seam is LIVE here: tar_ssh_pull is exported from infra/transport/__init__.py (
+- **Fix sketch:** Give slashed include patterns any-depth semantics in all three twins so they agree with the downstream rglob(summary_name): in the _REMOTE_PULL_MANIFEST_SNIPPET matches() and in _match_globs, also test fnmatch(rel, '*/' + pat); in _find_filter_predicate, emit a second -o term `-path './*/<pat>'` alongside `-path './<pat>'`. (Alternatively normalize at the aggregate_flow.py:665 call site by including both summary_name and '*/'+summary_name, but fixing the shared matchers keeps the three copies in lockstep.) Add a regression test pulling a depth>0 path-shaped summary through the manifest snippet's matcher.
+
+## B6 [MEDIUM] Manifest-less fallback pull masks find failures behind the pipe: a partial enumeration lands as ok=True and finished tasks silently vanish from the per-task weighted-mean aggregate
+- **Site:** src/hpc_agent/infra/transport/_pull.py:759
+- **Failure:** Verified end-to-end by reading code + confirming shell semantics (no live SSH available).
+
+MECHANISM (all confirmed):
+1. `_fallback_remote_cmd` (_pull.py:758-761): `cd <dir> && find . -type f <pred> -print0 | tar c --null --no-recursion -T - -f -`. No `set -o pipefail`, no `rc=$?` capture of find. Bash test confirmed: left-side rc=1 piped into rc=0 command yields pipe rc=0 without pipefail (rc=1 with it). Login shells default pipefail off. When find hits a permission-denied / stale-NFS subdir it prints to stderr, SKIPS that subtree, continues, and exits non-zero at the end -> emits a PARTIAL n
+- **Fix sketch:** Don't rely on the pipeline's exit status: mirror _batch_remote_cmd's temp-file shape — `T=$(mktemp) && find . -type f <pred> -print0 > "$T" && tar c --null --no-recursion -T "$T" -f - ; rc=$?; rm -f "$T"; exit $rc` with the find stage's failure short-circuiting before tar streams anything (the `&&` makes a failed find abort the archive instead of shipping a truncated set). That also keeps the one-connection property.
+
+## B7 [MEDIUM] #249 canary cache minted at first-canary success (mid-gate) — a failed second canary blocks the main once, then a retry within 4h cache-skips both canaries and launches the full array
+- **Site:** src/hpc_agent/ops/verify_canary.py:1788
+- **Failure:** Double-canary is default-ON (submit_and_verify.py:377). Order within one submit_and_verify: fire 2nd canary (967) -> verify 1st canary, whose success path records the #249 cache at verify_canary.py:1783-1792 -> 1st ok, mark complete (1016) -> _verify_second_canary_and_mint (1029) -> 2nd FAILS -> returns blocking verified=False (443-461); main correctly does not launch this call. But the cache entry stands: canary_cache.py has NO delete/invalidate; the 2nd-fail path only marks the record terminal, never touches _canary_cache.json. On retry within the 4h TTL with the unchanged cmd_sha, _gated_ca
+- **Fix sketch:** Move record_canary_validated out of verify_canary's success path into submit_and_verify, after BOTH canaries verified ok (just before the stop_after_canary return / Phase-2 launch); or, minimally, delete/invalidate the cache key in the second-canary-failure branch of _verify_second_canary_and_mint so the blocked cmd_sha cannot ride the TTL.
+
+## B8 [MEDIUM] Canary qsub->record crash window is unguarded: retry fires a duplicate canary under the same run_id, double-writing task-0 and orphaning the first job
+- **Site:** src/hpc_agent/ops/submit_flow.py:2592
+- **Failure:** CONFIRMED by code reading. Mechanism proven: (1) The canary crash-safety pre-stamp (submit_flow.py:2418-2421) writes job_ids to the CANARY sidecar (.hpc/runs/<run>-canary.json) via update_run_sidecar_job_ids, which FULL-REPLACES job_ids (runs.py:1094). (2) submit_and_record (runner.py:309) writes the JOURNAL record afterward (2424) — the acknowledged crash window is between these two, exactly what the pre-stamp comment at 2413-2416 exists for. (3) load_run (journal.py:70-72 -> _run_path) reads ONLY the journal file, a different file from the sidecar. The replay branch at submit_flow.py:2578 ke
+- **Fix sketch:** In the fresh-canary branch, mirror F47: read the canary sidecar first; if it already carries job_ids with no journal record, either adopt them as the replay ids (set canary_job_ids from the sidecar, canary_fired_this_call=False — the safe SGE/un-gated posture) or refuse loudly naming the landed id, instead of re-qsubbing. Same guard in fire_second_canary.
