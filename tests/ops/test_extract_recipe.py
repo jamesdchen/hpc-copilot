@@ -375,3 +375,120 @@ def test_exactly_one_seed_required(tmp_path: Path) -> None:
         extract_recipe(tmp_path, spec=ExtractRecipeInput())
     with pytest.raises(errors.SpecInvalid):
         extract_recipe(tmp_path, spec=ExtractRecipeInput(run_id="a", campaign_id="b"))
+
+
+# ── G2: mechanical dead-end disambiguation (docs/design/dead-end-disambiguation.md) ──
+
+
+def _persist_agg(
+    experiment_dir: Path, run_id: str, contributing: list[str], *, source: str = "local_reduce"
+) -> None:
+    """Persist a run's reduced table with a Task-1 contributing_run_ids block."""
+    agg = experiment_dir / "_aggregated" / run_id / "metrics_aggregate.json"
+    agg.parent.mkdir(parents=True, exist_ok=True)
+    agg.write_text(
+        json.dumps(
+            {
+                "aggregated_metrics": {},
+                "provenance": {
+                    "incomplete_waves": [],
+                    "source": source,
+                    "reduced_at": _TS,
+                    "contributing_run_ids": list(contributing),
+                    "piece_cmd_shas": [],
+                    "hpc_agent_version": "9.9.9",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_anchored_seed_harvested_but_non_contributing_sibling_is_mechanical_dead_end(
+    tmp_path: Path,
+) -> None:
+    """A campaign sibling that HARVESTED but never fed the cited table is a DEAD-END.
+
+    This is the G2 hole the harvest-receipt proxy left open: the dead-end run has a
+    harvest receipt (it ran to completion), so the proxy would KEEP it and pollute
+    the minimal recipe. Anchoring on the cited table's contributing_run_ids
+    mechanically excludes it — the disclosure names the mechanical reason.
+    """
+    cited = "exp-cited-11111111"
+    dead_harvested = "exp-deadhv-22222222"
+    _seed(tmp_path, cited, campaign_id="campM")  # harvested=True (default)
+    _seed(tmp_path, dead_harvested, campaign_id="campM")  # ALSO harvested
+    _persist_agg(tmp_path, cited, [cited])  # the cited table fed ONLY by `cited`
+
+    recipe = extract_recipe(tmp_path, spec=ExtractRecipeInput(run_id=cited))
+
+    assert recipe["minimal_run_ids"] == [cited]
+    reasons = {e["run_id"]: e["reason"] for e in recipe["excluded"]}
+    assert dead_harvested in reasons, "the harvested-but-non-contributing sibling was kept"
+    reason = reasons[dead_harvested]
+    assert reason.startswith("dead-end")
+    # MECHANICAL, not the proxy: the reason names the contributing set, not a receipt.
+    assert "contributing_run_ids" in reason
+    assert "proxy" not in reason
+
+
+def test_anchored_seed_keeps_contributor_without_harvest_receipt_graft_class(
+    tmp_path: Path,
+) -> None:
+    """A run PROVABLY in contributing_run_ids is kept even with NO harvest receipt.
+
+    The run-13 graft class: a repair re-ran arms under a new run id into another
+    run's tree, so it appears in the table's contributing_run_ids but was never
+    independently harvested (no receipt of its own). Membership outranks the
+    receipt proxy — the graft must NOT be excluded as a dead end.
+    """
+    host = "exp-host-33333333"
+    graft = "exp-graft-44444444"
+    _seed(tmp_path, host, campaign_id="campG")  # harvested
+    _seed(tmp_path, graft, campaign_id="campG", harvested=False)  # NO harvest receipt
+    _persist_agg(tmp_path, host, [host, graft])  # both fed the cited table
+
+    recipe = extract_recipe(tmp_path, spec=ExtractRecipeInput(run_id=host))
+
+    assert graft in recipe["minimal_run_ids"], (
+        "a proven contributor was excluded for lacking a harvest receipt"
+    )
+    reasons = {e["run_id"]: e["reason"] for e in recipe["excluded"]}
+    assert graft not in reasons
+
+
+def test_anchored_seed_supersession_ancestor_is_superseded_not_dead_end(tmp_path: Path) -> None:
+    """A campaign sibling superseded by a contributor reads SUPERSEDED, not dead-end.
+
+    The ancestor did not itself feed the cited table, but its lineage descendant (a
+    contributor) did — so it collapses toward the head as `superseded`, distinct
+    from a genuine dead end.
+    """
+    new = "exp-new-55555555"
+    old = "exp-old-66666666"
+    _seed(tmp_path, old, campaign_id="campSup")
+    _seed(tmp_path, new, campaign_id="campSup", supersedes=old)
+    _persist_agg(tmp_path, new, [new])  # only the newest fed the table
+
+    recipe = extract_recipe(tmp_path, spec=ExtractRecipeInput(run_id=new))
+
+    assert recipe["minimal_run_ids"] == [new]
+    reasons = {e["run_id"]: e["reason"] for e in recipe["excluded"]}
+    assert reasons[old] == "superseded"
+
+
+def test_campaign_seed_dead_end_reason_discloses_the_harvest_proxy(tmp_path: Path) -> None:
+    """A bare campaign seed has no single cited table → the dead-end reason SAYS proxy.
+
+    Behaviour is unchanged (the harvest-receipt heuristic still carves the set), but
+    the reason now discloses it is a PROXY and points at the anchored seed that
+    gives the mechanical answer — so a campaign-seed dead-end is never misread as
+    the mechanical contributing set.
+    """
+    _seed_campaign(tmp_path)
+    recipe = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    reasons = {e["run_id"]: e["reason"] for e in recipe["excluded"]}
+    dead_reason = reasons["exp-dead-dddddddd"]
+    assert dead_reason.startswith("dead-end")
+    assert "proxy" in dead_reason
+    assert "--aggregate-path" in dead_reason and "--run-id" in dead_reason

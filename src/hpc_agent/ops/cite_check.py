@@ -404,17 +404,21 @@ def cite_check(experiment_dir: Path, *, spec: CiteCheckInput) -> dict[str, Any]:
         campaign_id=spec.campaign_id,
         aggregate_path=spec.aggregate_path,
     )
-    seed_kind, seed_ref, candidates, artifact_opaque, _gaps = _resolve_seed(
+    # extract-recipe's seed resolver also returns the mechanical contributing set
+    # (the run-ids that actually fed the cited table) — cite-check threads it into
+    # the exclusion carve below so a dead-end sibling is stripped mechanically.
+    seed_kind, seed_ref, candidates, contributing, artifact_opaque, _gaps = _resolve_seed(
         experiment_dir, recipe_input
     )
     # The citing AUTHORITY must be exactly the recipe's KEPT chain, not the raw
     # candidate universe: a campaign seed's candidates include canary /
     # superseded / dead-end runs whose stale _aggregated tables would otherwise
     # let cite-check bless a number that lives ONLY in a run the recipe excludes
-    # (provenance-chain review Finding 1). Carve with the same mechanical
-    # exclusions extract-recipe applies. No-op for run/aggregate seeds (their
-    # pool reads the single seed table, not `candidates`).
-    candidates, _excluded = _apply_exclusions(experiment_dir, candidates)
+    # (provenance-chain review Finding 1). Carve with the SAME exclusions
+    # extract-recipe applies (threading `contributing` so the mechanical dead-end
+    # branch fires). No-op for run/aggregate seeds (their pool reads the single
+    # seed table, not `candidates`).
+    candidates, _excluded = _apply_exclusions(experiment_dir, candidates, contributing)
 
     strings, floats, sources = _sealed_pool(
         experiment_dir, seed_kind, seed_ref, candidates, artifact_opaque

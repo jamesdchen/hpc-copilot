@@ -309,6 +309,30 @@ disclose. #3/#4 make the recipe portable and citable once it exists.
   Back-compat pinned; regen clean. Built in an isolated worktree, integrated
   by the coordinator.
 
+- 2026-07-17 — **G2 mechanical dead-end disambiguation BUILT** (design +
+  memo `docs/design/dead-end-disambiguation.md`). The DEAD-END exclusion is now
+  anchored on the cited artifact's `contributing_run_ids` (Task 1) for the two
+  seeds where a SINGLE cited artifact is well-defined (`--run-id` with a persisted
+  table, `--aggregate-path`): the anchored-seed candidate universe is broadened to
+  the owner run's campaign (`extract_recipe._campaign_universe`), and
+  `_apply_exclusions` gained a mechanical branch — a campaign sibling absent from
+  `contributing_run_ids` and not a supersession ancestor is a DEAD-END with the
+  mechanical reason, a supersession ancestor is SUPERSEDED, and a proven
+  contributor is KEPT even with NO harvest receipt (fixes the run-13 graft
+  false-exclusion the old harvest-receipt proxy caused). `_candidates_from_provenance`
+  now returns `set[str] | None` (an old-shape table → `None` → proxy, never a
+  mislabelled empty set). The bare `--campaign-id` seed has no single cited table
+  (table-level finality / abandonment is NOT first-class — the superseded-
+  intermediate-ancestor case), so it stays on the harvest-receipt PROXY with the
+  proxy-ness now DISCLOSED in the exclusion reason and the seed that gives the
+  mechanical answer named; the union-vs-require-anchor **ruling recommendation
+  (require the anchor, option (b))** is recorded in the memo per the BR-14
+  precedent. No schema break (the `excluded[].reason` free string carries the
+  disclosure), no new lint, no MCP-curation change; `cite_check` updated for the
+  new `_resolve_seed` arity (it does not consume the contributing set). Tests
+  red-then-green in `tests/ops/test_extract_recipe.py`; regen + gauntlet clean.
+  Built in an isolated worktree, integrated by the coordinator.
+
 - 2026-07-17 — **cite-check DESIGNED-STOP** (the last-mile "number → paper
   transcription" link, beyond the G4 break list). The program seals the citable
   TABLE (extract-recipe signs the minimal run-set; the dossier seals the record

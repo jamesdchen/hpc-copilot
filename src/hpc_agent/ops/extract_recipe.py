@@ -192,14 +192,65 @@ def _fingerprint(experiment_dir: Path, run_id: str) -> dict[str, Any]:
     return out
 
 
+def _campaign_universe(
+    experiment_dir: Path, owner_run_id: str, contributing: set[str]
+) -> list[str]:
+    """The candidate universe for an ANCHORED seed: contributors + campaign siblings.
+
+    A minimal recipe is well-defined only relative to ONE cited table, whose
+    ``contributing_run_ids`` is the mechanical minimal set (*contributing*).
+    Broadening the universe from just that set to the owner run's WHOLE campaign is
+    what makes dead-end disambiguation VISIBLE: every campaign sibling absent from
+    *contributing* (and not a supersession ancestor of a contributor) is a
+    mechanical dead-end w.r.t. this table, and the human sees WHY each was
+    excluded. The kept set stays the contributing heads, so the recipe signature is
+    unaffected — broadening only adds ``excluded`` disclosures.
+
+    Order: the contributing runs first (sorted, deterministic), then the owner run,
+    then the campaign siblings in campaign order. A run with no campaign tag has no
+    siblings, so the universe is just its own contributing set — no dead-ends to
+    surface (correct: a standalone table has no campaign to be a dead end within).
+    """
+    seen: set[str] = set()
+    universe: list[str] = []
+    for r in sorted(contributing):
+        if r and r not in seen:
+            seen.add(r)
+            universe.append(r)
+    if owner_run_id and owner_run_id not in seen:
+        seen.add(owner_run_id)
+        universe.append(owner_run_id)
+    campaign_id = _safe_sidecar(experiment_dir, owner_run_id).get("campaign_id")
+    if isinstance(campaign_id, str) and campaign_id:
+        from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign
+        from hpc_agent.state.index import find_runs_by_campaign
+
+        for record in find_runs_by_campaign(experiment_dir, campaign_id):
+            if record.run_id and record.run_id not in seen:
+                seen.add(record.run_id)
+                universe.append(record.run_id)
+        for sc in find_sidecars_by_campaign(experiment_dir, campaign_id):
+            sid = sc.get("run_id")
+            if isinstance(sid, str) and sid and sid not in seen:
+                seen.add(sid)
+                universe.append(sid)
+    return universe
+
+
 def _resolve_seed(
     experiment_dir: Path, spec: ExtractRecipeInput
-) -> tuple[str, str, list[str], bool, list[dict[str, str]]]:
-    """Resolve the seed to ``(seed_kind, seed_ref, candidates, artifact_opaque, gaps)``.
+) -> tuple[str, str, list[str], set[str] | None, bool, list[dict[str, str]]]:
+    """Resolve the seed → ``(seed_kind, seed_ref, candidates, contributing, opaque, gaps)``.
 
-    ``candidates`` is the UNfiltered contributing-run universe (exclusions run
-    next). ``gaps`` collects the G4 breaks discovered at seed-resolution time
-    (table→run-set absent, pack-csv opaque, operator-bypass).
+    ``candidates`` is the UNfiltered candidate universe (exclusions run next).
+    ``contributing`` is the MECHANICAL contributing set — the cited table's
+    ``contributing_run_ids`` — when the seed anchors ONE cited artifact
+    (``--aggregate-path`` json, ``--run-id`` with a persisted table, the opaque
+    pack citation), or ``None`` when it does not (a bare ``--campaign-id`` seed, an
+    old-shape table, a run with no persisted table) — in which case dead-end
+    disambiguation falls to the harvest-receipt PROXY. ``gaps`` collects the G4
+    breaks discovered at seed-resolution time (table→run-set absent, pack-csv
+    opaque, operator-bypass).
     """
     gaps: list[dict[str, str]] = []
     cid = (spec.campaign_id or "").strip()
@@ -212,8 +263,11 @@ def _resolve_seed(
         )
 
     if cid:
-        # Campaign fallback: the whole campaign is the candidate universe; the
-        # exclusions carve it down to the minimal set.
+        # Bare campaign seed: no SINGLE cited table (table-level finality is not
+        # first-class), so there is no mechanical contributing set to anchor on.
+        # The whole campaign is the candidate universe and the exclusions carve it
+        # down via the harvest-receipt PROXY (contributing=None). See
+        # docs/design/dead-end-disambiguation.md for the ruling recommendation.
         from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign
         from hpc_agent.state.index import find_runs_by_campaign
 
@@ -222,7 +276,7 @@ def _resolve_seed(
             sid = sc.get("run_id")
             if isinstance(sid, str) and sid and sid not in candidates:
                 candidates.append(sid)
-        return "campaign", cid, candidates, False, gaps
+        return "campaign", cid, candidates, None, False, gaps
 
     if apath:
         p = Path(apath)
@@ -235,6 +289,8 @@ def _resolve_seed(
             # R2: a pack *.csv (or any non-json) is an OPAQUE citation — its
             # content is NEVER parsed. Its provenance is its containing run's
             # (the parent dir under _aggregated/<run_id>/), disclosed as a gap.
+            # That containing run IS the (sole) contributor; the content stays
+            # opaque so we do NOT grow a campaign universe around it.
             owner = p.parent.name
             gaps.append(
                 {
@@ -246,26 +302,37 @@ def _resolve_seed(
                     ),
                 }
             )
+            contributing: set[str] | None = {owner} if owner else None
             candidates = [owner] if owner else []
-            return "aggregate", apath, candidates, True, gaps
-        # A metrics_aggregate.json — read the Task-1 contributing set.
+            return "aggregate", apath, candidates, contributing, True, gaps
+        # A metrics_aggregate.json — read the Task-1 contributing set (the
+        # mechanical minimal set) and broaden the universe to the owner's campaign
+        # so every dead-end sibling is surfaced with a mechanical reason.
         data = _read_json(p)
         prov = (data or {}).get("provenance") if isinstance(data, dict) else None
-        candidates, prov_gaps = _candidates_from_provenance(prov, seed_ref=apath)
+        contributing, prov_gaps = _candidates_from_provenance(prov, seed_ref=apath)
         gaps.extend(prov_gaps)
-        return "aggregate", apath, candidates, False, gaps
+        if contributing is None:
+            return "aggregate", apath, [], None, False, gaps
+        candidates = _campaign_universe(experiment_dir, p.parent.name, contributing)
+        return "aggregate", apath, candidates, contributing, False, gaps
 
     # run_id seed: read the run's persisted aggregate for its contributing set;
     # fall back to the run + its supersession lineage when none was persisted.
     data = _read_json(_aggregate_path_for_run(experiment_dir, rid))
     prov = (data or {}).get("provenance") if isinstance(data, dict) else None
     if prov is not None:
-        candidates, prov_gaps = _candidates_from_provenance(prov, seed_ref=rid)
+        contributing, prov_gaps = _candidates_from_provenance(prov, seed_ref=rid)
         gaps.extend(prov_gaps)
-        if rid not in candidates:
-            candidates.append(rid)
-        return "run", rid, candidates, False, gaps
-    # No persisted table — the lineage IS the candidate universe.
+        if contributing is None:
+            # A persisted-but-old-shape table: no mechanical link (gap disclosed).
+            # The run itself is the only candidate, carved by the proxy.
+            return "run", rid, [rid], None, False, gaps
+        # rid is the cited run — always a contributor of its own table.
+        contributing = contributing | {rid}
+        candidates = _campaign_universe(experiment_dir, rid, contributing)
+        return "run", rid, candidates, contributing, False, gaps
+    # No persisted table — the lineage IS the candidate universe (proxy).
     from hpc_agent.state.scopes import lineage_chain
 
     gaps.append(
@@ -279,17 +346,23 @@ def _resolve_seed(
         }
     )
     candidates = list(lineage_chain(experiment_dir, rid))
-    return "run", rid, candidates, False, gaps
+    return "run", rid, candidates, None, False, gaps
 
 
 def _candidates_from_provenance(
     prov: Any, *, seed_ref: str
-) -> tuple[list[str], list[dict[str, str]]]:
-    """Extract ``contributing_run_ids`` from an aggregate's provenance block.
+) -> tuple[set[str] | None, list[dict[str, str]]]:
+    """The MECHANICAL contributing set for a cited table's provenance block.
 
-    Discloses the G4a gap when the block predates Task 1 (no
-    ``contributing_run_ids``), and the G4d gap when the reduce was human-directed
-    (``source == "human-directed"`` — the operator-bypass table settle).
+    Returns ``(contributing, gaps)`` where ``contributing`` is the set of
+    ``contributing_run_ids`` the reduce ACTUALLY consumed (Task 1 / BR-9) — the
+    mechanical "which runs fed THIS table" answer — or ``None`` when the table
+    keeps no such set (a pre-Task-1 shape, or an absent/foreign provenance block).
+    ``None`` is deliberately distinct from an empty set: an old-shape table has no
+    mechanical link (fall to the harvest-receipt proxy, gap disclosed), it does
+    NOT assert "zero runs contributed" (which would mislabel every campaign
+    sibling as a dead-end). Discloses the G4a gap for the missing link and the G4d
+    gap when the reduce was human-directed (the operator-bypass table settle).
     """
     gaps: list[dict[str, str]] = []
     if not isinstance(prov, dict):
@@ -302,9 +375,10 @@ def _candidates_from_provenance(
                 ),
             }
         )
-        return [], gaps
-    contributing = prov.get("contributing_run_ids")
-    if not isinstance(contributing, list) or not contributing:
+        return None, gaps
+    raw = prov.get("contributing_run_ids")
+    contributing: set[str] | None
+    if not isinstance(raw, list) or not raw:
         gaps.append(
             {
                 "code": "table-run-set-link-absent",
@@ -315,7 +389,12 @@ def _candidates_from_provenance(
                 ),
             }
         )
-        contributing = []
+        contributing = None
+    else:
+        members = {str(c) for c in raw if isinstance(c, str) and c}
+        # All entries non-str/empty ⇒ no usable mechanical set (treat as absent,
+        # gap already implied by the shape).
+        contributing = members or None
     source = str(prov.get("source") or "")
     if source in ("human-directed", "operator-settled"):
         gaps.append(
@@ -328,25 +407,49 @@ def _candidates_from_provenance(
                 ),
             }
         )
-    return [str(c) for c in contributing if isinstance(c, str) and c], gaps
+    return contributing, gaps
+
+
+#: The mechanical dead-end reason — a candidate absent from the cited table's
+#: ``contributing_run_ids`` (and not a supersession ancestor of a contributor). It
+#: does NOT depend on a harvest receipt: membership in the table's contributing
+#: set is the truth, so a proven contributor lacking a receipt (the run-13 graft
+#: class) is KEPT, and a harvested-but-non-contributing sibling IS a dead end.
+_DEADEND_MECHANICAL = "dead-end (not in the cited table's contributing_run_ids)"
+#: The PROXY dead-end reason — used only for a bare campaign seed / a seed with no
+#: single cited table, where no mechanical contributing set exists. The
+#: harvest-receipt ledger is a heuristic, and the reason SAYS so, pointing at the
+#: seed that gives the mechanical answer (docs/design/dead-end-disambiguation.md).
+_DEADEND_PROXY = (
+    "dead-end (harvest-receipt proxy — seed --aggregate-path/--run-id for the "
+    "mechanical contributing set)"
+)
 
 
 def _apply_exclusions(
-    experiment_dir: Path, candidates: list[str]
+    experiment_dir: Path, candidates: list[str], contributing: set[str] | None
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Carve the candidate universe down to the minimal set; disclose each cut.
 
-    Three mechanical exclusions, each a countable disclosed fact, applied in
-    order (a run gets exactly ONE reason — the first that matches):
+    Three exclusion classes, each a countable disclosed fact, applied in order (a
+    run gets exactly ONE reason — the first that matches): **canary** (a
+    ``-canary`` / ``-canary2`` family sibling, ``canary_parent_of``),
+    **superseded** (an older member of another run's ``lineage_chain``; collapse to
+    the newest), and **dead-end**.
 
-    1. **canary** — a ``-canary`` / ``-canary2`` family sibling (the one suffix
-       definition, ``canary_parent_of``);
-    2. **superseded** — a lineage member another candidate supersedes (it appears
-       as a non-head in another candidate's ``lineage_chain``; keep the newest);
-    3. **dead-end** — a run with NO harvest receipt (never harvested into a
-       citable table). The "no piece under remote_path" leg is a remote scan
-       (SSH); this local walk uses the durable harvest-receipt ledger as the
-       dead-end signal and discloses that basis.
+    The DEAD-END signal depends on whether the seed anchored ONE cited table:
+
+    * *contributing is a set* (an anchored ``--run-id`` / ``--aggregate-path``
+      seed) → **mechanical**: the table's ``contributing_run_ids`` IS the minimal
+      set. A candidate absent from it — and not a supersession ancestor of a
+      contributor — is a dead end w.r.t. THIS table; a proven contributor is KEPT
+      even with no harvest receipt (the run-13 graft class). superseded collapses
+      lineages toward the contributing head.
+    * *contributing is None* (a bare ``--campaign-id`` seed, or a seed with no
+      single cited table) → **proxy**: no mechanical contributing set exists, so
+      the durable harvest-receipt ledger stands in, and the reason DISCLOSES that
+      it is a proxy (not the mechanical answer) — see
+      docs/design/dead-end-disambiguation.md.
     """
     from hpc_agent.ops.monitor.harvest_guard import harvest_receipt_exists
     from hpc_agent.ops.monitor.reconcile import canary_parent_of
@@ -360,16 +463,38 @@ def _apply_exclusions(
             seen.add(r)
             ordered.append(r)
 
-    # Superseded set: a candidate that appears as a non-head (an older member) in
-    # ANY candidate's supersession chain.
+    kept: list[str] = []
+    excluded: list[dict[str, str]] = []
+
+    if contributing is not None:
+        # MECHANICAL: the cited table's contributing_run_ids is the source of
+        # truth. A supersession ancestor of ANY contributor is superseded (collapse
+        # toward the head, and catch an ancestor that did not itself feed the table
+        # but whose descendant did). A contributor is kept — receipt-independent. A
+        # non-contributor, non-ancestor candidate is a mechanical dead end.
+        contributing = {c for c in contributing if c}
+        ancestors: set[str] = set()
+        for c in contributing:
+            for older in lineage_chain(experiment_dir, c)[1:]:
+                ancestors.add(older)
+        for r in ordered:
+            if canary_parent_of(r) is not None:
+                excluded.append({"run_id": r, "reason": "canary"})
+            elif r in ancestors:
+                excluded.append({"run_id": r, "reason": "superseded"})
+            elif r in contributing:
+                kept.append(r)
+            else:
+                excluded.append({"run_id": r, "reason": _DEADEND_MECHANICAL})
+        return kept, excluded
+
+    # PROXY: no cited table to anchor on — the harvest-receipt ledger is the
+    # dead-end heuristic (disclosed as such in the reason).
     superseded: set[str] = set()
     for r in ordered:
         for older in lineage_chain(experiment_dir, r)[1:]:
             if older in seen and older != r:
                 superseded.add(older)
-
-    kept: list[str] = []
-    excluded: list[dict[str, str]] = []
     for r in ordered:
         if canary_parent_of(r) is not None:
             excluded.append({"run_id": r, "reason": "canary"})
@@ -378,7 +503,7 @@ def _apply_exclusions(
             excluded.append({"run_id": r, "reason": "superseded"})
             continue
         if not harvest_receipt_exists(experiment_dir, r):
-            excluded.append({"run_id": r, "reason": "dead-end (no harvest receipt on the ledger)"})
+            excluded.append({"run_id": r, "reason": _DEADEND_PROXY})
             continue
         kept.append(r)
     return kept, excluded
@@ -472,9 +597,11 @@ def extract_recipe(experiment_dir: Path, *, spec: ExtractRecipeInput) -> dict[st
     from hpc_agent.ops.recipe_render import render_recipe
 
     experiment_dir = Path(experiment_dir)
-    seed_kind, seed_ref, candidates, artifact_opaque, gaps = _resolve_seed(experiment_dir, spec)
+    seed_kind, seed_ref, candidates, contributing, artifact_opaque, gaps = _resolve_seed(
+        experiment_dir, spec
+    )
 
-    minimal, excluded = _apply_exclusions(experiment_dir, candidates)
+    minimal, excluded = _apply_exclusions(experiment_dir, candidates, contributing)
     runs = [_fingerprint(experiment_dir, rid) for rid in minimal]
 
     # A recipe-specific attestation over ONLY the minimal set (not a whole-campaign
