@@ -68,14 +68,19 @@ jobs:
           python scripts/mutmut_shortlist.py report | tee shortlist-report.txt
           python scripts/mutmut_shortlist.py report --json > shortlist-report.json
 
-      - name: Scope [tool.mutmut].paths_to_mutate to the cluster verbs
+      - name: Scope [tool.mutmut] paths_to_mutate AND tests_dir to the cluster verbs
+        # --apply-tests-dir narrows tests_dir from the committed whole-8k-suite
+        # default to the focused cluster-verb covering set. WITHOUT it, mutmut
+        # cannot fit a baseline + a single mutant inside this step, so every one
+        # of the ~6076 mutants stayed "not checked" and the job read green on
+        # ZERO signal (run 29560911639 / memo Unit A). Ephemeral checkout only.
         run: |
           ARGS=""
           if [ -n "${{ github.event.inputs.changed_since }}" ]; then
             ARGS="--changed-since ${{ github.event.inputs.changed_since }}"
           fi
           python scripts/mutmut_shortlist.py paths $ARGS \
-            --apply-to-pyproject pyproject.toml
+            --apply-to-pyproject pyproject.toml --apply-tests-dir
           echo "----- scoped [tool.mutmut] block -----"
           sed -n '/\[tool.mutmut\]/,/^\[/p' pyproject.toml
 
@@ -93,6 +98,15 @@ jobs:
         run: |
           echo "===== mutmut results =====" | tee mutation-results.txt
           mutmut results 2>&1 | tee -a mutation-results.txt || true
+
+      - name: Zero-signal tripwire (a green sweep MUST mean signal)
+        # FAILS the job if not a single mutant was checked -- the exact
+        # zero-signal-but-green failure the triage found (all 6076 "not
+        # checked"). Runs even after a non-zero `mutmut run` (survivors are
+        # tolerated upstream) so a real zero-signal run turns the job RED
+        # instead of silently green. This is why no weekly pause is needed:
+        # once zero-signal is red, a green run is trustworthy (memo Unit A).
+        run: python scripts/mutmut_shortlist.py tripwire --mutants-dir mutants
 
       - name: Upload sweep artifacts
         if: always()

@@ -68,37 +68,77 @@ class ModuleScope:
 # file so the scoped sweep stays inside a CI step. ``block-chain`` is the
 # reference target -- zero lazy body-imports, so every function is
 # mutmut-reachable (see the shortlist tool for why that matters).
+#
+# Each ``tests`` tuple is the module's TRUE COVERING SET, not just one paired
+# file (mutation-triage-2026-07-17 Unit C): the single-file pairing manufactured
+# false survivors -- e.g. block_chain's 183 "survivors" were all killed by
+# ``tests/contracts/test_spec_hint_completeness.py``, which the old one-file
+# scope excluded. The covering set is derived by grepping ``tests/`` for the
+# focused files that actually exercise the module's functions (the memo's
+# method), accepting the longer per-module runtime -- a false survivor costs
+# more than the CI minutes.
 MODULE_MAP: dict[str, ModuleScope] = {
     "block-chain": ModuleScope(
         key="block-chain",
         source="src/hpc_agent/infra/block_chain.py",
-        tests=("tests/ops/test_block_chain.py",),
+        tests=(
+            "tests/ops/test_block_chain.py",
+            # Routes every spec hint through _wrap_run_id_under /
+            # _complete_spec_hint + the compose_*_spec round-trips +
+            # SuccessorSpecIncomplete.missing (the 183 memo false survivors).
+            "tests/contracts/test_spec_hint_completeness.py",
+            # chain_successor / next_block_hint cross-coverage.
+            "tests/_kernel/lifecycle/test_block_drive.py",
+        ),
         note="Deterministic block-successor tables + spec composition. "
         "Pure, zero body-imports -- fully mutmut-reachable. The reference target.",
     ),
     "attestation": ModuleScope(
         key="attestation",
         source="src/hpc_agent/state/attestation.py",
-        tests=("tests/state/test_attestation.py",),
+        tests=(
+            "tests/state/test_attestation.py",
+            # Exercise validate/bind/reduce with real recompute payloads (the
+            # load-bearing mismatch-refusal + drift-revocation paths), not just
+            # the paired file's message-string asserts.
+            "tests/state/test_determinism.py",
+            "tests/ops/test_decision_journal_primitives.py",
+        ),
         note="Attestation kernel (validate / bind / reduce). Pure logic.",
     ),
     "describe-cache": ModuleScope(
         key="describe-cache",
         source="src/hpc_agent/state/describe_cache.py",
-        tests=("tests/cli/test_describe_cache.py",),
+        tests=(
+            "tests/cli/test_describe_cache.py",
+            # The describe fast path + capabilities path that also drive
+            # store()/load()/_cache_path -- the memo's confounding coverage.
+            "tests/cli/test_describe.py",
+            "tests/cli/test_capabilities_cache.py",
+        ),
         note="Build-content-keyed describe cache -- guard-heavy (disable / "
         "safe-name / partial-registry). Some lazy imports blind mutmut (fewer mutants).",
     ),
     "fast-path-cache": ModuleScope(
         key="fast-path-cache",
+        # Was tests/cli/test_fast_dispatch.py -- whose _fast_path_cache coverage
+        # is all @pytest.mark.slow SUBPROCESS tests (mutmut deselects slow and
+        # can't instrument a child interpreter), so mutmut aborted the baseline
+        # with "Unable to force test failures" (memo Unit B). The dedicated
+        # in-process battery exercises the module directly.
         source="src/hpc_agent/cli/_fast_path_cache.py",
-        tests=("tests/cli/test_fast_dispatch.py",),
-        note="CLI single-verb fast-path resolution cache. Guard + fingerprint logic.",
+        tests=("tests/cli/test_fast_path_cache.py",),
+        note="CLI single-verb fast-path resolution cache. Guard + fingerprint logic. "
+        "Paired with the IN-PROCESS battery -- test_fast_dispatch.py's coverage is "
+        "subprocess/slow-only, invisible to mutmut (baseline-abort fix).",
     ),
     "capabilities-cache": ModuleScope(
         key="capabilities-cache",
         source="src/hpc_agent/state/capabilities_cache.py",
-        tests=("tests/cli/test_capabilities_cache.py",),
+        tests=(
+            "tests/cli/test_capabilities_cache.py",
+            "tests/cli/test_describe.py",
+        ),
         note="Build+dist-keyed capabilities-envelope cache -- guard-heavy (disable / "
         "dirty / dist-signature / partial-registry / per-variant). Byte-identity to "
         "the walk is the load-bearing invariant. Some lazy imports blind mutmut.",
@@ -112,7 +152,57 @@ MODULE_MAP: dict[str, ModuleScope] = {
         ),
         note="Deterministic reduce/combine -- the module that computes every "
         "aggregate number. HEAVY (~650 lines): its scoped sweep is the slowest; "
-        "budget the most CI time for this key.",
+        "budget the most CI time for this key. Its end-to-end tests chdir(), which "
+        "broke mutmut's relative source_paths.resolve(strict=True) -- fixed by the "
+        "ABSOLUTE paths_to_mutate render below (memo Unit B).",
+    ),
+    # ── the correctness / consent / journal core (memo Unit D) ─────────────────
+    # These rank ABOVE renders on the risk ordering yet were in NO target set
+    # before. Each is paired with the focused files that exercise it directly
+    # (journal/index have diffuse coverage -- the tightest behavior tests are
+    # selected, not every tangential mention).
+    "state-journal": ModuleScope(
+        key="state-journal",
+        source="src/hpc_agent/state/journal.py",
+        tests=(
+            "tests/state/test_wp_i_journal_hygiene.py",
+            "tests/state/test_submitting_state.py",
+            "tests/state/test_watchdog_and_kill_state.py",
+        ),
+        note="Per-run journal RMW (load/upsert/update/mark) + paired index refresh. "
+        "Correctness core: a silent wrong-path corrupts the run record.",
+    ),
+    "state-index": ModuleScope(
+        key="state-index",
+        source="src/hpc_agent/state/index.py",
+        tests=(
+            "tests/state/test_submitting_state.py",
+            "tests/state/test_wp_i_journal_hygiene.py",
+            "tests/state/test_pending_verdict.py",
+        ),
+        note="Index scan/rebuild/prune + cross-run queries (find_in_flight / "
+        "find_submitting / find_by_campaign). Pure-logic query core.",
+    ),
+    "decision-journal": ModuleScope(
+        key="decision-journal",
+        source="src/hpc_agent/state/decision_journal.py",
+        tests=(
+            "tests/state/test_decision_journal.py",
+            "tests/ops/test_decision_journal_primitives.py",
+        ),
+        note="Decision-journal read/append -- the consent-gate substrate. A "
+        "wrong-path here silently mis-records a human sign-off.",
+    ),
+    "consent-hint": ModuleScope(
+        key="consent-hint",
+        source="src/hpc_agent/_kernel/lifecycle/consent_hint.py",
+        tests=(
+            "tests/ops/test_approve_hint.py",
+            "tests/_kernel/lifecycle/test_block_drive.py",
+        ),
+        note="Pure composer for the OFFERED-CONSENT scoped-utterance hint "
+        "(compose_approve_hint / brief_cluster). Deterministic string work; a "
+        "mutated scope token would mislabel what a 'y' grants.",
     ),
 }
 
@@ -186,9 +276,21 @@ def render_scoped_pyproject(scope: ModuleScope) -> str:
     accepts individual test-file paths -- that is the per-module test-selection
     lever that keeps one sweep inside a CI step. Every other key (``also_copy``,
     ``do_not_mutate``, the xdist-override ``pytest_add_cli_args``) is preserved.
+
+    ``paths_to_mutate`` is written as an ABSOLUTE path (memo Unit B). mutmut's
+    trampoline records each hit via ``Config.source_paths[p].resolve(strict=True)``,
+    which resolves *relative* source paths against the CURRENT cwd -- and the
+    combiner's end-to-end tests ``monkeypatch.chdir(tmp_path)``, so a relative
+    ``src/hpc_agent/...`` blew up with ``FileNotFoundError: 'src'`` and produced
+    ZERO verdicts on the highest-value curated module. An absolute path resolves
+    identically regardless of cwd. Emitted as POSIX (``as_posix()``) so the value
+    is valid TOML on every host -- a Windows ``\\`` would be an illegal escape and
+    break both ``--dry-run`` and this function's tests (mutmut itself only ever
+    runs the sweep on Linux, where POSIX == the native absolute form).
     """
     text = PYPROJECT.read_text(encoding="utf-8")
-    text = _replace_named_array(text, "paths_to_mutate", [scope.source])
+    abs_source = (REPO_ROOT / scope.source).resolve().as_posix()
+    text = _replace_named_array(text, "paths_to_mutate", [abs_source])
     text = _replace_named_array(text, "tests_dir", list(scope.tests))
     # Fail loudly if the rewrite produced non-parseable TOML.
     tomllib.loads(text)

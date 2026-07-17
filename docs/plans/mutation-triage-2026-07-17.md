@@ -288,3 +288,54 @@ gap, so they outrank the individual test assertions.
   until Unit A lands? It currently burns a weekly Linux runner for zero signal
   and reads green. Recommend either fix-forward (Unit A) or disable the
   `schedule:` trigger until then.
+  → **ANSWERED (2026-07-17, Units built):** no pause needed. The Unit A tripwire
+  turns a zero-signal sweep RED, so a green weekly run now *means* signal. Leave
+  the `schedule:` trigger on.
+
+- **2026-07-17 — Units A–E BUILT (uncommitted; do-not-push session).** Files:
+  - **Unit A (tripwire + tests_dir scoping):** `scripts/mutmut_shortlist.py`
+    grew `CLUSTER_VERB_TESTS` (a focused IN-PROCESS covering set: submit_flow /
+    aggregate_flow pure-API + block-flow, transport pull/prune/combiner-progress),
+    a `--apply-tests-dir` lever that narrows `[tool.mutmut].tests_dir` off the
+    whole-8k default, `count_checked_mutants()` (reads `*.meta` `exit_code_by_key`;
+    checked = non-null), and a `tripwire` subcommand. `.github/workflows/mutation.yml`
+    sweep now passes `--apply-tests-dir` and adds a **"Zero-signal tripwire"** step
+    (`mutmut_shortlist.py tripwire`) after Collect results — `exit 1` when 0 mutants
+    checked, so a future all-`not-checked` run FAILS instead of reading green.
+  - **Unit B (crashes):** combiner — `run_mutation.render_scoped_pyproject` now
+    renders `paths_to_mutate` **absolute+POSIX** (`(REPO_ROOT/src).resolve().as_posix()`),
+    so mutmut's `source_paths[p].resolve(strict=True)` survives the end-to-end
+    tests' `monkeypatch.chdir` (the `FileNotFoundError: 'src'`). fast-path-cache —
+    repaired via Unit C: repaired the `MODULE_MAP` pairing (see below).
+  - **Unit C (true covering sets):** `run_mutation.MODULE_MAP` broadened —
+    block-chain += `contracts/test_spec_hint_completeness.py` (+ `test_block_drive.py`)
+    [kills the 183 false survivors]; attestation += `state/test_determinism.py`,
+    `ops/test_decision_journal_primitives.py`; describe-cache += `cli/test_describe.py`,
+    `cli/test_capabilities_cache.py`; capabilities-cache += `cli/test_describe.py`;
+    **fast-path-cache RE-PAIRED** `tests/cli/test_fast_dispatch.py` →
+    `tests/cli/test_fast_path_cache.py` (the old file's coverage is all
+    `@pytest.mark.slow` SUBPROCESS tests — deselected + un-instrumentable by
+    mutmut → the "Unable to force test failures" baseline abort). Covering sets
+    derived by grepping `tests/` for the files that call the target functions.
+  - **Unit D (correctness/consent seams):** four new `MODULE_MAP` keys —
+    `state-journal` (`state/journal.py`), `state-index` (`state/index.py`),
+    `decision-journal` (`state/decision_journal.py` — note `ops/decision/__init__.py`
+    is EMPTY; the real source is `state/decision_journal.py`), `consent-hint`
+    (`_kernel/lifecycle/consent_hint.py`) — each with a focused covering set.
+  - **Unit E (the genuine gap):** `tests/cli/test_describe_cache.py` gained
+    `test_store_noops_when_registration_attr_absent` (delattr `_REGISTRATION_DONE`
+    so the `getattr(..., False)` DEFAULT branch is exercised — the old
+    `test_store_refused_under_partial_registration` only set it present-and-False,
+    leaving the `default=False→True` mutant alive) and `test_load_rejects_non_dict_payload`
+    (pins the `isinstance(data, dict)` guard). Both verified **red-then-green**:
+    they fail under the two mutants, pass on clean source.
+  - **Local verification:** `tests/scripts/test_run_mutation.py` (8) +
+    `tests/scripts/test_mutmut_shortlist.py` (20) added, all pass; ruff/format/mypy
+    clean on all touched Python; both boundary-import lints pass; workflow YAML parses.
+  - **Re-dispatch:** `gh workflow run mutation.yml` on hpc-copilot/main →
+    **run `29576353096`** (workflow_dispatch, headSha `6d29e23b`). ⚠️ CAVEAT: these
+    Units are UNCOMMITTED (do-not-push session), so run `29576353096` executes the
+    **pre-fix** committed workflow — it is still a zero-signal sweep + pre-fix
+    curated matrix. **The next session MUST commit+push Units A–E and RE-DISPATCH**
+    to read the fixed-sweep / crash-free curated signal; `29576353096` is only a
+    fresh pre-fix baseline at current `main` (now includes capabilities-cache).

@@ -53,6 +53,64 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "src/hpc_agent/infra/transport/_combiner.py",
 )
 
+# The scoped ``tests_dir`` for the scheduled sweep (memo Unit A). The committed
+# ``[tool.mutmut].tests_dir`` is the WHOLE 8k-test suite -- with it, mutmut
+# cannot fit a baseline + a single mutant inside the sweep step, so every one of
+# the 6076 cluster-verb mutants stayed ``not checked`` and the job read green on
+# ZERO signal. This is the focused, IN-PROCESS covering set for the five
+# cluster-verb targets above -- pure-API + block-flow tests that exercise
+# submit_flow / aggregate_flow / transport without a live cluster or a
+# subprocess (mutmut cannot instrument a child interpreter, and deselects
+# ``@pytest.mark.slow``). Scoping ``tests_dir`` here is what lets a baseline run
+# and mutants actually get checked. Missing entries are warned-and-skipped at
+# apply time so a test rename degrades gracefully rather than breaking the sweep.
+CLUSTER_VERB_TESTS: tuple[str, ...] = (
+    # submit_flow
+    "tests/ops/test_submit_flow_pure_api.py",
+    "tests/ops/submit/test_flow.py",
+    # aggregate_flow
+    "tests/ops/test_aggregate_flow_pure_api.py",
+    "tests/ops/test_aggregate_flow_pure_api_reduce.py",
+    # transport/{__init__,_pull,_combiner}
+    "tests/infra/test_remote.py",
+    "tests/infra/test_transport_pull.py",
+    "tests/infra/test_transport_prune.py",
+    "tests/infra/test_combiner_progress.py",
+    "tests/infra/test_transport_delta_cache_checkpoint.py",
+)
+
+
+# mutant exit codes in a ``*.meta`` ``exit_code_by_key`` map: 1 = killed,
+# 0 = survived, 33/34 = no-tests/skipped, ``null`` = NEVER EXECUTED. A mutant is
+# "checked" iff mutmut produced any non-null verdict for it.
+def count_checked_mutants(mutants_dir: Path) -> tuple[int, int]:
+    """Return ``(checked, total)`` across every ``*.meta`` under *mutants_dir*.
+
+    ``total`` counts every mutant key mutmut generated; ``checked`` counts those
+    with a NON-NULL exit code (killed / survived / no-tests / skipped -- i.e.
+    mutmut actually evaluated them). A ``null`` code means the mutant was never
+    executed (the zero-signal failure the sweep hit on run 29560911639, where all
+    6076 were null). This is the tripwire's measurement -- pure I/O over the same
+    ``*.meta`` artifacts the triage read, so it is unit-testable without mutmut.
+    """
+    import json
+
+    checked = 0
+    total = 0
+    for meta in sorted(mutants_dir.rglob("*.meta")):
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        codes = data.get("exit_code_by_key")
+        if not isinstance(codes, dict):
+            continue
+        for code in codes.values():
+            total += 1
+            if code is not None:
+                checked += 1
+    return checked, total
+
 
 @dataclass
 class FuncVerdict:
@@ -215,25 +273,27 @@ def cmd_report(reports: list[ModuleReport], as_json: bool) -> int:
     return 0
 
 
-def _apply_to_pyproject(pyproject: Path, paths: list[str]) -> None:
-    """Rewrite ``[tool.mutmut].paths_to_mutate`` in place. Minimal line-based
-    rewrite (no tomlkit dep): find the ``paths_to_mutate = [`` line inside the
-    ``[tool.mutmut]`` table and replace through its closing ``]``."""
-    lines = pyproject.read_text(encoding="utf-8").splitlines()
+def _replace_mutmut_array(text: str, key: str, values: list[str]) -> str:
+    """Rewrite the ``<key> = [ ... ]`` array inside ``[tool.mutmut]`` in place.
+
+    Minimal line-based rewrite (no tomlkit dep): find the ``key`` assignment
+    inside the ``[tool.mutmut]`` table and replace through its closing ``]``,
+    preserving every sibling key (``also_copy`` / ``do_not_mutate`` /
+    ``pytest_add_cli_args``). Raises if the key is absent so a silent no-scope
+    can never slip through. Mirrors ``run_mutation.py._replace_named_array``.
+    """
+    lines = text.splitlines()
     out: list[str] = []
     in_mutmut = False
     i = 0
     replaced = False
-    new_block = ["paths_to_mutate = ["]
-    for p in paths:
-        new_block.append(f'    "{p}",')
-    new_block.append("]")
+    new_block = [f"{key} = ["] + [f'    "{v}",' for v in values] + ["]"]
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             in_mutmut = stripped == "[tool.mutmut]"
-        if in_mutmut and stripped.startswith("paths_to_mutate"):
+        if in_mutmut and stripped.startswith(key):
             # Consume through the closing bracket of the array.
             while i < len(lines) and "]" not in lines[i]:
                 i += 1
@@ -244,8 +304,41 @@ def _apply_to_pyproject(pyproject: Path, paths: list[str]) -> None:
         out.append(line)
         i += 1
     if not replaced:
-        raise SystemExit("could not find [tool.mutmut].paths_to_mutate in " + str(pyproject))
-    pyproject.write_text("\n".join(out) + "\n", encoding="utf-8")
+        raise SystemExit(f"could not find [tool.mutmut].{key} in the pyproject")
+    return "\n".join(out) + "\n"
+
+
+def _resolve_tests_dir() -> list[str]:
+    """The scoped cluster-verb ``tests_dir`` -- existing entries only.
+
+    Warns-and-skips any missing test path so a rename degrades gracefully.
+    Refuses to return an empty list (scoping to nothing would abort mutmut).
+    """
+    present: list[str] = []
+    for t in CLUSTER_VERB_TESTS:
+        if (REPO_ROOT / t).is_file():
+            present.append(t)
+        else:
+            print(f"warning: cluster-verb test not found, skipping: {t}", file=sys.stderr)
+    if not present:
+        raise SystemExit("no cluster-verb tests_dir entries exist -- cannot scope the sweep")
+    return present
+
+
+def _apply_to_pyproject(pyproject: Path, paths: list[str], *, scope_tests_dir: bool) -> None:
+    """Rewrite ``[tool.mutmut].paths_to_mutate`` (and optionally ``tests_dir``).
+
+    ``scope_tests_dir`` additionally narrows ``tests_dir`` from the committed
+    whole-suite default to :data:`CLUSTER_VERB_TESTS` -- the memo Unit A fix that
+    lets the sweep actually check mutants instead of leaving all 6076 ``not
+    checked``. Ephemeral-checkout only (never committed), same as the paths
+    rewrite.
+    """
+    text = pyproject.read_text(encoding="utf-8")
+    text = _replace_mutmut_array(text, "paths_to_mutate", paths)
+    if scope_tests_dir:
+        text = _replace_mutmut_array(text, "tests_dir", _resolve_tests_dir())
+    pyproject.write_text(text, encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,9 +349,10 @@ def main(argv: list[str] | None = None) -> int:
         "mode",
         nargs="?",
         default="report",
-        choices=["report", "paths"],
+        choices=["report", "paths", "tripwire"],
         help="report (default): blind/reachable breakdown; "
-        "paths: emit scoped paths_to_mutate list.",
+        "paths: emit scoped paths_to_mutate list; "
+        "tripwire: FAIL (exit 1) if zero mutants were checked in --mutants-dir.",
     )
     parser.add_argument(
         "--targets",
@@ -284,7 +378,38 @@ def main(argv: list[str] | None = None) -> int:
         help="paths mode: rewrite [tool.mutmut].paths_to_mutate in this "
         "pyproject.toml (ephemeral CI checkout only -- never commit).",
     )
+    parser.add_argument(
+        "--apply-tests-dir",
+        action="store_true",
+        help="paths mode with --apply-to-pyproject: ALSO narrow "
+        "[tool.mutmut].tests_dir to the cluster-verb covering set so the sweep "
+        "actually checks mutants (memo Unit A). Never commit the result.",
+    )
+    parser.add_argument(
+        "--mutants-dir",
+        metavar="DIR",
+        default="mutants",
+        help="tripwire mode: the mutmut output dir to scan for *.meta (default: mutants).",
+    )
     args = parser.parse_args(argv)
+
+    if args.mode == "tripwire":
+        mutants_dir = Path(args.mutants_dir)
+        if not mutants_dir.is_absolute():
+            mutants_dir = REPO_ROOT / mutants_dir
+        checked, total = count_checked_mutants(mutants_dir)
+        print(f"mutation tripwire: {checked} checked / {total} generated mutant(s).")
+        if checked == 0:
+            print(
+                "TRIPWIRE FAILED: ZERO mutants were checked -- the sweep produced no "
+                "signal (every mutant 'not checked'). A green run must mean signal. "
+                "This is the run-29560911639 zero-signal failure; do NOT trust a "
+                "green sweep. Check the scoped tests_dir + baseline (memo Unit A).",
+                file=sys.stderr,
+            )
+            return 1
+        print("tripwire OK: the sweep checked at least one mutant.")
+        return 0
 
     paths = resolve_targets(args.targets, args.changed_since)
     rel_paths = [p.relative_to(REPO_ROOT).as_posix() for p in paths]
@@ -297,10 +422,14 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 0
-            _apply_to_pyproject(Path(args.apply_to_pyproject), rel_paths)
+            _apply_to_pyproject(
+                Path(args.apply_to_pyproject), rel_paths, scope_tests_dir=args.apply_tests_dir
+            )
             print(f"wrote {len(rel_paths)} path(s) to {args.apply_to_pyproject}")
             for p in rel_paths:
                 print(f"  {p}")
+            if args.apply_tests_dir:
+                print(f"scoped tests_dir to {len(_resolve_tests_dir())} cluster-verb test file(s)")
             return 0
         for p in rel_paths:
             print(p)

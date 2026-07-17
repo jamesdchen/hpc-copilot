@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 import sys
 
@@ -135,6 +136,42 @@ def test_store_refused_under_partial_registration(monkeypatch):
     # And once full registration is in effect, store() persists as normal.
     describe_cache.store("submit-flow", {"kind": "primitive", "name": "submit-flow"})
     assert describe_cache.load("submit-flow") is not None
+
+
+def test_store_noops_when_registration_attr_absent(monkeypatch):
+    # A1 build-poison guard, the DEFAULT branch (mutation-triage-2026-07-17
+    # Unit E). ``_full_registration_done`` reads
+    # ``getattr(primitive, "_REGISTRATION_DONE", False)`` — the guard must hold
+    # even when the latch attribute is ABSENT (not merely present-and-False, the
+    # only case test_store_refused_under_partial_registration exercised). With
+    # the attribute deleted, ``store`` still no-ops. This pins the ``default``:
+    # a ``getattr(..., True)`` mutation would persist under a missing latch (a
+    # false-positive registry latch poisons every full-path describe reader for
+    # the build), and that mutant survived the old single-case test.
+    from hpc_agent._kernel.registry import primitive
+
+    monkeypatch.delattr(primitive, "_REGISTRATION_DONE", raising=False)
+    describe_cache.store("submit-flow", {"kind": "primitive", "name": "submit-flow"})
+    # Nothing was written while the latch was absent — a later full-registration
+    # read still misses.
+    monkeypatch.setattr(primitive, "_REGISTRATION_DONE", True, raising=False)
+    assert describe_cache.load("submit-flow") is None
+
+
+def test_load_rejects_non_dict_payload(monkeypatch):
+    # ``load`` returns ``data if isinstance(data, dict) else None`` — a cached
+    # payload that parses as valid JSON but is NOT an object (a list, here) must
+    # be rejected, not returned. Pins the isinstance guard so a non-dict cached
+    # blob can never reach a describe reader as a payload (memo describe_cache
+    # ``load`` 3/11 survivor set).
+    from hpc_agent._kernel.registry import primitive
+
+    monkeypatch.setattr(primitive, "_REGISTRATION_DONE", True, raising=False)
+    path = describe_cache._cache_path("submit-flow")
+    assert path is not None  # cache is enabled under the fake clean build
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")  # a list, not a dict
+    assert describe_cache.load("submit-flow") is None
 
 
 def test_emit_describe_not_found_is_not_cached(monkeypatch):
