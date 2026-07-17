@@ -395,9 +395,7 @@ def test_signoff_harness_log_fresh_utterance_accepted(tmp_path: Path) -> None:
     assert sv.tier == HUMAN_REQUIRED
     write_render(tmp_path, audit_id=_AUDIT, view=sv)
     _set_render_mtime(tmp_path, sv, _ANCHOR)
-    _log_utterance_at(
-        tmp_path, "model-fit reviewed — the regularization term is sound", _AFTER
-    )
+    _log_utterance_at(tmp_path, "model-fit reviewed — the regularization term is sound", _AFTER)
     # The agent-relayed response is deliberately WORTHLESS (a bare ack): only the
     # fresh logged utterance can carry the sign-off.
     _signoff(tmp_path, "y", section_sha=sv.section_sha, view_sha=sv.view_sha)
@@ -418,9 +416,7 @@ def test_signoff_harness_log_stale_utterance_refused(tmp_path: Path) -> None:
     sv = _canonical_section(tmp_path)
     write_render(tmp_path, audit_id=_AUDIT, view=sv)
     _set_render_mtime(tmp_path, sv, _ANCHOR)
-    _log_utterance_at(
-        tmp_path, "model-fit reviewed — the regularization term is sound", _BEFORE
-    )
+    _log_utterance_at(tmp_path, "model-fit reviewed — the regularization term is sound", _BEFORE)
     with pytest.raises(errors.SpecInvalid) as ei:
         _signoff(
             tmp_path,

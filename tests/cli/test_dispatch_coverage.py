@@ -194,9 +194,7 @@ def test_map_miss_defers_without_importing_anything(
     an unknown verb before deferring).
     """
     touched: list[str] = []
-    monkeypatch.setattr(
-        primitive_mod, "register_single_module", lambda m: touched.append(m)
-    )
+    monkeypatch.setattr(primitive_mod, "register_single_module", lambda m: touched.append(m))
 
     assert "definitely-not-a-verb-xyz" not in VERB_MODULE_MAP  # genuine miss
     assert dispatch._try_fast_dispatch(["definitely-not-a-verb-xyz"]) is None
