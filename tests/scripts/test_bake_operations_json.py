@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import hpc_agent
 from tests._registry_helpers import core_only_operations_catalog, core_only_registry
 
@@ -30,6 +32,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PACKAGE_ROOT = Path(hpc_agent.__file__).parent
 BAKED = PACKAGE_ROOT / "operations.json"
 BAKE_SCRIPT = REPO_ROOT / "scripts" / "bake_operations_json.py"
+
+
+@pytest.fixture(autouse=True)
+def _hold_bake_lock():
+    """READER side of the cross-worker bake lock (see tests/_bake_lock.py).
+
+    ``test_fast_dispatch.py``'s seeded-stale test poisons the shared packaged
+    ``operations.json`` in place; this file's content assertions
+    (``--check`` cleanliness, registry drift) must never read mid-window.
+    """
+    from tests._bake_lock import bake_file_lock
+
+    with bake_file_lock():
+        yield
 
 
 def test_baked_file_exists():

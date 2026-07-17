@@ -107,8 +107,15 @@ def test_discovery_baked_hydration_is_byte_identical_to_full_walk(args: list[str
     hydrated ``operations.json`` bake is byte-identical to the full-walk answer —
     never the ~4-entry partial registry. Proven cross-module (submit-s1's row,
     the whole catalog for find's scan) so a partial-registry regression shows."""
-    baked = _run_discovery(args, mode="baked")
-    full = _run_discovery(args, mode="full")
+    # Cross-worker lock: the seeded-stale test below poisons the SHARED
+    # packaged bake in place; a forced-bake subprocess reading mid-window
+    # reports drift with the sentinel in the baked answer (the e41f25e2
+    # py3.12 CI red). See tests/_bake_lock.py.
+    from tests._bake_lock import bake_file_lock
+
+    with bake_file_lock():
+        baked = _run_discovery(args, mode="baked")
+        full = _run_discovery(args, mode="full")
     assert baked.returncode == full.returncode
     assert baked.stdout == full.stdout, f"fast/full drift for {args!r}"
 
@@ -122,17 +129,32 @@ def test_seeded_stale_bake_falls_back_to_walk_byte_identical(tmp_path: object) -
     default (no-force) path to the kill-switch full path: identical, and NOT the
     stale bake's content. A version-string key would wrongly trust the bake."""
     import json
-    import os
     from importlib.resources import files
 
-    bake_path = files("hpc_agent") / "operations.json"
-    original = bake_path.read_text(encoding="utf-8")  # type: ignore[attr-defined]
-    catalog = json.loads(original)
-    # Corrupt one row's summary so a bake-trusting path would emit the poison.
-    poison = "STALE-BAKE-POISON-DO-NOT-SERVE"
-    for entry in catalog:
-        if entry.get("name") == "submit-s1":
-            entry["summary"] = poison
+    from tests._bake_lock import bake_file_lock
+
+    # WRITER side of the cross-worker bake lock: this test mutates the ONE
+    # shared packaged operations.json on disk. Every content-reader (the
+    # byte-identity test above, tests/scripts/test_bake_operations_json.py)
+    # takes the same lock, so the poison window can never leak into another
+    # xdist worker's assertions. See tests/_bake_lock.py for the incident.
+    with bake_file_lock():
+        bake_path = files("hpc_agent") / "operations.json"
+        original = bake_path.read_text(encoding="utf-8")  # type: ignore[attr-defined]
+        catalog = json.loads(original)
+        # Corrupt one row's summary so a bake-trusting path would emit the poison.
+        poison = "STALE-BAKE-POISON-DO-NOT-SERVE"
+        for entry in catalog:
+            if entry.get("name") == "submit-s1":
+                entry["summary"] = poison
+        _seeded_stale_bake_body(bake_path, original, catalog, poison)
+
+
+def _seeded_stale_bake_body(bake_path, original: str, catalog, poison: str) -> None:
+    """Body of the seeded-stale test; the caller holds the bake lock throughout."""
+    import json
+    import os
+
     try:
         bake_path.write_text(  # type: ignore[attr-defined]
             json.dumps(catalog, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
