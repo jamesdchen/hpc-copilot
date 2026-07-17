@@ -50,6 +50,19 @@ def test_terminal_statuses_match_journal_status() -> None:
     assert JournalStatus.IN_FLIGHT not in TERMINAL_STATUSES
 
 
+def test_submitting_is_a_non_terminal_journal_status() -> None:
+    """``submitting`` (submit-once design §3.3) is a JournalStatus value, is the
+    pre-dispatch/pre-monitor state, and is NEVER terminal — so a submitting
+    orphan is not garbage-collected by ``prune_terminal_runs`` (premortem Δ3)."""
+    assert JournalStatus.SUBMITTING == "submitting"
+    assert JournalStatus.SUBMITTING in set(JournalStatus)
+    # Not terminal — kept out of TERMINAL_STATUSES so prune keeps it and
+    # is_resubmittable_terminal excludes it.
+    assert JournalStatus.SUBMITTING not in TERMINAL_STATUSES
+    # StrEnum round-trips as a plain string for JSON serialization.
+    assert json.dumps({"status": JournalStatus.SUBMITTING}) == '{"status": "submitting"}'
+
+
 def test_lifecycle_state_matches_monitor_flow_schema() -> None:
     """The schema enum must equal the StrEnum's value set."""
     enum = _load_lifecycle_enum("monitor_flow.output.json")

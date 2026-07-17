@@ -53,10 +53,22 @@ __all__ = [
 class JournalStatus(StrEnum):
     """Status field on :class:`hpc_agent.state.run_record.RunRecord`.
 
-    ``in_flight`` while the run is being monitored; transitions to one
-    of the three terminal values when the workflow ends.
+    ``submitting`` is the pre-dispatch state a submit mints BEFORE the
+    remote actuation (evidence durable, verdict revisable — the
+    lifecycle principle); ``in_flight`` while the run is being
+    monitored; then one of the three terminal values when the workflow
+    ends.
+
+    ``submitting`` is a JournalStatus ONLY — deliberately NOT a
+    :class:`LifecycleState`: a submitting run has no live cluster jobs
+    to compute a lifecycle verdict over yet, and the status query never
+    runs on one (submit-once design §3.3, premortem Δ8/OPEN-3). Its only
+    transition-out owner is reconcile-recovery; it is non-terminal
+    (absent from :data:`TERMINAL_STATUSES`) so a submitting orphan is
+    never garbage-collected by :func:`prune_terminal_runs`.
     """
 
+    SUBMITTING = "submitting"
     IN_FLIGHT = "in_flight"
     COMPLETE = "complete"
     FAILED = "failed"

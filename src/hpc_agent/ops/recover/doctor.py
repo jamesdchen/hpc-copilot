@@ -66,11 +66,25 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
     next_tick_due = stalled.get("next_tick_due")
     overdue = _overdue_seconds(next_tick_due, now)
     since = last_tick_at or "an unknown time"
-    proposal = (
-        f"driver stalled since {since}, status {stalled.get('status')}: next tick was due "
-        f"{next_tick_due} but has not fired (now {now}). Re-arm the driver? "
-        f"Re-running is safe — tick idempotency loses nothing."
-    )
+    if stalled.get("status") == "submitting":
+        # A submit that died in its dispatch→job-id window (submit-once §3.3):
+        # the durable evidence is a submitting-with-no-job-ids orphan. The safe
+        # recovery is reconcile-recovery (re-derive from the cluster: adopt the
+        # array if it landed, else safe re-submit) — NEVER a blind re-arm/re-run
+        # of the submit, which risks the duplicate array the contract prevents.
+        proposal = (
+            f"submit stalled since {since}, status submitting: the dispatch window "
+            f"lapsed (next tick was due {next_tick_due}, now {now}) with no job id "
+            "recorded. Reconcile to recover — re-derive from the cluster whether the "
+            "array landed (adopt it) or never dispatched (safe to re-submit); do NOT "
+            "blindly re-run the submit."
+        )
+    else:
+        proposal = (
+            f"driver stalled since {since}, status {stalled.get('status')}: next tick was due "
+            f"{next_tick_due} but has not fired (now {now}). Re-arm the driver? "
+            f"Re-running is safe — tick idempotency loses nothing."
+        )
     return StalledRunProposal(
         run_id=stalled["run_id"],
         status=stalled.get("status", "in_flight"),

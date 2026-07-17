@@ -72,6 +72,29 @@ def test_doctor_surfaces_only_the_stalled_run(tmp_path: Path) -> None:
     assert hit["evidence"]["now"] == now
 
 
+def test_doctor_submitting_orphan_drafts_reconcile_not_rearm(tmp_path: Path) -> None:
+    """A stalled ``submitting`` orphan (submit that died in its dispatch window,
+    submit-once §3.3) drafts a reconcile-RECOVERY proposal — re-derive from the
+    cluster — NEVER a blind re-arm/re-run that risks a duplicate array."""
+    now = "2026-07-17T01:00:00+00:00"
+    upsert_run(tmp_path, _record("orphan", status="submitting"))
+    stamp_tick(
+        "orphan",
+        last_tick_at="2026-07-17T00:00:00+00:00",
+        next_tick_due="2026-07-17T00:00:00+00:00",  # lapsed
+        experiment_dir=tmp_path,
+    )
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+    assert out["stalled_count"] == 1
+    hit = out["stalled"][0]
+    assert hit["run_id"] == "orphan"
+    assert hit["status"] == "submitting"
+    proposal = hit["proposal"].lower()
+    assert "reconcile" in proposal
+    assert "re-arm" not in proposal
+    assert "do not" in proposal and "re-run" in proposal
+
+
 def test_doctor_empty_when_nothing_overdue(tmp_path: Path) -> None:
     upsert_run(tmp_path, _record("healthy"))
     stamp_tick(

@@ -45,19 +45,30 @@ def test_lifecycle_state_matches_observable_with_timeout() -> None:
 
 
 def test_journal_status_matches_observable() -> None:
-    """``JournalStatus`` (StrEnum on RunRecord.status) must equal
-    ``LifecycleStateObservable`` (Pydantic Literal on the
-    point-in-time observation envelopes).
+    """``JournalStatus`` (StrEnum on RunRecord.status), MINUS the pre-monitor
+    ``submitting`` state, must equal ``LifecycleStateObservable`` (Pydantic
+    Literal on the point-in-time observation envelopes).
 
-    Both encode {in_flight, complete, failed, abandoned}.
+    The observable wire encodes {in_flight, complete, failed, abandoned}.
+    ``submitting`` (submit-once design §3.3, premortem Δ8/OPEN-3) is a
+    JournalStatus-ONLY value with NO lifecycle projection: a submitting run
+    has no live cluster jobs to observe, so the status query never runs on
+    one and its raw journal status is never echoed into ``lifecycle_state``.
+    Adding it to the observable Literal would be an (unwanted) schema change.
+    This is the same intentional asymmetry the terminal test encodes for the
+    workflow-only ``timeout`` value — the drift is by design, not a bug.
     """
     enum_values = {s.value for s in JournalStatus}
     literal_values = set(typing.get_args(LifecycleStateObservable))
-    assert enum_values == literal_values, (
+    assert enum_values - {"submitting"} == literal_values, (
         f"JournalStatus (StrEnum) drifted from "
         f"LifecycleStateObservable (Literal): "
         f"enum={sorted(enum_values)} vs literal={sorted(literal_values)}"
     )
+    # ``submitting`` is deliberately journal-only — it must NOT appear on the
+    # observable lifecycle wire (no schema value, no schema bump — Δ8).
+    assert enum_values - literal_values == {"submitting"}
+    assert "submitting" not in literal_values
 
 
 def test_terminal_statuses_matches_terminal_literal() -> None:

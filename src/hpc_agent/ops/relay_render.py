@@ -341,6 +341,10 @@ def _row_line(row: dict[str, Any]) -> str:
     if row.get("is_superseded"):
         return f"{kind} {run_id} superseded by {row.get('superseded_by')}"
     status = row.get("status") or "unknown"
+    # A pre-dispatch submitting record (submit-once design §3.3) has no job id
+    # and no per-task counts yet — display its phase, not a bare status token.
+    if status == "submitting":
+        return f"{kind} {run_id} submitting — dispatch in flight / awaiting id{where}"
     counts = _counts_phrase(row.get("summary") or {})
     tail = f": {counts}" if counts else ""
     return f"{kind} {run_id} {status}{where}{tail}"

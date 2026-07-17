@@ -161,7 +161,7 @@ Each row links a self-contained section file. Sizes are approximate.
 | Section | Scope | Size |
 |---|---|---|
 | [The determinism boundary: judgment in the LLM, mechanism in verbs](principles/determinism-boundary.md) | Judgment stays in the LLM; every rule-fixed step is a composed verb, enforced by removing the affordance. | ~1.8k tokens |
-| [Lifecycle verdicts and run identity: one definition, named tests](principles/lifecycle-verdicts.md) | One definition per terminal-verdict / run-identity / run-execution decision, every call site routing through it. | ~25.0k tokens |
+| [Lifecycle verdicts and run identity: one definition, named tests](principles/lifecycle-verdicts.md) | One definition per terminal-verdict / run-identity / run-execution decision, every call site routing through it. | ~27.1k tokens |
 | [The registration kernel: the deployment-boundary attestation is mechanism-only](principles/registration-kernel.md) | The deploy-boundary promotion is one more attestation over the sealed dossier — mechanism-only, agnostic by five mechanisms. | ~1.4k tokens |
 | [The determinism fingerprint: measure, don't ask](principles/determinism-fingerprint.md) | A measured, confidence-labeled run-to-run spread — core measures and compares, never names a metric or invents a tolerance. | ~1.5k tokens |
 | [Domain packs: bind-as-data, trust content-addressed](principles/domain-packs.md) | Bind pack files by sha, gate on pack receipts, never run or interpret pack logic; plus the evidence-memory and challenge boundaries. | ~4.0k tokens |

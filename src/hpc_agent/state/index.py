@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "find_in_flight_runs",
+    "find_submitting_runs",
     "find_runs_by_campaign",
     "find_held_runs",
     "find_stalled_runs",
@@ -180,6 +181,56 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
     return [r for _, r in records]
 
 
+def find_submitting_runs(experiment_dir: Path) -> list[RunRecord]:
+    """Return every run with ``status == "submitting"``, newest first.
+
+    The pre-dispatch state (submit-once design §3.3): a submit mints the
+    record ``submitting`` BEFORE the remote actuation and promotes it to
+    ``in_flight`` only once the job id is in hand, so an orphaned submit
+    (drop in the dispatch→id window) is a durable ``submitting`` record
+    with empty ``job_ids`` that reconcile-recovery can own — never lost.
+
+    This is the scan reconcile / ``doctor`` use to find those records to
+    recover. It follows the same index-first shape as
+    :func:`find_in_flight_runs` (the F42 trust-the-record-not-the-index
+    filter, F46 non-creating namespace probe) but keys on ``submitting`` —
+    a submitting run has no ``job_ids``, so it is deliberately NOT surfaced
+    by ``find_in_flight_runs`` (the monitor/campaign live set); it is a
+    pre-monitor state. These two scans are independent implementations:
+    each keys on its own status literal, with no shared-drift contract.
+    """
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.run_record import _current_homedir, _run_path
+
+    # F46: non-creating namespace probe (see find_in_flight_runs).
+    if not _current_homedir().exists() or not journal_root_if_exists(experiment_dir).exists():
+        return []
+    if _index_is_stale(experiment_dir):
+        _rebuild_index(experiment_dir)
+    idx = _read_index(experiment_dir)
+    submitting_ids = [
+        rid
+        for rid, meta in idx.items()
+        if isinstance(meta, dict) and meta.get("status") == "submitting"
+    ]
+    records: list[tuple[float, RunRecord]] = []
+    for rid in submitting_ids:
+        path = _run_path(experiment_dir, rid)
+        if not path.exists():
+            continue
+        record = load_run(experiment_dir, rid)
+        if record is None:
+            continue
+        # F42: trust the record we just loaded, not the (possibly stale) index
+        # tag — a promote submitting→in_flight or a reconcile transition may
+        # have landed on disk before its index refresh.
+        if record.status != "submitting":
+            continue
+        records.append((_safe_mtime(path), record))
+    records.sort(key=lambda item: item[0], reverse=True)
+    return [r for _, r in records]
+
+
 def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRecord]:
     """Return every run whose ``campaign_id`` matches, oldest-first.
 
@@ -241,12 +292,20 @@ def find_held_runs(experiment_dir: Path, campaign_id: str | None = None) -> list
 def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[dict]:
     """Return live runs whose driver missed its tick deadline (§5 watchdog).
 
-    A run is *stalled* when it is still ``in_flight`` AND carries a
-    ``next_tick_due`` that is now in the past — the driver stamped a deadline via
-    :func:`hpc_agent.state.journal.stamp_tick` and the next tick never landed by
-    it. This is detection only; the ``doctor`` verb surfaces each hit as a
-    drafted recovery proposal. Runs with no ``next_tick_due`` stamped yet (never
-    ticked) are not stalled — absence of a deadline is not a missed one.
+    A run is *stalled* when it is still ``in_flight`` (or ``submitting``) AND
+    carries a ``next_tick_due`` that is now in the past — the driver stamped a
+    deadline via :func:`hpc_agent.state.journal.stamp_tick` and the next tick
+    never landed by it. This is detection only; the ``doctor`` verb surfaces each
+    hit as a drafted recovery proposal. Runs with no ``next_tick_due`` stamped
+    yet (never ticked) are not stalled — absence of a deadline is not a missed
+    one.
+
+    A ``submitting`` run is also scanned (submit-once design §3.3): a submit that
+    died in its dispatch window leaves a ``submitting`` record whose initial
+    watchdog stamp lapses, so it surfaces here as a ``doctor`` recovery proposal
+    that routes to reconcile-recovery (the ``status`` field on each hit carries
+    ``submitting`` so the proposal drafts the right action — re-derive from the
+    cluster, never a blind re-arm/re-submit).
 
     **Parked ≠ stalled** (block-drive.md §5): a run carrying a
     ``pending_decision`` marker is legitimately *awaiting a human decision* at a
@@ -274,7 +333,10 @@ def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[
 
     ed = Path(experiment_dir) if experiment_dir is not None else Path.cwd()
     stalled: list[dict] = []
-    for record in find_in_flight_runs(ed):
+    # Live in_flight runs PLUS pre-dispatch submitting runs (submit-once §3.3):
+    # a submit that died in its dispatch window is a submitting record whose
+    # initial watchdog stamp lapsed. Both share the lapsed-deadline check below.
+    for record in [*find_in_flight_runs(ed), *find_submitting_runs(ed)]:
         # Parked-on-decision runs are awaiting the human, not stalled (§5).
         if is_awaiting_decision(record.run_id, experiment_dir=ed):
             continue
@@ -341,7 +403,18 @@ def find_parked_runs(now_iso: str, experiment_dir: Path | None = None) -> list[d
 
 
 def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
-    """Evict oldest non-in-flight runs past *keep*. Returns count removed."""
+    """Evict oldest TERMINAL runs past *keep*. Returns count removed.
+
+    Only :data:`TERMINAL_STATUSES` (complete / failed / abandoned) are
+    prune-eligible. A non-terminal record — ``in_flight`` (live) OR
+    ``submitting`` (pre-dispatch / orphaned; submit-once design §3.3) —
+    is NEVER pruned: pruning a ``submitting`` orphan would garbage-collect
+    the only durable evidence reconcile-recovery needs to adopt the array
+    or safely re-submit. The guard keys on membership in TERMINAL_STATUSES,
+    not ``!= "in_flight"``, so any future non-terminal status is kept too.
+    """
+    from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES
+
     if keep < 0:
         raise errors.SpecInvalid("keep must be non-negative")
     files = _all_run_files(experiment_dir)
@@ -350,7 +423,7 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
         payload = _read_json(path)
         if payload is None:
             continue
-        if payload.get("status", "in_flight") == "in_flight":
+        if payload.get("status", "in_flight") not in TERMINAL_STATUSES:
             continue
         terminal.append((_safe_mtime(path), path, payload.get("run_id", path.stem)))
     if len(terminal) <= keep:
