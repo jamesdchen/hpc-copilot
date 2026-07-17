@@ -109,21 +109,77 @@ def test_nonzero_exit_refuses_stage_with_stderr_verbatim(tmp_path: Path) -> None
     assert "pre_stage_smoke=false" in msg
 
 
-def test_import_error_refuses_but_flags_local_env_artifact(tmp_path: Path) -> None:
+def test_missing_third_party_dep_discloses_and_proceeds(tmp_path: Path, capsys) -> None:
+    """run-14 finding #6: an import of a dependency ABSENT from the local
+    interpreter but supplied by the cluster env (e.g. pandas on the native-Windows
+    control-plane venv) is an HONEST DISCLOSURE, not a refusal. The local smoke
+    cannot judge the cluster env; the cluster canary still verifies it. Previously
+    this REFUSED and forced the human to opt out of a useful check."""
     _write_tasks_py(tmp_path)
     ex = _write_script(
         tmp_path,
-        "badimport.py",
-        "import a_module_that_does_not_exist_xyz\n",
+        "needs_a_cluster_dep.py",
+        "import a_third_party_pkg_not_in_this_repo_xyz\n",
     )
+    # No raise — the missing module is not one of the repo's own modules, so it is
+    # treated as a cluster-env dependency and disclosed.
+    sf._smoke_one_executor(tmp_path, spec=_spec(), executor=ex, result_dir_template=_TEMPLATE)
+    err = capsys.readouterr().err
+    assert "a_third_party_pkg_not_in_this_repo_xyz" in err
+    assert "cluster canary will verify" in err
+    # The disclosure names the interpreter it actually ran under (FIX C: pinned to
+    # sys.executable, never PATH's python3).
+    assert sys.executable in err
+
+
+def test_import_error_of_own_repo_module_refuses(tmp_path: Path) -> None:
+    """Teeth: a ModuleNotFoundError naming one of the repo's OWN packages (a broken
+    sub-import inside the user's code) is something the local smoke CAN judge — the
+    cluster would fail identically — so the stage is still refused, and the opt-out
+    is named."""
+    _write_tasks_py(tmp_path)
+    pkg = tmp_path / "mypkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    ex = _write_script(tmp_path, "uses_pkg.py", "import mypkg.does_not_exist_sub\n")
     with pytest.raises(errors.SpecInvalid) as ei:
         sf._smoke_one_executor(tmp_path, spec=_spec(), executor=ex, result_dir_template=_TEMPLATE)
     msg = str(ei.value)
-    assert "ModuleNotFoundError" in msg  # stderr tail relayed verbatim
-    # An import failure MAY be a cluster-only dependency — the refusal says so
-    # and names the field to skip the gate.
-    assert "local-env artifact" in msg
-    assert "pre_stage_smoke=false" in msg
+    assert "part of the experiment repo" in msg
+    assert "mypkg" in msg
+    assert "pre_stage_smoke=false" in msg  # opt-out still named
+
+
+def test_syntax_error_still_refuses(tmp_path: Path) -> None:
+    """Teeth: a genuine SyntaxError is something the local smoke CAN judge (Python
+    compiles the whole module before running any line), so it still refuses even
+    with the run-14 finding-#6 disclosure path in place — a syntax error is never a
+    missing-dependency disclosure."""
+    _write_tasks_py(tmp_path)
+    ex = _write_script(tmp_path, "syntaxbad.py", "def f(:\n    pass\n")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        sf._smoke_one_executor(tmp_path, spec=_spec(), executor=ex, result_dir_template=_TEMPLATE)
+    assert "SyntaxError" in str(ei.value)
+
+
+def test_missing_module_discriminator_helpers(tmp_path: Path) -> None:
+    """Unit-pin the gate's interpretation helpers: repo-own vs third-party, and the
+    plain-ImportError (no 'No module named') → None → refuse path."""
+    (tmp_path / "mymod.py").write_text("")
+    (tmp_path / "mypkg").mkdir()
+    assert sf._module_shipped_in_repo(tmp_path, "mymod")
+    assert sf._module_shipped_in_repo(tmp_path, "mypkg")
+    assert not sf._module_shipped_in_repo(tmp_path, "pandas")
+
+    assert (
+        sf._missing_top_level_module("ModuleNotFoundError: No module named 'pandas.core'")
+        == "pandas"
+    )
+    assert sf._missing_top_level_module('No module named "torch"') == "torch"
+    # A plain ImportError names no missing module → None → the refuse path, never a
+    # cluster-env disclosure.
+    assert sf._missing_top_level_module("ImportError: cannot import name 'x' from 'y'") is None
+    assert sf._missing_top_level_module("") is None
 
 
 # ── proceed paths ──────────────────────────────────────────────────────
@@ -247,3 +303,30 @@ def test_localize_interpreter_substitutes_bare_python() -> None:
     assert _localize_interpreter("python x.py").startswith(f'"{sys.executable}" ')
     assert _localize_interpreter("/usr/bin/python3 x.py") == "/usr/bin/python3 x.py"
     assert _localize_interpreter("bash run.sh") == "bash run.sh"
+
+
+def test_win32_resolution_never_invokes_bare_python3(monkeypatch) -> None:
+    """Rung 3 of the local-interpreter resolution (run-14 finding #6): a CLUSTER-
+    shaped bare ``python3``/``python`` executor is pinned to the quoted control-
+    plane interpreter (``sys.executable``) — NEVER left as a bare ``python3`` PATH
+    lookup, which on the native-Windows box resolves a foreign/absent interpreter
+    (run #11: msys64's python, no hpc_agent). Pin the CONSTRUCTED command under a
+    win32-reported platform.
+
+    (Rung 1 — an experiment-repo venv named by the spec/sidecar — is intentionally
+    absent: no spec/sidecar field names a LOCAL interpreter. The only interpreter a
+    sidecar names is ``env_python``, a CLUSTER path unusable on the local box. So
+    resolution is rung 2 (sys.executable) with rung 3 as the win32 guarantee.)"""
+    import sys as _sys
+
+    from hpc_agent.ops.validate.dry_run_local import _localize_interpreter
+
+    monkeypatch.setattr(_sys, "platform", "win32", raising=False)
+    for cluster_cmd in (
+        "python3 -m hpc_agent.executor_cli run-registered train.py",
+        "python train.py --seed $SEED",
+    ):
+        built = _localize_interpreter(cluster_cmd)
+        assert not built.startswith("python3 ")  # never a bare PATH lookup
+        assert not built.startswith("python ")
+        assert built.startswith(f'"{_sys.executable}" ')  # always the pinned interpreter

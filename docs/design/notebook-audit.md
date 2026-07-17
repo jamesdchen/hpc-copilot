@@ -727,6 +727,35 @@ seam into the submit flow as a bounded pre-deploy smoke (S1/S2 seat,
 disclosure-or-refusal before transport ever runs). Core never interprets the
 failure — it relays the executor's own crash.
 
+Drift (run-14 finding #6, native-Windows papercut): the LOCAL smoke was
+environment-naive about third-party dependencies. After `_localize_interpreter`
+pins a bare `python3`/`python` executor token to `sys.executable` (the
+control-plane venv — guaranteed to import `hpc_agent`, never PATH's `python3`;
+FIX C), an executor that `import pandas` still crashed with a
+`ModuleNotFoundError` when `pandas` was absent from *that* venv — and the gate
+REFUSED, forcing the human to opt out (`pre_stage_smoke=false`) of a useful
+check the check itself had made noise. Fix: the gate's interpretation layer
+(`ops/submit_flow.py::_smoke_one_executor`) now splits `smoke_import_error` by
+what the local smoke can genuinely judge. A `ModuleNotFoundError` naming a
+top-level module ABSENT from the experiment repo
+(`_module_shipped_in_repo` — no `<mod>.py`/`<mod>/` at the repo root the smoke
+runs `cwd`'d into) is a cluster-env dependency the LOCAL interpreter cannot
+adjudicate → HONEST DISCLOSURE ("skipped the import-check of `pandas` … the
+cluster canary will verify") + PROCEED. The smoke keeps its teeth for what IS
+local: syntax / nonzero exits (`smoke_nonzero_exit` — Python compiles the whole
+module before running, so a `SyntaxError` fires regardless of a missing dep) and
+`ModuleNotFoundError`s naming the repo's OWN packages (a broken sub-import the
+cluster would hit identically → still REFUSE). Interpreter resolution: rung 2
+(`sys.executable`) + rung 3 (never a bare `python3` PATH lookup on win32) hold;
+rung 1 (an experiment-repo venv the spec/sidecar names) is intentionally
+NOT built — no spec/sidecar field names a LOCAL interpreter (the only one a
+sidecar carries, `env_python`, is a CLUSTER path unusable on the local box).
+The `pre_stage_smoke=false` opt-out is unchanged. Pins:
+`tests/ops/test_submit_flow_pre_stage_smoke.py::{test_missing_third_party_dep_discloses_and_proceeds,
+test_import_error_of_own_repo_module_refuses, test_syntax_error_still_refuses,
+test_win32_resolution_never_invokes_bare_python3,
+test_missing_module_discriminator_helpers}`.
+
 **8. Overnight mode** (submit/campaign; user-requested). A journaled standing
 consent for named boundaries while the human sleeps. Four pins from the live
 night: (a) the consent is the human's own typed utterance accepting fallout,
