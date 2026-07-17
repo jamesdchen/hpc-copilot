@@ -394,7 +394,7 @@ def cite_check(experiment_dir: Path, *, spec: CiteCheckInput) -> dict[str, Any]:
     """
     from hpc_agent._wire.queries.extract_recipe import ExtractRecipeInput
     from hpc_agent.ops.cite_render import render_cite_check
-    from hpc_agent.ops.extract_recipe import _resolve_seed
+    from hpc_agent.ops.extract_recipe import _apply_exclusions, _resolve_seed
 
     experiment_dir = Path(experiment_dir)
 
@@ -407,6 +407,14 @@ def cite_check(experiment_dir: Path, *, spec: CiteCheckInput) -> dict[str, Any]:
     seed_kind, seed_ref, candidates, artifact_opaque, _gaps = _resolve_seed(
         experiment_dir, recipe_input
     )
+    # The citing AUTHORITY must be exactly the recipe's KEPT chain, not the raw
+    # candidate universe: a campaign seed's candidates include canary /
+    # superseded / dead-end runs whose stale _aggregated tables would otherwise
+    # let cite-check bless a number that lives ONLY in a run the recipe excludes
+    # (provenance-chain review Finding 1). Carve with the same mechanical
+    # exclusions extract-recipe applies. No-op for run/aggregate seeds (their
+    # pool reads the single seed table, not `candidates`).
+    candidates, _excluded = _apply_exclusions(experiment_dir, candidates)
 
     strings, floats, sources = _sealed_pool(
         experiment_dir, seed_kind, seed_ref, candidates, artifact_opaque
