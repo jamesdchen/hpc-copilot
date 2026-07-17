@@ -288,3 +288,10 @@ disclose. #3/#4 make the recipe portable and citable once it exists.
   (findings 13/13-addendum/14 — the operator-bypass + graft/stale-cache class). No
   `src/**` change lands here; the four §4 proposals are the build queue, #1 buildable
   next session with Task 1 (`_persist_local_aggregate` provenance) as its foundation.
+
+- 2026-07-17 — Task 1 BUILT (`_persist_local_aggregate` gains additive
+  `contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version` sourced from the
+  reduce's own `_combiner/wave_*.json` + `_per_task_results/.hpc_cmd_sha`
+  inputs; combiner-footer mirror + manifest wheel-sha + all rulings held OUT).
+  Back-compat pinned; regen clean. Built in an isolated worktree, integrated
+  by the coordinator.

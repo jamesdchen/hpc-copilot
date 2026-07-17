@@ -1226,6 +1226,113 @@ def _cluster_final_reduce(
     )
 
 
+def _reduce_input_provenance(
+    experiment_dir: Path | None,
+    run_id: str,
+    out: Path,
+    *,
+    summary_name: str | None,
+) -> tuple[list[str], list[str], str | None]:
+    """The run-set + per-piece cmd_sha membership the reduce ACTUALLY consumed.
+
+    Read at persist time from the reduce's OWN on-disk inputs under *out* — the
+    same ``_combiner/wave_*.json`` partials and ``_per_task_results/`` mirror the
+    just-completed reduce read — so the recorded membership is exactly what was
+    consumed, never a fresh re-derivation after the fact. Returns
+    ``(contributing_run_ids, piece_cmd_shas, hpc_agent_version)``:
+
+    * ``contributing_run_ids`` — the distinct ``run_id`` fields of the wave
+      partials this run actually merged (F05 filter: this run's own partials or an
+      unlabeled legacy partial; a foreign partial is dropped exactly as
+      :func:`reduce_partials` drops it), unioned with ``run_id`` itself (the
+      per-task fallback / pure-API / cluster-reduce paths reduce this run's own
+      tree). Always contains ``run_id``.
+    * ``piece_cmd_shas`` — the distinct ``.hpc_cmd_sha`` fingerprints across the
+      per-task result dirs the fallback consumed under
+      :data:`PER_TASK_RESULTS_DIRNAME` (canary-family excluded, over the dirs
+      carrying the declared *summary_name* — the exact set
+      :func:`_per_task_metrics_reduce` reduced). A SINGLE value is the clean case;
+      MORE than one is the run-13 graft/stale-cache signal (a repair re-ran some
+      pieces under a new cmd_sha — finding 13-addendum). Falls back to the
+      sidecar's own ``cmd_sha`` when there is no per-task mirror (the
+      combiner-wave / pure-API / cluster-reduce paths carry no per-piece sha in
+      their LOCAL inputs — the combiner pre-reduces cluster-side).
+    * ``hpc_agent_version`` — the wheel that PRODUCED the run, read from its
+      sidecar (the identity projection the directive names), ``None`` when the
+      sidecar is unreadable.
+
+    Best-effort: every read is guarded, so a missing/corrupt input degrades to the
+    honest ``[run_id]`` / ``[sidecar cmd_sha]`` / ``None`` defaults and NEVER
+    raises — the caller is a harvest-guard write that must not abort.
+    """
+    sidecar: dict[str, Any] = {}
+    if experiment_dir is not None:
+        try:
+            sidecar = read_run_sidecar(experiment_dir, run_id) or {}
+        except (
+            FileNotFoundError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            errors.HpcError,
+        ):
+            sidecar = {}
+    version = sidecar.get("hpc_agent_version")
+    sidecar_cmd_sha = sidecar.get("cmd_sha")
+
+    from hpc_agent.ops.monitor.reconcile import sibling_run_ids
+
+    canary_ids = set(sibling_run_ids(run_id))
+
+    # Wave partials the combiner reduce merged. Apply the SAME F05 filter
+    # ``reduce_partials`` applies (keep this run's or an unlabeled legacy partial,
+    # drop foreign), collecting each kept partial's own ``run_id``.
+    run_ids: set[str] = {run_id}
+    combiner_local = out / "_combiner"
+    if combiner_local.is_dir():
+        for wf in combiner_local.glob("wave_*.json"):
+            if not _WAVE_PARTIAL_NAME_RE.match(wf.name):
+                continue
+            try:
+                data = json.loads(wf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            file_run_id = data.get("run_id") if isinstance(data, dict) else None
+            if file_run_id is not None and file_run_id != run_id:
+                continue  # foreign partial — never merged (F05)
+            if isinstance(file_run_id, str) and file_run_id:
+                run_ids.add(file_run_id)
+
+    # Per-task cmd_sha fingerprints across the pieces the per-task fallback
+    # consumed — the graft/stale-cache fingerprint (>1 distinct value).
+    piece_shas: set[str] = set()
+    results_local = out / PER_TASK_RESULTS_DIRNAME
+    if summary_name and results_local.is_dir():
+        for summary in results_local.rglob(summary_name):
+            if not summary.is_file():
+                continue
+            tdir = _summary_task_dir(summary, summary_name)
+            if not canary_ids.isdisjoint(tdir.parts):
+                continue  # canary-family sibling — excluded from the reduce
+            sha_file = tdir / PER_TASK_CMD_SHA_FILENAME
+            if not sha_file.is_file():
+                continue
+            try:
+                val = sha_file.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if val:
+                piece_shas.add(val)
+
+    # No per-task mirror (the combiner-wave / pure-API / cluster-reduce paths):
+    # the LOCAL inputs carry no per-piece sha, so the honest per-run fingerprint
+    # is the sidecar's own cmd_sha.
+    if not piece_shas and isinstance(sidecar_cmd_sha, str) and sidecar_cmd_sha:
+        piece_shas.add(sidecar_cmd_sha)
+
+    return sorted(run_ids), sorted(piece_shas), version
+
+
 def _persist_local_aggregate(
     out: Path,
     run_id: str,
@@ -1233,6 +1340,8 @@ def _persist_local_aggregate(
     aggregated: dict[str, Any],
     incomplete_waves: list[int],
     source: str,
+    experiment_dir: Path | None = None,
+    summary_name: str | None = None,
 ) -> None:
     """Atomically persist a reduce path's output as the durable comparator artifact.
 
@@ -1254,16 +1363,34 @@ def _persist_local_aggregate(
     it to the SAME canonical flat location, so verify-reproduction reads it too —
     routing it through here would downgrade that artifact to the leaner shape.
 
+    Reduce-time provenance (clean-reproduction extraction Task 1): additively,
+    the ``provenance`` block records WHICH runs' pieces fed this table
+    (``contributing_run_ids``), at WHICH per-piece cmd_sha(s) (``piece_cmd_shas``
+    — >1 is the run-13 graft/stale-cache signal), and the wheel that produced the
+    run (``hpc_agent_version``). All three are read from the reduce's OWN inputs at
+    write time via :func:`_reduce_input_provenance` (the ``_combiner/wave_*.json``
+    membership + the ``_per_task_results/`` ``.hpc_cmd_sha`` set it just
+    consumed), so the table is self-describing at publication time instead of
+    reconstructed from the journal. The fields are ADDITIVE: every existing reader
+    uses ``.get()`` on the provenance block and is byte-unaffected, and an
+    old-shape record (no new keys) still parses everywhere.
+
     Harvest-guard posture: BEST-EFFORT. A failed write logs a loud warning and
     NEVER aborts the harvest — the reduced metrics are already returned inline;
     only the durable-artifact convenience is lost until the next re-aggregate.
     """
+    contributing_run_ids, piece_cmd_shas, hpc_agent_version = _reduce_input_provenance(
+        experiment_dir, run_id, out, summary_name=summary_name
+    )
     payload = {
         "aggregated_metrics": aggregated,
         "provenance": {
             "incomplete_waves": list(incomplete_waves),
             "source": source,
             "reduced_at": utcnow_iso(),
+            "contributing_run_ids": contributing_run_ids,
+            "piece_cmd_shas": piece_cmd_shas,
+            "hpc_agent_version": hpc_agent_version,
         },
     }
     agg_path = out / "metrics_aggregate.json"
@@ -1892,7 +2019,12 @@ def _aggregate_flow_impl(
         # ``aggregated_metrics`` is that same empty dict — honestly comparable-
         # but-empty (no keyed metrics), never a fabricated scalar.
         _persist_local_aggregate(
-            out, run_id, aggregated=aggregated, incomplete_waves=[], source="pure_api"
+            out,
+            run_id,
+            aggregated=aggregated,
+            incomplete_waves=[],
+            source="pure_api",
+            experiment_dir=experiment_dir,
         )
         return AggregateFlowResult(
             run_id=run_id,
@@ -1967,7 +2099,12 @@ def _aggregate_flow_impl(
         # honest equivalent, never a fabricated comparability.
         cr_aggregated = cr["reduced"] if isinstance(cr.get("reduced"), dict) else {}
         _persist_local_aggregate(
-            out, run_id, aggregated=cr_aggregated, incomplete_waves=[], source="cluster_reduce"
+            out,
+            run_id,
+            aggregated=cr_aggregated,
+            incomplete_waves=[],
+            source="cluster_reduce",
+            experiment_dir=experiment_dir,
         )
         return AggregateFlowResult(
             run_id=run_id,
@@ -2113,6 +2250,11 @@ def _aggregate_flow_impl(
             aggregated=aggregated,
             incomplete_waves=incomplete_waves,
             source=reduce_source,
+            experiment_dir=experiment_dir,
+            # The run's declared per-task summary artifact (F-J), resolved at the
+            # reduce seam above — threaded so the reduce-time provenance reads the
+            # ``.hpc_cmd_sha`` set over the SAME per-task dirs the reduce consumed.
+            summary_name=resolved_summary_artifact(sidecar_for_cmd),
         )
 
     # Ingest runtime samples (timing + axis_bindings) from the pulled
