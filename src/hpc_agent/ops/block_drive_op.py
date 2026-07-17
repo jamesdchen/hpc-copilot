@@ -86,5 +86,6 @@ def block_drive(experiment_dir: Path, *, spec: BlockDriveSpec) -> BlockDriveResu
         run_id=spec.run_id,
         workflow=spec.workflow,
         dry_run=spec.dry_run,
+        approve=spec.approve,
     )
     return result

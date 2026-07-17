@@ -28,6 +28,8 @@ logic, only sequence it and digest the evidence into a brief.
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -63,6 +65,124 @@ if TYPE_CHECKING:
     from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 
 __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
+
+_log = logging.getLogger(__name__)
+
+
+def _worker_exit_park(
+    experiment_dir: Path, result: SubmitBlockResult, input_spec: dict[str, Any] | None
+) -> None:
+    """L2 second seat of the §5 park: a detached worker parks ITSELF on the way out.
+
+    Row 21 (one-definition-two-seats, the scope_gate/notebook_gate blessed
+    pattern): the ONE definition of "write the §5 pending-decision marker at a
+    parked boundary" is :func:`hpc_agent._kernel.lifecycle.block_drive._park`.
+    Seat 1 is the driver tick (``run_tick``). THIS is seat 2 — the detached worker
+    child, which runs a submit block to its terminal in its own process and so is
+    never seen by a driver tick. Before L2 a run detached at S2/S3/S4 needed an
+    EXTRA driver tick (three agent round-trips) to notice the recorded terminal
+    and park; now the worker leaves the marker itself, so ``wait-detached`` wakes
+    the agent straight onto the decision brief.
+
+    Fires ONLY inside a detached worker (``HPC_DETACHED_BLOCK`` set by
+    ``_spawn_detached``) at a genuine decision boundary (``needs_decision`` with a
+    ``run_id``). Routes THROUGH ``_park`` — it never re-inlines the low-level
+    marker-write primitive (pinned by the import-location contract test). The
+    marker write is best-effort exactly as ``_park`` is (a sidecar-only run whose
+    journal record is not yet minted logs + continues); the worker's terminal
+    record — already written by :func:`_persist_brief` — is the durable wake
+    payload either way, so a park miss never loses the brief.
+    """
+    block_verb = os.environ.get("HPC_DETACHED_BLOCK")
+    if not block_verb or not result.needs_decision or not result.run_id:
+        return
+    try:
+        from hpc_agent._kernel.lifecycle.block_drive import park
+
+        successor = result.next_block.get("verb") if isinstance(result.next_block, dict) else None
+        park(
+            experiment_dir,
+            run_id=result.run_id,
+            workflow=None,
+            verb=block_verb,
+            stage=result.stage_reached,
+            successor=successor if isinstance(successor, str) else None,
+            spec=input_spec if isinstance(input_spec, dict) else {},
+            result=result.model_dump(mode="json"),
+        )
+    except Exception:  # noqa: BLE001 — the worker exit must never gain a new crash
+        _log.warning(
+            "worker-exit park for %s/%s failed (best-effort); the terminal record "
+            "still carries the wake payload",
+            result.run_id,
+            block_verb,
+            exc_info=True,
+        )
+
+
+def _fire_speculative_canary(experiment_dir: Path, result: SubmitBlockResult) -> None:
+    """L3 (R2 APPROVED): fire S2's canary EARLY, in code, at S1's clean resolved-park.
+
+    Row 22: while the human reviews the S1 brief, run the speculative canary so a
+    plain ``y`` on the brief finds S2 already green. Fires ONLY on a CLEAN resolved
+    boundary that MINTED a run_id and BUILT a submit-flow spec — an ambiguous walk
+    (``needs_resolution``) or the PRE-RESOLVE boundary (no run_id / no
+    ``brief["resolve"]["submit_spec"]``) SKIP, the SAME skip rule the ``hpc-submit``
+    skill applies (required ambiguities are genuine human judgment, never
+    speculated over).
+
+    The fired verb is ``submit-speculate``, which composes
+    ``submit-and-verify(stop_after_canary=True)`` — ``stop_after_canary`` is
+    UNSTRIPPABLE on this path (the main array is unreachable from that verb, by
+    construction). The successor spec is composed by the run-14 #4 composer
+    (``block_chain.compose_successor_spec("submit-s2", …)``) — the SAME code that
+    materializes the S1→S2 successor, so the speculated spec is byte-identical to
+    the one the human's ``y`` will run (never re-authored).
+
+    ONE speculation-state definition (no second cache): budget-of-1 and
+    nudge-invalidation both come free from the #249 ``(cmd_sha, version)`` canary
+    TTL cache — ``submit-speculate`` consults it before firing. A nudge that moves
+    ``cmd_sha`` ORPHANS the speculative canary (cache miss → S2 re-canaries); the
+    orphan drains naturally, nothing is cancelled. Journal-untouched: the detached
+    launch writes only the ``_detached/`` handle — no decision / brief record.
+
+    Opt-in via ``HPC_S1_SPECULATE=1`` (the skill / block-drive enables it at the
+    resolved-park; OFF by default so a direct S1 call never surprises with a
+    scheduler submit). Best-effort: any failure is swallowed — speculation is an
+    optimization, never load-bearing for S1's return.
+    """
+    if os.environ.get("HPC_S1_SPECULATE") != "1":
+        return
+    if result.stage_reached != "resolved" or not result.run_id:
+        return
+    resolve = result.brief.get("resolve") if isinstance(result.brief, dict) else None
+    submit_flow = resolve.get("submit_spec") if isinstance(resolve, dict) else None
+    if not isinstance(submit_flow, dict):
+        return
+    try:
+        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
+        from hpc_agent.infra.block_chain import compose_successor_spec
+
+        # Compose the SAME submit-and-verify spec S2 will run (never re-authored):
+        # {"submit": {"submit": submit_flow}} — the outer "submit" IS a
+        # SubmitAndVerifySpec, which submit-speculate embeds verbatim.
+        composed = compose_successor_spec(
+            "submit-s2",
+            spec_hint={"run_id": result.run_id},
+            result_brief=result.brief,
+        )
+        speculate_spec = {"submit": composed["submit"], "detach": False}
+        launch_submit_block_detached(
+            verb="submit-speculate",
+            experiment_dir=str(experiment_dir),
+            spec=speculate_spec,
+        )
+    except Exception:  # noqa: BLE001 — speculation is an optimization, never load-bearing
+        _log.info(
+            "speculative canary at S1 resolved-park for %s skipped (best-effort)",
+            result.run_id,
+            exc_info=True,
+        )
 
 
 # The detached submit blocks (design §3): each spawns a durable worker and
@@ -102,7 +222,12 @@ def _replay_recorded_terminal(
         return None
 
 
-def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlockResult:
+def _persist_brief(
+    experiment_dir: Path,
+    result: SubmitBlockResult,
+    *,
+    input_spec: dict[str, Any] | None = None,
+) -> SubmitBlockResult:
     """Durably persist a decision-point brief so the provenance gate can diff it.
 
     Conduct rule 9 (docs/design/history/proving-run-2-hardening.md §6): ``append-decision``
@@ -169,6 +294,9 @@ def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlo
                 block=result.block,
                 brief=result.brief,
             )
+        # L2 (Row 21): if THIS is the detached worker's own terminal, park it here
+        # so no extra driver tick is needed to notice the terminal and rendezvous.
+        _worker_exit_park(experiment_dir, result, input_spec)
         return result
     if result.needs_decision and result.run_id and result.brief:
         from hpc_agent.state.decision_briefs import append_brief
@@ -474,8 +602,17 @@ def submit_s1(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
 
     The emitted brief is persisted (``_persist_brief``) so the provenance gate
     (conduct rule 9) can later diff an S1→S2 greenlight's ``resolved`` against it.
+
+    L3 (R2 APPROVED): a CLEAN resolved-park fires the speculative canary in code
+    (:func:`_fire_speculative_canary`) so it runs while the human reviews the
+    brief — no agent action pre-greenlight.
     """
-    return _persist_brief(experiment_dir, _submit_s1_impl(experiment_dir, spec=spec))
+    # S1 is never a detached worker (not in SUPPORTED_DETACHED_BLOCK_VERBS), so its
+    # input_spec is never used by the worker-exit park — omit it (a partial S1 spec
+    # built via model_construct is not always JSON-serializable anyway).
+    result = _persist_brief(experiment_dir, _submit_s1_impl(experiment_dir, spec=spec))
+    _fire_speculative_canary(experiment_dir, result)
+    return result
 
 
 def _deploy_payload_brief(
@@ -672,7 +809,11 @@ def submit_s2(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
     The emitted brief is persisted (``_persist_brief``) for the provenance gate
     (conduct rule 9): an S2→S3 greenlight's ``resolved`` is diffed against it.
     """
-    return _persist_brief(experiment_dir, _submit_s2_impl(experiment_dir, spec=spec))
+    return _persist_brief(
+        experiment_dir,
+        _submit_s2_impl(experiment_dir, spec=spec),
+        input_spec=spec.model_dump(mode="json"),
+    )
 
 
 def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
@@ -900,7 +1041,11 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
     return for the provenance gate (conduct rule 9). The unattended / detached /
     clean-terminal returns carry no greenlight, so nothing is persisted there.
     """
-    return _persist_brief(experiment_dir, _submit_s3_impl(experiment_dir, spec=spec))
+    return _persist_brief(
+        experiment_dir,
+        _submit_s3_impl(experiment_dir, spec=spec),
+        input_spec=spec.model_dump(mode="json"),
+    )
 
 
 def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
@@ -1145,7 +1290,11 @@ def submit_s4(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:
     The emitted results brief is persisted (``_persist_brief``) for the
     provenance gate (conduct rule 9).
     """
-    return _persist_brief(experiment_dir, _submit_s4_impl(experiment_dir, spec=spec))
+    return _persist_brief(
+        experiment_dir,
+        _submit_s4_impl(experiment_dir, spec=spec),
+        input_spec=spec.model_dump(mode="json"),
+    )
 
 
 def _submit_s4_impl(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:

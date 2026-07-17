@@ -85,7 +85,7 @@ def test_build_spec_skeleton_submit_s3_shape() -> None:
 
     assert isinstance(skel, dict)
     # Top-level required present, optional (canary_run_id, detach, ...) omitted.
-    assert set(skel) == {"submit", "monitor", "invocation_argv"}
+    assert set(skel) == {"submit", "monitor"}  # invocation_argv now optional (unit 3.1)
     assert "detach" not in skel  # optional-with-default → omitted
     # monitor is a $ref-resolved object whose only required member is run_id.
     assert isinstance(skel["monitor"], dict)
@@ -108,7 +108,7 @@ def test_build_spec_skeleton_submit_s3_shape() -> None:
     }
     assert inner["total_tasks"] == 1  # minimum-aware integer placeholder
     assert inner["job_env"] == {}  # required object, no required members
-    assert isinstance(skel["invocation_argv"], str)
+    assert "invocation_argv" not in skel  # optional-with-default -> omitted (unit 3.1)
 
 
 def test_skeleton_validates_after_placeholder_substitution() -> None:

@@ -812,6 +812,109 @@ def _materialize_successor_spec(
     return _MaterializedSuccessor(spec=composed, path=path, sha=sha, refused=None)
 
 
+# ── R3 consumption leg: dereference-by-run_id + sha pin (unit 4a) ────────────────
+#
+# R3 (APPROVED by the maintainer with the sha pin, 2026-07-16): a plain
+# ``{next_block, response:'y'}`` advance runs the successor UNDER the complete
+# code-composed spec that 3.1 MATERIALIZED + disclosed to the human at park
+# (``.hpc/specs/next/<run_id>.<successor>.json``) — dereferenced by run_id, never
+# re-authored — verified against the sha stamped in the marker at park (Row 16).
+# "The spec the human saw provably equals the spec that executes": a drift refuses
+# LOUDLY. Absent materialization falls back to today's resolved-derived acting spec.
+
+
+def _r3_materialized_advance_spec(
+    experiment_dir: Path,
+    run_id: str,
+    pending: dict[str, Any],
+    successor: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The code-composed successor spec to advance UNDER on a plain-``y`` resume (R3).
+
+    Consumes 3.1's materialized sidecar (the CONSUMPTION half of run-14 #4): reads
+    the well-known per-run file, recomputes its byte-stable sha
+    (:func:`block_chain.successor_spec_sha`), and compares it to the ``next_spec_sha``
+    the marker stamped at park. Returns:
+
+    * ``(spec, None)`` — the on-disk materialized spec whose recomputed sha MATCHES
+      the stamped one → advance the successor under it (the spec the human approved);
+    * ``(None, reason)`` — a stamped sha exists but the on-disk spec DRIFTED (or is
+      unreadable) → REFUSE LOUDLY; the caller returns a skip with the marker intact
+      (the approval is NOT consumed), so the human sees why and can re-approve;
+    * ``(None, None)`` — no stamped sha / no materialized file (a Row-14 composition
+      refusal, or a boundary before 3.1's materialization ran) → the caller falls
+      back to today's resolved-derived acting spec. Materialization is a best-effort
+      disclosure; its ABSENCE is never a refusal, only its DRIFT.
+    """
+    if not (run_id and isinstance(successor, str) and successor):
+        return None, None
+    cursor = pending.get("resume_cursor") or {}
+    stamped = cursor.get("next_spec_sha") if isinstance(cursor, dict) else None
+    if not (isinstance(stamped, str) and stamped):
+        return None, None
+    path = _successor_spec_path(experiment_dir, run_id, successor)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None, None  # nothing materialized on disk → resolved-derived fallback
+    try:
+        spec = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None, (
+            f"the materialized {successor} spec at {path} is unreadable — refusing to "
+            "advance (cannot prove it is the spec the human approved; R3 sha-pin)."
+        )
+    if not isinstance(spec, dict):
+        return None, (
+            f"the materialized {successor} spec is not a JSON object — refusing (R3 sha-pin)."
+        )
+    recomputed = block_chain.successor_spec_sha(spec)
+    if recomputed != stamped:
+        return None, (
+            f"the materialized {successor} spec sha {recomputed[:12]} does not match the "
+            f"sha the human approved ({stamped[:12]}) — refusing LOUDLY: the spec that "
+            "would execute is NOT the spec the human saw (R3 byte-stability pin)."
+        )
+    return spec, None
+
+
+# ── L1 fused commit+advance (unit 4a) ───────────────────────────────────────────
+
+
+def _commit_fused_approval(experiment_dir: Path, approve: dict[str, Any]) -> None:
+    """Journal a fused ``block-drive --approve`` decision through the ONE append_decision.
+
+    L1 fusion (Row 19): instead of the agent calling ``append-decision`` and THEN
+    ``block-drive``, one ``--approve`` call routes the y/nudge through the SAME
+    :func:`hpc_agent.ops.decision.journal.append_decision` primitive the standalone
+    verb runs — so EVERY trust-seam gate (the bare-``y`` laundering refusal, the
+    human-authorship gate on ``REQUIRED_CALLER_FIELDS``, the code-derived-field
+    refusal, the brief-provenance / token-exact prior-nudge gate, the scope-unlock
+    authorship gate, the multi-human actor policy) fires IDENTICALLY on the fused
+    path — then :func:`run_tick` falls through to the advance, which finds the
+    just-committed greenlight and consumes it. Fusion is a MECHANISM, not a ruling:
+    the human still uttered the y; only the agent's second mechanical call is gone.
+
+    The payload is validated against the SAME :class:`AppendDecisionInput` model the
+    CLI validates ``--spec`` against; a malformed payload is refused as a
+    :class:`errors.SpecInvalid` (mirroring the CLI's ``--spec`` validation), and any
+    gate that raises propagates unchanged. The fused call thus refuses whatever a
+    standalone ``append-decision`` refuses (the Row-19 fire test).
+    """
+    from hpc_agent import errors
+    from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
+    from hpc_agent.ops.decision.journal import append_decision as _journal_append
+
+    try:
+        spec = AppendDecisionInput.model_validate(approve)
+    except Exception as exc:  # noqa: BLE001 — pydantic ValidationError → SpecInvalid (as --spec does)
+        raise errors.SpecInvalid(
+            f"block-drive --approve payload is not a valid append-decision spec: {exc}"
+        ) from exc
+    # Routes through the ONE definition — every gate fires; a refusal propagates.
+    _journal_append(experiment_dir=experiment_dir, spec=spec)
+
+
 # ── the tick ───────────────────────────────────────────────────────────────────
 
 
@@ -821,6 +924,7 @@ def run_tick(
     run_id: str | None,
     workflow: str | None,
     dry_run: bool = False,
+    approve: dict[str, Any] | None = None,
 ) -> tuple[BlockDriveResult, int]:
     """Advance the block chain by one tick; return ``(result, exit_code)``.
 
@@ -831,10 +935,28 @@ def run_tick(
     watchdog dead-man's-switch after every executed span (reusing
     ``drive._stamp_driver_tick``).
 
+    ``approve`` is the L1 FUSED commit+advance payload (unit 4a): an
+    append-decision spec that this tick FIRST commits — routing through the ONE
+    :func:`hpc_agent.ops.decision.journal.append_decision` definition so every
+    trust-seam gate fires identically (:func:`_commit_fused_approval`, Row 19) —
+    then falls straight through to the advance below (which finds the
+    just-committed greenlight and consumes it). It removes the agent's mechanical
+    SECOND call; the demoted decision-rendezvous Stop guard remains the backstop
+    for a y committed WITHOUT the fused advance (Row 20). ``None`` (the default) is
+    byte-identical to the pre-fusion tick.
+
     Used by the :func:`block_drive_once` console entry (which prints the result +
     returns the exit code) and by the ``block-drive`` primitive wrapper (which
     returns the :class:`BlockDriveResult` directly).
     """
+    # L1 fusion (Row 19): commit the approval through the ONE append_decision
+    # BEFORE reading the durable position, so the resume scan below sees the fresh
+    # greenlight and advances in this same tick. A refusal from any gate (or a
+    # malformed payload) propagates exactly as a standalone append-decision would —
+    # the fused path refuses whatever append-decision refuses.
+    if approve is not None and not dry_run:
+        _commit_fused_approval(experiment_dir, approve)
+
     pending = read_pending_decision(run_id, experiment_dir=experiment_dir) if run_id else {}
     committed_resolved: dict[str, Any] | None = None
     last_run_inputs: dict[str, Any] | None = None
@@ -932,6 +1054,34 @@ def run_tick(
     # as a bare journal-derived advance (dropping a nudge's rerun + the §4
     # ``input_spec`` diff base).
     resume_action = action in ("advance", "rerun", "advance_carrying")
+
+    # R3 (APPROVED w/ sha pin): a PLAIN-``y`` advance (spec unchanged) runs the
+    # successor UNDER the complete code-composed spec 3.1 materialized + disclosed
+    # to the human at park — dereferenced by run_id, sha-verified against the park
+    # stamp. Scoped to ``advance`` alone: a ``rerun`` / ``advance_carrying`` carries
+    # the human's OWN edit, so the park-time composition is correctly stale there and
+    # the resolved-derived path (which folds the edit) still governs. A sha DRIFT
+    # refuses LOUDLY here — BEFORE the marker is cleared, so the approval survives and
+    # the human can re-approve the real spec.
+    r3_spec: dict[str, Any] | None = None
+    if pending and resume_action and run_id and action == "advance":
+        r3_spec, r3_refusal = _r3_materialized_advance_spec(
+            experiment_dir, run_id, pending, plan.get("verb")
+        )
+        if r3_refusal is not None:
+            _log.warning("R3 sha-pin refused the advance for %s: %s", run_id, r3_refusal)
+            return (
+                BlockDriveResult(
+                    action="skip",
+                    run_id=run_id,
+                    workflow=plan.get("workflow") or workflow,
+                    current_verb=plan.get("current_verb"),
+                    next_verb=plan.get("verb"),
+                    reason=r3_refusal,
+                ),
+                1,
+            )
+
     on_first_failure: Callable[[], None] | None = None
     if pending and resume_action and run_id:
         clear_pending_decision(run_id, experiment_dir=experiment_dir)
@@ -963,12 +1113,19 @@ def run_tick(
     #   bare-startable (submit-s1 / campaign-greenlight, or aggregate-check
     #   without a run_id) → a clear skip.
     if resume_action:
-        accepted = _spec_model_field_names(verb) if verb else None
-        first_spec: dict[str, Any] = {
-            k: v
-            for k, v in (committed_resolved or {}).items()
-            if k not in _META_KEYS and (accepted is None or k in accepted)
-        }
+        if r3_spec is not None:
+            # R3 consumption: advance under the sha-verified materialized spec (the
+            # spec the human saw), NOT the thin agent-committed ``resolved``. It was
+            # already validated against the successor's own ``--spec`` model at
+            # materialization, so it is passed VERBATIM (no re-filtering).
+            first_spec: dict[str, Any] = dict(r3_spec)
+        else:
+            accepted = _spec_model_field_names(verb) if verb else None
+            first_spec = {
+                k: v
+                for k, v in (committed_resolved or {}).items()
+                if k not in _META_KEYS and (accepted is None or k in accepted)
+            }
     else:
         built = _fresh_entry_spec(verb, run_id)
         if built is None:
@@ -1100,7 +1257,7 @@ def _chain(
 
         # A human decision point — park and exit (the rendezvous).
         if result.get("needs_decision"):
-            _park(
+            park(
                 experiment_dir,
                 run_id=run_id,
                 workflow=workflow,
@@ -1171,7 +1328,7 @@ def _chain(
                 spec = composed_next if composed_next is not None else _next_spec_hint(result)
                 verb = successor
                 continue
-            _park(
+            park(
                 experiment_dir,
                 run_id=run_id,
                 workflow=workflow,
@@ -1380,7 +1537,7 @@ def _boundary_has_post_park_nudge(
     )
 
 
-def _park(
+def park(
     experiment_dir: Path,
     *,
     run_id: str,
@@ -1793,3 +1950,7 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(main())
+
+
+# Back-compat alias (one-definition, two seats: submit_blocks worker-exit park).
+_park = park

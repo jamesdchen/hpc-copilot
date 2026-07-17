@@ -284,3 +284,116 @@ def test_speculate_noops_when_canary_validated_fresh(tmp_path: Path, monkeypatch
     assert result.speculated is False
     assert result.verified is True
     assert "already validated-fresh" in result.reason
+
+
+# ── L3: code-fired speculative canary at S1 resolved-park (R2 APPROVED) ──────────
+
+
+def _resolved_s1(tmp_path: Path, *, cmd_sha: str = "deadbeef") -> Any:
+    """Drive submit_s1 to a CLEAN resolved-park (run_id minted, submit_spec built),
+    with resolve_submit_inputs patched so the test stays cluster-free."""
+    from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesInput
+    from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsResult
+    from hpc_agent._wire.workflows.submit_blocks import SubmitS1Spec
+
+    walk = WalkSubmitAmbiguitiesInput.model_validate(
+        {
+            "cluster": "hoffman2",
+            "configured_clusters": ["carc", "hoffman2"],
+            "goal": "g",
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "data_axis_resolved": True,
+            "homogeneous_axes_resolved": True,
+        }
+    )
+    spec = SubmitS1Spec.model_construct(walk=walk, run_preflight=False, resolve=object())
+    submit_flow = {
+        "profile": "ml",
+        "cluster": "hoffman2",
+        "run_id": _RUN_ID,
+        "job_env": {"HPC_CMD_SHA": cmd_sha},
+        "canary": True,
+    }
+    fake_rr = ResolveSubmitInputsResult(
+        stage_reached="resolved",
+        needs_decision=True,
+        reason="plan resolved; stage & canary.",
+        run_id=_RUN_ID,
+        cmd_sha="0" * 64,
+        submit_spec=submit_flow,
+        sidecar_path=str(tmp_path / ".hpc" / "runs" / f"{_RUN_ID}.json"),
+    )
+    return spec, fake_rr, submit_flow
+
+
+def test_s1_resolved_park_fires_speculative_canary_in_code(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HPC_S1_SPECULATE", "1")
+    spec, fake_rr, submit_flow = _resolved_s1(tmp_path)
+    with (
+        mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
+        mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached") as launch,
+    ):
+        result = submit_blocks.submit_s1(tmp_path, spec=spec)
+
+    assert result.stage_reached == "resolved"
+    launch.assert_called_once()
+    kwargs = launch.call_args.kwargs
+    assert kwargs["verb"] == "submit-speculate"
+    # stop_after_canary is unstrippable: submit-speculate is the ONLY verb fired,
+    # and it composes submit-and-verify(stop_after_canary=True) — the main array is
+    # unreachable from it. The composed spec threads the SAME submit_flow S2 runs.
+    fired = kwargs["spec"]
+    assert fired["submit"]["submit"] == submit_flow
+    # cmd_sha identity flows through, so a nudge that moves it ORPHANS the canary.
+    assert fired["submit"]["submit"]["job_env"]["HPC_CMD_SHA"] == "deadbeef"
+    assert fired["detach"] is False
+
+
+def test_s1_speculation_off_by_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("HPC_S1_SPECULATE", raising=False)
+    spec, fake_rr, _ = _resolved_s1(tmp_path)
+    with (
+        mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
+        mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached") as launch,
+    ):
+        submit_blocks.submit_s1(tmp_path, spec=spec)
+    launch.assert_not_called()
+
+
+def test_s1_speculation_skips_ambiguous_walk(tmp_path: Path, monkeypatch) -> None:
+    """Required ambiguities → skip (the same rule the hpc-submit skill applies)."""
+    from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesInput
+    from hpc_agent._wire.workflows.submit_blocks import SubmitS1Spec
+
+    monkeypatch.setenv("HPC_S1_SPECULATE", "1")
+    walk = WalkSubmitAmbiguitiesInput.model_validate(
+        {
+            "cluster": None,
+            "configured_clusters": ["carc", "hoffman2"],
+            "goal": "g",
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "data_axis_resolved": True,
+            "homogeneous_axes_resolved": True,
+        }
+    )
+    spec = SubmitS1Spec(walk=walk, run_preflight=False)
+    with mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached") as launch:
+        result = submit_blocks.submit_s1(tmp_path, spec=spec)
+    assert result.stage_reached == "needs_resolution"
+    launch.assert_not_called()
+
+
+def test_s1_speculative_fire_leaves_the_journal_untouched(tmp_path: Path, monkeypatch) -> None:
+    """The speculative fire writes the _detached/ handle only — no decision/brief."""
+    from hpc_agent.state.decision_journal import read_decisions
+
+    monkeypatch.setenv("HPC_S1_SPECULATE", "1")
+    spec, fake_rr, _ = _resolved_s1(tmp_path)
+    with (
+        mock.patch.object(submit_blocks, "resolve_submit_inputs", return_value=fake_rr),
+        mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"),
+    ):
+        submit_blocks.submit_s1(tmp_path, spec=spec)
+    assert read_decisions(tmp_path, "run", _RUN_ID) == []

@@ -28,6 +28,14 @@ mechanically kills there is the observed rationalization class
 (hand-injected fields, bare-``y`` laundering), not deliberate fabrication
 of a human quote.
 
+:func:`append_decision` is the ONE definition of a committed decision (Row 19).
+The L1 fused ``block-drive --approve`` path (unit 4a,
+:func:`hpc_agent._kernel.lifecycle.block_drive._commit_fused_approval`) does NOT
+re-implement the commit — it ROUTES THROUGH this same function, so every gate
+below fires identically whether the agent calls ``append-decision`` standalone or
+fuses the commit into the advancing ``block-drive`` tick. There is no second
+"lite" commit path to keep in sync; the fused path is a caller of this one.
+
 This module is the thin dispatching FACADE of the ``journal`` package: it hosts
 the two agent-facing primitives (``append-decision`` / ``read-decisions``) and
 re-exports every symbol the pre-split ``journal.py`` module exposed, so the

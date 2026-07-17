@@ -15,7 +15,7 @@ at completion — event-driven, no polling.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,3 +64,34 @@ class WaitDetachedResult(BaseModel):
     pid: int | None
     log_path: str | None
     waited_sec: float = Field(ge=0)
+    # The wake-up payload (L2, run-14 loop kill): a detached worker parks ITSELF
+    # at its decision boundary (writes the §5 pending marker + records its
+    # terminal) on the way out, so ``wait-detached`` can hand the woken agent the
+    # decision brief DIRECTLY — no extra driver tick to notice the terminal and no
+    # journal re-scrape. Populated from the worker's recorded terminal (falling
+    # back to the pending-decision marker) once it has exited; ``None`` while the
+    # worker is still alive (``timeout``) or when it recorded nothing.
+    brief: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The exited worker's code-digested decision brief, read from its "
+            "recorded terminal / pending-decision marker. Null on timeout (still "
+            "running) or when no terminal was recorded."
+        ),
+    )
+    relay: str | None = Field(
+        default=None,
+        description=(
+            "The human-facing one-liner CODE rendered for the worker's terminal "
+            "(the SubmitBlockResult.relay), relayed VERBATIM — never reconstructed "
+            "from memory. Null when the worker recorded no relay."
+        ),
+    )
+    next_verb: str | None = Field(
+        default=None,
+        description=(
+            "The deterministically-computed next block verb the worker's terminal "
+            "suggests (its next_block.verb), or null at a human-branch / terminal "
+            "boundary."
+        ),
+    )

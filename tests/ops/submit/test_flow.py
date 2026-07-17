@@ -382,6 +382,7 @@ class TestSubmitFlowBatch:
             remote_path: Any,
             rsync_excludes: Any,
             scheduler: Any,
+            reducer_item: Any = None,
         ) -> None:
             _time.sleep(0.4)
 
@@ -1284,7 +1285,13 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, journal_home: Any) 
     seen: dict[str, bool] = {}
 
     def _capture_at_deploy(
-        *, experiment_dir, ssh_target, remote_path, rsync_excludes, scheduler=None
+        *,
+        experiment_dir,
+        ssh_target,
+        remote_path,
+        rsync_excludes,
+        scheduler=None,
+        reducer_item=None,
     ):
         seen["canary_on_disk"] = run_sidecar_path(experiment_dir, "rC-canary").is_file()
 

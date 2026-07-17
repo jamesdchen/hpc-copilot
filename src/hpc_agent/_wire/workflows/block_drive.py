@@ -19,7 +19,7 @@ module carries the wire shapes; the tick itself lives in
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -79,6 +79,21 @@ class BlockDriveSpec(BaseModel):
     dry_run: bool = Field(
         default=False,
         description="Print the planned action and exit without executing any span.",
+    )
+    approve: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "FUSED commit+advance (L1). An append-decision payload (the SAME "
+            "AppendDecisionInput shape: scope_kind / scope_id / block / response / "
+            "resolved / etc). When set, this ONE call first commits the human's "
+            "y/nudge through the single append_decision definition — every "
+            "authorship / brief-provenance / code-derived-field / bare-ack / "
+            "unlock-authorship gate fires IDENTICALLY to a standalone "
+            "`append-decision` — then advances the driver in the same call, "
+            "returning the next parked brief. It removes the agent's mechanical "
+            "SECOND call (the old `append-decision` then `block-drive` pair "
+            "becomes one). MECHANISM only: the human still utters the y."
+        ),
     )
 
 

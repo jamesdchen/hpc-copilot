@@ -43,6 +43,86 @@ from hpc_agent._wire.queries.wait_detached import WaitDetachedInput, WaitDetache
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 
+def _newest_lease(detached_dir: Path, run_id: str, block: str | None) -> dict[str, Any] | None:
+    """The newest lease dict for ``(run_id[, block])`` regardless of pid liveness.
+
+    Distinct from :func:`_live_lease` (which requires a LIVE pid): this is the
+    read-side lookup used AFTER the wait to recover where the worker's journal
+    home / experiment dir live, so ``wait-detached`` can read the exited worker's
+    recorded terminal even on the ``no_live_worker`` return (the worker already
+    gone). A corrupt lease is skipped, never fatal.
+    """
+    pattern = f"{block}-{run_id}.lease.json" if block else f"*-{run_id}.lease.json"
+    newest: dict[str, Any] | None = None
+    newest_mtime = -1.0
+    for lease_path in detached_dir.glob(pattern):
+        try:
+            loaded: Any = json.loads(lease_path.read_text(encoding="utf-8"))
+            mtime = lease_path.stat().st_mtime
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(loaded, dict) and mtime > newest_mtime:
+            newest, newest_mtime = loaded, mtime
+    return newest
+
+
+def _terminal_pointers(
+    lease: dict[str, Any] | None, run_id: str, block: str | None
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Read the exited worker's ``(brief, relay, next_verb)`` from its terminal.
+
+    Reads the block-terminal record (the FULL ``SubmitBlockResult`` dump the
+    worker recorded on the way out — it carries the brief, the code-rendered
+    relay, and the next_block hint) for ``(run_id, block)``, falling back to the
+    §5 pending-decision marker's brief + resume-cursor when no terminal exists.
+    The experiment dir is recovered from the lease (stamped at spawn), or the cwd
+    when the lease predates that field / is absent. Fail-open: any read problem
+    yields all-``None`` — the wake-up payload is a convenience, never load-bearing
+    (the journal still carries the truth).
+    """
+    block_for_read = block
+    experiment_dir: Path | None = None
+    if isinstance(lease, dict):
+        lease_block = lease.get("block")
+        block_for_read = block or (lease_block if isinstance(lease_block, str) else None)
+        ed = lease.get("experiment_dir")
+        if isinstance(ed, str) and ed:
+            experiment_dir = Path(ed)
+    if experiment_dir is None:
+        experiment_dir = Path.cwd()
+    if not block_for_read:
+        return None, None, None
+    try:
+        from hpc_agent.state.block_terminal import read_terminal_with_fallback
+
+        record = read_terminal_with_fallback(experiment_dir, run_id, block_for_read)
+    except Exception:  # noqa: BLE001 — the payload is a convenience, never load-bearing
+        record = None
+    result = record.get("result") if isinstance(record, dict) else None
+    if isinstance(result, dict):
+        raw_brief = result.get("brief")
+        brief = raw_brief if isinstance(raw_brief, dict) else None
+        raw_relay = result.get("relay")
+        relay = raw_relay if isinstance(raw_relay, str) and raw_relay else None
+        nb = result.get("next_block")
+        next_verb = nb.get("verb") if isinstance(nb, dict) else None
+        return brief, relay, next_verb if isinstance(next_verb, str) else None
+    # No terminal recorded — fall back to the §5 pending-decision marker (L2: the
+    # worker parked itself, so the marker's brief + cursor are the wake payload).
+    try:
+        from hpc_agent.state.journal import read_pending_decision
+
+        marker = read_pending_decision(run_id, experiment_dir=experiment_dir)
+    except Exception:  # noqa: BLE001 — convenience read, never load-bearing
+        marker = {}
+    if not marker:
+        return None, None, None
+    brief = marker.get("brief") if isinstance(marker.get("brief"), dict) else None
+    cursor = marker.get("resume_cursor")
+    next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+    return brief, None, next_verb if isinstance(next_verb, str) else None
+
+
 def _live_lease(detached_dir: Path, run_id: str, block: str | None) -> dict[str, Any] | None:
     """The first lease for ``(run_id[, block])`` whose pid is alive, else None.
 
@@ -103,21 +183,32 @@ def wait_detached(*, spec: WaitDetachedInput) -> WaitDetachedResult:
 
     detached_dir = current_homedir() / "_detached"
     started = time.monotonic()
+    have_dir = detached_dir.is_dir()
 
-    lease = _live_lease(detached_dir, spec.run_id, spec.block) if detached_dir.is_dir() else None
+    lease = _live_lease(detached_dir, spec.run_id, spec.block) if have_dir else None
     if lease is None:
+        # No LIVE worker: it either already exited (its recorded terminal is the
+        # wake payload) or was never launched. Recover the pointers from whatever
+        # lease is on disk (dead pid) so an already-done worker still hands back
+        # its brief/relay/next_verb.
+        read_lease = _newest_lease(detached_dir, spec.run_id, spec.block) if have_dir else None
+        brief, relay, next_verb = _terminal_pointers(read_lease, spec.run_id, spec.block)
         return WaitDetachedResult(
             outcome="no_live_worker",
             run_id=spec.run_id,
-            block=spec.block,
+            block=(read_lease.get("block") if isinstance(read_lease, dict) else None) or spec.block,
             pid=None,
-            log_path=None,
+            log_path=read_lease.get("log_path") if isinstance(read_lease, dict) else None,
             waited_sec=0.0,
+            brief=brief,
+            relay=relay,
+            next_verb=next_verb,
         )
 
     pid = int(lease["pid"])
     while pid_alive(pid):
         if time.monotonic() - started >= spec.timeout_sec:
+            # Still alive at the budget — no terminal yet, so no wake payload.
             return WaitDetachedResult(
                 outcome="timeout",
                 run_id=spec.run_id,
@@ -128,6 +219,9 @@ def wait_detached(*, spec: WaitDetachedInput) -> WaitDetachedResult:
             )
         time.sleep(spec.poll_interval_sec)
 
+    # The worker exited: it parked itself on the way out (L2), so its recorded
+    # terminal carries the decision brief the woken agent needs directly.
+    brief, relay, next_verb = _terminal_pointers(lease, spec.run_id, spec.block)
     return WaitDetachedResult(
         outcome="worker_exited",
         run_id=spec.run_id,
@@ -135,4 +229,7 @@ def wait_detached(*, spec: WaitDetachedInput) -> WaitDetachedResult:
         pid=pid,
         log_path=lease.get("log_path"),
         waited_sec=round(time.monotonic() - started, 3),
+        brief=brief,
+        relay=relay,
+        next_verb=next_verb,
     )

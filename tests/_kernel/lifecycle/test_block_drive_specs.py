@@ -483,6 +483,89 @@ def test_overnight_auto_advance_crosses_s2_to_s3_without_agent_authored_json(
     SubmitS3Spec.model_validate(s3_spec)
 
 
+# ── R3 (approved w/ sha pin): consume the materialized spec by run_id, sha-verified ─
+
+
+def _seed_materialized_advance(
+    faked: dict[str, Any],
+    tmp_path: Path,
+    *,
+    on_disk: dict[str, Any],
+    stamped_sha: str,
+) -> None:
+    """Park at submit-s2 → submit-s3 with a stamped sha, and write the sidecar spec.
+
+    The resume plan is a PLAIN ``y`` (committed == input_spec, minus metadata → an
+    ``advance``), so run_tick's R3 leg dereferences the sidecar and sha-checks it.
+    """
+    import json
+
+    resolved = {"approved": True}
+    pending = _pending(current_verb="submit-s2", next_verb="submit-s3", input_spec=resolved)
+    pending["resume_cursor"]["next_spec_sha"] = stamped_sha
+    faked["pending"] = pending
+    faked["committed"] = {**resolved, "next_block": "submit-s3"}
+    faked["results"] = {"submit-s3": {"block": "s3", "needs_decision": True, "next_block": None}}
+    spec_path = tmp_path / ".hpc" / "specs" / "next" / f"{_RUN_ID}.submit-s3.json"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(on_disk), encoding="utf-8")
+
+
+def test_r3_plain_y_advance_runs_the_sha_verified_materialized_spec(
+    faked: dict[str, Any], tmp_path: Path
+) -> None:
+    """R3 consumption: a plain ``y`` advances the successor UNDER the code-composed
+    spec the human saw (dereferenced by run_id), NOT the thin committed ``resolved``,
+    when the sidecar's sha matches the park-time stamp."""
+    composed = {"submit": {"run_id": _RUN_ID}, "monitor": {"run_id": _RUN_ID}}
+    _seed_materialized_advance(
+        faked, tmp_path, on_disk=composed, stamped_sha=block_chain.successor_spec_sha(composed)
+    )
+    result, code = run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    assert code == 0
+    ran = {r["verb"]: r["spec"] for r in faked["ran"]}
+    assert ran["submit-s3"] == composed  # the materialized spec, verbatim
+
+
+def test_r3_sha_drift_refuses_loudly_and_keeps_the_marker(
+    faked: dict[str, Any], tmp_path: Path
+) -> None:
+    """R3 drift: the sidecar's recomputed sha does not match the sha the human
+    approved → the advance is REFUSED loudly (nonzero exit) and the block never
+    runs; the pending marker is NOT cleared (the approval survives)."""
+    approved = {"submit": {"run_id": _RUN_ID}}
+    tampered = {"submit": {"run_id": "SOMEONE_ELSE"}}  # different bytes → different sha
+    _seed_materialized_advance(
+        faked, tmp_path, on_disk=tampered, stamped_sha=block_chain.successor_spec_sha(approved)
+    )
+    result, code = run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    assert code != 0
+    assert result.action == "skip"
+    assert "R3" in (result.reason or "") and "refusing" in (result.reason or "").lower()
+    assert [r["verb"] for r in faked["ran"]] == []  # the successor never ran
+    assert faked["cleared"] == []  # the marker survived — the human can re-approve
+
+
+def test_r3_falls_back_to_resolved_when_no_sidecar_materialized(
+    faked: dict[str, Any], tmp_path: Path
+) -> None:
+    """No stamped sha (a Row-14 refusal / a pre-materialization boundary) → R3 is a
+    no-op and the pre-existing resolved-derived acting spec governs (byte-identical
+    to the pre-R3 driver)."""
+    resolved = {"approved": True}
+    pending = _pending(current_verb="submit-s2", next_verb="submit-s3", input_spec=resolved)
+    # No ``next_spec_sha`` in the cursor, no sidecar file on disk.
+    faked["pending"] = pending
+    faked["committed"] = {**resolved, "next_block": "submit-s3"}
+    faked["results"] = {"submit-s3": {"block": "s3", "needs_decision": True, "next_block": None}}
+    result, code = run_tick(tmp_path, run_id=_RUN_ID, workflow="submit")
+    assert code == 0
+    ran = {r["verb"]: r["spec"] for r in faked["ran"]}
+    # The resolved-derived path ran (``approved`` is not a SubmitS3Spec field, so the
+    # model-field filter drops it → empty acting spec; the point is R3 did not fire).
+    assert "submit-s3" in ran
+
+
 def test_campaign_chain_spec_hints_validate() -> None:
     """The two ungated campaign in-code hops emit specs their successor accepts."""
     from hpc_agent._wire.workflows.campaign_blocks import (

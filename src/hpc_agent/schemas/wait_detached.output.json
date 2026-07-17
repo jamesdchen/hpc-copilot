@@ -64,6 +64,46 @@
       "minimum": 0,
       "title": "Waited Sec",
       "type": "number"
+    },
+    "brief": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The exited worker's code-digested decision brief, read from its recorded terminal / pending-decision marker. Null on timeout (still running) or when no terminal was recorded.",
+      "title": "Brief"
+    },
+    "relay": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The human-facing one-liner CODE rendered for the worker's terminal (the SubmitBlockResult.relay), relayed VERBATIM — never reconstructed from memory. Null when the worker recorded no relay.",
+      "title": "Relay"
+    },
+    "next_verb": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The deterministically-computed next block verb the worker's terminal suggests (its next_block.verb), or null at a human-branch / terminal boundary.",
+      "title": "Next Verb"
     }
   }
 }

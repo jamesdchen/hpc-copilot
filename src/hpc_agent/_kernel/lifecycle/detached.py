@@ -526,6 +526,10 @@ def _spawn_detached(
             "pid": proc.pid,
             "host": _current_host(),
             "log_path": str(log_path.resolve()),
+            # The worker's experiment dir (its cwd), so ``wait-detached`` can read
+            # the exited worker's recorded terminal / pending-decision marker
+            # (per-experiment sidecar tree) without parsing argv (L2 wake payload).
+            "experiment_dir": cwd,
             "argv": argv,
         }
         create_time = _process_create_time(proc.pid)

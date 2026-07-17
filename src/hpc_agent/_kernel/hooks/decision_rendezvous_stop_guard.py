@@ -44,6 +44,23 @@ approved spec and clears the marker, after which ``is_awaiting_decision`` is
 False and the guard has nothing to block on. Loop-safe: ``stop_hook_active``
 passes straight through.
 
+Demoted to a BACKSTOP by L1 fusion (unit 4a, Row 20)
+----------------------------------------------------
+The L1 fused ``block-drive --approve`` path commits the ``y`` and advances the
+driver in ONE call, so on the fused path the marker is cleared in the same breath
+the greenlight is journaled — this guard sees no committed-but-unadvanced state
+and stays silent (the fused path never trips it). That DEMOTES the guard from the
+primary anti-stall mechanism to a BACKSTOP. The backstop is not vestigial: it
+STILL FIRES whenever a ``y`` is committed WITHOUT the driver advancing — the
+legacy two-call path (a standalone ``append-decision`` and no ``block-drive``), a
+fused advance whose tick failed after the commit landed, or any out-of-band commit.
+Demoting a guard must never DELETE it (verify-a-guard-can-fire): the fire-path
+tests (``test_marker_plus_committed_y_forces_continue`` /
+``test_fresh_boundary_targeting_y_forces_continue`` /
+``test_backstop_fires_on_unfused_committed_y``) prove the demoted guard still
+fires on the un-advanced commit it was built for; the §5 subtlety (silent while
+merely awaiting the human) is unchanged.
+
 The rejector → completer (RULED 2026-07-12)
 -------------------------------------------
 ``docs/design/stop-hook-completer.md`` rules this guard a COMPLETER: the parked

@@ -152,6 +152,7 @@ def _derived_run_id(source_run_id: str, target_cluster: str) -> str:
 @primitive(
     name="migrate-remainder",
     verb="workflow",
+    composes=["submit-s2"],
     side_effects=[
         SideEffect(
             "writes-derived-run",

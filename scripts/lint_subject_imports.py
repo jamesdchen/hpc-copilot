@@ -336,6 +336,11 @@ _KERNEL_TO_OPS = DirectionalRule(
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.field_ownership"),
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.overnight"),
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.block_gate"),
+            # Fused approve (unit 4a): the drive loop journals the y through the
+            # ONE append_decision definition before advancing (block-drive
+            # --approve), so every trust-seam gate fires identically to a
+            # standalone append. Lazy-imported inside _commit_fused_approval.
+            ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.decision.journal"),
             # MCP surface exposes a few ops atoms directly; the elicitation /
             # render-digest half (which reaches these two) split into
             # mcp_elicitation.py.

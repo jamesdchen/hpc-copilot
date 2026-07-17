@@ -136,6 +136,11 @@ ALLOWLIST: frozenset[str] = frozenset(
         # terminal — the watch treats a missing announcement as "not yet",
         # not "done".
         "hpc_agent/ops/monitor/announce.py::read_announcements",
+        # migrate census (M-CENSUS): same positive-evidence _ANNOUNCE_IDS_ACK
+        # discipline as read_announcements — echoes the ack on cd-success and
+        # reads only when present, so a severed channel yields present=False,
+        # never a false-empty done-set. Custom ack token the matcher misses.
+        "hpc_agent/ops/monitor/announce.py::read_announced_task_ids",
         # Per-host BATCHED census (F4, latency-elimination 2.6): self-ack-gated on
         # ``_BATCH_ACK`` (echoed only after the batch shell ran) — an absent batch
         # ack degrades EVERY run to not-present (fall-through), never a spurious
