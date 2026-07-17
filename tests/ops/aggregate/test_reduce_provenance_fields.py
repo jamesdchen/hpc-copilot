@@ -31,6 +31,7 @@ from hpc_agent.ops import aggregate_flow as af_module
 from hpc_agent.ops.aggregate_flow import (
     PER_TASK_CMD_SHA_FILENAME,
     PER_TASK_RESULTS_DIRNAME,
+    _read_reduce_provenance,
     _reduce_input_provenance,
     aggregate_flow,
 )
@@ -213,6 +214,83 @@ def test_helper_degrades_without_sidecar(journal_home, experiment):
     assert run_ids == [_RUN_ID]
     assert piece_shas == []
     assert version is None
+
+
+# --------------------------------------------------------------------------- #
+# The reader: PREFER the persisted footer, disclose the source, else re-derive
+# --------------------------------------------------------------------------- #
+def _write_footer(out: Path, *, provenance: dict) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "metrics_aggregate.json").write_text(
+        json.dumps({"aggregated_metrics": {"g": {"pi": 3.14}}, "provenance": provenance}),
+        encoding="utf-8",
+    )
+
+
+def test_reader_prefers_cluster_footer_and_discloses_source(journal_home, experiment):
+    """The reader PREFERS the cluster ``--final`` footer's provenance verbatim and
+    discloses ``source="cluster_final"`` — the CLUSTER performed the reduce, so its
+    footer is the authoritative record of what it consumed (never re-derived)."""
+    out = experiment / "_aggregated" / _RUN_ID
+    _write_footer(
+        out,
+        provenance={
+            "wave_count": 2,
+            "incomplete_waves": [],
+            "errors_per_wave": {},
+            "skipped_foreign_waves": [],
+            "source": "cluster_final",
+            "contributing_run_ids": [_RUN_ID],
+            "piece_cmd_shas": [_CMD_SHA],
+            "hpc_agent_version": _VERSION,
+        },
+    )
+    prov = _read_reduce_provenance(
+        out, _RUN_ID, experiment_dir=experiment, summary_name="metrics.json"
+    )
+    assert prov["captured"] is True
+    assert prov["source"] == "cluster_final"
+    assert prov["contributing_run_ids"] == [_RUN_ID]
+    assert prov["piece_cmd_shas"] == [_CMD_SHA]
+    assert prov["hpc_agent_version"] == _VERSION
+
+
+def test_reader_old_footer_reads_not_captured(journal_home, experiment):
+    """An OLD footer (no ``contributing_run_ids`` — a cluster combiner predating the
+    G4a mirror) reads as not-captured, DISCLOSED, never a crash and never re-derived
+    after the fact."""
+    out = experiment / "_aggregated" / _RUN_ID
+    _write_footer(out, provenance={"incomplete_waves": [], "source": "cluster_final"})
+    prov = _read_reduce_provenance(
+        out, _RUN_ID, experiment_dir=experiment, summary_name="metrics.json"
+    )
+    assert prov["captured"] is False
+    assert prov["source"] == "not-captured"
+    assert prov["contributing_run_ids"] == []
+    assert prov["piece_cmd_shas"] == []
+    assert prov["hpc_agent_version"] is None
+
+
+def test_reader_no_footer_rederives_locally(journal_home, experiment):
+    """With NO persisted footer the reader falls back to the LOCAL
+    ``_reduce_input_provenance`` over the reduce's own on-disk inputs, disclosing
+    ``source="local"`` — the ``else`` leg of prefer-cluster-footer."""
+    _seed_run(experiment)
+    _seed_sidecar(experiment)
+    out = experiment / "_aggregated" / _RUN_ID
+    combiner = out / "_combiner"
+    combiner.mkdir(parents=True)
+    (combiner / "wave_0.json").write_text(
+        json.dumps({"run_id": _RUN_ID, "grid_points": {"g0": {"pi": 3.14}}}), encoding="utf-8"
+    )
+    prov = _read_reduce_provenance(
+        out, _RUN_ID, experiment_dir=experiment, summary_name="metrics.json"
+    )
+    assert prov["captured"] is True
+    assert prov["source"] == "local"
+    assert prov["contributing_run_ids"] == [_RUN_ID]
+    assert prov["piece_cmd_shas"] == [_CMD_SHA]
+    assert prov["hpc_agent_version"] == _VERSION
 
 
 # --------------------------------------------------------------------------- #

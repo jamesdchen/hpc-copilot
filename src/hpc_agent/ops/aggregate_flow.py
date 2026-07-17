@@ -1230,6 +1230,28 @@ def _cluster_final_reduce(
     provenance = data.get("provenance") or {}
     incomplete = provenance.get("incomplete_waves") or []
     skipped_foreign = provenance.get("skipped_foreign_waves") or []
+
+    # Disclose the reduce-time provenance the cluster footer carries (G4a cluster
+    # leg). PREFER the cluster footer — the ``--final`` combiner recorded which runs'
+    # partials fed the table at write time — and name whether the table->run-set link
+    # is first-class or (an old combiner) not-captured, so the operator sees which
+    # before ``extract-recipe`` is ever run. Pure disclosure over the just-pulled
+    # KB footer; never gates the harvest.
+    prov = _read_reduce_provenance(agg_local, run_id, experiment_dir=experiment_dir)
+    if prov["captured"]:
+        print(
+            f"[aggregate-flow] cluster-final reduce for run_id {run_id!r}: reduce-time "
+            f"provenance captured (source={prov['source']}, "
+            f"{len(prov['contributing_run_ids'])} contributing run(s)) — extract-recipe "
+            f"reads a first-class table->run-set link."
+        )
+    else:
+        print(
+            f"[aggregate-flow] cluster-final reduce for run_id {run_id!r}: the pulled "
+            f"footer carries NO contributing_run_ids (a cluster combiner predating the "
+            f"G4a mirror) — extract-recipe discloses the table->run-set link as "
+            f"not-captured, never a wrong answer."
+        )
     return (
         aggregated,
         [int(w) for w in incomplete],
@@ -1347,6 +1369,92 @@ def _reduce_input_provenance(
         piece_shas.add(sidecar_cmd_sha)
 
     return sorted(run_ids), sorted(piece_shas), version
+
+
+def _read_reduce_provenance(
+    out: Path,
+    run_id: str,
+    *,
+    experiment_dir: Path | None = None,
+    summary_name: str | None = None,
+) -> dict[str, Any]:
+    """A run's reduce-time provenance — PREFER the persisted footer, disclose the source.
+
+    The ONE reader of the table->run-set link (clean-reproduction extraction, G4a).
+    Reads ``<out>/metrics_aggregate.json`` and returns a DISCLOSED provenance dict::
+
+        {contributing_run_ids, piece_cmd_shas, hpc_agent_version, source, captured}
+
+    Three legs, each a disclosed fact — never a raise:
+
+    * **a footer carrying ``contributing_run_ids``** — PREFER it verbatim; this is
+      what the reduce that produced the table RECORDED at write time (the cluster
+      ``--final`` combiner's footer when the CLUSTER performed the reduce — G4a
+      cluster leg — or the LOCAL :func:`_persist_local_aggregate` footer). ``source``
+      is the footer's own reduce engine (``"cluster_final"`` / ``"local_reduce"`` /
+      ``"per_task_fallback"`` / ...), so the caller can disclose which engine
+      answered. ``captured=True``.
+    * **a footer WITHOUT ``contributing_run_ids``** — an OLD table (an old cluster
+      combiner, or a pre-Task-1 local reduce). It reads as ``captured=False``,
+      ``source="not-captured"``, empty membership — disclosed, never re-derived
+      after the fact (the footer is the authoritative record of what its reduce
+      consumed; a stale re-derivation would be a different, possibly-wrong answer).
+    * **NO footer on disk** — nothing was persisted yet; re-derive from the reduce's
+      OWN local inputs via :func:`_reduce_input_provenance` (``source="local"``), the
+      honest ``[run_id]`` / sidecar-cmd_sha / version defaults.
+
+    Best-effort: a torn/unreadable footer is treated as "no footer" and falls through
+    to the local re-derivation. Never raises — every consumer is a disclosure surface.
+    """
+    agg_path = out / "metrics_aggregate.json"
+    footer: dict[str, Any] | None = None
+    if agg_path.is_file():
+        try:
+            loaded = json.loads(agg_path.read_text(encoding="utf-8"))
+            footer = loaded if isinstance(loaded, dict) else None
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            footer = None
+
+    if footer is not None:
+        prov = footer.get("provenance")
+        prov = prov if isinstance(prov, dict) else {}
+        contributing = prov.get("contributing_run_ids")
+        if isinstance(contributing, list) and contributing:
+            raw_shas = prov.get("piece_cmd_shas")
+            version = prov.get("hpc_agent_version")
+            source = prov.get("source")
+            return {
+                "contributing_run_ids": [str(c) for c in contributing if isinstance(c, str) and c],
+                "piece_cmd_shas": (
+                    [str(s) for s in raw_shas if isinstance(s, str) and s]
+                    if isinstance(raw_shas, list)
+                    else []
+                ),
+                "hpc_agent_version": version if isinstance(version, str) and version else None,
+                "source": str(source) if isinstance(source, str) and source else "unknown",
+                "captured": True,
+            }
+        # Footer present but pre-G4a — no first-class run-set link. Disclosed, not
+        # re-derived: the footer is authoritative for what ITS reduce consumed.
+        return {
+            "contributing_run_ids": [],
+            "piece_cmd_shas": [],
+            "hpc_agent_version": None,
+            "source": "not-captured",
+            "captured": False,
+        }
+
+    # No persisted footer: re-derive from the reduce's own local inputs.
+    contributing_run_ids, piece_cmd_shas, version = _reduce_input_provenance(
+        experiment_dir, run_id, out, summary_name=summary_name
+    )
+    return {
+        "contributing_run_ids": contributing_run_ids,
+        "piece_cmd_shas": piece_cmd_shas,
+        "hpc_agent_version": version,
+        "source": "local",
+        "captured": True,
+    }
 
 
 def _persist_local_aggregate(

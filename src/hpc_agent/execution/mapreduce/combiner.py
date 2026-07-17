@@ -330,6 +330,11 @@ def _final_reduce(*, run_id, force):
     errors_per_wave = {}
     incomplete_waves = []
     skipped_foreign_waves = []
+    # G4a cluster leg: the distinct run_ids of the partials this reduce ACTUALLY
+    # merged — the run-set membership the LOCAL ``aggregate_flow._reduce_input_provenance``
+    # records for the combiner-wave path. Always contains ``run_id`` (this run's own
+    # tree); a foreign partial is dropped by the F05 filter below and never counted.
+    contributing_run_ids = {run_id}
     for wave_num, path in wave_files:
         try:
             with open(path, encoding="utf-8") as f:
@@ -349,6 +354,8 @@ def _final_reduce(*, run_id, force):
             skipped_foreign_waves.append(wave_num)
             continue
         waves_reduced.append(wave_num)
+        if isinstance(file_run_id, str) and file_run_id:
+            contributing_run_ids.add(file_run_id)
         wave_errors = data.get("errors") or []
         if wave_errors:
             errors_per_wave[str(wave_num)] = list(wave_errors)
@@ -357,6 +364,32 @@ def _final_reduce(*, run_id, force):
             partials.setdefault(grid_key, []).append(metrics)
 
     aggregated = {gk: _weighted_mean(partials[gk]) for gk in sorted(partials)}
+
+    # G4a cluster leg — mirror the LOCAL reduce-time provenance into the cluster
+    # footer so ``extract-recipe`` reads a first-class table->run-set link over a
+    # cluster-reduced artifact instead of degrading to the lineage fallback. The
+    # per-run cmd_sha + wheel come from the DEPLOYED sidecar the combiner reads at
+    # ``.hpc/runs/<run_id>.json`` (cwd-relative: the final reduce runs in the remote
+    # project root, so ``.hpc/`` sits directly under cwd). ``piece_cmd_shas`` is the
+    # sidecar's own cmd_sha — the combiner pre-reduces cluster-side, so its consumed
+    # inputs (wave partials) carry no per-piece sha, exactly the local combiner-wave
+    # fallback in ``_reduce_input_provenance``. Best-effort: an unreadable/absent
+    # sidecar degrades to ``[]``/``None`` and NEVER fails the reduce (the final
+    # reduce needs only ``run_id`` + the partials).
+    sidecar_cmd_sha = None
+    hpc_agent_version = None
+    try:
+        _sc = json.loads(
+            Path(".hpc", "runs", f"{run_id}.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        _sc = None
+    if isinstance(_sc, dict):
+        _cs = _sc.get("cmd_sha")
+        sidecar_cmd_sha = _cs if isinstance(_cs, str) and _cs else None
+        _ver = _sc.get("hpc_agent_version")
+        hpc_agent_version = _ver if isinstance(_ver, str) and _ver else None
+    piece_cmd_shas = [sidecar_cmd_sha] if sidecar_cmd_sha else []
 
     payload = {
         "run_id": run_id,
@@ -367,6 +400,13 @@ def _final_reduce(*, run_id, force):
             "incomplete_waves": sorted(set(incomplete_waves)),
             "errors_per_wave": errors_per_wave,
             "skipped_foreign_waves": sorted(set(skipped_foreign_waves)),
+            # Reduce-time provenance mirror (parity with the LOCAL
+            # ``aggregate_flow._reduce_input_provenance``); ``source`` discloses the
+            # reduce engine so a reader can PREFER this footer and name its origin.
+            "source": "cluster_final",
+            "contributing_run_ids": sorted(contributing_run_ids),
+            "piece_cmd_shas": piece_cmd_shas,
+            "hpc_agent_version": hpc_agent_version,
         },
         "manifest": {
             # Actual on-cluster partial paths consumed (run-scoped or legacy-flat),

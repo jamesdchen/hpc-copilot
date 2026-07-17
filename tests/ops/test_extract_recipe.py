@@ -250,6 +250,40 @@ def test_old_shape_table_discloses_the_run_set_link_gap_not_papered(tmp_path: Pa
     assert recipe["minimal_run_ids"] == []
 
 
+def test_cluster_reduced_table_reads_contributing_run_ids_not_lineage(tmp_path: Path) -> None:
+    """Gap-closing pin (G4a cluster leg): a table reduced by the cluster ``--final``
+    combiner now carries ``contributing_run_ids`` in its footer, so extract-recipe
+    reads the real minimal run-set instead of degrading to the lineage fallback and
+    disclosing the ``table-run-set-link-absent`` gap."""
+    import pytest
+
+    from hpc_agent.execution.mapreduce import combiner
+
+    run_id = "exp-cluster-99999999"
+    _seed(tmp_path, run_id)  # run record + sidecar (.hpc/runs) + harvest receipt
+    # Run-scoped combiner partials for the run, then the cluster --final reduce. The
+    # combiner runs cwd-relative under the remote project root; chdir so ``.hpc/``
+    # and ``_combiner/`` sit directly under cwd exactly as on the cluster.
+    scoped = tmp_path / "_combiner" / run_id
+    scoped.mkdir(parents=True)
+    (scoped / "wave_0.json").write_text(
+        json.dumps(
+            {"wave": 0, "run_id": run_id, "grid_points": {"g0": {"acc": 0.9, "n_samples": 1}}}
+        ),
+        encoding="utf-8",
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.chdir(tmp_path)
+        combiner.main(argv=["--final", "--run-id", run_id])
+
+    agg = tmp_path / "_aggregated" / run_id / "metrics_aggregate.json"
+    recipe = extract_recipe(tmp_path, spec=ExtractRecipeInput(aggregate_path=str(agg)))
+    assert recipe["minimal_run_ids"] == [run_id]
+    # The G4a table->run-set-link gap is NOT disclosed — the link is now first-class.
+    codes = {g["code"] for g in recipe["gaps"]}
+    assert "table-run-set-link-absent" not in codes
+
+
 def test_pack_csv_is_opaque_and_its_content_is_never_parsed(tmp_path: Path) -> None:
     _seed(tmp_path, "exp-pack-77777777")
     csv = tmp_path / "_aggregated" / "exp-pack-77777777" / "metrics_table.csv"

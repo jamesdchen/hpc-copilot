@@ -189,12 +189,18 @@ Journal records, cluster-side announce markers
   `per-arm-final` and cross-arm stats `final-harvest-only`, every emission carries a
   `completeness_label`.
 
-- **Class: MECHANICAL.** **One residual ABSENT:** the cluster combiner footer
-  (`execution/mapreduce/combiner.py::_final_reduce` L317-322) mirrors ONLY
-  `wave_count`/`incomplete_waves`/`errors`/`skipped_foreign` — it does **not** stamp
-  `contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version`. On the
-  `HPC_CLUSTER_FINAL_REDUCE=1` path the Task-1 provenance is missing, so
-  `extract-recipe` degrades to the lineage fallback there (§6).
+- **Class: MECHANICAL** (cluster leg closed 2026-07-17, U-RED1). The cluster
+  combiner footer (`execution/mapreduce/combiner.py::_final_reduce`) now mirrors the
+  SAME three reduce-time fields the LOCAL path stamps —
+  `contributing_run_ids` (the run-scoped partial membership it consumed, F05-filtered),
+  `piece_cmd_shas` (the run's sidecar cmd_sha — the combiner pre-reduces cluster-side,
+  so its consumed wave partials carry no per-piece sha, exactly the local combiner-wave
+  fallback), and `hpc_agent_version` (the deployed sidecar's wheel) — plus
+  `source: "cluster_final"`. On the `HPC_CLUSTER_FINAL_REDUCE` path `extract-recipe` now
+  reads a first-class table→run-set link instead of degrading to lineage (§6). The
+  local reader `aggregate_flow::_read_reduce_provenance` PREFERS the cluster footer and
+  discloses the source; an old footer (a combiner predating the mirror) reads
+  not-captured, disclosed, never a wrong answer.
 
 ### 6. SELECTION / CURATION — *the messy→clean step; now mechanical*
 
@@ -310,7 +316,7 @@ effort saved there should go to Wave 1.**
 | **1** | **INPUT DATA capture opt-in** (§1) | DILIGENCE | Highest | High (default undeclared) | Data is *the* classic crisis link; an undeclared run is silently invisible to all data-drift attribution, no warning |
 | **2** | **ENVIRONMENT drift invisible** (§3) | ABSENT + never-compared | Highest | High (every reproduction) | Full package env + interpreter ABSENT; `env_hash` captured but never compared; a mutated conda-env-under-same-name or a version bump reproduces "clean" |
 | **3** | **number → paper transcription** (§7) | ABSENT | High | High (every paper) | The chain seals the number but does not follow it into the manuscript; the actual citable digit is hand-typed, unaudited |
-| **4** | **cluster combiner footer mirror** (§5) | ABSENT | Medium-High | Medium (cluster-reduce path) | `HPC_CLUSTER_FINAL_REDUCE=1` publishes a table with no `contributing_run_ids`; `extract-recipe` degrades to lineage, re-opening G2 |
+| **4** | **cluster combiner footer mirror** (§5) | ~~ABSENT~~ **MECHANICAL** (closed 2026-07-17, U-RED1) | Medium-High | Medium (cluster-reduce path) | ~~`HPC_CLUSTER_FINAL_REDUCE=1` publishes a table with no `contributing_run_ids`; `extract-recipe` degrades to lineage~~ — the cluster `--final` footer now mirrors `contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version`+`source`, at parity with the local reduce; `extract-recipe` reads the real run-set on the cluster path |
 | **5** | **hardware / scheduler variance** (§3) | ABSENT | Medium | Medium | GPU/SKU numeric variance is surfaced only as an n=2 `same_submission` caveat, never recorded — invisible cross-run |
 | **6** | **legacy-sidecar code-drift vacuous pass** (§2) | DILIGENCE | Medium | Low (pre-`#351` records) | Reproducing an old original skips the code-drift leg |
 | **7** | **notebook `output_sha` caller-attested** (§7) | DILIGENCE | Low-Med | notebook users only | Core binds the receipt to current code but trusts the emitter's output hash |
@@ -366,14 +372,17 @@ Raises the diligence floor without a gate.
 
 ### Wave 2 — finish the freshly-built extraction to full coverage
 
-**U-RED1 — mirror Task-1 provenance into the cluster combiner footer.** Stamp
-`contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version` in
-`execution/mapreduce/combiner.py::_final_reduce` (L317-322) so the
-`HPC_CLUSTER_FINAL_REDUCE=1` path is at parity with the local reduce; `extract-recipe`
-stops degrading to lineage there (closes gap 4, the G4a cluster leg).
-- *Files:* `execution/mapreduce/combiner.py`. **Coordinate** with the concurrent
-  reconcile/reduce session touching mapreduce. *Size:* SMALL. *Disclosure-not-gate:*
-  ✓ — a footer field, no gate.
+**U-RED1 — mirror Task-1 provenance into the cluster combiner footer. BUILT
+2026-07-17.** Stamps `contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version` +
+`source: "cluster_final"` in `execution/mapreduce/combiner.py::_final_reduce` so the
+`HPC_CLUSTER_FINAL_REDUCE` path is at parity with the local reduce; `extract-recipe`
+stops degrading to lineage there (closes gap 4, the G4a cluster leg). The local
+reader `aggregate_flow::_read_reduce_provenance` PREFERS the cluster footer, discloses
+the source, and falls back to the local `_reduce_input_provenance` when no footer was
+persisted; an old footer reads not-captured (disclosed, never a wrong answer).
+- *Files:* `execution/mapreduce/combiner.py` (footer mirror) + `ops/aggregate_flow.py`
+  (`_read_reduce_provenance` reader + a cluster-final disclosure). *Size:* SMALL.
+  *Disclosure-not-gate:* ✓ — additive footer fields + a disclosure line, no gate.
 
 **U-HW1 — capture hardware/scheduler as a disclosed coverage axis.** Record the
 scheduler-reported exec node/hostname (already in scheduler artifacts) into the
@@ -503,6 +512,27 @@ attestation}.py`, and `execution/mapreduce/`. Coordination points with the three
 concurrent sessions (reconcile/mapreduce, provenance-manifest, agent-assets) are
 named per unit.
 
+- 2026-07-17 — **U-RED1 BUILT (gap #4 → MECHANICAL, the cluster leg closed).**
+  `execution/mapreduce/combiner.py::_final_reduce` now stamps the SAME reduce-time
+  provenance the LOCAL `_reduce_input_provenance` records into its footer:
+  `contributing_run_ids` (the run-scoped wave-partial membership it consumed, unioned
+  with `run_id`, foreign partials F05-dropped), `piece_cmd_shas` (the run's sidecar
+  cmd_sha — the combiner pre-reduces cluster-side so its consumed inputs carry no
+  per-piece sha, the local combiner-wave fallback), `hpc_agent_version` (the deployed
+  `.hpc/runs/<run_id>.json` wheel), and `source: "cluster_final"` — all derived from
+  the reduce's OWN consumed inputs at write time, best-effort (an absent sidecar
+  degrades to `[]`/`None`, never failing the reduce). The local reader
+  `aggregate_flow::_read_reduce_provenance` PREFERS the cluster footer's provenance and
+  discloses the source (`cluster_final`), reads an old footer as `not-captured`
+  (disclosed, never re-derived after the fact), and re-derives via
+  `_reduce_input_provenance` only when NO footer was persisted (`source: "local"`);
+  `_cluster_final_reduce` prints a one-line disclosure of whether the table→run-set
+  link is first-class. `extract-recipe` over a cluster-reduced `metrics_aggregate.json`
+  now reads real `contributing_run_ids` instead of the `table-run-set-link-absent`
+  (G4a) lineage degrade — the gap-closing pin. Additive fields; verify-reproduction and
+  every existing reader are byte-unaffected. `reduce/metrics.py` untouched (the local
+  reduce path already carried the provenance via Task 1). Built in an isolated
+  worktree.
 - 2026-07-17 (integration) — **U-ENV1 BUILT**: canary emits a resolved-env
   snapshot (SOURCE_ORDER pip_freeze > lockfile > python_env, source tag folded
   into the sha, ack-gated fetch so truncation = could-not-capture never a wrong

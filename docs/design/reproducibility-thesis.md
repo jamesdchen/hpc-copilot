@@ -196,9 +196,13 @@ but was never compared" is now compared). And the reducer is checked *before* th
 array launches: `ops/submit_and_verify.py::_check_reducer_on_canary` (L113, commit
 `2f6fd10d`) executes the declared `aggregate_cmd` against the verified canary's real
 row, asserting contract shape, disclosing any error verbatim, never refusing.
-(Residual ABSENT: the cluster combiner footer does not yet mirror the reduce-time
-provenance, so the `HPC_CLUSTER_FINAL_REDUCE=1` path degrades link 6 to the lineage
-fallback — a disclosed gap, not a silent one.)
+(Cluster leg closed 2026-07-17: the cluster combiner footer
+`execution/mapreduce/combiner.py::_final_reduce` now mirrors the SAME
+`contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version` + `source:"cluster_final"`,
+so the `HPC_CLUSTER_FINAL_REDUCE` path is at parity with the local reduce and link 6
+no longer degrades to lineage there; the local reader
+`aggregate_flow::_read_reduce_provenance` prefers the cluster footer and discloses its
+source, and an old footer reads not-captured — disclosed, never a wrong answer.)
 
 **6. Selection / curation — MECHANICAL. This is the messy→clean step, and it is now a
 walk, not a memory act.** `ops/extract_recipe.py::extract_recipe` (commit `8fff2a2c`)
