@@ -220,6 +220,15 @@ def _check_reducer_on_canary(
     )
 
 
+#: The per-task runtime sidecar the dispatcher writes into each result dir,
+#: carrying the U-HW1 placement facts (node / cpu_model / partition). Named here
+#: (not imported at module top to avoid an import cycle) in lock-step with
+#: :data:`hpc_agent.ops.submit.hw_facts_capture.RUNTIME_SIDECAR_NAME`; the
+#: fingerprint pull widens its include to bring this home for free.
+# MIRROR: hpc_agent.ops.submit.hw_facts_capture::RUNTIME_SIDECAR_NAME pinned-by tests/ops/submit/test_hw_facts_capture.py::test_runtime_sidecar_name_mirrors_dispatcher  # noqa: E501
+_RUNTIME_SIDECAR_NAME = "_runtime.json"
+
+
 @dataclass(frozen=True)
 class _CanaryTask0Pull:
     """A canary's task-0 pull coordinates, rendered locally (no round-trip).
@@ -381,18 +390,30 @@ def _pull_both_canary_task0_metrics(
     sub_b = plan_b.result_subdir.strip("/")
     file_a = posixpath.join(sub_a, plan_a.summary_name)
     file_b = posixpath.join(sub_b, plan_b.summary_name)
+    # U-HW1 (gap #5): each canary's per-task ``_runtime.json`` (the placement facts
+    # the dispatcher already emits — node / cpu_model / partition) lives in the
+    # SAME result dir as the summary, so it rides home on THIS pull for the cost of
+    # one more ``include`` pattern — the hardware-facts capture is zero new
+    # round-trip. Best-effort: an old wheel that wrote no ``_runtime.json`` simply
+    # transfers nothing extra (rsync ignores an absent include), and the hw stamp
+    # records could-not-capture. The runtime file is NOT asserted-present below;
+    # only the two summaries are required.
+    rt_a = posixpath.join(sub_a, _RUNTIME_SIDECAR_NAME)
+    rt_b = posixpath.join(sub_b, _RUNTIME_SIDECAR_NAME)
     # Pull the two files' common ancestor so the ONE cycle's server-side walk is
     # scoped (typically ``results/``); the per-file includes are anchored to it.
     common = posixpath.commonpath([sub_a, sub_b]) if sub_a and sub_b else ""
     inc_a = posixpath.relpath(file_a, common) if common else file_a
     inc_b = posixpath.relpath(file_b, common) if common else file_b
+    inc_rt_a = posixpath.relpath(rt_a, common) if common else rt_a
+    inc_rt_b = posixpath.relpath(rt_b, common) if common else rt_b
     local = pulls_dir(experiment_dir, dest_run_id)
     pull = rsync_pull(
         ssh_target=plan_a.ssh_target,
         remote_path=plan_a.remote_path,
         remote_subdir=common,
         local_dir=str(local),
-        include=sorted({inc_a, inc_b}),
+        include=sorted({inc_a, inc_b, inc_rt_a, inc_rt_b}),
     )
     if pull.returncode != 0:
         raise errors.RemoteCommandFailed(
@@ -457,6 +478,15 @@ def _mint_double_canary_sample(
             second_canary_run_id=second_canary_run_id,
             dest_run_id=base.run_id,
         )
+        # U-HW1 (gap #5): the canary's placement facts (node / cpu_model /
+        # partition) rode home in ``_runtime.json`` on the SAME pull above —
+        # reduce them to an additive hw_sha on the MAIN run's sidecar so a later
+        # reproduction on different hardware is DISCLOSED (never gated). Its OWN
+        # guard, so a hw stamp never disturbs the fingerprint sample below; zero
+        # new round-trip (rides the existing pull).
+        _capture_hw_facts_best_effort(
+            experiment_dir, run_id=base.run_id, canary_summary_path=path_a
+        )
         payload_a = json.loads(path_a.read_text(encoding="utf-8"))
         payload_b = json.loads(path_b.read_text(encoding="utf-8"))
         per_key = determinism.diff_metrics(payload_a, payload_b)
@@ -483,6 +513,53 @@ def _mint_double_canary_sample(
             "double-canary fingerprint sample not minted for run %r (both canaries "
             "verified ok; the fingerprint simply did not grow this submit)",
             base.run_id,
+            exc_info=True,
+        )
+
+
+def _capture_hw_facts_best_effort(
+    experiment_dir: Path, *, run_id: str, canary_summary_path: Path
+) -> None:
+    """Reduce + stamp the run's hardware facts off the pulled canary runtime (U-HW1).
+
+    The canary's per-task ``_runtime.json`` (the placement facts the dispatcher
+    emitted — node / cpu_model / partition) rode home NEXT TO its task-0 summary
+    on the fingerprint pull, so it sits at ``canary_summary_path.parent /
+    _runtime.json``. This reads THAT already-landed file (NO new round-trip),
+    reduces it to an additive ``hw_sha``, and stamps it on the MAIN run's sidecar
+    (:func:`hpc_agent.ops.submit.hw_facts_capture.capture_and_stamp_hw_facts`), so
+    a later reproduction on different hardware is DISCLOSED (never gated) — gap #5
+    closed on the capture side.
+
+    Best-effort by contract, exactly like :func:`_capture_env_lock_best_effort`:
+    the capture is itself never-raising (an absent/torn runtime stamps an honest
+    ``could_not_capture`` status), but the call is wrapped here too so no
+    unexpected error can fail a submit whose canary verified.
+    """
+    from hpc_agent.ops.submit.hw_facts_capture import (
+        RUNTIME_SIDECAR_NAME,
+        capture_and_stamp_hw_facts,
+    )
+
+    runtime_path = canary_summary_path.parent / RUNTIME_SIDECAR_NAME
+
+    def _load(*, canary_run_id: str) -> dict[str, object] | None:
+        if not runtime_path.is_file():
+            return None
+        import json
+
+        data = json.loads(runtime_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+
+    try:
+        capture_and_stamp_hw_facts(experiment_dir, run_id=run_id, canary_run_id=run_id, load=_load)
+    except Exception:  # noqa: BLE001 — hw-facts capture never fails a passing submit
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "hw_facts capture for run %r raised unexpectedly; the sidecar simply "
+            "carries no hw_facts this submit (disclosed as not-captured at verify)",
+            run_id,
             exc_info=True,
         )
 

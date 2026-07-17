@@ -722,6 +722,49 @@ def _task_is_included(task_id, env):
     return task_id in included
 
 
+# Placement-fact capture for the per-task _runtime.json (U-HW1, reproducibility
+# program gap #5). The dispatcher runs ON the compute node — the ONE place the
+# machine that ran the task is actually visible — so it stamps the CPU model and
+# the scheduler partition alongside the ``node`` it already records. The control
+# plane reduces these to an additive ``hw_sha`` at canary-verify and DISCLOSES a
+# hardware delta at reproduce/verify (never a gate). Stdlib-only + best-effort:
+# this file ships standalone (deploy_runtime never ships the package), and a
+# capture miss simply omits that fact — an honest partial, never a raise.
+_CPUINFO_MODEL_RE = re.compile(r"^model name\s*:\s*(.+)$", re.MULTILINE)
+
+
+def _cpu_model():
+    """The CPU generation string, best-effort — ``""`` when it cannot be read.
+
+    Reads ``/proc/cpuinfo``'s first ``model name`` line (the SKU / CPU generation
+    the task's numerics can hinge on — BLAS kernels, FMA width). Opaque to the
+    control plane, which only hashes it. A non-Linux node / unreadable file / a
+    kernel without the field yields ``""`` (that fact did not resolve).
+    """
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return ""
+    m = _CPUINFO_MODEL_RE.search(text)
+    return m.group(1).strip() if m else ""
+
+
+def _scheduler_partition():
+    """The scheduler-visible placement (partition / queue), best-effort → ``""``.
+
+    SLURM exports ``$SLURM_JOB_PARTITION``; PBS/Torque ``$PBS_QUEUE``; SGE
+    ``$QUEUE``. First set wins. Distinct from the ``gpu_type`` field (which may
+    be an operator-forced ``$HPC_GPU_TYPE``): this is the raw placement the
+    scheduler chose, an opaque coverage fact. ``""`` when none is set.
+    """
+    for var in ("SLURM_JOB_PARTITION", "PBS_QUEUE", "QUEUE"):
+        val = os.environ.get(var)
+        if val and val.strip():
+            return val.strip()
+    return ""
+
+
 def _format_result_dir(template, *, task_id, run_id, kwargs):
     """Render *template* using ``str.format`` with task/run identity + kwargs.
 
@@ -1409,6 +1452,14 @@ def main() -> None:
                 or os.environ.get("HOST")
                 or ""
             ),
+            # Placement facts for the hardware-variance coverage dimension
+            # (U-HW1, gap #5): the CPU generation + the scheduler partition the
+            # task actually ran on, captured HERE (the compute node) since it is
+            # the only place the machine is visible. Reduced to an additive
+            # hw_sha at canary-verify; a hardware delta is DISCLOSED (never gated)
+            # at reproduce/verify. Empty string = that fact did not resolve.
+            "cpu_model": _cpu_model(),
+            "partition": _scheduler_partition(),
             # gpu_preamble.sh uses ${HPC_GPU_TYPE+set} to distinguish
             # *unset* (auto-detect) from *explicitly empty* (operator
             # opt-out: "leave it unset / skip auto-detect"). The naive

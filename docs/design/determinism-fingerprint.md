@@ -882,3 +882,52 @@ fingerprint `SampleIdentity` (samples still key on code identity + the data leg)
 and U-ENV1 never refuses a submit or a reproduction on env drift. Held by
 `tests/state/test_env_lock.py`, `tests/ops/submit/test_env_lock_capture.py`,
 `tests/ops/aggregate/test_verify_reproduction_env_lock.py`.
+
+## Amendment (2026-07-17): U-HW1 — hardware / scheduler variance as a coverage dimension
+
+Gap #5 of the reproducibility program
+(`docs/plans/reproducibility-program-2026-07-17.md`): two runs can differ because
+of the MACHINE — the node, the CPU generation, the scheduler's placement — and
+today that is invisible (surfaced only as the n=2 `same_submission` caveat above,
+never RECORDED). U-HW1 records it, and DISCLOSES a hardware delta at
+reproduce/verify so unexplained fingerprint variance can be ATTRIBUTED to the box
+rather than mislabeled nondeterminism.
+
+1. **Capture rides an EXISTING surface — zero new round-trip (the contrast with
+   U-ENV1).** U-ENV1 opened a fresh SSH exec for its env snapshot; U-HW1 needs no
+   fetch. The dispatcher already writes the exec `node` into each task's
+   `_runtime.json` (`execution/mapreduce/dispatch.py`, already rsync-pulled +
+   ingested by the warm-axis path), so U-HW1 (a) stamps `cpu_model`
+   (`/proc/cpuinfo` model name) + `partition` (`SLURM_JOB_PARTITION` / `PBS_QUEUE`
+   / `QUEUE`) alongside it — compute-node stdlib, best-effort, an empty fact just
+   omitted — and (b) widens the double-canary task-0 fingerprint pull's `include`
+   by the one `_runtime.json` filename so the canary's placement facts ride home
+   in the SAME cycle the fingerprint mint already runs
+   (`ops/submit_and_verify.py::_pull_both_canary_task0_metrics` +
+   `_capture_hw_facts_best_effort`).
+2. **Reduce + additive sidecar stamp.** `state/hw_facts.py::resolve_hw_facts`
+   normalizes the facts (strip + collapse whitespace, drop empties, keep the
+   `FACT_KEYS = node / cpu_model / partition` vocabulary) and reduces them to an
+   additive `hw_sha` (canonical key-sorted JSON over the normalized set — no
+   source tag; the facts ARE the identity). `state/runs.py::stamp_run_sidecar_hw_facts`
+   writes `hw_facts` + `hw_sha` + `hw_status` (`captured` / `could_not_capture`)
+   as a POST-submission additive stamp (backfill-only; an old sidecar reads None =
+   "hardware placement not captured"; a torn/absent runtime is an honest
+   `could_not_capture`, never a silent skip). `ops/submit/hw_facts_capture.py`
+   reads the ALREADY-LANDED file (no SSH).
+3. **Disclose, never gate.** `state/hw_facts.py::hw_drift_disclosure` (match /
+   drifted / unknown + the moved-fact `delta`) feeds `reproduce_run`'s mint brief
+   (`hw_identity`) and `verify_reproduction`'s v2 receipt (`hw_identity` block +
+   `_hw_dimension_phrase` reason clause). The clause — the value over a bare drift
+   line — frames the delta against the metric verdict: drifted + diverged → a
+   CANDIDATE attribution *offered not asserted*; match + diverged → hardware ruled
+   OUT (strengthens the divergence signal); drifted + matched → the delta did not
+   perturb the numbers here. The verdict / `needs_decision` derives purely from
+   the metric `stage` — the hw leg only appends to the receipt + reason.
+
+RR3 honored (deliberately OUT of scope): hardware is COVERAGE, NOT an
+`IDENTITY_FIELDS` leg — a benign node reassignment never invalidates a reused
+envelope, and U-HW1 never refuses a submit or a reproduction on hardware drift.
+Held by `tests/state/test_hw_facts.py`,
+`tests/ops/submit/test_hw_facts_capture.py`,
+`tests/ops/aggregate/test_verify_reproduction_hw_facts.py`.

@@ -169,6 +169,42 @@ class EnvLockDisclosure(BaseModel):
     )
 
 
+class HwIdentityDisclosure(BaseModel):
+    """The v2 receipt's HARDWARE-dimension disclosure (U-HW1, reproducibility gap #5).
+
+    The placement-facts leg's comparison of the reproduction's ``hw_sha`` against
+    the original's, DISCLOSED so a verdict NAMES the hardware when it moved:
+    ``status`` is ``match`` (both hw_shas present + equal — placement equivalent,
+    hardware ruled out as a divergence source), ``drifted`` (both present +
+    different — the node / CPU-generation / partition moved, a candidate
+    attribution for any divergence), or ``unknown`` (either side's hardware could
+    not be captured / an old sidecar has no hw_sha). ``original`` / ``repro`` echo
+    the two shas verbatim (null where absent); ``delta`` NAMES the placement-fact
+    keys that differ (``["node"]``, ``["cpu_model", "node"]``, …) — ``[]`` when
+    equal / unknown / not both-captured. NEVER a gate — reproducing on a newer SKU
+    is a legitimate reproduction, mirroring the data + env legs. Present only when
+    at least one side recorded an hw_sha (else the receipt is byte-identical to a
+    pre-U-HW1 one).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="reproduction hardware-placement disclosure")
+
+    status: Literal["match", "drifted", "unknown"] = Field(
+        description="How the reproduction's hardware placement compares to the original's."
+    )
+    original: str | None = Field(
+        default=None, description="The original run's hw_sha (null when not captured)."
+    )
+    repro: str | None = Field(
+        default=None, description="The reproduction run's hw_sha (null when not captured)."
+    )
+    delta: list[str] = Field(
+        default_factory=list,
+        description="The placement-fact keys that differ (node / cpu_model / partition); "
+        "empty when equal, unknown, or not both-captured.",
+    )
+
+
 class StageInterlockDisclosure(BaseModel):
     """The v2 receipt's data-trace interlock disclosure (docs/design/data-trace.md).
 
@@ -290,6 +326,18 @@ class ReproductionReceipt(BaseModel):
             "the receipt then stays byte-identical to a pre-U-ENV1 one. Never a "
             "gate; the environment is named as the moved dimension, mirroring the "
             "data leg."
+        ),
+    )
+    hw_identity: HwIdentityDisclosure | None = Field(
+        default=None,
+        description=(
+            "Hardware-dimension disclosure (U-HW1, reproducibility gap #5): how the "
+            "reproduction's placement facts (node / cpu_model / partition) compare "
+            "to the original's (match / drifted / unknown + the moved-fact delta). "
+            "Null when NEITHER side recorded an hw_sha (an old sidecar or a "
+            "could-not-capture canary) — the receipt then stays byte-identical to a "
+            "pre-U-HW1 one. Never a gate; a hardware delta is named as a candidate "
+            "attribution for any divergence, mirroring the env leg."
         ),
     )
     stage_interlock: StageInterlockDisclosure | None = Field(

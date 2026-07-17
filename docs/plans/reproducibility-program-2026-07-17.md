@@ -572,3 +572,31 @@ named per unit.
   extract-recipe description/help edits — the manifest core owed no schema
   regen, per the R3 precedent), ruff/format/mypy clean. Built in an isolated
   worktree, integrated by the coordinator.
+- 2026-07-17 (integration) — **U-HW1 BUILT (gap #5 → DISCLOSED)**: hardware /
+  scheduler variance is now a RECORDED coverage dimension, not just the n=2
+  `same_submission` caveat. Capture rides an EXISTING cluster-side surface with
+  **zero new round-trip**: the dispatcher already emits the exec `node` into the
+  per-task `_runtime.json` (which the harvest already rsync-pulls + ingests), so
+  U-HW1 (a) stamps `cpu_model` (/proc/cpuinfo model name) + `partition`
+  (SLURM_JOB_PARTITION / PBS_QUEUE / QUEUE) alongside it on the compute node
+  (stdlib-only, best-effort — an empty fact is simply omitted), and (b) widens
+  the double-canary task-0 fingerprint pull's `include` by one filename so the
+  canary's `_runtime.json` rides home in the SAME cycle. `state/hw_facts.py`
+  reduces the facts (node / cpu_model / partition) to an additive `hw_sha` over
+  the normalized, whitespace-collapsed, key-sorted fact set (source-free canonical
+  JSON); `ops/submit/hw_facts_capture.py` reads the already-landed file (NO SSH,
+  the contrast with env-lock's fetch) and stamps additive
+  `hw_facts`/`hw_sha`/`hw_status` on the MAIN sidecar (backfill-only, old records
+  read None = not-captured; a torn/absent runtime → honest `could_not_capture`).
+  reproduce/verify DISCLOSE the placement delta and never gate: the receipt's
+  `hw_identity` block + a reason clause that — the value over a bare drift line —
+  frames the delta against the metric verdict (drifted + diverged → a CANDIDATE
+  attribution *offered not asserted*; match + diverged → hardware ruled OUT,
+  strengthening the divergence signal; drifted + matched → the delta did not
+  perturb the numbers here). RR3 honored: hardware is COVERAGE, not an
+  `IDENTITY_FIELDS` leg — a benign node reassignment never poisons an envelope.
+  Proven red-then-green: a hw gate makes the disclose-not-gate pin fire; a
+  divergence-blind phrase makes the attribution/equivalence pins fire; verdict
+  untouched in all cases. As-built detail in
+  docs/design/determinism-fingerprint.md's drift log. The HARDWARE dimension
+  moves ABSENT → DISCLOSED. Built in an isolated worktree.

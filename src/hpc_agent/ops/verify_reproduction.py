@@ -622,6 +622,64 @@ def _env_dimension_phrase(disclosure: Mapping[str, Any]) -> str:
     return ""
 
 
+def _hw_dimension_phrase(disclosure: Mapping[str, Any], *, diverged: bool) -> str:
+    """Code-rendered clause NAMING the hardware dimension (U-HW1, gap #5), or ``""``.
+
+    The reproducibility program's #5 gap, DISCLOSED not gated: the verdict states
+    how the run's PLACEMENT compared, and — the value over a bare drift line —
+    frames it against whether the metrics actually diverged:
+
+    * ``drifted`` + *diverged* → the hardware delta is offered as a CANDIDATE
+      ATTRIBUTION for the observed divergence (offered, NEVER asserted as the
+      cause — a different node / CPU generation is one hypothesis among several);
+    * ``drifted`` + NOT diverged → the delta is still disclosed, but noted as
+      having NOT perturbed the metrics here (the machine moved, the numbers held);
+    * ``match`` + *diverged* → placement was EQUIVALENT, so hardware is ruled OUT
+      as the source — which STRENGTHENS the divergence signal (it is not the box);
+    * ``match`` + NOT diverged → ``""`` (equivalent hardware, matching metrics —
+      nothing to say; byte-identical to a pre-U-HW1 verify beyond the receipt);
+    * ``unknown`` → the placement identity could not be captured on one side,
+      disclosed.
+
+    NEVER a refusal. ``delta`` (the fact keys that moved) is named when present.
+    """
+    status = disclosure.get("status")
+    delta = disclosure.get("delta") or []
+    delta_phrase = f" [{', '.join(delta)}]" if delta else ""
+    if status == "drifted":
+        original = str(disclosure.get("original") or "")
+        current = str(disclosure.get("current") or "")
+        head = (
+            f"; hardware dimension: placement DRIFTED{delta_phrase} "
+            f"(original {original[:12]} vs repro {current[:12]})"
+        )
+        if diverged:
+            return (
+                head + " — a CANDIDATE attribution for the observed divergence "
+                "(the machine moved: a different node / CPU generation / partition), "
+                "offered not asserted, disclosed not gated"
+            )
+        return (
+            head + " — but the metrics matched, so the hardware delta did not "
+            "perturb them here, disclosed not gated"
+        )
+    if status == "match":
+        if diverged:
+            return (
+                "; hardware dimension: placement EQUIVALENT (same node / CPU model "
+                "/ partition) — hardware is ruled OUT as a source of the divergence, "
+                "which strengthens the signal, disclosed"
+            )
+        return ""
+    if status == "unknown":
+        return (
+            "; hardware dimension: placement identity unknown (the node / cpu_model "
+            "/ partition could not be captured on one side — an old record or a "
+            "could-not-capture canary), disclosed"
+        )
+    return ""
+
+
 def _identity(sidecar: Mapping[str, Any], run_id: str) -> dict[str, Any]:
     """Lift a run's identity off its sidecar VERBATIM (never re-derived)."""
     ident: dict[str, Any] = {"run_id": run_id}
@@ -1080,6 +1138,11 @@ def verify_reproduction(
     # metrics-present path below when at least one side recorded an env_lock;
     # stays None otherwise (byte-identical to a pre-U-ENV1 verify).
     env_identity_disclosure: dict[str, Any] | None = None
+    # The hardware-dimension disclosure (U-HW1, gap #5): how the reproduction's
+    # placement facts compare to the original's. Populated only on the
+    # metrics-present path below when at least one side recorded an hw_sha; stays
+    # None otherwise (byte-identical to a pre-U-HW1 verify).
+    hw_identity_disclosure: dict[str, Any] | None = None
     # The data-trace interlock disclosure (both/one/neither side traced) and the
     # localized stage — populated only on the full metrics-present path below;
     # stay None on the incomparable / partial paths (nothing folded, nothing to
@@ -1251,6 +1314,33 @@ def verify_reproduction(
                 "original": env_disclosure["recorded"],
                 "repro": env_disclosure["current"],
             }
+        # Hardware-dimension leg (U-HW1, gap #5): compare the reproduction's
+        # placement facts (node / cpu_model / partition) against the original's —
+        # DISCLOSED, never gated. A drifted machine is NAMED as a candidate
+        # attribution for any divergence rather than mislabeled nondeterminism;
+        # equivalent placement is disclosed as ruling hardware OUT. Rides the
+        # receipt + reason only when at least one side recorded an hw_sha (else
+        # byte-identical to a pre-U-HW1 verify). The reason CLAUSE is appended
+        # after the metric verdict is known (it frames the delta against the
+        # actual divergence), so only the disclosure is built here.
+        from hpc_agent.state.hw_facts import hw_drift_disclosure
+
+        orig_hw_sha = original_sidecar.get("hw_sha")
+        repro_hw_sha = repro_sidecar.get("hw_sha")
+        hw_known = bool(orig_hw_sha or repro_hw_sha)
+        hw_disclosure = hw_drift_disclosure(
+            orig_hw_sha,
+            repro_hw_sha,
+            recorded_facts=original_sidecar.get("hw_facts"),
+            current_facts=repro_sidecar.get("hw_facts"),
+        )
+        if hw_known:
+            hw_identity_disclosure = {
+                "status": hw_disclosure["status"],
+                "original": hw_disclosure["recorded"],
+                "repro": hw_disclosure["current"],
+                "delta": hw_disclosure["delta"],
+            }
         diffs = diff_metrics(orig_metrics, repro_metrics)
         classification = classify(
             diffs,
@@ -1274,11 +1364,19 @@ def verify_reproduction(
         # untraced comparison never forces it (byte-identical to a pre-interlock
         # receipt — nothing folded, nothing disclosed).
         tiered = bool(envelope.per_key)
-        # env_known forces v2 so the env_identity disclosure rides the receipt; an
-        # env-less comparison never forces it (byte-identical to a pre-U-ENV1 one).
+        # env_known / hw_known force v2 so the env_identity / hw_identity
+        # disclosures ride the receipt; an env-less + hw-less comparison never
+        # forces it (byte-identical to a pre-U-ENV1 / pre-U-HW1 one).
         schema_version = (
             RECEIPT_SCHEMA_VERSION_TIERED
-            if (tiered or partial or data_moved or stage_interlock is not None or env_known)
+            if (
+                tiered
+                or partial
+                or data_moved
+                or stage_interlock is not None
+                or env_known
+                or hw_known
+            )
             else RECEIPT_SCHEMA_VERSION
         )
 
@@ -1315,6 +1413,16 @@ def verify_reproduction(
                     per_key.append(entry)
             stage = overall_v1
             reason = _render_reason(per_key_v1, overall_v1) + data_phrase + env_phrase
+
+        # Hardware-dimension clause (U-HW1) appended LAST — after the metric verdict
+        # (``stage``) is known — so it frames a placement delta against whether the
+        # metrics actually diverged: a candidate attribution for a real divergence,
+        # or (on a match) hardware ruled out. ``diverged`` = the comparison did not
+        # cleanly match/auto-clear. NEVER gates ``needs_decision`` — a pure
+        # disclosure appended to the reason.
+        if hw_known:
+            diverged = stage not in ("match", "auto_cleared")
+            reason = reason + _hw_dimension_phrase(hw_disclosure, diverged=diverged)
 
         # Stage-localized mismatch: surface the first diverging stage ONLY when
         # the overall verdict routes to the human (mismatch / needs_verdict /
@@ -1367,6 +1475,11 @@ def verify_reproduction(
         # recorded an env_lock — the receipt then stays byte-identical to a
         # pre-U-ENV1 one.
         receipt["env_identity"] = env_identity_disclosure
+        # v2 hardware-identity disclosure (U-HW1, gap #5): how the reproduction's
+        # placement facts compare to the original's (match / drifted / unknown +
+        # the moved-fact delta). None when neither side recorded an hw_sha — the
+        # receipt then stays byte-identical to a pre-U-HW1 one.
+        receipt["hw_identity"] = hw_identity_disclosure
         # v2 data-trace interlock (docs/design/data-trace.md): only present when a
         # trace exists on at least one side (else the receipt is byte-identical to
         # a pre-interlock one). ``diverged_stage`` names the first stage a routed

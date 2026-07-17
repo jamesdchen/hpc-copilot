@@ -309,6 +309,25 @@ def _env_lock_disclosure(sidecar: dict[str, Any]) -> dict[str, Any]:
     return {"status": status, "original_env_lock": recorded}
 
 
+def _hw_facts_disclosure(sidecar: dict[str, Any]) -> dict[str, Any]:
+    """The hardware-placement disclosure for the reproduction mint brief (U-HW1).
+
+    A NAMED DISCLOSURE, never a refusal (mirroring :func:`_env_lock_disclosure`):
+    at mint time the reproduction's own hardware is not yet resolved (its canary
+    captures it post-submission), so this discloses whether the ORIGINAL's
+    placement facts were captured — so the human's re-``y`` knows a hardware
+    comparison is pending at verify. ``status="captured"`` with the recorded
+    ``hw_sha`` when the original's canary recorded its node / cpu_model /
+    partition; ``status="not_captured"`` (hw null, or an explicit
+    ``could_not_capture``) otherwise — verify will read the pair as hardware
+    placement unknown, disclosed, never blocking.
+    """
+    recorded = sidecar.get("hw_sha")
+    recorded = str(recorded) if recorded else None
+    status = "captured" if recorded else "not_captured"
+    return {"status": status, "original_hw_sha": recorded}
+
+
 def _cost_estimate(submit: SubmitFlowSpec) -> CostEstimate:
     """The pre-dispatch cost estimate for the reproduction spec (S2 parity).
 
@@ -597,6 +616,19 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         if env_lock["status"] == "captured"
         else " env not captured for the original (env drift disclosed, not compared, at verify)"
     )
+    # The hardware dimension (U-HW1, gap #5): DISCLOSE whether the original's
+    # placement facts (node / cpu_model / partition) were captured, so the human
+    # knows a hardware comparison is pending at verify (the reproduction's own hw
+    # is captured by its canary). Never a refusal — reproducing on a different
+    # node / newer SKU is a legitimate reproduction; verify NAMES hardware as a
+    # candidate attribution for any divergence.
+    hw_facts = _hw_facts_disclosure(sidecar)
+    hw_phrase = (
+        ""
+        if hw_facts["status"] == "captured"
+        else " hardware not captured for the original (placement variance disclosed, not "
+        "compared, at verify)"
+    )
     brief: dict[str, Any] = {
         "run_id": rr.run_id,
         "reproduces": original_run_id,
@@ -618,6 +650,10 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         # The environment dimension (U-ENV1): whether the original's resolved env
         # was captured; the reproduction's env is compared at verify. Disclosed.
         "env_identity": env_lock,
+        # The hardware dimension (U-HW1, gap #5): whether the original's placement
+        # facts were captured; the reproduction's hardware is compared at verify.
+        # Disclosed, never gated.
+        "hw_identity": hw_facts,
         "resolve": {
             "run_id": rr.run_id,
             "cmd_sha": rr.cmd_sha,
@@ -630,9 +666,9 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         needs_decision=True,
         reason=(
             f"reproduction of {original_run_id!r} resolved (est. {est_phrase}) under a "
-            f"disjoint remote_path;{partial_phrase}{data_phrase}{env_phrase} canary PENDING — "
-            "greenlight submit-s2 to stage & canary the reproduction (its detached worker owns "
-            "the poll)."
+            f"disjoint remote_path;{partial_phrase}{data_phrase}{env_phrase}{hw_phrase} canary "
+            "PENDING — greenlight submit-s2 to stage & canary the reproduction (its detached "
+            "worker owns the poll)."
         ),
         run_id=rr.run_id,
         reproduces=original_run_id,

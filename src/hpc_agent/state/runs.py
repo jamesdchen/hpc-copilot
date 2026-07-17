@@ -21,7 +21,7 @@ import os
 import re
 import warnings
 from collections import OrderedDict
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -248,6 +248,18 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     # never a silent skip.
     "env_lock_sha": None,
     "env_lock_status": None,
+    # hw_facts / hw_sha / hw_status land AFTER submission via
+    # :func:`stamp_run_sidecar_hw_facts` — the placement facts the dispatcher
+    # already emits into the per-task ``_runtime.json`` (exec node / cpu_model /
+    # scheduler partition) are reduced to an additive ``hw_sha`` at canary-verify
+    # (U-HW1, reproducibility program gap #5). Like ``env_lock_*`` these are
+    # POST-WRITE additive stamps, NOT config-snapshot fields, so they live in the
+    # backfill defaults only (not _V2_CONFIG_FIELDS). An old sidecar without them
+    # reads None -- "hardware placement not captured", disclosed at verify, never
+    # a silent skip.
+    "hw_facts": None,
+    "hw_sha": None,
+    "hw_status": None,
 }
 
 # Hardened return-shape defaults. ``read_run_sidecar`` always fills these
@@ -1286,6 +1298,55 @@ def stamp_run_sidecar_env_lock(
             existing["env_lock_sha"] = env_lock_sha
         if existing.get("env_lock_status") is None:
             existing["env_lock_status"] = env_lock_status
+        return existing
+
+    atomic_locked_update(target, _mutate)
+    return target
+
+
+def stamp_run_sidecar_hw_facts(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    hw_facts: Mapping[str, Any] | None,
+    hw_sha: str | None,
+    hw_status: str,
+) -> Path:
+    """Stamp the HARDWARE placement facts on an existing sidecar; return its path.
+
+    The U-HW1 capture seam (reproducibility program gap #5): the canary's
+    per-task ``_runtime.json`` already carried the exec node / cpu_model /
+    scheduler partition home, and this records the normalized ``hw_facts`` map +
+    its reduced ``hw_sha`` plus the capture ``hw_status`` (``captured`` /
+    ``could_not_capture``) on the run's per-experiment sidecar — POST-submission,
+    exactly the additive post-write shape :func:`stamp_run_sidecar_env_lock` uses,
+    same lock seam.
+
+    Strictly **additive**: ``hw_facts``/``hw_sha`` are written only when non-null
+    AND the sidecar's current ``hw_sha`` is null (an already-stamped fingerprint
+    is never overwritten, so a re-capture cannot silently rewrite provenance).
+    ``hw_status`` is likewise only written when currently absent, so the FIRST
+    capture verdict stands — a could-not-capture is honestly recorded and not
+    later erased. A could-not-capture (``hw_sha=None``) still records the status,
+    never a silent skip (no-silent-caps).
+
+    Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*.
+    """
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        raise FileNotFoundError(f"run sidecar not found: {target}")
+    from hpc_agent.infra.io import atomic_locked_update
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        if hw_sha is not None and existing.get("hw_sha") is None:
+            existing["hw_sha"] = hw_sha
+            # hw_facts rides ONLY alongside a fresh sha (the two are one record) —
+            # never written without it, so an old facts map can't survive a sha.
+            existing["hw_facts"] = dict(hw_facts) if hw_facts is not None else None
+        if existing.get("hw_status") is None:
+            existing["hw_status"] = hw_status
         return existing
 
     atomic_locked_update(target, _mutate)

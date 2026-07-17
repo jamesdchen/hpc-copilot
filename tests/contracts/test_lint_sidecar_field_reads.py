@@ -125,6 +125,16 @@ _RUNTIME_WRITTEN = frozenset(
         # read so an old sidecar reads "environment identity not captured".
         "env_lock_sha",
         "env_lock_status",
+        # hw_facts / hw_sha / hw_status (U-HW1, reproducibility gap #5):
+        # POST-submission additive stamps written by
+        # state/runs.py::stamp_run_sidecar_hw_facts after the canary's placement
+        # facts (node / cpu_model / partition, emitted into the dispatcher's
+        # _runtime.json) ride home on the fingerprint pull. Like env_lock_* they
+        # are runtime-written, NOT config-snapshot fields — backfilled to None on
+        # read so an old sidecar reads "hardware placement not captured".
+        "hw_facts",
+        "hw_sha",
+        "hw_status",
     ]
 )
 ALLOWED_SIDECAR_KEYS = _V1_REQUIRED | _V2_CONFIG | _RUNTIME_WRITTEN
