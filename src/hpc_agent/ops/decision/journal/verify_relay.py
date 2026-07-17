@@ -765,10 +765,64 @@ _PATH_KEY_SEGMENTS = frozenset(
 # announce a path (``summary_artifact`` = ``metrics.json``).
 _PATH_SHAPED_TOKEN_RE = re.compile(r"[/\\]|\.[A-Za-z][A-Za-z0-9]*$")
 
+# Sentence punctuation that can WRAP a token in prose (``results.csv.``,
+# ``(verified)``, ``green,``, ```green```). Stripped from BOTH ends of a value
+# token before the path-shape / needle tests, so a filename with a trailing period
+# is still recognised as a path (residual 2 — the trailing ``.`` moved the
+# extension off ``_PATH_SHAPED_TOKEN_RE``'s ``$`` anchor and re-opened the
+# b8148f86 hole) and a real verdict word with trailing punctuation still evidences.
+_WRAP_PUNCT = ".,;:!?()[]{}\"'`"
+
 
 def _is_path_key(key: str) -> bool:
     """True when *key* names a filesystem-path field (segment-equality)."""
     return any(seg in _PATH_KEY_SEGMENTS for seg in re.split(r"[._\-]", key.lower()))
+
+
+def _key_evidences_needle(key: str, out: set[str]) -> None:
+    """Add each needle a boolean-True schema KEY names, by SEGMENT equality.
+
+    A verdict is a whole ``[._- ]``-delimited SEGMENT of the field name — so a
+    positive compound key (``canary_verified``) evidences its stem while a NEGATED
+    field (``unverified``) does NOT (residual 1, key side): the old ``needle in
+    kl`` substring test let ``unverified`` vouch for ``verified``. Segment equality
+    is the sanctioned token-exact pattern (cf. the provenance gate's
+    ``_prior_nudge_named``), not a growing list of negation prefixes.
+    """
+    segments = set(re.split(r"[._\- ]+", key.lower()))
+    for needle in _VERIFICATION_NEEDLE.values():
+        if needle in segments:
+            out.add(needle)
+
+
+def _value_token_evidences_needle(tok: str, out: set[str]) -> None:
+    """Add the needle a FREE-TEXT value TOKEN evidences, if any (exact, not substring).
+
+    A verification verdict is a BARE word (``verified`` / ``green``): the token,
+    stripped of wrapping punctuation, must EQUAL the needle. Exact-not-substring is
+    the ONE fix that closes the value-side laundering trio without a per-case
+    carve-out list:
+
+    * a NEGATED word (``unverified``) no longer vouches for its positive stem
+      (residual 1) — it is simply not equal;
+    * a plain NON-path label (``model-verified-v2``) that merely CONTAINS the word
+      no longer vouches (residual 3, the value-scan false NEGATIVE) — the b8148f86
+      path-shaped guard never touched it because it has no ``/`` or extension;
+    * a path/filename token, tested AFTER the punctuation strip, is still dropped —
+      so a trailing-period filename (``green_run.json.``) stays excluded (residual 2)
+      rather than leaking the needle as an incidental substring.
+
+    A genuine bare verdict with trailing punctuation (``verified.``) still evidences,
+    because the strip normalises it before the equality test — so the fix removes
+    false NEGATIVES only and never starts flagging a truthful ``verified`` relay.
+    """
+    core = tok.strip(_WRAP_PUNCT)
+    if not core or _PATH_SHAPED_TOKEN_RE.search(core):
+        return  # empty after strip, or a filesystem path fragment — never a verdict
+    cl = core.lower()
+    for needle in _VERIFICATION_NEEDLE.values():
+        if cl == needle:
+            out.add(needle)
 
 
 def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
@@ -778,12 +832,14 @@ def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
     dead once any S2 brief existed: a persisted brief serializes the KEY
     ``"verified"`` regardless of its boolean value, so ``'run-1 is verified'``
     audited clean even after a FAILED canary (bug-sweep #12). A needle counts
-    only value-semantically:
+    only value-semantically, and each side is matched TOKEN-EXACT (not substring):
 
-    * some STRING value contains it (``evidence_digest={"canary": "green"}``
-      evidences ``green``); or
-    * a KEY containing it maps to boolean ``True`` (``verified: true`` evidences
-      ``verified``; ``verified: false`` must NOT).
+    * some STRING value has a TOKEN equal to it, punctuation-stripped
+      (``evidence_digest={"canary": "green"}`` evidences ``green``;
+      :func:`_value_token_evidences_needle`); or
+    * a KEY with a SEGMENT equal to it maps to boolean ``True`` (``verified: true``
+      / ``canary_verified: true`` evidences ``verified``; ``verified: false`` and a
+      negated ``unverified: true`` must NOT; :func:`_key_evidences_needle`).
 
     Value-semantic ALSO means PATH-valued fields don't count (run-13 latent): a
     string that is a filesystem path is never a verification verdict, but a path
@@ -793,9 +849,17 @@ def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
     NEGATIVE that survives a fabricated ``verified`` / ``canary green`` relay.
     Path values are excluded two ways, mirroring the tokenizer-precision work in
     ``539c1cdc``: a path-valued KEY (:func:`_is_path_key`) is skipped whole, and
-    within any string VALUE each path-SHAPED token (:data:`_PATH_SHAPED_TOKEN_RE`)
-    is dropped before the needle test — so a genuine verdict word sitting beside
-    a path in the same free-text value still counts.
+    within any string VALUE each path-SHAPED token (:data:`_PATH_SHAPED_TOKEN_RE`,
+    tested after the wrapping-punctuation strip so ``results.csv.`` still counts as
+    a path) is dropped before the needle test — so a genuine verdict word sitting
+    beside a path in the same free-text value still counts.
+
+    The token-EXACT matching (over the pre-fix substring ``needle in ...``) closes
+    three residual laundering channels at once — a negated superstring
+    (``unverified``), an embedded non-path label (``model-verified-v2``), and a
+    trailing-punctuation filename (``results.csv.``) — while the punctuation strip
+    keeps every truthful bare verdict (``verified`` / ``green`` / ``verified.``)
+    evidencing, so the change only removes false negatives.
     """
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -804,10 +868,7 @@ def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
                 # verification verdict. Skip the whole subtree.
                 continue
             if isinstance(k, str) and v is True:
-                kl = k.lower()
-                for needle in _VERIFICATION_NEEDLE.values():
-                    if needle in kl:
-                        out.add(needle)
+                _key_evidences_needle(k, out)
             _collect_verification_evidence(v, out)
         return
     if isinstance(obj, (list, tuple)):
@@ -816,12 +877,7 @@ def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
         return
     if isinstance(obj, str):
         for tok in obj.split():
-            if _PATH_SHAPED_TOKEN_RE.search(tok):
-                continue  # a filesystem path fragment, never a verdict
-            tl = tok.lower()
-            for needle in _VERIFICATION_NEEDLE.values():
-                if needle in tl:
-                    out.add(needle)
+            _value_token_evidences_needle(tok, out)
 
 
 def _classify_state(

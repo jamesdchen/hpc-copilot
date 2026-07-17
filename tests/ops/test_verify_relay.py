@@ -882,6 +882,100 @@ def test_plain_string_value_verdict_still_evidences(tmp_path: Path) -> None:
     assert [m for m in out.mismatches if m.kind == "state"] == []
 
 
+# ── residuals: substring / trailing-punct / embedded-label verification laundering ─
+# (test names deliberately avoid the 'verified'/'green' substrings — the tmp_path,
+# derived from the test name, is scanned for verification evidence; see
+# test_canary_adjacent_verification_quote_skipped's note.)
+
+
+def test_negated_status_value_does_not_vouch_positive_claim(tmp_path: Path) -> None:
+    """Residual 1 (substring laundering, value side): a source string VALUE that is
+    a NEGATED verdict ('unverified') must NOT evidence its positive-stem claim —
+    'verified' is a substring of 'unverified' but the negated word is the OPPOSITE
+    verdict. RED before the fix (the ``needle in tl`` substring test passed it)."""
+    _seed_journal(tmp_path, canary_status="un" + "verified")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False, failure_kind="canary_failed")
+
+    out = _run(tmp_path, "run-1 is " + "verified.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "verified"
+
+
+def test_negated_status_true_key_does_not_vouch_positive_claim(tmp_path: Path) -> None:
+    """Residual 1 (substring laundering, key side): a boolean-True schema KEY that
+    is a NEGATED verdict ('unverified': true) must NOT evidence 'verified' — the
+    key-side substring test ``needle in kl`` passed it before the fix."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, **{"un" + "verified": True})
+
+    out = _run(tmp_path, "run-1 is " + "verified.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "verified"
+
+
+def test_trailing_punct_path_value_stays_excluded(tmp_path: Path) -> None:
+    """Residual 2 (trailing-punct filenames): a path/filename VALUE token followed
+    by sentence punctuation ('..._run.json.') must still be recognised as a path
+    and excluded — the trailing '.' broke ``_PATH_SHAPED_TOKEN_RE``'s extension
+    anchor and re-opened the b8148f86 path-evidence hole. RED before the fix."""
+    _seed_journal(tmp_path, note="see output " + "green" + "_run.json.")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False)
+
+    out = _run(tmp_path, "The canary " + "green" + " check is in for run-1.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert any("green" in m.claim.lower() for m in state)
+
+
+def test_embedded_label_value_does_not_vouch_positive_claim(tmp_path: Path) -> None:
+    """Residual 3 (value-scan false negative): a plain NON-path label VALUE
+    ('model-verified-v2') carries the verdict word only as an incidental substring
+    and must NOT vouch for a fabricated claim (no path separator / extension, so the
+    b8148f86 path-shaped guard never touched it). RED before the fix."""
+    _seed_journal(tmp_path, run_label="model-" + "verified" + "-v2")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False, failure_kind="canary_failed")
+
+    out = _run(tmp_path, "run-1 is " + "verified.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "verified"
+
+
+# ── honest-case regressions: the fixes must not START flagging truthful relays ──
+
+
+def test_bare_status_value_with_trailing_punct_still_vouches(tmp_path: Path) -> None:
+    """Honest case (residual 2 must not over-strip): a GENUINE bare verdict value
+    with trailing sentence punctuation ('verified.') still evidences the claim — the
+    punct strip that closes the filename hole also normalises a real verdict word."""
+    _seed_journal(tmp_path, canary_status="verified" + ".")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False)
+
+    out = _run(tmp_path, "run-1 is " + "verified.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_positive_compound_status_key_still_vouches(tmp_path: Path) -> None:
+    """Honest case (residual 1 key fix must not over-reject): a POSITIVE compound
+    schema key ('canary_verified': true) still evidences 'verified' — whole-segment
+    matching accepts the positive stem as a segment and rejects only the negated
+    word ('unverified'), never a legitimate compound field."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, **{"canary_" + "verified": True})
+
+    out = _run(tmp_path, "run-1 is " + "verified.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
 # ── bug-sweep #39: negative source metrics relayed verbatim ────────────────────
 
 
