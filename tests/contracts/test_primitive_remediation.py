@@ -88,6 +88,8 @@ def _verb_from_schema_path(path: Path) -> str:
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
         "aggregate-stream",
+        "extract-recipe",
+        "settle-aggregate",
         "migrate-remainder",
         "notebook-draft",
         "challenge-status",

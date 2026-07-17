@@ -105,6 +105,7 @@ def _run_bash(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
 
 
@@ -199,7 +200,10 @@ def _sq(s: str) -> str:
 def _bash_available() -> bool:
     try:
         return (
-            subprocess.run(["bash", "-c", "true"], capture_output=True, check=False).returncode == 0
+            subprocess.run(
+                ["bash", "-c", "true"], capture_output=True, check=False, timeout=30
+            ).returncode
+            == 0
         )
     except (OSError, ValueError):
         return False
