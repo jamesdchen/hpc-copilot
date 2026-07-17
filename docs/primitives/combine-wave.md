@@ -4,7 +4,7 @@ verb: mutate
 side_effects:
 - ssh: <cluster>
 - runs: cluster-side combiner (python3 .hpc/_hpc_combiner.py)
-- writes-cluster: <output_dir>/_combiner/wave_<N>.json
+- writes-cluster: <output_dir>/_combiner/<run_id>/wave_<N>.json
 - writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)
 idempotent: true
 idempotency_key: (run_id, wave)

@@ -135,7 +135,8 @@
             "dossier",
             "run",
             "fingerprint",
-            "attestation"
+            "attestation",
+            "recipe"
           ],
           "title": "Kind",
           "type": "string"
@@ -212,7 +213,8 @@
             "dossier",
             "run",
             "fingerprint",
-            "attestation"
+            "attestation",
+            "recipe"
           ],
           "title": "Kind",
           "type": "string"

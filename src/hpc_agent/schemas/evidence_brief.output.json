@@ -154,7 +154,8 @@
             "dossier",
             "run",
             "fingerprint",
-            "attestation"
+            "attestation",
+            "recipe"
           ],
           "title": "Kind",
           "type": "string"
