@@ -147,24 +147,29 @@ def test_bare_import_does_not_load_pathlib() -> None:
     ``__init__`` reds this. Subprocess-isolated so a sibling test that imported
     ``pathlib`` earlier can't mask the regression (base CPython does not preload it).
     """
-    code = "import sys; import hpc_agent; print('pathlib' in sys.modules)"
-    # Scrub coverage's subprocess-start hook: under `pytest --cov` the child
-    # runs `coverage.process_startup()` at interpreter init, and coverage
-    # imports `pathlib`, polluting sys.modules before `import hpc_agent` runs
-    # (the c41c7d24 3.12-with-coverage red — local runs have no --cov).
-    child_env = {
-        k: v for k, v in os.environ.items() if not (k.startswith("COV") or k == "PYTHONSTARTUP")
-    }
+    # CLEAR pathlib from the child's sys.modules BEFORE `import hpc_agent`, then
+    # assert the import does not put it back. Under `pytest --cov` the coverage
+    # ``process_startup`` .pth runs ``import coverage`` at EVERY interpreter start
+    # (env-independent — scrubbing COVERAGE_PROCESS_START does not stop it), and
+    # coverage imports pathlib; popping it first isolates hpc_agent's own import
+    # graph so the measurement is immune to the harness (the c41c7d24 /
+    # 26ec0829 3.12-with-coverage reds). Local runs have no .pth and pop nothing.
+    code = (
+        "import sys\n"
+        "for _k in [k for k in list(sys.modules) if k == 'pathlib' or k.startswith('pathlib.')]:\n"
+        "    del sys.modules[_k]\n"
+        "import hpc_agent\n"
+        "print(any(k == 'pathlib' or k.startswith('pathlib.') for k in sys.modules))\n"
+    )
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         check=True,
         timeout=60,
-        env=child_env,
     )
     assert proc.stdout.strip() == "False", (
-        "bare `import hpc_agent` eagerly loaded pathlib — the root __init__ must "
+        "`import hpc_agent` imported pathlib — the root __init__ must "
         f"stay pathlib-free (hook-floor unit, 2026-07-17). stderr:\n{proc.stderr}"
     )
 

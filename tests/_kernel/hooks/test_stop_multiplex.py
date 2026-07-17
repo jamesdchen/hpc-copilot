@@ -281,21 +281,25 @@ def test_noop_turn_does_not_import_pathlib(tmp_path: Path) -> None:
     the root ``__init__`` reds this."""
     cwd = tmp_path / "proj"
     cwd.mkdir()
+    # CLEAR pathlib from the child's sys.modules BEFORE the hook import + run,
+    # then assert the no-op turn does not put it back. Under `pytest --cov` the
+    # coverage ``process_startup`` .pth runs ``import coverage`` at EVERY
+    # interpreter start (env-independent), and coverage imports pathlib; popping
+    # it first isolates the hook path's own import graph (the c41c7d24 /
+    # 26ec0829 3.12-with-coverage reds). Local runs have no .pth and pop nothing.
     script = (
         "import sys, json\n"
+        "for _k in [k for k in list(sys.modules) if k == 'pathlib' or k.startswith('pathlib.')]:\n"
+        "    del sys.modules[_k]\n"
         "from hpc_agent._kernel.hooks import stop_multiplex as m\n"
         f"rc = m.main({list(_GUARDS)!r})\n"
-        "print(json.dumps({'rc': rc, 'pathlib': 'pathlib' in sys.modules}))\n"
+        "pl = any(k == 'pathlib' or k.startswith('pathlib.') for k in sys.modules)\n"
+        "print(json.dumps({'rc': rc, 'pathlib': pl}))\n"
     )
-    # Scrub coverage's subprocess-start hook: under `pytest --cov` the child
-    # would run `coverage.process_startup()` at interpreter init, and coverage
-    # itself imports `pathlib` — polluting the child's sys.modules BEFORE our
-    # code runs and false-failing this measurement (the c41c7d24 3.12-with-
-    # coverage red; local runs have no --cov so never saw it).
     env = {
-        k: v for k, v in _os_environ().items() if not (k.startswith("COV") or k == "PYTHONSTARTUP")
+        **_os_environ(),
+        "HPC_JOURNAL_DIR": str(tmp_path / "_no_home"),
     }
-    env["HPC_JOURNAL_DIR"] = str(tmp_path / "_no_home")
     proc = subprocess.run(
         [sys.executable, "-c", script],
         input=json.dumps({"cwd": str(cwd)}).encode("utf-8"),
