@@ -267,3 +267,9 @@ untouched.)
   ship Option B (two-bucket, `nearest_chain_value` context, zero false-match) as
   v1; gate Option A (label-anchored `mismatch`) behind a maintainer ruling as an
   additive v2. No `src/**` change; no regen; no commit.
+
+- 2026-07-17 — **RULED: v1 stands; v2 (the mismatch bucket) DECLINED for now**
+  (user: "I haven't hit this use case yet — overengineering to figure it out
+  now"). The two-bucket contract is the shipped surface; revisit v2 only with
+  real-manuscript evidence that `uncitable + nearest_chain_value` is not
+  pointed enough.
