@@ -79,20 +79,26 @@ def _read_prior_push_manifest(
     exact fail-open shape the folded read reproduces (absent/garbled ``paths`` ->
     empty set) and remains available to any non-delta / older caller.
     """
-    # ``_ssh_bounded`` is defined in the engine package (``__init__``), which
-    # imports THIS module in its re-export block — import it call-time to keep
-    # the package's own initialization free of an import cycle.
-    from hpc_agent.infra.transport import _ssh_bounded
+    # ``_guarded_ssh_bounded`` is defined in the engine package (``__init__``),
+    # which imports THIS module in its re-export block — import it call-time to
+    # keep the package's own initialization free of an import cycle. U5
+    # breaker/slot uniformity: this back-compat reader rides the breaker + slot
+    # like every other dial (was a bare ``_ssh_bounded`` — AUDIT §6 un-guarded).
+    from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
+    from hpc_agent.infra.transport import _guarded_ssh_bounded
 
     quoted = shlex.quote(f"{remote_path.rstrip('/')}/{_PUSH_MANIFEST_REL}")
     try:
-        proc = _ssh_bounded(
+        proc = _guarded_ssh_bounded(
             ssh_target,
             f"cat {quoted} 2>/dev/null",
             timeout=timeout,
             what=f"read push manifest of {remote_path}",
         )
-    except (TimeoutError, OSError):
+    except (TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        # A breaker-open / slot give-up degrades to the SAME empty-set contract
+        # as any other read problem: an unprovable manifest routes every remote
+        # extra to the ANOMALY branch (never deleted) — fail-open preserved.
         return set()
     raw = (getattr(proc, "stdout", "") or "").strip()
     if not raw:
@@ -163,10 +169,13 @@ def _write_push_manifest(
     the tree re-hashes), never breaks this push. Runs stdlib-only ``python3`` — the
     same interpreter the delta path already required to hash the remote tree.
     """
-    # ``_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``) are both
-    # re-exported by the package; import them call-time so this module never
-    # depends on the engine at its own import time (no cycle).
-    from hpc_agent.infra.transport import _pkg_version, _ssh_bounded
+    # ``_guarded_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``)
+    # are both re-exported by the package; import them call-time so this module
+    # never depends on the engine at its own import time (no cycle). U5
+    # breaker/slot uniformity: the checkpoint/seal write rides the breaker + slot
+    # like every other dial (was a bare ``_ssh_bounded`` — AUDIT §6 un-guarded).
+    from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
+    from hpc_agent.infra.transport import _guarded_ssh_bounded, _pkg_version
 
     payload = json.dumps(
         {
@@ -182,8 +191,12 @@ def _write_push_manifest(
         f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(merge_b64)} | base64 -d | "
         f"HPC_PM_PAYLOAD={shlex.quote(payload_b64)} python3"
     )
-    with contextlib.suppress(TimeoutError, OSError):
-        _ssh_bounded(
+    # Fail-open (unchanged): a breaker-open (SshCircuitOpen) or slot-wait give-up
+    # (SshSlotWaitTimeout) degrades to the SAME skip as a TimeoutError/OSError —
+    # a lost checkpoint/seal only lags the NEXT push's prune ability + cache
+    # (extras degrade to anomalies, the tree re-hashes), never a new raise.
+    with contextlib.suppress(TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        _guarded_ssh_bounded(
             ssh_target,
             cmd,
             timeout=timeout,
@@ -278,10 +291,13 @@ def _prune_and_reseal(
     anomaly). Base64-piped so no path needs shell quoting. Rides the same dial
     discipline as the writer it replaces (no new cold SSH).
     """
-    # ``_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``) are both
-    # re-exported by the package; import them call-time so this module never
-    # depends on the engine at its own import time (no cycle).
-    from hpc_agent.infra.transport import _pkg_version, _ssh_bounded
+    # ``_guarded_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``)
+    # are both re-exported by the package; import them call-time so this module
+    # never depends on the engine at its own import time (no cycle). U5
+    # breaker/slot uniformity: the prune+reseal tail rides the breaker + slot
+    # like every other dial (was a bare ``_ssh_bounded`` — AUDIT §6 un-guarded).
+    from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
+    from hpc_agent.infra.transport import _guarded_ssh_bounded, _pkg_version
 
     payload = json.dumps(
         {
@@ -298,8 +314,13 @@ def _prune_and_reseal(
         f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(reseal_b64)} | base64 -d | "
         f"HPC_PM_PAYLOAD={shlex.quote(payload_b64)} python3"
     )
-    with contextlib.suppress(TimeoutError, OSError):
-        _ssh_bounded(
+    # Fail-open (Invariant 2, unchanged): a breaker-open (SshCircuitOpen) or a
+    # slot-wait give-up (SshSlotWaitTimeout) degrades to the SAME skip as a
+    # TimeoutError/OSError — a skipped prune leaves the extras un-pruned (they
+    # stay manifest-known for the next push) and the manifest lag re-derives from
+    # the live remote hash, never a new raise.
+    with contextlib.suppress(TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        _guarded_ssh_bounded(
             ssh_target,
             cmd,
             timeout=timeout,

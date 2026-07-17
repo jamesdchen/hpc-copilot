@@ -376,6 +376,100 @@ def test_bounded_runner_audit_fires() -> None:
     assert _bounded_runner_audit(good_fn) == (False, True)
 
 
+# --- U5: every standalone transfer-plane dial rides the breaker + slot ----------
+#
+# BR-12 / transport-robustness AUDIT §6/§9 U5. The transfer plane's standalone
+# dials (delta manifest read, push-manifest checkpoints/seal + prune-reseal,
+# run-sidecar ship, deploy manifest) must funnel through ``_guarded_ssh_bounded``
+# — which wraps the bare ``_ssh_bounded`` in ``ssh_circuit.guarded_call`` (the
+# per-host breaker + N=2 slot). The scan below forbids a DIRECT ``_ssh_bounded``
+# call anywhere in the transport package except a named exemption, so a newly
+# added standalone dial that forgets the guard turns this RED. (The bounded-runner
+# discipline — that these funnel through ``run_capture_bounded`` — is the SEPARATE
+# ``test_transport_ssh_sites_route_through_bounded_runner`` above.)
+_TRANSPORT_SSH_FILES: tuple[str, ...] = (
+    "src/hpc_agent/infra/transport/__init__.py",
+    "src/hpc_agent/infra/transport/_delta.py",
+    "src/hpc_agent/infra/transport/_prune.py",
+)
+
+# Functions allowed to call bare ``_ssh_bounded`` directly (breaker exemption).
+# Each cites WHY it needs no ``_guarded_ssh_bounded``. Adding an entry is a
+# reviewed decision; ``test_ssh_bounded_exemptions_still_exist`` forbids a stale one.
+_SSH_BOUNDED_DIRECT_CALLERS_EXEMPT: dict[str, str] = {
+    # The stage-drop probe, the rsync/cp swap, and the pre-clean move all run
+    # INSIDE _tar_ssh_push, which its callers (rsync_push, _deploy_transfer)
+    # invoke UNDER guarded_call — so these legs ride the enclosing per-host slot
+    # the push already holds. Wrapping them again would acquire a SECOND slot
+    # while holding the first: an N=2 self-deadlock (AUDIT §9 U5, DELTA-PUSH §3).
+    "_tar_ssh_push": "stage-swap legs ride the enclosing guarded_call the push holds",
+}
+
+
+def _direct_ssh_bounded_callers(tree: ast.AST) -> set[str]:
+    """Innermost enclosing function name of every DIRECT ``_ssh_bounded(...)``
+    call. A ``functools.partial(_ssh_bounded, ...)`` (how ``_guarded_ssh_bounded``
+    reaches it) is NOT a direct call and is intentionally not flagged."""
+    callers: set[str] = set()
+
+    def _walk(node: ast.AST, fn_name: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                _walk(child, child.name)
+                continue
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "_ssh_bounded"
+            ):
+                callers.add(fn_name)
+            _walk(child, fn_name)
+
+    _walk(tree, "<module>")
+    return callers
+
+
+def _all_transport_direct_callers() -> set[str]:
+    callers: set[str] = set()
+    for rel in _TRANSPORT_SSH_FILES:
+        tree = ast.parse((_REPO_ROOT / rel).read_text(encoding="utf-8"))
+        callers |= _direct_ssh_bounded_callers(tree)
+    return callers
+
+
+def test_transport_ssh_dials_ride_the_breaker_or_are_exempt() -> None:
+    """Every standalone transfer-plane dial rides ``guarded_call`` (via
+    ``_guarded_ssh_bounded``); a DIRECT ``_ssh_bounded`` call is allowed only for
+    a cited breaker exemption (the stage-swap legs under the enclosing guard)."""
+    offenders = sorted(_all_transport_direct_callers() - set(_SSH_BOUNDED_DIRECT_CALLERS_EXEMPT))
+    assert not offenders, (
+        "These transport functions dial bare `_ssh_bounded` OUTSIDE the breaker + "
+        "slot. Route them through `_guarded_ssh_bounded` (U5, AUDIT §6/§9), or add a "
+        "cited entry to _SSH_BOUNDED_DIRECT_CALLERS_EXEMPT explaining why the dial "
+        f"already rides an enclosing guarded_call:\n  {offenders}"
+    )
+
+
+def test_ssh_bounded_exemptions_still_exist() -> None:
+    """No stale breaker exemption: every cited name is still a live direct caller."""
+    live = _all_transport_direct_callers()
+    stale = sorted(set(_SSH_BOUNDED_DIRECT_CALLERS_EXEMPT) - live)
+    assert not stale, (
+        "Stale _SSH_BOUNDED_DIRECT_CALLERS_EXEMPT entries (no longer call "
+        f"_ssh_bounded — remove them):\n  {stale}"
+    )
+
+
+def test_breaker_guard_scan_fires_on_a_planted_unguarded_dial() -> None:
+    """Fire path: a fresh function dialing bare ``_ssh_bounded`` is flagged; the
+    same function reaching it via ``_guarded_ssh_bounded`` is not."""
+    bad = ast.parse("def ship():\n    _ssh_bounded('u@h', 'cat x', timeout=5, what='x')\n")
+    assert _direct_ssh_bounded_callers(bad) == {"ship"}
+
+    good = ast.parse("def ship():\n    _guarded_ssh_bounded('u@h', 'cat x', timeout=5, what='x')\n")
+    assert _direct_ssh_bounded_callers(good) == set()
+
+
 # ── WS-INPROC in-process-eligibility carve-out (enforcement-map row 7) ──────────
 #
 # ``block_drive._IN_PROCESS_ELIGIBLE_VERBS`` names the block verbs a driver span

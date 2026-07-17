@@ -485,10 +485,13 @@ def _remote_push_manifest(
     ``shlex.quote``-d; the snippet is base64 (no shell metacharacters) so no
     source quoting is needed.
     """
-    # ``_ssh_bounded`` is defined in the engine package (``__init__``), which
-    # imports THIS module in its re-export block — import it call-time to keep
-    # the package's own initialization free of an import cycle.
-    from hpc_agent.infra.transport import _ssh_bounded
+    # ``_guarded_ssh_bounded`` is defined in the engine package (``__init__``),
+    # which imports THIS module in its re-export block — import it call-time to
+    # keep the package's own initialization free of an import cycle. U5
+    # breaker/slot uniformity: leg A rides the breaker + slot like every other
+    # dial (it was a bare ``_ssh_bounded`` — AUDIT §6 un-guarded).
+    from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
+    from hpc_agent.infra.transport import _guarded_ssh_bounded
 
     b64 = base64.b64encode(_REMOTE_MANIFEST_SNIPPET.encode("utf-8")).decode("ascii")
     excludes_json = json.dumps([p.rstrip("/") for p in exclude])
@@ -498,13 +501,17 @@ def _remote_push_manifest(
         f"HPC_DELTA_CAP={_DELTA_MANIFEST_FILE_CAP} python3"
     )
     try:
-        proc = _ssh_bounded(
+        proc = _guarded_ssh_bounded(
             ssh_target,
             remote_cmd,
             timeout=timeout,
             what=f"remote hash manifest of {remote_path}",
         )
-    except (TimeoutError, OSError):
+    except (TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        # A breaker-open / slot give-up degrades to the SAME None-on-trouble
+        # contract as a timeout: ``(None, set())`` routes to the full-copy
+        # fallback (disclosed), which then rides its own guarded dial — so an
+        # open breaker still surfaces loud there, never worse than before.
         return None, set()
     raw = getattr(proc, "stdout", "") or ""
     manifest, known = _parse_remote_push_manifest(raw)

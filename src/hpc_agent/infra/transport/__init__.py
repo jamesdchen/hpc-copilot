@@ -42,6 +42,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final
 
+from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
 from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.remote import (
     RSYNC_TIMEOUT_SEC,
@@ -532,6 +533,48 @@ def _ssh_bounded(
             raise TimeoutError(f"{what} on {ssh_target} timed out after {timeout}s") from exc
 
     return run_with_named_pipe_retry(_attempt)
+
+
+def _guarded_ssh_bounded(
+    ssh_target: str,
+    remote_cmd: str,
+    *,
+    timeout: float | None,
+    what: str,
+) -> subprocess.CompletedProcess[str]:
+    """:func:`_ssh_bounded` under the per-host breaker + slot (``guarded_call``).
+
+    U5 breaker/slot uniformity (transport-robustness AUDIT §6/§9). Bare
+    :func:`_ssh_bounded` opens a cold dial that consults NEITHER the circuit
+    breaker NOR the N=2 per-host slot, so the standalone transfer-plane dials —
+    the delta remote-hash/manifest read, the per-batch push-manifest
+    checkpoints + the trailing seal/prune-reseal, the run-sidecar ship, and the
+    deploy-manifest write — each bypassed the ban-hammer protection every other
+    dial rides (AUDIT §6 "these dials bypass the breaker and the slot limiter").
+    This wraps that single attempt in :func:`guarded_call` so a breaker-open
+    fast-fails locally (never a fresh cold connection the intrusion filter would
+    count) and the fleet-wide slot cap holds.
+
+    NOT for the stage-swap legs INSIDE :func:`_tar_ssh_push` (the stage-drop
+    probe, the swap, and :func:`_remote_preclean`): those already run under the
+    enclosing ``guarded_call`` the push holds, so a second wrap would take a
+    SECOND per-host slot while holding the first — an N=2 self-deadlock. They are
+    the named exemption in the breaker-guard contract test; they ride the dial
+    the push already holds (the zero-new-cold-SSH discipline).
+
+    Degradation is the caller's to choose: on a breaker-open the raised
+    :class:`~hpc_agent.errors.SshCircuitOpen` (``retry_safe=False``) or on
+    slot-exhaustion the :class:`~hpc_agent.errors.SshSlotWaitTimeout` propagate
+    exactly like the ``TimeoutError`` the inner dial already raises. A FAIL-OPEN
+    caller catches them beside its existing ``(TimeoutError, OSError)`` and
+    degrades to its documented None/skip; a FAIL-LOUD caller lets them raise —
+    the same typed error its callers already classify from the adjacent
+    qsub/transfer legs.
+    """
+    return guarded_call(
+        ssh_target,
+        functools.partial(_ssh_bounded, ssh_target, remote_cmd, timeout=timeout, what=what),
+    )
 
 
 def _tar_ssh_push(
@@ -1317,13 +1360,26 @@ def _deploy_transfer(*, ssh_target: str, remote_path: str, items: list[_DeployIt
         if _have_rsync():
             _rsync_deploy(ssh_target=ssh_target, remote_path=remote_path, staging=staging)
             return
-        result = _tar_ssh_push(
-            ssh_target=ssh_target,
-            remote_path=remote_path,
-            local_path=staging,
-            exclude=[],
-            delete=False,
-            timeout=SSH_TIMEOUT_SEC,
+        # U5 breaker/slot uniformity: the rsync leg above rides the breaker via
+        # ``_rsync_deploy``'s ``_with_ssh_backoff`` wrap, but this tar|ssh
+        # fallback dial did not — it opened a cold connection with no breaker/slot
+        # consult. Wrap it in ``guarded_call`` exactly as ``rsync_push`` wraps its
+        # own tar fallback (delete=False → no stage-swap legs fire, so this holds
+        # exactly one slot for exactly one dial). FAIL-LOUD: a breaker-open
+        # SshCircuitOpen propagates like the RuntimeError below — the same class
+        # the enclosing deploy/submit flow already classifies (the preceding
+        # ``rsync_push`` would have raised it first on a truly open breaker).
+        result = guarded_call(
+            ssh_target,
+            functools.partial(
+                _tar_ssh_push,
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                local_path=staging,
+                exclude=[],
+                delete=False,
+                timeout=SSH_TIMEOUT_SEC,
+            ),
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -1347,12 +1403,21 @@ def push_run_sidecar(*, ssh_target: str, remote_path: str, run_id: str, content:
     the caller MUST know the sidecar landed before the job runs, or the reporter
     reads a missing file. ``run_id`` is filesystem-validated upstream; quoted
     anyway.
+
+    U5 breaker/slot uniformity: rides the breaker + slot via
+    :func:`_guarded_ssh_bounded`. This is a FAIL-LOUD dial, so a breaker-open
+    :class:`~hpc_agent.errors.SshCircuitOpen` or a
+    :class:`~hpc_agent.errors.SshSlotWaitTimeout` propagates exactly like the
+    ``TimeoutError``/``OSError`` it already raises — the same network-error class
+    the canary-fire caller already classifies from the qsub it fires one leg
+    later (a breaker-open host refuses that qsub too), so the sidecar ship simply
+    surfaces the refusal first instead of dialing behind an open breaker.
     """
     b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
     root = shlex.quote(remote_path.rstrip("/"))
     dst = shlex.quote(f".hpc/runs/{run_id}.json")
     cmd = f"cd {root} && mkdir -p .hpc/runs && printf %s {shlex.quote(b64)} | base64 -d > {dst}"
-    _ssh_bounded(
+    _guarded_ssh_bounded(
         ssh_target,
         cmd,
         timeout=SSH_TIMEOUT_SEC,
@@ -1383,8 +1448,13 @@ def _write_deploy_manifest(*, ssh_target: str, remote_path: str, content: str) -
     root = shlex.quote(remote_path.rstrip("/"))
     dst = shlex.quote(_DEPLOY_MANIFEST_REL)
     cmd = f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(b64)} | base64 -d > {dst}"
-    with contextlib.suppress(TimeoutError, OSError):
-        _ssh_bounded(
+    # U5 breaker/slot uniformity: this fail-open manifest write now rides the
+    # breaker + slot via _guarded_ssh_bounded. A breaker-open (SshCircuitOpen) or
+    # a slot-wait give-up (SshSlotWaitTimeout) degrades to the SAME skip as a
+    # TimeoutError/OSError — a lost manifest write only forces the next deploy to
+    # re-ship as a full cache miss, never a new raise (fail-open preserved).
+    with contextlib.suppress(TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        _guarded_ssh_bounded(
             ssh_target,
             cmd,
             timeout=SSH_TIMEOUT_SEC,
