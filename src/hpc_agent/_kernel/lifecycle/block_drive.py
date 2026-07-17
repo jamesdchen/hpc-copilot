@@ -1549,8 +1549,9 @@ def _compose_approve_hint_for_park(
 ) -> dict[str, Any] | None:
     """Compose the boundary's scoped-consent utterance hint (OFFERED-CONSENT ruling).
 
-    The park-side adapter over the pure :func:`hpc_agent.ops.relay_render.compose_approve_hint`
-    composer: it derives the tokens the composer names — the successor the ``y``
+    The park-side adapter over the pure ``consent_hint.compose_approve_hint``
+    composer (:mod:`hpc_agent._kernel.lifecycle.consent_hint`): it derives the
+    tokens the composer names — the successor the ``y``
     greenlights, the run it is scoped to, the ``@<sha8>`` pin of the materialized
     code-composed spec — from the driver's own park-time products, so the scope the
     approval grants is legible in what the human types.
@@ -1567,7 +1568,7 @@ def _compose_approve_hint_for_park(
     read from the parked block's brief when it carries them. Pure disclosure — no
     validation (the overnight-consent caps gate owns that).
     """
-    from hpc_agent.ops.relay_render import _brief_cluster, compose_approve_hint
+    from hpc_agent._kernel.lifecycle.consent_hint import brief_cluster, compose_approve_hint
 
     target = successor
     if target is None:
@@ -1575,7 +1576,7 @@ def _compose_approve_hint_for_park(
     if not (isinstance(target, str) and target):
         return None
     brief_dict = brief if isinstance(brief, dict) else {}
-    cluster = _brief_cluster(brief_dict)
+    cluster = brief_cluster(brief_dict)
     standing = (workflow or "") == "campaign"
     bounds = brief_dict.get("consent_bounds") if isinstance(brief_dict, dict) else None
     return compose_approve_hint(

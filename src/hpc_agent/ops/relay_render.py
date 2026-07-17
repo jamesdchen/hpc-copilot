@@ -34,6 +34,14 @@ from __future__ import annotations
 
 from typing import Any
 
+# ``compose_approve_hint`` (the OFFERED-CONSENT scoped-utterance composer) lives in
+# ``_kernel.lifecycle.consent_hint`` so its ``_kernel`` caller (the driver park) can
+# reach it without ``_kernel`` importing UP into ``ops`` (the layering + private-
+# cross-package import lints). Re-exported here — a legal DOWNWARD reach — so this
+# relay-verbatim home and its tests keep the
+# ``from hpc_agent.ops.relay_render import compose_approve_hint`` import path.
+from hpc_agent._kernel.lifecycle.consent_hint import compose_approve_hint
+
 __all__ = ["render_relay", "compose_approve_hint"]
 
 # The per-task count keys a record's digested ``summary`` carries (mirrors
@@ -388,157 +396,3 @@ def _render_watch(stage: str, brief: dict[str, Any]) -> str:
         esc = brief.get("escalation_reason") or "no escalation reason"
         return f"{prefix} {lifecycle} ({esc}) — review the evidence brief."
     return ""
-
-
-# ── the scoped-consent hint (OFFERED-CONSENT ruling, 2026-07-16) ────────────────
-#
-# The user ruling: every consent boundary must present a CODE-COMPOSED, ready-to-
-# type consent utterance naming the exact scope tokens (the successor, the run, the
-# code-composed spec's sha pin) plus, for a STANDING consent, its bounds (duration /
-# caps / wake). The human types it (authorship stays human, token-exact bar met by
-# construction); it is NEVER agent-echoed and never a bare `y` with invisible scope.
-# Precedent = the audit-view "To sign: type ..." line
-# (``ops/notebook/audit_view.py::_render_next_actions``), generalized to the
-# block-drive decision boundaries.
-#
-# This is PURE PRESENTATION — a DISPLAY + verification-target, exactly like the
-# audit-view next-actions footer (it is not part of any sha the record binds, and
-# it never edits or auto-fills anything). A bare `y` still works where it works
-# today; the hint ADDS the scoped form, it does not break the plain one.
-
-
-def _sha8(sha: str | None) -> str | None:
-    """The 8-hex display prefix of a full spec sha, or ``None``."""
-    return sha[:8] if isinstance(sha, str) and sha else None
-
-
-def compose_approve_hint(
-    *,
-    workflow: str | None,
-    successor: str | None,
-    run_id: str | None,
-    cluster: str | None = None,
-    next_spec_sha: str | None = None,
-    standing: bool = False,
-    bounds: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Compose the ready-to-type scoped-consent utterance for a parked boundary.
-
-    Derives — MECHANICALLY, deterministically — the exact consent utterance the
-    human types to approve the successor the driver parked before. The scope the
-    ``y`` implicitly grants is made VISIBLE by naming, in the utterance itself:
-
-    * ``successor`` — the block the approval greenlights (``submit-s2`` / … /
-      ``aggregate-run`` / a campaign boundary);
-    * ``run_id`` — the run (or campaign) the approval is scoped to;
-    * ``@<sha8>`` — the 8-hex pin of the CODE-COMPOSED complete successor spec the
-      driver materialized + disclosed at park (run-14 #4 / R3). Naming it makes the
-      utterance a verification-target: "the spec I approved provably equals the spec
-      that executes" (R3 sha-pin) is legible in what the human typed. Absent a
-      materialized sha (a Row-14 composition refusal, or a pre-materialization
-      boundary) the pin is simply omitted — the utterance still names successor+run.
-
-    For a STANDING consent (``standing=True`` — a campaign greenlight authorizing
-    unattended async execution, or an overnight consent) the returned ``line`` also
-    names the *bounds* the standing ``y`` grants: its ``expires_at`` (duration), any
-    ``walltime_cap`` / ``budget_cap`` (spend caps), and whether a wake is armed — so
-    a standing consent is never a bare `y` with invisible, unbounded scope.
-
-    Returns a dict ``{utterance, scope_tokens, line, note, bare_ok, standing}`` or
-    ``None`` when there is nothing scoped to name (no successor or no run_id) — the
-    caller then simply omits the hint (a bare `y` boundary with no successor to pin).
-
-    PURE + DETERMINISTIC: the same (successor, run_id, sha, bounds) always yields the
-    same utterance. No I/O, no clock — the caller supplies every token.
-    """
-    if not (isinstance(successor, str) and successor):
-        return None
-    if not (isinstance(run_id, str) and run_id):
-        return None
-
-    sha8 = _sha8(next_spec_sha)
-    tokens = ["y", successor, run_id]
-    if sha8:
-        tokens.append(f"@{sha8}")
-    utterance = " ".join(tokens)
-
-    scope_tokens: dict[str, Any] = {"response": "y", "next_block": successor, "run_id": run_id}
-    if isinstance(cluster, str) and cluster:
-        scope_tokens["cluster"] = cluster
-    if isinstance(next_spec_sha, str) and next_spec_sha:
-        scope_tokens["next_spec_sha"] = next_spec_sha
-
-    pin_clause = (
-        f" the code-composed {successor} spec (sha {sha8})"
-        if sha8
-        else f" the code-composed {successor} spec"
-    )
-    line = (
-        f'To approve: type  "{utterance}"  — this names the successor ({successor}), '
-        f'the run ({run_id}), and{pin_clause} you are approving. A bare "y" still works.'
-    )
-    note = (
-        "code-composed scoped-consent utterance (OFFERED-CONSENT ruling): display + "
-        "verification-target only. The human types it; nothing auto-fills it. Relay it "
-        "VERBATIM. A bare 'y' remains accepted (backward compat)."
-    )
-
-    result: dict[str, Any] = {
-        "utterance": utterance,
-        "scope_tokens": scope_tokens,
-        "line": line,
-        "note": note,
-        "bare_ok": True,
-        "standing": bool(standing),
-    }
-
-    if standing:
-        bound_clauses, bound_tokens = _standing_bound_clauses(bounds)
-        if bound_tokens:
-            scope_tokens["bounds"] = bound_tokens
-        wf = workflow or ""
-        subject = (
-            "an unattended async campaign" if wf == "campaign" else "unattended overnight advances"
-        )
-        result["line"] = (
-            f'To approve: type  "{utterance}"  — this is a STANDING consent for {subject}. '
-            f"It names the successor ({successor}), the run ({run_id})"
-            + (f", {pin_clause.strip()}" if sha8 else "")
-            + (f", and its bounds ({'; '.join(bound_clauses)})" if bound_clauses else "")
-            + '. A bare "y" still works, but grants the SAME unbounded scope invisibly — '
-            "prefer the scoped form."
-        )
-
-    return result
-
-
-def _standing_bound_clauses(bounds: dict[str, Any] | None) -> tuple[list[str], dict[str, Any]]:
-    """Human clauses + token map for a standing consent's bounds (duration/caps/wake).
-
-    Reads the same fields the overnight-consent caps gate enforces
-    (``ops/overnight.py::assert_consent_hard_caps`` / ``assert_wake_armed``):
-    ``expires_at`` (the morning boundary), ``walltime_cap`` / ``budget_cap`` (the
-    resource ceilings), and a ``wake`` marker. Purely descriptive — it names what the
-    ``y`` grants, it never validates (the gate owns validation).
-    """
-    if not isinstance(bounds, dict):
-        return [], {}
-    clauses: list[str] = []
-    tokens: dict[str, Any] = {}
-    expires = bounds.get("expires_at")
-    if isinstance(expires, str) and expires:
-        clauses.append(f"until {expires}")
-        tokens["expires_at"] = expires
-    walltime = bounds.get("walltime_cap")
-    if isinstance(walltime, (int, float)) and not isinstance(walltime, bool) and walltime > 0:
-        clauses.append(f"≤ {walltime:g} wall-seconds")
-        tokens["walltime_cap"] = walltime
-    budget = bounds.get("budget_cap")
-    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
-        clauses.append(f"≤ {budget:g} budget")
-        tokens["budget_cap"] = budget
-    wake = bounds.get("wake")
-    if wake:
-        clauses.append("wake armed")
-        tokens["wake"] = wake
-    return clauses, tokens
