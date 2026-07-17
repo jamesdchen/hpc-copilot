@@ -1,24 +1,20 @@
-"""Stage-swap atomicity drill — AUDIT rank-3 / U4 (a CONFIRMED OPEN gap).
+"""Stage-swap atomicity drill — AUDIT rank-3 / U4 (primary CLOSED; fallback residual).
 
 AUDIT rank 3 (§4) and §7 'Timeout mid stage-swap `cp -a`': the tar-push stage
-swap is the ONE transfer-plane write with a non-atomic torn-live-tree window. The
-swap is ``cp -a <stage>/. <live>/ && rm -rf <stage>`` — a purely additive MERGE,
-not an atomic rename. A drop mid-`cp -a` leaves a PARTIALLY-merged live tree that
-a concurrent array could import (every other transfer step is atomic temp+rename
-or staged-and-swapped).
+swap was the ONE transfer-plane write with a non-atomic torn-live-tree window.
+U4 (a′, STAGE-SWAP-SEAM-MAP.md) closed it on the PRIMARY path: when the login
+node has rsync (probed for free on the stage-drop leg), the swap is one
+``rsync -a --delete --exclude=<protected> <stage>/ <live>/`` leg — temp+atomic-
+rename per file, the pre-clean folded into ``--delete``, no partial-merge
+window. The first drill pins that closure and must stay GREEN.
 
-The audit rules this closed by step-2 unit U4 (atomic-rename discipline or a
-marker-guarded two-phase commit). Until U4 lands there is a genuine window, so
-this drill asserts the DOCTRINE (the swap has no partial-merge-into-live window)
-and is expected to FAIL. It is marked ``xfail(strict=True)``: when U4 makes the
-swap atomic this test XPASSes, and the strict marker turns that xpass into a hard
-failure — the mechanical signal that the rank-3 gap is closed and this drill
-should be un-xfailed.
-
-The code deliberately uses ``cp -a`` because ``mv`` cannot move a directory onto
-an existing non-empty one (the pre-clean preserves protected paths). So closing
-this is real design work (U4), not a one-line fix — which is exactly why it is a
-tracked xfail rather than an inline TODO.
+The ``cp -a`` merge (:func:`_stage_swap_cmd`) remains as the rsync-ABSENT
+fallback and retains the original torn window there — an ACCEPTED RESIDUAL
+(login nodes overwhelmingly carry rsync; the fallback exists for the
+pathological host; seam-map drift log 2026-07-17). The second drill pins that
+residual as ``xfail(strict=True)``: it XPASSes (hard failure) only if the
+fallback is ever made atomic or deleted — the mechanical signal to retire the
+fallback's residual entry and this xfail together.
 """
 
 from __future__ import annotations
@@ -28,25 +24,39 @@ import pytest
 from hpc_agent.infra import transport
 
 
+def test_primary_stage_swap_has_no_torn_live_tree_window() -> None:
+    """DOCTRINE (U4 closure pin): the PRIMARY swap into the LIVE tree is
+    atomic-per-file — no command that merges file-by-file into the live root
+    via a non-atomic copy.
+    """
+    cmd = transport._stage_swap_rsync_cmd(
+        "/scratch/run/.hpc_stage", "/scratch/run", ["results/", "logs/"]
+    )
+    assert "rsync" in cmd and "--delete" in cmd
+    # The torn window was the non-atomic merge-copy into the live root.
+    merges_into_live = "cp -a" in cmd and "/. " in cmd
+    assert not merges_into_live, (
+        "the PRIMARY stage swap regressed to a file-by-file merge-copy into the "
+        "live tree — the rank-3 torn window U4 closed"
+    )
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "CONFIRMED GAP — AUDIT rank-3 / U4: the stage swap is a non-atomic "
-        "`cp -a <stage>/. <live>/ && rm -rf <stage>` merge, leaving a "
-        "partial-live-tree window a concurrent array could import. Flips to XPASS "
-        "(hard-fail) when U4 lands an atomic-rename / two-phase-commit swap — the "
-        "signal to un-xfail this drill."
+        "ACCEPTED RESIDUAL — AUDIT rank-3 / U4: the rsync-ABSENT fallback swap "
+        "is still the non-atomic `cp -a <stage>/. <live>/ && rm -rf <stage>` "
+        "merge, leaving a partial-live-tree window on hosts without rsync. "
+        "Flips to XPASS (hard-fail) if the fallback is made atomic or deleted — "
+        "the signal to retire this drill."
     ),
 )
-def test_stage_swap_has_no_torn_live_tree_window() -> None:
-    """DOCTRINE: the swap into the LIVE tree must be all-or-nothing — no command
-    that merges file-by-file into the live root (a mid-op drop must never leave a
-    partially-updated tree a concurrent reader can observe).
-    """
+def test_fallback_stage_swap_has_no_torn_live_tree_window() -> None:
+    """The rsync-absent fallback retains the torn window by accepted tradeoff
+    (STAGE-SWAP-SEAM-MAP.md drift log, 2026-07-17)."""
     cmd = transport._stage_swap_cmd("/scratch/run/.hpc_stage", "/scratch/run")
-    # A non-atomic merge-copy directly into the live root is the torn window.
     merges_into_live = "cp -a" in cmd and "/. " in cmd
     assert not merges_into_live, (
-        "stage swap merges into the live tree file-by-file (`cp -a <stage>/. "
-        "<live>/`); a drop mid-copy leaves a partially-merged live tree (rank-3)."
+        "fallback stage swap merges into the live tree file-by-file (`cp -a "
+        "<stage>/. <live>/`); accepted residual on rsync-less hosts."
     )

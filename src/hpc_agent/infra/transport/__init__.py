@@ -315,27 +315,106 @@ def _remote_clean_cmd(remote_path: str, exclude: list[str]) -> str:
     return f"{files_pass} && {dirs_pass}"
 
 
+#: Positive-evidence token the stage-drop leg echoes IFF the login node carries
+#: an ``rsync`` binary (U4 remote-rsync probe, 2026-07-17). Its PRESENCE in that
+#: leg's stdout selects the atomic per-file rsync swap; its ABSENCE — whether
+#: rsync is genuinely missing OR the probe read was truncated by a severed
+#: channel (run-12 finding 24) — falls back CONSERVATIVELY to the ``cp -a``
+#: merge, never a false "rsync present". The token rides the pre-existing
+#: stage-drop round-trip, so the probe costs no new ssh leg.
+_RSYNC_PROBE_TOKEN: Final[str] = "__HPC_REMOTE_RSYNC__"
+
+
+def _stage_drop_probe_cmd(stage_path: str) -> str:
+    """Stage-drop leg (delete=True) that ALSO probes for a remote ``rsync``.
+
+    Rides the pre-existing stage-drop round-trip — no new ssh leg. It drops any
+    stale staging dir from a prior interrupted push and then, only if the drop
+    succeeded, echoes :data:`_RSYNC_PROBE_TOKEN` iff ``command -v rsync`` finds a
+    binary. The ``&& {{ ... || true; }}`` scoping keeps the leg's returncode the
+    ``rm``'s — a real drop failure still surfaces to the caller's ``returncode``
+    check — while making the probe itself never fail the leg (rsync-absent is a
+    normal, expected outcome, not an error). The token rides stdout; the swap
+    tail reads it to pick the atomic rsync swap over the ``cp -a`` fallback.
+    """
+    quoted_stage = shlex.quote(stage_path)
+    token = shlex.quote(_RSYNC_PROBE_TOKEN)
+    return (
+        f"rm -rf {quoted_stage} && "
+        f"{{ command -v rsync >/dev/null 2>&1 && printf %s {token} || true; }}"
+    )
+
+
 def _stage_swap_cmd(stage_path: str, remote_path: str) -> str:
     """Build the remote command that merges the staged tree into the live one.
 
-    The swap must MERGE, not move: the pre-clean deliberately preserves
-    protected paths (``.hpc/templates/``, ``results/``, ...), so the live
-    tree's directories are non-empty on every re-push — and ``mv`` cannot
-    move a directory onto an existing non-empty one (``Directory not
-    empty``, which used to kill every re-push AFTER the pre-clean had
-    already deleted the unprotected files). ``cp -a`` merges into existing
-    directories, preserving modes/times, and is purely additive — a failure
-    mid-copy leaves the staging dir intact (the ``&&`` skips the cleanup)
-    and never deletes anything the bounded clean didn't. The deployed tree
-    is small (the big output dirs are excluded from the push), so the local
-    remote-side copy stays within the same seconds-scale exposure window
-    the same-filesystem move had.
+    The ``cp -a`` FALLBACK swap, used only when the login node has no ``rsync``
+    (the primary is :func:`_stage_swap_rsync_cmd`). The swap must MERGE, not
+    move: the pre-clean deliberately preserves protected paths
+    (``.hpc/templates/``, ``results/``, ...), so the live tree's directories are
+    non-empty on every re-push — and ``mv`` cannot move a directory onto an
+    existing non-empty one (``Directory not empty``, which used to kill every
+    re-push AFTER the pre-clean had already deleted the unprotected files).
+    ``cp -a`` merges into existing directories, preserving modes/times, and is
+    purely additive — a failure mid-copy leaves the staging dir intact (the
+    ``&&`` skips the cleanup) and never deletes anything the bounded clean
+    didn't. The deployed tree is small (the big output dirs are excluded from the
+    push), so the local remote-side copy stays within the same seconds-scale
+    exposure window the same-filesystem move had. Residual torn-FILE hazard: the
+    per-file ``open/truncate/write`` this leg does is NON-atomic, so a concurrent
+    array task can read a half-written file (the U4 rank-3 gap the rsync primary
+    closes) — accepted here only because it is the no-remote-rsync fallback.
     """
     quoted_stage = shlex.quote(stage_path)
     quoted_remote = shlex.quote(remote_path)
     # ``<stage>/.`` copies the staged tree's CONTENTS (dotfiles included)
     # into the live root.
     return f"cp -a {quoted_stage}/. {quoted_remote}/ && rm -rf {quoted_stage}"
+
+
+def _rsync_swap_exclude_flag(pattern: str) -> str:
+    """One ``--exclude=`` flag for the rsync swap, anchored like the pre-clean.
+
+    Mirrors :func:`_remote_clean_cmd` / :func:`_excludes._path_excluded`
+    anchoring so the atomic swap shields EXACTLY the paths the two-leg pre-clean
+    shielded: an internal-slash pattern (``.hpc/templates/``) is anchored to the
+    transfer root with a leading ``/`` (rsync's root-anchor, matching the
+    pre-clean's ``find -path <root>/<pattern>``); a bare name (``results/``,
+    ``*.pyc``) stays unanchored so rsync matches it at any depth (matching the
+    pre-clean's ``find -name``). The trailing ``/`` (directory-only) is preserved.
+    """
+    if "/" in pattern.rstrip("/"):
+        anchored = "/" + pattern.lstrip("/")
+        return f"--exclude={shlex.quote(anchored)}"
+    return f"--exclude={shlex.quote(pattern)}"
+
+
+def _stage_swap_rsync_cmd(stage_path: str, remote_path: str, exclude: list[str]) -> str:
+    """Build the ATOMIC-per-file remote swap: ``rsync -a --delete`` stage → live.
+
+    The PRIMARY swap (U4, 2026-07-17) taken when the login node has ``rsync`` —
+    which it does even when the Windows CLIENT does not, the exact case that
+    routes into this tar fallback at all. This ONE leg folds in the separate
+    pre-clean: rsync's ``--delete`` removes every live file absent from the
+    staged tree, and ``--exclude`` (the same protected set the ``find`` pre-clean
+    pruned — ``results/`` / ``_combiner/`` / ``logs/`` / ``.hpc/templates/`` /
+    the runtime files, anchored by :func:`_rsync_swap_exclude_flag`) shields the
+    protected content from that delete, reproducing the merge contract exactly.
+    Unlike ``cp -a``'s in-place ``open/truncate/write``, rsync writes each file to
+    a temp sibling and atomically renames it into place (the #F20 discipline
+    :func:`_rsync_deploy` already relies on), so a concurrent array task reading
+    the live tree sees the whole old or whole new file, never a torn one — the
+    torn-FILE window the ``cp -a`` swap left open is closed with no consumer
+    change and no marker. Residual A-before-B file ORDERING during the swap is
+    benign and identical to the delta path's ``tar x``. ``<stage>/``'s trailing
+    slash copies the staged tree's CONTENTS (dotfiles included) into the live
+    root, mirroring the ``cp -a <stage>/.`` form.
+    """
+    quoted_stage = shlex.quote(stage_path)
+    quoted_remote = shlex.quote(remote_path)
+    excl_flags = " ".join(_rsync_swap_exclude_flag(pat) for pat in exclude if pat.strip())
+    excl = f"{excl_flags} " if excl_flags else ""
+    return f"rsync -a --delete {excl}{quoted_stage}/ {quoted_remote}/ && rm -rf {quoted_stage}"
 
 
 def _remote_preclean(
@@ -451,13 +530,19 @@ def _tar_ssh_push(
     Implementation: spawn ``tar c`` and ``ssh tar x`` as two Popens
     connected by a pipe; both must exit zero for success.
 
-    ``delete=True`` mirrors rsync's ``--delete``: a remote pre-clean
-    step (see :func:`_remote_clean_cmd`) removes everything under
-    *remote_path* that the *exclude* set does not protect, before the
-    fresh ``tar x`` extract — so stale files cannot survive a re-push.
-    The pre-clean runs as its OWN bounded ssh call ahead of the extract
-    (see :func:`_remote_preclean`) so it can't eat the transfer budget
-    (#173); the extract is then a clean ``mkdir -p && tar x``.
+    ``delete=True`` mirrors rsync's ``--delete`` and is STAGE-THEN-SWAP
+    (run-#10 F-G): the archive extracts into a sibling ``<remote>.hpc_stage``
+    dir first (a failed/timed-out transfer leaves the live tree untouched),
+    and the live tree is touched only AFTER a complete extract. The swap then
+    removes everything under *remote_path* the *exclude* set does not protect
+    and merges the fresh code in. Two shapes, chosen by a zero-cost rsync probe
+    that rides the stage-drop leg (:func:`_stage_drop_probe_cmd`): a login node
+    WITH ``rsync`` takes the atomic per-file :func:`_stage_swap_rsync_cmd`
+    (``rsync -a --delete --exclude=<protected>`` — one leg, temp+atomic-rename
+    per file, no torn window); a node WITHOUT it falls back to the original
+    bounded pre-clean (:func:`_remote_preclean`) + ``cp -a`` merge
+    (:func:`_stage_swap_cmd`). Either swap runs on its OWN bounded ssh call so it
+    can't eat the transfer budget (#173).
     """
     src_dir = str(local_path).rstrip("/\\")
 
@@ -509,16 +594,23 @@ def _tar_ssh_push(
     stage_path = remote_path.rstrip("/") + ".hpc_stage"
     quoted_stage = shlex.quote(stage_path)
     small_timeout = None if timeout is None else min(PRECLEAN_TIMEOUT_SEC, timeout)
+    remote_has_rsync = False
     if delete:
-        # Drop any stale staging dir from a previously interrupted push.
+        # Drop any stale staging dir from a previously interrupted push AND probe
+        # for a login-node rsync on the SAME leg (no new round-trip — see
+        # :func:`_stage_drop_probe_cmd`). The probe rides the drop's stdout.
         pre = _ssh_bounded(
             ssh_target,
-            f"rm -rf {quoted_stage}",
+            _stage_drop_probe_cmd(stage_path),
             timeout=small_timeout,
             what=f"stage-dir drop ({stage_path})",
         )
         if pre.returncode != 0:
             return pre
+        # Positive-evidence read: only the token's PRESENCE flips the swap tail
+        # to the atomic rsync path. A severed/truncated probe read leaves it
+        # absent, so we fall back CONSERVATIVELY to cp -a (never a false rsync).
+        remote_has_rsync = _RSYNC_PROBE_TOKEN in (getattr(pre, "stdout", "") or "")
         ssh_remote_cmd = f"mkdir -p {quoted_stage} && tar x -C {quoted_stage}"
     else:
         # Extract: ``mkdir -p`` (idempotent) + ``tar x``, fed by tar's stdout
@@ -667,12 +759,30 @@ def _tar_ssh_push(
         return transfer
 
     # Stage-then-swap tail (F-G): the transfer landed COMPLETE in the staging
-    # dir; only now touch the live tree. Clean (bounded, excludes protected)
-    # then a merge-copy of the staged tree (see :func:`_stage_swap_cmd` for
-    # why it must MERGE, not ``mv``) — seconds of exposure instead of the
-    # whole transfer. Any failure here returns loud with the staging dir
-    # intact on the remote (the next push drops it), never a half-cleaned
-    # live tree.
+    # dir; only now touch the live tree — seconds of exposure instead of the
+    # whole transfer. Any failure here returns loud with the staging dir intact
+    # on the remote (the next push drops it), never a half-cleaned live tree.
+    if remote_has_rsync:
+        # PRIMARY (U4, 2026-07-17): one atomic-per-file rsync swap FOLDS IN the
+        # pre-clean — ``--delete`` removes stale unprotected live files while
+        # ``--exclude`` shields the protected set (exactly the two-leg pre-clean
+        # semantics), and every file lands via rsync's temp+atomic-rename, so a
+        # concurrent array task never reads a torn file. Net one fewer ssh leg
+        # AND a smaller destructive window than the fallback below.
+        swap = _ssh_bounded(
+            ssh_target,
+            _stage_swap_rsync_cmd(stage_path, remote_path, exclude),
+            timeout=small_timeout,
+            what=f"stage swap (rsync) into {remote_path}",
+        )
+        if swap.returncode != 0:
+            return swap
+        return transfer
+
+    # FALLBACK (no login-node rsync): the original two legs — a bounded pre-clean
+    # of the live tree (excludes protected) then a merge-copy of the staged tree
+    # (see :func:`_stage_swap_cmd` for why it MERGEs, not ``mv``). The ``cp -a``
+    # leg's per-file write is non-atomic (the accepted residual torn window).
     clean = _remote_preclean(
         ssh_target=ssh_target,
         remote_path=remote_path,

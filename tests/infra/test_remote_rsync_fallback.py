@@ -399,8 +399,11 @@ def test_rsync_push_fallback_delete_true_stages_then_swaps(tmp_path: Path) -> No
     extract lands in a sibling staging dir first; the live tree is touched
     only after a COMPLETE transfer — bounded clean, then a merge-copy swap
     (cp -a merges into the non-empty dirs the pre-clean preserves; mv could
-    not). Four bounded ssh legs, in order: stage drop, extract-into-stage,
-    pre-clean of the live tree, merge+cleanup."""
+    not). This pins the rsync-ABSENT fallback shape (the mocked run returns an
+    empty stdout, so the U4 stage-drop probe finds no ``__HPC_REMOTE_RSYNC__``
+    token and the swap tail takes the cp -a path): four bounded ssh legs, in
+    order — stage drop (carrying the rsync probe), extract-into-stage, pre-clean
+    of the live tree, merge+cleanup."""
     calls = _tar_fallback_run_calls(tmp_path, exclude=[], delete=True)
     assert len(calls) == 4
     drop_cmd = str(calls[0][0][0][-1])
@@ -408,6 +411,9 @@ def test_rsync_push_fallback_delete_true_stages_then_swaps(tmp_path: Path) -> No
     clean_cmd = str(calls[2][0][0][-1])
     move_cmd = str(calls[3][0][0][-1])
     assert "rm -rf /r.hpc_stage" in drop_cmd
+    # U4: the rsync probe rides the stage-drop leg (no extra round-trip).
+    assert "command -v rsync" in drop_cmd
+    assert transport._RSYNC_PROBE_TOKEN in drop_cmd
     assert "tar x -C /r.hpc_stage" in extract_cmd  # NEVER extracts into /r
     assert "rm -rf" not in extract_cmd
     assert "find /r -mindepth 1" in clean_cmd
@@ -453,9 +459,132 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
                 ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
             )
     cmds = [str(c[0][0][-1]) for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
-    # No pre-clean of /r, no merge-swap — the live tree was never touched.
+    # The stage-drop leg carried the U4 rsync probe, but the transfer died
+    # before ANY swap decision was reached.
+    assert any("command -v rsync" in c for c in cmds)
+    # No pre-clean of /r, no cp -a merge, no rsync swap — the live tree was never
+    # touched under EITHER swap shape.
     assert not any("find /r -mindepth 1" in c for c in cmds)
     assert not any("cp -a /r.hpc_stage/. /r/" in c for c in cmds)
+    assert not any("rsync -a --delete" in c for c in cmds)
+
+
+# ── U4 (2026-07-17): remote-side atomic-per-file swap (primary (a′)) ──────────
+#
+# The stage-swap torn-FILE window (AUDIT rank-3): the ``cp -a`` merge writes each
+# file in place (open/truncate/write), so a concurrent array task could import a
+# half-written file. U4 replaces leg-4 with a remote
+# ``rsync -a --delete --exclude=<protected>`` swap when the login node has rsync —
+# temp+atomic-rename per file closes the window and FOLDS the separate pre-clean
+# into rsync's ``--delete`` (one fewer ssh leg). A ``cp -a`` fallback stays for
+# rsync-absent login nodes. The atomic path is selected by a zero-cost probe that
+# rides the stage-drop leg.
+
+
+def _tar_fallback_run_calls_seq(tmp_path: Path, *, exclude: list[str], side_effect):
+    """Run rsync_push in tar-fallback delete=True mode with a per-call
+    ``run_capture_bounded`` side-effect list, returning the (probe-filtered)
+    call list. *side_effect* controls each leg's CompletedProcess — crucially
+    the stage-drop leg's ``stdout``, which carries the U4 rsync probe token."""
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=side_effect) as run_mock,
+        # Force the full-copy path (no remote hash manifest) so the leg sequence
+        # is the stage/extract/swap shape, not the delta batch loop.
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=exclude,
+            delete=True,
+        )
+    return [c for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
+
+
+def test_stage_swap_rsync_cmd_is_atomic_per_file_delete() -> None:
+    """The U4 primary swap builder: ``rsync -a --delete`` from the staged tree
+    into the live root, with the protected set shielded via ``--exclude`` and
+    anchored exactly like the ``find`` pre-clean — internal-slash patterns
+    root-anchored, bare names match-any-depth. No cp -a, no separate find."""
+    cmd = transport._stage_swap_rsync_cmd("/r.hpc_stage", "/r", transport._effective_excludes(None))
+    assert cmd.startswith("rsync -a --delete ")
+    assert " /r.hpc_stage/ /r/ " in cmd  # trailing-slash source => copy CONTENTS
+    assert cmd.endswith("&& rm -rf /r.hpc_stage")
+    # Protected content shielded from --delete (the merge contract).
+    assert "--exclude=results/" in cmd  # bare name — match any depth
+    assert "--exclude=_combiner/" in cmd
+    assert "--exclude=logs/" in cmd
+    assert "--exclude=hpc_agent/" in cmd
+    assert "--exclude=clusters.yaml" in cmd
+    # Internal-slash patterns are ROOT-ANCHORED with a leading / (mirroring the
+    # pre-clean's `find -path <root>/<pattern>`).
+    assert "--exclude=/.hpc/templates/" in cmd
+    assert "--exclude=/.hpc/_hpc_dispatch.py" in cmd
+    # The torn-file window is gone: no in-place merge, no find pre-clean leg.
+    assert "cp -a" not in cmd
+    assert "find " not in cmd
+
+
+def test_rsync_push_fallback_delete_true_atomic_swap_when_remote_has_rsync(
+    tmp_path: Path,
+) -> None:
+    """When the stage-drop probe finds a login-node rsync (its token rides the
+    leg's stdout), the swap tail takes the PRIMARY atomic-per-file path: THREE
+    legs — stage drop, extract-into-stage, one rsync ``--delete`` swap that folds
+    in the pre-clean. No separate find pre-clean, no cp -a."""
+    token = transport._RSYNC_PROBE_TOKEN
+    side_effect = [
+        _ok(stdout=f"{token}\n"),  # leg 1: stage drop — probe finds rsync
+        _ok(),  # leg 2: extract into stage
+        _ok(),  # leg 3: the atomic rsync swap
+    ]
+    calls = _tar_fallback_run_calls_seq(tmp_path, exclude=[], side_effect=side_effect)
+    assert len(calls) == 3  # one fewer leg than the cp -a fallback's four
+    drop_cmd = str(calls[0][0][0][-1])
+    extract_cmd = str(calls[1][0][0][-1])
+    swap_cmd = str(calls[2][0][0][-1])
+    assert "command -v rsync" in drop_cmd
+    assert "tar x -C /r.hpc_stage" in extract_cmd
+    # The swap is the single atomic rsync leg; the pre-clean is FOLDED in.
+    assert "rsync -a --delete" in swap_cmd
+    assert "/r.hpc_stage/ /r/" in swap_cmd
+    assert "rm -rf /r.hpc_stage" in swap_cmd
+    assert "--exclude=results/" in swap_cmd
+    assert "--exclude=/.hpc/templates/" in swap_cmd
+    # No cp -a merge and no standalone find pre-clean anywhere in the sequence.
+    assert not any("cp -a /r.hpc_stage/. /r/" in str(c[0][0][-1]) for c in calls)
+    assert not any("find /r -mindepth 1" in str(c[0][0][-1]) for c in calls)
+    # The swap carries its own bounded (short) timeout, like every stage leg.
+    assert calls[2][1]["timeout_sec"] == transport.PRECLEAN_TIMEOUT_SEC
+
+
+def test_rsync_push_fallback_delete_true_cp_a_when_remote_lacks_rsync(
+    tmp_path: Path,
+) -> None:
+    """When the probe finds NO login-node rsync (empty stdout on the stage-drop
+    leg), the swap tail falls back to today's behavior: FOUR legs — stage drop,
+    extract, find pre-clean, cp -a merge. This is the rsync-absent fallback the
+    seam map requires U4 to preserve unchanged."""
+    side_effect = [_ok(), _ok(), _ok(), _ok()]  # no probe token on leg 1
+    calls = _tar_fallback_run_calls_seq(tmp_path, exclude=[], side_effect=side_effect)
+    assert len(calls) == 4
+    clean_cmd = str(calls[2][0][0][-1])
+    move_cmd = str(calls[3][0][0][-1])
+    assert "find /r -mindepth 1" in clean_cmd  # pre-clean stays a distinct leg
+    assert "cp -a /r.hpc_stage/. /r/" in move_cmd  # unchanged fallback merge
+    assert not any("rsync -a --delete" in str(c[0][0][-1]) for c in calls)
 
 
 def test_tar_fallback_preclean_prunes_output_dirs_even_if_caller_omits_them(
@@ -655,6 +784,46 @@ def test_stage_swap_merges_into_preserved_live_tree(tmp_path: Path) -> None:
     assert (remote / ".hpc" / "templates" / "common" / "hpc_preamble.sh").is_file()
     assert (remote / ".hpc" / "_hpc_dispatch.py").is_file()
     assert (remote / "results" / "out.txt").is_file()
+    assert not stage.exists()
+
+
+_needs_rsync = pytest.mark.skipif(
+    shutil.which("rsync") is None, reason="exercises a real rsync swap on disk"
+)
+
+
+@_needs_posix_shell
+@_needs_rsync
+def test_stage_swap_rsync_merges_and_deletes_on_disk(tmp_path: Path) -> None:
+    """Behavioral proof of the U4 merge contract under the REAL rsync swap: fresh
+    code merges into the preserved live tree, protected content survives the
+    ``--delete``, and stale unprotected code is removed — the same contract the
+    cp -a swap + pre-clean gave, now atomic per file (temp+rename)."""
+    remote = tmp_path / "remote"
+    stage = tmp_path / "remote.hpc_stage"
+    _first_deploy_remote_tree(remote)
+    for rel, content in {".hpc/tasks.py": "new tasks", "src/mod.py": "code v2"}.items():
+        f = stage / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+
+    cmd = transport._stage_swap_rsync_cmd(
+        str(stage), str(remote), transport._effective_excludes(None)
+    )
+    res = _sh(cmd)
+    assert res.returncode == 0, res.stderr
+    # Fresh code merged into the preserved dirs.
+    assert (remote / ".hpc" / "tasks.py").read_text() == "new tasks"
+    assert (remote / "src" / "mod.py").read_text() == "code v2"
+    # Protected content preserved (never --delete'd).
+    assert (remote / ".hpc" / "templates" / "common" / "hpc_preamble.sh").is_file()
+    assert (remote / ".hpc" / "_hpc_dispatch.py").is_file()
+    assert (remote / "results" / "out.txt").is_file()
+    assert (remote / "logs" / "job.o1.1").is_file()
+    assert (remote / "hpc_agent" / "execution" / "mapreduce" / "metrics_io.py").is_file()
+    # Stale unprotected code deleted by --delete (was live, not staged).
+    assert not (remote / "src" / "old_pkg" / "gone.py").exists()
+    # Staging dir consumed by the trailing rm -rf.
     assert not stage.exists()
 
 
