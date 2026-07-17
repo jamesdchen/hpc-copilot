@@ -132,6 +132,35 @@ def test_wheel_sha_present_in_every_fingerprint(tmp_path: Path) -> None:
         assert run["tasks_py_sha"] == f"tsha-{run['run_id']}"
 
 
+def test_wheel_source_prefers_signed_manifest_and_discloses(tmp_path: Path) -> None:
+    from hpc_agent.ops.provenance_manifest import write_provenance_manifest
+
+    _seed_campaign(tmp_path)
+
+    # No manifest yet: the sidecar projection is the disclosed source.
+    r0 = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    assert r0["runs"]
+    for run in r0["runs"]:
+        assert run["hpc_agent_version_source"] == "sidecar"
+        assert run["hpc_agent_version"] == "9.9.9"
+
+    # Write the signed v2 provenance manifest → the wheel sha is now signed.
+    write_provenance_manifest(tmp_path, "camp")
+    r1 = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    for run in r1["runs"]:
+        assert run["hpc_agent_version_source"] == "signed-manifest"
+        assert run["hpc_agent_version"] == "9.9.9"
+
+    # PREFERENCE proof: drift the sidecar AFTER signing; the SIGNED value wins.
+    _sidecar(tmp_path, "exp-good-aaaaaaaa", campaign_id="camp", version="0.0.0-drift")
+    r2 = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    good = next(r for r in r2["runs"] if r["run_id"] == "exp-good-aaaaaaaa")
+    assert good["hpc_agent_version"] == "9.9.9", (
+        "the signed manifest value must win over a drifted sidecar"
+    )
+    assert good["hpc_agent_version_source"] == "signed-manifest"
+
+
 def test_recipe_signature_is_deterministic_over_the_minimal_set(tmp_path: Path) -> None:
     _seed_campaign(tmp_path)
     a = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))

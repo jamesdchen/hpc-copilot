@@ -31,16 +31,33 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign
 
 __all__ = [
+    "KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS",
+    "PROVENANCE_MANIFEST_SCHEMA_VERSION",
     "build_provenance_manifest",
     "manifest_signature",
     "project_run_provenance",
     "provenance_manifest",
+    "verify_provenance_manifest",
     "write_provenance_manifest",
 ]
 
 # Manifest schema version. Bump when the emitted shape changes in a way a
 # consumer (a signer, a diff tool) would need to branch on.
-PROVENANCE_MANIFEST_SCHEMA_VERSION: int = 1
+#
+# v2 (2026-07-17, R3): the wheel sha ``hpc_agent_version`` joins the signed
+# per-run allowlist — so the signature that attests {code, data, env, params}
+# now also covers the code VERSION the directive names. The bump is the
+# read-compat contract: a v1 manifest's signature was computed over the v1
+# field-set and STAYS valid — ``verify_provenance_manifest`` re-hashes the
+# on-disk body AS WRITTEN, and the ``manifest_schema_version`` field in that
+# body tells the verifier which field-set was signed.
+PROVENANCE_MANIFEST_SCHEMA_VERSION: int = 2
+
+# Every manifest schema version this build can still READ and verify. The
+# current writer emits :data:`PROVENANCE_MANIFEST_SCHEMA_VERSION`; the verifier
+# accepts any version in this set (old manifests on disk / clusters must still
+# verify) and REFUSES an unknown/future one rather than silently trusting it.
+KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS: frozenset[int] = frozenset({1, 2})
 
 # Per-run provenance fields lifted verbatim off each sidecar. Kept as an
 # explicit allowlist (not ``**sidecar``) so the manifest is a stable,
@@ -51,6 +68,7 @@ _RUN_PROVENANCE_FIELDS: tuple[str, ...] = (
     "tasks_py_sha",  # code identity
     "data_sha",  # data identity (#222)
     "env_hash",  # resolved-environment identity (#222)
+    "hpc_agent_version",  # the wheel sha — code VERSION identity (R3, v2)
     "cluster",  # cluster key from clusters.yaml
     "profile",  # submission-shape label
     "submitted_at",  # ISO-8601 submit time
@@ -65,8 +83,11 @@ def project_run_provenance(sidecar: dict[str, Any]) -> dict[str, Any]:
     used both by :func:`build_provenance_manifest` (the signable artifact) and
     by the ``trace`` query verb (the derived DAG view), so the two never drift.
     A field the sidecar never recorded is emitted as ``null`` so the shape is
-    uniform across sidecar vintages. Excludes ``run_id`` (the caller already
-    holds the run identity); returns only the fingerprint fields.
+    uniform across sidecar vintages — including ``hpc_agent_version`` (the wheel
+    sha, R3): a sidecar with no recorded version projects an explicit ``null``
+    marker, which is itself part of the signed body (never a silent omission).
+    Excludes ``run_id`` (the caller already holds the run identity); returns only
+    the fingerprint fields.
     """
     return {field: sidecar.get(field) for field in _RUN_PROVENANCE_FIELDS}
 
@@ -82,13 +103,14 @@ def build_provenance_manifest(experiment_dir: Path, campaign_id: str) -> dict[st
     .. code-block:: json
 
         {
-          "manifest_schema_version": 1,
+          "manifest_schema_version": 2,
           "campaign_id": "...",
           "run_count": 2,
           "runs": [
             {"run_id": "...", "cmd_sha": "...", "tasks_py_sha": "...",
-             "data_sha": "...", "env_hash": "...", "cluster": "...",
-             "profile": "...", "submitted_at": "...", "trial_tokens": [...]},
+             "data_sha": "...", "env_hash": "...", "hpc_agent_version": "...",
+             "cluster": "...", "profile": "...", "submitted_at": "...",
+             "trial_tokens": [...]},
             ...
           ]
         }
@@ -96,7 +118,8 @@ def build_provenance_manifest(experiment_dir: Path, campaign_id: str) -> dict[st
     Each run carries its ``run_id`` (the sidecar's identity) plus the
     provenance allowlist; a field the sidecar never recorded is emitted as
     ``null`` so the manifest shape is uniform regardless of when the sidecar
-    was written (v1 sidecars predate ``data_sha``/``env_hash``). The
+    was written (v1 sidecars predate ``data_sha``/``env_hash``; a sidecar with
+    no ``hpc_agent_version`` projects a signed ``null`` wheel-sha marker). The
     ``trial_tokens`` list pairs each task's opaque reconciliation token with
     the run — so a closed-loop result can be traced back to the exact
     {code, data, env, params} it was produced under.
@@ -131,6 +154,37 @@ def manifest_signature(manifest: dict[str, Any]) -> str:
     """
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def verify_provenance_manifest(manifest: dict[str, Any]) -> bool:
+    """Verify a self-attesting on-disk *manifest* — accepting any KNOWN version.
+
+    The read-compat reader (R3). A written manifest carries a top-level
+    ``signature`` over its body (everything except ``signature``). This
+    re-hashes the on-disk body **as written** and compares — so a v1 manifest
+    (no ``hpc_agent_version`` field, signature over the v1 field-set) and a v2
+    manifest (the wheel sha signed in) BOTH verify, because the signed
+    ``manifest_schema_version`` in the body tells the verifier which field-set
+    was hashed. It never re-derives from the sidecars (which would produce the
+    CURRENT version and a different signature); it trusts only the bytes signed.
+
+    Returns ``False`` — never raises — when: *manifest* is not a dict; its
+    ``manifest_schema_version`` is not in
+    :data:`KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS` (an unknown/future bump is
+    REFUSED, not silently trusted); it carries no non-empty ``signature``; or the
+    recomputed signature does not match the stored one (any tampered field —
+    including a flipped ``hpc_agent_version`` or a null-marker turned into a
+    value — breaks the match).
+    """
+    if not isinstance(manifest, dict):
+        return False
+    if manifest.get("manifest_schema_version") not in KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS:
+        return False
+    stored = manifest.get("signature")
+    if not isinstance(stored, str) or not stored:
+        return False
+    body = {k: v for k, v in manifest.items() if k != "signature"}
+    return manifest_signature(body) == stored
 
 
 def write_provenance_manifest(

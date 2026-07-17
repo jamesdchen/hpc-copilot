@@ -289,6 +289,19 @@ disclose. #3/#4 make the recipe portable and citable once it exists.
   `src/**` change lands here; the four §4 proposals are the build queue, #1 buildable
   next session with Task 1 (`_persist_local_aggregate` provenance) as its foundation.
 
+- 2026-07-17 — R3 BUILT (the signable manifest's wheel sha; #1's second
+  Task-1-adjacent fix, closes G4c). `hpc_agent_version` joins
+  `provenance_manifest._RUN_PROVENANCE_FIELDS` and `manifest_schema_version`
+  bumps 1→2, so the signature now covers the code VERSION; an absent sidecar
+  version projects a signed `null` marker (never a silent omission). New
+  `verify_provenance_manifest` re-hashes the on-disk body as written and accepts
+  any KNOWN version (`{1, 2}`), so v1 manifests still verify and an unknown
+  future bump is refused — read-compat is the version-field contract, not a
+  re-derive. `extract-recipe` now PREFERS the signed v2 value over the sidecar
+  projection and discloses which per run (`hpc_agent_version_source`). Rulings
+  R1/R2 unchanged; the `contributing_run_ids` combiner-footer mirror (G4a
+  cluster leg) and proposals #2–#4 remain OUT.
+
 - 2026-07-17 — Task 1 BUILT (`_persist_local_aggregate` gains additive
   `contributing_run_ids`/`piece_cmd_shas`/`hpc_agent_version` sourced from the
   reduce's own `_combiner/wave_*.json` + `_per_task_results/.hpc_cmd_sha`

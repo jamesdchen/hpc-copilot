@@ -18,10 +18,13 @@ definition (``sibling_run_ids`` / ``canary_parent_of``,
 ``ops/monitor/reconcile``), the harvest-receipt ledger
 (``harvest_receipt_exists``, ``ops/monitor/harvest_guard``), the campaign run /
 sidecar finders (``state/index`` + the reduce history), and the signable
-``manifest_signature`` (``ops/provenance_manifest``). The wheel sha is projected
-by THIS verb from each sidecar — the signable provenance manifest's field list is
-NOT extended (R3 held out: no ``manifest_schema_version`` bump, no new manifest
-fields).
+``manifest_signature`` (``ops/provenance_manifest``). Since R3 (v2) the wheel sha
+``hpc_agent_version`` is a SIGNED field of the provenance manifest; when a written,
+signature-verified v2 manifest carries a contributing run, this verb PREFERS that
+signed value over the sidecar projection and discloses which source it used
+(``hpc_agent_version_source`` per run — ``signed-manifest`` vs ``sidecar``), per
+the memo's receipts-chain honesty. Absent a signed source, the sidecar projection
+stands.
 
 It is a PURE projection (the ``run_story`` / ``trace`` posture): no SSH, no
 scheduler, no write, no store. Derived state recomputed from the on-disk records
@@ -64,8 +67,9 @@ RECIPE_SCHEMA_VERSION: int = 1
 
 # The fingerprint fields projected per contributing run — the identity legs the
 # directive names (params/code/data/env/wheel/cluster/profile). ``hpc_agent_version``
-# is projected HERE, off the sidecar, NOT through provenance-manifest (R3: the
-# signable manifest's field list is not extended). NO metric value is among them.
+# defaults to the sidecar projection but is PREFERRED from a verified v2 provenance
+# manifest when one exists (R3 — the wheel sha is now a signed manifest field); the
+# per-run ``hpc_agent_version_source`` discloses which. NO metric value is among them.
 _FINGERPRINT_FIELDS: tuple[str, ...] = (
     "cmd_sha",
     "tasks_py_sha",
@@ -110,12 +114,56 @@ def _run_exists(experiment_dir: Path, run_id: str) -> bool:
     return bool(_safe_sidecar(experiment_dir, run_id))
 
 
+def _signed_wheel(
+    experiment_dir: Path, run_id: str, sidecar: dict[str, Any]
+) -> tuple[bool, str | None]:
+    """The run's wheel sha AS SIGNED by a verified v2+ provenance manifest.
+
+    Returns ``(signed?, value)``. ``signed`` is True ONLY when a written,
+    signature-verified provenance manifest for the run's campaign carries this
+    run with a wheel-sha field (v2 emits ``hpc_agent_version`` even as a signed
+    ``null`` marker; v1 never signed a wheel field, so a v1 entry is NOT a signed
+    source). ``value`` is the signed string, or ``None`` for a signed absent
+    marker. Any absence — no campaign tag, no written manifest, an unverifiable
+    manifest, the run missing — returns ``(False, None)`` so the caller falls
+    back to the sidecar projection. Never raises.
+    """
+    campaign_id = sidecar.get("campaign_id")
+    if not isinstance(campaign_id, str) or not campaign_id:
+        return False, None
+    from hpc_agent._kernel.contract.layout import RepoLayout
+    from hpc_agent.ops.provenance_manifest import verify_provenance_manifest
+
+    safe = campaign_id.replace("/", "_")
+    path = RepoLayout(experiment_dir).hpc / "provenance" / f"{safe}.json"
+    manifest = _read_json(path)
+    if not isinstance(manifest, dict) or not verify_provenance_manifest(manifest):
+        return False, None
+    for entry in manifest.get("runs") or []:
+        if isinstance(entry, dict) and entry.get("run_id") == run_id:
+            if "hpc_agent_version" not in entry:
+                return False, None  # a v1 (pre-wheel-signature) manifest entry
+            wheel = entry.get("hpc_agent_version")
+            return True, (wheel if isinstance(wheel, str) and wheel else None)
+    return False, None
+
+
 def _fingerprint(experiment_dir: Path, run_id: str) -> dict[str, Any]:
-    """Project one run's provenance fingerprint (incl. the wheel sha)."""
+    """Project one run's provenance fingerprint (incl. the wheel sha).
+
+    The wheel sha prefers a verified v2 provenance manifest's SIGNED value over
+    the sidecar projection, disclosing which via ``hpc_agent_version_source``.
+    """
     sidecar = _safe_sidecar(experiment_dir, run_id)
     out: dict[str, Any] = {"run_id": run_id}
     for field in _FINGERPRINT_FIELDS:
         out[field] = sidecar.get(field)
+    signed, signed_wheel = _signed_wheel(experiment_dir, run_id, sidecar)
+    if signed:
+        out["hpc_agent_version"] = signed_wheel
+        out["hpc_agent_version_source"] = "signed-manifest"
+    else:
+        out["hpc_agent_version_source"] = "sidecar"
     return out
 
 

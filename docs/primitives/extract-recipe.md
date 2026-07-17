@@ -29,9 +29,12 @@ supersession `lineage_chain` (`state/scopes`), the canary-family suffix
 definition (`sibling_run_ids` / `canary_parent_of`, `ops/monitor/reconcile`), the
 harvest-receipt ledger (`harvest_receipt_exists`, `ops/monitor/harvest_guard`),
 the campaign run / sidecar finders, and the signable `manifest_signature`
-(`ops/provenance_manifest`). The wheel sha (`hpc_agent_version`) is projected by
-this verb from each sidecar — the signable provenance manifest's field list is
-**not** extended (no `manifest_schema_version` bump, no new manifest fields).
+(`ops/provenance_manifest`). Since R3 (manifest schema v2) the wheel sha
+(`hpc_agent_version`) is a **signed** field of the provenance manifest; when a
+written, signature-verified v2 manifest carries a contributing run, this verb
+**prefers** that signed value over the sidecar projection and discloses which
+source it used per run (`hpc_agent_version_source` — `signed-manifest` vs
+`sidecar`). Absent a signed source, the sidecar projection stands.
 
 Read-only and client-side: no SSH, no scheduler, no write. Derived state,
 recomputed from the on-disk records on every call, so it can never drift from a
@@ -59,9 +62,11 @@ seed reference:
 
 - `minimal_run_ids` — the minimal contributing run-set, after all exclusions.
 - `runs` — one fingerprint per minimal run: `{run_id, cmd_sha, tasks_py_sha,
-  data_sha, data_manifest_sha, env_hash, hpc_agent_version, cluster, profile}` —
-  identity fields only, **no metric value** (the wheel sha the directive names is
-  present on every row).
+  data_sha, data_manifest_sha, env_hash, hpc_agent_version, cluster, profile,
+  hpc_agent_version_source}` — identity fields only, **no metric value** (the
+  wheel sha the directive names is present on every row;
+  `hpc_agent_version_source` discloses whether it came from a `signed-manifest`
+  or the `sidecar`).
 - `excluded` — one `{run_id, reason}` per mechanically-excluded run, where reason
   is `canary` / `superseded` / `dead-end`. Every exclusion is a disclosed,
   countable fact.

@@ -22,10 +22,22 @@ fingerprint, so that given any result you can reconstruct exactly what
 produced it (#222/#312). The manifest is *derived* state: it is
 recomputed from the run sidecars on every call, never a second source
 of truth that can drift. The per-run fields are an explicit allowlist
-(`cmd_sha`, `tasks_py_sha`, `data_sha`, `env_hash`, `cluster`,
-`profile`, `submitted_at`, `trial_tokens`); a field a sidecar never
-recorded is emitted as `null` so the shape is uniform across sidecar
-vintages.
+(`cmd_sha`, `tasks_py_sha`, `data_sha`, `env_hash`,
+`hpc_agent_version`, `cluster`, `profile`, `submitted_at`,
+`trial_tokens`); a field a sidecar never recorded is emitted as `null`
+so the shape is uniform across sidecar vintages.
+
+`hpc_agent_version` (the wheel sha — the code VERSION) joined the signed
+allowlist in **schema v2** (R3): the signature that attests {code, data,
+env, params} now also covers the version of the framework that produced
+the run. A sidecar with no recorded version projects an explicit signed
+`null` marker — never a silent omission. **Read-compat:** a v1 manifest
+(no wheel field) already on disk / a cluster still verifies — its
+signature was computed over the v1 field-set and stays valid;
+`verify_provenance_manifest` re-hashes the on-disk body *as written*, and
+the signed `manifest_schema_version` in that body tells the verifier
+which field-set was hashed. An unknown/future version is refused, not
+silently trusted.
 
 `data_sha` is non-null for runs whose submit spec declared
 `input_datasets` (auto-captured at sidecar-write time, like
