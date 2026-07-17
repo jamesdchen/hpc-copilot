@@ -17,14 +17,15 @@ from typing import Any
 __all__ = ["render_recipe"]
 
 # The fingerprint fields rendered per contributing run, in a fixed order — the
-# identity legs the directive names (params/code/data/env/wheel/cluster). A
-# metric value is NEVER among them.
+# identity legs the directive names (params/code/data/env/env-lock/wheel/cluster).
+# A metric value is NEVER among them.
 _FINGERPRINT_FIELDS: tuple[str, ...] = (
     "cmd_sha",
     "tasks_py_sha",
     "data_sha",
     "data_manifest_sha",
     "env_hash",
+    "env_lock_sha",
     "hpc_agent_version",
     "cluster",
     "profile",

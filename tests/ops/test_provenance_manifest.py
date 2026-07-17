@@ -92,6 +92,8 @@ def test_manifest_projects_only_allowlist(tmp_path: Path) -> None:
         "tasks_py_sha",
         "data_sha",
         "env_hash",
+        "env_lock_sha",
+        "env_lock_status",
         "hpc_agent_version",
         "cluster",
         "profile",
@@ -165,10 +167,12 @@ def test_write_manifest_is_self_attesting(tmp_path: Path) -> None:
 # --- R3 (v2): the wheel sha is a SIGNED manifest field ------------------------
 
 
-def test_schema_version_is_v2() -> None:
-    # The R3 bump: the signable manifest now covers the code VERSION.
-    assert PROVENANCE_MANIFEST_SCHEMA_VERSION == 2
+def test_schema_version_is_v3() -> None:
+    # v2 (R3) signed the code VERSION; v3 (U-ENV1) additionally signs the
+    # resolved-environment lock. Both are KNOWN read-compat versions.
+    assert PROVENANCE_MANIFEST_SCHEMA_VERSION == 3
     assert PROVENANCE_MANIFEST_SCHEMA_VERSION in KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS
+    assert {1, 2, 3} <= set(KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS)
 
 
 def test_wheel_version_is_carried_and_signed(tmp_path: Path) -> None:
@@ -176,7 +180,7 @@ def test_wheel_version_is_carried_and_signed(tmp_path: Path) -> None:
     # tampering with it must break verification (THE point of the unit).
     _write(tmp_path, "20260101-000001-aaaaaaa", campaign_id="camp", hpc_agent_version="1.2.3")
     _, written = write_provenance_manifest(tmp_path, "camp")
-    assert written["manifest_schema_version"] == 2
+    assert written["manifest_schema_version"] == 3
     assert written["runs"][0]["hpc_agent_version"] == "1.2.3"
     assert verify_provenance_manifest(written) is True
 
@@ -198,7 +202,7 @@ def test_absent_wheel_projects_and_signs_an_explicit_null_marker() -> None:
     assert projected["hpc_agent_version"] is None
 
     body = {
-        "manifest_schema_version": 2,
+        "manifest_schema_version": 3,
         "campaign_id": "camp",
         "run_count": 1,
         "runs": [{"run_id": "r", **projected}],
@@ -214,10 +218,75 @@ def test_absent_wheel_projects_and_signs_an_explicit_null_marker() -> None:
     )
 
 
-def test_verify_accepts_a_v1_manifest_and_refuses_an_unknown_version() -> None:
-    # Read-compat: a v1 manifest (no wheel field, signature over the v1 body)
-    # STILL verifies against this v2 build — the signed manifest_schema_version
-    # tells the verifier which field-set was hashed.
+# --- U-ENV1 (v3): the resolved-environment lock is a SIGNED manifest field ----
+
+
+def test_env_lock_fields_are_carried_and_signed(tmp_path: Path) -> None:
+    # env_lock_sha + env_lock_status ride every run entry AND are covered by the
+    # signature — tampering with the sha must break verification (THE point).
+    from hpc_agent.state.env_lock import STATUS_CAPTURED
+    from hpc_agent.state.runs import stamp_run_sidecar_env_lock
+
+    _write(tmp_path, "20260101-000001-aaaaaaa", campaign_id="camp")
+    sha = "e" * 64
+    stamp_run_sidecar_env_lock(
+        tmp_path, "20260101-000001-aaaaaaa", env_lock_sha=sha, env_lock_status=STATUS_CAPTURED
+    )
+    _, written = write_provenance_manifest(tmp_path, "camp")
+    assert written["manifest_schema_version"] == 3
+    assert written["runs"][0]["env_lock_sha"] == sha
+    assert written["runs"][0]["env_lock_status"] == STATUS_CAPTURED
+    assert verify_provenance_manifest(written) is True
+
+    tampered = json.loads(json.dumps(written))
+    tampered["runs"][0]["env_lock_sha"] = "f" * 64
+    assert verify_provenance_manifest(tampered) is False, (
+        "a flipped env_lock_sha must break the signature — the field is signed"
+    )
+
+    # The status is signed too: flipping the capture verdict breaks the sig.
+    tampered2 = json.loads(json.dumps(written))
+    tampered2["runs"][0]["env_lock_status"] = "could_not_capture"
+    assert verify_provenance_manifest(tampered2) is False
+
+
+def test_absent_env_lock_projects_and_signs_explicit_null_markers() -> None:
+    # A sidecar with no captured env lock → explicit ``null`` markers for BOTH
+    # env_lock_sha and env_lock_status (never silent omission), and those nulls
+    # are part of the signed body: turning either into a value breaks the sig.
+    from hpc_agent.ops.provenance_manifest import project_run_provenance
+
+    projected = project_run_provenance({"cmd_sha": "0" * 64})  # no env-lock keys
+    assert projected["env_lock_sha"] is None
+    assert projected["env_lock_status"] is None
+
+    body = {
+        "manifest_schema_version": 3,
+        "campaign_id": "camp",
+        "run_count": 1,
+        "runs": [{"run_id": "r", **projected}],
+    }
+    signed = dict(body)
+    signed["signature"] = manifest_signature(body)
+    assert verify_provenance_manifest(signed) is True
+
+    smuggled_sha = json.loads(json.dumps(signed))
+    smuggled_sha["runs"][0]["env_lock_sha"] = "e" * 64
+    assert verify_provenance_manifest(smuggled_sha) is False, (
+        "the signed null env_lock_sha cannot become a value without breaking the sig"
+    )
+    smuggled_status = json.loads(json.dumps(signed))
+    smuggled_status["runs"][0]["env_lock_status"] = "captured"
+    assert verify_provenance_manifest(smuggled_status) is False, (
+        "the signed null env_lock_status is what makes an absent env sha honest"
+    )
+
+
+def test_verify_accepts_v1_and_v2_manifests_and_refuses_an_unknown_version() -> None:
+    # Read-compat: a v1 manifest (no wheel / env-lock fields) AND a v2 manifest
+    # (wheel signed, no env-lock fields) BOTH still verify against this v3 build —
+    # the signed manifest_schema_version tells the verifier which field-set was
+    # hashed. The version-inside-the-signed-body discipline, pinned for both.
     v1_body = {
         "manifest_schema_version": 1,
         "campaign_id": "legacy",
@@ -240,6 +309,30 @@ def test_verify_accepts_a_v1_manifest_and_refuses_an_unknown_version() -> None:
     v1["signature"] = manifest_signature(v1_body)
     assert verify_provenance_manifest(v1) is True
 
+    # v2: the wheel sha was signed in, but NO env-lock fields existed yet.
+    v2_body = {
+        "manifest_schema_version": 2,
+        "campaign_id": "prev",
+        "run_count": 1,
+        "runs": [
+            {
+                "run_id": "20260101-000001-prev0000",
+                "cmd_sha": "0" * 64,
+                "tasks_py_sha": "1" * 64,
+                "data_sha": None,
+                "env_hash": None,
+                "hpc_agent_version": "2.0.0",
+                "cluster": "hoffman2",
+                "profile": "p",
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "trial_tokens": [],
+            }
+        ],
+    }
+    v2 = dict(v2_body)
+    v2["signature"] = manifest_signature(v2_body)
+    assert verify_provenance_manifest(v2) is True
+
     # A future/unknown bump is REFUSED, not silently trusted.
     future_body = dict(v1_body, manifest_schema_version=999)
     future = dict(future_body)
@@ -247,8 +340,8 @@ def test_verify_accepts_a_v1_manifest_and_refuses_an_unknown_version() -> None:
     assert verify_provenance_manifest(future) is False
 
     # Missing / empty signature → not verifiable.
-    assert verify_provenance_manifest({"manifest_schema_version": 2}) is False
-    assert verify_provenance_manifest({"manifest_schema_version": 2, "signature": ""}) is False
+    assert verify_provenance_manifest({"manifest_schema_version": 3}) is False
+    assert verify_provenance_manifest({"manifest_schema_version": 3, "signature": ""}) is False
 
 
 def test_write_manifest_sanitizes_campaign_in_filename(tmp_path: Path) -> None:

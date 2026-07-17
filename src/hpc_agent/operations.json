@@ -906,7 +906,7 @@
     "output_schema": "extract_recipe.output.json",
     "python": "hpc_agent.ops.extract_recipe.extract_recipe",
     "side_effects": [],
-    "summary": "Walk a citable artifact BACK to its minimal contributing run-set and emit the clean-reproduction recipe: the run-set with canary / superseded / dead-end runs mechanically EXCLUDED (each exclusion disclosed + counted), each run's full provenance fingerprint incl. the wheel sha (hpc_agent_version), a signature over ONLY the minimal set, the runnable re-derivation steps, the receipts chain, and every gap it cannot bridge DISCLOSED. Read-only, no SSH. Seed with exactly one of --run-id / --campaign-id / --aggregate-path. A pack *.csv is an OPAQUE citation — its content is never parsed.",
+    "summary": "Walk a citable artifact BACK to its minimal contributing run-set and emit the clean-reproduction recipe: the run-set with canary / superseded / dead-end runs mechanically EXCLUDED (each exclusion disclosed + counted), each run's full provenance fingerprint incl. the wheel sha (hpc_agent_version) and the resolved-environment lock (env_lock_sha), a signature over ONLY the minimal set, the runnable re-derivation steps, the receipts chain, and every gap it cannot bridge DISCLOSED. Read-only, no SSH. Seed with exactly one of --run-id / --campaign-id / --aggregate-path. A pack *.csv is an OPAQUE citation — its content is never parsed.",
     "verb": "query"
   },
   {

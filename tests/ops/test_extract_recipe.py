@@ -161,6 +161,42 @@ def test_wheel_source_prefers_signed_manifest_and_discloses(tmp_path: Path) -> N
     assert good["hpc_agent_version_source"] == "signed-manifest"
 
 
+def test_env_lock_source_prefers_signed_manifest_and_discloses(tmp_path: Path) -> None:
+    from hpc_agent.ops.provenance_manifest import write_provenance_manifest
+    from hpc_agent.state.env_lock import STATUS_CAPTURED
+    from hpc_agent.state.runs import stamp_run_sidecar_env_lock
+
+    _seed_campaign(tmp_path)
+    # Stamp a captured env lock on the good run BEFORE signing.
+    good_env = "a" * 64
+    stamp_run_sidecar_env_lock(
+        tmp_path, "exp-good-aaaaaaaa", env_lock_sha=good_env, env_lock_status=STATUS_CAPTURED
+    )
+
+    # No manifest yet: the sidecar projection is the disclosed source.
+    r0 = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    good0 = next(r for r in r0["runs"] if r["run_id"] == "exp-good-aaaaaaaa")
+    assert good0["env_lock_sha_source"] == "sidecar"
+    assert good0["env_lock_sha"] == good_env
+
+    # Write the signed v3 provenance manifest → the env lock is now signed.
+    write_provenance_manifest(tmp_path, "camp")
+    r1 = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    good1 = next(r for r in r1["runs"] if r["run_id"] == "exp-good-aaaaaaaa")
+    assert good1["env_lock_sha_source"] == "signed-manifest"
+    assert good1["env_lock_sha"] == good_env
+
+    # PREFERENCE proof: drift the sidecar env lock AFTER signing; the SIGNED wins.
+    _sidecar(tmp_path, "exp-good-aaaaaaaa", campaign_id="camp")  # rewrite → env_lock back to None
+    stamp_run_sidecar_env_lock(
+        tmp_path, "exp-good-aaaaaaaa", env_lock_sha="d" * 64, env_lock_status=STATUS_CAPTURED
+    )
+    r2 = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+    good2 = next(r for r in r2["runs"] if r["run_id"] == "exp-good-aaaaaaaa")
+    assert good2["env_lock_sha"] == good_env, "the signed env lock must win over a drifted sidecar"
+    assert good2["env_lock_sha_source"] == "signed-manifest"
+
+
 def test_recipe_signature_is_deterministic_over_the_minimal_set(tmp_path: Path) -> None:
     _seed_campaign(tmp_path)
     a = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))

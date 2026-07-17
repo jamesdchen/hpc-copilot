@@ -19,12 +19,13 @@ definition (``sibling_run_ids`` / ``canary_parent_of``,
 (``harvest_receipt_exists``, ``ops/monitor/harvest_guard``), the campaign run /
 sidecar finders (``state/index`` + the reduce history), and the signable
 ``manifest_signature`` (``ops/provenance_manifest``). Since R3 (v2) the wheel sha
-``hpc_agent_version`` is a SIGNED field of the provenance manifest; when a written,
-signature-verified v2 manifest carries a contributing run, this verb PREFERS that
+``hpc_agent_version`` — and since U-ENV1 (v3) the resolved-environment lock
+``env_lock_sha`` — are SIGNED fields of the provenance manifest; when a written,
+signature-verified manifest carries a contributing run, this verb PREFERS each
 signed value over the sidecar projection and discloses which source it used
-(``hpc_agent_version_source`` per run — ``signed-manifest`` vs ``sidecar``), per
-the memo's receipts-chain honesty. Absent a signed source, the sidecar projection
-stands.
+(``hpc_agent_version_source`` / ``env_lock_sha_source`` per run — ``signed-manifest``
+vs ``sidecar``), per the memo's receipts-chain honesty. Absent a signed source, the
+sidecar projection stands.
 
 It is a PURE projection (the ``run_story`` / ``trace`` posture): no SSH, no
 scheduler, no write, no store. Derived state recomputed from the on-disk records
@@ -75,20 +76,30 @@ _RECIPE_SEED_FIELD: dict[str, str] = {
 RECIPE_SCHEMA_VERSION: int = 1
 
 # The fingerprint fields projected per contributing run — the identity legs the
-# directive names (params/code/data/env/wheel/cluster/profile). ``hpc_agent_version``
-# defaults to the sidecar projection but is PREFERRED from a verified v2 provenance
-# manifest when one exists (R3 — the wheel sha is now a signed manifest field); the
-# per-run ``hpc_agent_version_source`` discloses which. NO metric value is among them.
+# directive names (params/code/data/env/env-lock/wheel/cluster/profile). Two of
+# them — ``hpc_agent_version`` (the wheel sha, R3) and ``env_lock_sha`` (the
+# resolved-environment lock, U-ENV1/v3) — default to the sidecar projection but
+# are PREFERRED from a verified provenance manifest when one signs them (the
+# signed value beats a drifted sidecar); the per-run ``<field>_source`` discloses
+# which for each. NO metric value is among them.
 _FINGERPRINT_FIELDS: tuple[str, ...] = (
     "cmd_sha",
     "tasks_py_sha",
     "data_sha",
     "data_manifest_sha",
     "env_hash",
+    "env_lock_sha",
     "hpc_agent_version",
     "cluster",
     "profile",
 )
+
+# The fingerprint legs that are SIGNED provenance-manifest fields — each prefers
+# its verified signed value over the sidecar projection, disclosing the source.
+# ``hpc_agent_version`` joined the signed manifest in v2 (R3); ``env_lock_sha`` in
+# v3 (U-ENV1). A manifest whose schema predates a field never signed it, so a
+# too-old entry falls back to the sidecar (handled in :func:`_signed_field`).
+_SIGNED_FINGERPRINT_FIELDS: tuple[str, ...] = ("hpc_agent_version", "env_lock_sha")
 
 
 def _read_json(path: Path) -> Any:
@@ -123,19 +134,21 @@ def _run_exists(experiment_dir: Path, run_id: str) -> bool:
     return bool(_safe_sidecar(experiment_dir, run_id))
 
 
-def _signed_wheel(
-    experiment_dir: Path, run_id: str, sidecar: dict[str, Any]
+def _signed_field(
+    experiment_dir: Path, run_id: str, sidecar: dict[str, Any], field: str
 ) -> tuple[bool, str | None]:
-    """The run's wheel sha AS SIGNED by a verified v2+ provenance manifest.
+    """A run's *field* value AS SIGNED by a verified provenance manifest.
 
+    The one signed-provenance lookup, generalized over the manifest's signed
+    identity legs (``hpc_agent_version``, R3/v2; ``env_lock_sha``, U-ENV1/v3).
     Returns ``(signed?, value)``. ``signed`` is True ONLY when a written,
     signature-verified provenance manifest for the run's campaign carries this
-    run with a wheel-sha field (v2 emits ``hpc_agent_version`` even as a signed
-    ``null`` marker; v1 never signed a wheel field, so a v1 entry is NOT a signed
-    source). ``value`` is the signed string, or ``None`` for a signed absent
-    marker. Any absence — no campaign tag, no written manifest, an unverifiable
-    manifest, the run missing — returns ``(False, None)`` so the caller falls
-    back to the sidecar projection. Never raises.
+    run WITH *field* present (a manifest whose schema predates *field* never
+    signed it — the key is absent — so that entry is NOT a signed source and the
+    caller falls back to the sidecar). ``value`` is the signed string, or
+    ``None`` for a signed absent marker (a signed ``null``). Any absence — no
+    campaign tag, no written manifest, an unverifiable manifest, the run missing
+    — returns ``(False, None)``. Never raises.
     """
     campaign_id = sidecar.get("campaign_id")
     if not isinstance(campaign_id, str) or not campaign_id:
@@ -150,29 +163,32 @@ def _signed_wheel(
         return False, None
     for entry in manifest.get("runs") or []:
         if isinstance(entry, dict) and entry.get("run_id") == run_id:
-            if "hpc_agent_version" not in entry:
-                return False, None  # a v1 (pre-wheel-signature) manifest entry
-            wheel = entry.get("hpc_agent_version")
-            return True, (wheel if isinstance(wheel, str) and wheel else None)
+            if field not in entry:
+                return False, None  # a manifest schema too old to sign this field
+            value = entry.get(field)
+            return True, (value if isinstance(value, str) and value else None)
     return False, None
 
 
 def _fingerprint(experiment_dir: Path, run_id: str) -> dict[str, Any]:
-    """Project one run's provenance fingerprint (incl. the wheel sha).
+    """Project one run's provenance fingerprint (incl. the wheel sha + env lock).
 
-    The wheel sha prefers a verified v2 provenance manifest's SIGNED value over
-    the sidecar projection, disclosing which via ``hpc_agent_version_source``.
+    Each signed leg (:data:`_SIGNED_FINGERPRINT_FIELDS` — ``hpc_agent_version``,
+    ``env_lock_sha``) prefers a verified provenance manifest's SIGNED value over
+    the sidecar projection, disclosing which via a per-field ``<field>_source``
+    (``signed-manifest`` vs ``sidecar``).
     """
     sidecar = _safe_sidecar(experiment_dir, run_id)
     out: dict[str, Any] = {"run_id": run_id}
     for field in _FINGERPRINT_FIELDS:
         out[field] = sidecar.get(field)
-    signed, signed_wheel = _signed_wheel(experiment_dir, run_id, sidecar)
-    if signed:
-        out["hpc_agent_version"] = signed_wheel
-        out["hpc_agent_version_source"] = "signed-manifest"
-    else:
-        out["hpc_agent_version_source"] = "sidecar"
+    for field in _SIGNED_FINGERPRINT_FIELDS:
+        signed, signed_value = _signed_field(experiment_dir, run_id, sidecar, field)
+        if signed:
+            out[field] = signed_value
+            out[f"{field}_source"] = "signed-manifest"
+        else:
+            out[f"{field}_source"] = "sidecar"
     return out
 
 
@@ -424,7 +440,8 @@ def _rederivation_steps(run_ids: list[str], seed_kind: str, seed_ref: str) -> li
             "emit the clean-reproduction recipe: the run-set with canary / "
             "superseded / dead-end runs mechanically EXCLUDED (each exclusion "
             "disclosed + counted), each run's full provenance fingerprint incl. the "
-            "wheel sha (hpc_agent_version), a signature over ONLY the minimal set, "
+            "wheel sha (hpc_agent_version) and the resolved-environment lock "
+            "(env_lock_sha), a signature over ONLY the minimal set, "
             "the runnable re-derivation steps, the receipts chain, and every gap it "
             "cannot bridge DISCLOSED. Read-only, no SSH. Seed with exactly one of "
             "--run-id / --campaign-id / --aggregate-path. A pack *.csv is an OPAQUE "
@@ -443,8 +460,9 @@ def extract_recipe(experiment_dir: Path, *, spec: ExtractRecipeInput) -> dict[st
 
     Resolves the seed to a contributing-run universe, mechanically excludes the
     canary / superseded / dead-end members (each disclosed + counted), projects
-    each kept run's fingerprint (incl. ``hpc_agent_version``), signs ONLY the
-    minimal set, and walks the receipts chain — disclosing every G4 gap it cannot
+    each kept run's fingerprint (incl. ``hpc_agent_version`` + ``env_lock_sha``,
+    each preferring a signed manifest value), signs ONLY the minimal set, and
+    walks the receipts chain — disclosing every G4 gap it cannot
     bridge. Pure derived state, recomputed from disk on every call.
 
     Raises :class:`errors.SpecInvalid` on a bad seed (not exactly one) or an

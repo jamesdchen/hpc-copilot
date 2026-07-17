@@ -26,7 +26,8 @@ _OP_FILE = SRC_DIR / "hpc_agent" / "ops" / "extract_recipe.py"
 _RENDER_FILE = SRC_DIR / "hpc_agent" / "ops" / "recipe_render.py"
 
 # The identity-only fingerprint legs the recipe projects per run — params / code /
-# data / env / the wheel / cluster / profile. A metric name here is the leak.
+# data / env / the env-lock / the wheel / cluster / profile. A metric name here is
+# the leak.
 _IDENTITY_FINGERPRINT = frozenset(
     {
         "cmd_sha",
@@ -34,6 +35,7 @@ _IDENTITY_FINGERPRINT = frozenset(
         "data_sha",
         "data_manifest_sha",
         "env_hash",
+        "env_lock_sha",
         "hpc_agent_version",
         "cluster",
         "profile",

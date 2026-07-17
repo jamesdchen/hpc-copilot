@@ -48,7 +48,7 @@
       "type": "array"
     },
     "runs": {
-      "description": "One fingerprint per minimal run: {run_id, cmd_sha, tasks_py_sha, data_sha, data_manifest_sha, env_hash, hpc_agent_version, cluster, profile} — identity fields only, no metric value.",
+      "description": "One fingerprint per minimal run: {run_id, cmd_sha, tasks_py_sha, data_sha, data_manifest_sha, env_hash, env_lock_sha, hpc_agent_version, cluster, profile} — identity fields only, no metric value. The two signed legs (hpc_agent_version, env_lock_sha) each carry a <field>_source disclosing signed-manifest vs sidecar.",
       "items": {
         "additionalProperties": true,
         "type": "object"

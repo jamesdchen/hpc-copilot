@@ -513,3 +513,32 @@ named per unit.
   docs/design/determinism-fingerprint.md's drift log. The ENVIRONMENT link
   moves ABSENT/weak → DISCLOSED. Built in an isolated worktree, integrated by
   the coordinator.
+
+- 2026-07-17 — **RR4 BUILT: env-lock joins the SIGNED provenance manifest**
+  (schema v2→v3, the ruled-obvious follow-on cited above; MIRRORS the R3
+  wheel-sha precedent at 008198ee exactly). A captured env claim held OUTSIDE
+  the signature can be edited after the fact — the same hole R3 closed for the
+  wheel sha. `env_lock_sha` AND `env_lock_status` join
+  `provenance_manifest._RUN_PROVENANCE_FIELDS` (both belong under the signature:
+  the signed `env_lock_status` is what makes an absent sha an HONEST signed
+  `null` rather than a silent omission); `PROVENANCE_MANIFEST_SCHEMA_VERSION`
+  bumps 2→3, `KNOWN_PROVENANCE_MANIFEST_SCHEMA_VERSIONS` → `{1, 2, 3}`.
+  `verify_provenance_manifest` continues to verify v1 AND v2 manifests unchanged
+  (the version-inside-the-signed-body discipline — re-hash the on-disk body AS
+  WRITTEN, the signed `manifest_schema_version` names the field-set); a
+  tampered/flipped `env_lock_sha` or a null-marker turned into a value breaks the
+  signature. `extract-recipe`'s fingerprint now PREFERS the signed `env_lock_sha`
+  over the sidecar (generalizing R3's `_signed_wheel` → `_signed_field` over
+  `hpc_agent_version` + `env_lock_sha`) and discloses `env_lock_sha_source`
+  (`signed-manifest` vs `sidecar`) per run, mirroring the wheel-sha disclosure;
+  `env_lock_sha` joins the recipe/render/boundary identity fingerprint set. New
+  targeted tests red-then-green: v3 carries+signs both env fields (tamper the sha
+  OR the status → verify False), absent env capture signs the explicit null
+  markers (smuggling either into a value → False), v1+v2 read-compat both verify,
+  extract-recipe prefers-and-discloses the signed env over a drifted sidecar.
+  Gates green: test_provenance_manifest + test_extract_recipe + test_trace +
+  boundary + evidence + cli/aggregate (102 targeted), 26/26 lint gauntlet,
+  regen --check green (build_schemas + bake_operations_json regenerated for the
+  extract-recipe description/help edits — the manifest core owed no schema
+  regen, per the R3 precedent), ruff/format/mypy clean. Built in an isolated
+  worktree, integrated by the coordinator.
