@@ -355,3 +355,24 @@ disclose. #3/#4 make the recipe portable and citable once it exists.
   `reproducibility-program-2026-07-17.md` does not exist in-repo; cite-check is
   filed against THIS program as the natural extension of its G4 gap list.) No
   `src/**` change; no regen; no commit.
+
+- 2026-07-17 — **publication-bundle BUILT** (the program's publication-time
+  deliverable — the single artifact that composes every G4-closing verb). Landed
+  `export-bundle` (`ops/publication_bundle.py`, `verb=mutate`, one local write,
+  no SSH, NOT MCP-curated) as a SIBLING of `export-dossier` (the
+  `export-attestations` precedent): it composes the ONE dossier gather
+  (`compute_dossier_signature` — evidence + the BR-4 recipe, never re-walked), the
+  signed provenance manifest (`build_provenance_manifest` + `manifest_signature`),
+  the cite-check report over the MANUSCRIPT (the last-mile transcription link,
+  disclose-skipped when absent), the in-toto/DSSE attestations, and a top-level
+  code-emitted `VERIFY` manifest (`BUNDLE_SCHEMA_VERSION=1`) classifying each
+  reproducibility link MECHANICAL/DISCLOSED/ABSENT with the union-of-disclosures
+  ledger — all under one `bundle_sha256`. Zero-dep offline verify (unzip → sha
+  each member → recompute the seal) + stock-DSSE round-trip; a tampered member /
+  signed manifest fails. Inherits every disclosure honestly (an opted-out data
+  run classifies the data link DISCLOSED, never MECHANICAL); never overclaims
+  "reproducible". Design + R-B1..R-B5 realized in `docs/design/publication-bundle.md`
+  (see its drift log; the one recipe-member/disjoint reconciliation recorded
+  there). `verify-bundle` (the Layer-3 convenience query) is a noted sibling
+  follow-on. Built in an isolated worktree; regen `--write` clean; left
+  UNCOMMITTED for the coordinator.
