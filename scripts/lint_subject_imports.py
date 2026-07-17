@@ -495,6 +495,12 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("audit_preflight.py", "ops", "recover"),
         ("auto_resume_flow.py", "ops", "recover"),
         ("campaign_refill.py", "meta", "campaign"),
+        # cite-check composes verify-relay's extraction discipline: the number
+        # grammar + faithful-render tolerance + false-positive consumers live in
+        # ops/decision/journal/verify_relay (promoted public helpers, reused
+        # verbatim), so the role-root reach into the decision subject earns an
+        # inventory entry (the composes= is string-name, unresolvable here).
+        ("cite_check.py", "ops", "decision"),
         ("dag_frontier.py", "ops", "validate"),
         # extract-recipe composes the shipped provenance walks: the harvest-receipt
         # ledger + canary-family / lineage helpers live in ops/monitor (functions,

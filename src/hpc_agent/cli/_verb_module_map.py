@@ -39,6 +39,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'campaign-watch': ('campaign-watch', 'hpc_agent.meta.campaign.blocks'),
     'challenge-status': ('challenge-status', 'hpc_agent.ops.challenge_status_op'),
     'check-task-generator-mismatch': ('check-task-generator-mismatch', 'hpc_agent.ops.check_task_generator_mismatch'),
+    'cite-check': ('cite-check', 'hpc_agent.ops.cite_check'),
     'classify-axis': ('classify-axis', 'hpc_agent.incorporation.classify_axis'),
     'classify-axis-auto': ('classify-axis-auto', 'hpc_agent.incorporation.classify_axis_auto'),
     'classify-axis-easy': ('classify-axis-easy', 'hpc_agent.incorporation.classify_axis_easy'),

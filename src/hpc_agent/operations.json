@@ -645,6 +645,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent cite-check --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "cite_check.input.json",
+    "name": "cite-check",
+    "output_schema": "cite_check.output.json",
+    "python": "hpc_agent.ops.cite_check.cite_check",
+    "side_effects": [],
+    "summary": "Audit a manuscript's numbers against a SEALED reduced table: per number, is this digit faithfully transcribed from the sealed mechanical chain? Two buckets — matched (equals a sealed aggregated_metrics value under the faithful-render tolerance) and uncitable (no sealed value backs it, with the nearest sealed value offered as CONTEXT). Reuses verify-relay's number grammar + false-positive discipline (dates, run-ids, page/figure/table/equation refs, citation years, [12] bibliography markers are NOT claims). DISCLOSES, never gates. Read-only, no SSH. Manuscript = one of --manuscript-text / --manuscript-path; seed = exactly one of --run-id / --campaign-id / --aggregate-path. A pack *.csv is OPAQUE (never parsed).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>",
     "idempotent": true,
     "input_schema": null,

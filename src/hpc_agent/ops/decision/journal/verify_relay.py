@@ -2276,3 +2276,26 @@ def verify_notebook_relay(
 _normalize_num = normalize_num
 _match_number = match_number
 _number_word_value = number_word_value
+
+
+# ── Public composition surface (cite-check reuses this extraction discipline) ──
+# ``cite-check`` (``ops/cite_check.py``, a DIFFERENT package) audits a manuscript's
+# numbers against a SEALED value pool, reusing this module's number grammar,
+# pooling, faithful-render tolerance, nearest-value context, and the ISO-date /
+# month-day / size-suffix / run-id-ident / conversational / spelled-cardinal
+# false-positive discipline VERBATIM — imported, never copied. The
+# private-cross-package-import lint requires PUBLIC names for that reuse (the W2
+# promote-don't-reach pattern), so the composition primitives are re-exported here
+# with stable public names. (``match_number`` / ``normalize_num`` /
+# ``number_word_value`` are already public above.)
+NUM_RE = _NUM_RE
+IDENT_RE = _IDENT_RE
+ISO_DATETIME_RE = _ISO_DATETIME_RE
+BARE_MONTH_DAY_RE = _BARE_MONTH_DAY_RE
+SIZE_SUFFIX_RE = _SIZE_SUFFIX_RE
+collect_source_numbers = _collect_source_numbers
+nearest_number = _nearest_number
+extract_number_word_claims = _extract_number_word_claims
+is_conversational_number = _is_conversational_number
+is_run_id_like = _is_run_id_like
+overlaps = _overlaps

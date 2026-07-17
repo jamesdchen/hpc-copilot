@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/cite_check.output.json",
+  "title": "cite-check output data",
+  "description": "The per-number transcription audit — two-bucket disclosure (v1).\n\n``clean`` is False iff any ``uncitable`` finding was surfaced (a ``matched``\nfinding never affects ``clean``). ``claims_checked`` counts every extracted\nnumeric claim that was evaluated (reference numbers — page / figure / table /\nequation / section refs, citation years, bibliography markers — and low-signal\nbare small integers are filtered out before the count, the false-positive\nguard). ``sources_consulted`` honestly lists only the sealed artifacts actually\nread (an absent / opaque artifact yields the empty list, not a fabricated one).",
+  "type": "object",
+  "required": [
+    "clean",
+    "claims_checked",
+    "seed_kind",
+    "seed_ref"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "clean": {
+      "description": "False iff any uncitable finding was surfaced.",
+      "title": "Clean",
+      "type": "boolean"
+    },
+    "claims_checked": {
+      "description": "Count of extracted numeric claims evaluated (references / low-signal filtered).",
+      "minimum": 0,
+      "title": "Claims Checked",
+      "type": "integer"
+    },
+    "findings": {
+      "description": "One entry per evaluated claim that bucketed as matched or uncitable.",
+      "items": {
+        "$ref": "#/$defs/CiteFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "sources_consulted": {
+      "description": "The sealed metrics_aggregate.json artifacts whose values were pooled.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Sources Consulted",
+      "type": "array"
+    },
+    "seed_kind": {
+      "description": "Which seed reference the sealed value pool was resolved from.",
+      "enum": [
+        "run",
+        "campaign",
+        "aggregate"
+      ],
+      "title": "Seed Kind",
+      "type": "string"
+    },
+    "seed_ref": {
+      "description": "The seed's identity / path verbatim.",
+      "title": "Seed Ref",
+      "type": "string"
+    },
+    "markdown": {
+      "default": "",
+      "description": "The code-rendered audit (deterministic; LLM-free render path).",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "CiteFinding": {
+      "additionalProperties": false,
+      "description": "One extracted manuscript number, bucketed against the sealed value pool.\n\n``kind``:\n\n* ``matched`` — the cited number EQUALS a sealed chain value under the\n  faithful-render tolerance (exact / float-equality / pure-truncation-prefix /\n  display round-or-truncate — the ``verify_relay.match_number`` semantics).\n  This digit in the paper IS the sealed table's digit. Reported for\n  auditability; ``clean`` ignores it. ``nearest_chain_value`` is ``None``.\n* ``uncitable`` — the cited number matches no sealed value: \"no chain value\n  backs this digit.\" The honest default — cite-check does NOT guess whether it\n  is a transcription typo or an incidental prose number. ``nearest_chain_value``\n  carries the closest sealed value as CONTEXT (offered, never asserted as an\n  alignment to a specific cell).",
+      "properties": {
+        "claim": {
+          "description": "The number as it appears in the manuscript (its surface form).",
+          "title": "Claim",
+          "type": "string"
+        },
+        "kind": {
+          "description": "matched (equals a sealed value) or uncitable (no sealed value backs it).",
+          "enum": [
+            "matched",
+            "uncitable"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "description": "A one-line disclosure of why the number bucketed as it did.",
+          "title": "Detail",
+          "type": "string"
+        },
+        "nearest_chain_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "On an uncitable finding, the closest sealed value as CONTEXT (never an assertion that the cited number was meant to be it). None on a matched finding.",
+          "title": "Nearest Chain Value"
+        }
+      },
+      "required": [
+        "claim",
+        "kind",
+        "detail"
+      ],
+      "title": "cite-check finding",
+      "type": "object"
+    }
+  }
+}

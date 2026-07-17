@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**174 operations total**: 143 primitive atoms + 31 workflow atoms.
+**175 operations total**: 144 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (78)
+## `query` (79)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -35,6 +35,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`campaign-status`](../primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` | `_(none)_` | — | — |
 | [`capabilities`](../primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities [--full]` | `_(none)_` | — | — |
 | [`challenge-status`](../primitives/challenge-status.md) | ✓ | _none_ | `hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`cite-check`](../primitives/cite-check.md) | ✓ | _none_ | `hpc-agent cite-check --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`classify-axis-easy`](../primitives/classify-axis-easy.md) | ✓ | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` | `_(none)_` | — | — |
 | [`classify-campaign-path`](../primitives/classify-campaign-path.md) | ✓ | _none_ | `hpc-agent classify-campaign-path --source-path <source_path>` | `_(none)_` | — | — |
 | [`clusters-describe`](../primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `_(none)_` | — | — |

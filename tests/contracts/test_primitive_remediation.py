@@ -89,6 +89,12 @@ _SPEC_VERBS: frozenset[str] = frozenset(
     {
         "aggregate-stream",
         "extract-recipe",
+        # cite-check (clean-reproduction extraction, the number → paper transcription
+        # audit): a read-only query over a manuscript + a sealed seed. Spec-taking
+        # ({} is invalid — a manuscript source AND a seed are required), so it appears
+        # in the schema-file-parametrized remediation probes; failure_features attaches
+        # at the shared dispatch seam.
+        "cite-check",
         "settle-aggregate",
         "migrate-remainder",
         "notebook-draft",

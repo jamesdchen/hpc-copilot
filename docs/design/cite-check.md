@@ -1,7 +1,16 @@
 ---
-status: plan
----
-# cite-check — the number → paper transcription audit (DESIGN, build gated on one ruling)
+status: v1-built
+# cite-check — the number → paper transcription audit (v1 BUILT; v2 ruling-gated)
+
+**Status: v1 BUILT (2026-07-17).** The two-bucket shape (Option B — `matched` /
+`uncitable` with `nearest_chain_value` context, zero alignment, zero false-match)
+is SHIPPED: `ops/cite_check.py` + `ops/cite_render.py`, `_wire/queries/cite_check.py`
+(`CiteCheckInput` / `CiteCheckResult` / `CiteFinding`), `schemas/cite_check.{input,output}.json`,
+`docs/primitives/cite-check.md`, and the boundary contract
+`tests/contracts/test_cite_check_boundary.py`. The label-anchored **`mismatch`**
+bucket (Option A) remains **ruling-gated** as the additive v2 (it only reclassifies
+some `uncitable` into `mismatch`; it never changes a `matched`, so v2 lands without
+a schema break). The original DESIGN-STOP record is preserved below.
 
 **Status: DESIGN-STOP (2026-07-17).** The contract, the composed machinery, and
 the false-positive discipline are settled below. The build is **gated on one
@@ -267,6 +276,32 @@ untouched.)
   ship Option B (two-bucket, `nearest_chain_value` context, zero false-match) as
   v1; gate Option A (label-anchored `mismatch`) behind a maintainer ruling as an
   additive v2. No `src/**` change; no regen; no commit.
+- **2026-07-17 — v1 BUILT (Option B).** Shipped the two-bucket audit under the
+  standing recommendation-aligned delegation. `ops/cite_check.py` (role-root,
+  composes `extract_recipe._resolve_seed` + the promoted-public `verify_relay`
+  extraction discipline — `NUM_RE` / `match_number` / `nearest_number` /
+  `collect_source_numbers` / the ISO-date / month-day / size-suffix / run-id-ident /
+  conversational / spelled-cardinal consumers, imported not copied) + `ops/cite_render.py`
+  (LLM-free deterministic markdown). Authority = the sealed `metrics_aggregate.json`
+  `aggregated_metrics` VALUES, read as sealed (per-seed: the run's / the campaign's
+  contributing runs' / the aggregate-path's table; a pack `*.csv` stays OPAQUE, R2 —
+  every number uncitable-against-it). The false-positive guard reuses verify-relay's
+  discipline verbatim PLUS the manuscript-specific reference exclusions (page /
+  figure / table / section / equation / algorithm / theorem refs, citation years,
+  `[12]` bibliography markers, path-embedded digits) and a conservative claim-shape
+  filter (decimals / percentages / comma-grouped / large ints are high-signal; a
+  bare small integer `< 1000` is low-signal and a non-matching one is skipped, so a
+  prose hyperparameter never floods) — the Facet-1 bound, disclosed. DISCLOSE never
+  gate; read-only; NOT MCP-curated (CLI registry only, out of `_CURATED_EXTRA_VERBS`).
+  Boundary pins in `tests/contracts/test_cite_check_boundary.py` (reads the sealed
+  values but never re-derives / never names a metric / no LLM in the render path / no
+  domain-vocab wire field); behaviour + the false-positive battery in
+  `tests/ops/test_cite_check.py`. `_SPEC_VERBS` gained `cite-check`; a sanctioned
+  `lint_subject_imports.ROLE_ROOT_ALLOW` entry (`cite_check.py` → `ops`/`decision`)
+  covers the verify-relay reach (the extract-recipe precedent). regen 8/8, gauntlet
+  26/26, ruff/format/mypy clean. **Option A's label-anchored `mismatch` bucket
+  REMAINS ruling-gated (declined for v1)** — the additive v2 that only reclassifies
+  some `uncitable` into `mismatch`, never touching a `matched`.
 
 - 2026-07-17 — **RULED: v1 stands; v2 (the mismatch bucket) DECLINED for now**
   (user: "I haven't hit this use case yet — overengineering to figure it out

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/cite_check.input.json",
+  "title": "cite-check input spec",
+  "description": "Inputs to ``cite-check`` — a manuscript + exactly one sealed seed.\n\nExactly one of ``manuscript_text`` / ``manuscript_path`` supplies the text\nwhose numeric claims are audited; exactly one of ``run_id`` / ``campaign_id`` /\n``aggregate_path`` names the SEALED artifact whose ``aggregated_metrics`` values\nare the citing authority (the ``extract-recipe`` seed contract, reused verbatim).\nA pack ``*.csv`` seed is accepted only as an OPAQUE citation whose content is\nNEVER parsed (the dossier no-parse boundary) — every manuscript number is then\nuncitable-against-it.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "manuscript_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The manuscript prose / table verbatim whose numeric claims are audited. Excludes manuscript_path.",
+      "title": "Manuscript Text"
+    },
+    "manuscript_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to a .tex / .md / .txt manuscript, read tolerantly. Excludes manuscript_text.",
+      "title": "Manuscript Path"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cite against this run's sealed table (_aggregated/<run_id>/metrics_aggregate.json aggregated_metrics values). Excludes the other two seeds.",
+      "title": "Run Id"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cite against this campaign's sealed tables (each contributing run's aggregated_metrics values). Excludes the other two seeds.",
+      "title": "Campaign Id"
+    },
+    "aggregate_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to a sealed reduced-metrics artifact. A metrics_aggregate.json is read for its aggregated_metrics values; a pack *.csv is an OPAQUE citation (never parsed). Excludes the other two seeds.",
+      "title": "Aggregate Path"
+    }
+  }
+}
