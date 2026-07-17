@@ -79,6 +79,7 @@ ops/scaffold_spec.py :: hpc_agent._wire.actions.interview :: _PARAM_NAME
 ops/submit/runner.py :: hpc_agent._kernel.lifecycle.drive :: _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
 ops/submit_flow.py :: hpc_agent.infra.executor_guard :: _is_bare_script_name
 ops/submit_flow.py :: hpc_agent.infra.transport :: _GENERATED_SHIPPABLE
+ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _RECONCILE
 ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _REFUSE
 ops/submit_flow.py :: hpc_agent.ops.submit.runner :: _resolve_layer1
 ops/validate/dry_run_local.py :: hpc_agent.execution.mapreduce.dispatch :: _executor_reinvokes_dispatcher

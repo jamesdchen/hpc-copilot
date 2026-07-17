@@ -14,7 +14,12 @@ from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.code_drift import detect_code_drift
-from hpc_agent.state.journal import is_resubmittable_terminal, load_run, upsert_run
+from hpc_agent.state.journal import (
+    is_resubmittable_terminal,
+    load_run,
+    upsert_run,
+    upsert_run_compare_and_mint,
+)
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
 
@@ -168,6 +173,8 @@ def _warn_layer1_drift(
 _DEDUP = "dedup"  # the existing record stands; do not submit
 _PROCEED = "proceed"  # fall through to a fresh / in-place submit
 _REFUSE = "refuse"  # a live run on a DIFFERENT cluster — refuse loudly, never dedup
+_RECONCILE = "reconcile"  # a prior submit is in its dispatch window / orphaned —
+# route to reconcile-recovery, REFUSE a blind re-submit (submit-once premortem Δ1)
 
 
 @dataclass(frozen=True)
@@ -225,6 +232,18 @@ def _resolve_layer1(
     """
     if is_resubmittable_terminal(existing):
         return _Layer1Decision(_PROCEED, "terminal_failure_resubmittable")
+    if existing.status == JournalStatus.SUBMITTING:
+        # A prior submit for this run_id is in its dispatch→id window, or orphaned
+        # there (submit-once §3.3, premortem Δ1). It is NOT a live run to dedup
+        # against (no job_ids yet) and NOT a corpse to redo — a blind re-submit
+        # would race a possibly-live array. Route to reconcile-recovery, which
+        # re-derives truth from the cluster jobmap marker and either adopts the
+        # orphan's id or safely re-submits at attempt+1. This is the front-door
+        # guard that replaces the leaky ``_refuse_prestamped_without_journal``
+        # empty-ids gap. Always-on reader tolerance: a ``submitting`` record only
+        # ever exists once the opt-in mint path has run, so with the flag OFF this
+        # branch is unreachable and behavior is byte-identical.
+        return _Layer1Decision(_RECONCILE, "submitting_route_to_reconcile")
     if existing.status != JournalStatus.COMPLETE:
         # A live run on a DIFFERENT cluster is not a duplicate — it is a retarget
         # under a parameter-only run_id (#207). Dedup would re-attach this submit
@@ -437,6 +456,20 @@ def submit_and_record(
                 "run. Wait for or kill the live attempt, or make the retarget a "
                 "NEW attempt: re-resolve with a distinct run_name and name the "
                 "old attempt via supersedes."
+            )
+        if decision.action == _RECONCILE:
+            # An existing ``submitting`` record: a prior submit for this run_id is
+            # in its dispatch window / orphaned there (submit-once §3.3, Δ1).
+            # Refuse a blind re-submit — reconcile-recovery owns the transition
+            # out of ``submitting`` (adopt the orphan's id from the cluster jobmap
+            # marker, or safely re-submit at attempt+1). Never dedup/proceed here.
+            raise errors.SpecInvalid(
+                f"run {run_id!r} has a live 'submitting' record — a prior submit "
+                "is in its dispatch→id window or orphaned there. A blind re-submit "
+                "could race a possibly-live array (the orphan→duplicate class this "
+                "contract exists to prevent). Let reconcile-recovery adopt the "
+                "orphan's job id from the cluster jobmap marker or safely re-submit "
+                "at the next attempt; do not re-submit this run_id directly."
             )
         if decision.action == _DEDUP:
             if decision.warn_drift:
@@ -701,6 +734,181 @@ def submit_and_record(
             stacklevel=2,
         )
     return record, False
+
+
+def allocate_attempt(existing: RunRecord | None, jobmap_attempt: int = 0) -> int:
+    """The submit-once ``attempt`` ordinal to mint for this submit (premortem Δ1/O2).
+
+    * No prior record → ``0`` (a first submit of this run_id).
+    * A prior record (an in-place redo of a resubmittable-terminal corpse, or a
+      reconcile-authorized re-submit of a prior ``submitting`` orphan) →
+      ``max(existing.attempt, jobmap_attempt) + 1`` (submit-once §3.3/A4): the
+      ``+1`` guarantees a stale prior-attempt jobmap marker can never ``attempt``-
+      match and be falsely adopted onto this fresh submit. *jobmap_attempt* is the
+      attempt read back from the cluster jobmap on the recovery path (U3-d passes
+      it; the direct submit path passes 0), folded in so a jobmap that raced ahead
+      of the journal still forces a strictly-newer attempt.
+
+    This is the SINGLE ruled allocation path — allocating an ``attempt`` any other
+    way (e.g. reusing ``N`` on a redo) is the A4 false-adopt fire.
+    """
+    if existing is None:
+        return 0
+    return max(int(existing.attempt), int(jobmap_attempt)) + 1
+
+
+def mint_submitting_record(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    profile: str,
+    cluster: str,
+    ssh_target: str,
+    remote_path: str,
+    job_name: str,
+    total_tasks: int,
+    campaign_id: str = "",
+    jobmap_attempt: int = 0,
+) -> tuple[RunRecord, bool]:
+    """Atomic compare-and-mint of the pre-dispatch ``submitting`` record (Δ1/§3.3).
+
+    Mints ``RunRecord(status="submitting", job_ids=[], attempt=N)`` BEFORE the
+    remote dispatch so an orphan (a drop in the dispatch→id window) is at worst a
+    durable ``submitting`` record with empty ``job_ids`` — a state reconcile can
+    own — instead of *no record at all* (the lifecycle principle: evidence
+    durable, verdict revisable). Promote to ``in_flight`` only once the id is in
+    hand (:func:`promote_submitting_record`).
+
+    **The Δ1 locked compare-and-mint.** The dedup read and the mint are performed
+    inside ONE ``_locked(run_path)`` critical section, so two genuinely concurrent
+    same-run_id submits serialize: the first reads no record and mints
+    ``submitting``; the second, acquiring the lock only after the first's write is
+    durable, reads the ``submitting`` record and is routed to ``_RECONCILE`` (it
+    raises, refusing a blind second dispatch). This closes the concurrent-submit
+    race the deterministic-run_id + unlocked dedup leaves open (premortem A1) and
+    establishes the single-attempt-in-flight invariant every other simplification
+    assumes. The lock is NOT re-entrant, so the write is done INLINE with
+    :func:`_atomic_write_json` (never a nested ``upsert_run``, which would
+    self-deadlock on the same lock); ``load_run`` takes no lock, so calling it
+    inside the critical section is safe and reuses its schema/version handling.
+
+    Returns ``(record, minted)``:
+
+    * an existing ``submitting`` record → raises :class:`~hpc_agent.errors.SpecInvalid`
+      (route to reconcile — the concurrent/orphan case);
+    * an existing ``in_flight`` / ``complete`` record → ``(existing, False)`` (a
+      live run or a completed replay — nothing to mint, the caller must not
+      dispatch);
+    * an existing cross-cluster live record → raises (proving-run #5 REFUSE);
+    * otherwise (no record, or a resubmittable-terminal corpse / invalidated
+      redo) → mints a fresh ``submitting`` record and returns ``(record, True)``.
+
+    Gated by the caller: only the opt-in submit-once path calls this. Callers on
+    the flag-off path never mint a ``submitting`` record, so the byte-identical
+    contract holds.
+    """
+    from hpc_agent.infra.time import utcnow_iso
+
+    def _decide(existing: RunRecord | None) -> RunRecord | None:
+        # Runs INSIDE the state-layer compare-and-mint lock (the Δ1 window): the
+        # dedup read (``load_run``) and this decision + the write it authorizes
+        # all share ONE run lock, so two concurrent same-run_id mints serialize.
+        if existing is not None:
+            decision = _resolve_layer1(
+                existing,
+                invalidate_on_code_change=False,
+                current_executor=None,
+                current_tasks_py_sha=None,
+                current_cluster=cluster,
+            )
+            if decision.action == _RECONCILE:
+                raise errors.SpecInvalid(
+                    f"run {run_id!r} already has a live 'submitting' record — a "
+                    "concurrent or prior submit is in its dispatch→id window. "
+                    "Reconcile-recovery owns it; do not mint a second attempt."
+                )
+            if decision.action == _REFUSE:
+                raise errors.SpecInvalid(
+                    f"run {run_id!r} is already live on cluster "
+                    f"{existing.cluster!r}, but this submit targets "
+                    f"{cluster!r} — one run_id cannot be live on two clusters."
+                )
+            if decision.action == _DEDUP:
+                # A live in_flight run, or a completed replay: nothing to mint.
+                return None
+            # _PROCEED (resubmittable-terminal corpse / invalidated redo): fall
+            # through and mint a fresh attempt in place.
+        attempt = allocate_attempt(existing, jobmap_attempt)
+        return RunRecord(
+            run_id=run_id,
+            profile=profile,
+            cluster=cluster,
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            job_name=job_name,
+            job_ids=[],
+            total_tasks=int(total_tasks),
+            submitted_at=utcnow_iso(),
+            experiment_dir=str(Path(experiment_dir).resolve()),
+            campaign_id=campaign_id or "",
+            status=str(JournalStatus.SUBMITTING),
+            attempt=attempt,
+        )
+
+    record, minted = upsert_run_compare_and_mint(experiment_dir, run_id, _decide)
+    if not minted:
+        # An existing in_flight / complete record stood — nothing was minted and
+        # nothing dispatches.
+        return record, False
+
+    # Stamp an INITIAL watchdog deadline the moment the ``submitting`` record
+    # lands, so a driver that dies IN THE DISPATCH WINDOW (before the id is read)
+    # leaves a lapsed ``next_tick_due`` and surfaces via ``find_stalled_runs`` /
+    # ``doctor`` as a reconcile-recovery proposal (submit-once §3.3 step 1).
+    # Best-effort and loud, mirroring ``submit_and_record``'s stamp.
+    try:
+        from datetime import timedelta
+
+        from hpc_agent._kernel.lifecycle.drive import _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
+        from hpc_agent.infra.time import utcnow
+        from hpc_agent.state.journal import stamp_tick
+
+        _now = utcnow()
+        stamp_tick(
+            run_id,
+            last_tick_at=_now.isoformat(timespec="seconds"),
+            next_tick_due=(
+                _now + timedelta(seconds=_DEFAULT_DRIVER_TICK_CADENCE_SECONDS)
+            ).isoformat(timespec="seconds"),
+            experiment_dir=experiment_dir,
+        )
+    except Exception:  # noqa: BLE001 — the initial stamp must never fail the mint
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "initial watchdog stamp failed for submitting run %s", run_id, exc_info=True
+        )
+    return record, True
+
+
+def promote_submitting_record(
+    experiment_dir: Path,
+    run_id: str,
+    job_ids: list[str],
+) -> RunRecord:
+    """Promote a ``submitting`` record to ``in_flight`` once the id is in hand (§3.3 step 3).
+
+    Two locked writes, exactly as the design specifies: stamp ``job_ids`` (via the
+    whitelisted :func:`update_run_status`), then transition the status (via
+    :func:`mark_run`). A crash BETWEEN them leaves a ``submitting`` record that
+    already carries ``job_ids`` — still recoverable (reconcile adopts the id),
+    strictly better than losing it. Raises :class:`FileNotFoundError` if no record
+    exists for *run_id*.
+    """
+    from hpc_agent.state.journal import mark_run, update_run_status
+
+    update_run_status(experiment_dir, run_id, job_ids=list(job_ids))
+    return mark_run(experiment_dir, run_id, status=str(JournalStatus.IN_FLIGHT))
 
 
 def build_job_env(runtime_spec: dict[str, Any], base_env: dict[str, str]) -> dict[str, str]:

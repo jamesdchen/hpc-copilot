@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 __all__ = [
     "load_run",
     "upsert_run",
+    "upsert_run_compare_and_mint",
     "update_run_status",
     "update_run_record",
     "mark_run",
@@ -154,6 +155,51 @@ def update_run_record(
         _atomic_write_json(path, record.to_dict())
     _refresh_index_entry(experiment_dir, record.run_id, record.status)
     return record
+
+
+def upsert_run_compare_and_mint(
+    experiment_dir: Path,
+    run_id: str,
+    decide: Callable[[RunRecord | None], RunRecord | None],
+) -> tuple[RunRecord, bool]:
+    """Locked compare-and-mint — read the existing record and mint atomically.
+
+    Under ONE per-run flock (the critical section that closes the dedup-read →
+    mint window), read the current record via :func:`load_run` and hand it (or
+    ``None`` if absent) to *decide*:
+
+    * *decide* returns a :class:`RunRecord` → write it atomically, refresh the
+      index, and return ``(record, True)`` (minted);
+    * *decide* returns ``None`` → the existing record stands; return
+      ``(existing, False)`` (not minted);
+    * *decide* may RAISE to refuse the mint — the exception propagates with the
+      lock released.
+
+    This is the state-layer primitive behind the submit-once single-attempt-in-
+    flight invariant (:func:`hpc_agent.ops.submit.runner.mint_submitting_record`,
+    premortem Δ1): the dedup read and the mint share ONE lock, so two genuinely
+    concurrent same-run_id callers serialize — the first mints, the second reads
+    the minted record and *decide* routes it (refuse / dedup). The decision logic
+    lives with the caller (ops); only the lock + I/O live here (state).
+
+    The lock is NOT re-entrant (:func:`hpc_agent.infra.io.advisory_flock`), so
+    *decide* MUST NOT call back into a locking journal writer for THIS ``run_id``
+    (it may read via ``load_run``, which takes no lock).
+    """
+    path = _run_path(experiment_dir, run_id)
+    with _locked(path):
+        existing = load_run(experiment_dir, run_id)
+        record = decide(existing)
+        if record is None:
+            if existing is None:
+                raise ValueError(
+                    "upsert_run_compare_and_mint: decide returned None with no "
+                    "existing record — nothing to mint and nothing to return"
+                )
+            return existing, False
+        _atomic_write_json(path, record.to_dict())
+    _refresh_index_entry(experiment_dir, record.run_id, record.status)
+    return record, True
 
 
 def _resolve_experiment_dir(experiment_dir: Path | None) -> Path:

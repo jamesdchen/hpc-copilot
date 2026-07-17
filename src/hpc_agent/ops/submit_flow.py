@@ -2390,7 +2390,7 @@ def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowRes
     # cluster while nothing runs on the new one. Refuse. (Only the cluster arm is
     # consulted here; complete/terminal drift stays governed by the existing
     # branches below, so behaviour is unchanged when clusters agree.)
-    from hpc_agent.ops.submit.runner import _REFUSE, _resolve_layer1
+    from hpc_agent.ops.submit.runner import _RECONCILE, _REFUSE, _resolve_layer1
 
     decision = _resolve_layer1(
         existing,
@@ -2399,6 +2399,21 @@ def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowRes
         current_tasks_py_sha=None,
         current_cluster=spec.cluster,
     )
+    if decision.action == _RECONCILE:
+        # An existing ``submitting`` record (submit-once §3.3, premortem Δ1): a
+        # prior submit is in its dispatch→id window / orphaned there. This is the
+        # front-door guard that replaces the leaky ``_refuse_prestamped_without_
+        # journal`` empty-ids gap — refuse a blind re-submit and route to
+        # reconcile-recovery (it adopts the orphan's id from the cluster jobmap
+        # marker or safely re-submits at attempt+1). Unreachable with the
+        # submit-once flag OFF (nothing mints ``submitting``), so byte-identical.
+        raise errors.SpecInvalid(
+            f"run {spec.run_id!r} has a live 'submitting' record — a prior submit "
+            "is in its dispatch→id window or orphaned there. A blind re-submit "
+            "could race a possibly-live array; let reconcile-recovery adopt the "
+            "orphan's job id from the cluster jobmap marker or safely re-submit at "
+            "the next attempt."
+        )
     if decision.action == _REFUSE:
         raise errors.SpecInvalid(
             f"run {spec.run_id!r} is already live on cluster {existing.cluster!r} "

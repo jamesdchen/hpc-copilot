@@ -344,6 +344,17 @@ class RunRecord:
     # blocking the superseding submit; cleared when a later reconcile confirms
     # the jobs terminal.
     pending_closure: dict = dataclasses.field(default_factory=dict)
+    # ── submit-once attempt ordinal (U3, SUBMIT-ONCE-DESIGN.md §3.1/§3.3) ──────
+    # 0-based per-run_id submit ordinal. Minted onto the ``submitting`` record
+    # BEFORE dispatch and discriminates a legitimate later resubmit's cluster-side
+    # jobmap marker from an orphan's marker of the SAME run_id, so recovery never
+    # adopts a stale attempt's job id onto a fresh one. Allocated under the run
+    # lock at mint (``ops.submit.runner.allocate_attempt`` /
+    # ``mint_submitting_record``) as ``max(record.attempt, jobmap.attempt)+1`` for
+    # an in-place redo (0 for a first submit) — the single-attempt-in-flight
+    # invariant (premortem Δ1/O2). Harmless default 0: a pre-U3 record loads
+    # unchanged (``from_dict`` filters to known fields) and never mis-adopts.
+    attempt: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -556,9 +567,11 @@ def _locked(target: Path) -> Iterator[None]:
     """Acquire an exclusive flock on a sibling ``.lock`` file for *target*.
 
     Thin wrapper around :func:`hpc_agent.infra.io.advisory_flock`
-    that derives the lock path via :func:`_lock_path`. No-op on platforms
-    without ``fcntl`` (e.g. Windows). The lock file is created on demand
-    and never deleted — flock semantics handle reuse.
+    that derives the lock path via :func:`_lock_path`. Real inter-process
+    exclusion on every platform (``filelock``: fcntl on POSIX, msvcrt
+    byte-range on Windows) — the Δ1 compare-and-mint lock depends on this
+    holding on Windows too. The lock file is created on demand and never
+    deleted — flock semantics handle reuse.
     """
     with advisory_flock(_lock_path(target), timeout_sec=120.0):
         yield

@@ -257,7 +257,12 @@ class RemoteHPCBackend:
                 abs_cmd_str = " ".join(
                     [shlex.quote(cached), *(shlex.quote(arg) for arg in cmd[1:])]
                 )
-                direct = f"cd {shlex.quote(self.remote_repo)} && {abs_cmd_str}"
+                # Direct (cached-bin) shape — the steady-state path (Δ7). The
+                # jobmap weave replaces the ``cd <repo> && <cmd>`` core; OFF ⇒
+                # byte-identical. ``exit "$rc"`` propagates the qsub returncode so
+                # BOTH the submit_one returncode check AND the stale-cache 127
+                # detection below keep working under the weave.
+                direct = self._dispatch_core(abs_cmd_str, job_env)
                 proc = self.ssh_run(direct)
                 if proc.returncode != 127:
                     return proc
@@ -265,14 +270,67 @@ class RemoteHPCBackend:
                 # cache entry and fall through to the login-shell form below,
                 # which re-resolves via the marker.
                 self._resolved_bins.pop(bin_name, None)
+            # Login-shell shape (Δ7). Same jobmap weave folded into ``inner``.
             inner = (
                 f'echo "{_BIN_MARKER}=$(command -v {shlex.quote(bin_name)})" 1>&2; '
-                f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
+                f"{self._dispatch_core(cmd_str, job_env)}"
             )
             remote_cmd = f"bash -lc {shlex.quote(inner)}"
             proc = self.ssh_run(remote_cmd)
         self._harvest_bin_marker(bin_name, proc)
         return proc
+
+    def _dispatch_core(self, cmd_portion: str, job_env: dict[str, str]) -> str:
+        """The ``cd <repo> && <cmd>`` dispatch core, optionally jobmap-woven (U3, Δ7).
+
+        Flag OFF (``HPC_SUBMIT_ONCE`` unset) or no ``HPC_RUN_ID`` in *job_env* ⇒
+        returns the EXACT historical ``cd {remote_repo} && {cmd_portion}`` string,
+        so the emitted command is byte-identical to pre-U3 (the regression pin).
+
+        Flag ON with a run_id ⇒ folds the jobmap marker protocol (§3.2) into the
+        SAME round-trip: write the ``pending`` marker BEFORE the ``cd``+dispatch,
+        capture the id + rc server-side (``__hpc_jid=$(<cmd>); __hpc_rc=$?``),
+        persist ``"<JID> <rc>"`` into the per-wave id-file, then re-emit the id on
+        stdout byte-for-byte and ``exit "$__hpc_rc"``. The ``exit`` propagates the
+        real qsub returncode so the caller's ``JOB_ID_REGEX`` parse AND
+        returncode/127-stale-cache logic are unchanged; the marker append is the
+        durable backup that makes the response channel optional for correctness.
+
+        run_id keys the marker (already in ``job_env["HPC_RUN_ID"]`` — and set to
+        the canary's DISTINCT run_id on the canary leg, so the canary mints its own
+        ``<canary_run_id>.jobmap`` for free, Δ5). ``attempt`` /
+        ``HPC_SUBMIT_WAVE_KEY`` ride ``job_env`` too (the mint path stamps them);
+        a canary leg carries ``HPC_SUBMIT_WAVE_KEY=<canary key>`` so it is never
+        read as the main array's wave-0.
+        """
+        from hpc_agent.infra.jobmap import (
+            CANARY_WAVE_KEY,
+            build_post_dispatch_shell,
+            build_pre_dispatch_shell,
+            submit_once_enabled,
+            wave_key,
+        )
+
+        plain = f"cd {shlex.quote(self.remote_repo)} && {cmd_portion}"
+        run_id = job_env.get("HPC_RUN_ID", "")
+        if not (submit_once_enabled() and run_id):
+            return plain
+        try:
+            attempt = int(job_env.get("HPC_SUBMIT_ATTEMPT", "0"))
+        except ValueError:
+            attempt = 0
+        wkey = job_env.get("HPC_SUBMIT_WAVE_KEY") or wave_key(0)
+        # (CANARY_WAVE_KEY referenced so the canonical canary key stays one import.)
+        _ = CANARY_WAVE_KEY
+        pre = build_pre_dispatch_shell(
+            remote_path=self.remote_repo, run_id=run_id, attempt=attempt, wkey=wkey
+        )
+        post = build_post_dispatch_shell(remote_path=self.remote_repo, run_id=run_id, wkey=wkey)
+        return (
+            f"{pre}; cd {shlex.quote(self.remote_repo)} && "
+            f"__hpc_jid=$({cmd_portion}); __hpc_rc=$?; {post}; "
+            f'printf \'%s\\n\' "$__hpc_jid"; exit "$__hpc_rc"'
+        )
 
     def _harvest_bin_marker(self, bin_name: str, proc: subprocess.CompletedProcess[str]) -> None:
         """Cache the absolute binary path the login-shell call resolved.
