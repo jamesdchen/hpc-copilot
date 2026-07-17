@@ -17,9 +17,14 @@ import sys
 from pathlib import Path
 
 import pytest
-import tomllib
 
 from tests._paths import REPO_ROOT
+
+# scripts/run_mutation.py itself imports tomllib (3.11+ stdlib) and only ever
+# runs in the Linux mutation workflow's interpreter — under 3.10 the module
+# under test cannot import either, so skipping here is honest, not lost
+# coverage.
+tomllib = pytest.importorskip("tomllib")
 
 _SPEC = importlib.util.spec_from_file_location(
     "run_mutation", REPO_ROOT / "scripts" / "run_mutation.py"
