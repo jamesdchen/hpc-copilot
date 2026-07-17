@@ -70,6 +70,14 @@ def _read_prior_push_manifest(
     a manifest we cannot prove routes every remote extra to the ANOMALY branch
     (never deleted). The safe direction: only a path we can PROVE we shipped is
     ever prunable.
+
+    NOTE (delta-push round-trip Option 1, 2026-07-17): the delta push no longer
+    calls this — the ``paths`` bookkeeping is now folded into the remote hash
+    read (leg A) and threaded through as ``known`` (see
+    :func:`hpc_agent.infra.transport._delta._remote_push_manifest`), saving a
+    dial. This standalone reader is retained for back-compat: it defines the
+    exact fail-open shape the folded read reproduces (absent/garbled ``paths`` ->
+    empty set) and remains available to any non-delta / older caller.
     """
     # ``_ssh_bounded`` is defined in the engine package (``__init__``), which
     # imports THIS module in its re-export block — import it call-time to keep
@@ -200,29 +208,101 @@ def _journal_deploy_prune(local_path: str | Path, record: dict[str, Any]) -> Non
         pass
 
 
-def _execute_prune(
-    *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
-) -> bool:
-    """Delete exactly *paths* under *remote_path* via one bounded ssh ``rm``.
+#: The stdlib-only python the control plane pipes cluster-side to prune the
+#: manifest-known extras AND re-seal the push manifest in ONE trailing leg
+#: (delta-push round-trip Option 3 — collapses the former ``rm`` leg + union-seal
+#: leg). It removes each proven-ours path (``os.remove``, no shell), computes the
+#: retained set REMOTE-SIDE (which paths the delete could NOT remove — a
+#: raced/failed delete stays ours, fail-open per-path), then writes the manifest
+#: as ``sorted(seal ∪ retained)`` while PRESERVING the ``entries`` remote
+#: quick-check cache the hash snippet persisted, atomically (temp + ``os.replace``
+#: — the same crash-safety as :data:`_PUSH_MANIFEST_MERGE_PY`, so a severed
+#: connection can never leave a corrupt manifest). Reads its payload
+#: (``{prune, seal, pkg_version, manifest_schema}``, base64 in ``HPC_PM_PAYLOAD``).
+#: Kept under the deploy Python floor (stdlib ``os``/``sys``/``json``/``base64``
+#: only). A delete-then-sever leaves the proven-ours extras gone (correct) and the
+#: manifest lag re-derives next push; a sever before the delete removes nothing
+#: and the retained set stays intact — fail-open either way (Invariant 2).
+_PRUNE_RESEAL_PY: Final[str] = (
+    "import os,sys,json,base64\n"
+    "d='.hpc/.push_manifest.json'\n"
+    "t=d+'.tmp'\n"
+    "P=json.loads(base64.b64decode(os.environ['HPC_PM_PAYLOAD']))\n"
+    "retained=[]\n"
+    "for p in P.get('prune',[]):\n"
+    "    try:\n"
+    "        os.remove(p)\n"
+    "    except OSError:\n"
+    "        pass\n"
+    "    if os.path.lexists(p):\n"
+    "        retained.append(p)\n"
+    "new={'paths':sorted(set(P.get('seal',[]))|set(retained)),"
+    "'pkg_version':P.get('pkg_version'),'manifest_schema':P.get('manifest_schema')}\n"
+    "try:\n"
+    "    with open(d) as f:\n"
+    "        cur=json.load(f)\n"
+    "except Exception:\n"
+    "    cur={}\n"
+    "if isinstance(cur,dict) and isinstance(cur.get('entries'),list):\n"
+    "    new['entries']=cur['entries']\n"
+    "with open(t,'w') as f:\n"
+    "    json.dump(new,f)\n"
+    "os.replace(t,d)\n"
+)
 
-    Each path is ``shlex.quote``-d and the list is the vetted manifest-known set
-    (never anomalies, never over-bound). ``rm -f --`` is 0 even if a path already
-    vanished. Returns True on a clean delete. Fail-open on any transport error —
-    the manifest-known extra simply survives to the next push.
+
+def _prune_and_reseal(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    prune_paths: list[str],
+    seal_paths: list[str],
+    timeout: float | None,
+) -> None:
+    """Delete *prune_paths* AND reseal the push manifest in ONE bounded ssh leg.
+
+    The delta-push round-trip Option 3 fold: the prune ``rm`` and the
+    retained-union manifest seal — formerly two separate un-guarded dials
+    (``_execute_prune`` + :func:`_write_push_manifest`) — collapse into a single
+    trailing leg fired ONLY when a prune actually has paths to delete. One
+    stdlib-floor ``python3`` script (:data:`_PRUNE_RESEAL_PY`) removes each
+    proven-ours path, computes the retained set REMOTE-SIDE (which paths the
+    delete could not remove — a raced/failed delete stays ours), and writes the
+    manifest as ``sorted(seal_paths ∪ retained)`` while preserving the ``entries``
+    remote quick-check cache, atomically.
+
+    Fail-open (Invariant 2): a severed leg after the delete leaves the
+    proven-ours extras gone (correct) and the manifest lag re-derives next push; a
+    severed leg before the delete removes nothing and the retained set stays
+    intact. Every delete target is the vetted manifest-known set (never an
+    anomaly). Base64-piped so no path needs shell quoting. Rides the same dial
+    discipline as the writer it replaces (no new cold SSH).
     """
-    from hpc_agent.infra.transport import _ssh_bounded
+    # ``_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``) are both
+    # re-exported by the package; import them call-time so this module never
+    # depends on the engine at its own import time (no cycle).
+    from hpc_agent.infra.transport import _pkg_version, _ssh_bounded
 
-    if not paths:
-        return False
+    payload = json.dumps(
+        {
+            "prune": list(prune_paths),
+            "seal": sorted(set(seal_paths)),
+            "pkg_version": _pkg_version(),
+            "manifest_schema": _PUSH_MANIFEST_SCHEMA,
+        }
+    )
+    payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    reseal_b64 = base64.b64encode(_PRUNE_RESEAL_PY.encode("utf-8")).decode("ascii")
     root = shlex.quote(remote_path.rstrip("/"))
-    quoted_paths = " ".join(shlex.quote(p) for p in paths)
-    try:
-        proc = _ssh_bounded(
+    cmd = (
+        f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(reseal_b64)} | base64 -d | "
+        f"HPC_PM_PAYLOAD={shlex.quote(payload_b64)} python3"
+    )
+    with contextlib.suppress(TimeoutError, OSError):
+        _ssh_bounded(
             ssh_target,
-            f"cd {root} && rm -f -- {quoted_paths}",
+            cmd,
             timeout=timeout,
-            what=f"prune {len(paths)} manifest-known extra(s) from {remote_path}",
+            what=f"prune {len(prune_paths)} manifest-known extra(s) + reseal manifest "
+            f"of {remote_path}",
         )
-    except (TimeoutError, OSError):
-        return False
-    return getattr(proc, "returncode", 1) == 0

@@ -360,3 +360,34 @@ drops 5→3; only the large-N per-batch checkpoint saving is forgone.
   `transport/__init__.py:796–990` + `_delta.py` + `_prune.py` +
   `ssh_circuit.guarded_call:663` at c893d2fa; stage-swap region (~340–430) read
   READ-only while a concurrent agent (U4) edited it.
+- 2026-07-17: **BUILT — the §5 FALLBACK (Options 1 + 4); Options 2 & 3 DEFERRED.**
+  Landed the two folds that never touch `_tar_ssh_push` (U4's surface), per the
+  restricted build scope:
+  - **Option 1 (fold D1 into A).** `_REMOTE_MANIFEST_SNIPPET` now emits the prior
+    manifest's `paths` bookkeeping in its own JSON; `_parse_remote_push_manifest`
+    / `_remote_push_manifest` return `(manifest, known)`; the delta path threads
+    `remote_known` into the prune. The standalone `_read_prior_push_manifest`
+    dial is gone from the delta hot path (retained for back-compat, docstring
+    notes it). Fail-open preserved: absent/garbled `paths` → `known = ∅` → every
+    extra → ANOMALY; the manifest read keeps its None-on-any-trouble contract
+    (the added field never changes it).
+  - **Option 4 (collapse D2 `rm` + E union-reseal into ONE only-when-extras
+    tail).** New `_prune_and_reseal` + `_PRUNE_RESEAL_PY` (stdlib-floor,
+    temp+`os.replace` atomic, `entries` cache preserved, retained survivors
+    computed REMOTE-SIDE). `_prune_manifest_known_extras` now OWNS the single
+    trailing leg: the combined tail when a prune fires, else a standalone
+    `_write_push_manifest` seal. Exactly one trailing leg either way.
+  - **Round-trips (proven by pins):** small warm delta nothing-dropped stays
+    **3** (A,B,E); small warm delta with a prune drops **5 → 3** (A folds D1; B;
+    the combined tail folds D2+E). Leg-count pins: `test_warm_delta_push_no_prune_
+    is_three_legs`, `test_warm_delta_push_with_prune_is_three_legs`. Invariants
+    held: mid-drop resume re-derives from the live remote hash (batch/checkpoint
+    mechanics untouched — `test_died_mid_push_retry_ships_only_the_remainder`);
+    prune fail-open (`test_prune_reseal_script_deletes_seals_and_retains_survivors`
+    — a raced/failed delete stays ours).
+  - **DEFERRED — Options 2 & 3 (the memo's §4 PRIMARY extras).** The per-batch
+    checkpoint fold (Option 2) and the final-seal fold into the last batch's leg
+    (Option 3, memo numbering) both edit `_tar_ssh_push`'s `delete=False` branch —
+    U4's function. Land after the U4 merge (§6 coordination note). This unit's
+    diff is confined to `_delta.py` / `_prune.py` / the delta-path caller +
+    the re-export block, so it merges cleanly around U4's stage-swap edits.

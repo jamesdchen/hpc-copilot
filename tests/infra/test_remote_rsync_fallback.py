@@ -367,7 +367,7 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
         # No remote hash manifest -> the full-copy tar shape this helper pins
         # (queue item 6b routes to full copy when the remote can't hash). The
         # delta shape has its own coverage below.
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
         # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
         # module), so a cold-cache probe would otherwise run the REAL
@@ -444,7 +444,7 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
         # Force the full-copy path so the two-leg side_effect maps to
         # stage-drop then a dying extract (item 6b's delta leg is covered
         # separately); without this the manifest fetch would consume a leg.
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
@@ -493,7 +493,7 @@ def _tar_fallback_run_calls_seq(tmp_path: Path, *, exclude: list[str], side_effe
         patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=side_effect) as run_mock,
         # Force the full-copy path (no remote hash manifest) so the leg sequence
         # is the stage/extract/swap shape, not the delta batch loop.
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
@@ -646,7 +646,7 @@ def test_tar_fallback_preclean_timeout_is_actionable(tmp_path: Path) -> None:
         ),
         # Full-copy path: the first bounded leg is then the stage-dir drop
         # (item 6b's manifest fetch would otherwise be the first timeout).
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
         # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
         # module), so a cold-cache probe would otherwise run the REAL
@@ -674,7 +674,7 @@ def test_tar_fallback_preclean_failure_aborts_before_extract(tmp_path: Path) -> 
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fail) as run_mock,
         # Full-copy path so the single non-probe leg is the pre-clean itself
         # (item 6b's manifest fetch would otherwise add a leg).
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
         # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
         # module), so a cold-cache probe would otherwise run the REAL
@@ -1309,7 +1309,10 @@ def test_delta_tars_exactly_the_changed_set(
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        patch(
+            "hpc_agent.infra.transport._remote_push_manifest",
+            return_value=(remote_manifest, set()),
+        ),
         # Isolate the delta-tar mechanics: the post-ship prune + push-manifest
         # write (ruling 6) are their own legs, covered by tests/infra/
         # test_transport_prune.py — patch them out so run_mock's last call is
@@ -1368,7 +1371,10 @@ def test_delta_identical_remote_ships_zero_bytes(
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        patch(
+            "hpc_agent.infra.transport._remote_push_manifest",
+            return_value=(remote_manifest, set()),
+        ),
         # The post-ship prune + push-manifest write (ruling 6) still ride even a
         # zero-byte ship (a drop with nothing new to send can still leave a
         # manifest-known extra to prune) — patch them out so this test pins the
@@ -1398,7 +1404,7 @@ def test_manifest_unavailable_falls_back_to_full_tar_with_disclosure(
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
@@ -1686,10 +1692,13 @@ def _warm_delta_push_ssh_cmds(tmp_path: Path, *, n_extra: int = 0) -> list[str]:
 
     The remote is content-identical except ``changed.txt`` (1 file ships). A smart
     ``run_capture_bounded`` mock answers each open by inspecting the remote command
-    so the REAL ``_remote_push_manifest`` / ``_read_prior_push_manifest`` /
-    ``_write_push_manifest`` / prune legs all execute and are counted — no leg is
-    patched out, so the dial count is the true one. *n_extra* seeds a
-    manifest-known remote extra so the prune ``rm`` leg fires.
+    so the REAL ``_remote_push_manifest`` / ``_write_push_manifest`` / prune legs
+    all execute and are counted — no leg is patched out, so the dial count is the
+    true one. *n_extra* seeds a manifest-known remote extra so the prune leg fires.
+
+    Delta-push round-trip Option 1: the snippet now folds the prior push-manifest
+    ``paths`` into its OWN JSON, so the mock returns them in ``remote_files`` and
+    there is NO separate ``cat .push_manifest.json`` prior-read leg.
     """
     from dataclasses import replace
 
@@ -1707,12 +1716,13 @@ def _warm_delta_push_ssh_cmds(tmp_path: Path, *, n_extra: int = 0) -> list[str]:
         entries.append(FileEntry(path="gone_extra.txt", size=3, sha256="1" * 64))
     remote_files = {
         "files": [{"path": e.path, "size": e.size, "sha256": e.sha256} for e in entries],
+        # Option 1: the folded prior-manifest paths (the prune bookkeeping) ride
+        # the SAME snippet JSON — a manifest-known extra to prune when n_extra.
+        "paths": ["gone_extra.txt"] if n_extra else [],
         "hashed": 0,
         "cached": len(entries),
     }
     import json as _json
-
-    prior_manifest = _json.dumps({"paths": ["gone_extra.txt"], "manifest_schema": 2})
 
     cmds: list[str] = []
 
@@ -1721,8 +1731,6 @@ def _warm_delta_push_ssh_cmds(tmp_path: Path, *, n_extra: int = 0) -> list[str]:
         cmds.append(remote)
         if "HPC_DELTA_EXCLUDES" in remote:  # the remote hash-manifest snippet
             return _ok(stdout=_json.dumps(remote_files))
-        if "cat " in remote and "push_manifest" in remote:  # read prior manifest
-            return _ok(stdout=prior_manifest if n_extra else "")
         return _ok()
 
     with (
@@ -1748,34 +1756,53 @@ def _warm_delta_push_ssh_cmds(tmp_path: Path, *, n_extra: int = 0) -> list[str]:
     return [c for c in cmds if c != "-V"]
 
 
-def test_warm_delta_push_stays_within_four_opens(tmp_path: Path) -> None:
-    """F2 push-fold acceptance (unit 2.4b): a WARM rsync-less re-push (small delta,
-    nothing to prune) costs <= 4 cold ssh opens — remote hash manifest, the single
-    delta batch, and the final push-manifest seal (3). The many-batch cold case is
-    inherently more (one durable checkpoint per landed batch, run-13 finding 3 — a
-    correctness feature, not a fold-away regression); this pin fixes the WARM floor
-    so a future edit that re-added a per-op cold round-trip to the warm path turns
-    RED."""
+def test_warm_delta_push_no_prune_is_three_legs(tmp_path: Path) -> None:
+    """Delta-push round-trip leg-count pin (memo §5 table, "small warm delta,
+    nothing dropped" = 3): a WARM rsync-less re-push with nothing to prune costs
+    EXACTLY 3 cold ssh opens — remote hash manifest (A), the single delta batch
+    (B), the final push-manifest seal (E). Unchanged by this unit (E can't fold
+    without the tar-leg append, Option 2/out of scope); the pin fixes the WARM
+    floor so a future edit that re-added a per-op cold round-trip turns RED."""
     cmds = _warm_delta_push_ssh_cmds(tmp_path)
-    assert len(cmds) <= 4, f"warm push opened {len(cmds)} ssh connections: {cmds}"
+    assert len(cmds) == 3, f"warm no-prune push opened {len(cmds)} ssh connections: {cmds}"
     # The exact warm shape: manifest read, one delta batch, final seal.
-    assert any("HPC_DELTA_EXCLUDES" in c for c in cmds)  # remote hash manifest
-    assert any("tar x -C /r" in c for c in cmds)  # the single delta batch
-    assert any("push_manifest" in c.lower() or "HPC_PM_PAYLOAD" in c for c in cmds)  # final seal
+    assert sum("HPC_DELTA_EXCLUDES" in c for c in cmds) == 1  # remote hash manifest (A)
+    assert sum("tar x -C /r" in c for c in cmds) == 1  # the single delta batch (B)
+    assert sum("HPC_PM_PAYLOAD" in c for c in cmds) == 1  # the standalone seal (E)
+    # Option 1: NO separate prior-manifest read leg (folded into A).
+    assert not any("cat " in c and "push_manifest" in c for c in cmds), f"D1 leg present: {cmds}"
+
+
+def test_warm_delta_push_with_prune_is_three_legs(tmp_path: Path) -> None:
+    """Delta-push round-trip leg-count pin (memo §5 fallback table, "small warm
+    delta, a file pruned" 5 -> 3): the SAME warm re-push that must ALSO prune one
+    manifest-known remote extra costs EXACTLY 3 cold ssh opens, down from 5 —
+    Option 1 folds the prior-manifest read (D1) into leg A, and Option 3 collapses
+    the prune ``rm`` (D2) + the union-reseal (E) into ONE trailing leg. A future
+    edit that re-split either fold turns RED."""
+    cmds = _warm_delta_push_ssh_cmds(tmp_path, n_extra=1)
+    assert len(cmds) == 3, f"warm pruning push opened {len(cmds)} ssh connections: {cmds}"
+    assert sum("HPC_DELTA_EXCLUDES" in c for c in cmds) == 1  # remote hash manifest (A, folds D1)
+    assert sum("tar x -C /r" in c for c in cmds) == 1  # the single delta batch (B)
+    # Option 3: the prune rm + reseal are ONE trailing python leg (HPC_PM_PAYLOAD),
+    # NOT a separate shell ``rm`` leg and NOT a separate seal.
+    assert sum("HPC_PM_PAYLOAD" in c for c in cmds) == 1  # the combined prune+reseal tail
+    assert not any("rm -f -- " in c for c in cmds), f"separate rm leg present (D2): {cmds}"
+    assert not any("cat " in c and "push_manifest" in c for c in cmds), f"D1 leg present: {cmds}"
 
 
 def test_transfer_plane_remote_commands_are_preamble_free(tmp_path: Path) -> None:
     """E1 byte-equality: every transfer-plane remote command line — the delta path
     (remote hash manifest, tar extract, push-manifest write) AND the with-prune
-    path (prior-manifest read, prune ``rm``) — is byte-equal to the raw shell it
-    runs: no ``module load`` / ``conda activate`` / ``source`` control-plane
-    preamble and no ``HPC_AGENT_OP=``/``timeout -k`` ssh_run self-destruct wrapper.
-    The transfer plane never routes through ``remote_activation_for_sidecar`` or
+    path (the folded prune+reseal tail) — is byte-equal to the raw shell it runs:
+    no ``module load`` / ``conda activate`` / ``source`` control-plane preamble and
+    no ``HPC_AGENT_OP=``/``timeout -k`` ssh_run self-destruct wrapper. The transfer
+    plane never routes through ``remote_activation_for_sidecar`` or
     ``build_remote_command``."""
     cmds = _warm_delta_push_ssh_cmds(tmp_path, n_extra=1)
-    # The with-prune path exercised every transfer leg: manifest, batch, prior-read,
-    # prune rm, seal.
-    assert any("rm -f -- gone_extra.txt" in c for c in cmds), f"prune leg absent: {cmds}"
+    # The with-prune path exercised every transfer leg: manifest (folds prior-read),
+    # batch, and the combined prune+reseal tail.
+    assert any("HPC_PM_PAYLOAD" in c for c in cmds), f"prune+reseal tail absent: {cmds}"
     for cmd in cmds:
         for token in _FORBIDDEN_PREAMBLE_TOKENS:
             assert token not in cmd, f"transfer command acquired {token!r}: {cmd!r}"
@@ -1802,7 +1829,7 @@ def test_transfer_plane_push_never_consults_ssh_engine(tmp_path: Path) -> None:
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=(None, set())),
         patch.object(ssh_engine, "engine_enabled", return_value=True),
         patch.object(ssh_engine, "engine_ssh_run") as engine_mock,
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),

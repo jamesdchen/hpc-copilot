@@ -156,7 +156,7 @@ def test_cache_file_is_excluded_from_the_push(tmp_path: Path) -> None:
 
     def _fake_remote(*, exclude, **_kw):  # noqa: ANN001
         captured["exclude"] = list(exclude)
-        return None  # route to full-copy; we only care about the exclude set
+        return None, set()  # route to full-copy; we only care about the exclude set
 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
@@ -229,10 +229,15 @@ def test_checkpoint_after_each_batch_except_the_last(tmp_path: Path, monkeypatch
 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        patch(
+            "hpc_agent.infra.transport._remote_push_manifest",
+            return_value=(remote_manifest, set()),
+        ),
         patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", return_value=_ok()),
-        patch("hpc_agent.infra.transport._prune_manifest_known_extras", return_value=set()),
+        # NOT patching _prune_manifest_known_extras: the empty remote has no extras,
+        # so it runs to its standalone _write_push_manifest FINAL SEAL (Option 3
+        # moved the seal into the prune step) — the recorded 3rd write.
         patch("hpc_agent.infra.transport._write_push_manifest", side_effect=_record_manifest),
     ):
         result = transport.rsync_push(
@@ -272,12 +277,13 @@ def test_died_mid_push_retry_ships_only_the_remainder(tmp_path: Path, monkeypatc
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
-        patch("hpc_agent.infra.transport._prune_manifest_known_extras", return_value=set()),
+        patch("hpc_agent.infra.transport._prune_manifest_known_extras"),
         patch("hpc_agent.infra.transport._write_push_manifest"),
         # The retry's delta reads the LIVE remote hash — reflect the fake remote.
+        # Option 1: the read now returns (manifest, known_paths).
         patch(
             "hpc_agent.infra.transport._remote_push_manifest",
-            side_effect=lambda **_kw: _remote_from(fake_remote),
+            side_effect=lambda **_kw: (_remote_from(fake_remote), set()),
         ),
     ]
 
@@ -615,3 +621,73 @@ def test_parallel_hash_still_reuses_cache_second_pass(tmp_path: Path, monkeypatc
     with patch("hpc_agent.infra.manifest._sha256_of", _boom):
         _, hashed2, cached2 = transport._build_local_manifest_cached(tmp_path, paths)
     assert hashed2 == 0 and cached2 == 6
+
+
+# --------------------------------------------------------------------------- #
+# Delta-push round-trip Option 1 — the prune-plan read folded into leg A
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_remote_manifest_folds_known_paths() -> None:
+    """The parser returns ``(manifest, known_paths)`` — the prune-plan ``paths``
+    now ride the SAME remote hash read (Option 1). A valid ``paths`` list becomes
+    the known set; the manifest still parses from ``files`` exactly as before."""
+    stdout = json.dumps(
+        {
+            "files": [{"path": "a.txt", "size": 1, "sha256": "aa"}],
+            "paths": ["a.txt", "dropped.txt"],
+        }
+    )
+    manifest, known = transport._parse_remote_push_manifest(stdout)
+    assert manifest is not None
+    assert [e.path for e in manifest.entries] == ["a.txt"]
+    assert known == {"a.txt", "dropped.txt"}
+
+
+def test_parse_remote_manifest_missing_or_garbled_paths_is_fail_open() -> None:
+    """Fail-open prune (Invariant 2): an absent ``paths`` (a v1 manifest / first
+    deploy) OR a garbled ``paths`` (present, wrong shape) yields the EMPTY known
+    set — so every remote extra routes to ANOMALY (never deleted), exactly as the
+    standalone prior-read returned. The manifest itself still parses (the added
+    field never changes the None-on-trouble contract)."""
+    absent = json.dumps({"files": [{"path": "a.txt", "size": 1, "sha256": "aa"}]})
+    m1, known1 = transport._parse_remote_push_manifest(absent)
+    assert m1 is not None and known1 == set()
+
+    garbled = json.dumps(
+        {"files": [{"path": "a.txt", "size": 1, "sha256": "aa"}], "paths": {"not": "a list"}}
+    )
+    m2, known2 = transport._parse_remote_push_manifest(garbled)
+    assert m2 is not None and known2 == set()
+
+    # A severed/empty read stays (None, set()) — full-copy fallback, unchanged.
+    assert transport._parse_remote_push_manifest("") == (None, set())
+    assert transport._parse_remote_push_manifest("{ not json ]") == (None, set())
+
+
+def test_snippet_emits_folded_prior_paths(tmp_path: Path) -> None:
+    """The deployed hash snippet folds the prior manifest's ``paths`` bookkeeping
+    into its OWN JSON (Option 1) — so the prune plan needs no separate ``cat`` leg.
+    A prior manifest with ``paths`` -> those paths echoed; no prior -> ``[]``."""
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    (tree / "a.txt").write_text("alpha")
+    exclude = [".hpc/"]
+
+    # No prior manifest -> folded paths is the empty list.
+    cold = _run_snippet(tree, exclude)
+    assert cold["paths"] == []
+
+    # Seed a prior manifest carrying prune bookkeeping; the snippet echoes it.
+    (tree / ".hpc" / ".push_manifest.json").write_text(
+        json.dumps(
+            {
+                "paths": ["a.txt", "gone.txt"],
+                "pkg_version": "1.0",
+                "manifest_schema": 2,
+                "entries": [],
+            }
+        )
+    )
+    warm = _run_snippet(tree, exclude)
+    assert sorted(warm["paths"]) == ["a.txt", "gone.txt"]

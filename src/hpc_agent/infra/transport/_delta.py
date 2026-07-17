@@ -108,6 +108,17 @@ _REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
         except Exception:
             prior_doc = {}
 
+        # Delta-push round-trip Option 1: fold the prune-plan read into THIS read.
+        # The prune's separate `cat .push_manifest.json` leg only wanted the
+        # `paths` bookkeeping list; emit it alongside `files` so the control plane
+        # gets `known` from the same round-trip. Absent/garbled -> [] (fail-open
+        # prune: every remote extra then routes to ANOMALY, never deleted).
+        prior_paths = []
+        if isinstance(prior_doc, dict):
+            _pp = prior_doc.get('paths')
+            if isinstance(_pp, list):
+                prior_paths = [str(p) for p in _pp]
+
         files = []
         cache = []
         hashed = 0
@@ -148,7 +159,8 @@ _REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
                 cache.append({'path': key, 'size': size, 'mtime_ns': mtime_ns, 'sha256': sha})
                 if len(files) > cap:
                     sys.exit(0)  # too big -> no output -> caller ships the whole tree
-        sys.stdout.write(json.dumps({'files': files, 'hashed': hashed, 'cached': cached}))
+        sys.stdout.write(json.dumps(
+            {'files': files, 'paths': prior_paths, 'hashed': hashed, 'cached': cached}))
         # Persist the cache back (preserving the prune bookkeeping keys), atomically,
         # only inside a real deploy tree. Best-effort: never affects the emitted manifest.
         try:
@@ -418,44 +430,60 @@ def _local_push_manifest(local_path: str | Path, exclude: list[str]) -> Any:
     return manifest
 
 
-def _parse_remote_push_manifest(stdout: str) -> Any | None:
-    """Parse the cluster-side hash manifest, or ``None`` on any problem.
+def _parse_remote_push_manifest(stdout: str) -> tuple[Any | None, set[str]]:
+    """Parse the cluster-side hash manifest AND the folded prune-plan paths.
 
-    An absent/empty tree (snippet printed nothing), corrupt JSON, a wrong shape,
-    or a cap breach all collapse to ``None`` — which routes the push to the
-    full-copy tar fallback (disclosed). The safe direction: never claim a remote
-    file is present unless the manifest proves it.
+    Returns ``(manifest, known_paths)``. An absent/empty tree (snippet printed
+    nothing), corrupt JSON, a wrong shape, or a cap breach all collapse to
+    ``(None, set())`` — which routes the push to the full-copy tar fallback
+    (disclosed). The safe direction: never claim a remote file is present unless
+    the manifest proves it (positive-evidence, None-on-any-trouble — unchanged by
+    the added field).
+
+    ``known_paths`` is the ``paths`` prune-bookkeeping list the deployed snippet
+    now folds into the SAME read (delta-push round-trip Option 1) — the set our
+    LAST push recorded, used to decide which remote extras are ours-to-prune. An
+    absent / garbled ``paths`` (a v1 manifest, a first deploy, a wrong shape)
+    yields the EMPTY set — exactly what the standalone ``_read_prior_push_manifest``
+    returned on the same conditions, so every remote extra routes to the ANOMALY
+    branch (fail-open prune preserved, Invariant 2).
     """
     from hpc_agent.infra.manifest import Manifest
 
     raw = (stdout or "").strip()
     if not raw:
-        return None
+        return None, set()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return None
+        return None, set()
     if not (isinstance(data, dict) and isinstance(data.get("files"), list)):
-        return None
+        return None, set()
     try:
-        return Manifest.from_dict(data)
+        manifest = Manifest.from_dict(data)
     except (KeyError, TypeError, ValueError):
-        return None
+        return None, set()
+    raw_known = data.get("paths")
+    known_paths = {str(p) for p in raw_known} if isinstance(raw_known, list) else set()
+    return manifest, known_paths
 
 
 def _remote_push_manifest(
     *, ssh_target: str, remote_path: str, exclude: list[str], timeout: float | None
-) -> Any | None:
+) -> tuple[Any | None, set[str]]:
     """One bounded ssh round-trip: the deployed runtime hashes the remote tree.
 
     Ships :data:`_REMOTE_MANIFEST_SNIPPET` base64-piped into ``python3`` under
-    ``remote_path`` and parses the JSON manifest it prints. Returns a
-    :class:`Manifest` of the remote tree, or ``None`` when the remote can't
-    produce one — a first deploy (``cd`` fails, absent tree), a pre-delta
-    runtime, a python/base64 gap, a cap breach, or a timeout. ``None`` routes to
-    the full-copy fallback (disclosed), so this is never worse than the prior
-    whole-tree behavior. *remote_path* is ``shlex.quote``-d; the snippet is
-    base64 (no shell metacharacters) so no source quoting is needed.
+    ``remote_path`` and parses the JSON manifest it prints. Returns
+    ``(manifest, known_paths)``: a :class:`Manifest` of the remote tree plus the
+    prior-manifest ``paths`` prune-bookkeeping set folded into the SAME read
+    (delta-push round-trip Option 1 — one leg where there were two). Returns
+    ``(None, set())`` when the remote can't produce a manifest — a first deploy
+    (``cd`` fails, absent tree), a pre-delta runtime, a python/base64 gap, a cap
+    breach, or a timeout. ``None`` routes to the full-copy fallback (disclosed),
+    so this is never worse than the prior whole-tree behavior. *remote_path* is
+    ``shlex.quote``-d; the snippet is base64 (no shell metacharacters) so no
+    source quoting is needed.
     """
     # ``_ssh_bounded`` is defined in the engine package (``__init__``), which
     # imports THIS module in its re-export block — import it call-time to keep
@@ -477,12 +505,12 @@ def _remote_push_manifest(
             what=f"remote hash manifest of {remote_path}",
         )
     except (TimeoutError, OSError):
-        return None
+        return None, set()
     raw = getattr(proc, "stdout", "") or ""
-    manifest = _parse_remote_push_manifest(raw)
+    manifest, known = _parse_remote_push_manifest(raw)
     if manifest is not None:
         _disclose_remote_scan(raw)
-    return manifest
+    return manifest, known
 
 
 def _disclose_remote_scan(stdout: str) -> None:

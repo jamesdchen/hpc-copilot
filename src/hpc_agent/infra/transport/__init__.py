@@ -126,10 +126,11 @@ from ._excludes import (
 )
 from ._prune import (
     _PRUNE_ENV_KILL,  # noqa: F401
+    _PRUNE_RESEAL_PY,  # noqa: F401
     _PUSH_MANIFEST_REL,  # noqa: F401
     _PUSH_MANIFEST_TMP_REL,  # noqa: F401
-    _execute_prune,  # noqa: F401
     _journal_deploy_prune,  # noqa: F401
+    _prune_and_reseal,  # noqa: F401
     _prune_max_bytes,  # noqa: F401
     _prune_max_files,  # noqa: F401
     _read_prior_push_manifest,  # noqa: F401
@@ -849,29 +850,53 @@ def _prune_manifest_known_extras(
     remote_path: str,
     local_path: str | Path,
     remote_manifest: Any,
+    known: set[str],
     extra: tuple[str, ...],
+    seal_paths: list[str],
     timeout: float | None,
-) -> set[str]:
-    """Plan + disclose + journal + execute the bounded auto-prune (ruling 6).
+) -> None:
+    """Plan + disclose + journal + execute the bounded auto-prune (ruling 6) AND
+    seal the push manifest — the WHOLE trailing leg of the delta push.
 
     Called only from the delete=True delta push (holds the dial). Fully
-    fail-open: any error leaves the remote untouched — a prune we cannot do
-    cleanly is a prune we skip, never a broken push.
+    fail-open: any error leaves the remote untouched and still seals the
+    manifest — a prune we cannot do cleanly is a prune we skip, never a broken
+    push.
 
-    Returns the set of manifest-known remote extras that this push did NOT
-    successfully delete (a cap-REFUSED plan, a failed/racing ``rm``, or an
-    error) — the paths that are STILL ours on the remote. The caller folds them
-    into the push manifest it writes (#F58): a refused or failed prune must keep
-    those extras classified ``manifest-known (prunable)`` for the next push, or
-    the disclosure's own ``raise the cap and re-push`` remediation can never
-    work (they would silently downgrade to never-touched ANOMALYs).
+    Owns EXACTLY ONE trailing leg (delta-push round-trip Options 1+3):
+
+    * *known* is the prior-manifest ``paths`` set folded into the remote hash
+      read (Option 1) — there is NO separate ``_read_prior_push_manifest`` dial.
+    * When the prune actually has paths to delete, the ``rm`` + the retained-union
+      manifest seal collapse into ONE trailing :func:`_prune_and_reseal` leg
+      (Option 3), fired ONLY-when-extras. The retained survivors (paths the ``rm``
+      could not remove) are computed REMOTE-SIDE and folded into the same seal.
+    * Otherwise (no candidates, an all-anomaly set, a cap-refused plan, or the
+      kill-switch) a standalone :func:`_write_push_manifest` leg seals the
+      manifest as ``sorted(seal_paths ∪ retained)`` — where *retained* keeps the
+      provenance of any manifest-known extra this push did NOT delete (#F58): a
+      cap-refused/failed prune must stay ``manifest-known (prunable)`` for the
+      next push, or the disclosed ``raise the cap and re-push`` remediation can
+      never fire (the extras would downgrade to never-touched ANOMALYs).
     """
+    seal_base = sorted(set(seal_paths))
+
+    def _seal(extra_paths: set[str]) -> None:
+        _write_push_manifest(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            paths=sorted(set(seal_base) | extra_paths),
+            timeout=timeout,
+        )
+
     if os.environ.get(_PRUNE_ENV_KILL) == "1":
-        return set()
+        _seal(set())
+        return
     # Provenance we must NOT lose: manifest-known extras still on the remote.
-    # Populated as soon as the plan is known and cleared only on a confirmed
-    # delete, so an exception at any later point still retains it.
+    # Populated as soon as the plan is known so an exception at any later point
+    # still seals them into the manifest (fail-open).
     retained: set[str] = set()
+    prune_paths: list[str] = []
     try:
         # Our own bookkeeping file is a remote extra (never shipped locally); it
         # is neither ours-to-prune nor an anomaly — filter it out up front.
@@ -882,16 +907,14 @@ def _prune_manifest_known_extras(
             if p not in (_PUSH_MANIFEST_REL, _PUSH_MANIFEST_TMP_REL) and not _is_runtime_placed(p)
         ]
         if not candidates:
-            return set()
+            _seal(set())
+            return
 
         from hpc_agent.infra.manifest import FileEntry
         from hpc_agent.infra.prune import plan_prune
 
         by_path = {e.path: e for e in remote_manifest.entries}
         extra_entries = [by_path.get(p) or FileEntry(path=p, size=0, sha256="") for p in candidates]
-        known = _read_prior_push_manifest(
-            ssh_target=ssh_target, remote_path=remote_path, timeout=timeout
-        )
         plan = plan_prune(
             extra_entries,
             known,
@@ -913,9 +936,11 @@ def _prune_manifest_known_extras(
                     "manifest_known_bytes": plan.prune_bytes,
                 },
             )
-            return retained
+            _seal(retained)
+            return
         if not plan.to_prune:
-            return retained
+            _seal(retained)
+            return
 
         # Journal BEFORE deleting: record what + why + the old remote sha, so the
         # timeline survives even if the delete itself races or fails.
@@ -931,17 +956,24 @@ def _prune_manifest_known_extras(
                     "size": entry.size,
                 },
             )
-        if _execute_prune(
-            ssh_target=ssh_target,
-            remote_path=remote_path,
-            paths=list(plan.to_prune),
-            timeout=timeout,
-        ):
-            # Confirmed gone from the remote — drop them from the manifest.
-            retained = set()
-        return retained
+        prune_paths = list(plan.to_prune)
     except Exception:  # noqa: BLE001 — the prune is never load-bearing on a push
-        return retained
+        # A failure anywhere during planning still seals the manifest, keeping the
+        # provenance of any manifest-known extra we did not confirm-delete.
+        with contextlib.suppress(Exception):
+            _seal(retained)
+        return
+
+    # COMBINED TAIL (Option 3): the prune ``rm`` + the retained-union reseal in
+    # ONE trailing leg, fired ONLY-when-extras (reached only when a prune has
+    # paths to delete). Outside the try so it fires exactly once; itself fail-open.
+    _prune_and_reseal(
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        prune_paths=prune_paths,
+        seal_paths=seal_base,
+        timeout=timeout,
+    )
 
 
 def rsync_push(
@@ -1020,7 +1052,10 @@ def rsync_push(
         # transfer); the additive ``delete=False`` callers keep the simple path.
         # Kill-switch: HPC_NO_DEPLOY_DELTA=1.
         delta_on = delete and os.environ.get(_DELTA_ENV_KILL) != "1"
-        remote_manifest = (
+        # One round-trip returns BOTH the remote hash manifest AND the prior
+        # push-manifest ``paths`` (``remote_known``) — the prune-plan read folded
+        # into leg A (delta-push round-trip Option 1); no separate prior-read dial.
+        remote_manifest, remote_known = (
             _remote_push_manifest(
                 ssh_target=ssh_target,
                 remote_path=remote_path,
@@ -1028,7 +1063,7 @@ def rsync_push(
                 timeout=effective_timeout,
             )
             if delta_on
-            else None
+            else (None, set())
         )
         if remote_manifest is not None:
             from hpc_agent.infra.manifest import manifest_delta
@@ -1113,29 +1148,28 @@ def rsync_push(
             else:
                 pushed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-            # Bounded auto-prune of MANIFEST-KNOWN remote extras (ruling 6): the
-            # delta tar cannot prune, but a file WE shipped in a prior push and
-            # since dropped is safe to delete under a disclosed cap. Rides this
-            # same delete=True dial (no new cold SSH); anomalies are never
-            # touched. Then persist the push manifest so the NEXT push knows what
-            # is ours. Both fail-open — neither can break a successful transfer.
-            retained_extras = _prune_manifest_known_extras(
+            # Bounded auto-prune of MANIFEST-KNOWN remote extras (ruling 6) AND
+            # the push-manifest seal, folded into ONE trailing leg (delta-push
+            # round-trip Options 1+3). The delta tar cannot prune, but a file WE
+            # shipped in a prior push and since dropped is safe to delete under a
+            # disclosed cap. ``remote_known`` is the prior manifest's ``paths``
+            # folded into leg A (Option 1 — no separate prior-read dial). When a
+            # prune actually fires, the ``rm`` + the retained-union manifest seal
+            # collapse into ONE ``_prune_and_reseal`` leg (Option 3), fired
+            # only-when-extras; otherwise a standalone seal writes the manifest.
+            # Rides this same delete=True dial (no new cold SSH); anomalies are
+            # never touched. Fully fail-open — none of it can break a successful
+            # transfer. ``seal_paths`` is the current local path set (the base of
+            # the manifest); any manifest-known extra a cap-refused/failed prune
+            # did NOT delete keeps its provenance in the union (#F58).
+            _prune_manifest_known_extras(
                 ssh_target=ssh_target,
                 remote_path=remote_path,
                 local_path=local_path,
                 remote_manifest=remote_manifest,
+                known=remote_known,
                 extra=delta.extra,
-                timeout=effective_timeout,
-            )
-            # Write the manifest as the UNION of the current local paths AND any
-            # manifest-known extras this push did NOT delete (#F58): a cap-refused
-            # or failed prune must keep its provenance, or those remote extras
-            # silently downgrade to never-touched ANOMALYs on the very next push
-            # and the "raise the cap and re-push" remediation can never fire.
-            _write_push_manifest(
-                ssh_target=ssh_target,
-                remote_path=remote_path,
-                paths=sorted({e.path for e in local_manifest.entries} | retained_extras),
+                seal_paths=[e.path for e in local_manifest.entries],
                 timeout=effective_timeout,
             )
             return pushed
