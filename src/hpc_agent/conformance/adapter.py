@@ -30,10 +30,14 @@ __all__ = [
     "CAP_DECISION_RENDEZVOUS",
     "CAP_RELAY_ENFORCEMENT",
     "CAP_SCHEDULER_FENCE",
+    "CAP_STOP_HOOK_APPEND",
+    "CAP_TRUSTED_DISPLAY",
     "CAP_UTTERANCE_LOG",
     "DEGRADED_TIERS",
+    "DisplayOutcome",
     "EnforcementOutcome",
     "HarnessAdapter",
+    "StopAppendOutcome",
     "WakeEvent",
     "declared_capabilities",
     "default_detect_capabilities",
@@ -62,6 +66,21 @@ CAPABILITIES: frozenset[str] = frozenset(
 CAP_SCHEDULER_FENCE = "scheduler-fence"
 CAP_DECISION_RENDEZVOUS = "decision-rendezvous"
 
+# --- capabilities 4 & 5 (harness-contract.md, "Capabilities 4 & 5"). Like 6 & 7
+# these are NOT part of the three-capability ``CAPABILITIES`` verdict set — they
+# are ADDITIVE reference-behaved batteries (T9/T10, anti-vendor-lockout Wave D):
+# the kit exercises the REAL cores (the trusted-display render-lock; the
+# relay-audit Stop-hook completer) so a FOREIGN provider can later run the identical
+# assertions through the adapter seam. Crucially NEITHER has a passive detection
+# seam — ``harness-capabilities`` reports ``trusted_display: "unknown"`` and the
+# env-declared ``stop_hook_append`` — so this landing closes the BEHAVED leg only;
+# the passive-detection seam stays the honest residual (never faked into a
+# self-asserted ``true``). Registering the nouns here lets ``declared_capabilities``
+# / ``skip_reason_for`` report them for such an adapter, without changing what
+# "conforming" means today.
+CAP_TRUSTED_DISPLAY = "trusted-display"
+CAP_STOP_HOOK_APPEND = "stop-hook-append"
+
 # Which Protocol method(s) DECLARE each capability. An adapter declares a
 # capability by implementing ALL of its methods (a partial harness simply omits
 # them — the honest-partial posture, not a manifest opt-out).
@@ -73,6 +92,11 @@ _CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     # the reference batteries fall back to the real core when a method is absent.
     CAP_SCHEDULER_FENCE: ("run_scheduler_fence",),
     CAP_DECISION_RENDEZVOUS: ("run_decision_rendezvous",),
+    # Capabilities 4 & 5 — same additive shape (T9/T10). A foreign provider
+    # declares by implementing the optional method; the reference battery falls
+    # back to the real render-lock / completer core otherwise.
+    CAP_TRUSTED_DISPLAY: ("run_trusted_display",),
+    CAP_STOP_HOOK_APPEND: ("run_stop_hook_append",),
 }
 
 # The contract-named degraded tier each capability collapses to when ABSENT.
@@ -88,6 +112,11 @@ DEGRADED_TIERS: dict[str, str] = {
     # clauses (prose-only fence / doctor-tick-backstop-only rendezvous).
     CAP_SCHEDULER_FENCE: "prose-only scheduler-mutation guard",
     CAP_DECISION_RENDEZVOUS: "doctor-tick-backstop-only rendezvous",
+    # Capabilities 4 & 5 tiers track harness-contract.md's degrade clauses: a
+    # model-carried display with no code-proven verbatim surface; the rejector
+    # block-once bounce with no code-appended completion.
+    CAP_TRUSTED_DISPLAY: "model-carried display; no code-proven verbatim surface",
+    CAP_STOP_HOOK_APPEND: "rejector block-once bounce; no code-appended completion",
 }
 
 
@@ -103,6 +132,26 @@ class WakeEvent(NamedTuple):
 
     woke: bool  # the driver was re-invoked after detach
     terminal_seen: bool  # the wake observed the worker's terminal record
+
+
+class DisplayOutcome(NamedTuple):
+    """The outcome of running a harness's trusted-display seam over one code-rendered payload."""
+
+    #: the exact bytes the surface shows the human.
+    displayed: str
+    #: the content address the displayed artifact binds (its header ``view_sha``).
+    bound_view_sha: str | None
+    #: the artifact lives at its ``view_sha`` content address (a forged binding is False).
+    content_addressed: bool
+
+
+class StopAppendOutcome(NamedTuple):
+    """The outcome of running a harness's Stop-hook APPEND channel over one owed/poisoned stop."""
+
+    #: the code-appended ``systemMessage`` the surface DISPLAYS (None = the rejector degrade).
+    system_message: str | None
+    #: the stop ALSO forced a continuation (``decision:"block"``) — the mixed class (D1 shape B).
+    blocked: bool
 
 
 class HarnessAdapter(Protocol):
@@ -162,6 +211,42 @@ class HarnessAdapter(Protocol):
         proceed. ``previously_blocked=True`` models the ``stop_hook_active``
         re-entry — a conforming seam NEVER forces twice. When absent, the reference
         battery falls back to the real rendezvous core (FOREIGN proof owed — Wave C)."""
+
+    # --- capability 4 (trusted display) — OPTIONAL (additive, T9; kit-behaved) ---
+    def run_trusted_display(
+        self, experiment_dir: Path, *, audit_id: str, view: Any
+    ) -> DisplayOutcome:
+        """Run YOUR trusted-display surface over a KIT-CHOSEN code-rendered payload
+        (*view*) — the surface that DISPLAYS a code-authored artifact to the human so
+        code can PROVE the human saw it VERBATIM, uncorrupted by the model. Emit the
+        payload to your content-addressed display and report what it shows:
+        ``displayed`` is the exact bytes the surface shows, ``bound_view_sha`` is the
+        content address the artifact binds, ``content_addressed`` is whether the
+        artifact actually lives at that address (a forged binding is False). The kit
+        compares ``displayed`` byte-for-byte against the known payload and checks the
+        address integrity; a model-substituted or non-content-addressed display is
+        FAILED. When absent, the reference battery falls back to the real render-lock
+        core (a FOREIGN proof stays owed). NOTE (T9 residual): NO passive install
+        marker exists for a trusted-display surface — ``harness-capabilities``
+        honestly reports ``trusted_display: "unknown"`` — so this seam is the BEHAVED
+        leg only; the passive-detection seam is the still-owed follow-on, never faked
+        into a self-asserted ``true``."""
+
+    # --- capability 5 (Stop-hook append channel) — OPTIONAL (additive, T10) ---
+    def run_stop_hook_append(
+        self, experiment_dir: Path, *, on_block: bool = False
+    ) -> StopAppendOutcome:
+        """Run YOUR turn-final APPEND channel over an owed/poisoned stop — the seam
+        that lets deterministic code APPEND what it holds (an owed terminal verdict, a
+        trusted render, a rule-10 correction) to the human via a hook
+        ``systemMessage`` and PROCEED, instead of bouncing the model into re-relaying
+        it. The D1 two-shape probe: ``on_block=False`` MUST display a bare
+        ``systemMessage`` on a PROCEEDING stop (``blocked=False``); ``on_block=True``
+        MUST display a ``systemMessage`` COMBINED with a ``decision:"block"`` poisoned
+        bounce (``blocked=True``) — display may differ between the two shapes.
+        ``system_message`` is the appended text the surface shows (None = the REJECTOR
+        degrade, nothing appended). When absent, the reference battery falls back to
+        the real relay-audit completer core (a FOREIGN proof stays owed)."""
 
     # --- optional; kit skips the matching assertions when absent ---
     def answer_question(self, experiment_dir: Path, offered_labels: list[str], answer: str) -> None:

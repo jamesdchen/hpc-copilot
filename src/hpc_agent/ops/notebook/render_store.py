@@ -48,6 +48,7 @@ __all__ = [
     "HEADER_KEYS",
     "RenderDigest",
     "write_render",
+    "render_bytes",
     "render_path",
     "read_render_header",
     "read_render_digest",
@@ -122,6 +123,20 @@ def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> P
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def render_bytes(*, audit_id: str, view: SectionView) -> str:
+    """The PUBLIC deterministic-render entrypoint: the exact bytes :func:`write_render` lays down.
+
+    The sanctioned way to obtain the KNOWN code-rendered trusted-display payload
+    IN-PROCESS (the conformance kit's capability-4 reference battery imports THIS as
+    the byte-for-byte expectation, exactly as the fence kit imports
+    ``scheduler_write_fence.fenced_in_command``) — never the package-private
+    ``_render_bytes``. Same inputs → byte-identical output (no timestamps, no
+    absolute paths), so the content address (``view.view_sha``) is stable and a
+    substitution is detectable by a plain byte compare.
+    """
+    return _render_bytes(audit_id=audit_id, view=view)
 
 
 def _parse_header(text: str) -> dict[str, str] | None:

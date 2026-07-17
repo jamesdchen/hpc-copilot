@@ -22,7 +22,11 @@ never a self-asserted manifest:
 3. **Backgrounding / wake.** Always present — the detached-worker machinery is
    core-side — with the watchdog alert-delivery hook's presence reported honestly.
 4. **Trusted display.** ``"unknown"`` — the trusted-render capability has no
-   detection seam yet (the honest non-answer, not an asserted ``true``).
+   PASSIVE detection seam yet (the honest non-answer, not an asserted ``true``).
+   The BEHAVED leg IS covered: the conformance kit's capability-4 battery
+   (``conformance/test_capability_trusted_display.py``) drives the real render-lock
+   core, but a passive install marker — what would let this probe report anything
+   but ``"unknown"`` — remains the still-owed follow-on (T9).
 6. **The scheduler-write fence.** Whether the ``PreToolUse(Bash)`` fence hook is
    installed (its needle in ``hooks.PreToolUse``) — the seam that blocks a
    mutating scheduler verb the agent is about to run (conduct rule 7).
@@ -324,11 +328,14 @@ def harness_capabilities(
     # capability has no observable install marker); the honest non-answer.
     trusted_display = CapabilityEntry(
         present="unknown",
-        channel="none — the trusted-render capability has no detection seam yet",
+        channel="none — the trusted-render capability has no passive detection seam yet",
         evidence={
             "note": (
                 "no code-observable install marker for a trusted display surface; "
-                "reported unknown rather than asserted"
+                "reported unknown rather than asserted. The BEHAVED leg is covered by "
+                "the conformance kit (conformance/test_capability_trusted_display.py "
+                "drives the real render-lock core, content-address + byte-for-byte); a "
+                "passive detection seam is the still-owed follow-on (T9)."
             )
         },
     )
@@ -353,8 +360,11 @@ def harness_capabilities(
             "note": (
                 "no passive install seam yet (like trusted_display); a conforming "
                 "harness activates the append channel explicitly once its "
-                "systemMessage-display conformance probe confirms it. Absent/unknown "
-                "-> the completer degrades to the rejector, never to silence."
+                "systemMessage-display conformance probe confirms it. The BEHAVED leg "
+                "IS covered: the kit's capability-5 D1 two-shape prober "
+                "(conformance/test_capability_stop_hook_append.py) drives the real "
+                "relay-audit completer core. Absent/unknown -> the completer degrades "
+                "to the rejector, never to silence."
             ),
         },
     )

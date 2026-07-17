@@ -274,13 +274,25 @@ in §4.**
   rendezvous, proving backgrounding is not Claude-Code-shaped. Files: new
   adapter + CI row. Size: M.
 
-### Wave D — capability 4/5 second implementations (deferred; needs R4 outcomes)
+### Wave D — capability 4/5 second implementations (needs R4 outcomes)
 
 - **T9 — trusted-display detection seam + a second render surface**, IF R4 says
-  name it. Files: `ops/harness_capabilities.py` + kit noun. Size: M.
+  name it. Files: `ops/harness_capabilities.py` + kit noun. Size: M. **BEHAVED-leg
+  LANDED 2026-07-17** (see drift log): the kit battery
+  `conformance/test_capability_trusted_display.py` drives the real render-lock core
+  (byte-for-byte display + content-address) + the `run_trusted_display` adapter
+  seam + `CAP_TRUSTED_DISPLAY` noun. RESIDUAL: the PASSIVE detection seam (an install
+  marker so the verb moves off `trusted_display: "unknown"`) is NOT built — no
+  self-asserted field was invented (doctrine); a FOREIGN provider's proof is owed.
 - **T10 — stop-hook-append conformance prober** (the D1 two-shape probe) so a
   foreign harness can activate capability 5 by behavior, not just env markers.
-  Size: M.
+  Size: M. **BEHAVED-leg LANDED 2026-07-17** (see drift log): the D1 two-shape
+  prober `conformance/test_capability_stop_hook_append.py` drives the real
+  relay-audit completer core (bare `systemMessage` on proceed AND `systemMessage` +
+  `decision:"block"`) + the `run_stop_hook_append` adapter seam +
+  `CAP_STOP_HOOK_APPEND` noun. RESIDUAL: a passive seam stays impossible (a hook
+  `systemMessage` leaves no `settings.json` evidence — env-declared tri-state kept);
+  a FOREIGN provider's proof is owed.
 
 **Regen tails:** any new `@primitive` (none currently planned — the activation
 seam reuses `install-commands`) → `scripts/bake_operations_json.py --write` +
@@ -380,6 +392,35 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   stated verbatim in the protocol). Gates green: `regen_all --check` (9/9), lint
   gauntlet (26/26), ruff/format/mypy, 9 runbook tests. The SKILL.md re-cast as the
   Claude-Code PROFILE (light front-matter edits) is NOT in this unit — deferred.
+- **Capability 4/5 kit behavioral batteries landed (2026-07-17) — T9/T10 Wave-D
+  BEHAVED leg, the cap-6/7 follow-on analogues.** Wave-A T3 recorded capabilities 4
+  (trusted display) and 5 (stop-hook append) as `"unknown"`-in-report with the kit
+  behavioral assertion as the owed Wave-D follow-on. This unit builds the BEHAVED
+  half of both: (1) two reference-core-driven kit batteries —
+  `conformance/test_capability_trusted_display.py` drives the real render-lock core
+  (`render_store.write_render` + the new PUBLIC `render_store.render_bytes` +
+  `read_render_header`), asserting a known code-rendered `SectionView` is displayed
+  BYTE-FOR-BYTE and is CONTENT-ADDRESSED by its own `view_sha` (a substituted or
+  forged-binding surface FAILS); and `conformance/test_capability_stop_hook_append.py`
+  is the D1 two-shape prober over the real `relay_audit_stop.build_hook_output`
+  completer — shape A (bare `systemMessage` on a proceeding stop) + shape B
+  (`systemMessage` + `decision:"block"`), with the append channel activated via
+  SCOPED/always-restored env (never leaked). (2) `conformance/adapter.py` gains the
+  additive nouns `CAP_TRUSTED_DISPLAY` / `CAP_STOP_HOOK_APPEND`, their degraded
+  tiers, the optional methods `run_trusted_display` / `run_stop_hook_append`, and
+  the outcome types `DisplayOutcome` / `StopAppendOutcome`; mirror guard-can-fire
+  fakes in `tests/conformance_kit/`. **NO version bump (honest, unlike 6/7):** the
+  NEGOTIATION REPORT gains no new detectable capability — `trusted_display` stays
+  `"unknown"` (no passive seam invented — doctrine) and `stop_hook_append` stays its
+  env-declared tri-state — so this is kit-BEHAVED + adapter-seam only, additive
+  within the current minor; the three-way pin stays at **1.2.0**. RESIDUAL: FOREIGN
+  proofs for both + a PASSIVE trusted-display detection seam remain owed (see the
+  updated Wave D T9/T10 bullets). The three-capability `conforming` verdict is
+  UNCHANGED (110/110 kit self-run green). Files: `ops/notebook/render_store.py`
+  (public `render_bytes`), `conformance/adapter.py` + `conformance/__init__.py`
+  (nouns + methods + outcomes), two shipped kit modules + two mirror modules,
+  `ops/harness_capabilities.py` (evidence notes), `docs/internals/harness-contract.md`
+  (HONEST STATUS + negotiation bullets + drift log).
 - **Capability 6/7 negotiation seams landed (2026-07-17) — the M follow-on Wave A
   named + assigned the version bump to.** The Wave-A T2 landing recorded
   capabilities 6 (scheduler-write fence) and 7 (decision-rendezvous

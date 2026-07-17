@@ -387,8 +387,11 @@ named seam:
 - **Capability 3 (backgrounding)** — always present (the detached-worker machinery
   is core-side); the watchdog alert-delivery hook (`_ALERT_COUNT_NEEDLE`) is
   reported honestly.
-- **Capability 4 (trusted display)** — reported `"unknown"`: no detection seam
-  exists yet for a trusted-render surface, so the verb asserts nothing.
+- **Capability 4 (trusted display)** — reported `"unknown"`: no PASSIVE detection
+  seam exists yet for a trusted-render surface, so the verb asserts nothing. The
+  BEHAVED leg IS kit-covered (T9): `conformance/test_capability_trusted_display.py`
+  drives the real render-lock core (byte-for-byte display + content-address). See
+  "Capability 4 — trusted display" for the full HONEST STATUS.
 - **Capability 5 (Stop-hook append channel)** — a hook `systemMessage` the
   harness DISPLAYS to the human (added v1.1.0, additive; `docs/design/stop-hook-completer.md`,
   D1). It is what lets the relay-audit Stop hook COMPLETE — code-append the owed
@@ -399,10 +402,12 @@ named seam:
   (the probe MUST cover BOTH output shapes — a bare `systemMessage` on a
   proceeding stop AND a `systemMessage` combined with `decision:"block"`, since
   display may differ) and activates it via `detect_stop_hook_append` /
-  `detect_stop_hook_append_on_block` (`ops/harness_capabilities.py`). **Degrades
-  when absent/unknown** (the default — no harness declares it yet): the Stop hook
-  stays the REJECTOR (block-once bounce, `_kernel/hooks/relay_audit_stop.py`), an
-  owed verdict or contradicted claim re-relayed by the MODEL, never code-appended.
+  `detect_stop_hook_append_on_block` (`ops/harness_capabilities.py`). The BEHAVED
+  leg IS kit-covered (T10): the D1 two-shape prober
+  `conformance/test_capability_stop_hook_append.py` drives the real completer core.
+  **Degrades when absent/unknown** (the default — no harness declares it yet): the
+  Stop hook stays the REJECTOR (block-once bounce, `_kernel/hooks/relay_audit_stop`),
+  an owed verdict or contradicted claim re-relayed by the MODEL, never code-appended.
   No wedge — the completer path is dark until the append channel is confirmed.
 - **Capability 6 (scheduler-write fence)** — detected from the fence hook's needle
   in `hooks.PreToolUse` (`_SCHEDULER_WRITE_FENCE_NEEDLE`, added v1.2.0, additive),
@@ -689,15 +694,32 @@ authorship BAR is untouched.
   relay / verdict / brief, uncorrupted by the model. A second harness proves it
   with a conformance probe that emits a known code-rendered payload and confirms
   the surface displayed it byte-for-byte, with no model-authored substitution.
-- **What seam is MISSING.** There is NO code-observable install marker for a
-  trusted-render surface — `harness_capabilities` asserts nothing and reads
-  `"unknown"` (`ops/harness_capabilities.py`, the `trusted_display`
-  `CapabilityEntry`). There is no second render surface and no kit noun. A
-  negotiated report needs EITHER a passive detection seam OR a conformance probe
-  in the shape capability 5 already sketches.
-- **Verdict.** KEEP `"unknown"` in Wave A. Naming/probing is deferred.
-- **Follow-on unit.** T9 (plan Wave D) — a trusted-display detection seam + a
-  second render surface. Files: `ops/harness_capabilities.py` + a kit noun. Size: M.
+- **Detection (declared == detected == behaved).** HONEST STATUS (as of v1.2.0,
+  T9 landed): the BEHAVED leg is closed FOR THE REFERENCE ADAPTER; the passive
+  DETECTED seam is the residual — deliberately NOT faked. The conformance kit
+  carries a BEHAVIORAL battery
+  (`conformance/test_capability_trusted_display.py`) that drives the REAL
+  render-lock core (`ops/notebook/render_store.py`'s `write_render` /
+  `render_bytes` / `read_render_header`, the v1.5 trusted-display lock) in-process
+  as the reference: it emits a known code-rendered payload (a real `SectionView`)
+  and confirms the surface displays it BYTE-FOR-BYTE (`render_bytes` equality) AND
+  that the artifact is CONTENT-ADDRESSED by its own `view_sha` (a forged / non-
+  content-addressed binding is FAILED — guard-can-fire). A foreign provider runs
+  the identical assertions through the `run_trusted_display` adapter method
+  (`conformance/adapter.py`, `CAP_TRUSTED_DISPLAY`).
+- **What seam is STILL MISSING.** There is NO code-observable PASSIVE install
+  marker for a trusted-render surface, so `harness-capabilities` still asserts
+  nothing and reads `"unknown"` (`ops/harness_capabilities.py`, the
+  `trusted_display` `CapabilityEntry`) — never a self-asserted `true` (doctrine).
+  The behaved leg proves the render-lock BEHAVES; the passive-detection seam that
+  would let the verb report anything but `"unknown"` is the residual.
+- **Verdict.** KEEP `"unknown"` in the negotiation report; the BEHAVED leg is now
+  kit-covered. No contract-version bump: the report gains no new detectable
+  capability (see the drift log entry below).
+- **Follow-on seam (owed).** A PASSIVE trusted-display detection seam (an install
+  marker the verb can read) so the negotiation report can move off `"unknown"`,
+  AND a FOREIGN trusted-display provider exercising the shipped battery through
+  `run_trusted_display`. Size: M.
 
 ### Capability 5 — the Stop-hook append channel
 
@@ -708,22 +730,72 @@ authorship BAR is untouched.
   conforming prober MUST confirm BOTH output shapes display (D1): a bare
   `systemMessage` on a PROCEEDING stop, AND a `systemMessage` combined with
   `decision:"block"` — display may differ between them.
-- **What seam is MISSING.** There is NO passive install seam — a hook
-  `systemMessage` leaves zero evidence in `settings.json` — so the channel is
-  ENV-DECLARED only (`HPC_STOP_HOOK_APPEND` / `HPC_STOP_HOOK_APPEND_ON_BLOCK`, read
+- **Detection (declared == detected == behaved).** HONEST STATUS (as of v1.2.0,
+  T10 landed): the BEHAVED leg is closed FOR THE REFERENCE ADAPTER; the passive
+  DETECTED seam stays absent (the channel is ENV-DECLARED, tri-state). The
+  conformance kit carries a BEHAVIORAL D1 two-shape prober
+  (`conformance/test_capability_stop_hook_append.py`) that drives the REAL
+  relay-audit completer core (`_kernel/hooks/relay_audit_stop.build_hook_output`)
+  in-process as the reference, with the append channel activated (scoped env,
+  always restored — never leaked into a sibling probe): it confirms shape A (a
+  bare `systemMessage` code-appending an owed verdict on a PROCEEDING stop) AND
+  shape B (a `systemMessage` COMBINED with a `decision:"block"` poisoned bounce —
+  the D2 confirmed-display path). A channel that swallows the systemMessage on a
+  blocked stop, or never appends at all, is FAILED (guard-can-fire). A foreign
+  provider runs the identical assertions through the `run_stop_hook_append` adapter
+  method (`conformance/adapter.py`, `CAP_STOP_HOOK_APPEND`).
+- **What seam is STILL MISSING.** There is NO passive install seam — a hook
+  `systemMessage` leaves zero evidence in `settings.json` — so the channel stays
+  ENV-DECLARED (`HPC_STOP_HOOK_APPEND` / `HPC_STOP_HOOK_APPEND_ON_BLOCK`, read
   tri-state by `detect_stop_hook_append` / `detect_stop_hook_append_on_block` in
   `ops/harness_capabilities.py`) and reads `"unknown"` until a conforming harness's
-  probe confirms `systemMessage` display. No conforming prober exists yet.
-  Env-declared activation is trust-by-self-assertion's next-door risk (guardrail
-  G2), which is exactly why the completer path is gated on a PROBE-confirmed bit,
-  not on the env marker alone.
-- **Verdict.** KEEP `"unknown"` in Wave A. Activation stays PROBE-gated.
-- **Follow-on unit.** T10 (plan Wave D) — a stop-hook-append conformance prober
-  (the D1 two-shape probe) so a foreign harness activates capability 5 by
-  BEHAVIOR, not just env markers. Size: M.
+  probe confirms `systemMessage` display. Env-declared activation is
+  trust-by-self-assertion's next-door risk (guardrail G2), which is exactly why the
+  completer path is gated on a PROBE-confirmed bit, not on the env marker alone —
+  and the kit prober above is now that probe, in reference form.
+- **Verdict.** KEEP the tri-state `"unknown"`-until-activated report; the BEHAVED
+  leg is now kit-covered. No contract-version bump (the report gains no new
+  detectable capability — see the drift log).
+- **Follow-on seam (owed).** A FOREIGN append-channel provider exercising the
+  shipped D1 two-shape battery through `run_stop_hook_append`, so activation is
+  proven by BEHAVIOR from something other than our own core (and, if ever
+  possible, a passive detection seam). Size: M.
 
 ## Drift log
 
+- **2026-07-17 (anti-vendor-lockout, capability 4/5 kit behavioral batteries —
+  T9/T10, the Wave-D follow-ons).** Closed the BEHAVED-for-the-reference-adapter
+  leg for capabilities 4 (trusted display) and 5 (Stop-hook append channel); a
+  FOREIGN proof, and a PASSIVE detection seam, remain owed. (1) The conformance kit
+  gains two reference-core-driven behavioral batteries:
+  `conformance/test_capability_trusted_display.py` (drives the real render-lock
+  core — `render_store.write_render` / the new public `render_store.render_bytes` /
+  `read_render_header` — emitting a known code-rendered `SectionView` payload and
+  confirming BYTE-FOR-BYTE display + CONTENT-ADDRESS integrity; a substituted or
+  forged-binding surface is FAILED), and
+  `conformance/test_capability_stop_hook_append.py` (the D1 two-shape prober over
+  the real `relay_audit_stop.build_hook_output` completer — shape A: a bare
+  `systemMessage` on a proceeding stop; shape B: a `systemMessage` COMBINED with
+  `decision:"block"` — with the append channel activated via SCOPED, always-restored
+  env, never leaked into a sibling probe; a swallow-on-block or never-append channel
+  is FAILED). (2) `conformance/adapter.py` gains the additive nouns
+  `CAP_TRUSTED_DISPLAY` / `CAP_STOP_HOOK_APPEND`, their degraded tiers, the optional
+  adapter methods `run_trusted_display` / `run_stop_hook_append`, and the outcome
+  types `DisplayOutcome` / `StopAppendOutcome`, so a FOREIGN provider can run the
+  identical assertions. Both carry mirror guard-can-fire fakes in
+  `tests/conformance_kit/`. **No contract-version bump (deliberate, honest).** Unlike
+  the 6/7 landing (v1.1.0 → v1.2.0), this one adds NO new NEGOTIATION-REPORT
+  capability: `trusted_display` stays `"unknown"` (no passive seam exists — never
+  faked into a self-asserted `true`, doctrine) and `stop_hook_append` stays its
+  existing env-declared tri-state. The change is kit-BEHAVED + adapter-seam only —
+  observable to a conformance run, not to a negotiating harness's report — so it is
+  additive WITHIN the current minor; the three-way version pin (doc line == constant
+  == kit stamp) stays at **1.2.0**. The three-capability `conforming: harness
+  contract v1` verdict is UNCHANGED (110/110 kit self-run green; 4/5 are additive
+  reference-behaved batteries, not verdict gates — guardrail G5). Updates the
+  capability 4/5 sections (HONEST STATUS + owed follow-on), the negotiation-section
+  bullets, and the `harness-capabilities` evidence notes (behaved-leg pointer + the
+  still-missing passive seam named). Enforcing cores unchanged.
 - **2026-07-17 (anti-vendor-lockout, capability 6/7 negotiation seams — the
   Wave-A-owed M follow-on).** Closed the declared == detected legs and the
   behaved-for-the-reference-adapter leg for capabilities 6 (scheduler-write fence)
