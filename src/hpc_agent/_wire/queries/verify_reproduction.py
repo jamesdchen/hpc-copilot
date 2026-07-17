@@ -141,6 +141,34 @@ class DataIdentityDisclosure(BaseModel):
     )
 
 
+class EnvLockDisclosure(BaseModel):
+    """The v2 receipt's ENVIRONMENT-dimension disclosure (U-ENV1, reproducibility program).
+
+    The resolved-environment leg's comparison of the reproduction's ``env_lock_sha``
+    against the original's, DISCLOSED so a verdict NAMES the environment when it
+    moved: ``status`` is ``match`` (both env_locks present + equal), ``drifted``
+    (both present + different — the silent-package-bump / mutated-conda-env class,
+    now attributed), or ``unknown`` (either side's env could not be resolved / an
+    old sidecar has no env_lock). ``original`` / ``repro`` echo the two shas
+    verbatim (null where absent). NEVER a gate — reproducing under a bumped
+    dependency set is a legitimate reproduction, mirroring the data leg. Present
+    only when at least one side recorded an env_lock (else the receipt is
+    byte-identical to a pre-U-ENV1 one).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="reproduction environment-lock disclosure")
+
+    status: Literal["match", "drifted", "unknown"] = Field(
+        description="How the reproduction's resolved environment compares to the original's."
+    )
+    original: str | None = Field(
+        default=None, description="The original run's env_lock_sha (null when not captured)."
+    )
+    repro: str | None = Field(
+        default=None, description="The reproduction run's env_lock_sha (null when not captured)."
+    )
+
+
 class StageInterlockDisclosure(BaseModel):
     """The v2 receipt's data-trace interlock disclosure (docs/design/data-trace.md).
 
@@ -250,6 +278,18 @@ class ReproductionReceipt(BaseModel):
             "priors excluded, no-manifest priors counted unknown). Null when the "
             "current data identity is unknown (no manifest) — the verify then stays "
             "byte-identical to a pre-amendment one."
+        ),
+    )
+    env_identity: EnvLockDisclosure | None = Field(
+        default=None,
+        description=(
+            "Environment-dimension disclosure (U-ENV1, reproducibility program): "
+            "how the reproduction's resolved env_lock_sha compares to the "
+            "original's (match / drifted / unknown). Null when NEITHER side "
+            "recorded an env_lock (an old sidecar or a could-not-capture canary) — "
+            "the receipt then stays byte-identical to a pre-U-ENV1 one. Never a "
+            "gate; the environment is named as the moved dimension, mirroring the "
+            "data leg."
         ),
     )
     stage_interlock: StageInterlockDisclosure | None = Field(

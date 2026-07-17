@@ -291,6 +291,24 @@ def _data_drift_disclosure(experiment_dir: Path, sidecar: dict[str, Any]) -> dic
     return {"status": status, "recorded": recorded, "current": current}
 
 
+def _env_lock_disclosure(sidecar: dict[str, Any]) -> dict[str, Any]:
+    """The environment-lock disclosure for the reproduction mint brief (U-ENV1).
+
+    A NAMED DISCLOSURE, never a refusal (mirroring :func:`_data_drift_disclosure`):
+    at mint time the reproduction's own environment is not yet resolved (its canary
+    captures it post-submission), so this discloses whether the ORIGINAL's resolved
+    environment was captured — so the human's re-``y`` knows an env comparison is
+    pending at verify. ``status="captured"`` with the recorded ``env_lock_sha`` when
+    the original's canary resolved its env; ``status="not_captured"`` (env_lock null,
+    or an explicit ``could_not_capture``) otherwise — verify will read the pair as
+    environment identity unknown, disclosed, never blocking.
+    """
+    recorded = sidecar.get("env_lock_sha")
+    recorded = str(recorded) if recorded else None
+    status = "captured" if recorded else "not_captured"
+    return {"status": status, "original_env_lock": recorded}
+
+
 def _cost_estimate(submit: SubmitFlowSpec) -> CostEstimate:
     """The pre-dispatch cost estimate for the reproduction spec (S2 parity).
 
@@ -569,6 +587,16 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         data_phrase = " DATA DRIFT: the declared input roots differ from the original's"
     elif data_drift["status"] == "unknown":
         data_phrase = " data identity unknown (no manifest at record/current time)"
+    # The environment dimension (U-ENV1): DISCLOSE whether the original's resolved
+    # environment was captured, so the human knows an env comparison is pending at
+    # verify (the reproduction's own env_lock is captured by its canary). Never a
+    # refusal — reproducing under a bumped env is a legitimate reproduction.
+    env_lock = _env_lock_disclosure(sidecar)
+    env_phrase = (
+        ""
+        if env_lock["status"] == "captured"
+        else " env not captured for the original (env drift disclosed, not compared, at verify)"
+    )
     brief: dict[str, Any] = {
         "run_id": rr.run_id,
         "reproduces": original_run_id,
@@ -587,6 +615,9 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         "uncompared_task_count": uncompared_task_count,
         # The third drift dimension (amendment leg 3): data identity, disclosed.
         "data_identity": data_drift,
+        # The environment dimension (U-ENV1): whether the original's resolved env
+        # was captured; the reproduction's env is compared at verify. Disclosed.
+        "env_identity": env_lock,
         "resolve": {
             "run_id": rr.run_id,
             "cmd_sha": rr.cmd_sha,
@@ -599,8 +630,9 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         needs_decision=True,
         reason=(
             f"reproduction of {original_run_id!r} resolved (est. {est_phrase}) under a "
-            f"disjoint remote_path;{partial_phrase}{data_phrase} canary PENDING — greenlight "
-            "submit-s2 to stage & canary the reproduction (its detached worker owns the poll)."
+            f"disjoint remote_path;{partial_phrase}{data_phrase}{env_phrase} canary PENDING — "
+            "greenlight submit-s2 to stage & canary the reproduction (its detached worker owns "
+            "the poll)."
         ),
         run_id=rr.run_id,
         reproduces=original_run_id,

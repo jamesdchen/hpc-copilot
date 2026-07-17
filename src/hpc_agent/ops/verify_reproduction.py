@@ -593,6 +593,35 @@ def _data_dimension_phrase(excluded_data_drift: int, data_identity_unknown: int)
     return "; data dimension: " + ", ".join(parts)
 
 
+def _env_dimension_phrase(disclosure: Mapping[str, Any]) -> str:
+    """Code-rendered clause NAMING the environment dimension (U-ENV1), or ``""``.
+
+    The reproducibility program's #2 gap, DISCLOSED not gated (mirroring
+    :func:`_data_dimension_phrase`): the verdict states when the RESOLVED
+    environment moved. A ``drifted`` env (the silent-package-bump / mutated-conda
+    class) names both env_locks; an ``unknown`` (either side's env could not be
+    resolved / an old sidecar) discloses the environment identity is not captured.
+    A ``match`` returns ``""`` — matching env, no drift line (byte-identical to a
+    pre-U-ENV1 verify beyond the additive receipt block). NEVER a refusal.
+    """
+    status = disclosure.get("status")
+    if status == "drifted":
+        original = str(disclosure.get("original") or "")
+        repro = str(disclosure.get("repro") or "")
+        return (
+            f"; environment dimension: env_lock DRIFTED "
+            f"(original {original[:12]} vs repro {repro[:12]}) — the resolved "
+            "environment changed (a package bump / mutated env), disclosed not gated"
+        )
+    if status == "unknown":
+        return (
+            "; environment dimension: env_lock identity unknown (the resolved "
+            "environment could not be captured on one side — an old record or a "
+            "could-not-capture canary), disclosed"
+        )
+    return ""
+
+
 def _identity(sidecar: Mapping[str, Any], run_id: str) -> dict[str, Any]:
     """Lift a run's identity off its sidecar VERBATIM (never re-derived)."""
     ident: dict[str, Any] = {"run_id": run_id}
@@ -1046,6 +1075,11 @@ def verify_reproduction(
     # tiered path (an envelope exists to have applied the data leg); stays None on
     # the incomparable / empty-ledger paths.
     data_identity_disclosure: dict[str, Any] | None = None
+    # The environment-dimension disclosure (U-ENV1): how the reproduction's
+    # resolved env_lock_sha compares to the original's. Populated only on the
+    # metrics-present path below when at least one side recorded an env_lock;
+    # stays None otherwise (byte-identical to a pre-U-ENV1 verify).
+    env_identity_disclosure: dict[str, Any] | None = None
     # The data-trace interlock disclosure (both/one/neither side traced) and the
     # localized stage — populated only on the full metrics-present path below;
     # stay None on the incomparable / partial paths (nothing folded, nothing to
@@ -1197,6 +1231,26 @@ def verify_reproduction(
                 "excluded_data_drift": envelope.excluded_data_drift,
                 "data_identity_unknown": envelope.data_identity_unknown,
             }
+        # Environment-dimension leg (U-ENV1): compare the reproduction's RESOLVED
+        # env_lock_sha against the original's — DISCLOSED, never gated (the data
+        # leg's shape). A drifted env (a mutated conda env / a silent package bump)
+        # is NAMED as the moved dimension rather than mislabeled nondeterminism.
+        # Rides the receipt + reason only when at least one side recorded an
+        # env_lock (else byte-identical to a pre-U-ENV1 verify); a match adds NO
+        # reason clause (matching env → no drift line).
+        from hpc_agent.state.env_lock import env_drift_disclosure
+
+        orig_env_lock = original_sidecar.get("env_lock_sha")
+        repro_env_lock = repro_sidecar.get("env_lock_sha")
+        env_known = bool(orig_env_lock or repro_env_lock)
+        env_disclosure = env_drift_disclosure(orig_env_lock, repro_env_lock)
+        env_phrase = _env_dimension_phrase(env_disclosure) if env_known else ""
+        if env_known:
+            env_identity_disclosure = {
+                "status": env_disclosure["status"],
+                "original": env_disclosure["recorded"],
+                "repro": env_disclosure["current"],
+            }
         diffs = diff_metrics(orig_metrics, repro_metrics)
         classification = classify(
             diffs,
@@ -1220,9 +1274,11 @@ def verify_reproduction(
         # untraced comparison never forces it (byte-identical to a pre-interlock
         # receipt — nothing folded, nothing disclosed).
         tiered = bool(envelope.per_key)
+        # env_known forces v2 so the env_identity disclosure rides the receipt; an
+        # env-less comparison never forces it (byte-identical to a pre-U-ENV1 one).
         schema_version = (
             RECEIPT_SCHEMA_VERSION_TIERED
-            if (tiered or partial or data_moved or stage_interlock is not None)
+            if (tiered or partial or data_moved or stage_interlock is not None or env_known)
             else RECEIPT_SCHEMA_VERSION
         )
 
@@ -1241,7 +1297,7 @@ def verify_reproduction(
                     merged["envelope_applied"] = None
                 per_key.append(merged)
             stage = classification.stage_reached
-            reason = _render_tiered_reason(stage, per_key) + data_phrase
+            reason = _render_tiered_reason(stage, per_key) + data_phrase + env_phrase
         else:
             per_key = []
             for entry in per_key_v1:
@@ -1258,7 +1314,7 @@ def verify_reproduction(
                 else:
                     per_key.append(entry)
             stage = overall_v1
-            reason = _render_reason(per_key_v1, overall_v1) + data_phrase
+            reason = _render_reason(per_key_v1, overall_v1) + data_phrase + env_phrase
 
         # Stage-localized mismatch: surface the first diverging stage ONLY when
         # the overall verdict routes to the human (mismatch / needs_verdict /
@@ -1306,6 +1362,11 @@ def verify_reproduction(
         # + what the data leg did to the prior evidence. None on an empty-ledger v2
         # (partial-but-untiered) receipt — no envelope applied the data leg.
         receipt["data_identity"] = data_identity_disclosure
+        # v2 environment-identity disclosure (U-ENV1): how the reproduction's
+        # resolved env_lock compares to the original's. None when neither side
+        # recorded an env_lock — the receipt then stays byte-identical to a
+        # pre-U-ENV1 one.
+        receipt["env_identity"] = env_identity_disclosure
         # v2 data-trace interlock (docs/design/data-trace.md): only present when a
         # trace exists on at least one side (else the receipt is byte-identical to
         # a pre-interlock one). ``diverged_stage`` names the first stage a routed

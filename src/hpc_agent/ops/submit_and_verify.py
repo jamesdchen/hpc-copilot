@@ -487,6 +487,37 @@ def _mint_double_canary_sample(
         )
 
 
+def _capture_env_lock_best_effort(experiment_dir: Path, *, run_id: str, canary_run_id: str) -> None:
+    """Resolve + stamp the run's env_lock off the verified canary (U-ENV1).
+
+    The canary just verified — it ran a real task under the run's env, so this is
+    where the RESOLVED-environment snapshot (pip freeze / lockfile / python -V) is
+    captured over SSH (in the canary's activation) and reduced to an additive
+    ``env_lock_sha`` on the MAIN run's sidecar
+    (:func:`hpc_agent.ops.submit.env_lock_capture.capture_and_stamp_env_lock`).
+    A later reproduction under a drifted env is then DISCLOSED (never gated) —
+    the #2 crisis gap closed on the capture side.
+
+    Best-effort by contract, exactly like :func:`_mint_double_canary_sample`: the
+    capture is itself never-raising (an unresolvable env stamps an honest
+    ``could_not_capture`` status), but the call is wrapped here too so no
+    unexpected error can fail a submit whose canary verified.
+    """
+    from hpc_agent.ops.submit.env_lock_capture import capture_and_stamp_env_lock
+
+    try:
+        capture_and_stamp_env_lock(experiment_dir, run_id=run_id, canary_run_id=canary_run_id)
+    except Exception:  # noqa: BLE001 — env-lock capture never fails a passing submit
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "env_lock capture for run %r raised unexpectedly; the sidecar simply "
+            "carries no env_lock this submit (disclosed as not-captured at verify)",
+            run_id,
+            exc_info=True,
+        )
+
+
 def _fire_second_canary_concurrent(
     experiment_dir: Path,
     spec: SubmitAndVerifySpec,
@@ -1189,6 +1220,20 @@ def submit_and_verify(
     # in_flight run (both the stop_after_canary S2 return and the Phase-2 launch
     # below are reached only past this point, so one call covers both).
     _mark_canary_terminal(experiment_dir, canary_submit.canary_run_id, status="complete")
+
+    # U-ENV1 (reproducibility program): the canary verified ⇒ it ran a real task
+    # under the run's env, so resolve that env NOW (pip freeze / lockfile / python
+    # -V, over SSH in the canary's activation) and stamp its reduced env_lock_sha
+    # on the MAIN run's sidecar. Environment drift (a mutated conda env, a silent
+    # package bump) is invisible today — env_hash is captured but never compared;
+    # this records the RESOLVED env so a later reproduction under a drifted env is
+    # DISCLOSED (never gated, mirroring the data leg). Best-effort + never-raising:
+    # an unresolvable env stamps an honest could_not_capture, disclosed at verify.
+    # Runs once per verified gate for BOTH the single- and double-canary paths, and
+    # before the stop_after_canary S2 return and the fused Phase-2 launch.
+    _capture_env_lock_best_effort(
+        experiment_dir, run_id=canary_submit.run_id, canary_run_id=canary_submit.canary_run_id
+    )
 
     # THE DOUBLE CANARY, verify half (docs/design/determinism-fingerprint.md,
     # D-double-canary). The first canary verified ok — verify the SECOND canary

@@ -836,3 +836,49 @@ verify) — and then decision-ready per attention-queue D8 (named blocker,
 one code-rendered evidence block, pre-drafted y/nudge resolution, at an
 existing decision moment). Restriction rationale: unrestricted routing of
 low-tier verdicts teaches the human to ignore the channel wholesale.
+
+## Amendment (2026-07-17): U-ENV1 — the RESOLVED-environment lock
+
+The "env" dimension named above (the three-dimension drift guard: code, env,
+data) was `env_hash` — the DECLARED activation inputs (modules / conda source /
+runtime) captured at submit by `state/run_sha.py::compute_env_hash`. But
+`env_hash` was **never compared in any gate**, and it says nothing about the
+RESOLVED environment: a conda env mutated under the same name, or a silent
+package bump, reproduces "clean" (the reproducibility program's #2 crisis gap —
+environment drift invisible). U-ENV1 closes the capture + disclose side of that
+gap; it does NOT gate.
+
+As built:
+
+1. **The canary emits a RESOLVED-environment snapshot.** After a canary verifies
+   (it ran a real task under the run's env), `ops/submit_and_verify.py`
+   (`_capture_env_lock_best_effort`, once per verified gate — single- or
+   double-canary) resolves the env over SSH in the run's activation via
+   `ops/submit/env_lock_capture.py::capture_and_stamp_env_lock`. The
+   snapshot-source resolution order is `pip freeze` → a lockfile → `python -V` +
+   key package versions (`state/env_lock.py::SOURCE_ORDER`), reduced to an
+   additive `env_lock_sha` (opaque line-set + source tag). The SSH read is
+   ack-gated (finding-24): a truncated `pip freeze` is a positive UNKNOWN
+   (could-not-capture), never a wrong sha over a subset of packages.
+2. **Additive sidecar stamp.** `state/runs.py::stamp_run_sidecar_env_lock` writes
+   `env_lock_sha` + `env_lock_status` (`captured` / `could_not_capture`) as a
+   POST-submission additive stamp (backfill-defaults only, NOT `_V2_CONFIG_FIELDS`
+   — the `_RUNTIME_WRITTEN` class the sidecar-field-reads lint pins). An OLD
+   record without the field reads `None` = "environment identity not captured".
+   An unresolvable env still records the `could_not_capture` status — never a
+   silent skip (no-silent-caps).
+3. **Disclose, never gate.** `state/env_lock.py::env_drift_disclosure` (match /
+   drifted / unknown) is consumed at verify (`ops/verify_reproduction.py`, the
+   additive `env_identity` receipt block + reason clause, `EnvLockDisclosure` on
+   the wire) and at reproduce mint (`ops/reproduce_run.py`, the brief's
+   `env_identity`). A drifted env NAMES the environment as the moved dimension
+   rather than mislabeling it nondeterminism — the same disclose-not-gate posture
+   as the data leg (`docs/design/data-manifest.md`). A MATCH adds no reason
+   clause; NEITHER side captured → no `env_identity` block (byte-identical to a
+   pre-U-ENV1 verify).
+
+Deliberately OUT of scope for U-ENV1: `env_lock_sha` is NOT folded into the
+fingerprint `SampleIdentity` (samples still key on code identity + the data leg),
+and U-ENV1 never refuses a submit or a reproduction on env drift. Held by
+`tests/state/test_env_lock.py`, `tests/ops/submit/test_env_lock_capture.py`,
+`tests/ops/aggregate/test_verify_reproduction_env_lock.py`.

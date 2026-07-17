@@ -502,3 +502,14 @@ export_dossier}.py`, `state/{run_sha,data_manifest,determinism,fingerprint_store
 attestation}.py`, and `execution/mapreduce/`. Coordination points with the three
 concurrent sessions (reconcile/mapreduce, provenance-manifest, agent-assets) are
 named per unit.
+
+- 2026-07-17 (integration) — **U-ENV1 BUILT**: canary emits a resolved-env
+  snapshot (SOURCE_ORDER pip_freeze > lockfile > python_env, source tag folded
+  into the sha, ack-gated fetch so truncation = could-not-capture never a wrong
+  sha) → additive env_lock_sha/env_lock_status on the sidecar (backfill-only,
+  old records read None); reproduce/verify DISCLOSE drift (env_identity receipt
+  block + reason clause) and never gate — proven: drifted env + matching
+  metrics leaves the verdict untouched. As-built detail in
+  docs/design/determinism-fingerprint.md's drift log. The ENVIRONMENT link
+  moves ABSENT/weak → DISCLOSED. Built in an isolated worktree, integrated by
+  the coordinator.

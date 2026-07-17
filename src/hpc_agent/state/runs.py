@@ -238,6 +238,16 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     # old sidecar (or a single ≤cap array, or a resubmit-recorded job) keeps
     # the global-index probe behaviour.
     "job_task_spans": None,
+    # env_lock_sha / env_lock_status land AFTER submission via
+    # :func:`stamp_run_sidecar_env_lock` — the canary emits a RESOLVED-environment
+    # snapshot (pip freeze / lockfile / python -V) reduced to an additive
+    # env_lock_sha (U-ENV1, reproducibility program). Like job_ids these are
+    # POST-WRITE additive stamps, NOT config-snapshot fields, so they live in the
+    # backfill defaults only (not _V2_CONFIG_FIELDS). An old sidecar without them
+    # reads None -- "environment identity not captured", disclosed at verify,
+    # never a silent skip.
+    "env_lock_sha": None,
+    "env_lock_status": None,
 }
 
 # Hardened return-shape defaults. ``read_run_sidecar`` always fills these
@@ -1232,6 +1242,50 @@ def backfill_run_sidecar_provenance(
         ):
             if value is not None and existing.get(field) is None:
                 existing[field] = value
+        return existing
+
+    atomic_locked_update(target, _mutate)
+    return target
+
+
+def stamp_run_sidecar_env_lock(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    env_lock_sha: str | None,
+    env_lock_status: str,
+) -> Path:
+    """Stamp the RESOLVED-environment lock on an existing sidecar; return its path.
+
+    The U-ENV1 capture seam (reproducibility program): the canary resolves the
+    run's environment (pip freeze / lockfile / python -V) and this records the
+    reduced ``env_lock_sha`` plus the capture ``env_lock_status`` (``captured`` /
+    ``could_not_capture``) on the run's per-experiment sidecar — POST-submission,
+    exactly the additive post-write shape :func:`backfill_run_sidecar_provenance`
+    and :func:`update_run_sidecar_job_ids` use, same lock seam.
+
+    Strictly **additive**: ``env_lock_sha`` is written only when non-null AND the
+    sidecar's current value is null (an already-stamped sha is never overwritten,
+    so a re-capture cannot silently rewrite provenance). ``env_lock_status`` is
+    likewise only written when currently absent, so the FIRST capture verdict
+    stands — a could-not-capture is honestly recorded and not later erased. A
+    could-not-capture (``env_lock_sha=None``) still records the status, never a
+    silent skip (no-silent-caps).
+
+    Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*.
+    """
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        raise FileNotFoundError(f"run sidecar not found: {target}")
+    from hpc_agent.infra.io import atomic_locked_update
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        if env_lock_sha is not None and existing.get("env_lock_sha") is None:
+            existing["env_lock_sha"] = env_lock_sha
+        if existing.get("env_lock_status") is None:
+            existing["env_lock_status"] = env_lock_status
         return existing
 
     atomic_locked_update(target, _mutate)

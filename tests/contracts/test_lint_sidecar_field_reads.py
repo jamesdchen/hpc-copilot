@@ -117,6 +117,14 @@ _RUNTIME_WRITTEN = frozenset(
         # ``tasks`` is populated by execution/mapreduce/dispatch.py at task
         # runtime — the per-task block carrying exit_code/preempt/etc.
         "tasks",
+        # env_lock_sha / env_lock_status (U-ENV1, reproducibility program):
+        # POST-submission additive stamps written by
+        # state/runs.py::stamp_run_sidecar_env_lock after the canary resolves the
+        # run's environment (pip freeze / lockfile / python -V). Like job_ids they
+        # are runtime-written, NOT config-snapshot fields — backfilled to None on
+        # read so an old sidecar reads "environment identity not captured".
+        "env_lock_sha",
+        "env_lock_status",
     ]
 )
 ALLOWED_SIDECAR_KEYS = _V1_REQUIRED | _V2_CONFIG | _RUNTIME_WRITTEN
