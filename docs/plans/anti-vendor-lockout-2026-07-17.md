@@ -292,18 +292,19 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   registry (Claude Code = one profile; a foreign harness ships its own asset
   profile), or do we only make the existing install env-overridable and leave
   foreign activation to the harness? Blocks T4.
-- **R2 (negotiation version-gating — the task's explicit question).** Should
-  `harness-capabilities` VERSION-GATE — refuse/downgrade when a harness's
-  declared contract version is older than `HARNESS_CONTRACT_VERSION`? *Draft
-  recommendation:* NO — stay report-only/additive-only within major 1
-  (`harness-contract.md`, "Deprecation posture"), consistent with G2/G5. Gating
-  would move trust into a declared version string. Record the decision either way.
+- **R2 (negotiation version-gating — the task's explicit question). RULED
+  2026-07-17: NO — report-only/additive-only within major 1.** Gating would
+  move trust into a self-declared version string, the exact "trust into a
+  harness surface" move the doctrine forbids; consistent with G2/G5 and the
+  MCP-is-projection ruling. (Ruled as the doctrine-forced option under the
+  standing authorization; recorded here per "record the decision either way.")
 - **R3 (risk-register burn-down timing).** Build the gateway/OTel/foreign-bg
   adapters NOW (Wave C), or reserve them and pull when a real foreign harness
   appears? Trade: proving the claim vs YAGNI.
-- **R4 (unnamed enforcement).** Promote `scheduler_write_fence` (rule 7) and the
-  rendezvous commit-then-continue to NAMED capabilities 6/7, or record them
-  code-backstopped-only? Blocks T2/T9/T10.
+- **R4 (unnamed enforcement). RULED 2026-07-17: promote to NAMED capabilities
+  6/7** — recording already-enforced behavior is docs-only bookkeeping with no
+  downside, and an unnamed capability cannot acquire a second-harness proof.
+  Unblocks T2/T9/T10 (the T2 docs work itself remains queued with Wave A).
 - **R5 (prose-neutral runbook).** Is the harness runbook a GENERATED projection
   from `DECISION_POINTS`, and does a foreign harness consume it or the
   machine-readable contract only? Blocks T5.
