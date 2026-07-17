@@ -116,6 +116,11 @@ _UTTERANCE_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "utterance_capture"
 _ANSWER_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "answer_capture"
 _RELAY_AUDIT_NEEDLE = _HOOK_MODULE_PREFIX + "relay_audit_stop"
 _ALERT_COUNT_NEEDLE = _HOOK_MODULE_PREFIX + "alert_count"
+# Capability 6 (scheduler-write fence): the ``PreToolUse(Bash)`` hook needle the
+# ``harness-capabilities`` verb probes. Byte-identical to the needle in the
+# ``settings_write_fence_hook`` _HOOK_SPEC below — an explicit importable name so
+# the negotiation probe reuses the ONE canonical matcher, never a re-derived scan.
+_SCHEDULER_WRITE_FENCE_NEEDLE = _HOOK_MODULE_PREFIX + "scheduler_write_fence"
 
 # ── Fused Stop hook (stop_multiplex) ─────────────────────────────────────────
 # The three legacy standalone ``Stop`` guards are fused into ONE interpreter start
@@ -202,7 +207,7 @@ _HOOK_SPECS: tuple[_HookSpec, ...] = (
     _HookSpec(
         "settings_write_fence_hook",
         "PreToolUse",
-        _HOOK_MODULE_PREFIX + "scheduler_write_fence",
+        _SCHEDULER_WRITE_FENCE_NEEDLE,
         "Bash",
         ("qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"),
     ),

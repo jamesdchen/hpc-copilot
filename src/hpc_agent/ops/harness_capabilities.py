@@ -23,6 +23,19 @@ never a self-asserted manifest:
    core-side — with the watchdog alert-delivery hook's presence reported honestly.
 4. **Trusted display.** ``"unknown"`` — the trusted-render capability has no
    detection seam yet (the honest non-answer, not an asserted ``true``).
+6. **The scheduler-write fence.** Whether the ``PreToolUse(Bash)`` fence hook is
+   installed (its needle in ``hooks.PreToolUse``) — the seam that blocks a
+   mutating scheduler verb the agent is about to run (conduct rule 7).
+7. **The decision-rendezvous commit-then-continue.** Whether the rendezvous Stop
+   guard is installed (its needle, carried inside the fused ``stop_multiplex``
+   Stop entry) — the seam that forces one continuation on a committed-but-
+   unadvanced greenlight and stays silent while merely awaiting the human.
+
+Capabilities 6 and 7 detect via the SAME canonical needle-matcher the other
+probes use (``agent_assets._find_hook_entry_index``); like capabilities 1–2 the
+reported ``present`` is a real bool (the reference provider's install is seen),
+never asserted — a foreign provider unseen by the needle is the detection
+asymmetry (D-K3), not a false ``true``.
 
 The result pairs each capability's detected report with the exact tier its absence
 degrades to (the contract's named friction tiers, quoted). This is
@@ -75,7 +88,12 @@ __all__ = [
 # harness at negotiation time, and the kit does not ship in every install. SemVer
 # posture (harness-contract.md "Contract version"): within major 1 the contract
 # is ADDITIVE-ONLY; the sha canonicalization is the canonical major trigger.
-HARNESS_CONTRACT_VERSION = "1.1.0"
+# 1.2.0 (2026-07-17, anti-vendor-lockout): additive MINOR — capabilities 6
+# (scheduler-write fence) and 7 (decision-rendezvous commit-then-continue) gained
+# negotiation seams here + kit behavioral assertions. Both reference adapters stay
+# conforming (the top-level v1 verdict is the three core capabilities), so the bump
+# is additive, never breaking (harness-contract.md "Deprecation posture").
+HARNESS_CONTRACT_VERSION = "1.2.0"
 
 _log = logging.getLogger(__name__)
 
@@ -203,8 +221,10 @@ def _needle_installed(settings: dict[str, Any], needle: str) -> bool:
             "capture hooks + this repo's log presence + MCP elicitation flag), "
             "relay/verbatim enforcement (the relay-audit Stop hook), backgrounding "
             "(core-side, always present; watchdog hook reported honestly), "
-            "trusted display (unknown — no detection seam yet), and the Stop-hook "
-            "append channel (unknown until a conformance probe activates it) — each "
+            "trusted display (unknown — no detection seam yet), the Stop-hook "
+            "append channel (unknown until a conformance probe activates it), the "
+            "scheduler-write fence (PreToolUse needle), and the decision-rendezvous "
+            "commit-then-continue (rendezvous Stop-guard needle) — each "
             "with the named tier its absence degrades to. Read-only, no SSH, "
             "fail-open on an unreadable settings.json. The declaration IS what "
             "code can verify."
@@ -232,7 +252,9 @@ def harness_capabilities(
     from hpc_agent.agent_assets import (
         _ALERT_COUNT_NEEDLE,
         _ANSWER_CAPTURE_NEEDLE,
+        _DECISION_RENDEZVOUS_STOP_NEEDLE,
         _RELAY_AUDIT_NEEDLE,
+        _SCHEDULER_WRITE_FENCE_NEEDLE,
         _UTTERANCE_CAPTURE_NEEDLE,
     )
     from hpc_agent.state.utterances import utterances_path
@@ -337,6 +359,35 @@ def harness_capabilities(
         },
     )
 
+    # Capability 6 — the scheduler-write fence (conduct rule 7). Detected from the
+    # PreToolUse(Bash) fence hook's needle via the SAME canonical matcher; a real
+    # bool like capabilities 1–2 (the install seam exists, unlike trusted_display).
+    fence_installed = _needle_installed(settings, _SCHEDULER_WRITE_FENCE_NEEDLE)
+    scheduler_write_fence_cap = CapabilityEntry(
+        present=fence_installed,
+        channel=(
+            "scheduler-write-fence PreToolUse(Bash) hook -> blocks a mutating "
+            "scheduler verb (qsub/sbatch/qdel/scancel/qmod/qalter) in command "
+            "position; read-only probes and mere mentions pass"
+        ),
+        evidence={"scheduler_write_fence_hook": fence_installed},
+    )
+
+    # Capability 7 — the decision-rendezvous commit-then-continue. Detected from
+    # the rendezvous Stop guard's needle, which the fused stop_multiplex entry's
+    # command mentions as an argument (so _needle_installed resolves it against the
+    # one fused Stop entry). A real bool, same shape as capabilities 1–2/6.
+    rendezvous_installed = _needle_installed(settings, _DECISION_RENDEZVOUS_STOP_NEEDLE)
+    decision_rendezvous_cap = CapabilityEntry(
+        present=rendezvous_installed,
+        channel=(
+            "decision-rendezvous Stop guard (inside the fused stop_multiplex Stop "
+            "entry) -> forces one continuation on a committed-but-unadvanced "
+            "greenlight; silent while merely awaiting the human"
+        ),
+        evidence={"decision_rendezvous_stop_hook": rendezvous_installed},
+    )
+
     return HarnessCapabilitiesResult(
         capabilities={
             "utterance_log": utterance_log,
@@ -344,6 +395,8 @@ def harness_capabilities(
             "backgrounding": backgrounding,
             "trusted_display": trusted_display,
             "stop_hook_append": stop_hook_append,
+            "scheduler_write_fence": scheduler_write_fence_cap,
+            "decision_rendezvous": decision_rendezvous_cap,
         },
         tier_consequences={
             "utterance_log": (
@@ -373,6 +426,21 @@ def harness_capabilities(
                 "owed terminal verdict or a contradicted claim is re-relayed by the "
                 "MODEL (the block-once bounce), never code-appended. No wedge; the "
                 "completer path is dark until the append channel is confirmed."
+            ),
+            "scheduler_write_fence": (
+                "absent -> the scheduler-mutation guarantee reverts to PROSE: no "
+                "pre-execution seam refuses an agent-improvised qsub/qdel, so a "
+                "mutating cluster action rests on the model refraining rather than "
+                "on code. No wedge — cluster mutations still belong to block code "
+                "gated on a journaled greenlight; only the belt-and-suspenders "
+                "interception is gone (the named weaker tier)."
+            ),
+            "decision_rendezvous": (
+                "absent -> a committed greenlight can STRAND the driver: the model "
+                "may commit the `y` and end the turn ('recorded, done') with no "
+                "turn-final seam forcing the advance. No wedge — the scheduled "
+                "doctor tick remains the out-of-session backstop; only the in-session "
+                "commit-then-continue guarantee degrades (the named weaker tier)."
             ),
         },
         harness_contract_version=HARNESS_CONTRACT_VERSION,

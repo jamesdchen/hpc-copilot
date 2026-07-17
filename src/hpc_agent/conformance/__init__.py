@@ -30,7 +30,9 @@ from __future__ import annotations
 
 from hpc_agent.conformance.adapter import (
     CAP_BACKGROUNDING,
+    CAP_DECISION_RENDEZVOUS,
     CAP_RELAY_ENFORCEMENT,
+    CAP_SCHEDULER_FENCE,
     CAP_UTTERANCE_LOG,
     CAPABILITIES,
     DEGRADED_TIERS,
@@ -44,7 +46,9 @@ from hpc_agent.conformance.adapter import (
 __all__ = [
     "CAPABILITIES",
     "CAP_BACKGROUNDING",
+    "CAP_DECISION_RENDEZVOUS",
     "CAP_RELAY_ENFORCEMENT",
+    "CAP_SCHEDULER_FENCE",
     "CAP_UTTERANCE_LOG",
     "DEGRADED_TIERS",
     "EnforcementOutcome",

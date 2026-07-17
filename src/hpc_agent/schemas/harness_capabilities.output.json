@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/harness_capabilities.output.json",
   "title": "harness-capabilities output data",
-  "description": "The detected capability set plus the tier consequence of each absence.\n\n``capabilities`` maps the four contract capability names to their detected\n:class:`CapabilityEntry`. ``tier_consequences`` maps the same names to the\nexact degrade each absence implies — the contract's named friction tiers,\nquoted, not invented. This is detection-as-negotiation: what the code can\nverify IS the declaration.",
+  "description": "The detected capability set plus the tier consequence of each absence.\n\n``capabilities`` maps the contract capability names to their detected\n:class:`CapabilityEntry`. ``tier_consequences`` maps the same names to the\nexact degrade each absence implies — the contract's named friction tiers,\nquoted, not invented. This is detection-as-negotiation: what the code can\nverify IS the declaration.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

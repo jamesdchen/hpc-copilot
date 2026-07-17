@@ -65,7 +65,7 @@ class CapabilityEntry(BaseModel):
 class HarnessCapabilitiesResult(BaseModel):
     """The detected capability set plus the tier consequence of each absence.
 
-    ``capabilities`` maps the four contract capability names to their detected
+    ``capabilities`` maps the contract capability names to their detected
     :class:`CapabilityEntry`. ``tier_consequences`` maps the same names to the
     exact degrade each absence implies — the contract's named friction tiers,
     quoted, not invented. This is detection-as-negotiation: what the code can

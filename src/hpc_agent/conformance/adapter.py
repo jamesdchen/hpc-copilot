@@ -27,7 +27,9 @@ if TYPE_CHECKING:
 __all__ = [
     "CAPABILITIES",
     "CAP_BACKGROUNDING",
+    "CAP_DECISION_RENDEZVOUS",
     "CAP_RELAY_ENFORCEMENT",
+    "CAP_SCHEDULER_FENCE",
     "CAP_UTTERANCE_LOG",
     "DEGRADED_TIERS",
     "EnforcementOutcome",
@@ -50,6 +52,16 @@ CAPABILITIES: frozenset[str] = frozenset(
     {CAP_UTTERANCE_LOG, CAP_RELAY_ENFORCEMENT, CAP_BACKGROUNDING}
 )
 
+# --- capabilities 6 & 7 (harness-contract.md, "Capabilities 6 & 7"). These are
+# NOT part of the three-capability ``CAPABILITIES`` verdict set (the top-level
+# ``conforming: harness contract v1`` line stays the three core capabilities); they
+# are ADDITIVE reference-behaved batteries (contract v1.2.0) with an adapter seam a
+# FOREIGN provider can later run (Wave C). Registering the nouns here lets
+# ``declared_capabilities`` / ``skip_reason_for`` report them for such an adapter,
+# without changing what "conforming" means today.
+CAP_SCHEDULER_FENCE = "scheduler-fence"
+CAP_DECISION_RENDEZVOUS = "decision-rendezvous"
+
 # Which Protocol method(s) DECLARE each capability. An adapter declares a
 # capability by implementing ALL of its methods (a partial harness simply omits
 # them — the honest-partial posture, not a manifest opt-out).
@@ -57,6 +69,10 @@ _CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     CAP_UTTERANCE_LOG: ("write_utterance",),
     CAP_RELAY_ENFORCEMENT: ("run_enforcement_point",),
     CAP_BACKGROUNDING: ("start_background", "await_wake"),
+    # Capabilities 6 & 7 — declared by implementing the optional adapter method;
+    # the reference batteries fall back to the real core when a method is absent.
+    CAP_SCHEDULER_FENCE: ("run_scheduler_fence",),
+    CAP_DECISION_RENDEZVOUS: ("run_decision_rendezvous",),
 }
 
 # The contract-named degraded tier each capability collapses to when ABSENT.
@@ -68,6 +84,10 @@ DEGRADED_TIERS: dict[str, str] = {
     CAP_UTTERANCE_LOG: "journal-response friction tier",
     CAP_RELAY_ENFORCEMENT: "verb-only relay-audit posture",
     CAP_BACKGROUNDING: "synchronous in-turn execution; correctness unaffected",
+    # Capabilities 6 & 7 tiers track harness-contract.md's "Degrades when absent"
+    # clauses (prose-only fence / doctor-tick-backstop-only rendezvous).
+    CAP_SCHEDULER_FENCE: "prose-only scheduler-mutation guard",
+    CAP_DECISION_RENDEZVOUS: "doctor-tick-backstop-only rendezvous",
 }
 
 
@@ -117,6 +137,31 @@ class HarnessAdapter(Protocol):
     # --- capability 3: backgrounding / wake ---
     def start_background(self, experiment_dir: Path, argv: list[str]) -> Any: ...
     def await_wake(self, handle: Any, timeout_s: float) -> WakeEvent: ...
+
+    # --- capability 6 (scheduler-write fence) — OPTIONAL (additive, v1.2.0) ---
+    def run_scheduler_fence(self, command: str) -> EnforcementOutcome:
+        """Run YOUR pre-execution command fence over *command* — the seam that
+        INSPECTS a shell command the agent is about to run and REFUSES it when it
+        would EXECUTE a mutating scheduler verb (``qsub``/``sbatch``/``qdel``/…) in
+        command position (including wrapped / transport forms like
+        ``bash -c 'qsub …'`` or ``ssh host qdel``), while letting a mere mention
+        (``grep qsub``), a read-only probe (``qstat``), and the ``hpc-agent`` CLI
+        itself through. ``blocked=True`` is a refusal (``reason`` names the fenced
+        verb); ``blocked=False`` is a pass. When absent, the reference battery falls
+        back to the real fence core (a FOREIGN proof stays owed — Wave C)."""
+
+    # --- capability 7 (decision-rendezvous commit-then-continue) — OPTIONAL ---
+    def run_decision_rendezvous(
+        self, experiment_dir: Path, *, previously_blocked: bool = False
+    ) -> EnforcementOutcome:
+        """Run YOUR turn-final seam over the cwd repo's journal — the seam that
+        reads the decision journal and FORCES ONE continuation when a human
+        greenlight is committed but the driver has not advanced past the parked
+        boundary, and stays SILENT while the driver is merely awaiting the human.
+        ``blocked=True`` forced a continuation; ``blocked=False`` let the stop
+        proceed. ``previously_blocked=True`` models the ``stop_hook_active``
+        re-entry — a conforming seam NEVER forces twice. When absent, the reference
+        battery falls back to the real rendezvous core (FOREIGN proof owed — Wave C)."""
 
     # --- optional; kit skips the matching assertions when absent ---
     def answer_question(self, experiment_dir: Path, offered_labels: list[str], answer: str) -> None:

@@ -970,7 +970,7 @@
     "output_schema": "harness_capabilities.output.json",
     "python": "hpc_agent.ops.harness_capabilities.harness_capabilities",
     "side_effects": [],
-    "summary": "Detect and report the harness capability set as CODE can observe it (LSP-style negotiation for the harness contract). Reports the contract capabilities — the out-of-band utterance log (installed capture hooks + this repo's log presence + MCP elicitation flag), relay/verbatim enforcement (the relay-audit Stop hook), backgrounding (core-side, always present; watchdog hook reported honestly), trusted display (unknown — no detection seam yet), and the Stop-hook append channel (unknown until a conformance probe activates it) — each with the named tier its absence degrades to. Read-only, no SSH, fail-open on an unreadable settings.json. The declaration IS what code can verify.",
+    "summary": "Detect and report the harness capability set as CODE can observe it (LSP-style negotiation for the harness contract). Reports the contract capabilities — the out-of-band utterance log (installed capture hooks + this repo's log presence + MCP elicitation flag), relay/verbatim enforcement (the relay-audit Stop hook), backgrounding (core-side, always present; watchdog hook reported honestly), trusted display (unknown — no detection seam yet), the Stop-hook append channel (unknown until a conformance probe activates it), the scheduler-write fence (PreToolUse needle), and the decision-rendezvous commit-then-continue (rendezvous Stop-guard needle) — each with the named tier its absence degrades to. Read-only, no SSH, fail-open on an unreadable settings.json. The declaration IS what code can verify.",
     "verb": "query"
   },
   {

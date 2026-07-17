@@ -23,7 +23,7 @@ pretending the guarantee still holds.
 
 ## Contract version
 
-Contract version: 1.1.0
+Contract version: 1.2.0
 
 This is the SemVer of the contract this page specifies. It has ONE home in
 code — `HARNESS_CONTRACT_VERSION` in `ops/harness_capabilities.py` — and this
@@ -371,7 +371,7 @@ A conforming harness's capability set is not a self-asserted manifest — it is
 negotiation posture: a harness advertises what it can do, but here "advertise"
 means "expose the seams code reads", never "claim in prose". The read-only
 `harness-capabilities` verb (`ops/harness_capabilities.py`) is the negotiation
-surface; it reports the four capabilities as code OBSERVES them, each against a
+surface; it reports the capabilities as code OBSERVES them, each against a
 named seam:
 
 - **Capability 1 (utterance log)** — detected from the installed input-capture
@@ -404,6 +404,17 @@ named seam:
   stays the REJECTOR (block-once bounce, `_kernel/hooks/relay_audit_stop.py`), an
   owed verdict or contradicted claim re-relayed by the MODEL, never code-appended.
   No wedge — the completer path is dark until the append channel is confirmed.
+- **Capability 6 (scheduler-write fence)** — detected from the fence hook's needle
+  in `hooks.PreToolUse` (`_SCHEDULER_WRITE_FENCE_NEEDLE`, added v1.2.0, additive),
+  a real bool like capabilities 1–2. The behaved leg is a kit battery over the
+  real fence core; a FOREIGN provider's proof is owed (Wave C). See "Capability 6 —
+  the scheduler-write fence" for the full HONEST STATUS.
+- **Capability 7 (decision-rendezvous commit-then-continue)** — detected from the
+  rendezvous guard's needle (`_DECISION_RENDEZVOUS_STOP_NEEDLE`), carried inside
+  the fused `stop_multiplex` Stop entry (added v1.2.0, additive), a real bool. The
+  behaved leg is a kit battery over the real rendezvous core; a FOREIGN provider's
+  proof is owed (Wave C). See "Capability 7 — the decision-rendezvous
+  commit-then-continue" for the full HONEST STATUS.
 
 **The detection asymmetry (D-K3; anti-vendor-lockout T2).** The needles above
 detect OUR reference providers — the Claude Code hooks this repo installs;
@@ -560,16 +571,26 @@ MUST NEVER treat the fence as authorization to run mutations from block code
 WITHOUT a journaled greenlight — the fence is one layer; the greenlight gate is
 the other.
 
-**Detection (declared == detected == behaved).** HONEST STATUS: there is NO
-negotiation seam in `harness-capabilities` for capability 6 today — that verb
-reports capabilities 1–5 only. The reference provider IS install-detectable by
-the same canonical matcher the other needles use
-(`agent_assets._find_hook_entry_index` over the `scheduler_write_fence` needle in
-`hooks.PreToolUse`, pinned by `tests/cli/test_agent_assets_settings_hook.py`), but
-that detection is not surfaced as a negotiated capability and there is no
-BEHAVIORAL kit assertion a foreign fence must pass. So the declared == detected ==
-behaved triangle is UNCLOSED for capability 6. Naming it does not close it; the
-seam is a named follow-on.
+**Detection (declared == detected == behaved).** HONEST STATUS (as of v1.2.0):
+the declared == detected legs are CLOSED and the behaved leg is closed FOR THE
+REFERENCE ADAPTER; a FOREIGN proof remains owed (Wave C). `harness-capabilities`
+now REPORTS capability 6 as `scheduler_write_fence`, detected by the same
+canonical matcher the other needles use
+(`agent_assets._find_hook_entry_index` over the `_SCHEDULER_WRITE_FENCE_NEEDLE` in
+`hooks.PreToolUse`, pinned by `tests/cli/test_agent_assets_settings_hook.py` +
+`tests/ops/test_harness_capabilities.py`) — a real bool like capabilities 1–2,
+never asserted, with the tier its absence degrades to named. The conformance kit
+carries a BEHAVIORAL battery (`conformance/test_capability_scheduler_fence.py`)
+that drives the REAL fence core in-process as the reference: it MUST block a
+fenced verb in command position (including `bash -c 'qsub …'`, `ssh host qdel`,
+and other wrapped/transport forms) and MUST pass a mere mention (`grep qsub`), a
+read-only probe (`qstat`), and the `hpc-agent` CLI itself — a planted fence that
+misses `bash -c 'qsub …'` is FAILED by the battery (guard-can-fire). What is NOT
+yet closed: no FOREIGN PreToolUse-equivalent provider has run the battery — the
+adapter seam (`run_scheduler_fence`) exists so one can (Wave C), but the reference
+core is the only thing proven to behave. The needle detects OUR reference
+provider only (the D-K3 detection asymmetry); a conforming foreign fence is
+detected BY BEHAVIOR (the kit verdict), never by the needle.
 
 **Enforcing code.** `_kernel/hooks/scheduler_write_fence.py` — a `PreToolUse(Bash)`
 command hook, **exit 2 blocks the tool call** with the reason on stderr;
@@ -578,12 +599,13 @@ command-position analysis (subshell/redirect/wrapper skipping, transport
 recursion, command-substitution scan). Installed by `install_agent_assets` into
 `hooks.PreToolUse` (`agent_assets.py`, the `settings_write_fence_hook` spec).
 
-**Follow-on seam (named, not implied).** A negotiated capability-6 report in
-`harness-capabilities` + a conformance-kit behavioral assertion (a foreign
-PreToolUse-equivalent provider proving the fence-vs-mention discrimination). Size:
-M. That unit OWNS the MINOR contract-version bump (`HARNESS_CONTRACT_VERSION` in
-`ops/harness_capabilities.py` and the three-way pin), which this docs-only naming
-deliberately does NOT take — the version stays 1.1.0 until a seam actually lands.
+**Follow-on seam (owed, Wave C).** A FOREIGN capability-6 reference adapter (a
+non-Claude PreToolUse-equivalent provider) exercising the shipped battery through
+the `run_scheduler_fence` adapter method, so the fence-vs-mention discrimination
+is proven by something other than our own core. Size: M. The MINOR
+contract-version bump this capability's seam OWNED is TAKEN by this landing
+(`HARNESS_CONTRACT_VERSION` 1.1.0 → 1.2.0 in `ops/harness_capabilities.py` and the
+three-way pin) — the report + reference battery are the seam.
 
 ### Capability 7 — the decision-rendezvous commit-then-continue
 
@@ -614,14 +636,25 @@ capability (capability 5) AND the parked next verb is MECHANICAL AND transport i
 healthy, it MAY complete the mechanical tick in code rather than bouncing — but
 absent any of those it degrades to the byte-identical bounce.
 
-**Detection (declared == detected == behaved).** HONEST STATUS: like capability 6,
-there is NO distinct negotiation seam for capability 7 in `harness-capabilities`
-today. The reference provider is one of the three fused Stop guards installed
-under the `stop_multiplex` dispatcher; it is install-detectable via the Stop-entry
-needle, but the verb reports it as part of neither capability 2 (relay) nor a
-distinct capability 7, and no kit assertion exercises a foreign
-commit-then-continue provider. The triangle is UNCLOSED. Naming it is the
-prerequisite, not the proof.
+**Detection (declared == detected == behaved).** HONEST STATUS (as of v1.2.0):
+like capability 6, the declared == detected legs are CLOSED and the behaved leg is
+closed FOR THE REFERENCE ADAPTER; a FOREIGN proof remains owed (Wave C).
+`harness-capabilities` now REPORTS capability 7 as `decision_rendezvous`, detected
+via the rendezvous guard's needle (`_DECISION_RENDEZVOUS_STOP_NEEDLE`), which the
+fused `stop_multiplex` Stop entry's command mentions as an argument — so the SAME
+canonical matcher (`agent_assets._find_hook_entry_index`) resolves it against the
+one fused Stop entry (pinned by `tests/ops/test_harness_capabilities.py`). The
+conformance kit carries a BEHAVIORAL battery
+(`conformance/test_capability_decision_rendezvous.py`) that drives the REAL
+rendezvous core (`decision_rendezvous_stop_guard.build_hook_output`) in-process as
+the reference: it MUST force exactly-one continuation on a committed-but-unadvanced
+greenlight, MUST stay SILENT while merely awaiting the human (a trailing nudge / no
+committed `y`), and MUST be loop-safe (`stop_hook_active` re-entry passes through
+without a second block) — a planted rendezvous that FIRES while merely awaiting is
+FAILED by the battery (guard-can-fire). What is NOT yet closed: no FOREIGN
+turn-final provider has run the battery — the adapter seam
+(`run_decision_rendezvous`) exists so one can (Wave C), but the reference core is
+the only thing proven to behave.
 
 **Enforcing code.** `_kernel/hooks/decision_rendezvous_stop_guard.py` —
 `build_hook_output(payload)` → `find_committed_unadvanced` (the
@@ -631,10 +664,11 @@ block-once bounce, `_completer_output` the capability-5-gated in-code advance.
 Fused into the one Stop entry by the `stop_multiplex` dispatcher; installed by
 `install_agent_assets`.
 
-**Follow-on seam (named, not implied).** A negotiated capability-7 report + a kit
-assertion that a foreign turn-final provider forces exactly-one continuation on a
-committed-unadvanced journal AND stays silent while merely awaiting. Size: M.
-Shares the MINOR version-bump follow-on with capability 6.
+**Follow-on seam (owed, Wave C).** A FOREIGN capability-7 turn-final provider
+exercising the shipped battery through the `run_decision_rendezvous` adapter
+method, so exactly-one-continuation-on-committed-unadvanced + silent-while-awaiting
+is proven by something other than our own core. Size: M. The MINOR version bump
+this seam shared with capability 6 is TAKEN by this landing (v1.2.0).
 
 ## Capabilities 4 & 5 — the detection-seam audit (anti-vendor-lockout T3)
 
@@ -690,6 +724,30 @@ authorship BAR is untouched.
 
 ## Drift log
 
+- **2026-07-17 (anti-vendor-lockout, capability 6/7 negotiation seams — the
+  Wave-A-owed M follow-on).** Closed the declared == detected legs and the
+  behaved-for-the-reference-adapter leg for capabilities 6 (scheduler-write fence)
+  and 7 (decision-rendezvous commit-then-continue); a FOREIGN proof remains owed
+  (Wave C). (1) `harness-capabilities` now REPORTS both — `scheduler_write_fence`
+  detected from `_SCHEDULER_WRITE_FENCE_NEEDLE` in `hooks.PreToolUse`,
+  `decision_rendezvous` from `_DECISION_RENDEZVOUS_STOP_NEEDLE` inside the fused
+  `stop_multiplex` Stop entry — both via the ONE canonical matcher
+  `agent_assets._find_hook_entry_index`, real bools with named tier consequences.
+  (2) `HARNESS_CONTRACT_VERSION` bumped 1.1.0 → **1.2.0** (additive MINOR; both
+  reference adapters stay conforming) and the three-way pin (doc line == constant
+  == kit stamp) updated consistently. (3) Kit behavioral batteries land as
+  reference-core-driven modules: `conformance/test_capability_scheduler_fence.py`
+  (blocks fenced verbs incl. `bash -c 'qsub …'` / `ssh host qdel` / wrapped forms;
+  passes `grep qsub`, `qstat`, and the `hpc-agent` CLI itself) and
+  `conformance/test_capability_decision_rendezvous.py` (forces exactly-one
+  continuation on a committed-unadvanced greenlight; silent while merely awaiting;
+  loop-safe re-entry). Both carry the adapter-driven shape (`run_scheduler_fence` /
+  `run_decision_rendezvous` optional adapter methods) so a FOREIGN provider can run
+  the identical assertions in Wave C. The top-level `conforming: harness contract
+  v1` verdict is UNCHANGED (the three core capabilities); 6/7 are additive
+  reference-behaved batteries, not verdict gates, per the amplification/skips-honest
+  doctrine. Updates the capability 6/7 HONEST STATUS + follow-on paragraphs and the
+  negotiation-section bullets. Enforcing hooks unchanged.
 - **2026-07-17 (anti-vendor-lockout Wave A, T2 + T3).** Named the two
   previously-unnamed enforcement behaviors as **capabilities 6 (scheduler-write
   fence) and 7 (decision-rendezvous commit-then-continue)** — R4 RULED

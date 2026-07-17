@@ -50,6 +50,8 @@ import re
 import shlex
 import sys
 
+__all__ = ["FENCED", "fenced_in_command", "main"]
+
 FENCED = frozenset({"qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"})
 
 # Wrappers the fence sees through to the real command. Their flags and
@@ -231,6 +233,19 @@ def _fenced_in_line_legacy(line: str) -> str | None:
         if verb:
             return verb
     return None
+
+
+def fenced_in_command(command: str) -> str | None:
+    """The PUBLIC fence-core entrypoint: the fenced verb *command* would EXECUTE,
+    or ``None`` when it is clean.
+
+    The sanctioned way to drive the fence's command-position analysis IN-PROCESS
+    (the conformance kit's capability-6 reference battery imports THIS, exactly as
+    the relay / rendezvous kits drive ``build_hook_output``) — never the
+    package-private recursion helper. A thin, stable delegate over
+    :func:`_fenced_in_command`.
+    """
+    return _fenced_in_command(command)
 
 
 def main() -> int:

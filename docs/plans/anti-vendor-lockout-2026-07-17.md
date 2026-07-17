@@ -354,6 +354,7 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   portability (guardrail G3 keeps it non-load-bearing) and does NOT chase the
   auth blocker (contract T2 out-of-scope). The real residual is activation (T4),
   the unproven capabilities 2–5 (Wave C/D), and prose (T5).
+<<<<<<< ours
 - **T5 landed (2026-07-17): the prose-neutral harness runbook, GENERATED.** R5
   answered "generated projection": `docs/generated/harness-runbook.md` is
   projected from `_wire/spawn_contract.py::DECISION_POINTS` + the
@@ -380,6 +381,38 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   stated verbatim in the protocol). Gates green: `regen_all --check` (9/9), lint
   gauntlet (26/26), ruff/format/mypy, 9 runbook tests. The SKILL.md re-cast as the
   Claude-Code PROFILE (light front-matter edits) is NOT in this unit — deferred.
+=======
+- **Capability 6/7 negotiation seams landed (2026-07-17) — the M follow-on Wave A
+  named + assigned the version bump to.** The Wave-A T2 landing recorded
+  capabilities 6 (scheduler-write fence) and 7 (decision-rendezvous
+  commit-then-continue) code-backstopped-only with the declared == detected ==
+  behaved triangle UNCLOSED and the seam-wiring follow-on OWNING the MINOR
+  contract-version bump. This unit builds that follow-on: (1) `harness-capabilities`
+  now REPORTS both (`scheduler_write_fence` via `_SCHEDULER_WRITE_FENCE_NEEDLE` in
+  `hooks.PreToolUse`; `decision_rendezvous` via `_DECISION_RENDEZVOUS_STOP_NEEDLE`
+  inside the fused `stop_multiplex` Stop entry) through the ONE canonical
+  needle-matcher; (2) `HARNESS_CONTRACT_VERSION` 1.1.0 → **1.2.0** (additive MINOR)
+  with the three-way pin (doc line == constant == kit stamp) updated consistently;
+  (3) kit BEHAVIORAL batteries drive the REAL cores in-process as the reference —
+  `conformance/test_capability_scheduler_fence.py` (blocks fenced verbs incl.
+  wrapped `bash -c 'qsub …'` / transport `ssh host qdel`; passes mention `grep
+  qsub`, probe `qstat`, and the `hpc-agent` CLI) and
+  `conformance/test_capability_decision_rendezvous.py` (forces exactly-one
+  continuation on committed-unadvanced; silent while merely awaiting; loop-safe) —
+  each in the adapter-driven shape (`run_scheduler_fence` / `run_decision_rendezvous`
+  optional adapter methods, mirrored guard-can-fire fakes in `tests/conformance_kit/`).
+  This closes declared == detected + behaved-for-the-reference-adapter for 6/7; a
+  FOREIGN proof stays owed (Wave C) — these are T9/T10-adjacent seams (a
+  negotiation report + a kit assertion), landed for 6/7 ahead of the trusted-display
+  (T9) / stop-hook-append (T10) analogues. The three-capability `conforming: harness
+  contract v1` verdict is UNCHANGED (6/7 are additive reference-behaved batteries,
+  not verdict gates — guardrail G5, skips-honest). Files:
+  `ops/harness_capabilities.py`, `agent_assets.py` (fence needle constant),
+  `_wire/queries/harness_capabilities.py`, `conformance/adapter.py` +
+  `conformance/__init__.py` (nouns + adapter methods), two shipped kit modules +
+  two mirror modules, `docs/internals/harness-contract.md` (HONEST STATUS +
+  negotiation bullets + drift log).
+>>>>>>> theirs
 - **Wave A landed (2026-07-17): T1 + T2 + T3, docs-only.** T1 — the memory-note
   stale-claims reconciliation table (§2) verifies every "planned/unbuilt/missing"
   claim against code with a citation, and the risk register is marked the CANONICAL
