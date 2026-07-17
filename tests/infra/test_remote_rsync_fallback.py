@@ -792,6 +792,7 @@ _needs_rsync = pytest.mark.skipif(
 )
 
 
+@pytest.mark.slow
 @_needs_posix_shell
 @_needs_rsync
 def test_stage_swap_rsync_merges_and_deletes_on_disk(tmp_path: Path) -> None:
