@@ -118,3 +118,45 @@ Existing pins to extend at build time:
   fallback retains the accepted residual window; the atomic primary is
   covered by the new pins above. Whoever owns the fault harness may want to
   re-point that drill at the rsync primary now that (a′) has landed.
+- 2026-07-17: **PRIMARY (a′) CORRECTED — `--exclude` → `protect` filter +
+  `--ignore-times`.** The first (a′) build shielded the protected set with
+  `rsync --exclude=<protected>`; its behavioral on-disk pin
+  (`test_stage_swap_rsync_merges_and_deletes_on_disk`) ran for the FIRST time
+  on Linux 3.12 (slow tier, CI run 29573485915 — it `@pytest.mark.slow`-skips
+  on Windows and needs a real rsync) and went RED:
+  `.hpc/tasks.py` stayed `old tasks` after the swap. Root cause (confirmed by
+  local rsync 3.4.1 reproduction driving the real builder): **NOT** an exclude
+  shielding a protected path — the offending file `.hpc/tasks.py` matches NO
+  exclude, and `src/mod.py` (also unexcluded) went stale too. The cause is
+  **rsync's default size+mtime quick-check**: `old tasks`→`new tasks` and
+  `code v1`→`code v2` are byte-identical in length and were written within the
+  same second, so rsync judged them unchanged and skipped the transfer. The old
+  `cp -a` swap never had this — `cp -a` overwrites unconditionally. Fix, to
+  match the `cp -a` + `find` pre-clean contract EXACTLY:
+    1. `--ignore-times` — force every staged file to transfer (still temp+
+       atomic-rename per file), matching `cp -a`'s unconditional overwrite.
+    2. `--exclude=<pattern>` → `--filter='P <pattern>'` (short `protect`, whole
+       token `shlex.quote`-d; anchoring unchanged — internal-slash root-anchored,
+       bare names any-depth). `--exclude` drops a path from the transfer
+       entirely, so a STAGED file matching a protected pattern would be neither
+       deleted NOR updated → permanent deploy staleness (a correctness bug worse
+       than the torn window U4 closed). `protect` only spares protected LIVE-ONLY
+       content from `--delete` while letting staged files transfer — exactly the
+       pre-clean (never deletes protected) + `cp -a` (lands everything staged)
+       semantics. For the current deploy layout the shippable and protected sets
+       are disjoint, so this is latent today, but the CI red forced the audit
+       that found it; the correction future-proofs and is the semantically exact
+       mapping. Builder renamed `_rsync_swap_exclude_flag` →
+       `_rsync_swap_protect_flag`. Local mechanism proof: the REAL builder's
+       emitted command, executed on disk via msys rsync, lands same-size staged
+       edits + a staged file UNDER a protected pattern, preserves all protected
+       live-only content, deletes unprotected live-only content; dropping
+       `--ignore-times` reproduces the exact CI red. Pins updated:
+       `test_stage_swap_rsync_cmd_is_atomic_per_file_delete` (asserts
+       `--ignore-times`, NO `--exclude=`, `--filter=P` forms),
+       `test_rsync_push_fallback_delete_true_atomic_swap_when_remote_has_rsync`,
+       plus a new behavioral slow test
+       `test_stage_swap_rsync_staged_protected_file_still_lands_on_disk`
+       (regression guard against reverting to `--exclude`). The probe/fallback/
+       leg structure is untouched; the `cp -a` rsync-absent fallback is
+       unchanged.

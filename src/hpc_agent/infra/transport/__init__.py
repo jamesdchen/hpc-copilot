@@ -372,34 +372,67 @@ def _stage_swap_cmd(stage_path: str, remote_path: str) -> str:
     return f"cp -a {quoted_stage}/. {quoted_remote}/ && rm -rf {quoted_stage}"
 
 
-def _rsync_swap_exclude_flag(pattern: str) -> str:
-    """One ``--exclude=`` flag for the rsync swap, anchored like the pre-clean.
+def _rsync_swap_protect_flag(pattern: str) -> str:
+    """One deletion-``protect`` FILTER flag for the rsync swap, anchored like the
+    pre-clean.
 
-    Mirrors :func:`_remote_clean_cmd` / :func:`_excludes._path_excluded`
-    anchoring so the atomic swap shields EXACTLY the paths the two-leg pre-clean
-    shielded: an internal-slash pattern (``.hpc/templates/``) is anchored to the
-    transfer root with a leading ``/`` (rsync's root-anchor, matching the
-    pre-clean's ``find -path <root>/<pattern>``); a bare name (``results/``,
-    ``*.pyc``) stays unanchored so rsync matches it at any depth (matching the
-    pre-clean's ``find -name``). The trailing ``/`` (directory-only) is preserved.
+    Emits ``--filter='P <pattern>'`` (``P`` is rsync's short form of
+    ``protect``), NOT ``--exclude=<pattern>``. The distinction is load-bearing
+    (2026-07-17 correction, CI red run 29573485915, see
+    :func:`_stage_swap_rsync_cmd`): ``--exclude`` removes the path from the
+    transfer ENTIRELY — a staged file matching a protected pattern would be
+    neither deleted NOR updated, going permanently stale — whereas a ``protect``
+    rule only spares matching live-only files from ``--delete`` while leaving
+    staged files free to transfer and update. That is exactly the old ``find``
+    pre-clean's contract (protected paths are never DELETED, but ``cp -a`` still
+    overwrites everything staged).
+
+    Anchoring mirrors :func:`_remote_clean_cmd` / :func:`_excludes._path_excluded`
+    so the protect set covers EXACTLY the paths the two-leg pre-clean shielded:
+    an internal-slash pattern (``.hpc/templates/``) is root-anchored with a
+    leading ``/`` (matching the pre-clean's ``find -path <root>/<pattern>`` and
+    rsync's root-anchor); a bare name (``results/``, ``*.pyc``) stays unanchored
+    so rsync matches it at any depth (matching the pre-clean's ``find -name``).
+    The trailing ``/`` (directory-only) is preserved. The whole ``--filter=P
+    <pattern>`` token is ``shlex.quote``-d as a unit so the space between the
+    rule letter and the pattern survives the remote shell intact.
     """
     if "/" in pattern.rstrip("/"):
         anchored = "/" + pattern.lstrip("/")
-        return f"--exclude={shlex.quote(anchored)}"
-    return f"--exclude={shlex.quote(pattern)}"
+        return shlex.quote(f"--filter=P {anchored}")
+    return shlex.quote(f"--filter=P {pattern}")
 
 
 def _stage_swap_rsync_cmd(stage_path: str, remote_path: str, exclude: list[str]) -> str:
-    """Build the ATOMIC-per-file remote swap: ``rsync -a --delete`` stage → live.
+    """Build the ATOMIC-per-file remote swap: ``rsync -a --ignore-times --delete``
+    stage → live.
 
     The PRIMARY swap (U4, 2026-07-17) taken when the login node has ``rsync`` —
     which it does even when the Windows CLIENT does not, the exact case that
     routes into this tar fallback at all. This ONE leg folds in the separate
-    pre-clean: rsync's ``--delete`` removes every live file absent from the
-    staged tree, and ``--exclude`` (the same protected set the ``find`` pre-clean
-    pruned — ``results/`` / ``_combiner/`` / ``logs/`` / ``.hpc/templates/`` /
-    the runtime files, anchored by :func:`_rsync_swap_exclude_flag`) shields the
-    protected content from that delete, reproducing the merge contract exactly.
+    pre-clean while reproducing the ``cp -a`` + ``find`` pre-clean contract
+    EXACTLY:
+
+    - ``--delete`` removes every live file absent from the staged tree, and each
+      protected pattern is mapped to a deletion-``protect`` FILTER rule
+      (:func:`_rsync_swap_protect_flag`) — NOT ``--exclude`` (2026-07-17
+      correction, CI red run 29573485915). ``--exclude`` would drop a matching
+      path from the transfer entirely, so a staged file under a protected pattern
+      would go permanently stale (neither deleted nor updated); a ``protect``
+      rule spares protected LIVE-ONLY content from ``--delete`` yet lets staged
+      files transfer, exactly like the ``find`` pre-clean (never deletes
+      protected paths — ``results/`` / ``_combiner/`` / ``logs/`` /
+      ``.hpc/templates/`` / the runtime files) + ``cp -a`` (unconditionally
+      overwrites everything staged).
+    - ``--ignore-times`` makes every staged file transfer UNCONDITIONALLY, so the
+      swap always lands the fresh code — matching ``cp -a``'s unconditional
+      overwrite. Without it rsync's default size+mtime quick-check silently skips
+      a staged file whose size is unchanged and whose mtime matches the live copy
+      (e.g. a same-length edit shipped within the same second — the exact
+      deterministic skip the on-disk test caught). The deployed tree is small
+      (the big output dirs are protected/excluded from the push), so re-checking
+      every file is cheap.
+
     Unlike ``cp -a``'s in-place ``open/truncate/write``, rsync writes each file to
     a temp sibling and atomically renames it into place (the #F20 discipline
     :func:`_rsync_deploy` already relies on), so a concurrent array task reading
@@ -412,9 +445,12 @@ def _stage_swap_rsync_cmd(stage_path: str, remote_path: str, exclude: list[str])
     """
     quoted_stage = shlex.quote(stage_path)
     quoted_remote = shlex.quote(remote_path)
-    excl_flags = " ".join(_rsync_swap_exclude_flag(pat) for pat in exclude if pat.strip())
-    excl = f"{excl_flags} " if excl_flags else ""
-    return f"rsync -a --delete {excl}{quoted_stage}/ {quoted_remote}/ && rm -rf {quoted_stage}"
+    protect_flags = " ".join(_rsync_swap_protect_flag(pat) for pat in exclude if pat.strip())
+    protect = f"{protect_flags} " if protect_flags else ""
+    return (
+        f"rsync -a --ignore-times --delete {protect}{quoted_stage}/ {quoted_remote}/ "
+        f"&& rm -rf {quoted_stage}"
+    )
 
 
 def _remote_preclean(
@@ -538,8 +574,9 @@ def _tar_ssh_push(
     and merges the fresh code in. Two shapes, chosen by a zero-cost rsync probe
     that rides the stage-drop leg (:func:`_stage_drop_probe_cmd`): a login node
     WITH ``rsync`` takes the atomic per-file :func:`_stage_swap_rsync_cmd`
-    (``rsync -a --delete --exclude=<protected>`` — one leg, temp+atomic-rename
-    per file, no torn window); a node WITHOUT it falls back to the original
+    (``rsync -a --ignore-times --delete --filter='P <protected>'`` — one leg,
+    temp+atomic-rename per file, no torn window); a node WITHOUT it falls back
+    to the original
     bounded pre-clean (:func:`_remote_preclean`) + ``cp -a`` merge
     (:func:`_stage_swap_cmd`). Either swap runs on its OWN bounded ssh call so it
     can't eat the transfer budget (#173).
@@ -764,11 +801,15 @@ def _tar_ssh_push(
     # on the remote (the next push drops it), never a half-cleaned live tree.
     if remote_has_rsync:
         # PRIMARY (U4, 2026-07-17): one atomic-per-file rsync swap FOLDS IN the
-        # pre-clean — ``--delete`` removes stale unprotected live files while
-        # ``--exclude`` shields the protected set (exactly the two-leg pre-clean
-        # semantics), and every file lands via rsync's temp+atomic-rename, so a
-        # concurrent array task never reads a torn file. Net one fewer ssh leg
-        # AND a smaller destructive window than the fallback below.
+        # pre-clean — ``--delete`` removes stale unprotected live files while a
+        # deletion-``protect`` filter shields the protected set (exactly the
+        # two-leg pre-clean semantics; a ``protect`` rule NOT ``--exclude``, so a
+        # staged protected-pattern file still updates — 2026-07-17 correction),
+        # and ``--ignore-times`` forces every staged file to land (matching
+        # ``cp -a``'s unconditional overwrite). Every file lands via rsync's
+        # temp+atomic-rename, so a concurrent array task never reads a torn file.
+        # Net one fewer ssh leg AND a smaller destructive window than the
+        # fallback below.
         swap = _ssh_bounded(
             ssh_target,
             _stage_swap_rsync_cmd(stage_path, remote_path, exclude),

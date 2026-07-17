@@ -4,9 +4,11 @@ AUDIT rank 3 (§4) and §7 'Timeout mid stage-swap `cp -a`': the tar-push stage
 swap was the ONE transfer-plane write with a non-atomic torn-live-tree window.
 U4 (a′, STAGE-SWAP-SEAM-MAP.md) closed it on the PRIMARY path: when the login
 node has rsync (probed for free on the stage-drop leg), the swap is one
-``rsync -a --delete --exclude=<protected> <stage>/ <live>/`` leg — temp+atomic-
-rename per file, the pre-clean folded into ``--delete``, no partial-merge
-window. The first drill pins that closure and must stay GREEN.
+``rsync -a --ignore-times --delete --filter='P <protected>' <stage>/ <live>/``
+leg — temp+atomic-rename per file, the pre-clean folded into ``--delete`` (with
+a deletion-``protect`` filter, not ``--exclude``, so a staged protected-pattern
+file still updates), no partial-merge window. The first drill pins that closure
+and must stay GREEN.
 
 The ``cp -a`` merge (:func:`_stage_swap_cmd`) remains as the rsync-ABSENT
 fallback and retains the original torn window there — an ACCEPTED RESIDUAL

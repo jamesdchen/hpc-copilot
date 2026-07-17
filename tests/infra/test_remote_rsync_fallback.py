@@ -466,7 +466,7 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
     # touched under EITHER swap shape.
     assert not any("find /r -mindepth 1" in c for c in cmds)
     assert not any("cp -a /r.hpc_stage/. /r/" in c for c in cmds)
-    assert not any("rsync -a --delete" in c for c in cmds)
+    assert not any("rsync -a --ignore-times --delete" in c for c in cmds)
 
 
 # ── U4 (2026-07-17): remote-side atomic-per-file swap (primary (a′)) ──────────
@@ -474,9 +474,10 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
 # The stage-swap torn-FILE window (AUDIT rank-3): the ``cp -a`` merge writes each
 # file in place (open/truncate/write), so a concurrent array task could import a
 # half-written file. U4 replaces leg-4 with a remote
-# ``rsync -a --delete --exclude=<protected>`` swap when the login node has rsync —
-# temp+atomic-rename per file closes the window and FOLDS the separate pre-clean
-# into rsync's ``--delete`` (one fewer ssh leg). A ``cp -a`` fallback stays for
+# ``rsync -a --ignore-times --delete --filter='P <protected>'`` swap when the login
+# node has rsync — temp+atomic-rename per file closes the window and FOLDS the
+# separate pre-clean into rsync's ``--delete`` (one fewer ssh leg); ``--ignore-times``
+# forces every staged file to land like ``cp -a``. A ``cp -a`` fallback stays for
 # rsync-absent login nodes. The atomic path is selected by a zero-cost probe that
 # rides the stage-drop leg.
 
@@ -514,24 +515,35 @@ def _tar_fallback_run_calls_seq(tmp_path: Path, *, exclude: list[str], side_effe
 
 
 def test_stage_swap_rsync_cmd_is_atomic_per_file_delete() -> None:
-    """The U4 primary swap builder: ``rsync -a --delete`` from the staged tree
-    into the live root, with the protected set shielded via ``--exclude`` and
-    anchored exactly like the ``find`` pre-clean — internal-slash patterns
-    root-anchored, bare names match-any-depth. No cp -a, no separate find."""
+    """The U4 primary swap builder: ``rsync -a --ignore-times --delete`` from the
+    staged tree into the live root, with the protected set shielded via a
+    deletion-``protect`` FILTER rule (NOT ``--exclude``) anchored exactly like the
+    ``find`` pre-clean — internal-slash patterns root-anchored, bare names
+    match-any-depth. No cp -a, no separate find."""
     cmd = transport._stage_swap_rsync_cmd("/r.hpc_stage", "/r", transport._effective_excludes(None))
-    assert cmd.startswith("rsync -a --delete ")
+    assert cmd.startswith("rsync -a --ignore-times --delete ")
     assert " /r.hpc_stage/ /r/ " in cmd  # trailing-slash source => copy CONTENTS
     assert cmd.endswith("&& rm -rf /r.hpc_stage")
-    # Protected content shielded from --delete (the merge contract).
-    assert "--exclude=results/" in cmd  # bare name — match any depth
-    assert "--exclude=_combiner/" in cmd
-    assert "--exclude=logs/" in cmd
-    assert "--exclude=hpc_agent/" in cmd
-    assert "--exclude=clusters.yaml" in cmd
+    # --ignore-times makes every staged file land UNCONDITIONALLY, matching
+    # cp -a's overwrite (rsync's default size+mtime quick-check would silently
+    # skip a same-size, same-mtime staged edit — CI red run 29573485915).
+    assert "--ignore-times" in cmd
+    # Protected content shielded from --delete via a `protect` filter (the merge
+    # contract). CRITICAL: the swap must NEVER use `--exclude` for a protected
+    # pattern — `--exclude` drops the path from the transfer entirely, so a staged
+    # file under a protected pattern would go permanently stale (neither deleted
+    # NOR updated). A `protect` rule spares live-only content from --delete yet
+    # lets a staged file transfer.
+    assert "--exclude=" not in cmd
+    assert "--filter=P results/" in cmd  # bare name — match any depth
+    assert "--filter=P _combiner/" in cmd
+    assert "--filter=P logs/" in cmd
+    assert "--filter=P hpc_agent/" in cmd
+    assert "--filter=P clusters.yaml" in cmd
     # Internal-slash patterns are ROOT-ANCHORED with a leading / (mirroring the
     # pre-clean's `find -path <root>/<pattern>`).
-    assert "--exclude=/.hpc/templates/" in cmd
-    assert "--exclude=/.hpc/_hpc_dispatch.py" in cmd
+    assert "--filter=P /.hpc/templates/" in cmd
+    assert "--filter=P /.hpc/_hpc_dispatch.py" in cmd
     # The torn-file window is gone: no in-place merge, no find pre-clean leg.
     assert "cp -a" not in cmd
     assert "find " not in cmd
@@ -558,11 +570,14 @@ def test_rsync_push_fallback_delete_true_atomic_swap_when_remote_has_rsync(
     assert "command -v rsync" in drop_cmd
     assert "tar x -C /r.hpc_stage" in extract_cmd
     # The swap is the single atomic rsync leg; the pre-clean is FOLDED in.
-    assert "rsync -a --delete" in swap_cmd
+    assert "rsync -a --ignore-times --delete" in swap_cmd
     assert "/r.hpc_stage/ /r/" in swap_cmd
     assert "rm -rf /r.hpc_stage" in swap_cmd
-    assert "--exclude=results/" in swap_cmd
-    assert "--exclude=/.hpc/templates/" in swap_cmd
+    # Protected set shielded via `protect` filters (not `--exclude`, which would
+    # block a staged protected-pattern file from ever updating).
+    assert "--exclude=" not in swap_cmd
+    assert "--filter=P results/" in swap_cmd
+    assert "--filter=P /.hpc/templates/" in swap_cmd
     # No cp -a merge and no standalone find pre-clean anywhere in the sequence.
     assert not any("cp -a /r.hpc_stage/. /r/" in str(c[0][0][-1]) for c in calls)
     assert not any("find /r -mindepth 1" in str(c[0][0][-1]) for c in calls)
@@ -584,7 +599,7 @@ def test_rsync_push_fallback_delete_true_cp_a_when_remote_lacks_rsync(
     move_cmd = str(calls[3][0][0][-1])
     assert "find /r -mindepth 1" in clean_cmd  # pre-clean stays a distinct leg
     assert "cp -a /r.hpc_stage/. /r/" in move_cmd  # unchanged fallback merge
-    assert not any("rsync -a --delete" in str(c[0][0][-1]) for c in calls)
+    assert not any("rsync -a --ignore-times --delete" in str(c[0][0][-1]) for c in calls)
 
 
 def test_tar_fallback_preclean_prunes_output_dirs_even_if_caller_omits_them(
@@ -799,7 +814,14 @@ def test_stage_swap_rsync_merges_and_deletes_on_disk(tmp_path: Path) -> None:
     """Behavioral proof of the U4 merge contract under the REAL rsync swap: fresh
     code merges into the preserved live tree, protected content survives the
     ``--delete``, and stale unprotected code is removed — the same contract the
-    cp -a swap + pre-clean gave, now atomic per file (temp+rename)."""
+    cp -a swap + pre-clean gave, now atomic per file (temp+rename).
+
+    Note the staged edits are SAME-SIZE as the live copies (``old tasks`` →
+    ``new tasks``, ``code v1`` → ``code v2``) and are written within the same
+    second: that is the exact deterministic case rsync's default size+mtime
+    quick-check would SKIP, leaving the live code stale (CI red run 29573485915).
+    ``--ignore-times`` in the swap builder forces the update, matching cp -a's
+    unconditional overwrite."""
     remote = tmp_path / "remote"
     stage = tmp_path / "remote.hpc_stage"
     _first_deploy_remote_tree(remote)
@@ -826,6 +848,51 @@ def test_stage_swap_rsync_merges_and_deletes_on_disk(tmp_path: Path) -> None:
     assert not (remote / "src" / "old_pkg" / "gone.py").exists()
     # Staging dir consumed by the trailing rm -rf.
     assert not stage.exists()
+
+
+@pytest.mark.slow
+@_needs_posix_shell
+@_needs_rsync
+def test_stage_swap_rsync_staged_protected_file_still_lands_on_disk(tmp_path: Path) -> None:
+    """Behavioral pin of the exclude→protect correction (2026-07-17): a staged
+    file that MATCHES a protected pattern must still UPDATE the live copy.
+
+    Under the old ``find`` pre-clean + ``cp -a`` contract, protection only stopped
+    DELETION — ``cp -a`` still overwrote everything staged. If the rsync swap
+    shielded protected paths with ``--exclude`` (as the first U4 draft did), a
+    staged protected-pattern file would be dropped from the transfer entirely and
+    go permanently stale (a deploy-staleness bug worse than the torn window U4
+    closed). A deletion-``protect`` filter spares only the live-only protected
+    content from ``--delete`` while letting a staged protected file transfer, so
+    both behaviors hold at once. This test would FAIL if the builder ever reverts
+    to ``--exclude`` for the protected set."""
+    remote = tmp_path / "remote"
+    stage = tmp_path / "remote.hpc_stage"
+    _first_deploy_remote_tree(remote)
+    # Stage FRESH content at paths that match protected patterns:
+    #   hpc_agent/... matches PROTECTED_RUNTIME_FILES "hpc_agent/"
+    #   .hpc/templates/... matches PROTECTED_RUNTIME_FILES ".hpc/templates/"
+    for rel, content in {
+        "hpc_agent/execution/mapreduce/metrics_io.py": "runtime v2",
+        ".hpc/templates/common/hpc_preamble.sh": "preamble v2",
+    }.items():
+        f = stage / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+
+    cmd = transport._stage_swap_rsync_cmd(
+        str(stage), str(remote), transport._effective_excludes(None)
+    )
+    res = _sh(cmd)
+    assert res.returncode == 0, res.stderr
+    # The staged protected-pattern files LAND (protect != exclude).
+    metrics = remote / "hpc_agent" / "execution" / "mapreduce" / "metrics_io.py"
+    preamble = remote / ".hpc" / "templates" / "common" / "hpc_preamble.sh"
+    assert metrics.read_text() == "runtime v2"
+    assert preamble.read_text() == "preamble v2"
+    # And live-only protected content that was NOT staged still survives --delete.
+    assert (remote / "results" / "out.txt").is_file()
+    assert (remote / ".hpc" / "_hpc_dispatch.py").is_file()
 
 
 def test_remote_clean_cmd_anchors_excludes() -> None:
