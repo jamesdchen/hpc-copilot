@@ -499,6 +499,7 @@ def resolve_target_existence(
     target: TargetAddress,
     *,
     dossier_resolver: Callable[[str], str | None] | None = None,
+    recipe_resolver: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> TargetResolution:
     """Resolve target EXISTENCE at FILING — you cannot contest what code cannot find.
 
@@ -529,7 +530,10 @@ def resolve_target_existence(
             True, False, "no committed record in the named journal carries the asserted content_sha"
         )
     res = resolve_citation(
-        experiment_dir, _target_as_citation(target), dossier_resolver=dossier_resolver
+        experiment_dir,
+        _target_as_citation(target),
+        dossier_resolver=dossier_resolver,
+        recipe_resolver=recipe_resolver,
     )
     return TargetResolution(res.resolved, res.matches, res.detail)
 
@@ -539,6 +543,7 @@ def resolve_target_current(
     target: TargetAddress,
     *,
     dossier_resolver: Callable[[str], str | None] | None = None,
+    recipe_resolver: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> TargetResolution:
     """Re-resolve the target's subject NEWEST-WINS — the ``superseded`` input.
 
@@ -548,10 +553,13 @@ def resolve_target_current(
     True and ``matches`` False → the subject moved off the challenged sha
     (``superseded`` by construction, C-reduce); ``resolved`` False → the subject
     is unresolvable here (cannot prove supersession — the reduction keeps its
-    verdict-based status). The ``dossier`` resolver is INJECTED.
+    verdict-based status). The ``dossier`` / ``recipe`` resolvers are INJECTED.
     """
     res = resolve_citation(
-        experiment_dir, _target_as_citation(target), dossier_resolver=dossier_resolver
+        experiment_dir,
+        _target_as_citation(target),
+        dossier_resolver=dossier_resolver,
+        recipe_resolver=recipe_resolver,
     )
     return TargetResolution(res.resolved, res.matches, res.detail)
 
@@ -790,6 +798,7 @@ def standing_challenges(
     subject_kind: str | None = None,
     subject_id: str | None = None,
     dossier_resolver: Callable[[str], str | None] | None = None,
+    recipe_resolver: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> StandingChallenges:
     """Collect standing challenges under one namespace → :class:`StandingChallenges`.
 
@@ -862,7 +871,12 @@ def standing_challenges(
         if subject_id is not None and filing_target.subject_id != subject_id:
             continue
 
-        res = resolve_target_current(exp, filing_target, dossier_resolver=dossier_resolver)
+        res = resolve_target_current(
+            exp,
+            filing_target,
+            dossier_resolver=dossier_resolver,
+            recipe_resolver=recipe_resolver,
+        )
         is_superseded = res.resolved and not res.matches
         statuses.append(reduce_challenge(recs, challenge_id=cid, superseded=is_superseded))
 

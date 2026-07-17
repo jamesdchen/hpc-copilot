@@ -285,6 +285,51 @@ def test_dossier_citation_unresolvable_disclosed(home: Path, tmp_path: Path) -> 
     assert res.citations_status[0].verified is False
 
 
+# --- recipe citation kind (BR-5) ---------------------------------------------
+
+
+def test_recipe_citation_parity_verified_in_brief(home: Path, tmp_path: Path) -> None:
+    """A conclusion citing a clean-reproduction recipe re-derives + parity-verifies
+    it at read: the brief discloses the recipe citation as verified (BR-5)."""
+    from hpc_agent._wire.queries.extract_recipe import ExtractRecipeInput
+    from hpc_agent.ops.extract_recipe import extract_recipe, recipe_citation_ref
+
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    # A bare run seed derives a deterministic (empty) recipe; cite its real signature.
+    recipe = extract_recipe(exp, spec=ExtractRecipeInput(run_id="widget-run-1"))
+    sig = recipe["recipe_signature"]
+    _write_conclusion(
+        exp,
+        "widget-recipe",
+        ts="2025-11-01T00:00:00+00:00",
+        tags=["widget-x"],
+        citations=[_cite("recipe", recipe_citation_ref("run", "widget-run-1"), sig)],
+    )
+    res = evidence_brief(experiment_dir=exp, spec=EvidenceBriefSpec(tags=["widget-x"]))
+    assert [c.conclusion_id for c in res.conclusions] == ["widget-recipe"]
+    recipe_lines = [cs for cs in res.citations_status if cs.kind == "recipe"]
+    assert recipe_lines and recipe_lines[0].verified is True
+
+
+def test_recipe_citation_not_derivable_disclosed(home: Path, tmp_path: Path) -> None:
+    """A recipe cited over a no-longer-derivable seed DISCLOSES (verified=False) at
+    read — never a refusal (only the append gate refuses)."""
+    from hpc_agent.ops.extract_recipe import recipe_citation_ref
+
+    exp = tmp_path / "exp"
+    _write_conclusion(
+        exp,
+        "widget-norecipe",
+        ts="2025-11-01T00:00:00+00:00",
+        tags=["widget-x"],
+        citations=[_cite("recipe", recipe_citation_ref("aggregate", "/no/such.json"), "any-sig")],
+    )
+    res = evidence_brief(experiment_dir=exp, spec=EvidenceBriefSpec(tags=["widget-x"]))
+    line = next(cs for cs in res.citations_status if cs.kind == "recipe")
+    assert line.verified is False
+
+
 # --- the T4 render seam ------------------------------------------------------
 
 

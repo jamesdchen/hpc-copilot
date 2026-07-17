@@ -117,6 +117,23 @@ def _dossier_resolver_for(experiment_dir: Path) -> Callable[[str], str | None]:
     return _resolve
 
 
+def _recipe_resolver_for(experiment_dir: Path) -> Callable[[str], tuple[str, str] | None]:
+    """A ``ref -> (recipe_signature, summary) | None`` resolver for a ``recipe`` target.
+
+    The ``recipe`` counterpart to :func:`_dossier_resolver_for` — ``state`` never
+    imports ``ops``, so the recipe resolver
+    (``ops/extract_recipe.py::resolve_recipe_citation``) is composed HERE and
+    injected into ``standing_challenges`` / ``resolve_citation``. Read-side: a
+    no-longer-derivable recipe returns ``None`` → DISCLOSED, never raised.
+    """
+    from hpc_agent.ops.extract_recipe import resolve_recipe_citation
+
+    def _resolve(ref: str) -> tuple[str, str] | None:
+        return resolve_recipe_citation(experiment_dir, ref)
+
+    return _resolve
+
+
 # --- collection → projection (mechanism-nouned, deterministic) ---------------
 
 
@@ -168,6 +185,7 @@ def _citation_lines(experiment_dir: Path, status: Any) -> list[CitationStatusLin
     refuses). A malformed citation or an unknown kind is skipped, not raised.
     """
     resolver = _dossier_resolver_for(experiment_dir)
+    recipe_resolver = _recipe_resolver_for(experiment_dir)
     filing = status.filing or {}
     raw_citations = filing.get("citations")
     lines: list[CitationStatusLine] = []
@@ -178,7 +196,9 @@ def _citation_lines(experiment_dir: Path, status: Any) -> list[CitationStatusLin
             continue
         item: Any = raw
         try:
-            res = resolve_citation(experiment_dir, item, dossier_resolver=resolver)
+            res = resolve_citation(
+                experiment_dir, item, dossier_resolver=resolver, recipe_resolver=recipe_resolver
+            )
         except errors.SpecInvalid:
             continue
         lines.append(
@@ -349,11 +369,14 @@ def challenge_status(*, experiment_dir: Path, spec: ChallengeStatusSpec) -> Chal
     bundle_skips: list[SkippedNamespace] = []
     for e in experiments:
         resolver = _dossier_resolver_for(e)
+        recipe_resolver = _recipe_resolver_for(e)
         if by_id:
             # Thread view: the collector has no id filter (C-reduce pins address
             # filtering only), so collect the namespace's standing challenges and
             # select the thread — still the ONE collector, never a private re-glob.
-            bundle = standing_challenges(e, dossier_resolver=resolver)
+            bundle = standing_challenges(
+                e, dossier_resolver=resolver, recipe_resolver=recipe_resolver
+            )
             found = [s for s in bundle.statuses if s.challenge_id == spec.challenge_id]
         else:
             bundle = standing_challenges(
@@ -362,6 +385,7 @@ def challenge_status(*, experiment_dir: Path, spec: ChallengeStatusSpec) -> Chal
                 subject_kind=spec.subject_kind,
                 subject_id=spec.subject_id,
                 dossier_resolver=resolver,
+                recipe_resolver=recipe_resolver,
             )
             found = list(bundle.statuses)
         collected.extend((e, s) for s in found)

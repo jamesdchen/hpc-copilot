@@ -655,6 +655,30 @@ def _conclusion_dossier_resolver(experiment_dir: Path) -> Callable[[str], str | 
     return _resolve
 
 
+def _conclusion_recipe_resolver(
+    experiment_dir: Path,
+) -> Callable[[str], tuple[str, str] | None]:
+    """The INJECTED recipe resolver for citation dispatch (the ``recipe`` kind, BR-5).
+
+    The ``recipe`` counterpart to :func:`_conclusion_dossier_resolver`:
+    ``state/evidence.py`` never imports ``ops``, so the recipe resolver
+    (``ops/extract_recipe.py::resolve_recipe_citation`` — re-derives the recipe
+    and returns ``(recipe_signature, summary)``) is passed IN here through the
+    top-level ``extract_recipe`` facade (the package-alias form the subject-import
+    lint permits from inside the ``decision`` subject). A recipe ``ref`` is
+    ``"<seed_kind>:<seed_ref>"``; the resolved answer is the recipe's signature +
+    a compact disclosure summary. A no-longer-derivable recipe returns ``None`` →
+    :func:`state.evidence.resolve_citation` reports it unresolvable → the append
+    refuses loudly (verification at append is load-bearing).
+    """
+    from hpc_agent.ops import extract_recipe
+
+    def _resolve(ref: str) -> tuple[str, str] | None:
+        return extract_recipe.resolve_recipe_citation(experiment_dir, ref)
+
+    return _resolve
+
+
 def _names_target_sha_prefix(text: str, sha: str) -> bool:
     """True iff a hex run in *text* is an 8+ hex prefix of *sha* (the R6 form).
 

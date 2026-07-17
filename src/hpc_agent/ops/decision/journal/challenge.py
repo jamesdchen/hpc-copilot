@@ -12,6 +12,7 @@ from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 
 from ._shared import (
     _conclusion_dossier_resolver,
+    _conclusion_recipe_resolver,
     _fresh_authored_text,
     _is_bare_ack,
     _names_citation_sha_prefix,
@@ -192,8 +193,12 @@ def _assert_challenge_filing_full(
 
     # ── Lock 2 (recompute): the target must exist committed at the asserted sha ──
     dossier_resolver = _conclusion_dossier_resolver(experiment_dir)
+    recipe_resolver = _conclusion_recipe_resolver(experiment_dir)
     target_res = resolve_target_existence(
-        experiment_dir, parsed.target, dossier_resolver=dossier_resolver
+        experiment_dir,
+        parsed.target,
+        dossier_resolver=dossier_resolver,
+        recipe_resolver=recipe_resolver,
     )
     if not target_res.resolved:
         raise errors.SpecInvalid(
@@ -212,7 +217,12 @@ def _assert_challenge_filing_full(
 
     # ── Lock 2 (recompute): every citation must resolve AND match the live store ──
     for cit in parsed.citations:
-        res = resolve_citation(experiment_dir, cit, dossier_resolver=dossier_resolver)
+        res = resolve_citation(
+            experiment_dir,
+            cit,
+            dossier_resolver=dossier_resolver,
+            recipe_resolver=recipe_resolver,
+        )
         if not res.resolved:
             raise errors.SpecInvalid(
                 f"challenge gate (lock 2): citation {cit.kind}:{cit.ref!r} is UNRESOLVABLE on "

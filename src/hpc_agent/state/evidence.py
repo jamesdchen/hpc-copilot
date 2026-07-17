@@ -59,6 +59,7 @@ __all__ = [
     "KIND_RUN",
     "KIND_FINGERPRINT",
     "KIND_ATTESTATION",
+    "KIND_RECIPE",
     "CONCLUSION_BLOCK",
     "CONCLUSION_REVOKE_BLOCK",
     "CONCLUSION_BLOCK_FAMILY",
@@ -108,8 +109,22 @@ KIND_FINGERPRINT = "fingerprint"
 #: attestation's ``content_sha`` in a named journal (``state/attestation.py::reduce``).
 KIND_ATTESTATION = "attestation"
 
+#: A clean-reproduction recipe's ``recipe_signature`` — the deterministic digest
+#: over ONLY a citable artifact's minimal contributing run-set
+#: (``ops/extract_recipe.py``). Like :data:`KIND_DOSSIER` it carries no built-in
+#: resolver here (``state`` never imports ``ops``): the recipe is COMPUTED, so an
+#: ops caller injects the ``recipe_resolver`` (``ref -> (recipe_signature,
+#: summary) | None``). The ``ref`` addresses the seed as
+#: ``"<seed_kind>:<seed_ref>"`` — ``run:<run_id>`` / ``campaign:<campaign_id>`` /
+#: ``aggregate:<path>`` — mirroring the ``attestation`` ref shape. A recipe
+#: citation lets a conclusion answer "how do I reproduce this" with the mechanical
+#: recipe instead of prose: "this claim ← this minimal run-set recipe".
+KIND_RECIPE = "recipe"
+
 #: The CLOSED set of citation kinds (E-shape). Equality-pinned in tests.
-CITATION_KINDS = frozenset({KIND_DOSSIER, KIND_RUN, KIND_FINGERPRINT, KIND_ATTESTATION})
+CITATION_KINDS = frozenset(
+    {KIND_DOSSIER, KIND_RUN, KIND_FINGERPRINT, KIND_ATTESTATION, KIND_RECIPE}
+)
 
 # --- the conclusion record blocks (E-shape) ----------------------------------
 
@@ -668,20 +683,26 @@ def resolve_citation(
     citation: Citation | Mapping[str, Any],
     *,
     dossier_resolver: Callable[[str], str | None] | None = None,
+    recipe_resolver: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> CitationResolution:
     """Resolve ONE citation against the live stores — the dispatch entry point.
 
     ``run`` / ``fingerprint`` / ``attestation`` route through their state-level
     resolvers (:data:`_STATE_RESOLVERS`). A ``dossier`` citation routes through
     the INJECTED *dossier_resolver* (``compute_dossier_signature``-shaped:
-    ``ref -> bundle_sha256 | None``). A ``dossier`` citation with NO injected
-    resolver is a LOUD, named :class:`errors.SpecInvalid` — never a silent pass
-    (the drift-log item 2 rule). ``state`` imports no ``ops`` here, ever.
+    ``ref -> bundle_sha256 | None``). A ``recipe`` citation routes through the
+    INJECTED *recipe_resolver* (``ref -> (recipe_signature, summary) | None`` —
+    ops callers pass the ``extract-recipe`` resolution): the recipe is COMPUTED
+    from the on-disk records, so ``state`` cannot resolve it without ``ops``. A
+    ``dossier`` / ``recipe`` citation with NO injected resolver is a LOUD, named
+    :class:`errors.SpecInvalid` — never a silent pass (the drift-log item 2 rule).
+    ``state`` imports no ``ops`` here, ever.
 
     At the APPEND gate (T8) a caller lets this refuse loudly (verification is
     load-bearing); at READ (:func:`collect_evidence`) the caller DISCLOSES a
-    missing-resolver dossier citation instead of raising (evidence legitimately
-    moves after a conclusion is recorded).
+    missing-resolver dossier / recipe citation instead of raising (evidence
+    legitimately moves — or a recipe stops deriving — after a conclusion is
+    recorded).
     """
     cit = citation if isinstance(citation, Citation) else validate_citation(citation)
     if cit.kind == KIND_DOSSIER:
@@ -699,6 +720,23 @@ def resolve_citation(
             return CitationResolution(True, True, "dossier bundle_sha256 verified")
         return CitationResolution(
             True, False, f"dossier bundle_sha256 mismatch (live {bundle_sha})"
+        )
+    if cit.kind == KIND_RECIPE:
+        if recipe_resolver is None:
+            raise errors.SpecInvalid(
+                f"conclusion citation ({cit.ref!r}): a 'recipe' citation requires an injected "
+                "recipe_resolver — ops callers pass the extract-recipe resolution; "
+                "state/evidence.py never imports ops (the recipe is computed). A recipe citation "
+                "cannot be resolved here without it."
+            )
+        resolution = recipe_resolver(cit.ref)
+        if resolution is None:
+            return CitationResolution(False, False, "recipe not derivable on this namespace")
+        recipe_signature, summary = resolution
+        if recipe_signature == cit.sha:
+            return CitationResolution(True, True, f"recipe signature verified · {summary}")
+        return CitationResolution(
+            True, False, f"recipe signature mismatch (live {recipe_signature}) · {summary}"
         )
     resolver = _STATE_RESOLVERS.get(cit.kind)
     if resolver is None:  # pragma: no cover — validate_citation already closed the set
@@ -840,6 +878,7 @@ def _conclusion_contested(
     experiment_dir: Path,
     content_sha: str | None,
     dossier_resolver: Callable[[str], str | None] | None,
+    recipe_resolver: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> Contested | None:
     """The C-disclose contested projection for a conclusion, or ``None`` (fail-open).
 
@@ -857,7 +896,10 @@ def _conclusion_contested(
 
     try:
         return standing_challenges(
-            experiment_dir, content_sha=content_sha, dossier_resolver=dossier_resolver
+            experiment_dir,
+            content_sha=content_sha,
+            dossier_resolver=dossier_resolver,
+            recipe_resolver=recipe_resolver,
         ).contested
     except Exception:  # noqa: BLE001 — a reader's disclosure seat never raises
         return None
@@ -870,6 +912,7 @@ def collect_evidence(
     lineage: str | None = None,
     as_of: str | None = None,
     dossier_resolver: Callable[[str], str | None] | None = None,
+    recipe_resolver: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> EvidenceCollection:
     """Walk the five evidence stores under one namespace → :class:`EvidenceCollection`.
 
@@ -893,8 +936,9 @@ def collect_evidence(
     retro-index); *lineage* is a ``run_id`` whose ``cmd_sha`` + supersession chain
     select by CODE IDENTITY (the tag-free fallback). Both optional; when neither
     is given every store is disclosed. *as_of* is an inclusive ISO filter on every
-    store. *dossier_resolver* re-resolves dossier citations at read (a missing one
-    DISCLOSES per-citation, never raises — only the append gate refuses loudly).
+    store. *dossier_resolver* / *recipe_resolver* re-resolve dossier / recipe
+    citations at read (a missing one DISCLOSES per-citation, never raises — only
+    the append gate refuses loudly).
 
     Non-creating: reads only; a fresh namespace yields empty and creates nothing.
     """
@@ -1041,7 +1085,9 @@ def collect_evidence(
                 content_sha=c_content_sha,
                 superseded_count=len(status.superseded),
                 matched_by=tuple(dict.fromkeys(matched_by)),
-                contested=_conclusion_contested(exp, c_content_sha, dossier_resolver),
+                contested=_conclusion_contested(
+                    exp, c_content_sha, dossier_resolver, recipe_resolver
+                ),
             )
         )
 
@@ -1222,7 +1268,9 @@ def collect_evidence(
         for cit_dict in conc.citations:
             cit = Citation(cit_dict["kind"], cit_dict["ref"], cit_dict["sha"])
             try:
-                res = resolve_citation(exp, cit, dossier_resolver=dossier_resolver)
+                res = resolve_citation(
+                    exp, cit, dossier_resolver=dossier_resolver, recipe_resolver=recipe_resolver
+                )
             except errors.SpecInvalid as exc:
                 # A dossier citation with no injected resolver: at READ this
                 # DISCLOSES (evidence moves), it never refuses the digest.

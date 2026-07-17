@@ -265,6 +265,37 @@ def test_receipts_and_rederivation_steps_are_emitted(tmp_path: Path) -> None:
     assert recipe["markdown"].startswith("# Clean-reproduction recipe")
 
 
+def test_recipe_citation_resolver_round_trips_signature_and_summary(tmp_path: Path) -> None:
+    from hpc_agent.ops.extract_recipe import recipe_citation_ref, resolve_recipe_citation
+
+    _seed_campaign(tmp_path)
+    recipe = extract_recipe(tmp_path, spec=ExtractRecipeInput(campaign_id="camp"))
+
+    ref = recipe_citation_ref("campaign", "camp")
+    resolution = resolve_recipe_citation(tmp_path, ref)
+    assert resolution is not None
+    signature, summary = resolution
+    # parity: the resolved signature IS the recipe's own signature (re-derived).
+    assert signature == recipe["recipe_signature"]
+    # the disclosure summary carries the minimal-set size / exclusions / gaps / wheel-src.
+    assert "minimal 2" in summary
+    assert "excluded 3" in summary
+    assert "gaps 0" in summary
+    assert "wheel-src sidecar" in summary
+
+
+def test_recipe_citation_resolver_discloses_when_not_derivable(tmp_path: Path) -> None:
+    from hpc_agent.ops.extract_recipe import resolve_recipe_citation
+
+    # A malformed ref, a bad seed kind, or an empty seed_ref → not derivable (None),
+    # never a raise (the read-side disclosure posture).
+    assert resolve_recipe_citation(tmp_path, "not-a-ref") is None
+    assert resolve_recipe_citation(tmp_path, "campaign:") is None
+    assert resolve_recipe_citation(tmp_path, "bogus:x") is None
+    # An aggregate seed whose path does not exist → extract-recipe refuses → None.
+    assert resolve_recipe_citation(tmp_path, "aggregate:/no/such/table.json") is None
+
+
 def test_exactly_one_seed_required(tmp_path: Path) -> None:
     import pytest
 

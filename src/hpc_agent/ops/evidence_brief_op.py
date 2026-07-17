@@ -107,6 +107,25 @@ def _dossier_resolver_for(experiment_dir: Path) -> Callable[[str], str | None]:
     return _resolve
 
 
+def _recipe_resolver_for(experiment_dir: Path) -> Callable[[str], tuple[str, str] | None]:
+    """A ``ref -> (recipe_signature, summary) | None`` resolver bound to *experiment_dir*.
+
+    The ``recipe`` citation's counterpart to :func:`_dossier_resolver_for`:
+    ``state/evidence.py`` never imports ``ops``, so the recipe resolver
+    (``ops/extract_recipe.py::resolve_recipe_citation`` — re-derives the recipe
+    and returns its signature + a compact disclosure summary) is composed HERE
+    and injected into ``collect_evidence``. At READ a no-longer-derivable recipe
+    (a wiped run, a moved artifact) returns ``None`` → the collector DISCLOSES it,
+    never raises (only the append gate refuses loudly).
+    """
+    from hpc_agent.ops.extract_recipe import resolve_recipe_citation
+
+    def _resolve(ref: str) -> tuple[str, str] | None:
+        return resolve_recipe_citation(experiment_dir, ref)
+
+    return _resolve
+
+
 # --- collection → wire projection (mechanism-nouned, deterministic) ----------
 
 
@@ -352,6 +371,7 @@ def evidence_brief(*, experiment_dir: Path, spec: EvidenceBriefSpec) -> Evidence
             lineage=spec.lineage,
             as_of=spec.as_of,
             dossier_resolver=_dossier_resolver_for(e),
+            recipe_resolver=_recipe_resolver_for(e),
         )
         for e in experiments
     ]

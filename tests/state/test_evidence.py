@@ -69,7 +69,7 @@ _WIDGET_CITE = [_cite("run", "widget-run-1", "sha-widget-1")]
 
 
 def test_citation_kinds_equality_pin() -> None:
-    expected_kinds = frozenset({"dossier", "run", "fingerprint", "attestation"})
+    expected_kinds = frozenset({"dossier", "run", "fingerprint", "attestation", "recipe"})
     expected_statuses = frozenset({"current", "superseded", "revoked", "absent"})
     assert expected_kinds == evidence.CITATION_KINDS
     assert expected_statuses == evidence.STATUSES
@@ -203,6 +203,33 @@ def test_resolve_dossier_with_resolver(tmp_path: Path) -> None:
     assert res.resolved and res.matches
     res2 = evidence.resolve_citation(tmp_path, cit, dossier_resolver=lambda ref: "other-sha")
     assert res2.resolved and not res2.matches
+
+
+def test_resolve_recipe_without_resolver_raises() -> None:
+    # A recipe citation with NO injected resolver refuses loudly (the append-gate
+    # posture) — state never imports ops, so it cannot derive the recipe here.
+    cit = evidence.Citation("recipe", "campaign:widget-camp", "recipe-sig")
+    with pytest.raises(errors.SpecInvalid, match="injected"):
+        evidence.resolve_citation(Path("."), cit)
+
+
+def test_resolve_recipe_with_resolver_parity_and_summary(tmp_path: Path) -> None:
+    # The recipe kind is parity-checked against the recomputed signature; the
+    # resolver's disclosure summary rides the detail (BR-5).
+    cit = evidence.Citation("recipe", "campaign:widget-camp", "recipe-sig")
+    summary = "minimal 2, excluded 3, gaps 0, wheel-src sidecar"
+    ok = evidence.resolve_citation(
+        tmp_path, cit, recipe_resolver=lambda ref: ("recipe-sig", summary)
+    )
+    assert ok.resolved and ok.matches
+    assert summary in ok.detail  # the parity-checked summary is disclosed
+    miss = evidence.resolve_citation(
+        tmp_path, cit, recipe_resolver=lambda ref: ("other-sig", summary)
+    )
+    assert miss.resolved and not miss.matches
+    # No-recipe-derivable DISCLOSES at read (never raises) — the drift seat.
+    absent = evidence.resolve_citation(tmp_path, cit, recipe_resolver=lambda ref: None)
+    assert not absent.resolved and not absent.matches
 
 
 def test_resolve_run_citation(tmp_path: Path) -> None:

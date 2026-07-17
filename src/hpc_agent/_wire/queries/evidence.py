@@ -53,7 +53,9 @@ ConclusionStatus = Literal["current", "superseded", "revoked", "absent"]
 # ONE existing resolver the read side re-resolves against. Mechanism nouns only.
 # Mirrors ``state/evidence.py::CITATION_KINDS`` (T1); the T11 contract suite pins
 # the two equal so adding a kind is a reviewed vocabulary change in ONE place.
-CitationKind = Literal["dossier", "run", "fingerprint", "attestation"]
+# ``recipe`` cites a clean-reproduction recipe's signature (``extract-recipe``) —
+# re-derived + parity-checked at read (BR-5).
+CitationKind = Literal["dossier", "run", "fingerprint", "attestation", "recipe"]
 
 # Cache disposition for this read (E-cache, the ``describe_cache`` posture):
 # ``hit`` = served from the content-keyed cache; ``miss`` = recomputed and

@@ -206,7 +206,7 @@ def test_citation_kinds_closed_and_equals_wire_literal() -> None:
     from hpc_agent._wire.queries.evidence import CitationKind
     from hpc_agent.state.evidence import CITATION_KINDS
 
-    assert frozenset({"dossier", "run", "fingerprint", "attestation"}) == CITATION_KINDS
+    assert frozenset({"dossier", "run", "fingerprint", "attestation", "recipe"}) == CITATION_KINDS
     assert set(get_args(CitationKind)) == set(CITATION_KINDS)
 
 

@@ -60,7 +60,16 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 if TYPE_CHECKING:
     pass
 
-__all__ = ["extract_recipe"]
+__all__ = ["extract_recipe", "recipe_citation_ref", "resolve_recipe_citation"]
+
+# The evidence-memory ``recipe`` citation ref shape (``state/evidence.py::
+# KIND_RECIPE``): ``"<seed_kind>:<seed_ref>"``, mirroring the ``attestation`` ref.
+# Each seed kind maps to the ONE ``ExtractRecipeInput`` field it seeds.
+_RECIPE_SEED_FIELD: dict[str, str] = {
+    "run": "run_id",
+    "campaign": "campaign_id",
+    "aggregate": "aggregate_path",
+}
 
 # Bump when the emitted recipe shape changes in a way a consumer would branch on.
 RECIPE_SCHEMA_VERSION: int = 1
@@ -481,3 +490,70 @@ def extract_recipe(experiment_dir: Path, *, spec: ExtractRecipeInput) -> dict[st
     # wire-free (the ops op owns the Pydantic boundary).
     dumped["markdown"] = render_recipe(dumped)
     return dumped
+
+
+# --- the evidence-memory ``recipe`` citation resolver (BR-5) ------------------
+
+
+def recipe_citation_ref(seed_kind: str, seed_ref: str) -> str:
+    """Compose a ``recipe`` citation ``ref`` for a seed → ``"<seed_kind>:<seed_ref>"``.
+
+    The ONE spelling of the ref shape the resolver parses (``run`` / ``campaign``
+    / ``aggregate``), so a conclusion author and :func:`resolve_recipe_citation`
+    can never drift. *seed_ref* is an opaque identity / path — never read for
+    meaning here.
+    """
+    return f"{seed_kind}:{seed_ref}"
+
+
+def _recipe_summary(recipe: dict[str, Any]) -> str:
+    """A one-line disclosure summary over a resolved recipe (counts + wheel source).
+
+    IDENTITY / COUNTING only (the recipe posture): the minimal run-set SIZE, the
+    exclusions COUNT, the disclosed-gaps COUNT, and which wheel-sha SOURCE(S) the
+    fingerprints used (``signed-manifest`` vs ``sidecar``). Names no metric.
+    """
+    minimal = recipe.get("minimal_run_ids") or []
+    excluded = recipe.get("excluded") or []
+    gaps = recipe.get("gaps") or []
+    runs = recipe.get("runs") or []
+    sources = sorted(
+        {
+            r["hpc_agent_version_source"]
+            for r in runs
+            if isinstance(r, dict) and r.get("hpc_agent_version_source")
+        }
+    )
+    wheel_src = ",".join(sources) if sources else "-"
+    return (
+        f"minimal {len(minimal)}, excluded {len(excluded)}, gaps {len(gaps)}, wheel-src {wheel_src}"
+    )
+
+
+def resolve_recipe_citation(experiment_dir: Path, ref: str) -> tuple[str, str] | None:
+    """Resolve a ``recipe`` citation ref → ``(recipe_signature, summary)`` or ``None``.
+
+    The INJECTED resolver ops callers pass into
+    :func:`state.evidence.resolve_citation` (``state`` never imports ``ops``; the
+    recipe is COMPUTED). Parses *ref* (``"<seed_kind>:<seed_ref>"``), re-derives
+    the recipe via :func:`extract_recipe`, and returns its ``recipe_signature``
+    (the parity target) with a compact disclosure *summary* (minimal run-set size,
+    exclusions count, disclosed-gaps count, wheel-sha source). Returns ``None`` —
+    "not derivable on this namespace" — for a malformed ref or ANY derivation
+    failure (a wiped run, an absent aggregate path, a bad seed): the resolver is
+    fail-safe, so a moved artifact DISCLOSES at read and REFUSES loudly at the
+    append gate, never crashes. Pure read; never raises.
+    """
+    seed_kind, sep, seed_ref = ref.partition(":")
+    field = _RECIPE_SEED_FIELD.get(seed_kind)
+    if not sep or field is None or not seed_ref:
+        return None
+    try:
+        spec = ExtractRecipeInput(**{field: seed_ref})
+        recipe = extract_recipe(experiment_dir, spec=spec)
+    except Exception:  # noqa: BLE001 — read side: any derivation failure is "not derivable"
+        return None
+    signature = recipe.get("recipe_signature")
+    if not isinstance(signature, str) or not signature:
+        return None
+    return signature, _recipe_summary(recipe)
