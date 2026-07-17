@@ -146,6 +146,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent export-bundle --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "export_bundle.input.json",
+    "name": "export-bundle",
+    "output_schema": "export_bundle.output.json",
+    "python": "hpc_agent.ops.publication_bundle.export_bundle",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Assemble the publication bundle — one offline-verifiable .zip a scientist ships with a paper: the sealed dossier evidence + the minimal recipe (the ONE dossier gather), the signed provenance manifest, a cite-check audit of the manuscript's numbers against the sealed table, the in-toto/DSSE attestations, and a top-level VERIFY manifest classifying each reproducibility link MECHANICAL/DISCLOSED/ABSENT with the union-of-disclosures ledger, all under one seal. Composes the shipped verbs; discloses, never gates; never overclaims 'reproducible'. Seed = exactly one of --run-id / --campaign-id / --aggregate-path; manuscript = optionally one of --manuscript-text / --manuscript-path (absent → disclose-skipped). Pure local reads + one local write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "export_dossier.input.json",

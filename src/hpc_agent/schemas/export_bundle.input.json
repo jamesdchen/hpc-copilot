@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/export_bundle.input.json",
+  "title": "export-bundle input spec",
+  "description": "Inputs to ``export-bundle`` — one seed, an optional manuscript.\n\nThe **seed** is exactly one of ``run_id`` / ``campaign_id`` /\n``aggregate_path`` (the ``extract-recipe`` / ``cite-check`` seed contract,\nreused verbatim — validated in the op, not by the schema, so the exactly-one\nrule reports one clear error). The **manuscript** is optionally one of\n``manuscript_text`` / ``manuscript_path`` (the ``cite-check`` input\ncontract): ABSENT is legal (disclose-not-gate) — the bundle still seals the\ndossier evidence + signed manifest and records a ``cite-check-skipped``\ndisclosure.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Seed the bundle from this run's sealed evidence + table. Excludes the other two seeds.",
+      "title": "Run Id"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Seed the bundle from this campaign. Excludes the other two seeds.",
+      "title": "Campaign Id"
+    },
+    "aggregate_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Seed the bundle from a sealed reduced-metrics artifact. A pack *.csv is an OPAQUE citation (never parsed). Excludes the other two seeds.",
+      "title": "Aggregate Path"
+    },
+    "manuscript_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The manuscript verbatim whose numeric claims are audited against the sealed table. Optional; excludes manuscript_path.",
+      "title": "Manuscript Text"
+    },
+    "manuscript_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to a .tex / .md / .txt manuscript, read tolerantly. Optional; excludes manuscript_text.",
+      "title": "Manuscript Path"
+    },
+    "include_lineage": {
+      "default": false,
+      "description": "When true, widen the dossier gather to the primary run's whole supersession lineage (the run plus every run it superseded, to the lineage root). The resolved set is reported in run_ids.",
+      "title": "Include Lineage",
+      "type": "boolean"
+    },
+    "output_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Destination path for the bundle .zip. Omit to let the verb derive a conventional path (<experiment>/_dossier/<seed>.bundle.zip); the resolved location is echoed back as bundle_path.",
+      "title": "Output Path"
+    }
+  }
+}

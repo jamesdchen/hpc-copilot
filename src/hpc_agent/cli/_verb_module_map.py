@@ -67,6 +67,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'evidence-brief': ('evidence-brief', 'hpc_agent.ops.evidence_brief_op'),
     'evidence-period': ('evidence-period', 'hpc_agent.ops.evidence_period_op'),
     'export-attestations': ('export-attestations', 'hpc_agent.ops.export_attestations'),
+    'export-bundle': ('export-bundle', 'hpc_agent.ops.publication_bundle'),
     'export-dossier': ('export-dossier', 'hpc_agent.ops.export_dossier'),
     'export-package': ('export-package', 'hpc_agent.incorporation.export_package'),
     'extract-recipe': ('extract-recipe', 'hpc_agent.ops.extract_recipe'),

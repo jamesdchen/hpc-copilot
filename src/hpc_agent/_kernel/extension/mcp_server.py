@@ -286,18 +286,19 @@ _CURATED_EXTRA_VERBS = frozenset(
     }
 )
 
-# Curated-catalog decision for the attestation/dossier exporters (conformance-kit
-# K10, "expose export-attestations beside export-dossier's posture"). Both
-# ``export-dossier`` and ``export-attestations`` are read-only ``query`` verbs
-# that declare NO ``next_block`` and are NOT in the extras above, so NEITHER
-# derives into the curated catalog — the honest mirror is a recorded
-# NON-EXPOSURE, not a new entry. They are HUMAN-run publish/export steps (a human
-# exports a dossier or an in-toto attestation bundle after a run completes), not
-# agent-loop touchpoints the way the block verbs and recovery opt-ins are; adding
-# either to ``_CURATED_EXTRA_VERBS`` would advertise an export affordance the
-# amplification loop never needs. Recorded here so the parity is deliberate and
-# auditable rather than incidental: if one is ever curated, curate the other and
-# say why.
+# Curated-catalog decision for the dossier/attestation/publication exporters
+# (conformance-kit K10, "expose export-attestations beside export-dossier's
+# posture"; publication-bundle R-B decision). ``export-dossier``,
+# ``export-attestations`` and ``export-bundle`` are all ``verb=mutate`` export
+# verbs (each does a single local write, no SSH) that declare NO ``next_block``
+# and are NOT in the extras above, so NONE derives into the curated catalog — the
+# honest mirror is a recorded NON-EXPOSURE, not a new entry. They are HUMAN-run
+# publish/export steps (a human exports a dossier, an in-toto attestation bundle,
+# or the publication bundle after a run completes), not agent-loop touchpoints the
+# way the block verbs and recovery opt-ins are; adding any to
+# ``_CURATED_EXTRA_VERBS`` would advertise an export affordance the amplification
+# loop never needs. Recorded here so the parity is deliberate and auditable rather
+# than incidental: if one is ever curated, curate the others and say why.
 
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.

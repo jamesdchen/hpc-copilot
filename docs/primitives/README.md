@@ -201,6 +201,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [doctor-install](doctor-install.md) | yes | scheduler: `Windows`; file_write: `~/.claude/hpc/<repo_hash>/doctor.spec.json` | `hpc-agent doctor-install --spec <path> [--experiment-dir <dir>]` |
 | [emit-skill-return](emit-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>` |
 | [export-attestations](export-attestations.md) | yes | file_write: `<output_path>` | `hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]` |
+| [export-bundle](export-bundle.md) | yes | file_write: `<output_path>` | `hpc-agent export-bundle --spec <path> [--experiment-dir <dir>]` |
 | [export-dossier](export-dossier.md) | yes | file_write: `<output_path>` | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` |
 | [host-retarget](host-retarget.md) | yes | writes-journal: `<experiment>/.hpc/decisions/run/<run_id>.jsonl` | `hpc-agent host-retarget --spec <path> [--experiment-dir <dir>]` |
 | [kill](kill.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` |

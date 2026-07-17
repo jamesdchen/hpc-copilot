@@ -167,6 +167,14 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # so it also appears in the schema-file-parametrized remediation probes
         # ({} is invalid — run_id is required).
         "export-attestations",
+        # export-bundle (publication-bundle): the publication-time composition over
+        # the ONE dossier gather — the sealed evidence + recipe, the signed
+        # provenance manifest, a cite-check audit of the manuscript, the in-toto/
+        # DSSE attestations, and a top-level VERIFY manifest, all under one seal.
+        # Spec-taking mutate; its input schema (export_bundle.input.json) is baked
+        # in the same commit, so it also appears in the schema-file-parametrized
+        # remediation probes ({} is invalid — exactly one seed is required).
+        "export-bundle",
         "archive-dossier",
         "status-snapshot",
         "status-watch",

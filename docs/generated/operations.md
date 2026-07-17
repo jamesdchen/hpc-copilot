@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**175 operations total**: 144 primitive atoms + 31 workflow atoms.
+**176 operations total**: 145 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -124,7 +124,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (32)
+## `mutate` (33)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -140,6 +140,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`doctor-install`](../primitives/doctor-install.md) | ✓ | file_write; scheduler | `hpc-agent doctor-install --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`emit-skill-return`](../primitives/emit-skill-return.md) | ✓ | filesystem | `hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>` | `_(none)_` | — | — |
 | [`export-attestations`](../primitives/export-attestations.md) | ✓ | file_write | `hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`export-bundle`](../primitives/export-bundle.md) | ✓ | file_write | `hpc-agent export-bundle --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`export-dossier`](../primitives/export-dossier.md) | ✓ | file_write | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`host-retarget`](../primitives/host-retarget.md) | ✓ | writes-journal | `hpc-agent host-retarget --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`kill`](../primitives/kill.md) | ✓ | ssh; writes-journal | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

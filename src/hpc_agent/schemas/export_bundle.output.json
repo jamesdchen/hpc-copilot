@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/export_bundle.output.json",
+  "title": "export-bundle output data",
+  "description": "The assembled publication bundle's provenance + honest verify verdict.\n\nEvery field describes the bundle by PROVENANCE (where it landed, which seed\n+ runs it covers, how many members, the seal) or by the CODE-emitted honest\nverdict + disclosure ledger — never by the meaning of any sealed member. The\n``verify_manifest`` rides as a bare ``dict`` so the closed BUNDLE-MEMBER\nvocabulary and the per-link classification stay an ops-layer contract, out of\nthe boundary schema (the ``export-dossier`` ``manifest`` posture).",
+  "type": "object",
+  "required": [
+    "bundle_path",
+    "seed_kind",
+    "seed_ref",
+    "bundle_sha256",
+    "member_count",
+    "manuscript_present",
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "bundle_path": {
+      "title": "Bundle Path",
+      "type": "string"
+    },
+    "seed_kind": {
+      "description": "Which seed reference the bundle was composed from.",
+      "enum": [
+        "run",
+        "campaign",
+        "aggregate"
+      ],
+      "title": "Seed Kind",
+      "type": "string"
+    },
+    "seed_ref": {
+      "description": "The seed's identity / path verbatim.",
+      "title": "Seed Ref",
+      "type": "string"
+    },
+    "primary_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run whose sealed stores seeded the dossier gather.",
+      "title": "Primary Run Id"
+    },
+    "run_ids": {
+      "description": "The run ids whose dossier stores were sealed, in lineage order (newest first) when include_lineage is set; otherwise the primary run.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Run Ids",
+      "type": "array"
+    },
+    "bundle_sha256": {
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "member_count": {
+      "minimum": 0,
+      "title": "Member Count",
+      "type": "integer"
+    },
+    "manuscript_present": {
+      "title": "Manuscript Present",
+      "type": "boolean"
+    },
+    "verdict": {
+      "title": "Verdict",
+      "type": "string"
+    },
+    "disclosures": {
+      "description": "The union-of-disclosures ledger: every disclosed gap across the dossier, the recipe, the cite-check, and the env/data/provenance legs. Disclosed, never a failure.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Disclosures",
+      "type": "array"
+    },
+    "verify_manifest": {
+      "additionalProperties": true,
+      "description": "The top-level VERIFY manifest: bundle_schema_version, the path-sorted member entries, the per-link MECHANICAL/DISCLOSED/ABSENT classification, the disclosure ledger, the code-emitted verdict, the offline-verify recipe, and bundle_sha256. Self-attesting.",
+      "title": "Verify Manifest",
+      "type": "object"
+    }
+  }
+}
