@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stream_aggregate.input.json",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_stream.input.json",
   "title": "aggregate-stream input spec",
   "description": "What to stream: exactly ONE of a single run or a set of parent runs.",
   "type": "object",

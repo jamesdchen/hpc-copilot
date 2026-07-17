@@ -331,6 +331,10 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
 # fields the per-field synthesizer would otherwise skip. Keyed by model
 # qualname; values are merged into the synthesized kwargs.
 _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    # AggregateStreamInput requires EXACTLY ONE of run_id / parents (both
+    # optional); supply the single-run mode so the synthesizer's all-default
+    # instance satisfies the cross-field rule.
+    "AggregateStreamInput": {"run_id": "x"},
     "VerifyReproductionSpec": {"original_run_id": "orig-run"},
     "EvidenceBriefSpec": {"tags": ["x"]},
     "TraceRenderSpec": {"scope_kind": "run", "scope_id": "x"},

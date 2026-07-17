@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from hpc_agent._wire._shared import RunIdStrict
 
 
-class StreamAggregateInput(BaseModel):
+class AggregateStreamInput(BaseModel):
     """What to stream: exactly ONE of a single run or a set of parent runs."""
 
     model_config = ConfigDict(extra="forbid", title="aggregate-stream input spec")
@@ -47,7 +47,7 @@ class StreamAggregateInput(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _exactly_one_target(self) -> StreamAggregateInput:
+    def _exactly_one_target(self) -> AggregateStreamInput:
         has_single = self.run_id is not None
         has_parents = bool(self.parents)
         if has_single == has_parents:
@@ -69,7 +69,7 @@ class StreamArmPending(BaseModel):
     owner_run_id: str = Field(description="The parent run whose leg still owes this arm.")
 
 
-class StreamAggregateResult(BaseModel):
+class AggregateStreamResult(BaseModel):
     """A partial-but-honest aggregate over the arms complete NOW.
 
     Every number in ``aggregated_metrics`` / ``per_arm_metrics`` is

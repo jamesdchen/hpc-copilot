@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stream_aggregate.output.json",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_stream.output.json",
   "title": "aggregate-stream output data",
   "description": "A partial-but-honest aggregate over the arms complete NOW.\n\nEvery number in ``aggregated_metrics`` / ``per_arm_metrics`` is\nreducer-computed (core selected WHICH arms, the reducer computed the values).\n``arms_pending`` names what is still coming and from where; ``snapshot_seq``\nis monotonic across calls and ``newly_complete`` is the delta since the prior\nsnapshot. ``arms_regressed`` names any arm that was complete in a prior\nsnapshot but is not now (disclosed, never masked).",
   "type": "object",

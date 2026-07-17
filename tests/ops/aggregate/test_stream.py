@@ -15,7 +15,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.ops.aggregate.arm_census import census_arms
-from hpc_agent.ops.aggregate.stream import stream_aggregate
+from hpc_agent.ops.aggregate.stream import aggregate_stream
 from hpc_agent.ops.monitor.announce import AnnouncedTaskIds
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -104,9 +104,9 @@ def _make_pull_fn(staged: dict[str, dict[int, dict]]):
 
 
 def _spec(**kw):
-    from hpc_agent._wire.queries.stream_aggregate import StreamAggregateInput
+    from hpc_agent._wire.queries.aggregate_stream import AggregateStreamInput
 
-    return StreamAggregateInput(**kw)
+    return AggregateStreamInput(**kw)
 
 
 def test_stream_emits_complete_arms_and_discloses_pending(
@@ -119,7 +119,7 @@ def test_stream_emits_complete_arms_and_discloses_pending(
     pull_fn = _make_pull_fn(
         {"r1": {0: {"qlike": 0.1, "n_samples": 5}, 1: {"qlike": 0.3, "n_samples": 5}}}
     )
-    res = stream_aggregate(
+    res = aggregate_stream(
         tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _pull_fn=pull_fn
     )
     assert res.ok is True
@@ -156,7 +156,7 @@ def test_second_call_refines_monotonically(tmp_path: Path, journal_home: Path) -
     )
 
     # First call: only wave 0 complete.
-    r1 = stream_aggregate(
+    r1 = aggregate_stream(
         tmp_path,
         spec=_spec(run_id="r1"),
         _census_fn=_make_census_fn({"r1": {0, 1}}),
@@ -166,7 +166,7 @@ def test_second_call_refines_monotonically(tmp_path: Path, journal_home: Path) -
     assert r1.arms_complete == ["r1:0"]
 
     # Second call: wave 1 now also complete — refines, non-decreasing.
-    r2 = stream_aggregate(
+    r2 = aggregate_stream(
         tmp_path,
         spec=_spec(run_id="r1"),
         _census_fn=_make_census_fn({"r1": {0, 1, 2, 3}}),
@@ -183,7 +183,7 @@ def test_zero_complete_refuses_with_pending_named(tmp_path: Path, journal_home: 
     _seed_record(tmp_path, "r1")
     _seed_sidecar(tmp_path, "r1", wave_map={"0": [0, 1]}, task_count=2)
     with pytest.raises(errors.PreconditionFailed, match="zero arms complete"):
-        stream_aggregate(
+        aggregate_stream(
             tmp_path,
             spec=_spec(run_id="r1"),
             _census_fn=_make_census_fn({"r1": {0}}),  # wave 0 half done
@@ -218,7 +218,7 @@ def test_multi_parent_ownership_counts_shared_cell_once(tmp_path: Path, journal_
         }
     )
     census_fn = _make_census_fn({"src": {0, 1}, "der": {0}})
-    res = stream_aggregate(
+    res = aggregate_stream(
         tmp_path, spec=_spec(parents=["src", "der"]), _census_fn=census_fn, _pull_fn=pull_fn
     )
     assert res.reduce_path == "ownership"

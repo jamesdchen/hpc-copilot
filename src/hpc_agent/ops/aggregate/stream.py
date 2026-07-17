@@ -41,12 +41,12 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent._wire.queries.stream_aggregate import (
-    StreamAggregateInput,
-    StreamAggregateResult,
+from hpc_agent._wire.queries.aggregate_stream import (
+    AggregateStreamInput,
+    AggregateStreamResult,
     StreamArmPending,
 )
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_metrics
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.aggregate.arm_census import ArmCensus, census_arms
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from hpc_agent.ops.aggregate.arm_census import ArmCompleteness
     from hpc_agent.state.run_record import RunRecord
 
-__all__ = ["stream_aggregate"]
+__all__ = ["aggregate_stream"]
 
 #: The canonical partial-aggregate filename — the SAME basename the final harvest
 #: writes (``aggregate_flow.py`` convention) so a consumer reads either identically.
@@ -360,18 +360,17 @@ def _write_snapshot(
         spec_arg=True,
         experiment_dir_arg=True,
         requires_ssh=True,
-        spec_model=StreamAggregateInput,
-        schema_ref=SchemaRef(input="stream_aggregate"),
+        spec_model=AggregateStreamInput,
     ),
     agent_facing=True,
 )
-def stream_aggregate(
+def aggregate_stream(
     experiment_dir: Path,
     *,
-    spec: StreamAggregateInput,
+    spec: AggregateStreamInput,
     _census_fn: Callable[..., ArmCensus] | None = None,
     _pull_fn: Callable[..., Any] | None = None,
-) -> StreamAggregateResult:
+) -> AggregateStreamResult:
     """Stream the current best table over the complete arms [SPEC §1].
 
     Parameters
@@ -481,7 +480,7 @@ def stream_aggregate(
     }
     _write_snapshot(snapshot_path, aggregated=aggregated, per_arm=per_arm, provenance=provenance)
 
-    return StreamAggregateResult(
+    return AggregateStreamResult(
         ok=True,
         parents=parents,
         snapshot_seq=snapshot_seq,

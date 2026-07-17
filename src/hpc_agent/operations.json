@@ -462,10 +462,10 @@
     "agent_facing": true,
     "cli": "hpc-agent aggregate-stream --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
-    "input_schema": null,
+    "input_schema": "aggregate_stream.input.json",
     "name": "aggregate-stream",
-    "output_schema": null,
-    "python": "hpc_agent.ops.aggregate.stream.stream_aggregate",
+    "output_schema": "aggregate_stream.output.json",
+    "python": "hpc_agent.ops.aggregate.stream.aggregate_stream",
     "side_effects": [
       "ssh",
       "sync-pull"

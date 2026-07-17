@@ -18,7 +18,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent aggregate-stream --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.ops.aggregate.stream.stream_aggregate
+  python: hpc_agent.ops.aggregate.stream.aggregate_stream
 ---
 # aggregate-stream
 
