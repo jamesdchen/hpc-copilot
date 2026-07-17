@@ -448,6 +448,74 @@ def test_run_tick_parks_with_a_record_still_writes_the_marker(
     assert marker["resume_cursor"]["next_verb"] == "aggregate-run"
 
 
+def test_park_discloses_the_scoped_consent_hint(faked: dict[str, Any]) -> None:
+    """OFFERED-CONSENT ruling: a park composes the ready-to-type scoped-consent line.
+
+    The brief the human reads carries an ``approve_hint`` naming the successor, the
+    run, and the ``@<sha8>`` pin of the code-composed successor spec the driver
+    materialized — the audit-view "To sign: type ..." precedent generalized to the
+    block-drive rendezvous. The sha in the utterance MUST equal the materialized
+    disclosure's own sha (the R3 pin the human is approving), and a bare ``y`` is
+    still declared acceptable.
+    """
+    faked["results"] = _gated_park_results()
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.brief is not None
+    hint = result.brief["approve_hint"]
+    disclosed_sha = result.brief["materialized_successor_spec"]["sha256"]
+    assert hint["utterance"] == f"y aggregate-run r1 @{disclosed_sha[:8]}"
+    assert hint["scope_tokens"]["next_block"] == "aggregate-run"
+    assert hint["scope_tokens"]["run_id"] == "r1"
+    assert hint["scope_tokens"]["next_spec_sha"] == disclosed_sha
+    assert hint["bare_ok"] is True
+    # The marker persisted for the resume carries the hint too (re-surfaced on
+    # `awaiting_decision`), so a later tick re-shows the same ready-to-type line.
+    assert faked["parked"][0]["brief"]["approve_hint"]["utterance"] == hint["utterance"]
+
+
+def test_park_consent_hint_is_deterministic_across_ticks(faked: dict[str, Any]) -> None:
+    """Same record -> same utterance (the token-exact-by-construction bar)."""
+    faked["results"] = _gated_park_results()
+    first, _ = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    faked["parked"].clear()
+    second, _ = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert first.brief is not None and second.brief is not None
+    assert first.brief["approve_hint"]["utterance"] == second.brief["approve_hint"]["utterance"]
+
+
+def test_park_at_none_marker_decision_scopes_the_override_successor(
+    faked: dict[str, Any],
+) -> None:
+    """A decision park with no gated successor names the OVERRIDE target the y greenlights.
+
+    ``aggregate-check`` not_ready parks a *decision* (needs_decision, no
+    code-determined successor). The human's ``y`` there is an OVERRIDE that
+    greenlights the block's chain-forward successor (``aggregate-run``), so the hint
+    maps the ``None`` marker target through ``block_chain.chain_successor`` — exactly
+    as ``committed_greenlight_for_boundary`` resolves it — and names it.
+    """
+    faked["results"] = {
+        "aggregate-check": {
+            "block": "check",
+            "stage_reached": "not_ready",
+            "needs_decision": True,
+            "reason": "readiness gate failed",
+            "run_id": "r1",
+            "brief": {"missing": ["wave-2"]},
+            "next_block": None,
+        },
+    }
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb is None  # no code-determined successor
+    assert result.brief is not None
+    hint = result.brief["approve_hint"]
+    assert hint["scope_tokens"]["next_block"] == "aggregate-run"  # the override target
+    assert hint["utterance"].startswith("y aggregate-run r1")
+
+
 def test_run_tick_parks_at_decision(faked: dict[str, Any]) -> None:
     """A ``needs_decision`` span writes the pending marker and exits (rendezvous)."""
     faked["results"] = {

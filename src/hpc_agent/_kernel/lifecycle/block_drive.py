@@ -1537,6 +1537,58 @@ def _boundary_has_post_park_nudge(
     )
 
 
+def _compose_approve_hint_for_park(
+    experiment_dir: Path,
+    *,
+    workflow: str | None,
+    run_id: str,
+    verb: str,
+    successor: str | None,
+    materialized: _MaterializedSuccessor,
+    brief: Any,
+) -> dict[str, Any] | None:
+    """Compose the boundary's scoped-consent utterance hint (OFFERED-CONSENT ruling).
+
+    The park-side adapter over the pure :func:`hpc_agent.ops.relay_render.compose_approve_hint`
+    composer: it derives the tokens the composer names — the successor the ``y``
+    greenlights, the run it is scoped to, the ``@<sha8>`` pin of the materialized
+    code-composed spec — from the driver's own park-time products, so the scope the
+    approval grants is legible in what the human types.
+
+    ``target`` is the boundary's greenlight target: the parked ``successor`` when the
+    block chained into a gated block, else the block's OWN chain-forward successor
+    (:func:`block_chain.chain_successor`) — the OVERRIDE-BOUNDARY map a ``None``-marker
+    decision park (``aggregate-check`` not_ready / integrity_review) greenlights,
+    exactly as :func:`committed_greenlight_for_boundary` resolves it. When neither
+    exists there is no scoped successor to name → ``None`` (a bare ``y`` boundary).
+
+    STANDING (``workflow == "campaign"``): the utterance is a standing consent for an
+    unattended async campaign, so its bounds (duration / caps / wake) are named too,
+    read from the parked block's brief when it carries them. Pure disclosure — no
+    validation (the overnight-consent caps gate owns that).
+    """
+    from hpc_agent.ops.relay_render import _brief_cluster, compose_approve_hint
+
+    target = successor
+    if target is None:
+        target = block_chain.chain_successor(verb)
+    if not (isinstance(target, str) and target):
+        return None
+    brief_dict = brief if isinstance(brief, dict) else {}
+    cluster = _brief_cluster(brief_dict)
+    standing = (workflow or "") == "campaign"
+    bounds = brief_dict.get("consent_bounds") if isinstance(brief_dict, dict) else None
+    return compose_approve_hint(
+        workflow=workflow,
+        successor=target,
+        run_id=run_id,
+        cluster=cluster,
+        next_spec_sha=materialized.sha,
+        standing=standing,
+        bounds=bounds if isinstance(bounds, dict) else None,
+    )
+
+
 def park(
     experiment_dir: Path,
     *,
@@ -1614,6 +1666,28 @@ def park(
         brief = {**brief, "materialized_successor_spec": disclosure}
         # Carry the disclosure onto the caller's Result so the returned
         # BlockDriveResult surfaces it to the human too.
+        result["brief"] = brief
+    # OFFERED-CONSENT ruling (2026-07-16): compose the ready-to-type SCOPED consent
+    # utterance for this boundary and disclose it in the brief — the audit-view
+    # "To sign: type ..." precedent (``ops/notebook/audit_view.py``) generalized to
+    # the block-drive rendezvous. Derived MECHANICALLY from the same materialized
+    # successor (its sha pins the exact code-composed spec, R3) + the record's own
+    # bounds, so the scope the ``y`` grants is visible in what the human types. A
+    # DISCLOSURE only, like ``materialized_successor_spec`` above: it rides the
+    # driver-copy brief + the marker brief, NEVER the provenance-source
+    # decision-brief, and NEVER auto-fills the consent (relay-verbatim discipline).
+    # A bare ``y`` still works (backward compat); the hint ADDS the scoped form.
+    approve_hint = _compose_approve_hint_for_park(
+        experiment_dir,
+        workflow=wf,
+        run_id=run_id,
+        verb=verb,
+        successor=successor,
+        materialized=materialized,
+        brief=brief,
+    )
+    if approve_hint is not None and isinstance(brief, dict):
+        brief = {**brief, "approve_hint": approve_hint}
         result["brief"] = brief
     # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
     # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
