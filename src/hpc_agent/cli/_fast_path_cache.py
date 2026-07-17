@@ -158,14 +158,23 @@ def cached_cli_reshaping_verdict() -> tuple[bool, frozenset[str]]:
     path collapses to the fresh scan — the byte-identical, always-correct
     fallback.
     """
-    from hpc_agent._kernel.registry.plugins import cli_reshaping_verdict
-
+    # ``cli_reshaping_verdict`` is imported LAZILY, only on the branches that
+    # actually scan (disabled cache, un-fingerprintable env, cache miss). On a
+    # signature HIT — the steady state in a ``block-drive`` loop — the plugins
+    # module (and its ``importlib.metadata`` entry-points chain) is never
+    # imported at all, so a hot non-discovery fast verb pays only the cheap
+    # scandir + cache read. Every scan branch still yields the byte-identical
+    # verdict; only import timing differs.
     if cache_disabled():
+        from hpc_agent._kernel.registry.plugins import cli_reshaping_verdict
+
         return cli_reshaping_verdict()
 
     try:
         signature = installed_dist_signature()
     except Exception:  # noqa: BLE001 — an un-fingerprintable env → fresh scan
+        from hpc_agent._kernel.registry.plugins import cli_reshaping_verdict
+
         return cli_reshaping_verdict()
 
     data = _read_cache()
@@ -173,6 +182,8 @@ def cached_cli_reshaping_verdict() -> tuple[bool, frozenset[str]]:
         decoded = _decode_verdict(data.get("verdict"))
         if decoded is not None:
             return decoded
+
+    from hpc_agent._kernel.registry.plugins import cli_reshaping_verdict
 
     verdict = cli_reshaping_verdict()
     _write_cache(signature, verdict)

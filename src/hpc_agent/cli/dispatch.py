@@ -33,8 +33,6 @@ import contextlib
 import subprocess
 import sys
 
-from pydantic import ValidationError
-
 from hpc_agent import errors
 from hpc_agent.cli._helpers import _err_from_hpc
 
@@ -283,12 +281,17 @@ def _invoke_parsed(args: argparse.Namespace) -> int:
                 f"scheduler subprocess timed out after {exc.timeout}s: {exc.cmd!r}"
             )
         )
-    except ValidationError as exc:
-        # pydantic v2 ``ValidationError`` does NOT subclass ``ValueError``;
-        # without this clause a malformed --spec would fall through to the
-        # generic handler and be mislabelled internal / exit 3.
-        return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except Exception as exc:  # noqa: BLE001 — last-resort envelope
+        # pydantic v2 ``ValidationError`` does NOT subclass ``ValueError``;
+        # without this branch a malformed --spec would fall through to the
+        # generic handler and be mislabelled internal / exit 3. Imported LAZILY
+        # here (error path only) so the cold happy path never pays pydantic's
+        # ~160ms import — the single biggest reducible chunk of the fast-path
+        # dispatch floor (it was the only module-scope pydantic use).
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            return _err_from_hpc(errors.SpecInvalid(str(exc)))
         # Spec-input validation sites across ``ops/``, ``meta/``,
         # ``_kernel/contract``, ``state/``, ``infra/`` raise typed
         # ``errors.SpecInvalid`` (caught by the ``HpcError`` clause

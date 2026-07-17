@@ -576,6 +576,34 @@ def test_hpc_error_routed_to_err_envelope(capsys: pytest.CaptureFixture[str]) ->
     assert "nope" in env["message"]
 
 
+def test_pydantic_validation_error_maps_to_spec_invalid(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A raw pydantic ``ValidationError`` from a verb → spec_invalid / exit 1.
+
+    ``pydantic.ValidationError`` does NOT subclass ``ValueError``; the fast-path
+    latency work deferred its import out of ``dispatch`` module scope into the
+    ``_invoke_parsed`` generic handler (isinstance branch). This guard fires if
+    that restructure ever regresses the mapping (a raw ValidationError falling
+    through to the internal / exit-3 last-resort clause).
+    """
+    from hpc_agent.cli import dispatch
+
+    class _Model(BaseModel):
+        n: int
+
+    def _boom(_args: argparse.Namespace) -> int:
+        _Model(n="not-an-int")  # type: ignore[arg-type]  # raises pydantic ValidationError
+        return 0
+
+    ns = argparse.Namespace(func=_boom)
+    rc = dispatch._invoke_parsed(ns)
+    assert rc == 1
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["ok"] is False
+    assert env["error_code"] == "spec_invalid"
+
+
 # ─── verb-group registration via the parser ────────────────────────────────
 
 

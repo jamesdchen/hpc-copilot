@@ -29,11 +29,15 @@ import argparse
 import copy
 import functools
 import json
-from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
+
+# Module-scope (a deliberate monkeypatch seam: tests patch ``helpers.agent_available``
+# / ``agent_detail``). Cheap now that ``hpc_agent.infra.__init__`` is lazy —
+# importing ``ssh_agent`` pulls only ``ssh_options`` (~8ms), not the pydantic
+# ``clusters`` / asyncssh ``remote`` chain the eager package init used to drag in.
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
 
 EXIT_OK = 0
@@ -576,6 +580,8 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     # ``plugin_schema_roots`` resolves each loaded plugin's root by
     # convention (or its explicit ``schema_assets``), so the host stays
     # agnostic to which plugins are installed.
+    from importlib.resources import files as _resource_files
+
     from hpc_agent._kernel.registry.plugins import plugin_schema_roots
 
     schema_text: str | None = None

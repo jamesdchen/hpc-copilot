@@ -135,6 +135,47 @@ def test_bare_import_does_not_load_heavy_submodules() -> None:
     )
 
 
+def test_infra_reexport_lazy() -> None:
+    """``hpc_agent.infra`` re-exports resolve lazily (PEP 562) and correctly.
+
+    Importing a sibling submodule (``from hpc_agent.infra.ssh_agent import ...``,
+    as the CLI ``_helpers`` does) runs the package ``__init__``; before the
+    lazy rewrite that eagerly pulled ``clusters`` (pydantic + yaml) and the
+    ``remote``/``transport`` asyncssh chain, taxing every fast-path dispatch.
+    Two obligations: (1) a submodule import must NOT drag ``clusters`` in;
+    (2) every deferred re-export still resolves to the real symbol.
+    """
+    from hpc_agent import infra
+
+    # Deferred set stays covered by the TYPE_CHECKING mirror + __all__.
+    assert set(infra._LAZY) == set(infra.__all__)
+
+    # (2) Every re-export resolves through __getattr__ to the real callable.
+    for name in infra._LAZY:
+        assert getattr(infra, name) is not None
+    with pytest.raises(AttributeError, match="definitely_not_infra"):
+        infra.definitely_not_infra  # noqa: B018
+
+    # (1) A bare submodule import must not eagerly load the heavy clusters
+    # module. Subprocess-isolated so a sibling test that already imported
+    # clusters cannot mask the regression.
+    code = (
+        "import sys; import hpc_agent.infra.ssh_agent as _; "
+        "print('hpc_agent.infra.clusters' in sys.modules)"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert proc.stdout.strip() == "False", (
+        "importing a hpc_agent.infra submodule eagerly loaded clusters "
+        f"(pydantic/yaml) via the package __init__. stderr:\n{proc.stderr}"
+    )
+
+
 def test_package_root_resolves_without_getattr_import_work() -> None:
     """``hpc_agent._PACKAGE_ROOT`` is a real eager attr (G4), not a lazy import."""
     assert hpc_agent._PACKAGE_ROOT.is_dir()
