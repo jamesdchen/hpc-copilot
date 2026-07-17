@@ -308,3 +308,26 @@ disclose. #3/#4 make the recipe portable and citable once it exists.
   inputs; combiner-footer mirror + manifest wheel-sha + all rulings held OUT).
   Back-compat pinned; regen clean. Built in an isolated worktree, integrated
   by the coordinator.
+
+- 2026-07-17 — **cite-check DESIGNED-STOP** (the last-mile "number → paper
+  transcription" link, beyond the G4 break list). The program seals the citable
+  TABLE (extract-recipe signs the minimal run-set; the dossier seals the record
+  trail) but the chain stops at the dossier — the citable digit is hand-typed
+  into the manuscript, unaudited. cite-check is verify-relay's sibling aimed at a
+  MANUSCRIPT: seed with the same run_id/campaign_id/aggregate_path (reuse
+  `extract_recipe._resolve_seed`), resolve the authoritative citable numbers from
+  the SEALED `metrics_aggregate.json` `aggregated_metrics` values (NOT re-derived;
+  the load-bearing difference from extract-recipe, which is forbidden from reading
+  those values), extract manuscript numbers with verify-relay's exact token
+  discipline (the false-positive guard), and DISCLOSE per-number matched /
+  mismatch / uncitable — never gate, not MCP-curated. Design + contract + composed
+  machinery + false-positive guard SETTLED in `docs/design/cite-check.md`; BUILD
+  STOPPED on one ruling (BR-14 precedent): the manuscript-number → sealed-cell
+  alignment for the `mismatch` bucket has no false-match-free mechanical answer
+  (the verify-relay number-pool flood, worse on a manuscript). Recommendation:
+  ship Option B (two-bucket matched/uncitable with a `nearest_chain_value`
+  context hint — zero false-match) as v1; gate Option A (label-anchored
+  `mismatch`) behind a maintainer ruling as an additive v2. (The dispatch brief's
+  `reproducibility-program-2026-07-17.md` does not exist in-repo; cite-check is
+  filed against THIS program as the natural extension of its G4 gap list.) No
+  `src/**` change; no regen; no commit.

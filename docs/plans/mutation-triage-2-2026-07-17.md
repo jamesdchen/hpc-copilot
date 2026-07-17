@@ -215,3 +215,11 @@ work is entirely un-validated because a single Unit-B path-style choice zeroes t
 - **Open question for the operator:** curated jobs currently burn 10 matrix runners for zero
   signal and read green — pause the curated matrix (or gate it on queue-item 1) until the path
   fix lands? The sweep alone still yields real signal weekly.
+
+- 2026-07-17 (integration) — the top-3 covered-but-unasserted gaps PINNED:
+  `test_effective_backend_cap.py` (8 — the min-of-two-ceilings cap logic),
+  `test_pull_disclose.py` (6 — the exact human-facing batch disclosure line,
+  binary-MiB divisor, stderr), `test_incremental_include_patterns.py` (7 — the
+  empty-waves gate, anchored wave regex, ordered glob pair). Sensitivity proven
+  against 9 representative mutations (all killed) via faithful mutated copies;
+  no src touched. Built in an isolated worktree, integrated by the coordinator.
