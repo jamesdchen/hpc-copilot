@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -703,6 +704,42 @@ def _smoke_interpreter_disclosure(finding: Any) -> str:
     )
 
 
+_MISSING_MODULE_RE = re.compile(r"No module named ['\"]([\w.]+)['\"]")
+
+
+def _missing_top_level_module(stderr_tail: str) -> str | None:
+    """The top-level module name a ``ModuleNotFoundError`` names, or ``None``.
+
+    ``ModuleNotFoundError: No module named 'pandas.core'`` → ``"pandas"``. A plain
+    ``ImportError`` (the module was FOUND but a symbol or sub-import inside it
+    failed) carries no ``No module named`` line and yields ``None`` — that is a
+    genuine failure the smoke still refuses, never a missing-dependency
+    disclosure. Interpreting the smoke's stderr lives HERE in the gate, not in
+    core's smoke runner (which only relays the executor's own stderr verbatim).
+    """
+    m = _MISSING_MODULE_RE.search(stderr_tail or "")
+    return m.group(1).split(".", 1)[0] if m else None
+
+
+def _module_shipped_in_repo(experiment_dir: Path, module: str) -> bool:
+    """True when *module* is one of the experiment repo's OWN importable modules.
+
+    The smoke runs with ``cwd=experiment_dir`` (mirroring the cluster
+    dispatcher's ``REPO_DIR``), so a bare ``import <module>`` resolves
+    ``<module>.py`` / ``<module>/`` at the repo root. If such a file/package IS
+    present, a ``ModuleNotFoundError`` naming it (e.g. a broken sub-import of the
+    user's own package) is a GENUINE repo bug the cluster would hit identically —
+    the smoke keeps its teeth and refuses. If it is ABSENT from the repo, the
+    missing name is a third-party dependency the cluster env supplies and the
+    LOCAL interpreter lacks — not something the local smoke can judge, so it
+    discloses and proceeds (run-14 finding #6: the native-Windows
+    ``python3``/``pandas``-on-PATH papercut, where a cluster-env dependency was
+    refused as if it were a code bug and the human had to opt out of a useful
+    check).
+    """
+    return (experiment_dir / f"{module}.py").is_file() or (experiment_dir / module).is_dir()
+
+
 def _smoke_one_executor(
     experiment_dir: Path,
     *,
@@ -770,13 +807,35 @@ def _smoke_one_executor(
                 "pre_stage_smoke=false on the submit spec to skip this gate."
             )
         if f.code == "smoke_import_error":
+            # run-14 finding #6: split the import failure by what the LOCAL smoke
+            # can genuinely judge. A ``ModuleNotFoundError`` for a name ABSENT from
+            # the repo is a third-party dependency the cluster env supplies and the
+            # local interpreter lacks — NOT a code bug the smoke can adjudicate.
+            # Refusing it turned a real signal into noise on the native-Windows box
+            # (the ``python3``/``pandas``-on-PATH papercut): the human had to opt out
+            # of a useful check because the check itself was environment-naive.
+            # Disclose and PROCEED — the cluster canary still verifies the
+            # cluster-env import. The smoke keeps its teeth for what IS local:
+            # syntax / nonzero exits (``smoke_nonzero_exit``, above, since Python
+            # compiles the whole module before running) and import failures of the
+            # repo's OWN modules (the ``raise`` below).
+            missing = _missing_top_level_module(tail)
+            if missing and not _module_shipped_in_repo(experiment_dir, missing):
+                _disclose_smoke(
+                    f"pre-stage smoke skipped the import-check of {missing!r} for run "
+                    f"{spec.run_id!r}: absent from the local interpreter and not one of "
+                    "the experiment repo's own modules — a cluster-env dependency the "
+                    f"cluster canary will verify, not a code bug. {interp_note} "
+                    "Proceeding to stage."
+                )
+                continue
             raise errors.SpecInvalid(
-                f"pre-stage local smoke of run {spec.run_id!r} task 0 failed to "
-                "import a module BEFORE any transport ran (notebook-audit item 7). "
-                f"{interp_note} This MAY be a local-env artifact — a dependency "
-                "present only in the cluster env, not a real bug; if so, set "
-                "pre_stage_smoke=false on the submit spec to skip this gate. "
-                "Executor stderr (verbatim):\n"
+                f"pre-stage local smoke of run {spec.run_id!r} task 0 failed to import "
+                f"{('module ' + repr(missing)) if missing else 'a module'} that is part "
+                "of the experiment repo (or a broken import inside it) BEFORE any "
+                f"transport ran (notebook-audit item 7). {interp_note} The cluster would "
+                "fail identically. Fix the import, or set pre_stage_smoke=false on the "
+                "submit spec to skip this gate. Executor stderr (verbatim):\n"
                 f"{tail}"
             )
 
@@ -787,6 +846,11 @@ def _smoke_one_executor(
                 f"pre-stage smoke inconclusive (timeout after {timeout}s) for run "
                 f"{spec.run_id!r} — long tasks are normal; proceeding to stage."
             )
+        elif f.code == "smoke_import_error":
+            # Already fully handled in the refuse/disclose loop above (either
+            # raised as a repo-own import bug or disclosed as a cluster-env
+            # dependency, run-14 finding #6) — never double-disclose it here.
+            continue
         else:
             _disclose_smoke(
                 f"pre-stage smoke could not run ({f.code}) for run {spec.run_id!r}; "
