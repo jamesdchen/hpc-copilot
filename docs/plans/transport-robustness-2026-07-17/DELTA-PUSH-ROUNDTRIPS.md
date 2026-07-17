@@ -342,11 +342,11 @@ drops 5→3; only the large-N per-batch checkpoint saving is forgone.
 
 ## 6. Open coordination + drift log
 
-- **U4 overlap:** the primary edits `_tar_ssh_push`'s `delete=False` branch; U4
-  edits its `delete=True` stage-swap branch. Same function, disjoint branches —
-  land after U4, or rebase the append onto U4's final signature. If build order
-  puts this first, keep the append confined to the `only_paths is not None` path
-  so U4's stage-swap merge is untouched. The FALLBACK sidesteps this entirely.
+- **U4 overlap — RESOLVED (2026-07-17).** Option 2 landed AFTER U4 (378b3f53).
+  The Option-2 append lives entirely inside `_tar_ssh_push`'s `delete=False`
+  extract branch (gated `if checkpoint_payload_b64 is not None`, which only the
+  delta batch path passes with `only_paths`), disjoint from U4's `delete=True`
+  stage-swap tail — the two branches never touch. No rebase collision occurred.
 - **U1 seam handoff:** the primary supplies the push-pump injection seam
   FAULT-HARNESS §4 row 8 marks "needed" — land the seam + its drills in the same
   PR (FAULT-HARNESS §5.2).
@@ -391,3 +391,46 @@ drops 5→3; only the large-N per-batch checkpoint saving is forgone.
     U4's function. Land after the U4 merge (§6 coordination note). This unit's
     diff is confined to `_delta.py` / `_prune.py` / the delta-path caller +
     the re-export block, so it merges cleanly around U4's stage-swap edits.
+- 2026-07-17: **BUILT — Option 2 (the per-batch checkpoint fold), the deferred
+  half now UNBLOCKED (U4 landed at 378b3f53).** Each mid-ship push-manifest
+  checkpoint now RIDES its tar-push leg instead of a separate `_write_push_manifest`
+  dial:
+  - **Sentinel protocol.** New `_PUSH_CP_SENTINEL = "__HPC_PUSH_CP_OK__"` +
+    `_folded_checkpoint_cmd(remote_path, payload_b64)` (both `_prune.py`) build the
+    ack-gated append `_tar_ssh_push` bolts onto its `delete=False` extract:
+    `mkdir -p <r> && tar x -C <r> && { ( cd <r> && mkdir -p .hpc && <merge> &&
+    printf %s __HPC_PUSH_CP_OK__ ) || true; }`. The append is **`&&`-gated on
+    `tar x`** (rc stays authoritative — a failed extract short-circuits it, so a
+    batch death still returns rc≠0 and the caller's early-return/resume path is
+    unchanged) and **`{ ( … ) || true; }`-wrapped** (a best-effort merge hiccup can
+    never fail an otherwise-good batch). The sentinel prints LAST and only after
+    the merge `python3` succeeds; its PRESENCE in the leg's stdout is positive
+    evidence the checkpoint committed, its ABSENCE a safe re-derive (never read as
+    a batch failure). A shared `_push_manifest_payload_b64` makes a folded and a
+    standalone checkpoint byte-identical; the merge reuses `_PUSH_MANIFEST_MERGE_PY`
+    (same crash-safe temp+`os.replace`, `entries`-preserving). Rides the same
+    guarded/breaker dial the batch already holds (U5) — no raw ssh, no new cold SSH.
+    A `_disclose_checkpoint_uncommitted` line keeps the log honest when a mid-ship
+    ack is absent.
+  - **Round-trips (before → after, proven by pins).** Small warm delta (N=1) is
+    UNCHANGED — 3 (no-prune) / 3 (prune): N=1 has no mid-ship checkpoint, so the
+    §5 pins stay green. **Large re-ship, N batches, nothing dropped: 2N+1 → N+2**
+    (the N−1 mid-ship checkpoint dials disappear into their tar legs; only leg A +
+    N batches + the final standalone seal E remain). For N=3, **7 → 5**. New pin
+    `test_large_delta_push_folds_checkpoints_into_batch_legs` (first N−1 tar legs
+    carry the ack-gated fold, last does not, exactly one standalone seal survives);
+    `test_large_delta_push_batch_legs_are_preamble_free` extends E1 to the folded
+    leg. Option 3 (fold E into the last batch → N) remains the only deferred item.
+  - **Invariants held.** A mid-drop RESUMES without re-transferring landed batches
+    — `tar x` rc governs batch-landed, the sentinel governs checkpoint-committed
+    (orthogonal); the retry re-derives from the live remote hash and ships only the
+    remainder (faultinject Drill 2 extended to assert the fold rides the leg + the
+    last batch carries none; new Drill 2b `test_sentinel_absence_after_landed_batch_
+    is_not_a_failure` pins the drop-after-`tar x`-before-ack case). Prune stays
+    FAIL-OPEN (a missed checkpoint only lags bookkeeping; a later batch's cumulative
+    checkpoint subsumes it, and the final seal covers all). Files touched:
+    `_prune.py` (sentinel + payload/cmd builders + `_write_push_manifest` refactor),
+    `_disclose.py` (uncommitted-ack line), `transport/__init__.py` (`_tar_ssh_push`
+    param + delta-loop fold + re-exports). Verified: targeted transport + delta +
+    faultinject + full `tests/contracts/` green; lint gauntlet (incl. `lint_no_raw_ssh`
+    + `lint_remote_read_ack`) + regen `--check` + ruff/format/mypy clean.

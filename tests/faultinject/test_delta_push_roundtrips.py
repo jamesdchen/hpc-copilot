@@ -3,10 +3,12 @@
 The rsync-less content-hash DELTA path (``transport/__init__.py`` delta caller +
 ``_delta.py`` + ``_prune.py``) is AUDIT Rank 4 (highest round-trip count anywhere
 AND the live native-Windows push path). Its `§5 FALLBACK` consolidation
-(Options 1 + 4) landed at 831e4a40; Options 2 + 3 (the per-batch checkpoint /
-final-seal fold into ``_tar_ssh_push``'s ``delete=False`` branch) are DEFERRED
-behind the U4 stage-swap edit. These drills exercise the COMMITTED shape and pin
-the four load-bearing invariants of `DELTA-PUSH-ROUNDTRIPS.md §2`:
+(Options 1 + 4) landed at 831e4a40; **Option 2 (the per-batch checkpoint fold into
+``_tar_ssh_push``'s ``delete=False`` branch, ack-gated by ``__HPC_PUSH_CP_OK__``)
+now LANDED** on top (U4's stage-swap edit committed first). Option 3 (final-seal
+fold into the last batch's leg) remains the only deferred item. These drills
+exercise the COMMITTED shape and pin the four load-bearing invariants of
+`DELTA-PUSH-ROUNDTRIPS.md §2`:
 
 1. a mid-op drop RESUMES from the live remote hash, never re-transfers landed data;
 2. the prune stays FAIL-OPEN — a path is deleted only if PROVEN ours;
@@ -18,11 +20,11 @@ rc≠0), per ``FAULT-HARNESS.md §5``. The five drills map to the memo's owed li
 (`§4`), and cover AUDIT §7 row 8 ("kill ssh mid-``tar|ssh`` push") — moving it
 from FAULT-HARNESS §4 (needed) to §2 (covered).
 
-Where a drill's target touches a DEFERRED option (the per-batch acked checkpoint,
-Options 2+3), the drill pins the CURRENT committed behavior and the docstring
-names the upgrade path — there is NO accepted-residual gap here (the §5 fallback
-landed and is correct), so none of these are ``xfail``; the deferred options are
-round-trip optimizations, not correctness holes. Contrast the stage-swap drill's
+Where a drill's target touches the one still-DEFERRED option (Option 3, the
+final-seal fold), the drill pins the CURRENT committed behavior and names the
+upgrade path — there is NO accepted-residual gap here (Options 1 + 2 + 4 landed
+and are correct), so none of these are ``xfail``; the deferred option is a
+round-trip optimization, not a correctness hole. Contrast the stage-swap drill's
 strict-xfail, which pins a genuinely OPEN torn-window gap.
 """
 
@@ -113,11 +115,12 @@ def test_none_manifest_routes_to_full_copy_never_a_prune(tmp_path) -> None:
 # and the retry re-derives the delta from the LIVE remote hash — shipping ONLY
 # the remainder (Invariant 1, run-13 finding 3).
 #
-# UPGRADE PATH (Options 2+3, DEFERRED behind U4): today the mid-ship checkpoints
-# are SEPARATE un-acked ``_write_push_manifest`` dials. When Option 2 lands, each
-# checkpoint rides its tar leg gated by an ``__HPC_PUSH_CP_OK__`` ack; this drill
-# should then additionally assert the ack governs "landed vs checkpointed". The
-# RESUME behavior pinned here is fully present and correct regardless.
+# Option 2 (LANDED): the mid-ship checkpoints now RIDE their tar legs — each
+# non-last batch carries a ``checkpoint_payload_b64`` folded into ``_tar_ssh_push``
+# (no separate ``_write_push_manifest`` dial), ack-gated by ``__HPC_PUSH_CP_OK__``.
+# This drill now ALSO asserts the ack governs "landed vs checkpointed": the fold
+# rides the leg, and ``tar x``'s rc — not the checkpoint — decides batch failure.
+# The RESUME behavior is fully present and correct regardless.
 
 
 def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
@@ -125,7 +128,8 @@ def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
 ) -> None:
     """Attempt 1 dies shipping batch ``c`` (after ``a``, ``b`` land): the failed
     push returns rc≠0, the two landed batches are durable, and NEITHER the prune
-    NOR the final seal fires (the remote is left as-is for a clean retry)."""
+    NOR the final seal fires (the remote is left as-is for a clean retry). The
+    non-last batches carry their FOLDED checkpoint (Option 2); the last does not."""
     names = ["a", "b", "c", "d", "e"]
     for n in names:
         (tmp_path / n).write_text(f"body-of-{n}")
@@ -134,10 +138,14 @@ def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
     fake_remote: dict[str, bytes] = {}
     state = {"fail_path": "c"}
     shipped: list[str] = []
+    folds: list[tuple[str, bool]] = []  # (batch head, carried a folded checkpoint?)
 
-    def _fake_tar(*, only_paths, **_kw):  # noqa: ANN001, ANN002
+    def _fake_tar(*, only_paths, checkpoint_payload_b64=None, **_kw):  # noqa: ANN001, ANN002
+        # Option 2: record whether this batch rode a folded checkpoint on its leg.
+        folds.append((only_paths[0], checkpoint_payload_b64 is not None))
         # A severed tar|ssh folds to rc≠0 (Drill 5 proves that fold); consume it
-        # here as the batch-death shape and prove the RESUME doctrine.
+        # here as the batch-death shape and prove the RESUME doctrine. The
+        # checkpoint is &&-gated on tar x, so a batch death never records one.
         for p in only_paths:
             if p == state["fail_path"]:
                 state["fail_path"] = None
@@ -151,12 +159,14 @@ def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
         patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
         patch("hpc_agent.infra.transport._prune_manifest_known_extras"),
+        # Option 2 removed the mid-ship _write_push_manifest dial; keep it patched
+        # so a REGRESSION that re-added one would surface as an unexpected call.
         patch("hpc_agent.infra.transport._write_push_manifest"),
         # The retry's delta reads the LIVE remote hash (Option 1: (manifest, known)).
         patch(_REMOTE_MANIFEST, side_effect=lambda **_kw: (_remote_from(fake_remote), set())),
     ]
 
-    with common[0], common[1], common[2], common[3] as prune, common[4], common[5]:
+    with common[0], common[1], common[2], common[3] as prune, common[4] as seal, common[5]:
         r1 = transport.rsync_push(
             ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
         )
@@ -165,8 +175,15 @@ def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
         assert shipped == ["a", "b"]
         # DOCTRINE: a died batch leaves the remote as-is — no prune, no final seal.
         assert prune.call_count == 0
+        # Option 2: the mid-ship checkpoints rode the tar legs — NO standalone
+        # _write_push_manifest dial fired (a re-split regression would bump this).
+        assert seal.call_count == 0
+        # a, b, c were attempted; each is a non-last batch (of 5), so each carried
+        # a folded checkpoint on its tar leg (the ack rides the batch dial).
+        assert folds == [("a", True), ("b", True), ("c", True)]
 
     shipped.clear()
+    folds.clear()
     with common[0], common[1], common[2], common[3] as prune2, common[4], common[5]:
         r2 = transport.rsync_push(
             ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
@@ -175,6 +192,58 @@ def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
         assert shipped == ["c", "d", "e"]  # ONLY the remainder — never a, b again
         assert set(fake_remote) == set(names)  # tree now complete
         assert prune2.call_count == 1  # a clean push seals + prunes exactly once
+        # The clean 3-batch retry: c, d fold their checkpoint; e (the LAST) does not.
+        assert folds == [("c", True), ("d", True), ("e", False)]
+
+
+# ===========================================================================
+# Drill 2b — sentinel ABSENT after a landed batch (owed #1; Option 2, LANDED)
+# ===========================================================================
+# The load-bearing Option-2 case (memo §3 Option 2, drop after ``tar x`` before
+# ``__HPC_PUSH_CP_OK__``): the batch DID land (``tar x`` rc 0 authoritative) but
+# its folded checkpoint did NOT ack. The ack's absence must NEVER read as a batch
+# failure — the batch stays durable, the push proceeds, and only the manifest
+# bookkeeping lags (fail-open, Invariant 2), which the next push re-derives.
+
+
+def test_sentinel_absence_after_landed_batch_is_not_a_failure(tmp_path, monkeypatch) -> None:
+    """A batch that lands (rc 0) with the checkpoint ack ABSENT (drop after
+    ``tar x`` before ``__HPC_PUSH_CP_OK__``) is treated as LANDED + durable, not a
+    failure: the push proceeds through every batch and seals once. The sentinel
+    governs checkpoint-committed; ``tar x``'s rc governs batch-landed — orthogonal
+    signals. Contrast an rc≠0 batch, which DOES stop the push (Drill 2)."""
+    names = ["a", "b", "c"]
+    for n in names:
+        (tmp_path / n).write_text(f"body-of-{n}")
+    monkeypatch.setenv("HPC_DELTA_BATCH_MAX_FILES", "1")  # 1 file/batch -> 3 batches
+
+    fake_remote: dict[str, bytes] = {}
+    shipped: list[str] = []
+
+    def _fake_tar(*, only_paths, checkpoint_payload_b64=None, **_kw):  # noqa: ANN001, ANN002
+        # Every batch LANDS (rc 0), but the leg returns EMPTY stdout — the
+        # sentinel is ABSENT (the drop-after-tar-x-before-ack shape). The batch is
+        # durable regardless; the client must not read the missing ack as failure.
+        for p in only_paths:
+            fake_remote[p] = (tmp_path / p).read_bytes()
+            shipped.append(p)
+        return proc(0, stdout="")  # rc 0, NO __HPC_PUSH_CP_OK__
+
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
+        patch("hpc_agent.infra.transport._prune_manifest_known_extras") as prune,
+        patch(_REMOTE_MANIFEST, side_effect=lambda **_kw: (_remote_from(fake_remote), set())),
+    ):
+        result = transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    # DOCTRINE: an absent ack after a landed batch is NOT a failure.
+    assert result.returncode == 0
+    assert shipped == names  # every batch shipped — the push never stopped
+    assert set(fake_remote) == set(names)  # tree complete + durable
+    assert prune.call_count == 1  # the push completed to its single trailing seal
 
 
 # ===========================================================================
@@ -271,10 +340,11 @@ def test_truncated_manifest_stream_collapses_to_none(garble_at) -> None:
 # trusted as success (the transfer-plane's positive-evidence-of-completion
 # contract, AUDIT §2/§8). This moves the row from FAULT-HARNESS §4 to §2.
 #
-# UPGRADE PATH (Option 2, DEFERRED): the ack-gated "sever after ``tar x`` before
-# ``__HPC_PUSH_CP_OK__``" variant (owed #1) arrives with the per-batch checkpoint
-# fold into this same push; today the pump-fold rc≠0 pinned here is the committed
-# contract and is independent of that fold.
+# Option 2 (LANDED): the ack-gated "sever after ``tar x`` before
+# ``__HPC_PUSH_CP_OK__``" variant (owed #1) is now covered by Drill 2b
+# (sentinel-absent-after-landed-batch). The pump-fold rc≠0 pinned HERE is the
+# distinct "the transfer stream itself tore" case (a truncated push is refused as
+# rc≠0) and is independent of the checkpoint fold.
 
 
 def _fake_tar_popen(returncode: int = 0) -> MagicMock:

@@ -148,6 +148,88 @@ _PUSH_MANIFEST_MERGE_PY: Final[str] = (
 )
 
 
+#: Positive-evidence sentinel the FOLDED per-batch checkpoint (delta-push
+#: round-trip Option 2) echoes on stdout IFF the batch's ``tar x`` landed AND its
+#: push-manifest checkpoint merge recorded. Its PRESENCE proves "batch landed and
+#: checkpoint committed"; its ABSENCE — a drop after ``tar x`` before the ack, or
+#: a best-effort merge hiccup — is NOT a batch failure (the batch is durable; the
+#: ``tar x`` rc stays authoritative), only an un-committed checkpoint the NEXT
+#: push re-derives from the live remote hash (fail-open prune lag, Invariant 2).
+#: Read back per the positive-evidence discipline: an absent ack is never trusted
+#: as "committed" (house discipline 4, run-12 finding 24).
+_PUSH_CP_SENTINEL: Final[str] = "__HPC_PUSH_CP_OK__"
+
+
+def _push_manifest_payload_b64(paths: list[str]) -> str:
+    """Base64 JSON payload (``{paths, pkg_version, manifest_schema}``) for the
+    push-manifest merge script (:data:`_PUSH_MANIFEST_MERGE_PY`).
+
+    Shared by the standalone :func:`_write_push_manifest` seal/checkpoint dial and
+    the FOLDED per-batch checkpoint that rides the tar-push leg (delta-push
+    round-trip Option 2, :func:`_folded_checkpoint_cmd`), so the two writers emit a
+    byte-identical payload for the same path set — a folded checkpoint and a
+    standalone one are indistinguishable on the remote. ``_pkg_version`` is
+    re-exported by the engine package; imported call-time so this module never
+    depends on the engine at its own import time (no cycle).
+    """
+    from hpc_agent.infra.transport import _pkg_version
+
+    payload = json.dumps(
+        {
+            "paths": sorted(paths),
+            "pkg_version": _pkg_version(),
+            "manifest_schema": _PUSH_MANIFEST_SCHEMA,
+        }
+    )
+    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _folded_checkpoint_cmd(remote_path: str, payload_b64: str) -> str:
+    """The ack-gated remote-command SUFFIX that rides a delta batch's tar-push leg
+    to checkpoint the push manifest IN THE SAME ssh dial (delta-push round-trip
+    Option 2 — eliminates the separate per-batch :func:`_write_push_manifest`
+    dial).
+
+    Appended by :func:`hpc_agent.infra.transport._tar_ssh_push` to its
+    ``delete=False`` extract command (``mkdir -p <r> && tar x -C <r>``) so the
+    whole batch leg becomes::
+
+        mkdir -p <r> && tar x -C <r> && { ( cd <r> && mkdir -p .hpc
+            && <merge> && printf %s __HPC_PUSH_CP_OK__ ) || true; }
+
+    The shell shape is load-bearing:
+
+    * The checkpoint is ``&&``-GATED on ``tar x`` — a failed extract
+      short-circuits it, so ``tar x``'s rc stays AUTHORITATIVE for the batch. The
+      caller's rc≠0 early-return / resume path is unchanged, and the checkpoint
+      can never MASK a batch failure (the two signals — batch-landed vs
+      checkpoint-committed — stay orthogonal).
+    * The checkpoint block is wrapped ``{ ( … ) || true; }`` — a merge hiccup can
+      NEVER fail an otherwise-good batch (best-effort, exactly like the standalone
+      fail-open :func:`_write_push_manifest`); on ``tar x`` success the leg exits
+      0 whether or not the checkpoint recorded.
+    * The sentinel :data:`_PUSH_CP_SENTINEL` is printed LAST and ONLY after the
+      merge ``python3`` succeeds (``… python3 && printf %s <sentinel>``): its
+      presence in the leg's stdout is positive evidence the checkpoint committed;
+      its absence is a safe re-derive (Invariant 2), never a batch failure.
+
+    Reuses :data:`_PUSH_MANIFEST_MERGE_PY` (the same crash-safe temp+``os.replace``,
+    ``entries``-preserving read-modify-write the standalone writer runs) inside a
+    ``cd <remote_path>`` subshell so the relative ``.hpc/.push_manifest.json`` it
+    writes lands in the deploy tree — matching :func:`_write_push_manifest`'s
+    ``cd``. Base64-piped so neither the merge source nor any path needs shell
+    quoting; no new cold SSH (rides the batch's dial) and no raw ssh.
+    """
+    merge_b64 = base64.b64encode(_PUSH_MANIFEST_MERGE_PY.encode("utf-8")).decode("ascii")
+    root = shlex.quote(remote_path.rstrip("/"))
+    checkpoint = (
+        f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(merge_b64)} | base64 -d | "
+        f"HPC_PM_PAYLOAD={shlex.quote(payload_b64)} python3 && "
+        f"printf %s {shlex.quote(_PUSH_CP_SENTINEL)}"
+    )
+    return f" && {{ ( {checkpoint} ) || true; }}"
+
+
 def _write_push_manifest(
     *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
 ) -> None:
@@ -169,22 +251,17 @@ def _write_push_manifest(
     the tree re-hashes), never breaks this push. Runs stdlib-only ``python3`` — the
     same interpreter the delta path already required to hash the remote tree.
     """
-    # ``_guarded_ssh_bounded`` (engine) and ``_pkg_version`` (``_deploy_items``)
-    # are both re-exported by the package; import them call-time so this module
-    # never depends on the engine at its own import time (no cycle). U5
-    # breaker/slot uniformity: the checkpoint/seal write rides the breaker + slot
-    # like every other dial (was a bare ``_ssh_bounded`` — AUDIT §6 un-guarded).
+    # ``_guarded_ssh_bounded`` (engine) is re-exported by the package; import it
+    # call-time so this module never depends on the engine at its own import time
+    # (no cycle). U5 breaker/slot uniformity: the checkpoint/seal write rides the
+    # breaker + slot like every other dial (was a bare ``_ssh_bounded`` — AUDIT §6
+    # un-guarded). The payload is built by the SHARED
+    # :func:`_push_manifest_payload_b64` (byte-identical to the FOLDED per-batch
+    # checkpoint, Option 2).
     from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
-    from hpc_agent.infra.transport import _guarded_ssh_bounded, _pkg_version
+    from hpc_agent.infra.transport import _guarded_ssh_bounded
 
-    payload = json.dumps(
-        {
-            "paths": sorted(paths),
-            "pkg_version": _pkg_version(),
-            "manifest_schema": _PUSH_MANIFEST_SCHEMA,
-        }
-    )
-    payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    payload_b64 = _push_manifest_payload_b64(paths)
     merge_b64 = base64.b64encode(_PUSH_MANIFEST_MERGE_PY.encode("utf-8")).decode("ascii")
     root = shlex.quote(remote_path.rstrip("/"))
     cmd = (

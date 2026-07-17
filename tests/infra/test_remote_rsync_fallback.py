@@ -1791,6 +1791,96 @@ def test_warm_delta_push_with_prune_is_three_legs(tmp_path: Path) -> None:
     assert not any("cat " in c and "push_manifest" in c for c in cmds), f"D1 leg present: {cmds}"
 
 
+def _multibatch_delta_ssh_cmds(tmp_path: Path, *, n_files: int) -> list[str]:
+    """Run a COLD rsync-less delta push of *n_files* NEW files against an EMPTY
+    remote at ONE file per batch (so N files -> N batches), and return the remote
+    command handed to ssh for every ``run_capture_bounded`` open, in call order.
+
+    The empty remote hash manifest routes every file into the delta ``to_ship``
+    set; the small per-batch cap forces N batches, exercising Option 2's per-batch
+    checkpoint fold. Same smart-mock discipline as :func:`_warm_delta_push_ssh_cmds`
+    — no leg is patched out, so the dial count is the TRUE one."""
+    import json as _json
+    import os as _os
+
+    for i in range(n_files):
+        (tmp_path / f"f{i}.txt").write_text(f"body-{i}")
+    # Empty remote -> ship every file. Option 1: folded prior paths ride the JSON.
+    remote_files = {"files": [], "paths": [], "hashed": 0, "cached": 0}
+    cmds: list[str] = []
+
+    def _smart(cmd, *_a, **_kw):
+        remote = str(cmd[-1]) if isinstance(cmd, list) else str(cmd)
+        cmds.append(remote)
+        if "HPC_DELTA_EXCLUDES" in remote:  # the remote hash-manifest snippet (A)
+            return _ok(stdout=_json.dumps(remote_files))
+        return _ok()
+
+    with (
+        patch.dict(_os.environ, {"HPC_DELTA_BATCH_MAX_FILES": "1"}),
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_smart),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        result = transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    assert result.returncode == 0
+    return [c for c in cmds if c != "-V"]
+
+
+def test_large_delta_push_folds_checkpoints_into_batch_legs(tmp_path: Path) -> None:
+    """Delta-push round-trip Option 2 leg-count pin (memo table, "large re-ship, N
+    batches, nothing dropped"): a cold N=3-batch delta costs EXACTLY N+2 = 5 cold
+    ssh opens — remote hash manifest (A), 3 delta batches (B), the final seal (E) —
+    DOWN from the pre-Option-2 2N+1 = 7 (the 2 mid-ship ``_write_push_manifest``
+    checkpoint dials are gone: they ride their tar legs). The first N-1 batch legs
+    carry the folded ack-gated checkpoint; the last batch and the standalone seal
+    do not. A regression that re-split a per-batch checkpoint into its own dial
+    turns this RED."""
+    cmds = _multibatch_delta_ssh_cmds(tmp_path, n_files=3)
+    # N+2 legs for N=3 (was 2N+1 = 7 before Option 2).
+    assert len(cmds) == 5, f"large delta push opened {len(cmds)} ssh connections: {cmds}"
+    assert sum("HPC_DELTA_EXCLUDES" in c for c in cmds) == 1  # remote hash manifest (A)
+
+    tar_legs = [c for c in cmds if "tar x -C /r" in c]
+    folded_legs = [c for c in cmds if "tar x -C /r" in c and "HPC_PM_PAYLOAD" in c]
+    seal_only_legs = [c for c in cmds if "HPC_PM_PAYLOAD" in c and "tar x -C /r" not in c]
+
+    assert len(tar_legs) == 3  # 3 delta batches (B)
+    assert len(folded_legs) == 2  # the first N-1 fold their checkpoint into the tar leg
+    assert "HPC_PM_PAYLOAD" not in tar_legs[-1]  # the LAST batch carries no checkpoint
+    assert len(seal_only_legs) == 1  # exactly ONE standalone manifest write: the final seal
+    # Every folded checkpoint is ack-gated by the sentinel (positive evidence).
+    assert all(transport._PUSH_CP_SENTINEL in c for c in folded_legs)
+    # No separate mid-ship checkpoint dial survives (that was the eliminated leg).
+    assert not any("HPC_PM_PAYLOAD" in c and "tar x -C /r" not in c for c in cmds[:-1]), (
+        f"a standalone mid-ship checkpoint dial survived: {cmds}"
+    )
+
+
+def test_large_delta_push_batch_legs_are_preamble_free(tmp_path: Path) -> None:
+    """E1 byte-equality extends to the FOLDED per-batch checkpoint: a batch leg that
+    now also carries its manifest checkpoint is still byte-equal to the raw shell it
+    runs — no ``module load`` / ``conda activate`` / ``source`` preamble and no
+    ``HPC_AGENT_OP=`` / ``timeout -k`` self-destruct wrapper."""
+    cmds = _multibatch_delta_ssh_cmds(tmp_path, n_files=3)
+    assert any("tar x -C /r" in c and "HPC_PM_PAYLOAD" in c for c in cmds), (
+        f"no folded checkpoint leg present: {cmds}"
+    )
+    for cmd in cmds:
+        for token in _FORBIDDEN_PREAMBLE_TOKENS:
+            assert token not in cmd, f"transfer command acquired {token!r}: {cmd!r}"
+
+
 def test_transfer_plane_remote_commands_are_preamble_free(tmp_path: Path) -> None:
     """E1 byte-equality: every transfer-plane remote command line — the delta path
     (remote hash manifest, tar extract, push-manifest write) AND the with-prune

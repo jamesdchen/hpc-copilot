@@ -274,6 +274,29 @@ def _disclose_delta_mode(
         pass
 
 
+def _disclose_checkpoint_uncommitted(*, index: int, total: int) -> None:
+    """One ``[transport]`` line when a FOLDED per-batch checkpoint did NOT ack.
+
+    Delta-push round-trip Option 2 rides each mid-ship push-manifest checkpoint
+    inside its tar-push leg, ack-gated by ``__HPC_PUSH_CP_OK__`` (positive
+    evidence). The batch itself LANDED (rc 0, ``tar x`` authoritative); only the
+    checkpoint's remote merge did not confirm — a drop after ``tar x`` before the
+    ack, or a best-effort merge hiccup. This is fail-open, NOT a failure: the
+    push-manifest bookkeeping simply lags one batch and the NEXT push re-derives
+    the delta from the live remote hash (Invariant 2), so the batch stays durable.
+    Naming it keeps the tail-able log honest about which checkpoints committed.
+    Fail-open like the sibling disclosures.
+    """
+    with contextlib.suppress(Exception):
+        print(
+            f"[transport] content-hash DELTA: batch {index}/{total} landed but its "
+            "folded manifest checkpoint did not ack (__HPC_PUSH_CP_OK__ absent); "
+            "prune bookkeeping lags one batch and the next push re-derives from the "
+            "live remote hash — the batch is durable.",
+            file=sys.stderr,
+        )
+
+
 def _disclose_prune(plan: Any, *, remote_path: str) -> None:
     """One ``[transport]`` line per prune outcome (disclosure, never blocking).
 

@@ -213,19 +213,31 @@ def _remote_from(state: dict[str, bytes]) -> Manifest:
     return Manifest(entries=tuple(sorted(entries, key=lambda e: e.path)))
 
 
-def test_checkpoint_after_each_batch_except_the_last(tmp_path: Path, monkeypatch) -> None:
-    """With N batches, the manifest is checkpointed N-1 times mid-ship (the final
-    seal covers the last batch), and each checkpoint's path set GROWS as batches
-    land — the per-batch cadence the fix promises."""
+def test_folded_checkpoint_rides_tar_leg_except_the_last(tmp_path: Path, monkeypatch) -> None:
+    """Delta-push round-trip Option 2: with N batches, the first N-1 push-manifest
+    checkpoints RIDE their tar-push legs (a ``checkpoint_payload_b64`` folded into
+    ``_tar_ssh_push``, NOT a separate ``_write_push_manifest`` dial); the last
+    batch carries NONE (the final seal covers it). Each folded checkpoint's path
+    set still GROWS as batches land — the per-batch cadence the fix promises, now
+    at ZERO extra ssh legs. Only the final seal remains a standalone write."""
     for name in ("a", "b", "c"):
         (tmp_path / name).write_text(name * 3)
     monkeypatch.setenv("HPC_DELTA_BATCH_MAX_FILES", "1")  # one file per batch -> 3 batches
     remote_manifest = _remote_from({})  # empty remote -> ship all three
 
-    checkpoints: list[list[str]] = []
+    folds: list[list[str] | None] = []
 
-    def _record_manifest(*, paths, **_kw):  # noqa: ANN001
-        checkpoints.append(list(paths))
+    def _capture_tar(*, checkpoint_payload_b64=None, **_kw):  # noqa: ANN001
+        if checkpoint_payload_b64 is None:
+            folds.append(None)
+        else:
+            folds.append(json.loads(base64.b64decode(checkpoint_payload_b64))["paths"])
+        return _ok()
+
+    seals: list[list[str]] = []
+
+    def _record_seal(*, paths, **_kw):  # noqa: ANN001
+        seals.append(list(paths))
 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
@@ -234,21 +246,125 @@ def test_checkpoint_after_each_batch_except_the_last(tmp_path: Path, monkeypatch
             return_value=(remote_manifest, set()),
         ),
         patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
-        patch("hpc_agent.infra.transport._tar_ssh_push", return_value=_ok()),
+        patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_capture_tar),
         # NOT patching _prune_manifest_known_extras: the empty remote has no extras,
-        # so it runs to its standalone _write_push_manifest FINAL SEAL (Option 3
-        # moved the seal into the prune step) — the recorded 3rd write.
-        patch("hpc_agent.infra.transport._write_push_manifest", side_effect=_record_manifest),
+        # so it runs to its standalone _write_push_manifest FINAL SEAL — the ONE
+        # remaining standalone manifest write.
+        patch("hpc_agent.infra.transport._write_push_manifest", side_effect=_record_seal),
     ):
         result = transport.rsync_push(
             ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
         )
     assert result.returncode == 0
-    # 3 batches -> 2 mid-ship checkpoints + 1 final seal = 3 total writes.
-    assert len(checkpoints) == 3
-    mid = checkpoints[:-1]  # the per-batch checkpoints
-    assert [len(p) for p in mid] == [1, 2]  # path set grows batch by batch
-    assert set(mid[0]).issubset(set(mid[1]))
+    # 3 batches: the first 2 FOLD a checkpoint into their tar leg; the last folds
+    # NONE (the final seal covers it).
+    assert len(folds) == 3
+    assert folds[2] is None  # last batch: no folded checkpoint
+    f0, f1 = folds[0], folds[1]
+    assert f0 is not None and f1 is not None
+    assert [len(f0), len(f1)] == [1, 2]  # path set grows batch by batch
+    assert set(f0).issubset(set(f1))
+    # The mid-ship checkpoints cost NO separate dial now — only the final seal is a
+    # standalone _write_push_manifest write.
+    assert len(seals) == 1
+
+
+def test_folded_checkpoint_cmd_is_ack_gated_and_rc_authoritative() -> None:
+    """The folded checkpoint suffix (:func:`_folded_checkpoint_cmd`) is ``&&``-gated
+    on ``tar x`` (rc stays authoritative — a failed extract short-circuits it),
+    ``|| true``-wrapped (a merge hiccup never fails the batch), reuses the SAME
+    base64-piped python3 merge cd'd into the deploy tree, and emits the sentinel
+    LAST only after a successful merge — the positive-evidence ack contract."""
+    b64 = transport._push_manifest_payload_b64(["a.txt"])
+    suffix = transport._folded_checkpoint_cmd("/r", b64)
+    # &&-gated on tar x: the suffix begins with `` && `` so a failed extract
+    # (short-circuit) skips the checkpoint and the leg's rc stays tar x's.
+    assert suffix.startswith(" && {")
+    # || true wrap: a best-effort merge can never fail an otherwise-good batch.
+    assert "|| true" in suffix
+    assert suffix.rstrip().endswith(") || true; }")
+    # The merge is cd'd into the deploy tree (relative .push_manifest.json) and is
+    # the SAME base64-piped read-modify-write the standalone writer uses.
+    assert "cd /r &&" in suffix
+    assert "base64 -d" in suffix and "HPC_PM_PAYLOAD=" in suffix
+    # The sentinel is printed LAST and ONLY after the merge python3 SUCCEEDS (&&),
+    # never unconditionally — its presence is positive evidence, its absence safe.
+    assert f"python3 && printf %s {transport._PUSH_CP_SENTINEL}" in suffix
+
+
+def _fake_tar_popen() -> object:
+    """A ``subprocess.Popen`` stand-in for the ``tar c`` half — no real tar."""
+    from unittest.mock import MagicMock
+
+    m = MagicMock(name="tar_proc")
+    m.stdout.read.return_value = b""  # the pump reads EOF immediately
+    m.returncode = 0
+    m.wait.return_value = 0
+    return m
+
+
+def test_tar_ssh_push_folds_checkpoint_into_extract_and_returns_sentinel(tmp_path: Path) -> None:
+    """``_tar_ssh_push`` with ``checkpoint_payload_b64`` grows its delete=False
+    extract command with the ack-gated checkpoint append (``tar x`` + the merge +
+    the sentinel), and the sentinel the remote echoes on success rides back in the
+    returned ``stdout`` (positive evidence the checkpoint committed)."""
+    b64 = transport._push_manifest_payload_b64(["a.txt"])
+    captured: dict[str, str] = {}
+
+    def _capture_run(cmd, *_a, **_kw):  # noqa: ANN001
+        captured["remote_cmd"] = str(cmd[-1])
+        return _ok(stdout=transport._PUSH_CP_SENTINEL)  # remote echoes the ack
+
+    with (
+        patch("hpc_agent.infra.transport.subprocess.Popen", return_value=_fake_tar_popen()),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_capture_run),
+        patch("hpc_agent.infra.transport.run_with_named_pipe_retry", side_effect=lambda fn: fn()),
+    ):
+        result = transport._tar_ssh_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=[],
+            delete=False,
+            timeout=5.0,
+            only_paths=["a.txt"],
+            checkpoint_payload_b64=b64,
+        )
+    cmd = captured["remote_cmd"]
+    assert "tar x -C /r" in cmd  # the extract
+    assert "HPC_PM_PAYLOAD=" in cmd  # the folded checkpoint merge
+    assert transport._PUSH_CP_SENTINEL in cmd  # ack-gated sentinel append
+    assert result.returncode == 0
+    assert transport._PUSH_CP_SENTINEL in (result.stdout or "")  # rode back to the client
+
+
+def test_tar_ssh_push_without_checkpoint_is_a_bare_extract(tmp_path: Path) -> None:
+    """The default (``checkpoint_payload_b64=None``) leaves the delete=False
+    extract command exactly as before — no merge, no sentinel — so non-delta
+    callers (the last delta batch, ``_deploy_transfer``) are unchanged."""
+    captured: dict[str, str] = {}
+
+    def _capture_run(cmd, *_a, **_kw):  # noqa: ANN001
+        captured["remote_cmd"] = str(cmd[-1])
+        return _ok()
+
+    with (
+        patch("hpc_agent.infra.transport.subprocess.Popen", return_value=_fake_tar_popen()),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_capture_run),
+        patch("hpc_agent.infra.transport.run_with_named_pipe_retry", side_effect=lambda fn: fn()),
+    ):
+        transport._tar_ssh_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=[],
+            delete=False,
+            timeout=5.0,
+            only_paths=["a.txt"],
+        )
+    cmd = captured["remote_cmd"]
+    assert cmd == "mkdir -p /r && tar x -C /r"  # bare extract, nothing appended
+    assert transport._PUSH_CP_SENTINEL not in cmd
 
 
 def test_died_mid_push_retry_ships_only_the_remainder(tmp_path: Path, monkeypatch) -> None:

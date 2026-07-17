@@ -103,6 +103,7 @@ from ._disclose import (
     _PROGRESS_INTERVAL_SEC,  # noqa: F401
     _PUMP_CHUNK_BYTES,  # noqa: F401
     DeployPayloadSummary,
+    _disclose_checkpoint_uncommitted,  # noqa: F401
     _disclose_delta_mode,  # noqa: F401
     _disclose_no_rsync,  # noqa: F401
     _disclose_payload,  # noqa: F401
@@ -128,12 +129,15 @@ from ._excludes import (
 from ._prune import (
     _PRUNE_ENV_KILL,  # noqa: F401
     _PRUNE_RESEAL_PY,  # noqa: F401
+    _PUSH_CP_SENTINEL,  # noqa: F401
     _PUSH_MANIFEST_REL,  # noqa: F401
     _PUSH_MANIFEST_TMP_REL,  # noqa: F401
+    _folded_checkpoint_cmd,  # noqa: F401
     _journal_deploy_prune,  # noqa: F401
     _prune_and_reseal,  # noqa: F401
     _prune_max_bytes,  # noqa: F401
     _prune_max_files,  # noqa: F401
+    _push_manifest_payload_b64,  # noqa: F401
     _read_prior_push_manifest,  # noqa: F401
     _write_push_manifest,  # noqa: F401
 )
@@ -587,6 +591,7 @@ def _tar_ssh_push(
     timeout: float | None,
     total_bytes: int = 0,
     only_paths: list[str] | None = None,
+    checkpoint_payload_b64: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Push *local_path* to *remote_path* via ``tar c | ssh tar x``.
 
@@ -601,6 +606,20 @@ def _tar_ssh_push(
     The paths are already the exclude-filtered delta set, so no ``--exclude`` is
     applied on top of them. ``None`` (the default) archives the whole tree as
     before.
+
+    *checkpoint_payload_b64* (delta-push round-trip Option 2) folds a delta
+    batch's push-manifest checkpoint INTO this same tar-push leg: when set (only
+    the ``delete=False`` / ``only_paths`` delta-batch path passes it), the remote
+    extract command grows an ack-gated append (:func:`_folded_checkpoint_cmd`)
+    that runs the manifest merge AFTER ``tar x`` and echoes
+    :data:`_PUSH_CP_SENTINEL` on success — so the per-batch checkpoint costs no
+    separate ssh dial. The append is ``&&``-gated on ``tar x`` (rc stays
+    authoritative for the batch) and ``|| true``-wrapped (a merge hiccup never
+    fails the batch); the sentinel's presence in the returned ``stdout`` is
+    positive evidence the checkpoint committed, its absence a safe re-derive.
+    ``None`` (the default) leaves the extract command exactly as before, and it is
+    NEVER combined with ``delete=True`` — the stage-swap tail (U4's surface) is
+    untouched.
 
     Used as the rsync_push fallback when rsync is absent. Respects the
     same *exclude* patterns as rsync (passed through to ``tar
@@ -697,6 +716,16 @@ def _tar_ssh_push(
         # Extract: ``mkdir -p`` (idempotent) + ``tar x``, fed by tar's stdout
         # over the pipe into ssh's stdin.
         ssh_remote_cmd = f"mkdir -p {quoted_remote} && tar x -C {quoted_remote}"
+        if checkpoint_payload_b64 is not None:
+            # Delta-push round-trip Option 2: RIDE this batch's push-manifest
+            # checkpoint inside the SAME tar-push leg (remote-side append AFTER
+            # ``tar x``), ack-gated by ``__HPC_PUSH_CP_OK__``. The append is
+            # ``&&``-gated on ``tar x`` so the extract's rc stays authoritative
+            # and ``|| true``-wrapped so the best-effort merge can never fail the
+            # batch (:func:`_folded_checkpoint_cmd`). Confined to this
+            # ``delete=False`` extract branch — the ``delete=True`` stage-swap
+            # tail (U4's surface) is never touched.
+            ssh_remote_cmd += _folded_checkpoint_cmd(remote_path, checkpoint_payload_b64)
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         # Rebuild ssh_cmd each attempt: a named-pipe-failure retry needs to
@@ -1155,6 +1184,20 @@ def rsync_push(
                     _disclose_delta_batch(
                         index=i, total=len(batches), n_files=len(batch), batch_bytes=batch_bytes
                     )
+                    # Delta-push round-trip Option 2: RIDE this batch's push-manifest
+                    # checkpoint inside its tar-push leg — no separate
+                    # ``_write_push_manifest`` dial (2N+1 → N+2 legs for large N).
+                    # The checkpoint payload — base_paths ∪ everything landed
+                    # INCLUDING this batch — is known before the push and recorded
+                    # remote-side AFTER ``tar x``, ack-gated by ``__HPC_PUSH_CP_OK__``.
+                    # The LAST batch carries NO checkpoint: the trailing seal/prune
+                    # leg below covers it (and folds in the prune's retained extras),
+                    # so a folded checkpoint there would be immediately overwritten.
+                    checkpoint_b64: str | None = None
+                    if i < len(batches):
+                        checkpoint_b64 = _push_manifest_payload_b64(
+                            sorted(set(base_paths) | set(landed) | set(batch))
+                        )
                     pushed = guarded_call(
                         ssh_target,
                         functools.partial(
@@ -1167,27 +1210,27 @@ def rsync_push(
                             timeout=effective_timeout,
                             total_bytes=batch_bytes,
                             only_paths=batch,
+                            checkpoint_payload_b64=checkpoint_b64,
                         ),
                     )
                     if pushed.returncode != 0:
-                        # This batch did not land. Earlier batches DID (each tar|ssh
-                        # completed and was checkpointed), so a retry's delta reflects
-                        # them and re-ships only the remainder. Leave the remote as-is
-                        # (no prune, no final seal) so the next push retries cleanly.
+                        # This batch did not land (``tar x`` rc is authoritative —
+                        # the folded checkpoint is ``&&``-gated on it and never masks
+                        # a failure). Earlier batches DID land and their folded
+                        # checkpoints rode their legs, so a retry's delta (live remote
+                        # hash) reflects them and re-ships only the remainder. Leave
+                        # the remote as-is (no prune, no final seal) for a clean retry.
                         return pushed
                     landed.extend(batch)
-                    # Checkpoint the push manifest after each batch EXCEPT the last
-                    # (the final seal below covers the last batch and folds in the
-                    # prune's retained extras). Crash-safe: ``_write_push_manifest``
-                    # writes a remote temp then atomically ``mv``-s it into place, so
-                    # a torn checkpoint can never corrupt the live manifest.
-                    if i < len(batches):
-                        _write_push_manifest(
-                            ssh_target=ssh_target,
-                            remote_path=remote_path,
-                            paths=sorted(set(base_paths) | set(landed)),
-                            timeout=effective_timeout,
-                        )
+                    # Positive-evidence ack read (Option 2 contract): the batch landed
+                    # (rc 0), but whether its FOLDED checkpoint COMMITTED is proven
+                    # only by the sentinel. Its ABSENCE is never read as a batch
+                    # failure — the batch is durable; the manifest lag re-derives next
+                    # push (fail-open, Invariant 2). No corrective dial: re-adding one
+                    # would re-introduce the very leg Option 2 removes. A later batch's
+                    # cumulative checkpoint (base ∪ ALL landed) subsumes a missed one.
+                    if i < len(batches) and _PUSH_CP_SENTINEL not in (pushed.stdout or ""):
+                        _disclose_checkpoint_uncommitted(index=i, total=len(batches))
             else:
                 pushed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
