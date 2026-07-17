@@ -29,12 +29,14 @@ from typing import TYPE_CHECKING
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.submit_and_verify import (
+    ReducerCheckResult,
     SubmitAndVerifyResult,
     SubmitAndVerifySpec,
 )
 from hpc_agent._wire.workflows.verify_canary import VerifyCanaryResult
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.clusters import resolve_ssh_target
+from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 from hpc_agent.ops.submit_flow import SubmitFlowResult, fire_second_canary, submit_flow
 from hpc_agent.ops.verify_canary import verify_canary
 
@@ -79,6 +81,143 @@ def _mark_canary_terminal(experiment_dir: Path, canary_run_id: str | None, *, st
             status,
             exc_info=True,
         )
+
+
+# The canary reducer check's bounded timeout — SMALL (not cluster_reduce's
+# 1800s harvest default) so a hung reducer never stalls the S2→S3 human-review
+# window the check amortizes against.
+_REDUCER_CHECK_TIMEOUT_SEC = 300
+
+
+def _declared_custom_reducer(experiment_dir: Path, run_id: str) -> str | None:
+    """The run's declared custom ``aggregate_defaults.aggregate_cmd``, or None.
+
+    None (⇒ the reducer check SKIPS) when the sidecar is unreadable/absent or
+    declares no custom reducer — the built-in mean is framework code, nothing to
+    check. Routed through the tolerant :func:`read_run_sidecar_or_empty` so a
+    missing/torn sidecar degrades to "no custom reducer" (a skip is byte-identical
+    to a pre-feature run) rather than raising into the gate.
+    """
+    from hpc_agent.state.runs import read_run_sidecar_or_empty
+
+    try:
+        defaults = read_run_sidecar_or_empty(experiment_dir, run_id).get("aggregate_defaults")
+    except Exception:  # noqa: BLE001 — the gate read is best-effort; unreadable ⇒ skip
+        return None
+    if not isinstance(defaults, dict):
+        return None
+    cmd = defaults.get("aggregate_cmd")
+    return cmd if isinstance(cmd, str) and cmd.strip() else None
+
+
+def _check_reducer_on_canary(
+    experiment_dir: Path,
+    base: SubmitFlowSpec,
+    canary_run_id: str | None,
+) -> ReducerCheckResult:
+    """Rung 2 of the reducibility ladder: EXECUTE the run's declared custom
+    reducer against the verified canary's ONE real task-0 row, before the main
+    array launches (``docs/plans/amortized-reduction-check-2026-07-17.md``).
+
+    A verified canary's task-0 output is a GENUINE task artifact — the exact
+    shape the main array's tasks write. Run the SAME ``cluster_reduce`` the final
+    harvest runs (one-definition — no rung re-derives the reduction) with the
+    canary's run_id + the main run's declared ``aggregate_cmd``, so the reducer's
+    literal ``python3`` binds the run's env interpreter (the only way to catch the
+    py3.8-vs-3.13 class before the array runs). Assert only the contract SHAPE
+    (exit 0, parseable JSON) — never a VALUE.
+
+    Best-effort by contract, exactly like :func:`_mint_double_canary_sample`:
+    this NEVER fails a submit whose canary verified ok.
+
+    * reducer RAN and failed (non-zero exit / missing output / non-JSON =
+      :class:`errors.RemoteCommandFailed`) → ``disclosed``, verbatim stderr, the
+      bare ``y`` still crosses it (the failure MIGHT be a benign "needs ≥2 rows"
+      false alarm — the machinery surfaces the error and stops, never interpreting
+      "broken code" vs "needs more rows").
+    * check could not COMPLETE (severed / breaker open / timeout) → ``unverified``
+      (UNKNOWN), NEVER a pass (positive-evidence-only).
+    * no custom reducer / opted out → ``skipped``.
+    """
+    from hpc_agent.infra.env_flags import env_flag
+
+    if env_flag("HPC_NO_CANARY_REDUCER_CHECK") or not canary_run_id:
+        return ReducerCheckResult(status="skipped")
+    aggregate_cmd = _declared_custom_reducer(experiment_dir, base.run_id)
+    if aggregate_cmd is None:
+        # No custom reducer declared — the built-in mean is framework code,
+        # nothing to prove. Byte-identical to a pre-feature run.
+        return ReducerCheckResult(status="skipped")
+
+    try:
+        result = cluster_reduce(
+            experiment_dir,
+            run_id=canary_run_id,
+            aggregate_cmd=aggregate_cmd,
+            # A distinct remote path so the check never clobbers the canary's own
+            # aggregated output; cluster_reduce defaults the local pull dir.
+            output_path=f"_aggregated/_reducecheck/{canary_run_id}.json",
+            timeout_sec=_REDUCER_CHECK_TIMEOUT_SEC,
+        )
+    except errors.RemoteCommandFailed as exc:
+        # The reducer RAN and produced positive evidence of a problem (non-zero
+        # exit / missing output / non-JSON). DISCLOSE verbatim — NEVER block.
+        stderr = str(exc)
+        return ReducerCheckResult(
+            status="disclosed",
+            reducer_cmd=aggregate_cmd,
+            stderr_tail=stderr,
+            disclosure=(
+                "reducer check: the declared reducer FAILED against the canary's single "
+                "real row — read the error and register/fix it before aggregate (a bare "
+                f"`y` proceeds regardless): {stderr}"
+            ),
+        )
+    except (
+        errors.SshUnreachable,
+        errors.SshCircuitOpen,
+        errors.SshSlotWaitTimeout,
+        errors.ClusterTimeout,
+    ) as exc:
+        # The check could not COMPLETE (channel severed / breaker open / timeout).
+        # UNKNOWN — never a pass (positive-evidence-only, the reporter_unreachable
+        # / BATCH_END_SENTINEL truncation posture).
+        return ReducerCheckResult(
+            status="unverified",
+            reducer_cmd=aggregate_cmd,
+            stderr_tail=str(exc),
+            disclosure=(
+                "reducer check: could not run against the canary row "
+                f"(channel severed/timeout) — UNVERIFIED, not a pass: {exc}"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort; unknown = unverified, never block
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "canary reducer check for run %r raised unexpectedly; recording UNVERIFIED "
+            "(this best-effort check never fails the submit)",
+            base.run_id,
+            exc_info=True,
+        )
+        return ReducerCheckResult(
+            status="unverified",
+            reducer_cmd=aggregate_cmd,
+            stderr_tail=str(exc),
+            disclosure=(
+                "reducer check: could not run against the canary row — UNVERIFIED, "
+                f"not a pass: {exc}"
+            ),
+        )
+
+    reduced = result.get("reduced")
+    output_keys = sorted(reduced.keys()) if isinstance(reduced, dict) else []
+    return ReducerCheckResult(
+        status="passed",
+        reducer_cmd=aggregate_cmd,
+        exit_code=int(result.get("exit_code", 0) or 0),
+        output_keys=output_keys,
+    )
 
 
 @dataclass(frozen=True)
@@ -879,6 +1018,12 @@ def _gated_cache_skip_result(
 @primitive(
     name="submit-and-verify",
     verb="workflow",
+    # composes lists the top-level composition ATOMS (submit-flow + verify-canary).
+    # The rung-2 canary reducer check also invokes cluster-reduce, but as a
+    # conditional best-effort leg (docs/plans/amortized-reduction-check-2026-07-17.md);
+    # that cross-subject reach is declared to the layering lint via ROLE_ROOT_ALLOW
+    # (scripts/lint_subject_imports.py), the same mechanism verify-canary's own
+    # ops/aggregate reach uses — NOT a top-level composition atom.
     composes=["submit-flow", "verify-canary"],
     side_effects=[
         SideEffect("scheduler-submit", "<cluster>"),
@@ -1073,6 +1218,23 @@ def submit_and_verify(
     # S2 return and the fused Phase-2 launch, so every verified gate mints once.
     _record_canary_gate_validated(base)
 
+    # Rung 2 of the reducibility ladder (docs/plans/amortized-reduction-check-
+    # 2026-07-17.md): the canary verified ⇒ its task-0 output is a GENUINE task
+    # artifact. Before the main array launches, EXECUTE the run's declared custom
+    # reducer against that ONE real row (the SAME cluster_reduce the final harvest
+    # runs) so a broken reducer — py3.8-vs-3.13, a missing import, a wrong output
+    # path, non-JSON output — is discovered NOW, at zero critical-path wall-clock
+    # (the reduce compute amortizes into the S2→S3 human-review dead time), not
+    # hours later mid-harvest after the whole array computed. Placed past BOTH
+    # canary verdicts (a failed FIRST/SECOND canary already returned above), once
+    # per proceeding submit — the sanctioned "folded into the double-canary block"
+    # position (memo §4.2), which avoids a wasted reduce exec on a nondeterminism-
+    # blocked run. Best-effort + disclose-never-block: a reducer that RAN and
+    # failed is a loud brief disclosure the bare `y` still crosses; a severed check
+    # is `unverified`, never a pass; a run with no custom reducer SKIPS (byte-
+    # identical to before).
+    reducer_check = _check_reducer_on_canary(experiment_dir, base, canary_submit.canary_run_id)
+
     # Canary verified. The block boundary (submit-s2): STOP before the main
     # array so the human can review "canary green, est N core-hours" and
     # greenlight (§3). ``verified=True`` but ``job_ids`` is empty — the main did
@@ -1088,6 +1250,7 @@ def submit_and_verify(
             verified=True,
             failure_kind=None,
             verify_result=verify_result,
+            reducer_check=reducer_check,
         )
 
     # Phase 2 — canary verified → launch the main array. The deterministic
@@ -1110,4 +1273,5 @@ def submit_and_verify(
         verified=True,
         failure_kind=None,
         verify_result=verify_result,
+        reducer_check=reducer_check,
     )

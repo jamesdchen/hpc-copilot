@@ -136,6 +136,18 @@
       "default": null,
       "description": "Age in seconds of the cached canary validation the gate honoured (the structured form of canary_skipped_reason's '<age> ago'). Null unless canary_skipped_reason is set.",
       "title": "Validated Age Sec"
+    },
+    "reducer_check": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReducerCheckResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Rung-2 reducibility check (docs/plans/amortized-reduction-check-2026-07-17.md): the outcome of EXECUTING the run's declared custom reducer against the verified canary's ONE real task-0 row, before the main array launches. None when no canary ran / the run declares no custom reducer / the check was opted out. A `disclosed` or `unverified` status is a LOUD brief disclosure, never a block — the bare `y` stands."
     }
   },
   "$defs": {
@@ -180,6 +192,96 @@
         "cluster_log_tail"
       ],
       "title": "CanaryFailureFeatures",
+      "type": "object"
+    },
+    "ReducerCheckResult": {
+      "additionalProperties": false,
+      "description": "Rung-2 reducibility-ladder outcome: EXECUTING the run's declared custom\nreducer against the verified canary's ONE real task-0 row, before the main\narray launches (``docs/plans/amortized-reduction-check-2026-07-17.md``).\n\nRung 1 (S1) is a STATIC predicate — \"is a reducer *declared*?\"; this rung is\na DYNAMIC proof — \"does the declared reducer *execute*?\" — running the SAME\n``cluster_reduce`` the final harvest runs (one-definition), so a broken\nreducer (py3.8-vs-3.13, a missing import, a wrong output path, non-JSON\noutput) is caught NOW at zero critical-path wall-clock instead of hours later\nmid-harvest after the whole array computed. It asserts only the reducer's\ncontract SHAPE (exit 0, parseable JSON, top-level keys) against one row —\nnever a VALUE (a single canary row's aggregate number is meaningless;\ncorrectness is the aggregate stage's job).\n\n``status``:\n\n* ``passed`` — the reducer exited 0 and emitted parseable JSON.\n* ``disclosed`` — the reducer RAN and produced positive evidence of a problem\n  (non-zero exit / missing output / non-JSON). A LOUD, never-auto-masked\n  disclosure on the S2/S3 brief — NEVER a hard block: the human's bare ``y``\n  still crosses it (the failure MIGHT be a benign \"needs ≥2 rows\" false alarm\n  a single canary row cannot satisfy — the machinery surfaces the verbatim\n  stderr and stops, it never interprets \"broken code\" vs \"needs more rows\").\n* ``unverified`` — the check could not COMPLETE (ssh severed / breaker open /\n  timeout). UNKNOWN, never reported as passed (positive-evidence-only, the\n  same posture as ``reporter_unreachable`` and the combiner truncation rule).\n* ``skipped`` — the run declares no custom ``aggregate_cmd`` (the built-in\n  mean is framework code, nothing to check) or the check was opted out\n  (``HPC_NO_CANARY_REDUCER_CHECK=1``). Byte-identical to a pre-feature run.",
+      "properties": {
+        "status": {
+          "description": "passed | disclosed | unverified | skipped — see the class docstring.",
+          "enum": [
+            "passed",
+            "disclosed",
+            "unverified",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "reducer_cmd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The declared custom aggregate_cmd that was executed against the canary row. None when skipped (no custom reducer / opted out).",
+          "title": "Reducer Cmd"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The reducer's exit code when the reduce ran to an exit (0 on passed). None when the reduce could not complete (unverified / skipped) or the code is not recoverable from the failure surface (disclosed).",
+          "title": "Exit Code"
+        },
+        "stderr_tail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Verbatim reducer error text carried for the disclose / unverified paths so the human reads the real error. None on a clean pass / skip.",
+          "title": "Stderr Tail"
+        },
+        "output_keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sorted top-level keys of the reducer's JSON output on a pass — positive evidence of the contract SHAPE (never the values). None off the pass path.",
+          "title": "Output Keys"
+        },
+        "disclosure": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line code-rendered disclosure the block loop relays VERBATIM onto the S2/S3 brief (set on disclosed / unverified). None when there is nothing to surface (passed / skipped).",
+          "title": "Disclosure"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "canary reducer-check result",
       "type": "object"
     },
     "VerifyCanaryResult": {

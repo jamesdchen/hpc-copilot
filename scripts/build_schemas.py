@@ -105,8 +105,13 @@ _SUFFIX_RULES: tuple[tuple[str, str], ...] = (
 # Pydantic helpers we never want as standalone schemas. ``MpiSpec`` (#293) ends
 # in ``Spec`` but is a sub-model embedded in SubmitResources / BuildSubmitSpecInput
 # (inlined into their schemas), not a primitive input — so it has no CLI verb and
-# would trip the no-orphan-input-schemas contract.
-_HELPER_NAMES: frozenset[str] = frozenset({"SuccessEnvelope", "ErrorEnvelope", "MpiSpec"})
+# would trip the no-orphan-input-schemas contract. ``ReducerCheckResult`` ends in
+# ``Result`` but is a sub-model embedded in SubmitAndVerifyResult (inlined as a
+# $def), not a primitive output — same reason, so it would strand a top-level
+# schema the reachability lint rejects.
+_HELPER_NAMES: frozenset[str] = frozenset(
+    {"SuccessEnvelope", "ErrorEnvelope", "MpiSpec", "ReducerCheckResult"}
+)
 
 
 _PASCAL_RE_1 = re.compile(r"(.)([A-Z][a-z]+)")

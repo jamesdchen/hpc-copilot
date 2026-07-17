@@ -514,6 +514,7 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("settle_run.py", "ops", "monitor"),
         ("status_blocks.py", "ops", "monitor"),
         ("status_blocks.py", "ops", "recover"),
+        ("submit_and_verify.py", "ops", "aggregate"),
         ("submit_and_verify.py", "ops", "submit"),
         ("submit_blocks.py", "ops", "monitor"),
         ("submit_blocks.py", "ops", "recover"),
@@ -605,7 +606,7 @@ def lint_role_root(
                     base = ".".join(pkg_parts[: len(pkg_parts) - (node.level - 1)])
                     module = f"{base}.{node.module}" if node.module else base
                 else:
-                    module = node.module
+                    module = node.module or ""
                 if not module:
                     continue
                 for alias in node.names:

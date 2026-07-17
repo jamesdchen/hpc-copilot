@@ -975,6 +975,16 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     if sv.verify_result is not None:
         brief["verify_result"] = sv.verify_result.model_dump(mode="json")
 
+    # Rung-2 reducibility check (docs/plans/amortized-reduction-check-2026-07-17.md):
+    # the outcome of EXECUTING the run's declared custom reducer against the verified
+    # canary's ONE real row rides the brief. A `disclosed` / `unverified` status also
+    # carries a code-rendered one-line disclosure appended to the reason so the block
+    # loop relays it VERBATIM — a loud, never-auto-masked readiness line, NOT a block
+    # (the bare `y` still crosses it). Key ABSENT when no check ran (skipped / no
+    # canary), so a non-custom-reducer brief stays byte-identical.
+    if sv.reducer_check is not None and sv.reducer_check.status != "skipped":
+        brief["reducer_check"] = sv.reducer_check.model_dump(mode="json")
+
     # Run-14 disclosure: when the measured canary let the array walltime shrink,
     # surface the shrunk value + factor + canary basis so a `y` consents to the
     # calibrated footprint. Key ABSENT when nothing was calibrated (no
@@ -1040,11 +1050,22 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     # already the calibrated footprint — append the one-line basis so the human
     # sees WHY the number is what it is (and that the array won't over-ask).
     calib_note = f" ({calibration.disclosure})" if calibration.applied else ""
+    # A disclosed/unverified reducer check appends its VERBATIM one-line disclosure
+    # to the reason the block loop relays — loud, never-auto-masked, never a block
+    # (a passed/skipped check adds nothing, so the line stays byte-identical).
+    reducer_note = (
+        f" [{sv.reducer_check.disclosure}]"
+        if sv.reducer_check is not None and sv.reducer_check.disclosure
+        else ""
+    )
     return SubmitBlockResult(
         block="s2",
         stage_reached="canary_verified",
         needs_decision=True,
-        reason=f"{verdict_phrase}, est. {est_phrase}{calib_note}; greenlight to submit & watch.",
+        reason=(
+            f"{verdict_phrase}, est. {est_phrase}{calib_note}{reducer_note}; "
+            "greenlight to submit & watch."
+        ),
         run_id=sv.run_id,
         brief=brief,
         next_block=_next_block(

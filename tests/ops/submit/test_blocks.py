@@ -365,6 +365,60 @@ def test_s2_stops_after_canary_and_attaches_est_core_hours(tmp_path: Path) -> No
     assert result.brief["cost_estimate"]["cores_per_task"] == 4
 
 
+def test_s2_brief_carries_reducer_check_disclosure_line(tmp_path: Path) -> None:
+    """A disclosed reducer check rides the S2 brief AND appends its VERBATIM
+    one-line disclosure to the reason the block loop relays — loud, never a block
+    (the stage stays canary_verified; the bare `y` still greenlights)."""
+    from hpc_agent._wire.workflows.submit_and_verify import ReducerCheckResult
+
+    spec = SubmitS2Spec(submit=_sv_spec(), detach=False)
+    _greenlight(tmp_path, "submit-s2")
+    sv = _sv_result(verified=True, job_ids=[])
+    disclosed = sv.model_copy(
+        update={
+            "reducer_check": ReducerCheckResult(
+                status="disclosed",
+                reducer_cmd="python3 specs/reduce_x.py",
+                stderr_tail="reducer exited 1: ImportError: no module named pandas",
+                disclosure="reducer check: the declared reducer FAILED against the canary's "
+                "single real row — read the error and register/fix it before aggregate "
+                "(a bare `y` proceeds regardless): reducer exited 1: ImportError: no module "
+                "named pandas",
+            )
+        }
+    )
+
+    with mock.patch.object(blocks, "submit_and_verify", return_value=disclosed):
+        result = blocks.submit_s2(tmp_path, spec=spec)
+
+    # Still a clean canary_verified terminator — the check NEVER blocks.
+    assert result.stage_reached == "canary_verified"
+    assert result.needs_decision is True
+    # The structured check rides the brief...
+    assert result.brief["reducer_check"]["status"] == "disclosed"
+    # ...and its verbatim disclosure is appended to the relayed reason.
+    assert "reducer check:" in result.reason
+    assert "ImportError: no module named pandas" in result.reason
+
+
+def test_s2_brief_omits_reducer_check_when_skipped(tmp_path: Path) -> None:
+    """A run with no custom reducer (skipped check) is byte-identical: no
+    reducer_check key on the brief, no disclosure in the reason."""
+    from hpc_agent._wire.workflows.submit_and_verify import ReducerCheckResult
+
+    spec = SubmitS2Spec(submit=_sv_spec(), detach=False)
+    _greenlight(tmp_path, "submit-s2")
+    sv = _sv_result(verified=True, job_ids=[]).model_copy(
+        update={"reducer_check": ReducerCheckResult(status="skipped")}
+    )
+
+    with mock.patch.object(blocks, "submit_and_verify", return_value=sv):
+        result = blocks.submit_s2(tmp_path, spec=spec)
+
+    assert "reducer_check" not in result.brief
+    assert "reducer check:" not in result.reason
+
+
 def test_s2_surfaces_canary_failure(tmp_path: Path) -> None:
     spec = SubmitS2Spec(submit=_sv_spec(), detach=False)
     _greenlight(tmp_path, "submit-s2")
