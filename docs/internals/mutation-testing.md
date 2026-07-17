@@ -9,10 +9,64 @@ JSON. Mutmut would have surfaced it as a surviving mutant on the
 `sidecar.get("ssh_target")` line — *if* mutmut could mutate the
 function (see "limitations" below).
 
-Not in CI. A full sweep of `src/` is hours of single-core work. Run
-targeted sweeps locally when auditing a specific subject.
+Not a CI gate. A full sweep of `src/` is hours of single-core work. Run
+**curated, scoped** sweeps (see below) — never a full-tree sweep.
 
-## Quickstart
+## Platform: mutmut is Linux-only (Windows is CI-only)
+
+mutmut 3.x **cannot run on native Windows**: at import it does
+`if platform.system() == "Windows": sys.exit(1)`, and it imports the POSIX-only
+`resource` module — so even patching the guard fails. On this project's native-
+Windows dev box the real sweep therefore runs **only in CI (Linux)** or under a
+Linux checkout. This is fine: mutmut's value is the periodic signal, not an
+inner-loop tool, and a full local sweep would freeze the box (against project
+policy) anyway. `scripts/run_mutation.py` refuses to launch mutmut off Linux and
+points you at the CI workflow; its `--dry-run` (config validation only) works
+everywhere.
+
+## The curated per-module runner (`scripts/run_mutation.py`)
+
+The recommended entry point. It encapsulates a **curated module map** — a handful
+of high-value, pure-logic modules, each paired with the focused test file(s) that
+exercise it — so you never hand-edit `[tool.mutmut]` or assemble mutmut CLI args.
+Per-module test selection (mutmut's `tests_dir` accepts individual test-file
+paths, which feed `pytest_add_cli_args_test_selection`) keeps one module's scoped
+sweep small enough to finish inside a single CI step, instead of re-running the
+whole 8k-test suite per mutant.
+
+```bash
+python scripts/run_mutation.py --list                    # the module map
+python scripts/run_mutation.py --module block-chain       # one scoped sweep (Linux)
+python scripts/run_mutation.py --module block-chain --dry-run   # validate config (any OS)
+```
+
+The map (edit `MODULE_MAP` in the script to add/adjust; the CI matrix reads it
+via `--keys`, so the two never drift):
+
+| key | module | tests | notes |
+|---|---|---|---|
+| `block-chain` | `infra/block_chain.py` | `tests/ops/test_block_chain.py` | Deterministic successor tables + spec composition. Zero body-imports → fully mutmut-reachable. **Reference target.** |
+| `attestation` | `state/attestation.py` | `tests/state/test_attestation.py` | Attestation kernel (validate/bind/reduce). Pure logic. |
+| `describe-cache` | `state/describe_cache.py` | `tests/cli/test_describe_cache.py` | Build-content-keyed cache; guard-heavy. Some lazy imports blind mutmut. |
+| `fast-path-cache` | `cli/_fast_path_cache.py` | `tests/cli/test_fast_dispatch.py` | CLI fast-path resolution cache. Guard + fingerprint logic. |
+| `combiner` | `execution/mapreduce/combiner.py` | `tests/execution/mapreduce/test_combiner*.py` | The reduce/combine that computes every aggregate number. **Heavy (~650 lines)** — the slowest key. |
+
+The runner backs up `pyproject.toml` to a sidecar, writes the scoped
+`[tool.mutmut]` block, runs mutmut, and **always restores** the original in a
+`finally` (a stale sidecar from an interrupted run is recovered on the next
+start), so the committed defaults and the sibling `mutmut_shortlist.py` /
+scheduled cluster-verb sweep are never perturbed.
+
+**When to run it:** after hardening a module (did the new tests actually pin the
+branches?); before trusting a test battery someone claims is thorough. **Non-
+goals:** it is **not a CI gate** (`.github/workflows/mutation.yml`'s curated job
+is `workflow_dispatch`-only and `continue-on-error`), and **survivors are LEADS,
+not defects** — triage each per the checklist below; most are loose tests or
+semantically-equivalent mutants, not bugs.
+
+## Quickstart (raw mutmut, Linux)
+
+Prefer `scripts/run_mutation.py` above; this is the underlying manual flow.
 
 ```bash
 # 1. Install mutmut into the dev env.
