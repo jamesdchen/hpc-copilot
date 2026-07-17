@@ -1,5 +1,5 @@
 ---
-status: v1-built
+status: shipped
 # Mechanical dead-end disambiguation for `extract-recipe` (G2)
 
 **Status: v1 BUILT (2026-07-17).** The mechanical dead-end signal is anchored on

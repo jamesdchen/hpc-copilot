@@ -379,9 +379,7 @@ def _final_reduce(*, run_id, force):
     sidecar_cmd_sha = None
     hpc_agent_version = None
     try:
-        _sc = json.loads(
-            Path(".hpc", "runs", f"{run_id}.json").read_text(encoding="utf-8")
-        )
+        _sc = json.loads(Path(".hpc", "runs", f"{run_id}.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         _sc = None
     if isinstance(_sc, dict):

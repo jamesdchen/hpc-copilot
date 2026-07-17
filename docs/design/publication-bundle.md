@@ -1,5 +1,5 @@
 ---
-status: design
+status: plan
 audience: maintainer — the reproducibility program's publication-time deliverable
 ---
 # The publication bundle — one offline-verifiable artifact a scientist ships with a paper
@@ -440,3 +440,45 @@ signable digest; the new code is compose+seal+classify, comparable to
   BUNDLE member, not a `DOSSIER_SOURCES` noun (R-B3), to avoid the dossier
   boundary + attestations pair-edit blast radius. No `src/**` change; no regen; no
   commit — five rulings (R-B1..R-B5) flagged for the maintainer.
+
+- **2026-07-17 — BUILT (`export-bundle` verb + the self-attesting manifest).**
+  Landed `ops/publication_bundle.py::export_bundle` (`verb=mutate`, one local
+  write, no SSH, `agent_facing`, NOT MCP-curated, `idempotency_key="seed"`),
+  `ops/bundle_render.py::render_verify` (the deterministic `VERIFY.md`),
+  `_wire/actions/publication_bundle.py` (`ExportBundleSpec` / `ExportBundleResult`
+  → `export_bundle.{input,output}.json`), `docs/primitives/export-bundle.md`, and
+  `tests/contracts/test_publication_bundle_boundary.py`. Composes
+  `compute_dossier_signature` (the ONE gather — never a second store walk) +
+  `build_provenance_manifest` + `manifest_signature` + `cite_check` +
+  `export_attestations`'s `_statement`/`_dsse_envelope` projection. `VERIFY.json`
+  is the top-level self-attesting seal (`BUNDLE_SCHEMA_VERSION = 1`, R-B5);
+  `bundle_sha256 = manifest_signature(entries)` over the path-sorted
+  `{member, path, sha256, bytes}` entries. Rulings realized: **R-B1** — built
+  `export-bundle` + the zero-dep self-attesting `VERIFY` manifest (Layer 1) + the
+  stock-DSSE `attestations` member (Layer 2) NOW; the convenience `verify-bundle`
+  query verb (Layer 3, the per-link re-classification stock tooling cannot do) is
+  a noted SIBLING follow-on, deferred (registry arithmetic + its own boundary
+  pins). **R-B2** — manuscript optional, at-most-one, disclose-skipped when
+  absent (`cite-check-skipped`); both sources at once is a `SpecInvalid`. **R-B3**
+  — the cite-check report is a BUNDLE member under the closed `BUNDLE_MEMBERS`
+  vocabulary, never a `DOSSIER_SOURCES` noun. **R-B4** — the top-level verdict is
+  a CODE template filled by the classification (the `CLAIM_CONSISTENT_SENTENCE`
+  precedent), boundary-pinned to never say a bare "reproducible". **R-B5** — own
+  `BUNDLE_SCHEMA_VERSION = 1`; no existing schema bumped.
+  **One design reconciliation (recorded honestly):** §6 both (a) listed `recipe`
+  as a sixth bundle member AND (b) required `BUNDLE_MEMBERS` DISJOINT from
+  `DOSSIER_SOURCES` — but `recipe` IS a `DOSSIER_SOURCES` noun, so the two
+  cannot both hold. The build chose the enforceable **disjoint** invariant: the
+  derived recipe travels sealed INSIDE `dossier-evidence` (at
+  `dossier/recipe/recipe.json`, honoring "recipe [already inside the dossier
+  gather]") and is surfaced via a `members.recipe` POINTER in `VERIFY.json` — so
+  `BUNDLE_MEMBERS` is the five publication-concern members (`dossier-evidence`,
+  `provenance-manifest`, `cite-check-report`, `attestations`, `verify`), cleanly
+  disjoint and boundary-pinned both ways. Incidental doc-drift fixed: the
+  `mcp_server.py` curated-catalog comment called the exporters "read-only `query`
+  verbs" — corrected to `verb=mutate` and extended to the trio (dossier /
+  attestations / bundle). Verified: targeted + full `tests/contracts/` green, the
+  dossier + attestation boundary pins stay green (the bundle vocabulary is
+  separate), regen `--write`/`--check` clean, lint gauntlet + ruff/format/mypy
+  clean. `verify-bundle` remains the open sibling; a multi-manuscript corpus is a
+  future additive (R-B2).

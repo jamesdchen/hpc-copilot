@@ -385,8 +385,12 @@ def test_both_canary_metrics_pull_folds_into_one_cycle(tmp_path: Path, monkeypat
     assert len(calls) == 1
     # Scoped to the two result dirs' common ancestor, anchored includes per canary.
     assert calls[0]["remote_subdir"] == "results"
+    # U-HW1 widened the folded pull by the runtime sidecar (hardware facts ride
+    # home in the same rsync the fingerprint mint already runs — zero new dials).
     assert sorted(calls[0]["include"]) == [
+        f"{_MAIN}-canary/task_0/_runtime.json",
         f"{_MAIN}-canary/task_0/metrics.json",
+        f"{_MAIN}-canary2/task_0/_runtime.json",
         f"{_MAIN}-canary2/task_0/metrics.json",
     ]
     # Both payloads landed distinctly under the dest run's pulls dir.
