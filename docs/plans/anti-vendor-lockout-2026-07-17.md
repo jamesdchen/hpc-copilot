@@ -354,7 +354,6 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   portability (guardrail G3 keeps it non-load-bearing) and does NOT chase the
   auth blocker (contract T2 out-of-scope). The real residual is activation (T4),
   the unproven capabilities 2–5 (Wave C/D), and prose (T5).
-<<<<<<< ours
 - **T5 landed (2026-07-17): the prose-neutral harness runbook, GENERATED.** R5
   answered "generated projection": `docs/generated/harness-runbook.md` is
   projected from `_wire/spawn_contract.py::DECISION_POINTS` + the
@@ -381,7 +380,6 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   stated verbatim in the protocol). Gates green: `regen_all --check` (9/9), lint
   gauntlet (26/26), ruff/format/mypy, 9 runbook tests. The SKILL.md re-cast as the
   Claude-Code PROFILE (light front-matter edits) is NOT in this unit — deferred.
-=======
 - **Capability 6/7 negotiation seams landed (2026-07-17) — the M follow-on Wave A
   named + assigned the version bump to.** The Wave-A T2 landing recorded
   capabilities 6 (scheduler-write fence) and 7 (decision-rendezvous
@@ -412,7 +410,6 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   `conformance/__init__.py` (nouns + adapter methods), two shipped kit modules +
   two mirror modules, `docs/internals/harness-contract.md` (HONEST STATUS +
   negotiation bullets + drift log).
->>>>>>> theirs
 - **Wave A landed (2026-07-17): T1 + T2 + T3, docs-only.** T1 — the memory-note
   stale-claims reconciliation table (§2) verifies every "planned/unbuilt/missing"
   claim against code with a citation, and the risk register is marked the CANONICAL
