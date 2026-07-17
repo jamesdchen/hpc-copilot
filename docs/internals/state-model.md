@@ -78,7 +78,7 @@ campaigns/<slug>/
 │   └── result.json       # the iteration's aggregated metrics
 ```
 
-Read by: `campaign-driver`, `load-context`, `campaign-status`.
+Read by: `hpc-block-drive` (the campaign loop driver), `load-context`, `campaign-status`.
 
 Written by: `campaign-advance` (on each tick), `campaign-init`.
 

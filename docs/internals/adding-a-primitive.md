@@ -143,7 +143,7 @@ You don't need to touch any module list. `register_primitives()` walks
 every public module under `_PRIMITIVE_PACKAGES` (in
 `src/hpc_agent/_kernel/registry/primitive.py`) — `hpc_agent.ops`,
 `hpc_agent.meta`, `hpc_agent.incorporation`, `hpc_agent.state`,
-`hpc_agent.cli`, `hpc_agent._kernel.extension` — and your
+`hpc_agent.cli`, `hpc_agent.recovery`, `hpc_agent._kernel.extension` — and your
 `@primitive(...)` decorator registers itself on import. Adding a
 primitive in a brand-new top-level package is the only case that
 requires a one-line change to `_PRIMITIVE_PACKAGES`.

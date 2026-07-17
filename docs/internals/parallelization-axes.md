@@ -55,7 +55,9 @@ calls `resolve(i)` per task to get its kwargs.
 
 ### Built-in task_generator shapes
 
-(In `incorporation/build_tasks_py.py`.)
+(Recipe `kind`s defined in `_wire/actions/interview.py`; materialized into
+`tasks.py` by `ops/memory/interview.py`. The `build-tasks-py` scaffolder lives
+at `incorporation/build/tasks_py.py`.)
 
 | Shape | When to use |
 |---|---|
@@ -66,7 +68,7 @@ calls `resolve(i)` per task to get its kwargs.
 
 ### Interactions with the rest of the framework
 
-- **`cmd_sha` computation**: `cmd_sha = sha(executor_module + resolve(0).kwargs + ... + resolve(N-1).kwargs + frozen_yaml_shas)`. This is the framework's idempotency key — if two submissions produce the same `cmd_sha`, the second one is a dedup. Lives in `state/runs/compute_cmd_sha.py`.
+- **`cmd_sha` computation**: `cmd_sha = sha(executor_module + resolve(0).kwargs + ... + resolve(N-1).kwargs + frozen_yaml_shas)`. This is the framework's idempotency key — if two submissions produce the same `cmd_sha`, the second one is a dedup. Lives in `state/run_sha.py` (`compute_cmd_sha`).
 - **Array submission**: `total()` determines `--array=0-N` for SLURM (or `-t 1-N` for SGE).
 - **Per-task kwargs delivery**: the on-cluster dispatcher reads `tasks.py`, calls `resolve(SLURM_ARRAY_TASK_ID)`, runs the executor with those kwargs.
 - **Runtime prior keying**: the runtime prior reader keys observed walltimes by `(profile, cluster, cmd_sha)`. Two different sweep shapes have different `cmd_sha`s and different runtime priors.
@@ -129,7 +131,7 @@ pick is the trade-off the user makes per experiment.
 - **Runtime priors**: each `(profile, cluster, model)` has its own runtime prior; `homogeneous_axes` decides which dimension keys the prior.
 - **`/hpc-axes-init`** (sub-slash via workflow skill): the interview that asks the user "which axes are homogeneous?" — the user's judgement call is what populates `axes.yaml`.
 - **Cold-start fallback**: if `axes.yaml` doesn't exist, the framework refuses to guess (returns `spec_invalid: ambiguous_axis_layout`); the user has to declare it.
-- **`pick_array_axis`** (in `infra/throughput.py`): helper that picks which homogeneous axis to promote to the SLURM array index when multiple homogeneous axes exist.
+- **`pick_array_axis`** (in `state/axes.py`): helper that picks which homogeneous axis to promote to the SLURM array index when multiple homogeneous axes exist.
 
 ### The seam with other axes
 
@@ -296,7 +298,7 @@ the matcher.
 ### Where it lives
 
 - `experiment_kit/axis.py` — type definitions (the four `DataAxis` classes)
-- `experiment_kit/axis_matcher.py` — pattern-matcher for autonomous classification
+- `experiment_kit/axis_matcher/` — pattern-matcher package for autonomous classification (`_classifier.py` + the per-pattern `matchers/`)
 - `<experiment>/.hpc/axes.yaml` `executors.<run_name>.data_axis` — recorded classification per run
 - `experiment_kit/elision.py` — `assert_elision_equivalent` runtime check that whole-vs-split matches
 

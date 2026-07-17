@@ -952,3 +952,12 @@ view_sha-binds); `tests/state/test_data_trace.py` +3 (stamp/validate/absent);
 `test_observe.py` +1 (stamped shas equal `parse_percent_source`'s). Targeted
 suites green (data_trace, audit_view, canonical, multi_human_gate, relay_due,
 data_trace_acceptance, flow_trace_ingest, trace_render, trace_diff, observe).
+
+Drift-log line: 2026-07-17 (staleness sweep) — the plugin observe module cited
+above as `examples/plugins/hpc-agent-notebook-render/_observe.py` (T-R landed
+note, Amendment 16) now lives inside the plugin's package at
+`examples/plugins/hpc-agent-notebook-render/src/hpc_agent_notebook_render/_observe.py`.
+Core symbols are unmoved: `state/data_trace.py` (`make_record`/`validate_record`/
+`TRACE_SCHEMA_VERSION`), `execution/mapreduce/data_trace_contract.py` (the source
+tiers), `ops/notebook/audit_view.py::_section_trace_summary`, and the
+`trace-render`/`trace-diff` verbs are all current.

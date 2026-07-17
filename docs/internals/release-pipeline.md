@@ -74,7 +74,7 @@ publishes. This structurally retires all three hazards:
 - **`publish` job** (`needs: build`, `environment: pypi`, `permissions:
   id-token: write` + `contents: write`): downloads the verified `dist/`, publishes
   via `pypa/gh-action-pypi-publish@release/v1` (no password), then attaches the
-  sdist + wheel to the GitHub release with `softprops/action-gh-release@v2`.
+  sdist + wheel to the GitHub release with `softprops/action-gh-release@v3`.
 
 The `release` skill's Step-9 checklist no longer contains a `uv publish` line or a
 token-rotation step; they are replaced by `git push origin v<version>` (the tag

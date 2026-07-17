@@ -128,3 +128,8 @@ row, the orchestrating skill, and the onboarding-map rung-6 status flip.
   stale — `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in[verify_reproduction.input.json]`
   goes red until `python scripts/build_schemas.py --write` regenerates it
   (the ONLY expected red; the wire model is the authoring SoT).
+- 2026-07-17 (staleness sweep): the schema debt above is RESOLVED —
+  `hpc_agent/schemas/verify_reproduction.input.json` has since been regenerated
+  and now carries the `external_baseline` / `claimed_values` / `ExternalBaseline`
+  shapes; the roundtrip test is green. The 2026-07-08 "un-regenerated" note is
+  retained above as history.

@@ -64,8 +64,7 @@ a value is a one-place edit (Python alias) followed by
 
 Values returned by `hpc_agent.execution.mapreduce.reduce.classify.classify_failure`.
 Used by `/monitor-hpc` (slash) and any agent that wants to drive auto-retry
-policy. The complete list (`CATEGORIES` constant in
-`hpc_agent/execution/mapreduce/reduce/classify.py`):
+policy. `classify_failure`'s coarse public vocabulary is:
 
 - `gpu_oom`
 - `system_oom`
@@ -75,6 +74,14 @@ policy. The complete list (`CATEGORIES` constant in
 - `queue_stall`
 - `code_bug`
 - `unknown`
+
+Note: the `CATEGORIES` constant in
+`hpc_agent/execution/mapreduce/reduce/classify.py` is no longer just these
+eight — it is now `typing.get_args(FailureCategory)` (the broader
+`_wire/_shared.py:FailureCategory` union, which also carries the fine-grained
+`infra.failure_signatures` catalog classes such as `import_error`,
+`python_traceback`, `mpi_*`). The eight above are the subset the
+`classify_failure` *function* returns.
 
 Order is significant in the classifier (first-match-wins, specific
 patterns before generic traceback). The `--spec.category` field of

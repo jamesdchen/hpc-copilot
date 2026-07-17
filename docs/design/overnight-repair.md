@@ -586,3 +586,12 @@ intersection, so a refactor cannot silently move a healable var into the job env
 * **2026-07-10 — taxonomy ratified** (user). A/B/C1/C2; the standing rules; the
   mechanical-retry bottom rung; `heal_classes` consent cap verified buildable.
   (Prior PARKED note retired by the run-#12 fold-in.)
+* **2026-07-17 — docs-sweep path note.** `ops/decision/journal.py` (§4.3 and the
+  RULING-3 drift entry cite `::_assert_overnight_consent_authorship`) became the
+  `ops/decision/journal/` PACKAGE in the 2026-07-13 fable-sweep; the gate now
+  lives in `ops/decision/journal/overnight_consent.py`, re-exported at the
+  package `__init__`, so the citation still resolves at the package level — only
+  the `.py` suffix is stale. The §10 substrate map verifies live:
+  `ops/recover/heal_taxonomy.py`, `ops/recover/stray_sweep.py`,
+  `infra/env_flags.HEALABLE_TRANSPORT_ENV_VARS` / `active_transport_overrides`,
+  and `tests/contracts/test_heal_env_disjoint.py` are all present as "BUILT".

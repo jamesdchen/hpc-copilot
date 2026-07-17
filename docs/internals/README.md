@@ -25,6 +25,10 @@ notes, recipes for adding internals, and architecture deep-dives. They are
 | [`submit-sequence.md`](submit-sequence.md) | End-to-end walkthrough from `/submit-hpc` typed in chat to results landing in `aggregated.json`. Traces the slash → skill → bare worker → primitives → cluster pipeline. |
 | [`sync-checklist.md`](sync-checklist.md) | Invariants between the slash-command surface and the `hpc-agent` CLI — what must stay aligned when either changes. |
 | [`suggest-tests.md`](suggest-tests.md) | The ADVISORY diff → test-selection tool (`scripts/suggest_tests.py`) for agent inner loops — mirror-path + import-graph + cross-consumer mapping. Advisory only: the full suite stays mandatory at CI/release; unmapped files surface loudly. |
+| [`release-pipeline.md`](release-pipeline.md) | The build+publish CI pipeline (`.github/workflows/release.yml`) via PyPI trusted publishing (OIDC) — the hazards it retires, the tag-push trigger, and the one-time human PyPI/GitHub-environment setup. |
+| [`scheduler-integration-ci.md`](scheduler-integration-ci.md) | The experimental, non-required GitHub Actions job that runs the real submit spine against a real Slurm-in-a-container (`ci/slurm/`, `tests/integration/scheduler/`) — what it covers, its known gaps (SGE, GPU/MPI), and local reproduction. |
+| [`dossier-archival.md`](dossier-archival.md) | The `archive-dossier` verb's object-store posture — client-side integrity chain, the bucket-side Object-Lock immutability a human configures once, and the credential model. |
+| [`fallback-inventory.md`](fallback-inventory.md) | A point-in-time audit of every `src/hpc_agent/` site that degrades to an alternate path — the DISCLOSES/REFUSES/SILENT/JUSTIFIED-SILENT classification, the ranked SILENT list, and the proposed narrow disclosure lint. |
 
 ## When to add a doc here
 

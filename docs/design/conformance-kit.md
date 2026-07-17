@@ -642,3 +642,13 @@ catalog updated if exposed; `pyproject.toml` package-data for
      dossier zip), one DSSE envelope per JSONL line, `signatures: []`
      (unsigned v1) — exactly as D-K4 specified; the K7 stock-verifier
      acceptance check remains open.
+- **Docs-sweep path reconciliation (2026-07-17):** three enclosing paths cited
+  in the product-intent/D-K5 prose packaged or moved in the 2026-07-13
+  fable-sweep; the cited symbols are unmoved (both packages re-export at
+  `__init__`, so the reference-adapter drives still resolve):
+  `_kernel/hooks/relay_audit_stop.py` → the `relay_audit_stop/` PACKAGE
+  (`build_hook_output` in `__init__`); `ops/decision/verify_relay.py` →
+  `ops/decision/journal/verify_relay.py`; `ops/decision/journal.py` → the
+  `ops/decision/journal/` PACKAGE (`_assert_human_authorship` re-exported). The
+  kit surface itself (`src/hpc_agent/conformance/`, `ops/export_attestations.py`,
+  the two reference adapters) verifies present and matches the drift log.

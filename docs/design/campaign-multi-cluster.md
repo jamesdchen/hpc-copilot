@@ -30,17 +30,17 @@ Every piece of per-campaign state is keyed by `campaign_id`:
 | Manifest (opt-in / budget / strategy params) | `.hpc/campaigns/<cid>/manifest.json` | `meta/campaign/manifest.py` |
 | Cursor (iteration counter, audit-only) | `.hpc/campaigns/<cid>/cursor.json` | `meta/campaign/cursor.py` |
 | In-flight set / run partition | journal records filtered by `campaign_id` | `state/index.py::find_runs_by_campaign` |
-| Per-iteration history | sidecars filtered by `campaign_id` | `atoms/status.py:campaign_status` |
+| Per-iteration history | sidecars filtered by `campaign_id` | `meta/campaign/atoms/status.py::campaign_status` |
 
 Because `find_runs_by_campaign(experiment_dir, cid)`
 (`state/index.py::find_runs_by_campaign`) returns *only* runs whose
 `record.campaign_id == cid`, two cids in the same repo partition cleanly: each
 cluster's driver sees its own in-flight set and never the other's.
-`campaign_status(...).in_flight` (`atoms/status.py::campaign_status`) counts that
+`campaign_status(...).in_flight` (`meta/campaign/atoms/status.py::campaign_status`) counts that
 partition, so per-cid in-flight counts are independent. This is the whole basis
 of the model, and the test asserts it directly.
 
-`deterministic_resolver.py::_reconstruct_submit_context` reinforces
+`ops/campaign_refill.py::_build_iteration_resolve_spec` reinforces
 single-cluster-per-cid: when it rebuilds the next iteration's submit context it
 **prefers the most recent run of this campaign** (`find_runs_by_campaign(...)[-1]`),
 so each cid rebuilds against its own cluster / profile / remote
@@ -190,9 +190,11 @@ Commit `12043d0d` replaced that branch with a real `msvcrt` byte-range lock (see
 `infra/io.py::advisory_flock` for the implementation), giving genuine
 cross-process exclusion. Safe concurrent cross-cluster deploys rely on this.
 
-One live gap remains in the same area: `infra/io.py::atomic_locked_update` (which
-takes its exclusion through `advisory_flock`) still has a Windows correctness bug,
-tracked and being addressed in a separate task. Cross-process serialization of
+The related `infra/io.py::atomic_locked_update` (which takes its exclusion through
+`advisory_flock`) had a Windows correctness gap — it was entirely lockless on win32
+— that is now CLOSED: `1f368163` made it take a real lock and `d8130044` outsourced
+locking to the `filelock` library (see the `atomic_locked_update` docstring).
+Cross-process serialization of
 `advisory_flock` itself is proven by
 `tests/infra/test_atomic_locked_update.py::test_advisory_flock_serializes_cross_process_win32`.
 The multi-cluster test does not duplicate it; it pins only the exclusion contract
@@ -216,10 +218,10 @@ nothing in it conflicts with the per-cid partition here.
 |---|---|
 | Per-cid scratch dir | `meta/campaign/dirs.py::campaign_dir` |
 | Run partition by cid | `state/index.py::find_runs_by_campaign` |
-| Per-cid status / in-flight count | `atoms/status.py::campaign_status` |
+| Per-cid status / in-flight count | `meta/campaign/atoms/status.py::campaign_status` |
 | Strategy params → `HPC_KW_*` | `incorporation/build/submit_spec.py::_campaign_strategy_kw_env` |
 | Cluster config / env-activation | `infra/clusters.py::load_clusters_config` |
-| Single-cluster-per-cid rebuild | `deterministic_resolver.py::_reconstruct_submit_context` |
+| Single-cluster-per-cid rebuild | `ops/campaign_refill.py::_build_iteration_resolve_spec` |
 | Manifest (per-cid opt-in / params) | `meta/campaign/manifest.py::write_manifest` |
 | Windows deploy lock (fixed in `12043d0d`) | `infra/io.py::advisory_flock` (win32 branch) |
-| Driver (do not daemonize) | `meta/campaign/driver.py`, `_kernel/lifecycle/drive.py` |
+| Driver (do not daemonize) | `meta/campaign/blocks.py` (campaign reconcile), `_kernel/lifecycle/drive.py` |

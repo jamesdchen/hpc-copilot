@@ -79,8 +79,8 @@ Entering mid-ladder means entering with less attached evidence, disclosed.
 | 4 | Scale → verdict | campaign/aggregate blocks, briefs, look ledger | BUILT | — |
 | 5 | Existing *results* → evidence | import prior findings as dated conclusion attestations (the retro-indexing mechanism) | rides Phase 6 (evidence memory) | prior evidence, dated, cited by file sha; never receipts for runs the copilot didn't observe |
 | 6 | External claim → reproducible claim | **onboard-by-reproduction** — first act on arrival is reproducing the claimed result under observation; the run mints the identity AND the first fingerprint samples | **BUILT 2026-07-08 → `onboard-by-reproduction.md`** (Phase 6.5; `verify-reproduction` external-baseline mode + `claim-check` receipt kind + `hpc-claim-check` skill; claim-in-spec, `claim-check` ≠ reproduction) | claim + observed n=2 fingerprint, honestly labeled |
-| 7 | Claim → registered/defended | registration kernel, dossier export, DSSE | PLANNED (Phases 2, 5) | the top rung |
-| 8 | Solo → team | multi-human (per-actor logs, authorship) | PLANNED (Phase 9) | — |
+| 7 | Claim → registered/defended | registration kernel, dossier export, DSSE | **BUILT 2026-07-08/09** (registration kernel + dossier export: `verify-registration`, `export-dossier`/`archive-dossier`, `state/registration.py` → `registration-kernel.md`, `dossier-export.md`; DSSE signing still deferred) | the top rung |
+| 8 | Solo → team | multi-human (per-actor logs, authorship) | **BUILT 2026-07-08** (MT1–MT11 → `multi-human.md`) | — |
 
 Between rungs 1–4 coverage is complete: the acceptors fill the gaps and the
 2026-07-07 lane fix makes the greenfield path audit-native (`build-template
@@ -115,7 +115,7 @@ Each is either *meaning* (caller-side forever, per the scope doctrine) or
 ## The user-facing artifact this doc becomes
 
 "Arrive with X, start here" — a one-page entry guide derivable today only
-by knowing all 142 verbs. Home: the conformance-kit era (when outside users
+by knowing the entire verb registry (174 verbs as of 2026-07-17). Home: the conformance-kit era (when outside users
 are real), augmented per discipline by packs (the pack is the
 discipline-specific on-ramp kit: core owns the ladder, packs own the
 hand-holds). Until then, THIS doc is the internal source of truth for
@@ -123,6 +123,13 @@ on-ramp decisions.
 
 ## Drift log
 
+- 2026-07-17 (staleness sweep): rungs 7 and 8 flipped PLANNED → BUILT. Rung 7
+  — the registration kernel + dossier export shipped 2026-07-08/09
+  (`verify-registration`, `export-dossier`/`archive-dossier`,
+  `state/registration.py`; `registration-kernel.md` status `shipped`); DSSE
+  signing remains the deferred leg. Rung 8 — multi-human landed MT1–MT11
+  (`multi-human.md` status `shipped`, `IMPLEMENTED 2026-07-08`). Also refreshed
+  the stale "142 verbs" figure to the current registry size (174).
 - 2026-07-08: rung 6 flipped PLANNED → BUILT (Opus) — Phase 6.5
   onboard-by-reproduction shipped: `verify-reproduction`'s external-baseline
   (`claim-check`) mode, the anti-laundering enforcement row, and the

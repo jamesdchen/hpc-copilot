@@ -272,14 +272,14 @@ disclosed bound; anything NOT manifest-known is an anomaly → ASK, never
 delete. Spec + build = post-run-#12 batch item 6.
 
 **SHIPPED (2026-07-10).** The pure planner is
-`ops/transfer/prune.py::plan_prune` (→ `PrunePlan`): it splits the manifest
+`infra/prune.py::plan_prune` (→ `PrunePlan`): it splits the manifest
 delta's `extra` into `prunable` (path recorded in the PRIOR push manifest —
 proven ours) vs `anomalies` (never shipped by us — NEVER deleted, surfaced),
 and REFUSES the whole plan (`to_prune == ()`) when the manifest-known set
 breaches either conservative cap. Chosen defaults: **`DEFAULT_PRUNE_MAX_FILES
 = 100`**, **`DEFAULT_PRUNE_MAX_BYTES = 100 MiB`**, overridable at the transport
 call site via `HPC_DEPLOY_PRUNE_MAX_FILES` / `HPC_DEPLOY_PRUNE_MAX_BYTES`;
-kill-switch `HPC_NO_DEPLOY_PRUNE=1`. Wired into `infra/transport.py`'s
+kill-switch `HPC_NO_DEPLOY_PRUNE=1`. Wired into the `infra/transport/` package's
 rsync-less delta push (`rsync_push`, the `delete=True` branch that already
 holds the dial — zero new cold SSH): after the additive delta ship,
 `_prune_manifest_known_extras` reads the prior push manifest
@@ -290,7 +290,7 @@ holds the dial — zero new cold SSH): after the additive delta ship,
 then records the new shipped set for the next push. The prune is fully
 fail-open — it can never break a successful transfer. A first push (no prior
 manifest) routes every extra to the anomaly branch (nothing proven ours →
-nothing pruned). Tests: `tests/ops/transfer/test_prune.py` (8, the planner)
-and `tests/infra/test_transport_prune.py` (5, the seam: manifest-known
+nothing pruned). Tests: `tests/infra/test_prune.py` (8, the planner)
+and `tests/infra/test_transport_prune.py` (10, the seam: manifest-known
 journaled+pruned, anomaly never-pruned+surfaced, over-bound refused+journaled,
 kill-switch, own-bookkeeping-filtered).

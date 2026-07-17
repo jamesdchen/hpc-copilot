@@ -3,9 +3,13 @@ status: plan
 ---
 # Wave 4 — `block-drive`: the code-driven chain
 
-**Status:** SPEC — the next deliberate step after waves 1–3 (the block
-architecture, certified 2026-07-03). A refactor gated on the proving run, not a
-tweak. Consolidates the design iteration since wave 3.
+**Status:** LANDED — wave-4 `block-drive` (the code-driven chain) shipped in
+`34dd2047`; `hpc-agent block-drive` is now the registered production workflow
+driver (`_kernel/lifecycle/block_drive.py`, console script in `pyproject.toml`).
+Originally written as a SPEC — the next deliberate step after waves 1–3 (the block
+architecture, certified 2026-07-03), gated on the proving run. Consolidates the
+design iteration since wave 3; the checklist in §9 is retained as the historical
+build record.
 **Parent:** [`human-amplification-blocks.md`](human-amplification-blocks.md)
 (the guiding principle; this spec is its §9, extracted).
 
@@ -190,8 +194,8 @@ projected, never copied.
 - **Latency is the process model, not the gates.** The decision gates are local
   file reads (sub-ms) — do not optimize them away. The cost was Python
   cold-start per verb call; the **in-process warm runner** (shipped) fixes it by
-  reusing the loaded registry. Keep `_default_cli_runner` (rename →
-  `_subprocess_cli_runner`, it is no longer the default) as isolation fallback +
+  reusing the loaded registry. Keep `_subprocess_cli_runner` (the rename from
+  `_default_cli_runner` has LANDED — it is no longer the default) as isolation fallback +
   parity oracle; audit the in-process runner for cross-call global-state
   leakage; broaden the parity test beyond `find` to a mutating + a workflow verb.
 - **Curated is an allowlist, so `--allow-mutations ∩ curated` is vestigial.**
