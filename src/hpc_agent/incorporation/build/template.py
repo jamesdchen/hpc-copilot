@@ -163,7 +163,7 @@ def build_template(*, repo_dir: Path, force: bool = False, shape: str = "script"
     if shape not in _SHAPE_ASSETS:
         raise errors.SpecInvalid(f"shape {shape!r} not in {sorted(_SHAPE_ASSETS)!r}")
 
-    scaffold_dir = hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds"
+    scaffold_dir = Path(hpc_agent._PACKAGE_ROOT) / "incorporation" / "build" / "scaffolds"
 
     def _asset(name: str) -> str:
         return (scaffold_dir / name).read_text(encoding="utf-8")

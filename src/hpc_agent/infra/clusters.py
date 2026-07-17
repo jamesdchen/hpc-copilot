@@ -405,7 +405,7 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
             else:
                 from hpc_agent import _PACKAGE_ROOT
 
-                path = _PACKAGE_ROOT / "config" / "clusters.yaml"
+                path = Path(_PACKAGE_ROOT) / "config" / "clusters.yaml"
     with open(path, encoding="utf-8") as f:
         # yaml.safe_load returns None for an empty file; coerce to {} so
         # downstream `.get(...)` calls on the result don't AttributeError.

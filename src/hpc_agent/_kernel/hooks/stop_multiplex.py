@@ -75,7 +75,6 @@ import importlib
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
 __all__ = [
@@ -131,22 +130,24 @@ def read_stdin_payload() -> Any:
         return None
 
 
-def _journal_home() -> Path:
+def _journal_home() -> str:
     """The journal home directory, resolved stdlib-only (no ``hpc_agent`` import).
 
     ``HPC_JOURNAL_DIR`` (non-empty) wins, else ``~/.claude/hpc`` — the DEFAULT
     branch of :func:`hpc_agent.state.run_record.current_homedir`, restated here as
-    a coarse existence gate ONLY. This is a path, not a guard predicate: the
-    prefilter merely asks "does the journal home exist at all"; the guards own the
-    per-repo ``<home>/<repo_hash>/…`` resolution. (The prefilter deliberately does
-    NOT honour the ``run_record.HPC_HOMEDIR`` monkeypatch attribute — an
-    hpc_agent-side back-compat seam it must not import; missing that only makes the
-    prefilter MORE conservative, i.e. it runs the guards, never wrongly skips.)
+    a coarse existence gate ONLY. Returns a plain ``str`` path (``os.path``, not
+    ``pathlib``) so the dry no-op hook path imports no ``pathlib`` (latency unit
+    1.7 / hook-floor unit). This is a path, not a guard predicate: the prefilter
+    merely asks "does the journal home exist at all"; the guards own the per-repo
+    ``<home>/<repo_hash>/…`` resolution. (The prefilter deliberately does NOT
+    honour the ``run_record.HPC_HOMEDIR`` monkeypatch attribute — an hpc_agent-side
+    back-compat seam it must not import; missing that only makes the prefilter MORE
+    conservative, i.e. it runs the guards, never wrongly skips.)
     """
     env_val = os.environ.get("HPC_JOURNAL_DIR")
     if env_val:
-        return Path(env_val)
-    return Path.home() / ".claude" / "hpc"
+        return env_val
+    return os.path.join(os.path.expanduser("~"), ".claude", "hpc")
 
 
 def prefilter_should_run(payload: Any) -> bool:
@@ -167,16 +168,16 @@ def prefilter_should_run(payload: Any) -> bool:
         return False
 
     cwd = payload.get("cwd")
-    cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
+    cwd_dir = cwd if isinstance(cwd, str) and cwd else os.getcwd()
 
     try:
-        if (cwd_dir / ".hpc").exists():
+        if os.path.exists(os.path.join(cwd_dir, ".hpc")):
             return True
     except OSError:
         return True  # can't stat → run (fail toward running)
 
     try:
-        if _journal_home().exists():
+        if os.path.exists(_journal_home()):
             return True
     except OSError:
         return True

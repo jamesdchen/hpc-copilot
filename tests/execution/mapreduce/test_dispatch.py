@@ -639,11 +639,13 @@ def test_exit_no_output_constant_in_lockstep_with_preamble() -> None:
     TERMINAL code the retry helper must NOT retry (``HPC_DISPATCH_EXIT_NO_OUTPUT``
     in hpc_preamble.sh). Pin the value AND cross-check the shell asset so a
     change on one side without the other is caught."""
+    from pathlib import Path
+
     from hpc_agent import _PACKAGE_ROOT
 
     assert dispatch._EXIT_NO_OUTPUT == 4
     preamble = (
-        _PACKAGE_ROOT
+        Path(_PACKAGE_ROOT)
         / "execution"
         / "mapreduce"
         / "templates"

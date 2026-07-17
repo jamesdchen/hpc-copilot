@@ -269,6 +269,45 @@ def test_noop_turn_does_not_import_guard_modules(tmp_path: Path) -> None:
     assert result["loaded"] == [], f"guard chain imported on a no-op turn: {result['loaded']}"
 
 
+def test_noop_turn_does_not_import_pathlib(tmp_path: Path) -> None:
+    """The dry no-op hook path imports NO ``pathlib`` (hook-floor unit, 2026-07-17).
+
+    The installed Stop hook runs ``python -m …stop_multiplex`` 3×/turn; the ruling
+    made the prefilter ``os.path``-only AND dropped ``pathlib`` from the root
+    ``hpc_agent.__init__`` module scope, so a prefilter-skip turn — the common case —
+    loads no ``pathlib`` at all. Subprocess-isolated so a sibling test that imported
+    ``pathlib`` earlier cannot mask the regression (base CPython does not preload it).
+    Re-adding a module-scope ``from pathlib import Path`` to either the prefilter or
+    the root ``__init__`` reds this."""
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    script = (
+        "import sys, json\n"
+        "from hpc_agent._kernel.hooks import stop_multiplex as m\n"
+        f"rc = m.main({list(_GUARDS)!r})\n"
+        "print(json.dumps({'rc': rc, 'pathlib': 'pathlib' in sys.modules}))\n"
+    )
+    env = {
+        **_os_environ(),
+        "HPC_JOURNAL_DIR": str(tmp_path / "_no_home"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        input=json.dumps({"cwd": str(cwd)}).encode("utf-8"),
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    result = json.loads(proc.stdout.decode())
+    assert result["rc"] == 0
+    assert result["pathlib"] is False, (
+        "pathlib was imported on a no-op Stop turn — the prefilter / root __init__ "
+        "must stay pathlib-free (hook-floor unit, 2026-07-17)"
+    )
+
+
 def _os_environ() -> dict[str, str]:
     import os
 

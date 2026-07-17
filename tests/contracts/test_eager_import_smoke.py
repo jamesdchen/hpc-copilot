@@ -136,6 +136,31 @@ def test_bare_import_does_not_load_heavy_submodules() -> None:
     )
 
 
+def test_bare_import_does_not_load_pathlib() -> None:
+    """Fire path for the hook-floor unit: bare ``import hpc_agent`` loads no ``pathlib``.
+
+    The 2026-07-17 maintainer ruling made ``_PACKAGE_ROOT`` an ``os.path`` string
+    and moved ``pathlib`` (plus ``warnings`` / ``importlib.util``) out of the root
+    module scope into the functions that use them. A bare import — which every
+    Stop-hook fire runs 3×/turn (`stop_multiplex`) — therefore imports no
+    ``pathlib``; re-adding a module-scope ``from pathlib import Path`` to the root
+    ``__init__`` reds this. Subprocess-isolated so a sibling test that imported
+    ``pathlib`` earlier can't mask the regression (base CPython does not preload it).
+    """
+    code = "import sys; import hpc_agent; print('pathlib' in sys.modules)"
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert proc.stdout.strip() == "False", (
+        "bare `import hpc_agent` eagerly loaded pathlib — the root __init__ must "
+        f"stay pathlib-free (hook-floor unit, 2026-07-17). stderr:\n{proc.stderr}"
+    )
+
+
 def test_infra_reexport_lazy() -> None:
     """``hpc_agent.infra`` re-exports resolve lazily (PEP 562) and correctly.
 
@@ -238,9 +263,20 @@ def test_fast_path_cache_hit_does_not_import_run_record(tmp_path: Path) -> None:
 
 
 def test_package_root_resolves_without_getattr_import_work() -> None:
-    """``hpc_agent._PACKAGE_ROOT`` is a real eager attr (G4), not a lazy import."""
-    assert hpc_agent._PACKAGE_ROOT.is_dir()
-    assert (hpc_agent._PACKAGE_ROOT / "__init__.py").is_file()
+    """``hpc_agent._PACKAGE_ROOT`` is a real eager attr (G4), served without import work.
+
+    G4 MEANING PRESERVED — an eager, honest underscore attribute, never routed
+    through ``__getattr__`` (an unknown underscore name still raises AttributeError,
+    pinned by ``test_unknown_attribute_raises_honest_attributeerror``). Only its
+    TYPE changed ``Path`` -> ``str`` per the 2026-07-17 maintainer ruling (the
+    hook-floor unit): the root ``__init__`` drops ``pathlib`` from module scope so
+    every Stop-hook fire (3×/turn) loads no pathlib, so ``_PACKAGE_ROOT`` is now an
+    eager ``os.path`` string and these assertions are string-form. Consumers wrap
+    ``Path(_PACKAGE_ROOT)`` at their own site.
+    """
+    assert isinstance(hpc_agent._PACKAGE_ROOT, str)
+    assert os.path.isdir(hpc_agent._PACKAGE_ROOT)
+    assert os.path.isfile(os.path.join(hpc_agent._PACKAGE_ROOT, "__init__.py"))
 
 
 def test_unknown_attribute_raises_honest_attributeerror() -> None:

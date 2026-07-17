@@ -34,7 +34,7 @@ def _cmd_new(name: str) -> int:
     from hpc_agent import _PACKAGE_ROOT
 
     skeleton = (
-        _PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.py.tmpl"
+        Path(_PACKAGE_ROOT) / "incorporation" / "build" / "scaffolds" / "experiment.py.tmpl"
     )
     dest = Path("notebooks") / "executors" / f"{name}.py"
     if dest.exists():

@@ -6,10 +6,10 @@ GPU selection, and array-batch dispatch driven by a user-written
 ``clusters.yaml``; experiment setup is conversational.
 """
 
+from __future__ import annotations
+
 import importlib
-import importlib.util
-import warnings
-from pathlib import Path
+import os
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 # MIRROR: hpc_agent.__init__::_LAZY_PUBLIC <-> this TYPE_CHECKING import block
 #   pinned-by tests/contracts/test_eager_import_smoke.py::test_type_checking_mirror
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
     from hpc_agent._kernel.registry.primitive import (
         PrimitiveMeta,
@@ -43,12 +45,17 @@ if TYPE_CHECKING:
     # consumers (e.g. conformance/report.py) stay ``str``-typed under mypy.
     __version__: str
 
-# Package root. Cheap (``Path.resolve`` on ``__file__``) and read at module
-# scope by consumers (e.g. ``incorporation/build/executor.py``,
+# Package root, as an eager ``os.path`` STRING. Read at module scope by
+# consumers (e.g. ``incorporation/build/executor.py``,
 # ``incorporation/build/tasks_py.py`` do ``from hpc_agent import _PACKAGE_ROOT``
 # during their own import), so it stays eager — never deferred to
 # ``__getattr__`` (G4: honest underscore-attr resolution, no import-time work).
-_PACKAGE_ROOT = Path(__file__).resolve().parent
+# Kept a plain ``str`` (not ``pathlib.Path``) so importing this module — which
+# every hook fire does 3×/turn — loads no ``pathlib`` (RULED 2026-07-17, the
+# hook-floor unit: ~10-15ms/fire; the maintainer is the only consumer of
+# materialized scaffolds, so the Path→str compat hazard is waived). Consumers
+# wrap ``Path(_PACKAGE_ROOT)`` at their own site (or use ``os.path``).
+_PACKAGE_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 __all__ = [
     # Package root
@@ -219,6 +226,8 @@ def __getattr__(name: str) -> Any:
     target = _MOVED.get(name)
     if target is None:
         raise AttributeError(f"module 'hpc_agent' has no attribute {name!r}")
+    import warnings
+
     warnings.warn(
         f"{name!r} moved out of the hpc_agent root namespace; import from {target} instead.",
         DeprecationWarning,
@@ -251,6 +260,9 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     ``ImportError`` from the user's code as a submit-time error worth
     surfacing, not a framework bug.
     """
+    import importlib.util
+    from pathlib import Path
+
     path = Path(tasks_py_path)
     if not path.is_file():
         raise FileNotFoundError(f"tasks.py not found: {path}")
@@ -332,6 +344,7 @@ def get_template_path(scheduler: str, template: str) -> Path:
     """
     import tempfile
     import warnings
+    from pathlib import Path
 
     warnings.warn(
         "hpc_agent.get_template_path is deprecated; the runtime array scripts "

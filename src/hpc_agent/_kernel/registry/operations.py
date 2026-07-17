@@ -21,13 +21,11 @@ from the live registry — never from the baked file.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import hpc_agent
 from hpc_agent._kernel.registry.primitive import get_registry
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 __all__ = [
     "BOOTSTRAP_FIELDS",
@@ -55,7 +53,7 @@ BOOTSTRAP_FIELDS: tuple[str, ...] = (
     "agent_facing",
 )
 
-_PACKAGE_ROOT = hpc_agent._PACKAGE_ROOT
+_PACKAGE_ROOT = Path(hpc_agent._PACKAGE_ROOT)
 
 
 def _primitives_dir() -> Path | None:

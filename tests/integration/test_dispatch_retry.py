@@ -19,17 +19,14 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from hpc_agent import _PACKAGE_ROOT
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 PREAMBLE = (
-    _PACKAGE_ROOT
+    Path(_PACKAGE_ROOT)
     / "execution"
     / "mapreduce"
     / "templates"

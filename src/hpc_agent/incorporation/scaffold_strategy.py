@@ -80,7 +80,7 @@ _DEFAULT_DEST_REL = Path(".hpc") / "tasks.py"
 
 def _scaffolds_dir() -> Path:
     """The bundled scaffolds asset dir (``templates/scaffolds/``)."""
-    return hpc_agent._PACKAGE_ROOT / "execution" / "mapreduce" / "templates" / "scaffolds"
+    return Path(hpc_agent._PACKAGE_ROOT) / "execution" / "mapreduce" / "templates" / "scaffolds"
 
 
 def _copy_asset(asset: str, dest: Path, *, force: bool) -> Path:

@@ -111,7 +111,7 @@ def _clusters_yaml_path() -> Path | None:
     try:
         from hpc_agent import _PACKAGE_ROOT
 
-        return _PACKAGE_ROOT / "config" / "clusters.yaml"
+        return Path(_PACKAGE_ROOT) / "config" / "clusters.yaml"
     except Exception:  # noqa: BLE001 — package introspection must not break the key
         return None
 

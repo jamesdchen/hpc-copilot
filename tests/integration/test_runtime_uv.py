@@ -219,8 +219,9 @@ def test_submit_input_schema_accepts_runtime() -> None:
     None`` payloads — instead of pinning the encoding.
     """
     import json
+    from pathlib import Path
 
-    schema_path = _PACKAGE_ROOT / "schemas" / "submit.input.json"
+    schema_path = Path(_PACKAGE_ROOT) / "schemas" / "submit.input.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert "runtime" in schema["properties"]
     # runtime is optional — must not be in required list
