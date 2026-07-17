@@ -331,18 +331,29 @@ class _RawStdin:
         if termios is None or tty is None:  # non-POSIX: no raw mode, stay a no-op
             return self
         self._fd = fd
+        # termios/tty are POSIX-only; the `termios is None` guard above proves
+        # we only reach here on POSIX, but win32 mypy resolves the typeshed
+        # stubs as empty (all members are `sys.platform != "win32"`-guarded),
+        # so it flags these attrs. Narrow attr-defined ignores keep the local
+        # win32 mypy quiet without masking anything on the Linux CI run (where
+        # the attrs resolve and, with warn_unused_ignores off, the ignore is a
+        # harmless no-op).
         try:
-            self._old = termios.tcgetattr(fd)
-            tty.setcbreak(fd)
-        except termios.error:
+            self._old = termios.tcgetattr(fd)  # type: ignore[attr-defined]
+            tty.setcbreak(fd)  # type: ignore[attr-defined]
+        except termios.error:  # type: ignore[attr-defined]
             self._fd = None
             self._old = None
         return self
 
     def __exit__(self, *exc: object) -> None:
         if self._fd is not None and self._old is not None:
-            with contextlib.suppress(termios.error):
-                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
+            with contextlib.suppress(termios.error):  # type: ignore[attr-defined]
+                termios.tcsetattr(  # type: ignore[attr-defined]
+                    self._fd,
+                    termios.TCSADRAIN,  # type: ignore[attr-defined]
+                    self._old,
+                )
 
     def poll(self, timeout: float) -> str | None:
         """Return one pending keystroke, or None after *timeout* seconds."""
@@ -364,10 +375,36 @@ class _RawStdin:
 
 
 def _open_log(ssh_target: str | None, log_path: str, live: Any) -> None:
-    """Spawn ``ssh <target> less <log>`` in a subshell, pausing the Live view.
+    """Spawn an interactive ``less`` pager over the focused task's error log,
+    pausing the Live view for the TTY handover; local ``less`` when no
+    *ssh_target* is configured.
 
-    If no *ssh_target* is configured, fall back to local ``less`` so that a
-    plain file path still opens cleanly.
+    JUSTIFIED TRANSPORT EXEMPTION — transport-robustness AUDIT rank 7
+    (``docs/plans/transport-robustness-2026-07-17/AUDIT.md``, the ``_open_log``
+    row in §3g, the §6 "one command-plane hole" reusable-asset gap, the §7
+    fault-injection point, and step-2 unit U5). This is the single
+    command-plane ssh site that does NOT ride the breaker / slot / backoff
+    stack, and deliberately so: it is an INTERACTIVE pager a human watches
+    (holds the channel open by design), not a discrete request/response, so it
+    can be neither reframed as ``run-idempotent-script-returning-JSON`` nor
+    bounded by a hard timeout (that would kill the pager mid-read — the reason
+    it is an ``_EXEMPT_BY_DESIGN`` site in
+    ``tests/contracts/test_src_subprocess_timeout_discipline.py``). The
+    contract it gets INSTEAD of the standard stack:
+
+    * **Argv through the ONE seam.** Built via :func:`ssh_argv` so this viewer
+      uses the resolved binary (native Windows OpenSSH / ``HPC_SSH_BINARY``)
+      plus ``BatchMode``/``ConnectTimeout``/keepalive/multiplex options like
+      every other ssh call — never a Git-Bash-shadowed bare ``"ssh"`` (the
+      #145/#154/#156 regression class ``ssh_argv`` exists to prevent).
+    * **No orphan on exit.** The child is spawned via ``Popen`` and killed on
+      ANY abnormal unwind (Ctrl-C / exception) before the exception
+      re-propagates, so quitting or interrupting the TUI mid-view never leaks
+      an ssh (audit §7: "verify it cannot wedge the TUI or leak an ssh").
+    * **Disclosed, not swallowed.** A non-zero pager/ssh exit — and a missing
+      ``ssh``/``less`` binary, previously a silent ``pass`` — is surfaced via
+      the sibling :func:`disclose_child_failure` (run-#13 disclosure
+      discipline) instead of the keybind looking inert.
     """
     if ssh_target:
         # When ssh forwards positional args to a remote shell they are
@@ -378,18 +415,39 @@ def _open_log(ssh_target: str | None, log_path: str, live: Any) -> None:
 
         from hpc_agent.infra.ssh_options import ssh_argv
 
-        # Route through the ssh_argv seam so this viewer uses the native
-        # Windows OpenSSH binary + the ControlMaster override like every
-        # other ssh call (#158), not a Git-Bash-shadowed bare "ssh".
         argv: list[str] = [*ssh_argv("ssh"), ssh_target, f"less {_shlex.quote(log_path)}"]
+        what = f"ssh log-view {ssh_target}"
     else:
         argv = ["less", log_path]
+        what = "local log-view (less)"
+
+    from hpc_agent.infra.transport import disclose_child_failure
+
     # Stop the Live refresh before handing the TTY over to less.
     live.stop()
+    proc: subprocess.Popen[bytes] | None = None
     try:
-        subprocess.call(argv)
+        # Interactive: inherit the terminal's stdio so ``less`` drives the TTY.
+        # No hard timeout (would kill the pager mid-read); the human quitting
+        # ``less`` returns from wait(), and an abnormal unwind kills the child
+        # in the except arm below.
+        proc = subprocess.Popen(argv)
+        rc = proc.wait()
+        if rc != 0:
+            disclose_child_failure(what=what, returncode=rc, stderr=None)
     except FileNotFoundError:
-        pass
+        # ssh / less not on PATH. Disclose (127 = command-not-found) rather
+        # than the old silent no-op, so the keybind does not look dead.
+        disclose_child_failure(what=what, returncode=127, stderr=f"{argv[0]}: command not found")
+    except BaseException:
+        # Ctrl-C or any other abnormal unwind: reap the child so no ssh
+        # survives the TUI (audit §7 no-orphan drill), then re-raise so the
+        # interrupt/quit still propagates.
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=5)
+        raise
     finally:
         live.start(refresh=True)
 

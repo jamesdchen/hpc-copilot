@@ -182,6 +182,149 @@ def test_main_degrades_on_foreign_tasks_py(tmp_path, monkeypatch):
     assert rc == 0  # degraded, not the old hard `return 2`
 
 
+class _FakeLive:
+    """Minimal stand-in for a Rich ``Live`` — records stop/start handovers."""
+
+    def __init__(self) -> None:
+        self.stopped = 0
+        self.started = 0
+
+    def stop(self) -> None:
+        self.stopped += 1
+
+    def start(self, refresh: bool = False) -> None:
+        self.started += 1
+
+
+class _FakeProc:
+    """Minimal ``subprocess.Popen`` stand-in for the interactive pager."""
+
+    def __init__(self, rc: int = 0, wait_exc: BaseException | None = None) -> None:
+        self._rc = rc
+        self._wait_exc = wait_exc
+        self._alive = True
+        self.killed = 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._wait_exc is not None:
+            raise self._wait_exc
+        self._alive = False
+        return self._rc
+
+    def poll(self) -> int | None:
+        return None if self._alive else self._rc
+
+    def kill(self) -> None:
+        self.killed += 1
+        self._alive = False
+        # A killed child is reaped by the follow-up wait(); drop any pending
+        # injected exception so the bounded post-kill wait returns cleanly.
+        self._wait_exc = None
+
+
+class TestOpenLog:
+    """The ``l`` keybind's log-viewer (transport-robustness AUDIT rank 7)."""
+
+    def test_argv_routes_through_ssh_argv_not_bare_ssh(self, monkeypatch):
+        """The pager ssh call is built via the ONE ``ssh_argv`` seam — the
+        resolved binary + BatchMode/ConnectTimeout/multiplex options — never a
+        bare ``["ssh", target, ...]`` a Git-Bash-shadowed ssh could hijack
+        (#145/#154/#156)."""
+        import shlex
+
+        from hpc_agent.execution.mapreduce.reduce import tui
+        from hpc_agent.infra.ssh_options import ssh_argv
+
+        captured: dict[str, list[str]] = {}
+
+        def _fake_popen(argv):
+            captured["argv"] = argv
+            return _FakeProc(rc=0)
+
+        monkeypatch.setattr(tui.subprocess, "Popen", _fake_popen)
+
+        live = _FakeLive()
+        target = "user@login.hpc.example"
+        log_path = "/scratch/runs/task 7/err.log"
+        tui._open_log(target, log_path, live)
+
+        expected = [*ssh_argv("ssh"), target, f"less {shlex.quote(log_path)}"]
+        assert captured["argv"] == expected
+        # The seam markers prove it is NOT a naive bare-"ssh" argv.
+        assert "BatchMode=yes" in captured["argv"]
+        assert captured["argv"][0] == ssh_argv("ssh")[0]
+        # The path with whitespace is shlex-quoted in the remote command word.
+        assert "'/scratch/runs/task 7/err.log'" in captured["argv"][-1]
+        # Live view was paused for the TTY handover and resumed after.
+        assert (live.stopped, live.started) == (1, 1)
+
+    def test_local_less_when_no_ssh_target(self, monkeypatch):
+        """No ssh_target -> plain local ``less <path>`` (no ssh)."""
+        from hpc_agent.execution.mapreduce.reduce import tui
+
+        captured: dict[str, list[str]] = {}
+
+        def _fake_popen(argv):
+            captured["argv"] = argv
+            return _FakeProc(rc=0)
+
+        monkeypatch.setattr(tui.subprocess, "Popen", _fake_popen)
+
+        live = _FakeLive()
+        tui._open_log(None, "/tmp/err.log", live)
+        assert captured["argv"] == ["less", "/tmp/err.log"]
+        assert (live.stopped, live.started) == (1, 1)
+
+    def test_nonzero_exit_is_disclosed_not_swallowed(self, monkeypatch, capsys):
+        """A non-zero pager/ssh exit is surfaced via ``disclose_child_failure``
+        instead of being silently ignored (run-#13 disclosure discipline)."""
+        from hpc_agent.execution.mapreduce.reduce import tui
+
+        monkeypatch.setattr(tui.subprocess, "Popen", lambda argv: _FakeProc(rc=3))
+
+        live = _FakeLive()
+        tui._open_log("user@host", "/tmp/err.log", live)
+
+        err = capsys.readouterr().err
+        assert "exited 3" in err
+        assert live.started == 1  # Live view always resumes.
+
+    def test_missing_binary_is_disclosed_not_silent(self, monkeypatch, capsys):
+        """A missing ssh/less binary (``FileNotFoundError``) is disclosed, not
+        the old silent ``pass`` that made the keybind look inert."""
+        from hpc_agent.execution.mapreduce.reduce import tui
+
+        def _fake_popen(argv):
+            raise FileNotFoundError(argv[0])
+
+        monkeypatch.setattr(tui.subprocess, "Popen", _fake_popen)
+
+        live = _FakeLive()
+        # Does NOT raise — a benign missing binary degrades to a disclosure.
+        tui._open_log(None, "/tmp/err.log", live)
+
+        err = capsys.readouterr().err
+        assert "127" in err
+        assert "command not found" in err
+        assert live.started == 1
+
+    def test_child_killed_on_interrupt_no_orphan(self, monkeypatch):
+        """Ctrl-C (or any abnormal unwind) while the pager runs kills the child
+        so no ssh survives the TUI (audit §7 no-orphan drill); the interrupt
+        still propagates and the Live view resumes."""
+        from hpc_agent.execution.mapreduce.reduce import tui
+
+        proc = _FakeProc(wait_exc=KeyboardInterrupt())
+        monkeypatch.setattr(tui.subprocess, "Popen", lambda argv: proc)
+
+        live = _FakeLive()
+        with pytest.raises(KeyboardInterrupt):
+            tui._open_log("user@host", "/tmp/err.log", live)
+
+        assert proc.killed == 1  # the orphan-preventing reap fired
+        assert live.started == 1  # finally-arm still resumed the view
+
+
 def test_render_returns_rich_group_when_rich_present(tmp_path):
     # If rich isn't available, skip rather than fail the whole suite.
     pytest.importorskip("rich")

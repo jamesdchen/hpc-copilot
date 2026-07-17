@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from hpc_agent import errors
 from hpc_agent.infra.backends.profile import SGE_PROFILE, SLURM_PROFILE, SchedulerProfile
+from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
 
 if TYPE_CHECKING:
     import subprocess
@@ -57,6 +58,88 @@ _BIN_FAMILY = (("sbatch", "slurm"), ("qsub", "sge"), ("bsub", "lsf"))
 # Marker binaries that disambiguate a qsub host. ``command -v`` for each is
 # run only when ``qsub`` is present; the results feed ``_disambiguate_qsub``.
 _QSUB_MARKERS = ("pbsnodes", "qmgr", "qconf", "momctl")
+
+# Version-banner command per submit binary (diagnostics + PBS fork split).
+_VERSION_CMD = {"sbatch": "sbatch --version", "qsub": "qsub -help", "bsub": "bsub -V"}
+
+# qsub-family version banners read (in order) to split PBSPro vs TORQUE.
+_QSUB_VERSION_CMDS = ("qstat --version", "qsub --version")
+
+# The FULL, fixed set of detection probes, folded into ONE remote script so the
+# whole scheduler detection costs a SINGLE ssh round-trip (one handshake)
+# instead of the historical 6–12 serial cold dials (AUDIT rank 5 / U9). Ordered
+# as: submit-binary discovery, per-binary version banners, qsub disambiguation
+# markers, then the PBS-fork banners. Every probe runs every time — a qsub-only
+# probe on a slurm host costs nothing extra (still one round-trip) and keeps the
+# script static and auditable. Derivation only *consults* the probes it would
+# have run serially, so the resulting ``ProbeResult`` is byte-identical.
+_PROBE_COMMANDS: tuple[str, ...] = (
+    *(f"command -v {b}" for b, _f in _BIN_FAMILY),
+    *_VERSION_CMD.values(),
+    *(f"command -v {m}" for m in _QSUB_MARKERS),
+    *_QSUB_VERSION_CMDS,
+)
+
+# Positive-evidence ack for the batched probe (distinct from the scheduler-STATE
+# query ack ``__HPC_SCHED_ACK__``). Its ABSENCE means the channel was severed /
+# the script never ran to completion → UNKNOWN (raise), never a settled "no
+# scheduler" verdict (the F3 lesson). Parsed back with ``split_ack``.
+_PROBE_ACK_PREFIX = "__HPC_SCHEDPROBE_ACK__="
+
+# Section markers framing each probe's stdout in the batch stream (the
+# ``dir_digest`` single-round-trip pattern). One marker line precedes each
+# command's output; the parser assigns the text between consecutive markers.
+_SECTION_PREFIX = "<<<HPC_SCHEDPROBE:"
+_SECTION_SUFFIX = ">>>"
+
+
+def _build_probe_script() -> str:
+    """One POSIX-sh script that runs every detection probe in a single dial.
+
+    Each command's stdout is framed by a ``<<<HPC_SCHEDPROBE:{cmd}>>>`` marker
+    line so the concatenated stream is unambiguously splittable. No ``set -e``:
+    a ``command -v`` for an absent binary exits non-zero — that is DATA ("this
+    cluster lacks that scheduler"), not a script failure — and each probe is
+    ``|| true``-guarded so one absent binary can never abort the batch. Each
+    probe's stderr is dropped (``2>/dev/null``): the serial ``_run`` read
+    ``stdout`` only, so the section stream carries exactly what it saw. The whole
+    script is ack-suffixed via :func:`wrap_with_ack`; the ack's ABSENCE is the
+    positive-evidence signal that the run was severed / truncated.
+    """
+    parts: list[str] = []
+    for cmd in _PROBE_COMMANDS:
+        parts.append(f'echo "{_SECTION_PREFIX}{cmd}{_SECTION_SUFFIX}"')
+        parts.append(f"{cmd} 2>/dev/null || true")
+    return wrap_with_ack("; ".join(parts), _PROBE_ACK_PREFIX)
+
+
+def _parse_probe_output(stdout: str) -> dict[str, str]:
+    """Split the batch stream into ``{command: stripped_stdout}``.
+
+    Sections are bounded by the marker lines emitted by :func:`_build_probe_script`.
+    A command that produced nothing (absent binary) maps to ``""`` — the same
+    value the serial ``_run`` yielded — so downstream derivation is byte-identical.
+    Any preamble before the first marker (module-load / conda-activate chatter) is
+    ignored, matching the repo's activation-noise-robust probe parsing.
+    """
+    outputs: dict[str, str] = {}
+    current: str | None = None
+    buf: list[str] = []
+
+    def _flush() -> None:
+        if current is not None:
+            outputs[current] = "\n".join(buf).strip()
+
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(_SECTION_PREFIX) and stripped.endswith(_SECTION_SUFFIX):
+            _flush()
+            current = stripped[len(_SECTION_PREFIX) : -len(_SECTION_SUFFIX)]
+            buf = []
+        else:
+            buf.append(line)
+    _flush()
+    return outputs
 
 
 def _pbs_fork_from_version(banner: str) -> str:
@@ -136,14 +219,40 @@ def probe_cluster(ssh_run: SshRun) -> ProbeResult:
     tools (pbsnodes/qmgr/qconf/momctl) and reads a ``qstat --version`` /
     ``qsub --version`` banner, then disambiguates deterministically via
     ``_disambiguate_qsub``.
+
+    **One dial.** Every probe rides a SINGLE ssh round-trip (one handshake) via
+    a sentinel-framed batch script (:func:`_build_probe_script`) — not the
+    historical 6–12 serial cold dials, a burst pattern that both throttled the
+    login node and multiplied ban-risk (AUDIT rank 5 / U9). The batch is
+    positive-evidence ack-gated: a severed / truncated channel (no ack) RAISES
+    :class:`~hpc_agent.errors.RemoteCommandFailed` (UNKNOWN) rather than
+    settling a bogus "no scheduler" verdict from a stream that never completed
+    (the F3 lesson). A CLEANLY-completed probe that simply found no submit
+    binary still returns ``ProbeResult(family=None)`` — an absent binary is
+    DATA, not an error.
     """
+    try:
+        cp = ssh_run(_build_probe_script())
+    except Exception as exc:  # noqa: BLE001 — a severed channel is UNKNOWN, not "absent"
+        raise errors.RemoteCommandFailed(
+            "scheduler probe ssh dial raised before any output "
+            f"({type(exc).__name__}: {exc}) — refusing to settle a scheduler "
+            "verdict from a channel that never returned."
+        ) from exc
+    clean, ack_rc = split_ack(getattr(cp, "stdout", "") or "", _PROBE_ACK_PREFIX)
+    if ack_rc is None:
+        raise errors.RemoteCommandFailed(
+            "scheduler probe channel severed / output truncated: rc-0 read but no "
+            "positive-evidence ack (__HPC_SCHEDPROBE_ACK__) — the batch did not run "
+            "to completion; refusing to parse a truncated stream as 'no scheduler'."
+        )
+    outputs = _parse_probe_output(clean)
 
     def _run(cmd: str) -> str:
-        try:
-            cp = ssh_run(cmd)
-        except Exception:  # noqa: BLE001 — a probe failure is just "absent"
-            return ""
-        return (getattr(cp, "stdout", "") or "").strip()
+        # The N serial dials are now N dict lookups into the single batch's
+        # parsed output; the derivation below is byte-identical to the serial
+        # version because it still consults exactly the same per-command stdout.
+        return outputs.get(cmd, "")
 
     binaries: dict[str, str] = {}
     versions: dict[str, str] = {}
@@ -156,9 +265,8 @@ def probe_cluster(ssh_run: SshRun) -> ProbeResult:
             binaries[bin_name] = path.splitlines()[0].strip()
 
     # Version banners (only for binaries that exist) — diagnostics + fork split.
-    _version_cmd = {"sbatch": "sbatch --version", "qsub": "qsub -help", "bsub": "bsub -V"}
     for bin_name in binaries:
-        cmd = _version_cmd.get(bin_name)
+        cmd = _VERSION_CMD.get(bin_name)
         if cmd:
             out = _run(cmd)
             raw[cmd] = out
@@ -173,7 +281,7 @@ def probe_cluster(ssh_run: SshRun) -> ProbeResult:
             present = bool(_run(f"command -v {marker}"))
             raw[f"command -v {marker}"] = "/usr/bin/" + marker if present else ""
             markers[marker] = present
-        for vcmd in ("qstat --version", "qsub --version"):
+        for vcmd in _QSUB_VERSION_CMDS:
             out = _run(vcmd)
             raw[vcmd] = out
             if out and not pbs_banner:
