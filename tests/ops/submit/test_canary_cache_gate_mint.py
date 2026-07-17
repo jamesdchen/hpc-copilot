@@ -133,7 +133,9 @@ def test_failed_first_canary_does_not_mint(tmp_path: Path) -> None:
     assert _is_cached() is False
     with (
         mock.patch(f"{_SAV}.submit_flow", return_value=_submit_env()),
-        mock.patch(f"{_SAV}.verify_canary", return_value=_verify_env(ok=False, failure_kind="oom_killed")),  # noqa: E501
+        mock.patch(
+            f"{_SAV}.verify_canary", return_value=_verify_env(ok=False, failure_kind="oom_killed")
+        ),  # noqa: E501
         mock.patch(f"{_SAV}.fire_second_canary", return_value=["9999"]),
     ):
         result = submit_and_verify(tmp_path, spec=_spec(), stop_after_canary=True)

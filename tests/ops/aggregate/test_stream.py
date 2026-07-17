@@ -191,9 +191,7 @@ def test_zero_complete_refuses_with_pending_named(tmp_path: Path, journal_home: 
         )
 
 
-def test_multi_parent_ownership_counts_shared_cell_once(
-    tmp_path: Path, journal_home: Path
-) -> None:
+def test_multi_parent_ownership_counts_shared_cell_once(tmp_path: Path, journal_home: Path) -> None:
     """A cell the source finished AFTER the census (the qdel race) exists under
     BOTH run_ids' mirrors; the persisted ownership map drops it to its owner so
     its n is counted ONCE (composes migrate.harvest.multi_parent_reduce)."""

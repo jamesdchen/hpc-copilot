@@ -244,9 +244,7 @@ def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_
     assert out["output_path_remote"] == "custom/r1.summary.json"
 
 
-def test_env_python_activation_threaded_into_reduce_cmd(
-    tmp_path: Path, journal_home: Path
-) -> None:
+def test_env_python_activation_threaded_into_reduce_cmd(tmp_path: Path, journal_home: Path) -> None:
     """S-REDUCE (SPEC §3.C.1): a run pinning ``env_python`` prefixes the reducer
     command with the preamble-free PATH-prepend so the reducer's literal
     ``python3`` binds the run's env interpreter — not bare login python (the
@@ -288,7 +286,7 @@ def test_env_python_activation_threaded_into_reduce_cmd(
     cmd = captured_cmd[0]
     assert 'export PATH=/opt/conda/envs/rv/bin:"$PATH" &&' in cmd
     # activation lands before the reducer's own HPC_RUN_ID export …
-    assert cmd.index('export PATH=/opt/conda/envs/rv/bin') < cmd.index("HPC_RUN_ID=r1")
+    assert cmd.index("export PATH=/opt/conda/envs/rv/bin") < cmd.index("HPC_RUN_ID=r1")
     # … and the reducer still runs after it.
     assert cmd.rstrip().endswith("python3 specs/reduce_x.py")
 
