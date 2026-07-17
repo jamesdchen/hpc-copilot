@@ -146,3 +146,23 @@ JSON `schema: hpc.measure_dispatch_floor.v1`. Top-level keys: `runs_per_surface`
 assembly are unit-tested with injected timings (no real spawns in CI). One
 `@pytest.mark.slow` smoke actually spawns the two cheapest surfaces (bare,
 import) once each and asserts sane bounds (>0, <60 s).
+
+## GATE RUN — 2026-07-17, wheel d71a690b (CI-green b1ea0d5d), uv-tool env
+
+Measured on the installed wheel (BUILD_SHA present → baked hydration active;
+the dev .venv is a source checkout and always walks, so it is NOT the gate env):
+
+| surface | median |
+|---|---|
+| bare interpreter | 209 ms |
+| import hpc_agent (lazy root) | 413 ms |
+| cold fast-path (describe/find, baked) | **2207 ms** |
+| cold full-walk (capabilities, deferred) | 8584 ms |
+| fused Stop hook (dry) | 528 ms/turn |
+| WARM in-process (daemon target) | **27 ms** |
+
+**Residual gap: ~2180 ms per cold call; ~500 ms per fused-hook turn.**
+Pre-wave baseline was ~7000 ms cold, so the bake delivered ~3.2×. But the
+Windows spawn+import floor (~600 ms just for `import hpc_agent`) is
+irreducible without a warm process, so the stateless path plateaus ~2.2 s —
+still ~80× the 27 ms warm path. The R4 sec-2a step-3 call is the maintainer's.
