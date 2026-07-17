@@ -1,6 +1,100 @@
 # hpc-agent
 
-HPC orchestrator for array-batch experiments on SGE / SLURM / PBS (PBS Pro & TORQUE) clusters. Two surfaces over one core:
+> **A clean reproduction, extracted mechanically from the mess — because the
+> record is code-minted and the extraction is a *walk*, not a memory.**
+
+hpc-agent is an HPC orchestrator for array-batch experiments on SGE / SLURM /
+PBS clusters. Its distinctive contribution is what it does with the *mess*: a
+real experiment is dead ends, a retarget to another cluster mid-run, parameter
+drift across a dozen submissions, an operator who reduced the table by hand at
+2am. When the paper is written one clean table survives — and the chain from
+*that digit* back to *which code, which data, which environment, which runs,
+reduced by which command* usually lives only in the scientist's head and a
+scroll of shell history. Reproduction becomes **archaeology**: reconstruct, from
+memory, what probably happened — exactly where humans and language models
+confabulate.
+
+hpc-agent makes the clean reproduction a **mechanical extraction from the messy
+process**, not a diligence artifact reconstructed beside it — the product
+one-liner applied at *publication time*:
+
+> **"What changed since last-known-good" — answered mechanically instead of by
+> archaeology.**
+
+Git closed exactly this gap on *code* — "what changed?" became a `diff`.
+hpc-agent records a last-known-good on all five axes git only ever gave science
+on one, and makes the diff mechanical:
+
+| Axis | Last-known-good record | Mechanism |
+|---|---|---|
+| code | git | `cmd_sha` + `tasks_py_sha` on every run |
+| data | the content-sha manifest | `data_sha` / `data_manifest_sha` |
+| behavior | the determinism fingerprint | the double canary + order statistics |
+| beliefs | registrations with review horizons | evidence-memory conclusions |
+| decisions | the journal | the greenlight / settle ledger |
+
+### How the reproduction chain works today
+
+Every link from *input → code → environment → execution → reduction → selection →
+the paper's number* is one of three things — and by design never a fourth thing
+(a story). Every claim below is a real verb (`hpc-agent <verb> --help`):
+
+**Mechanical** — code computes and enforces it; a stranger gets it for free:
+
+- **Code identity** — `cmd_sha` + `tasks_py_sha` ride every run; `reproduce-run`
+  *refuses* on code or parameter drift, naming the first differing task.
+- **Execution** — `submit-s2` fires a **double canary** and mints an n=2
+  determinism fingerprint reduced to order statistics only (min / max / spread —
+  no invented epsilon), bind-locked so a spread cannot be asserted over payloads
+  that were never on disk.
+- **Reduction** — the reducer, never the language model, computes every citable
+  number; the reduced table stamps its own `contributing_run_ids`.
+- **Selection** — `extract-recipe` walks a citable table *back* to the minimal
+  contributing run-set, excluding canary siblings, superseded lineage, and dead
+  ends — each exclusion counted and disclosed — then signs the set
+  (`recipe_signature`). It names no metric and picks no "best" run.
+
+**Disclosed** — captured and surfaced as a named, counted fact, never a block:
+
+- **Data** — `data_sha` / `data_manifest_sha` fingerprint the declared inputs;
+  drift is disclosed on the greenlight brief, and an undeclared run is flagged
+  *invisible to data-drift attribution* rather than silently ignored.
+- **Environment** — the canary emits a resolved-environment snapshot reduced to
+  `env_lock_sha`; `verify-reproduction` discloses env drift between an original
+  and its reproduction (never gates it — a reproduction under a bumped
+  dependency is legitimate, and the moved dimension is *named*).
+- **Provenance** — `provenance-manifest` emits a tamper-pinned signed manifest
+  (schema v3) over code, data, the env-lock, and the wheel sha
+  (`hpc_agent_version`).
+- **Transcription** — `cite-check` compares each number in your manuscript
+  against the sealed table and buckets it *matched* or *uncitable*, offering the
+  nearest sealed value as context.
+- **Relay** — every figure a language model relays is audited by `verify-relay`
+  against the run's own corpus.
+- **Claims** — `verify-reproduction` refuses, by construction, to launder an
+  unobserved external claim into a reproduction.
+
+**Frontier** — honestly not done yet, named not hidden:
+
+- Input-data capture is opt-in — an undeclared run is silent-null by default;
+  capture-by-default is the build direction.
+- Deeper environment identity — hardware and full interpreter identity beyond
+  the canary's snapshot are not yet captured.
+- `cite-check` v2 — the label-anchored *mismatch* bucket is additive and not yet
+  built, and no code follows a number *into* the manuscript's LaTeX: the human
+  still types the sealed digit.
+
+hpc-agent is a **research tool** with a **disclose-not-gate** posture — the
+amplification doctrine: it makes a scientist's rigor cheap to accrue when they
+have the energy; it never refuses a bare `y`. Drift becomes a durable, counted
+fact on the record, not a block a tired human routes around at midnight. The
+full contribution statement, grounded link-by-link against the tree, is in
+[`docs/design/reproducibility-thesis.md`](docs/design/reproducibility-thesis.md)
+(the five-axis framing lives in [`docs/design/onboarding-map.md`](docs/design/onboarding-map.md)).
+
+---
+
+## Two surfaces over one core
 
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. The four workflow triggers cover every end-user moment; entry-point onboarding, axis classification, and axes-init are folded into `/submit-hpc`'s escalation playbook (the worker escalates when it can't proceed; the playbook walks the user through the dialog and the agent invokes the relevant skill with a resolved spec). Environment preflight (SSH agent, cluster reachability) is a one-time-per-machine CLI step: `hpc-agent setup --cluster <name>` probes the cluster and exits non-zero on a red probe — runtime workflows assume setup succeeded.
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
