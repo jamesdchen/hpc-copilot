@@ -127,6 +127,37 @@ def test_helper_combiner_path_reads_wave_run_ids_and_sidecar_sha(journal_home, e
     assert version == _VERSION
 
 
+def test_helper_reads_run_scoped_partials_and_still_filters_foreign(journal_home, experiment):
+    """BR-9 / DB1: contributing_run_ids reads the RUN-SCOPED
+    ``_combiner/<run_id>/wave_*.json`` layout (the current combiner's), while a
+    FOREIGN legacy-flat partial planted alongside is still excluded (F05
+    defense-in-depth) — the provenance reflects exactly the source consumed."""
+    _seed_run(experiment)
+    _seed_sidecar(experiment)
+    out = experiment / "_aggregated" / _RUN_ID
+    combiner = out / "_combiner"
+    scoped = combiner / _RUN_ID
+    scoped.mkdir(parents=True)
+    (scoped / "wave_0.json").write_text(
+        json.dumps({"run_id": _RUN_ID, "grid_points": {"g0": {"pi": 3.14}}}), encoding="utf-8"
+    )
+    # A foreign run's leftover partial at the shared legacy-flat _combiner/ — the
+    # exact cross-run collision BR-9 makes structurally impossible for NEW runs,
+    # kept here to prove the filter still fires during the deploy-skew window.
+    combiner.joinpath("wave_9.json").write_text(
+        json.dumps({"run_id": "some-other-run", "grid_points": {"g9": {"pi": 9.0}}}),
+        encoding="utf-8",
+    )
+
+    run_ids, piece_shas, version = _reduce_input_provenance(
+        experiment, _RUN_ID, out, summary_name="metrics.json"
+    )
+
+    assert run_ids == [_RUN_ID]  # run-scoped read; foreign flat excluded
+    assert piece_shas == [_CMD_SHA]  # sidecar fallback (no per-task mirror)
+    assert version == _VERSION
+
+
 def test_helper_per_task_graft_records_every_consumed_cmd_sha(journal_home, experiment):
     """Per-task fallback: piece_cmd_shas is the EXACT distinct .hpc_cmd_sha set
     across the consumed pieces. A graft that re-ran one arm under a NEW cmd_sha

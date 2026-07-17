@@ -269,6 +269,7 @@ def ingest_runtime_samples_from_combiner_dir(
     profile: str,
     cluster: str,
     cmd_sha: str | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Walk ``wave_*.runtime.json`` under *combiner_dir* and append samples.
 
@@ -279,6 +280,14 @@ def ingest_runtime_samples_from_combiner_dir(
     (and other prior consumers) see the latest task durations + axis
     bindings without any separate ingest pass.
 
+    Run-scoped layout (BR-9 / DB1): the current combiner writes each wave's
+    runtime sidecar under ``_combiner/<run_id>/wave_<N>.runtime.json``; an older
+    combiner wrote it flat under ``_combiner/``. Both are scanned — the flat
+    layout unconditionally, the run-scoped ``<run_id>/`` subdir when *run_id* is
+    supplied — so a run's samples are ingested whichever layout its combiner
+    wrote, while foreign runs' subdirs (also present under the shared, pulled
+    ``_combiner/``) are never swept in.
+
     Returns the number of samples successfully appended. Idempotent:
     :func:`append_sample` dedups on ``(run_id, task_id)``, so re-running
     on the same combiner dir is safe — duplicate calls overwrite rather
@@ -286,8 +295,11 @@ def ingest_runtime_samples_from_combiner_dir(
     """
     if not combiner_dir.is_dir():
         return 0
+    runtime_files = list(combiner_dir.glob("wave_*.runtime.json"))
+    if run_id:
+        runtime_files += list((combiner_dir / run_id).glob("wave_*.runtime.json"))
     appended = 0
-    for path in sorted(combiner_dir.glob("wave_*.runtime.json")):
+    for path in sorted(runtime_files):
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

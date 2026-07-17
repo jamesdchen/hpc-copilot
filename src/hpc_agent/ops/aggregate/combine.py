@@ -121,7 +121,7 @@ def _aggregate_handler(ns: argparse.Namespace) -> int:
     side_effects=[
         SideEffect("ssh", "<cluster>"),
         SideEffect("runs", "cluster-side combiner (python3 .hpc/_hpc_combiner.py)"),
-        SideEffect("writes-cluster", "<output_dir>/_combiner/wave_<N>.json"),
+        SideEffect("writes-cluster", "<output_dir>/_combiner/<run_id>/wave_<N>.json"),
         SideEffect(
             "writes-journal",
             "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)",

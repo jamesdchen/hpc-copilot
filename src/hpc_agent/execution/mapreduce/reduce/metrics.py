@@ -28,11 +28,35 @@ if TYPE_CHECKING:
 _WAVE_FILE_RE = re.compile(r"^wave_\d+\.json$")
 
 
-def _wave_partial_files(combiner_dir: Path) -> list[str]:
-    """``wave_<N>.json`` partial files in *combiner_dir* (runtime files excluded)."""
-    return [
-        p for p in glob.glob(str(combiner_dir / "wave_*.json")) if _WAVE_FILE_RE.match(Path(p).name)
-    ]
+def _wave_partial_files(combiner_dir: Path, run_id: str | None = None) -> list[str]:
+    """``wave_<N>.json`` partial files under *combiner_dir* (runtime files excluded).
+
+    Run-scoped layout (BR-9 / DB1): the current cluster combiner writes each
+    partial under a RUN-SCOPED subdir ``_combiner/<run_id>/wave_<N>.json`` so two
+    runs sharing a ``remote_path`` can never clobber each other's partials by
+    construction. An OLDER deployed combiner still writes ``_combiner/wave_<N>.json``
+    directly, and the ``_combiner/`` pull brings BOTH layouts down, so this reader
+    accepts both: it prefers the run-scoped copy for any wave present in both (a
+    re-scoped force-recombine must never be double-counted with its legacy-flat
+    twin), falling back to the legacy-flat copy otherwise. The legacy-flat copies
+    stay subject to the F05 foreign-run filter in the caller (a foreign run can only
+    collide on the flat layout); a run-scoped copy is inherently this run's own.
+    With *run_id* ``None`` the run-scoped subdir cannot be named, so only the
+    legacy-flat layout is scanned (the historical behavior, and every fixture that
+    writes partials flat)."""
+    by_wave: dict[int, str] = {}
+    # Legacy-flat directly under combiner_dir (lower precedence).
+    for p in glob.glob(str(combiner_dir / "wave_*.json")):
+        name = Path(p).name
+        if _WAVE_FILE_RE.match(name):
+            by_wave[int(name[len("wave_") : -len(".json")])] = p
+    # Run-scoped ``combiner_dir/<run_id>/wave_*.json`` overrides the flat twin.
+    if run_id:
+        for p in glob.glob(str(combiner_dir / run_id / "wave_*.json")):
+            name = Path(p).name
+            if _WAVE_FILE_RE.match(name):
+                by_wave[int(name[len("wave_") : -len(".json")])] = p
+    return [by_wave[w] for w in sorted(by_wave)]
 
 
 def _neumaier_sum(values: Iterable[float]) -> float:
@@ -233,15 +257,20 @@ def reduce_partials(combiner_dir: str | Path, *, run_id: str | None = None) -> d
     Parameters
     ----------
     combiner_dir : str or Path
-        Directory containing ``wave_*.json`` files.
+        Directory containing ``wave_*.json`` files (legacy-flat) and/or a
+        run-scoped ``<run_id>/wave_*.json`` subdir (BR-9). Both layouts are
+        read; a run-scoped partial wins over its legacy-flat twin for the same
+        wave number (see :func:`_wave_partial_files`).
     run_id : str or None
-        When given, a wave file whose own ``run_id`` field names a DIFFERENT
-        run is skipped (F05): ``_combiner/`` is delete-protected and shared
-        across runs at the same remote_path, so a prior run's partials persist
-        and would otherwise contaminate this run's aggregate. Fails OPEN — a
-        wave with no ``run_id`` field (legacy trees / fixtures) is always
-        reduced, and ``run_id=None`` disables the filter entirely (the
-        historical behavior).
+        When given, the run-scoped ``<combiner_dir>/<run_id>/`` subdir is read
+        (preferred over the flat layout) AND a legacy-flat wave file whose own
+        ``run_id`` field names a DIFFERENT run is skipped (F05): the flat
+        ``_combiner/`` is delete-protected and shared across runs at the same
+        remote_path, so a prior run's partials persist and would otherwise
+        contaminate this run's aggregate. Fails OPEN — a wave with no ``run_id``
+        field (legacy trees / fixtures) is always reduced, and ``run_id=None``
+        disables both the run-scoped scan and the filter (the historical
+        behavior).
 
     Returns
     -------
@@ -249,7 +278,7 @@ def reduce_partials(combiner_dir: str | Path, *, run_id: str | None = None) -> d
     """
     combiner_dir = Path(combiner_dir)
     wave_files = sorted(
-        _wave_partial_files(combiner_dir),
+        _wave_partial_files(combiner_dir, run_id),
         key=lambda p: int(Path(p).stem.split("_", 1)[1]),
     )
 
@@ -295,7 +324,7 @@ def collect_wave_errors(
     """
     combiner_dir = Path(combiner_dir)
     out: dict[int, list[str]] = {}
-    for wf in sorted(_wave_partial_files(combiner_dir)):
+    for wf in sorted(_wave_partial_files(combiner_dir, run_id)):
         wave_num = _wave_num_of(wf)
         if wave_num is None:
             continue

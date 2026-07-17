@@ -317,7 +317,14 @@ def verify_aggregation_complete(
     # (``doc.get("wave") != w``) a tautology — a partial with a mislabeled
     # internal ``wave`` would pass.
     pulled_waves: dict[int, dict[str, Any]] = {}
-    for path in sorted(combiner_dir.glob("wave_*.json")):
+    # Both layouts (BR-9): legacy-flat ``_combiner/wave_*.json`` and the run-scoped
+    # ``_combiner/<run_id>/wave_*.json`` subdir the current combiner writes. Iterate
+    # the run-scoped copies LAST so a wave present in both wins on the run-scoped one
+    # (a re-scoped force-recombine is never double-counted with its legacy twin).
+    wave_paths = sorted(combiner_dir.glob("wave_*.json")) + sorted(
+        (combiner_dir / run_id).glob("wave_*.json")
+    )
+    for path in wave_paths:
         # Skip the runtime sidecar (wave_<N>.runtime.json).
         if path.name.endswith(".runtime.json"):
             continue

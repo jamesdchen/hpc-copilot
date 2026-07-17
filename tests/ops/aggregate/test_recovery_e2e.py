@@ -46,7 +46,7 @@ def _combine(tmp_path, monkeypatch, *, force):
     if force:
         argv.append("--force")
     combiner_main(argv=argv)
-    return json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+    return json.loads((tmp_path / "_combiner" / _RUN_ID / "wave_0.json").read_text())
 
 
 def test_recover_then_reaggregate_includes_recovered_tasks(tmp_path: Path, monkeypatch) -> None:

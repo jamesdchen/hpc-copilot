@@ -62,7 +62,7 @@ def test_happy_path_writes_marker_and_returns_ok(journal_home: Path, experiment:
         _RUN_ID,
         terminal_cause="complete",
         _aggregate=_ok_aggregate({"r": {"acc": 0.9}}, escalation="empty_result_rows:tasks=3"),
-        _sweep=lambda combiner_dir: {2: ["task 5 unreadable"]},
+        _sweep=lambda combiner_dir, run_id: {2: ["task 5 unreadable"]},
     )
 
     assert marker["harvest_ok"] is True
@@ -95,7 +95,7 @@ def test_metrics_failure_is_loud_not_silent(journal_home: Path, experiment: Path
         _RUN_ID,
         terminal_cause="failed",
         _aggregate=_boom_agg,
-        _sweep=lambda combiner_dir: {},
+        _sweep=lambda combiner_dir, run_id: {},
     )
 
     assert marker["metrics_harvested"] is False
@@ -113,7 +113,7 @@ def test_metrics_failure_is_loud_not_silent(journal_home: Path, experiment: Path
 def test_sweep_failure_is_recorded(journal_home: Path, experiment: Path) -> None:
     """A raising error sweep → recorded, harvest_ok False, still no raise."""
 
-    def _boom_sweep(combiner_dir: str) -> dict[int, list[str]]:
+    def _boom_sweep(combiner_dir: str, run_id: str) -> dict[int, list[str]]:
         raise OSError("combiner dir vanished")
 
     marker = harvest_on_terminal(
@@ -158,7 +158,7 @@ def test_marker_is_append_only_across_calls(journal_home: Path, experiment: Path
             _RUN_ID,
             terminal_cause=cause,
             _aggregate=_ok_aggregate({}),
-            _sweep=lambda combiner_dir: {},
+            _sweep=lambda combiner_dir, run_id: {},
         )
     markers = _read_markers(experiment, _RUN_ID)
     assert [m["terminal_cause"] for m in markers] == ["timeout", "complete"]
@@ -206,7 +206,7 @@ class TestCircuitOpenBoundedRetry:
             _RUN_ID,
             terminal_cause="complete",
             _aggregate=_agg,
-            _sweep=lambda combiner_dir: {},
+            _sweep=lambda combiner_dir, run_id: {},
             _clock=lambda: self._NOW,
             _sleep=sleeps.append,
         )
@@ -235,7 +235,7 @@ class TestCircuitOpenBoundedRetry:
             _RUN_ID,
             terminal_cause="complete",
             _aggregate=_agg,
-            _sweep=lambda combiner_dir: {},
+            _sweep=lambda combiner_dir, run_id: {},
             _clock=lambda: self._NOW,
             _sleep=lambda s: pytest.fail(f"guard slept {s}s on a doubled cooldown"),
         )
@@ -259,7 +259,7 @@ class TestCircuitOpenBoundedRetry:
             _RUN_ID,
             terminal_cause="failed",
             _aggregate=_agg,
-            _sweep=lambda combiner_dir: {},
+            _sweep=lambda combiner_dir, run_id: {},
             _clock=lambda: self._NOW,
             _sleep=lambda s: pytest.fail(f"guard slept {s}s with no deadline"),
         )
@@ -283,7 +283,7 @@ class TestCircuitOpenBoundedRetry:
             _RUN_ID,
             terminal_cause="complete",
             _aggregate=_agg,
-            _sweep=lambda combiner_dir: {},
+            _sweep=lambda combiner_dir, run_id: {},
             _clock=lambda: self._NOW,
             _sleep=lambda s: None,
         )
@@ -308,7 +308,7 @@ def test_harvest_guard_records_locked_skip_not_failure(
     def _locked_agg(experiment_dir: Path, run_id: str) -> Any:
         raise ScopeLocked.for_tag("holdout", locked_at="2026-07-06T12:00:00+00:00")
 
-    def _must_not_sweep(combiner_dir: str) -> dict[int, list[str]]:
+    def _must_not_sweep(combiner_dir: str, run_id: str) -> dict[int, list[str]]:
         raise AssertionError("sweep must not run on a clean scope-locked skip")
 
     marker = harvest_on_terminal(
@@ -351,7 +351,7 @@ def test_write_marker_swallows_seam_oserror_and_harvest_continues(
         _RUN_ID,
         terminal_cause="complete",
         _aggregate=_ok_aggregate({"r": {"acc": 0.9}}),
-        _sweep=lambda combiner_dir: {},
+        _sweep=lambda combiner_dir, run_id: {},
     )
     assert marker["harvest_ok"] is True  # harvest itself succeeded; only the write failed
 
@@ -417,7 +417,7 @@ def test_abnormal_exit_harvests_when_journal_records_terminal(
         _RUN_ID,
         terminal_cause="abnormal-exit",
         _aggregate=_ok_aggregate({"r": {"acc": 1.0}}),
-        _sweep=lambda d: {},
+        _sweep=lambda d, run_id: {},
     )
     assert marker["metrics_harvested"] is True
     assert marker["harvest_skipped_reason"] is None
@@ -441,7 +441,7 @@ def test_named_terminal_cause_never_gated_on_status(
         _RUN_ID,
         terminal_cause="complete",
         _aggregate=_ok_aggregate({"r": {"acc": 1.0}}),
-        _sweep=lambda d: {},
+        _sweep=lambda d, run_id: {},
     )
     assert marker["metrics_harvested"] is True
 

@@ -217,20 +217,24 @@ def _parse_args(argv):
         "--final",
         action="store_true",
         help=(
-            "Cross-wave FINAL reduce (#254): merge every _combiner/wave_*.json "
-            "into a single _aggregated/<run_id>/metrics_aggregate.json so the "
-            "local side pulls ONE file, not hundreds. Ignores --wave."
+            "Cross-wave FINAL reduce (#254): merge every "
+            "_combiner/<run_id>/wave_*.json partial (plus any legacy-flat "
+            "_combiner/wave_*.json for deploy skew) into a single "
+            "_aggregated/<run_id>/metrics_aggregate.json so the local side pulls "
+            "ONE file, not hundreds. Ignores --wave."
         ),
     )
     return parser.parse_args(argv)
 
 
 def _wave_partial_files(out_dir):
-    """``[(wave_num, path), ...]`` for ``_combiner/wave_<N>.json``, sorted by wave.
+    """``[(wave_num, path), ...]`` for ``<out_dir>/wave_<N>.json``, sorted by wave.
 
     Excludes the optional ``wave_<N>.runtime.json`` sidecars (the ``\\.json``
     anchor only matches the bare partial) so the final reduce sees exactly the
-    per-wave aggregates the per-wave combiner wrote.
+    per-wave aggregates the per-wave combiner wrote. Non-recursive: a run-scoped
+    ``<out_dir>/<run_id>/`` subdir is NOT descended into here — the caller gathers
+    those separately (see :func:`_final_wave_partials`).
     """
     files = []
     if not os.path.isdir(out_dir):
@@ -243,10 +247,52 @@ def _wave_partial_files(out_dir):
     return files
 
 
+#: Root of the per-run combiner partials on the cluster (relative to the remote
+#: project root ``run_combiner`` cd's into). The per-wave partials live under a
+#: RUN-SCOPED subdir ``_combiner/<run_id>/wave_<N>.json`` (BR-9 / DB1).
+_COMBINER_DIR = "_combiner"
+
+
+def _run_scoped_combiner_dir(run_id):
+    """The RUN-SCOPED partial dir ``_combiner/<run_id>`` (BR-9 / DB1).
+
+    Per-wave partials are written here so two runs that SHARE a ``remote_path``
+    (``campaign_refill`` reuses it across new run_ids) can never clobber each
+    other's ``wave_<N>.json`` by construction — the structural fix behind the
+    run-13 wrong-citable-table class. Kept in lock-step with the inlined
+    ``_combiner/<run_id>`` layout in ``ops.aggregate_flow`` and
+    ``execution.mapreduce.reduce.metrics`` (the combiner ships standalone and
+    cannot import the package)."""
+    return os.path.join(_COMBINER_DIR, run_id)
+
+
+def _final_wave_partials(run_id):
+    """``[(wave_num, path), ...]`` for the final reduce, run-scoped preferred.
+
+    Deploy skew (BR-9): the current combiner writes
+    ``_combiner/<run_id>/wave_<N>.json``; an OLDER deployed combiner wrote
+    ``_combiner/wave_<N>.json`` directly. Both layouts may coexist on the cluster
+    during the transition (an in-flight run whose combiner was redeployed mid-run,
+    or a legacy run re-reduced by an upgraded combiner), so gather from BOTH and
+    prefer the run-scoped copy for any wave present in both — a re-scoped
+    force-recombine must never be double-counted with its legacy-flat twin. The
+    legacy-flat copies stay subject to the F05 foreign-run filter in
+    :func:`_final_reduce` (they are the only layout a foreign run can collide on);
+    a run-scoped copy is inherently this run's own."""
+    by_wave = {}
+    for wave_num, path in _wave_partial_files(_COMBINER_DIR):  # legacy-flat, lower precedence
+        by_wave[wave_num] = path
+    for wave_num, path in _wave_partial_files(_run_scoped_combiner_dir(run_id)):  # run-scoped wins
+        by_wave[wave_num] = path
+    return sorted(by_wave.items())
+
+
 def _final_reduce(*, run_id, force):
     """Cross-wave final reduce on the cluster (#254).
 
-    Reads every ``_combiner/wave_<N>.json`` partial, merges their ``grid_points``
+    Reads every run-scoped ``_combiner/<run_id>/wave_<N>.json`` partial (plus any
+    legacy-flat ``_combiner/wave_<N>.json`` during the deploy-skew window, F05-
+    filtered — see :func:`_final_wave_partials`), merges their ``grid_points``
     across waves with the SAME weighted-mean (keyed on ``n_samples``) the local
     ``reduce_partials`` uses — so ``aggregated_metrics`` is byte-for-byte what
     the old pull-all-waves-then-reduce-locally path produced — and writes a
@@ -259,7 +305,6 @@ def _final_reduce(*, run_id, force):
     per-wave combiner's output. Stdlib-only — reuses this module's
     :func:`_weighted_mean`.
     """
-    out_dir = "_combiner"
     agg_dir = os.path.join("_aggregated", run_id)
     agg_path = os.path.join(agg_dir, "metrics_aggregate.json")
     if os.path.exists(agg_path) and not force:
@@ -269,10 +314,13 @@ def _final_reduce(*, run_id, force):
         )
         sys.exit(1)
 
-    wave_files = _wave_partial_files(out_dir)
+    # Run-scoped partials preferred; legacy-flat partials accepted as deploy-skew
+    # fallback (BR-9). Both carry the F05 foreign-run filter below.
+    wave_files = _final_wave_partials(run_id)
     if not wave_files:
         print(
-            f"[combiner] ERROR: no {out_dir}/wave_*.json partials to reduce",
+            f"[combiner] ERROR: no {_COMBINER_DIR}/{run_id}/wave_*.json (or legacy "
+            f"{_COMBINER_DIR}/wave_*.json) partials to reduce",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -321,7 +369,10 @@ def _final_reduce(*, run_id, force):
             "skipped_foreign_waves": sorted(set(skipped_foreign_waves)),
         },
         "manifest": {
-            "wave_files": [f"{out_dir}/wave_{w}.json" for w, _ in wave_files],
+            # Actual on-cluster partial paths consumed (run-scoped or legacy-flat),
+            # normalized to POSIX separators — this is a cluster (Linux) path
+            # pointer, and the combiner is unit-tested on Windows control planes.
+            "wave_files": [path.replace(os.sep, "/") for _w, path in wave_files],
         },
     }
 
@@ -460,17 +511,21 @@ def main(max_workers=None, argv=None):
             sys.exit(1)
 
     # --- Output path & --force handling (check BEFORE doing any work) ---
-    out_dir = "_combiner"
+    # Run-scoped partial dir (BR-9): ``_combiner/<run_id>/wave_<N>.json``. Two runs
+    # sharing a ``remote_path`` write into DISTINCT subdirs, so a cross-run clobber
+    # is structurally impossible — the run-13 wrong-table class cannot recur here.
+    out_dir = _run_scoped_combiner_dir(run_id)
     out_path = os.path.join(out_dir, f"wave_{wave}.json")
     if os.path.exists(out_path) and not args.force:
-        # F05: ``_combiner/`` is delete-protected and shared across runs at the
-        # same remote_path, so a prior run's ``wave_<N>.json`` persists. Read the
-        # incumbent's run_id: only refuse when it is THIS run's own output (the
-        # genuine idempotency case). A FOREIGN partial (different run_id) must be
-        # overwritten, not adopted — otherwise this run silently inherits the
-        # other run's aggregate. The refusal carries the incumbent run_id so the
-        # control-plane recovery (``ops/aggregate/combine.py``) can tell a
-        # same-run "already combined" from a foreign collision without a re-read.
+        # With run-scoped partials the incumbent at ``out_path`` is THIS run's own
+        # output (a foreign run writes under ITS own ``_combiner/<other>/`` subdir),
+        # so the read below is a same-run idempotency check. The foreign branch is
+        # retained as belt-and-suspenders (a deploy-skew legacy-flat tree grafted
+        # under this path, or a hand-corrupted tree): read the incumbent's run_id
+        # and only refuse when it is THIS run's — a foreign partial is overwritten,
+        # not adopted. The refusal carries the incumbent run_id so the control-plane
+        # recovery (``ops/aggregate/combine.py``) can tell a same-run "already
+        # combined" from a foreign collision without a re-read.
         existing_run_id = None
         try:
             with open(out_path, encoding="utf-8") as _ef:

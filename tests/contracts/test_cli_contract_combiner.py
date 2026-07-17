@@ -64,7 +64,7 @@ class TestCombinerCliContract:
         proc = _run(tmp_path, combiner, "--wave", "0", "--run-id", "test_run")
         assert proc.returncode == 0, proc.stderr
 
-        out_path = tmp_path / "_combiner" / "wave_0.json"
+        out_path = tmp_path / "_combiner" / "test_run" / "wave_0.json"
         assert out_path.exists()
         data = json.loads(out_path.read_text())
 
@@ -103,7 +103,7 @@ class TestCombinerCliContract:
         forced = _run(tmp_path, combiner, "--wave", "0", "--run-id", "test_run", "--force")
         assert forced.returncode == 0, forced.stderr
 
-        data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        data = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         gp = next(iter(data["grid_points"].values()))
         # New weighted mean: (0.99 * 1 + 0.20 * 100) / 101
         assert abs(gp["mse"] - (0.99 * 1 + 0.20 * 100) / 101) < 1e-9

@@ -50,7 +50,7 @@ def _materialize_cluster_layout(
 
 
 def _run_combiner(
-    *, combiner_path: Path, cwd: Path, env: dict[str, str], extra_args: list[str] = ()
+    *, combiner_path: Path, cwd: Path, env: dict[str, str], extra_args: tuple[str, ...] = ()
 ) -> subprocess.CompletedProcess[str]:
     full_env = {"PATH": "/usr/bin:/bin:/usr/local/bin", **env}
     return subprocess.run(
@@ -133,7 +133,7 @@ class TestMalformedMetricsOneTask:
             f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
         )
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert any("task 1" in e for e in out["errors"]), out["errors"]
         # Distinct kwargs ⇒ distinct grid_keys.
         assert len(out["grid_points"]) == 1
@@ -164,7 +164,7 @@ class TestMissingMetricsOneTask:
             f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
         )
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert any("task 1" in e and "metrics.json not found" in e for e in out["errors"]), out[
             "errors"
         ]

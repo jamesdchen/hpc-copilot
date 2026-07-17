@@ -176,8 +176,11 @@ def _load_run_metrics(experiment_dir: Path, run_id: str) -> tuple[dict[str, Any]
                 return flatten_metrics(aggregated), str(metrics_aggregate)
 
     # Rung 2 — reduce the per-wave partials locally with the shared reducer.
+    # Thread run_id so the run-scoped ``_combiner/<run_id>/wave_*.json`` layout
+    # (BR-9) is read (and the F05 foreign-run filter still fires on legacy-flat).
     if combiner_dir.is_dir():
-        reduced = reduce_partials(combiner_dir)  # {grid_key: metrics}, {} when no waves
+        # {grid_key: metrics}, {} when no waves
+        reduced = reduce_partials(combiner_dir, run_id=run_id)
         if reduced:
             return flatten_metrics(reduced), str(combiner_dir)
 

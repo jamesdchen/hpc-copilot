@@ -159,7 +159,7 @@ class TestMainEndToEnd:
 
         main()
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert out["wave"] == 0
         assert out["task_ids"] == [0, 1]
         assert len(out["grid_points"]) == 1
@@ -189,7 +189,7 @@ class TestMainMissingMetrics:
 
         main()
 
-        data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        data = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert len(data["errors"]) == 1
         assert "metrics.json not found" in data["errors"][0]
 
@@ -225,7 +225,7 @@ class TestMainParallelReads:
         monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
         main(max_workers=max_workers)
-        return json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        return json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
 
     def test_parallel_matches_serial(self, tmp_path, monkeypatch):
         serial_dir = tmp_path / "serial"
@@ -281,7 +281,7 @@ class TestMainMultipleGridPoints:
 
         main()
 
-        data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        data = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert len(data["grid_points"]) == 2
         assert data["errors"] == []
 
@@ -316,9 +316,9 @@ class TestMainWritesOutputAtomically:
         ):
             combiner_mod.main()
 
-        out = tmp_path / "_combiner" / "wave_0.json"
+        out = tmp_path / "_combiner" / "test_run" / "wave_0.json"
         assert not out.exists()
-        leftovers = list((tmp_path / "_combiner").glob("wave_*.json.tmp"))
+        leftovers = list((tmp_path / "_combiner" / "test_run").glob("wave_*.json.tmp"))
         assert leftovers == []
 
     def test_successful_write_produces_parseable_json(self, tmp_path, monkeypatch):
@@ -330,7 +330,7 @@ class TestMainWritesOutputAtomically:
 
         main()
 
-        out = tmp_path / "_combiner" / "wave_0.json"
+        out = tmp_path / "_combiner" / "test_run" / "wave_0.json"
         assert out.exists()
         data = json.loads(out.read_text())
         assert data["wave"] == 0
@@ -381,7 +381,7 @@ class TestFrozenManifestCombine:
 
         main()
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert out["errors"] == []
         # Grid keys derive from the FROZEN params (seeds 0/1), not resolve()'s
         # next-iteration seeds (100/101).
@@ -400,7 +400,7 @@ class TestFrozenManifestCombine:
 
         main()
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert out["errors"] == []
         assert len(out["grid_points"]) == 2
 
@@ -425,7 +425,7 @@ class TestFrozenManifestCombine:
 
         main()
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         # Task 0 combined; tasks 1 and 5 recorded as errors, wave not aborted.
         assert len(out["grid_points"]) == 1
         assert any("not a dict" in e for e in out["errors"])
@@ -444,7 +444,7 @@ class TestFrozenManifestCombine:
 
         main()
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert out["errors"] == []
         assert list(out["grid_points"]) == ["ridge"]
 
@@ -471,7 +471,7 @@ class TestGroupSizeWeighting:
 
         main()
 
-        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        out = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert out["grid_points"]["ridge"]["_hpc_group_n"] == 3
 
     def test_nine_one_wave_split_is_task_weighted(self, tmp_path, monkeypatch):
@@ -583,7 +583,7 @@ class TestRuntimeAggregation:
 
         main()
 
-        runtime_out = tmp_path / "_combiner" / "wave_0.runtime.json"
+        runtime_out = tmp_path / "_combiner" / "test_run" / "wave_0.runtime.json"
         assert runtime_out.is_file()
         doc = json.loads(runtime_out.read_text())
         assert doc["wave"] == 0
@@ -616,9 +616,9 @@ class TestRuntimeAggregation:
         main()
 
         # Main wave file always lands.
-        assert (tmp_path / "_combiner" / "wave_0.json").is_file()
+        assert (tmp_path / "_combiner" / "test_run" / "wave_0.json").is_file()
         # Runtime sidecar must NOT exist.
-        assert not (tmp_path / "_combiner" / "wave_0.runtime.json").exists()
+        assert not (tmp_path / "_combiner" / "test_run" / "wave_0.runtime.json").exists()
 
     def test_partial_runtime_files_only_emit_those_present(self, tmp_path, monkeypatch):
         """If only some tasks have _runtime.json (best-effort dispatch
@@ -655,7 +655,7 @@ class TestRuntimeAggregation:
 
         main()
 
-        runtime_out = tmp_path / "_combiner" / "wave_0.runtime.json"
+        runtime_out = tmp_path / "_combiner" / "test_run" / "wave_0.runtime.json"
         assert runtime_out.is_file()
         doc = json.loads(runtime_out.read_text())
         assert len(doc["samples"]) == 1
@@ -696,22 +696,26 @@ class TestRuntimeAggregation:
 
         main()
 
-        wave = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        wave = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         # The bad _runtime.json got logged into errors[].
         assert any("_runtime.json" in e for e in wave["errors"])
         # The runtime sidecar still has the valid row.
-        runtime_out = tmp_path / "_combiner" / "wave_0.runtime.json"
+        runtime_out = tmp_path / "_combiner" / "test_run" / "wave_0.runtime.json"
         assert runtime_out.is_file()
         doc = json.loads(runtime_out.read_text())
         assert len(doc["samples"]) == 1
         assert doc["samples"][0]["task_id"] == 1
 
 
-class TestForeignPartialOverwrite:
-    """F05: ``_combiner/`` is delete-protected and shared across runs at one
-    remote_path, so a prior run's ``wave_<N>.json`` persists. A no-force run of
-    a DIFFERENT run_id must OVERWRITE the foreign partial (not adopt it), while a
-    same-run no-force replay must still refuse for idempotency."""
+class TestRunScopedNoClobber:
+    """BR-9 / DB1 STRUCTURAL PIN: per-wave partials are written under a run-scoped
+    ``_combiner/<run_id>/wave_<N>.json`` subdir, so two runs sharing a
+    ``remote_path`` write into DISTINCT dirs and CANNOT clobber each other's
+    partials by construction — the run-13 wrong-citable-table class made
+    impossible, not merely disclosed. RED-then-GREEN: the OLD flat layout wrote
+    both runs to the SAME ``_combiner/wave_0.json`` (run B destroyed run A's data);
+    the run-scoped layout keeps both intact. A same-run no-force replay still
+    refuses for idempotency."""
 
     def _seed_two_runs(self, tmp_path, monkeypatch, *, mse):
         # One sidecar per run_id; shared tasks.py + result dirs (keyed by
@@ -735,31 +739,43 @@ class TestForeignPartialOverwrite:
         monkeypatch.setenv("HPC_RUN_ID", run_id)
         main()
 
-    def test_foreign_partial_is_overwritten(self, tmp_path, monkeypatch):
+    def _wave(self, tmp_path, run_id):
+        return tmp_path / "_combiner" / run_id / "wave_0.json"
+
+    def test_two_runs_sharing_a_dir_cannot_clobber(self, tmp_path, monkeypatch):
         self._seed_two_runs(tmp_path, monkeypatch, mse=0.10)
-        # Run A combines first -> wave_0.json carries run_id=runA.
+        # Run A combines first -> its partial lands under _combiner/runA/.
         self._run(monkeypatch, "runA")
-        first = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert self._wave(tmp_path, "runA").is_file()
+        # The old shared path must NOT be written any more.
+        assert not (tmp_path / "_combiner" / "test_run" / "wave_0.json").exists()
+        first = json.loads(self._wave(tmp_path, "runA").read_text())
         assert first["run_id"] == "runA"
         assert abs(next(iter(first["grid_points"].values()))["mse"] - 0.10) < 1e-9
 
-        # Run B's tasks re-wrote their metrics with new values.
+        # Run B's tasks re-wrote their metrics with new values — the exact
+        # cross-run collision the old layout hit.
         for tid in (0, 1):
             (tmp_path / "results" / f"task_{tid}" / "metrics.json").write_text(
                 json.dumps({"mse": 0.90, "n_samples": 100})
             )
-        # No-force run of run B: FIRE PATH — the foreign partial is overwritten,
-        # not adopted. No SystemExit, and the file now carries run B's data.
+        # No-force run of run B: STRUCTURAL FIRE PATH — run B writes its OWN
+        # subdir, NEVER touching run A's partial (no SystemExit, no overwrite).
         self._run(monkeypatch, "runB")
-        second = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        second = json.loads(self._wave(tmp_path, "runB").read_text())
         assert second["run_id"] == "runB"
         assert abs(next(iter(second["grid_points"].values()))["mse"] - 0.90) < 1e-9
+
+        # Run A's partial is UNTOUCHED — its data survived run B's combine.
+        still = json.loads(self._wave(tmp_path, "runA").read_text())
+        assert still["run_id"] == "runA"
+        assert abs(next(iter(still["grid_points"].values()))["mse"] - 0.10) < 1e-9
 
     def test_same_run_partial_still_refuses(self, tmp_path, monkeypatch):
         self._seed_two_runs(tmp_path, monkeypatch, mse=0.10)
         self._run(monkeypatch, "runA")
-        # Same run, no force: idempotency preserved — refuse with the run_id
-        # stamped so the control plane can recognize a same-run collision.
+        # Same run, no force: idempotency preserved — refuse (the incumbent under
+        # _combiner/runA/ is this run's own output).
         with pytest.raises(SystemExit) as exc:
             self._run(monkeypatch, "runA")
         assert exc.value.code == 1
@@ -787,7 +803,7 @@ class TestTasksReadEvidence:
 
         main()
 
-        data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        data = json.loads((tmp_path / "_combiner" / "test_run" / "wave_0.json").read_text())
         assert data["task_ids"] == [0, 1]  # full membership, unchanged
         assert data["tasks_read"] == [0]  # only the task that aggregated
         assert len(data["errors"]) == 1
@@ -851,3 +867,86 @@ class TestFinalReduceForeignSkip:
         agg = self._agg(tmp_path)
         assert "g" in agg["aggregated_metrics"]
         assert agg["provenance"]["skipped_foreign_waves"] == []
+
+
+class TestFinalReduceRunScopedLayout:
+    """BR-9 / DB1: the cluster ``--final`` reduce reads RUN-SCOPED partials under
+    ``_combiner/<run_id>/wave_<N>.json`` (the current combiner's layout), still
+    accepts LEGACY-FLAT ``_combiner/wave_<N>.json`` for deploy skew, and prefers
+    the run-scoped copy when a wave exists in both."""
+
+    def _agg(self, tmp_path):
+        return json.loads(
+            (tmp_path / "_aggregated" / "target" / "metrics_aggregate.json").read_text()
+        )
+
+    @staticmethod
+    def _partial(run_id, wave, grid_key, mse):
+        return json.dumps(
+            {
+                "wave": wave,
+                "run_id": run_id,
+                "task_ids": [wave],
+                "tasks_read": [wave],
+                "grid_points": {grid_key: {"mse": mse, "n_samples": 10}},
+                "errors": [],
+            }
+        )
+
+    def test_run_scoped_partials_are_read(self, tmp_path, monkeypatch):
+        scoped = tmp_path / "_combiner" / "target"
+        scoped.mkdir(parents=True)
+        (scoped / "wave_0.json").write_text(self._partial("target", 0, "g0", 0.10))
+        (scoped / "wave_1.json").write_text(self._partial("target", 1, "g1", 0.20))
+        monkeypatch.chdir(tmp_path)
+        main(argv=["--final", "--run-id", "target"])
+        agg = self._agg(tmp_path)
+        assert set(agg["aggregated_metrics"]) == {"g0", "g1"}
+        assert agg["provenance"]["wave_count"] == 2
+
+    def test_mixed_old_and_new_layout_both_reduced(self, tmp_path, monkeypatch):
+        # Deploy skew: wave 0 written legacy-flat (old combiner), wave 1 run-scoped
+        # (redeployed combiner). BOTH are this run's own — both must merge.
+        flat = tmp_path / "_combiner"
+        flat.mkdir()
+        (flat / "wave_0.json").write_text(self._partial("target", 0, "g0", 0.10))
+        scoped = flat / "target"
+        scoped.mkdir()
+        (scoped / "wave_1.json").write_text(self._partial("target", 1, "g1", 0.20))
+        monkeypatch.chdir(tmp_path)
+        main(argv=["--final", "--run-id", "target"])
+        agg = self._agg(tmp_path)
+        assert set(agg["aggregated_metrics"]) == {"g0", "g1"}
+        assert agg["provenance"]["skipped_foreign_waves"] == []
+
+    def test_run_scoped_wins_over_legacy_flat_twin(self, tmp_path, monkeypatch):
+        # Same wave number present in BOTH layouts (a re-scoped force-recombine):
+        # the run-scoped copy is authoritative and the flat twin is not double-counted.
+        flat = tmp_path / "_combiner"
+        flat.mkdir()
+        (flat / "wave_0.json").write_text(self._partial("target", 0, "g_stale", 9.0))
+        scoped = flat / "target"
+        scoped.mkdir()
+        (scoped / "wave_0.json").write_text(self._partial("target", 0, "g_fresh", 0.10))
+        monkeypatch.chdir(tmp_path)
+        main(argv=["--final", "--run-id", "target"])
+        agg = self._agg(tmp_path)
+        assert set(agg["aggregated_metrics"]) == {"g_fresh"}  # flat twin overridden
+        assert agg["provenance"]["wave_count"] == 1
+
+    def test_foreign_flat_partial_still_filtered_with_run_scoped_present(
+        self, tmp_path, monkeypatch
+    ):
+        # F05 defense-in-depth survives the layout change: a FOREIGN legacy-flat
+        # partial planted alongside this run's run-scoped partials is dropped.
+        flat = tmp_path / "_combiner"
+        flat.mkdir()
+        (flat / "wave_9.json").write_text(self._partial("OTHER", 9, "g_foreign", 9.0))
+        scoped = flat / "target"
+        scoped.mkdir()
+        (scoped / "wave_0.json").write_text(self._partial("target", 0, "g0", 0.10))
+        monkeypatch.chdir(tmp_path)
+        main(argv=["--final", "--run-id", "target"])
+        agg = self._agg(tmp_path)
+        assert set(agg["aggregated_metrics"]) == {"g0"}
+        assert agg["provenance"]["skipped_foreign_waves"] == [9]

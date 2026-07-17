@@ -408,7 +408,7 @@ _WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_(\d+)\.json$")
 
 
 def _incremental_include_patterns(
-    combiner_local: Path, combined_waves: list[int]
+    combiner_local: Path, combined_waves: list[int], run_id: str | None = None
 ) -> list[str] | None:
     """Return rsync ``--include`` patterns for the ``_combiner/`` pull.
 
@@ -431,8 +431,17 @@ def _incremental_include_patterns(
     if not combined_waves:
         return None
     have_locally: set[int] = set()
-    if combiner_local.is_dir():
-        for child in combiner_local.iterdir():
+    # Scan BOTH layouts (BR-9): the legacy-flat ``_combiner/wave_*.json`` and the
+    # run-scoped ``_combiner/<run_id>/wave_*.json`` subdir the current combiner
+    # writes — either present locally means a prior pull happened and the bounded
+    # wave filter (rather than an unfiltered pull) is the right delta.
+    scan_dirs = [combiner_local]
+    if run_id:
+        scan_dirs.append(combiner_local / run_id)
+    for scan_dir in scan_dirs:
+        if not scan_dir.is_dir():
+            continue
+        for child in scan_dir.iterdir():
             m = _WAVE_PARTIAL_NAME_RE.match(child.name)
             if m is not None:
                 have_locally.add(int(m.group(1)))
@@ -952,7 +961,9 @@ def _combiner_only_reduce(
     cluster-reduce remediation hint is raised instead (the caller chose a
     custom reducer; silently meaning would mask their intent).
     """
-    include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
+    include_patterns = _incremental_include_patterns(
+        combiner_local, list(record.combined_waves), run_id
+    )
     pull = _pull(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
@@ -1286,22 +1297,27 @@ def _reduce_input_provenance(
 
     # Wave partials the combiner reduce merged. Apply the SAME F05 filter
     # ``reduce_partials`` applies (keep this run's or an unlabeled legacy partial,
-    # drop foreign), collecting each kept partial's own ``run_id``.
+    # drop foreign), collecting each kept partial's own ``run_id``. Read BOTH
+    # layouts (BR-9): legacy-flat ``_combiner/wave_*.json`` and the run-scoped
+    # ``_combiner/<run_id>/wave_*.json`` subdir the current combiner writes — the
+    # membership must reflect whichever source the reduce actually consumed.
     run_ids: set[str] = {run_id}
     combiner_local = out / "_combiner"
-    if combiner_local.is_dir():
-        for wf in combiner_local.glob("wave_*.json"):
-            if not _WAVE_PARTIAL_NAME_RE.match(wf.name):
-                continue
-            try:
-                data = json.loads(wf.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            file_run_id = data.get("run_id") if isinstance(data, dict) else None
-            if file_run_id is not None and file_run_id != run_id:
-                continue  # foreign partial — never merged (F05)
-            if isinstance(file_run_id, str) and file_run_id:
-                run_ids.add(file_run_id)
+    wave_files = list(combiner_local.glob("wave_*.json")) + list(
+        (combiner_local / run_id).glob("wave_*.json")
+    )
+    for wf in wave_files:
+        if not _WAVE_PARTIAL_NAME_RE.match(wf.name):
+            continue
+        try:
+            data = json.loads(wf.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        file_run_id = data.get("run_id") if isinstance(data, dict) else None
+        if file_run_id is not None and file_run_id != run_id:
+            continue  # foreign partial — never merged (F05)
+        if isinstance(file_run_id, str) and file_run_id:
+            run_ids.add(file_run_id)
 
     # Per-task cmd_sha fingerprints across the pieces the per-task fallback
     # consumed — the graft/stale-cache fingerprint (>1 distinct value).
@@ -2286,6 +2302,7 @@ def _aggregate_flow_impl(
             profile=record.profile,
             cluster=record.cluster,
             cmd_sha=cmd_sha_for_ingest,
+            run_id=run_id,
         )
         if ingested:
             print(

@@ -163,7 +163,7 @@ def harvest_on_terminal(
     terminal_cause: str,
     record: Any | None = None,
     _aggregate: Callable[[Path, str], Any] | None = None,
-    _sweep: Callable[[str], dict[int, list[str]]] | None = None,
+    _sweep: Callable[[str, str], dict[int, list[str]]] | None = None,
     _clock: Callable[[], float] = time.time,
     _sleep: Callable[[float], object] = time.sleep,
 ) -> dict[str, Any]:
@@ -295,7 +295,7 @@ def harvest_on_terminal(
     sweep_dir = combiner_dir or str(experiment_dir / "_aggregated" / run_id / "_combiner")
     if not scope_locked:
         try:
-            errs = sweep(sweep_dir)
+            errs = sweep(sweep_dir, run_id)
             marker["error_sweep_ran"] = True
             marker["waves_with_errors"] = {
                 str(w): [str(e) for e in v] for w, v in (errs or {}).items()
@@ -367,11 +367,16 @@ def _default_aggregate(experiment_dir: Path, run_id: str) -> Any:
     )
 
 
-def _default_sweep(combiner_dir: str) -> dict[int, list[str]]:
-    """Map wave → per-task read errors the combiner recorded (missing dir → {})."""
+def _default_sweep(combiner_dir: str, run_id: str) -> dict[int, list[str]]:
+    """Map wave → per-task read errors the combiner recorded (missing dir → {}).
+
+    Threads *run_id* so the run-scoped ``_combiner/<run_id>/wave_*.json`` layout
+    (BR-9) is swept, with the F05 foreign-run filter still applied to legacy-flat
+    partials.
+    """
     from hpc_agent.execution.mapreduce.reduce.metrics import collect_wave_errors
 
-    return collect_wave_errors(combiner_dir)
+    return collect_wave_errors(combiner_dir, run_id=run_id)
 
 
 def _write_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> None:
