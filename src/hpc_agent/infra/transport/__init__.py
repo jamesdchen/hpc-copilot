@@ -113,6 +113,7 @@ from ._disclose import (
     _write_all,  # noqa: F401
     deploy_payload_summary,
     disclose_child_failure,  # noqa: F401
+    iter_exclude_filtered_files,
     run_with_stage_heartbeat,  # noqa: F401
 )
 from ._excludes import (
@@ -164,6 +165,7 @@ __all__ = [
     "DeployPayloadSummary",
     "PullResult",
     "deploy_payload_summary",
+    "iter_exclude_filtered_files",
     "deploy_runtime",
     "push_run_sidecar",
     "rsync_pull",

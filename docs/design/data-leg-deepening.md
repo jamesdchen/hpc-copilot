@@ -232,6 +232,52 @@ regardless.
 
 ## Drift log
 
+**2026-07-17 — (a)+(d) BUILT (ruling-free core); RD1/(c) DEFERRED to the user.**
+Shipped the ruling-free half of the recommended build path — the (a) detection
+engine and the (d) coverage disclosure — and deliberately did NOT flip the
+capture default (RD1/(c) needs the user's sign-off; the capture default is
+unchanged, `data_manifest`/`declared_input_roots` still REFUSE to guess a `data/`
+dir).
+
+* **(a) detection engine** — new `src/hpc_agent/ops/detect_input_data.py`::
+  `detect_candidate_data_roots` scans the experiment repo for **data-shaped**
+  top-level roots and returns them as UNCONFIRMED `CandidateDataRoot` candidates
+  (the `detect_entry_point._scan_candidates` posture: propose + disclose, human
+  confirms). It COMPOSES the shared exclude-filtered walk rather than copying it:
+  the walk is promoted to a public seam
+  `infra/transport/_disclose.py::iter_exclude_filtered_files` (re-exported from
+  `infra.transport`) so the exclude vocabulary (`.hpc`, `.venv`,
+  `PROTECTED_OUTPUT_DIRS`, the credential file) can never drift from what the push
+  honors — no private cross-package import (the `harvest_receipt_exists`
+  public-seam precedent). Three data-shape signals over opaque file names
+  (IDENTITY/COUNTING, no format parsed, no library import): conventional dir names
+  (`data`/`datasets`/`inputs`/`raw`), data-shaped suffixes
+  (`.csv`/`.parquet`/`.h5`/`.npz`/`.feather`/`.arrow`), and `<name>.dvc` pointers.
+  Walk-capped and FAIL-OPEN (`[]` on any error); it NEVER mints or writes.
+* **(d) coverage disclosure** — `ops/submit_blocks.py::_input_data_brief` extended
+  (new `_coverage_disclosure` helper) so that beyond the U-DATA1 "no roots
+  declared" nudge it now reports the honest COVERAGE at the S1 boundary:
+  `{captured_count, captured_roots, unconfirmed_count, candidate_unconfirmed,
+  outside_repo_uncaptured, line}` — "N declared root(s) captured; M data-shaped
+  dir(s) detected but UNCONFIRMED; data read from OUTSIDE the repo is uncaptured".
+  Disclose-not-gate (the bare `y` flow is byte-unchanged); a run with fully
+  declared roots and NO unconfirmed candidate adds NO brief key (the
+  byte-identical regression pin); detection fail-open never blocks a submit. The
+  optional durable `data_capture_coverage` sidecar marker (memo (d), "coordinate
+  with `provenance-manifest`") is DEFERRED — this unit is brief-only.
+* **Tests** (red-then-green): `tests/ops/test_detect_input_data.py` (planted
+  `data/` → unconfirmed candidate; exclude vocabulary honored; DVC pointer;
+  never-mints; fail-open on an erroring walk; disclosure-path never-raises) and
+  the coverage additions in `tests/ops/submit/test_s1_input_data_brief.py`
+  (declared-N + unconfirmed-M + outside-repo caveat; fully-declared →
+  byte-identical; nudge+coverage; S1 wiring). Enforcement row + drift-log entry
+  added to `docs/internals/principles/lifecycle-verdicts.md` (the reproducibility
+  disclosure family's home, beside the reducibility S1 row).
+* **DEFERRED to the user (RD1 / option (c)):** the opt-in→opt-out default flip
+  that would capture a conventional `data/` dir by default. It softens a stated
+  design decision, so it is not the agent's call. a+d ship regardless and are (c)'s
+  substrate the moment RD1 is granted.
+
 **2026-07-17 — created (design-scoping only).** Cites the reproducibility
 program's gap \#1 (`docs/plans/reproducibility-program-2026-07-17.md` §1 + the
 damage×frequency table: INPUT DATA capture opt-in, rank 1, highest damage) and

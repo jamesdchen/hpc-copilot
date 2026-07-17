@@ -15,7 +15,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Final, TypeVar
@@ -135,6 +135,54 @@ def deploy_payload_summary(
         )
     except Exception:  # noqa: BLE001 — disclosure is never load-bearing
         return DeployPayloadSummary(file_count=0, total_bytes=0)
+
+
+def iter_exclude_filtered_files(
+    local_path: str | Path,
+    exclude: list[str] | None = None,
+    *,
+    walk_cap: int = _PAYLOAD_WALK_CAP,
+) -> Iterator[tuple[tuple[str, ...], Path]]:
+    """Yield ``(relpath_parts, path)`` for every FILE under *local_path* the
+    transfer would ship — the ONE public generalization of the repeated
+    ``rglob`` + ``_path_excluded`` walk (``_disclose_payload`` /
+    :func:`deploy_payload_summary` / ``_pushable_relpaths``).
+
+    Filtering routes through the SAME shared :func:`_effective_excludes` /
+    :func:`_path_excluded` core the push and the payload disclosure use, so a
+    consumer that needs the exclude-filtered file SET itself (e.g. the
+    candidate-data-root detector) composes this rather than re-inlining the walk
+    — no exclude copy can drift. ``None`` selects the default exclude set, exactly
+    as the push does; the three mandatory/protected groups are always unioned in
+    (so cluster run-output dirs, the credential file, and framework runtime files
+    are never surfaced as if they were user content).
+
+    Walk-capped at *walk_cap* (a capped walk yields a SUBSET — a lower bound —
+    exactly like the payload disclosure) and FAIL-OPEN: any walk error simply
+    ENDS iteration rather than raising, so a consumer on a disclosure path never
+    sees a crash. ``relpath_parts`` is the POSIX-style path tuple relative to
+    *local_path* (``("data", "train.csv")``); a file directly at the root is a
+    length-1 tuple.
+    """
+    try:
+        pats = [p.rstrip("/") for p in _effective_excludes(exclude)]
+        root = Path(local_path)
+        count = 0
+        for p in root.rglob("*"):
+            if count >= walk_cap:
+                return
+            try:
+                rel = p.relative_to(root)
+            except ValueError:
+                continue
+            parts = rel.parts
+            if _path_excluded(parts, pats):
+                continue
+            if p.is_file():
+                count += 1
+                yield parts, p
+    except Exception:  # noqa: BLE001 — the walk is best-effort on a disclosure path
+        return
 
 
 def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:

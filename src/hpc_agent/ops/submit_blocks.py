@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+    from hpc_agent.ops.detect_input_data import CandidateDataRoot
 
 __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
 
@@ -728,35 +729,86 @@ def _input_roots_declaration_unreadable(experiment_dir: Path) -> bool:
     return False
 
 
+def _coverage_disclosure(
+    declared: list[str], unconfirmed: list[CandidateDataRoot]
+) -> dict[str, Any]:
+    """The CODE-rendered, verdict-free input-data COVERAGE block (data-leg (d)).
+
+    Converts a silent-``null`` blind spot into a NAMED coverage number at the S1
+    human boundary: how many roots the run declared (captured), how many
+    data-shaped dirs were detected-but-UNCONFIRMED (candidates the human can
+    confirm into ``input_roots``), and the standing residual — data read from
+    OUTSIDE the repo is invisible to any repo scan and therefore uncaptured. Pure
+    IDENTITY/COUNTING over opaque records; states counts only, never a verdict.
+    """
+    captured = list(declared)
+    names_cap = ", ".join(captured) if captured else "(none)"
+    names_unc = ", ".join(c.path for c in unconfirmed) if unconfirmed else "(none)"
+    return {
+        "captured_count": len(captured),
+        "captured_roots": captured,
+        "unconfirmed_count": len(unconfirmed),
+        "candidate_unconfirmed": [c.as_brief() for c in unconfirmed],
+        "outside_repo_uncaptured": True,
+        "line": (
+            f"coverage: {len(captured)} declared root(s) captured ({names_cap}); "
+            f"{len(unconfirmed)} data-shaped dir(s) detected but UNCONFIRMED "
+            f"({names_unc}); data read from OUTSIDE the repo is uncaptured"
+        ),
+    }
+
+
 def _input_data_brief(experiment_dir: Path) -> dict[str, Any] | None:
-    """U-DATA1 input-data nudge for S1's resolved brief (reproducibility Wave-1).
+    """U-DATA1 nudge + the data-leg-deepening COVERAGE disclosure for S1's brief.
 
     Input-data capture is OPT-IN: a run that declares NO input roots writes a
     byte-identical null-data sidecar, silently invisible to ALL data-drift
     attribution — the #1 reproducibility gap (a classic pipeline failure: nothing
     ever throws). At THIS S1 resolved boundary — the human boundary BEFORE
-    submit-s2 detaches and spends the whole compute — when the run declares no
-    input data, ride a NEVER-BLOCKING nudge on the brief pointing at the ONE
-    declaration field: ``interview.json``'s ``audited_source.input_roots``, read
-    through the one declaration reader
-    (:func:`state.data_manifest.declared_input_roots`), never re-inlined here.
+    submit-s2 detaches and spends the whole compute — this rides a NEVER-BLOCKING
+    disclosure, mirroring the ``deploy_payload`` / ``reducibility`` seats above.
 
-    DISCLOSURE only, mirroring the ``deploy_payload`` / ``reducibility`` seats
-    above and the shipped dirty-worktree disclosure: no gate, no refusal, no new
-    decision point — the bare ``y`` flow is byte-unchanged. Three honest outcomes
-    (the no-silent-caps rule — the check either ran or the brief SAYS it could not):
+    Two composed halves (``docs/design/data-leg-deepening.md``, options (a)+(d)):
 
-    * input roots declared (a usable non-empty list) → ``None`` (the brief stays
-      BYTE-IDENTICAL — the regression pin);
+    * the U-DATA1 NUDGE at the ONE declaration field —
+      ``interview.json``'s ``audited_source.input_roots``, read through the one
+      declaration reader (:func:`state.data_manifest.declared_input_roots`), never
+      re-inlined here;
+    * the (a)-detected candidate roots (:func:`detect_candidate_data_roots`, a
+      fail-open scan that PROPOSES, never mints) folded into a (d) COVERAGE block
+      naming declared-N / unconfirmed-M / the outside-the-repo residual.
+
+    DISCLOSURE only: no gate, no refusal, the bare ``y`` flow byte-unchanged. The
+    honest outcomes:
+
+    * roots declared AND no unconfirmed data-shaped dir remains → ``None`` (the
+      brief stays BYTE-IDENTICAL — the regression pin: fully-declared capture with
+      no new blind spot adds no noise);
+    * roots declared BUT extra data-shaped dirs sit outside the declaration → a
+      ``checked: True`` coverage block naming the unconfirmed candidates;
     * no ``input_roots`` declared at all → the ``no_input_data_declared`` nudge
-      (``checked: True``);
+      plus coverage (``checked: True``);
     * an ``input_roots`` present but not a usable list (a wrong-shaped declaration)
-      → a ``checked: False`` could-not-determine line, never a silent skip.
+      → a ``checked: False`` could-not-determine line plus coverage, never a
+      silent skip.
     """
+    from hpc_agent.ops.detect_input_data import detect_candidate_data_roots
     from hpc_agent.state.data_manifest import declared_input_roots
 
-    if declared_input_roots(experiment_dir):
-        return None  # input data declared → nothing to nudge; brief byte-unchanged
+    declared = declared_input_roots(experiment_dir)
+
+    # (a) scan for data-shaped candidate roots (fail-open, NEVER mints), then
+    # subtract the declared roots — what remains is the detected-but-unconfirmed
+    # blind spot the (d) coverage line names.
+    declared_set = set(declared or [])
+    unconfirmed = [
+        c for c in detect_candidate_data_roots(experiment_dir) if c.path not in declared_set
+    ]
+
+    if declared:
+        if not unconfirmed:
+            return None  # fully declared, nothing unconfirmed → brief byte-unchanged
+        return {"checked": True, "coverage": _coverage_disclosure(declared, unconfirmed)}
     if _input_roots_declaration_unreadable(experiment_dir):
         return {
             "checked": False,
@@ -766,6 +818,7 @@ def _input_data_brief(experiment_dir: Path) -> dict[str, Any] | None:
                 "paths; declare input_roots as a list of paths so reproduction can "
                 "fingerprint the data this run consumes."
             ),
+            "coverage": _coverage_disclosure([], unconfirmed),
         }
     return {
         "checked": True,
@@ -775,6 +828,7 @@ def _input_data_brief(experiment_dir: Path) -> dict[str, Any] | None:
             "run consumes — declare input_roots (interview.json's "
             "audited_source.input_roots) to close this."
         ),
+        "coverage": _coverage_disclosure([], unconfirmed),
     }
 
 
@@ -887,15 +941,17 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     _reducibility = _reducibility_brief(experiment_dir, rr.run_id)
     if _reducibility is not None:
         brief["reducibility"] = _reducibility
-    # U-DATA1 INPUT-DATA NUDGE (reproducibility Wave-1): input-data capture is
-    # opt-in, so a run declaring NO input roots writes a byte-identical null-data
-    # sidecar, invisible to all drift attribution — the #1 reproducibility gap.
-    # Surface it at THIS resolved boundary (before submit-s2 detaches) as a
-    # DISCLOSURE, never a gate: an undeclared run rides a nudge pointing at the ONE
-    # declaration field (interview.json's audited_source.input_roots); a run WITH
-    # declared roots adds NO key (byte-identical — regression pin); a wrong-shaped
-    # declaration SAYS could-not-determine (no silent skip). Fail-open like the
-    # deploy_payload / reducibility disclosures above.
+    # U-DATA1 NUDGE + data-leg COVERAGE (reproducibility, data-leg-deepening a+d):
+    # input-data capture is opt-in, so a run declaring NO input roots writes a
+    # byte-identical null-data sidecar, invisible to all drift attribution — the #1
+    # reproducibility gap. Surface it at THIS resolved boundary (before submit-s2
+    # detaches) as a DISCLOSURE, never a gate: the nudge points at the ONE
+    # declaration field (interview.json's audited_source.input_roots), and the
+    # coverage block names declared-N / (a)-detected-but-unconfirmed-M / the
+    # outside-the-repo residual. A run WITH declared roots and NO unconfirmed
+    # data-shaped dir adds NO key (byte-identical — regression pin); a wrong-shaped
+    # declaration SAYS could-not-determine (no silent skip). Detection is fail-open
+    # and NEVER mints, like the deploy_payload / reducibility disclosures above.
     _input_data = _input_data_brief(experiment_dir)
     if _input_data is not None:
         brief["input_data"] = _input_data

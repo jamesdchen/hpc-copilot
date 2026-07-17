@@ -140,6 +140,84 @@ def test_input_data_disclosure_path_never_blocks() -> None:
     ambiguity probe never raise/gate (a future gate trips this)."""
     assert_never_blocking(blocks._input_data_brief)
     assert_never_blocking(blocks._input_roots_declaration_unreadable)
+    assert_never_blocking(blocks._coverage_disclosure)
+
+
+# ── the data-leg-deepening (a)+(d) coverage disclosure ─────────────────────────
+
+
+def _plant(experiment_dir: Path, rel: str, text: str = "x") -> None:
+    p = experiment_dir / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+def test_coverage_disclosure_names_declared_unconfirmed_and_outside_caveat(tmp_path: Path) -> None:
+    """(d): a run that declares SOME roots but leaves an (a)-detected data-shaped
+    dir unconfirmed gets a coverage block naming captured-N, unconfirmed-M, and
+    the standing outside-the-repo residual."""
+    _declare(tmp_path, ["configs"])
+    _plant(tmp_path, "configs/base.yaml", "lr: 0.1")  # declared, not data-shaped
+    _plant(tmp_path, "data/train.csv")  # data-shaped, NOT declared → unconfirmed
+
+    brief = blocks._input_data_brief(tmp_path)
+
+    assert brief is not None
+    assert brief["checked"] is True
+    cov = brief["coverage"]
+    assert cov["captured_count"] == 1
+    assert cov["captured_roots"] == ["configs"]
+    assert cov["unconfirmed_count"] == 1
+    assert [c["path"] for c in cov["candidate_unconfirmed"]] == ["data"]
+    assert cov["outside_repo_uncaptured"] is True
+    # the honest blind-spot line names all three quantities verbatim
+    assert "1 declared root(s) captured (configs)" in cov["line"]
+    assert "1 data-shaped dir(s) detected but UNCONFIRMED (data)" in cov["line"]
+    assert "OUTSIDE the repo is uncaptured" in cov["line"]
+
+
+def test_fully_declared_run_with_no_unconfirmed_stays_byte_identical(tmp_path: Path) -> None:
+    """Regression pin: a run that declares the data dir that IS on disk leaves the
+    brief BYTE-IDENTICAL — the declared root is captured, nothing is unconfirmed,
+    so no coverage noise is added (``None``)."""
+    _declare(tmp_path, ["data"])
+    _plant(tmp_path, "data/train.csv")  # the declared root, on disk
+
+    assert blocks._input_data_brief(tmp_path) is None
+
+
+def test_no_declaration_carries_nudge_plus_coverage(tmp_path: Path) -> None:
+    """No declaration + a detected candidate → the U-DATA1 nudge AND the coverage
+    block (captured 0, unconfirmed M, outside-repo residual)."""
+    _plant(tmp_path, "data/train.csv")
+
+    brief = blocks._input_data_brief(tmp_path)
+
+    assert brief is not None
+    assert brief["checked"] is True
+    assert brief["issue"] == "no_input_data_declared"
+    cov = brief["coverage"]
+    assert cov["captured_count"] == 0
+    assert cov["unconfirmed_count"] == 1
+    assert [c["path"] for c in cov["candidate_unconfirmed"]] == ["data"]
+    assert cov["outside_repo_uncaptured"] is True
+
+
+def test_s1_declared_with_unconfirmed_candidate_rides_coverage(tmp_path: Path) -> None:
+    """Wiring: the coverage block reaches S1's resolved brief under the
+    ``input_data`` key when a declared run has an unconfirmed data-shaped dir."""
+    (tmp_path / "tasks.py").write_text("x")
+    _declare(tmp_path, ["configs"])
+    _plant(tmp_path, "data/train.csv")
+    spec = SubmitS1Spec.model_construct(walk=_clean_walk(), run_preflight=False, resolve=object())
+    sidecar_path = tmp_path / ".hpc" / "runs" / f"{_RUN_ID}.json"
+
+    with mock.patch.object(blocks, "resolve_submit_inputs", return_value=_fake_rr(sidecar_path)):
+        result = blocks.submit_s1(tmp_path, spec=spec)
+
+    idata = result.brief["input_data"]
+    assert idata["coverage"]["unconfirmed_count"] == 1
+    assert [c["path"] for c in idata["coverage"]["candidate_unconfirmed"]] == ["data"]
 
 
 # ── S1 wiring ─────────────────────────────────────────────────────────────────
