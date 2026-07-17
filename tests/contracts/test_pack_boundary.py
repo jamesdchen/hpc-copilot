@@ -392,28 +392,105 @@ def _split_tokens(text: str) -> set[str]:
 # --- (c) core never imports/executes pack content ---------------------------
 
 
+def _import_execute_offenders(tree: ast.Module, label: str) -> list[tuple[str, str, int]]:
+    """Every reach for an import/execute machinery name in ``tree`` — usage AND import.
+
+    Four AST shapes are scanned so an aliased import cannot smuggle the machinery
+    past a usage-site-only scan (``docs/internals/principles/domain-packs.md`` row
+    A7, the aliased-from-import predicted risk):
+
+    * ``importlib.import_module(...)`` — an ``Attribute`` over a ``Name`` (usage),
+    * a bare ``exec``/``eval``/``__import__`` reference — a ``Name`` (usage),
+    * ``import importlib`` / ``from importlib import import_module`` — the imported
+      name lives in an ``alias`` node (the local ``asname`` is caller-chosen and
+      ignored; the REAL imported name is what is matched), and
+    * ``from importlib import ...`` — the source module on the ``ImportFrom`` node.
+
+    The aliased form ``from importlib import import_module as load`` rebinds the
+    machinery to ``load`` at every call site, so a Name/Attribute-only scan never
+    sees it; the ``alias`` name (``import_module``) and ``ImportFrom.module``
+    (``importlib``) checks are what close the A7 evasion. Dotted names are split so
+    ``from importlib.metadata import entry_points`` trips on both parts.
+    """
+    offenders: list[tuple[str, str, int]] = []
+    for node in ast.walk(tree):
+        hit: str | None = None
+        if isinstance(node, ast.Name) and node.id in _FORBIDDEN_IMPORT_NAMES:
+            hit = node.id
+        elif isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_IMPORT_NAMES:
+            hit = node.attr
+        elif isinstance(node, ast.alias):
+            # The imported name (dotted), NEVER the caller-chosen local ``asname``.
+            hit = next((p for p in node.name.split(".") if p in _FORBIDDEN_IMPORT_NAMES), None)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            hit = next((p for p in node.module.split(".") if p in _FORBIDDEN_IMPORT_NAMES), None)
+        if hit is not None:
+            offenders.append((label, hit, getattr(node, "lineno", -1)))
+    return offenders
+
+
 def test_no_import_or_execute_of_pack_content() -> None:
     """No ``importlib``/``entry_points``/``exec``/``eval``/``__import__`` in a pack module.
 
     DP3 (distribution invisible) + DP2 (code never runs in core): the pack modules
     read bytes and hash them; they never turn a pack-named file into code, never
-    look at pip metadata or entry points. Pinned by AST over every Name/Attribute —
-    the ``test_bundler_copies_bytes_and_never_parses_content`` form, one layer up.
+    look at pip metadata or entry points. Pinned by AST over every usage AND import
+    form (``_import_execute_offenders``) — the
+    ``test_bundler_copies_bytes_and_never_parses_content`` form, one layer up.
     """
     offenders: list[tuple[str, str, int]] = []
     for path in _ALL_PACK_FILES:
-        for node in ast.walk(_tree(path)):
-            hit: str | None = None
-            if isinstance(node, ast.Name) and node.id in _FORBIDDEN_IMPORT_NAMES:
-                hit = node.id
-            elif isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_IMPORT_NAMES:
-                hit = node.attr
-            if hit is not None:
-                offenders.append((path.name, hit, getattr(node, "lineno", -1)))
+        offenders.extend(_import_execute_offenders(_tree(path), path.name))
     assert not offenders, (
         "a pack module reaches for an import/execute name over content: "
         f"{offenders}. Core never imports, executes, or interprets a pack file "
         "(DP2/DP3); it reads bytes and hashes them."
+    )
+
+
+def test_import_scan_catches_aliased_and_module_import_forms() -> None:
+    """The import scan catches ALIASED from-imports, not just usage sites (A7).
+
+    ``docs/internals/principles/domain-packs.md`` row A7 recorded the predicted
+    risk: a Name/Attribute-only scan sees ``importlib.import_module(...)`` but NOT
+    ``from importlib import import_module as load`` — the alias rebinds the machinery
+    at every call site, so no usage node ever names it. This is the fire test that
+    the closure holds: each import shape of the machinery is caught, while a
+    legitimate aliased import is not — the scan keys on the machinery NAMES, never on
+    aliasing itself.
+    """
+    caught = {
+        "aliased-from": "from importlib import import_module as load\nload('x')\n",
+        "plain-from": "from importlib import import_module\nimport_module('x')\n",
+        "aliased-module": "import importlib as il\nil.import_module('x')\n",
+        "aliased-entry-points": ("from importlib.metadata import entry_points as eps\neps()\n"),
+    }
+    for label, src in caught.items():
+        offenders = _import_execute_offenders(ast.parse(src), label)
+        assert offenders, (
+            f"the {label!r} import shape evaded the pack import scan — an aliased or "
+            "module-level import of the pack-content machinery must be caught (A7)."
+        )
+
+    # Regression guard for the exact A7 form: the OLD usage-site-only scan (Name +
+    # Attribute) is blind to the aliased from-import; the alias/module checks are
+    # what catch it. Prove the alias node is the load-bearing one.
+    aliased_tree = ast.parse("from importlib import import_module as load\nload('x')\n")
+    usage_only = [
+        n
+        for n in ast.walk(aliased_tree)
+        if (isinstance(n, ast.Name) and n.id in _FORBIDDEN_IMPORT_NAMES)
+        or (isinstance(n, ast.Attribute) and n.attr in _FORBIDDEN_IMPORT_NAMES)
+    ]
+    assert not usage_only, "sanity: the aliased form must be invisible to usage nodes"
+    assert _import_execute_offenders(aliased_tree, "a"), "the alias check must catch it"
+
+    # Negative: a legitimate aliased import of a benign name is NOT flagged — the
+    # scan forbids the machinery names, never aliasing as such.
+    benign = "from pathlib import Path as P\nfrom typing import Any as A\nimport os as o\n"
+    assert not _import_execute_offenders(ast.parse(benign), "benign"), (
+        "a benign aliased import tripped the pack import scan — the pin must key on "
+        "the import/execute machinery names, not on the presence of an alias."
     )
 
 
