@@ -67,6 +67,34 @@ def test_default_is_dot_claude_hpc_when_run_record_absent():
     )
 
 
+def test_journal_home_ignores_claude_config_dir(tmp_path, monkeypatch):
+    """D1 fence: the journal home is a SEPARATE axis keyed on ``HPC_JOURNAL_DIR``
+    — setting ``CLAUDE_CONFIG_DIR`` (the harness CONFIG-dir knob that
+    ``agent_assets.resolve_claude_dir`` honors) must NOT move it.
+
+    Folding the config-dir resolver into the journal resolver would RELOCATE
+    every existing ``CLAUDE_CONFIG_DIR`` user's run history (RunRecords,
+    submit-locks, monitor sidecars) on upgrade. The journal home must be
+    byte-identical with and without the config env set.
+    """
+    from hpc_agent.state.run_record import current_homedir
+
+    monkeypatch.delenv("HPC_JOURNAL_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    before_leaf = journal_homedir()
+    before_canonical = current_homedir()
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "relocated"))
+
+    # Neither the leaf nor the canonical journal resolver may follow the
+    # config-dir env — the home is UNMOVED.
+    assert journal_homedir() == before_leaf
+    assert current_homedir() == before_canonical
+    # And the journal home is nowhere under the relocated config dir.
+    assert (tmp_path / "relocated") not in journal_homedir().parents
+
+
 def test_no_env_call_does_not_import_run_record():
     """The whole point: calling ``journal_homedir`` with no env must NOT drag
     ``run_record`` in. Subprocess-isolated so a sibling test that already

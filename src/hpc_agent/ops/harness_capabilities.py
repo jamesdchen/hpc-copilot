@@ -136,18 +136,17 @@ def detect_stop_hook_append_on_block() -> bool | str:
 
 
 def _claude_dir() -> Path:
-    """Resolve the harness config dir the same way Claude Code does.
+    """The harness config dir — delegates to the ONE shared resolver.
 
-    ``CLAUDE_CONFIG_DIR`` env override (the documented relocation knob) if set and
-    non-empty, else ``~/.claude`` (:func:`hpc_agent.agent_assets.DEFAULT_CLAUDE_DIR`).
-    Non-creating — this is a pure read.
+    Both this READ/probe path and the install WRITE path resolve through
+    :func:`hpc_agent.agent_assets.resolve_claude_dir` (``CLAUDE_CONFIG_DIR`` →
+    ``~/.claude``), the single definition that closes the former asymmetry: the
+    write path used to ignore ``CLAUDE_CONFIG_DIR`` and land capabilities where
+    this probe never looked. Non-creating — a pure read.
     """
-    override = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
-    if override:
-        return Path(override).expanduser()
-    from hpc_agent.agent_assets import DEFAULT_CLAUDE_DIR
+    from hpc_agent.agent_assets import resolve_claude_dir
 
-    return DEFAULT_CLAUDE_DIR()
+    return resolve_claude_dir()
 
 
 def _read_settings() -> dict[str, Any]:

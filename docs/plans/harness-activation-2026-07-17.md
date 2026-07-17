@@ -516,3 +516,16 @@ the grant — the refactor and the read verb are pure engineering under G1/G2/G4
 - **Recommendation recorded:** (a) and (b) COMPOSE — (a) is (b)'s first step, not
   a competing option; ship (a) now, stage (b). The honest cut-line: if unexercised,
   (b) stands as design-of-record here, shelved (the daemon-package precedent).
+
+- **2026-07-17 — U-ENV BUILT (Wave 1), with D1–D4 applied.** One shared
+  `agent_assets.resolve_claude_dir()` now honors `CLAUDE_CONFIG_DIR` on both the
+  install WRITE path (`install_agent_assets`) and the capability READ probe
+  (`harness_capabilities._claude_dir` delegates), closing the latent read/write
+  asymmetry. D1: resolver FENCED to the config-dir surface; the journal home
+  (`HPC_JOURNAL_DIR`, default `~/.claude/hpc`) is untouched, with a fire-test
+  asserting it ignores `CLAUDE_CONFIG_DIR`. D2: MCP-follows-resolved-dir
+  downgraded to best-effort in `_mcp_config_path`. D3: upgrade HEAL/orphan-litter
+  semantics documented at the resolver. D4: fire-test pins `.claude.json` as the
+  sole out-of-tree write and guards the default `~/.claude` is never touched.
+  Stale `interview.py #190` comment corrected. Built in an isolated worktree,
+  integrated by the coordinator.

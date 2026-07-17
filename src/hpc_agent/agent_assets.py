@@ -20,6 +20,7 @@ same name (last writer wins by path).
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import sys
@@ -31,7 +32,7 @@ from typing import Any, NamedTuple
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.io import atomic_write_text
 
-__all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets"]
+__all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets", "resolve_claude_dir"]
 
 
 def _hook_python() -> str:
@@ -257,6 +258,13 @@ def _mcp_config_path(claude_dir: Path) -> Path:
     install. (A user who relocates the whole config via ``CLAUDE_CONFIG_DIR`` and
     passes that as ``claude_dir`` gets ``.claude.json`` alongside it, which is the
     same sibling relationship.)
+
+    Under ``CLAUDE_CONFIG_DIR`` relocation (:func:`resolve_claude_dir`) this
+    parent-sibling registration is BEST-EFFORT (premortem D2): MCP is a ruled
+    NON-load-bearing projection, so if a given Claude Code build stores the
+    relocated user config somewhere other than this parent-sibling, registration
+    degrades to MCP-absent (drive the CLI directly) — no guarantee is lost. We do
+    not assert the relocated ``.claude.json`` location as a verified fact.
     """
     return claude_dir.parent / ".claude.json"
 
@@ -422,8 +430,62 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
 
 
 def DEFAULT_CLAUDE_DIR() -> Path:
-    """Return ``~/.claude`` (does not create the directory)."""
+    """Return the LITERAL default harness config dir ``~/.claude``.
+
+    The no-override default only — it deliberately does NOT read
+    ``CLAUDE_CONFIG_DIR``; the env-honoring resolution lives in the ONE shared
+    :func:`resolve_claude_dir`, which falls back here. Does not create the
+    directory.
+    """
     return Path.home() / ".claude"
+
+
+def resolve_claude_dir() -> Path:
+    """The ONE harness CONFIG-dir resolver — shared by the install WRITE path
+    (:func:`install_agent_assets`) and the capability READ probe
+    (:func:`hpc_agent.ops.harness_capabilities._claude_dir`).
+
+    Resolution: ``CLAUDE_CONFIG_DIR`` (Claude Code's documented relocation knob)
+    if set and non-empty → ``expanduser``; else ``~/.claude``
+    (:func:`DEFAULT_CLAUDE_DIR`). Does not create the directory. Collapsing the
+    two former CONFIG-dir definitions here (the write path used to ignore the
+    env) closes a latent read/write asymmetry: a relocated config used to get
+    capabilities WRITTEN to ``~/.claude`` where the env-honoring probe never
+    LOOKED.
+
+    **Fenced to the harness-config surface ONLY (premortem D1).** This is NOT
+    the journal home. The journal home — RunRecords, submit-locks, monitor
+    sidecars, the run index — is a SEPARATE axis keyed on ``HPC_JOURNAL_DIR``
+    (:func:`hpc_agent.state.run_record.current_homedir` /
+    :func:`hpc_agent.state._homedir.journal_homedir` /
+    :class:`hpc_agent._kernel.contract.layout.JournalLayout`), default
+    ``~/.claude/hpc``. That resolver MUST NOT delegate here: folding the two
+    axes together would RELOCATE every existing ``CLAUDE_CONFIG_DIR`` user's
+    entire run history on upgrade (their live-run journal would vanish from
+    where every reader looks). ``~/.claude/hpc`` staying literal-home under a
+    relocated config is INTENTIONAL, not a bug to heal.
+
+    **Upgrade semantics, stated honestly (premortem D3).** For a user who had
+    already set ``CLAUDE_CONFIG_DIR``, closing the asymmetry is a HEAL that MOVES
+    the install write target: the write path previously wrote to ``~/.claude``,
+    which Claude Code — following the env — never read (so the hooks never fired
+    and the capabilities were absent); it now writes to the relocated dir Claude
+    Code actually reads. Files left at the old ``~/.claude`` are INERT leftovers,
+    not a hazard:
+
+    * no double-fire — Claude Code follows ``CLAUDE_CONFIG_DIR`` and never reads
+      the old location, so the orphaned hooks never fire;
+    * litter, not harm — :func:`_prune_stale_assets` reads the manifest at the
+      NEW location, so manifest-prune never revisits (or cleans) the old dir;
+    * the one honest ambiguity — a Claude Code FORK that reads ``~/.claude``
+      UNCONDITIONALLY while the user also set ``CLAUDE_CONFIG_DIR`` for another
+      harness could see BOTH locations; the installer cannot adjudicate that
+      multi-harness config and does not try.
+    """
+    override = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return DEFAULT_CLAUDE_DIR()
 
 
 def _find_hook_entry_index(entries: list[Any], needle: str) -> int | None:
@@ -676,8 +738,10 @@ def _merge_skill_permissions(
     + skip-unparseable + dry-run semantics, but targets
     ``permissions.allow`` rather than ``hooks.PostToolUse``. User-global
     scope here (the bundled skills are user-global; the orchestrator can
-    invoke ``/submit-hpc`` from any working directory) — distinct from
-    ``ops/memory/interview.py``'s project-scoped Bash grant (#190).
+    invoke ``/submit-hpc`` from any working directory). This
+    :func:`install_agent_assets` path is the ONLY settings.json writer in the
+    tree — ``ops/memory/interview.py`` no longer writes any settings / permission
+    grant (the historical project-scoped Bash grant #190 is gone).
 
     Returns ``{settings_path, action, added, wrote}`` where ``action`` is:
 
@@ -1262,7 +1326,7 @@ def install_agent_assets(
     ``"dry-run-would-add"``, and ``added`` lists the rule strings
     actually appended (or that *would* have been on dry-run).
     """
-    target = (claude_dir or DEFAULT_CLAUDE_DIR()).expanduser()
+    target = (claude_dir or resolve_claude_dir()).expanduser()
 
     commands: set[str] = set()
     skills: set[str] = set()
