@@ -166,3 +166,38 @@ Pre-wave baseline was ~7000 ms cold, so the bake delivered ~3.2×. But the
 Windows spawn+import floor (~600 ms just for `import hpc_agent`) is
 irreducible without a warm process, so the stateless path plateaus ~2.2 s —
 still ~80× the 27 ms warm path. The R4 sec-2a step-3 call is the maintainer's.
+
+## GATE RUN — 2026-07-17, wheel 06796de3 (CI-green 93461364), uv-tool env
+
+The post-reduction re-measure the amended R4 ruling asked for ("REDUCE
+STATELESS FURTHER" — the c936a345 wave: lazy `infra` re-exports, deferred
+pydantic/plugins/`importlib.resources`). Same box, same uv-tool gate env,
+`--runs 7` (`full_walk` advisory n=3 via the new `--full-runs` cap).
+`boot_state: warm-uncontrolled`; the fast_path max (2712 ms) shows a load
+spike round — read the median/min, not the max.
+
+| surface | median | min |
+|---|---|---|
+| bare interpreter | 104 ms | 84 ms |
+| import hpc_agent (lazy root) | 170 ms | 135 ms |
+| cold fast-path (describe/find, baked) | **566 ms** | 460 ms |
+| cold full-walk (capabilities, deferred) | 3750 ms | 3210 ms |
+| dry Stop hook (single) | 201 ms | 179 ms |
+| WARM in-process (daemon target) | **20 ms** | 14 ms |
+
+**Cold fast-path 2207 → 566 ms (3.9×; cumulative from pre-bake ~7000 ms:
+~12×).** The reduction also carried `full_walk` 8584 → 3750 ms (capabilities
+inherits the lazy-infra cut) and `import hpc_agent` 413 → 170 ms. Hook
+single-median 201 ms is within load noise of the prior run's ~176 ms — the
+reduction never touched the hook chain. Composition of the remaining 566 ms:
+~100 ms spawn+AV, ~70 ms lazy-root import, ~400 ms registry/parser/catalog
+dispatch — the part only a warm process removes. Residual gap vs warm:
+~546 ms per cold call, ~28× (was ~80×).
+
+R4 sec-2a step-3 remains the maintainer's call. Two decision notes from the
+2026-07-16/17 sessions: (a) this floor measures LOCAL dispatch only — the
+daemon's other prize, SSH-handshake amortization across verb invocations
+(one asyncssh pool vs per-process cold connects), is not in this number and
+is argued in the maintainer's transport-brittleness thread; (b) the
+per-fused-hook-turn cost (~600 ms at 3 hooks/turn) is now the larger
+recurring stateless tax.
