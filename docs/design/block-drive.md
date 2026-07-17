@@ -1,5 +1,5 @@
 ---
-status: plan
+status: shipped
 ---
 # Wave 4 — `block-drive`: the code-driven chain
 

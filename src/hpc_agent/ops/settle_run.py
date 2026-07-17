@@ -89,7 +89,7 @@ def settle_run(
     *,
     spec: SettleRunInput,
     _aggregate: Callable[[Path, str], Any] | None = None,
-    _sweep: Callable[[str], dict[int, list[str]]] | None = None,
+    _sweep: Callable[[str, str], dict[int, list[str]]] | None = None,
 ) -> SettleRunResult:
     """Journal the directed evidence, set the terminal status, harvest.
 

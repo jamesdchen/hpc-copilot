@@ -1,5 +1,5 @@
 ---
-status: thesis
+status: shipped
 audience: public — seeds the README hero, the talk abstract, the paper's contribution statement
 ---
 # The reproducibility thesis — a clean reproduction, extracted mechanically from a messy process

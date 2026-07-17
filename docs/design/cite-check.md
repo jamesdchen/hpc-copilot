@@ -1,5 +1,5 @@
 ---
-status: design-open
+status: plan
 ---
 # cite-check — the number → paper transcription audit (DESIGN, build gated on one ruling)
 
