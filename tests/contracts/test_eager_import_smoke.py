@@ -148,12 +148,20 @@ def test_bare_import_does_not_load_pathlib() -> None:
     ``pathlib`` earlier can't mask the regression (base CPython does not preload it).
     """
     code = "import sys; import hpc_agent; print('pathlib' in sys.modules)"
+    # Scrub coverage's subprocess-start hook: under `pytest --cov` the child
+    # runs `coverage.process_startup()` at interpreter init, and coverage
+    # imports `pathlib`, polluting sys.modules before `import hpc_agent` runs
+    # (the c41c7d24 3.12-with-coverage red — local runs have no --cov).
+    child_env = {
+        k: v for k, v in os.environ.items() if not (k.startswith("COV") or k == "PYTHONSTARTUP")
+    }
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         check=True,
         timeout=60,
+        env=child_env,
     )
     assert proc.stdout.strip() == "False", (
         "bare `import hpc_agent` eagerly loaded pathlib — the root __init__ must "
