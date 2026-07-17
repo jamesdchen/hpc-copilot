@@ -638,6 +638,70 @@ def _deploy_payload_brief(
         return None
 
 
+def _reducibility_brief(experiment_dir: Path, run_id: str | None) -> dict[str, Any] | None:
+    """S1 reducibility shift-left (run #12 finding 28, RULED *disclose* 2026-07-17).
+
+    Runs the SAME predicate the aggregate-CHECK readiness surface keys on
+    (:func:`hpc_agent.ops.aggregate_blocks._reducibility_issue` →
+    :func:`hpc_agent.ops.aggregate_flow.per_task_fallback_reducible`) against the
+    sidecar ``resolve_submit_inputs`` just wrote — at THIS S1 human boundary, before
+    submit-s2 detaches and spends the whole compute. A run with NO ``aggregate_cmd``
+    and a non-JSON summary artifact can NEVER reduce (the built-in no-combiner
+    per-task fallback is a JSON weighted-mean), so the aggregate would refuse only
+    AFTER a full results/ pull. Surfacing it HERE is a DISCLOSURE, never a gate: the
+    bare ``y`` flow is unchanged (the park brief just gains lines); a human may
+    deliberately register the reducer between S1 and aggregate.
+
+    Reuses the aggregate-block issue rendering VERBATIM (one predicate, now a THIRD
+    seat — run-path refuse / aggregate-CHECK disclosure / S1 disclosure — so no seat
+    re-derives it). Three honest outcomes (the no-silent-caps rule — the check
+    either ran or the brief SAYS it could not, never a silent skip):
+
+    * irreducible → the never-auto-masked issue dict (``checked: True``) plus the
+      code-rendered S1 consequence line;
+    * reducible / has a reducer → ``None`` (the brief stays byte-identical);
+    * inputs absent (no run_id minted, or the sidecar is unreadable) →
+      ``{"checked": False, "reason": …}`` — one honest line, never silence.
+    """
+    if not run_id:
+        return {
+            "checked": False,
+            "reason": (
+                "reducibility could not be checked at S1 — no run_id was minted, so "
+                "there is no sidecar to read (aggregate-check re-runs this after compute)."
+            ),
+        }
+    from hpc_agent.ops.aggregate_blocks import _reducibility_issue
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, ValueError, errors.HpcError):
+        sidecar = None
+    if not isinstance(sidecar, dict):
+        return {
+            "checked": False,
+            "reason": (
+                f"reducibility could not be checked at S1 — the run sidecar for "
+                f"{run_id!r} was not readable (aggregate-check re-runs this after compute)."
+            ),
+        }
+    # The ONE predicate the aggregate-CHECK seat keys on — read verbatim; a readable
+    # sidecar makes a ``None`` here unambiguously mean "reducible / has a reducer".
+    issue = _reducibility_issue(experiment_dir, run_id)
+    if issue is None:
+        return None
+    return {
+        "checked": True,
+        "consequence": (
+            "aggregate-check will surface this again after compute; consider "
+            "registering an aggregate_cmd / pack reducer (or re-declaring a JSON "
+            "summary artifact) before submit rather than spending a run that can't reduce."
+        ),
+        **issue,
+    }
+
+
 def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     brief: dict[str, Any] = {}
 
@@ -736,6 +800,17 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     _deploy_disclosure = _deploy_payload_brief(experiment_dir, rr.submit_spec)
     if _deploy_disclosure is not None:
         brief["deploy_payload"] = _deploy_disclosure
+    # S1 REDUCIBILITY SHIFT-LEFT (finding 28, RULED disclose 2026-07-17): run the
+    # SAME predicate aggregate-CHECK keys on against the just-written sidecar, at
+    # THIS human boundary — before submit-s2 detaches and spends compute. A
+    # DISCLOSURE, never a gate (the bare `y` flow is unchanged): an irreducible plan
+    # rides the brief so the greenlight is informed; a reducible plan leaves the
+    # brief byte-identical (None → no key); an unreadable sidecar SAYS so (no silent
+    # skip). Reuses aggregate-block's issue rendering verbatim (one predicate, the
+    # THIRD seat), fail-open like the deploy_payload disclosure above.
+    _reducibility = _reducibility_brief(experiment_dir, rr.run_id)
+    if _reducibility is not None:
+        brief["reducibility"] = _reducibility
     # Only a CLEAN resolve (submit-flow spec built) has a single deterministic
     # successor (submit-s2). ``prior_run_found`` (resume-vs-fresh) and
     # ``needs_scaffold_interview`` are genuine human branches → next_block null.
