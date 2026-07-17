@@ -702,6 +702,82 @@ def _reducibility_brief(experiment_dir: Path, run_id: str | None) -> dict[str, A
     }
 
 
+def _input_roots_declaration_unreadable(experiment_dir: Path) -> bool:
+    """True when an interview doc PRESENTS ``audited_source.input_roots`` in a
+    shape the ONE declaration reader cannot resolve to usable roots — the honest
+    could-not-determine case for :func:`_input_data_brief`.
+
+    Called ONLY after :func:`state.data_manifest.declared_input_roots` already
+    returned falsy, so "the key is present but not a ``list``" means a declaration
+    was ATTEMPTED in a shape core can't read (a bare string path, a dict) — genuinely
+    ambiguous, distinct from a definitive no-declaration. A well-formed ``list``
+    (even empty / junk) is NOT unreadable: it resolves cleanly to "declared nothing
+    usable" and rides the definitive nudge. Never raises — ``iter_interview_docs``
+    reads every candidate tolerantly (a missing/corrupt file is skipped).
+    """
+    from hpc_agent.state.interview_doc import iter_interview_docs
+
+    for doc in iter_interview_docs(experiment_dir):
+        block = doc.get("audited_source")
+        if (
+            isinstance(block, dict)
+            and "input_roots" in block
+            and not isinstance(block["input_roots"], list)
+        ):
+            return True
+    return False
+
+
+def _input_data_brief(experiment_dir: Path) -> dict[str, Any] | None:
+    """U-DATA1 input-data nudge for S1's resolved brief (reproducibility Wave-1).
+
+    Input-data capture is OPT-IN: a run that declares NO input roots writes a
+    byte-identical null-data sidecar, silently invisible to ALL data-drift
+    attribution — the #1 reproducibility gap (a classic pipeline failure: nothing
+    ever throws). At THIS S1 resolved boundary — the human boundary BEFORE
+    submit-s2 detaches and spends the whole compute — when the run declares no
+    input data, ride a NEVER-BLOCKING nudge on the brief pointing at the ONE
+    declaration field: ``interview.json``'s ``audited_source.input_roots``, read
+    through the one declaration reader
+    (:func:`state.data_manifest.declared_input_roots`), never re-inlined here.
+
+    DISCLOSURE only, mirroring the ``deploy_payload`` / ``reducibility`` seats
+    above and the shipped dirty-worktree disclosure: no gate, no refusal, no new
+    decision point — the bare ``y`` flow is byte-unchanged. Three honest outcomes
+    (the no-silent-caps rule — the check either ran or the brief SAYS it could not):
+
+    * input roots declared (a usable non-empty list) → ``None`` (the brief stays
+      BYTE-IDENTICAL — the regression pin);
+    * no ``input_roots`` declared at all → the ``no_input_data_declared`` nudge
+      (``checked: True``);
+    * an ``input_roots`` present but not a usable list (a wrong-shaped declaration)
+      → a ``checked: False`` could-not-determine line, never a silent skip.
+    """
+    from hpc_agent.state.data_manifest import declared_input_roots
+
+    if declared_input_roots(experiment_dir):
+        return None  # input data declared → nothing to nudge; brief byte-unchanged
+    if _input_roots_declaration_unreadable(experiment_dir):
+        return {
+            "checked": False,
+            "reason": (
+                "input data could not be determined at S1 — an "
+                "audited_source.input_roots is present but not a usable list of "
+                "paths; declare input_roots as a list of paths so reproduction can "
+                "fingerprint the data this run consumes."
+            ),
+        }
+    return {
+        "checked": True,
+        "issue": "no_input_data_declared",
+        "line": (
+            "no input data declared; reproduction cannot fingerprint the data this "
+            "run consumes — declare input_roots (interview.json's "
+            "audited_source.input_roots) to close this."
+        ),
+    }
+
+
 def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     brief: dict[str, Any] = {}
 
@@ -811,6 +887,18 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     _reducibility = _reducibility_brief(experiment_dir, rr.run_id)
     if _reducibility is not None:
         brief["reducibility"] = _reducibility
+    # U-DATA1 INPUT-DATA NUDGE (reproducibility Wave-1): input-data capture is
+    # opt-in, so a run declaring NO input roots writes a byte-identical null-data
+    # sidecar, invisible to all drift attribution — the #1 reproducibility gap.
+    # Surface it at THIS resolved boundary (before submit-s2 detaches) as a
+    # DISCLOSURE, never a gate: an undeclared run rides a nudge pointing at the ONE
+    # declaration field (interview.json's audited_source.input_roots); a run WITH
+    # declared roots adds NO key (byte-identical — regression pin); a wrong-shaped
+    # declaration SAYS could-not-determine (no silent skip). Fail-open like the
+    # deploy_payload / reducibility disclosures above.
+    _input_data = _input_data_brief(experiment_dir)
+    if _input_data is not None:
+        brief["input_data"] = _input_data
     # Only a CLEAN resolve (submit-flow spec built) has a single deterministic
     # successor (submit-s2). ``prior_run_found`` (resume-vs-fresh) and
     # ``needs_scaffold_interview`` are genuine human branches → next_block null.
