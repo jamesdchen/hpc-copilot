@@ -113,6 +113,19 @@ ssh = [
 s3 = [
     "boto3>=1.34",
 ]
+# Mutation testing (Linux-CI-only, .github/workflows/mutation.yml). PINNED,
+# not floated: mutmut 3.6.0's stats-phase coverage-join is exactly what the
+# curated harness (scripts/run_mutation.py) + the zero-signal tripwires were
+# tuned against. An unpinned bump silently re-shaped a whole run once already
+# (a relative→absolute paths_to_mutate interaction zeroed the curated matrix;
+# docs/plans/mutation-triage-2-2026-07-17.md). The workflow installs
+# ``.[dev,mutation]``; the extra is the single source of the pin. mutmut is
+# Linux-only at RUNTIME (it sys.exit(1)s on Windows + imports POSIX ``resource``)
+# but the wheel installs fine anywhere, so this extra is safe to resolve on any
+# host — the runner is what refuses to launch it off-Linux.
+mutation = [
+    "mutmut==3.6.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/jamesdchen/hpc-copilot"

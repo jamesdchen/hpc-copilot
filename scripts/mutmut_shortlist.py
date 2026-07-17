@@ -92,9 +92,25 @@ def count_checked_mutants(mutants_dir: Path) -> tuple[int, int]:
     executed (the zero-signal failure the sweep hit on run 29560911639, where all
     6076 were null). This is the tripwire's measurement -- pure I/O over the same
     ``*.meta`` artifacts the triage read, so it is unit-testable without mutmut.
+    Delegates to :func:`_tally_mutants` (which also computes the stronger *signal*
+    count the refined tripwire gates on).
+    """
+    _signal, checked, total = _tally_mutants(mutants_dir)
+    return checked, total
+
+
+def _tally_mutants(mutants_dir: Path) -> tuple[int, int, int]:
+    """Return ``(signal, checked, total)`` over every ``*.meta`` under *dir*.
+
+    ``signal`` = mutants killed (1) OR survived (0) -- i.e. actually exercised;
+    ``checked`` = any non-null code (adds 33 no-tests / 34 skipped); ``total`` =
+    every generated key. The tripwire gates on ``signal`` so a run whose mutants
+    are ALL exit-33 "no tests" (``checked > 0`` but zero real signal) still turns
+    the job RED rather than faking green (triage-2 refinement).
     """
     import json
 
+    signal = 0
     checked = 0
     total = 0
     for meta in sorted(mutants_dir.rglob("*.meta")):
@@ -109,7 +125,9 @@ def count_checked_mutants(mutants_dir: Path) -> tuple[int, int]:
             total += 1
             if code is not None:
                 checked += 1
-    return checked, total
+            if code in (0, 1):
+                signal += 1
+    return signal, checked, total
 
 
 @dataclass
@@ -397,18 +415,22 @@ def main(argv: list[str] | None = None) -> int:
         mutants_dir = Path(args.mutants_dir)
         if not mutants_dir.is_absolute():
             mutants_dir = REPO_ROOT / mutants_dir
-        checked, total = count_checked_mutants(mutants_dir)
-        print(f"mutation tripwire: {checked} checked / {total} generated mutant(s).")
-        if checked == 0:
+        signal, checked, total = _tally_mutants(mutants_dir)
+        print(
+            f"mutation tripwire: {signal} with-signal (killed/survived) / "
+            f"{checked} checked / {total} generated mutant(s)."
+        )
+        if signal == 0:
             print(
-                "TRIPWIRE FAILED: ZERO mutants were checked -- the sweep produced no "
-                "signal (every mutant 'not checked'). A green run must mean signal. "
-                "This is the run-29560911639 zero-signal failure; do NOT trust a "
+                "TRIPWIRE FAILED: not one mutant was killed or survived -- the sweep "
+                "produced no signal (every mutant 'not checked', or ALL 'no tests'). "
+                "A green run must mean signal. This is the run-29560911639 zero-signal "
+                "failure (refined past the exit-33 'no tests' loophole); do NOT trust a "
                 "green sweep. Check the scoped tests_dir + baseline (memo Unit A).",
                 file=sys.stderr,
             )
             return 1
-        print("tripwire OK: the sweep checked at least one mutant.")
+        print("tripwire OK: the sweep killed or survived at least one mutant.")
         return 0
 
     paths = resolve_targets(args.targets, args.changed_since)

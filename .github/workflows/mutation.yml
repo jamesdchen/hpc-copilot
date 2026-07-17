@@ -58,10 +58,13 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install package (dev extras) + mutmut
+      - name: Install package (dev + mutation extras)
+        # mutmut is PINNED via the ``mutation`` extra (mutmut==3.6.0). An unpinned
+        # bump silently re-shaped a whole run once (triage-2); the pin lives in
+        # pyproject so local and CI resolve the identical mutmut.
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev]' mutmut
+          pip install -e '.[dev,mutation]'
 
       - name: Report the mutmut reachability shortlist (informational)
         run: |
@@ -148,7 +151,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -164,17 +166,32 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install package (dev extras) + mutmut
+      - name: Install package (dev + mutation extras)
+        # mutmut PINNED via the ``mutation`` extra (mutmut==3.6.0) -- see the sweep
+        # job's install note.
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev]' mutmut
+          pip install -e '.[dev,mutation]'
 
       - name: Run the curated mutation sweep for ${{ matrix.module }}
         # The runner scopes [tool.mutmut] to this module + its tests, runs
         # mutmut, restores pyproject, and prints the survivor results. It
         # tolerates mutmut's survivor exit internally, so the step is green
-        # unless the infra itself breaks.
+        # unless the infra itself breaks. continue-on-error is STEP-scoped (was
+        # job-scoped): a surviving-mutant / infra hiccup here must not read red,
+        # but the tripwire step below is authoritative and DOES fail the job on a
+        # zero-signal (dark) module.
+        continue-on-error: true
         run: python scripts/run_mutation.py --module ${{ matrix.module }} | tee mutation-${{ matrix.module }}.txt
+
+      - name: Curated zero-signal tripwire for ${{ matrix.module }}
+        # FAILS the job unless a mutant in this module was killed or survived. The
+        # curated matrix used to conclude GREEN even when every module aborted with
+        # ZERO verdicts (a chdir test crashed stats collection, or the coverage-join
+        # found nothing) -- the exact zero-signal-but-green failure the sweep tripwire
+        # guards against, but the curated jobs had no equivalent (triage-2 Finding #2).
+        # NOT continue-on-error, so a dark curated module turns this job RED.
+        run: python scripts/run_mutation.py --tripwire --mutants-dir mutants
 
       - name: Upload per-module results
         if: always()

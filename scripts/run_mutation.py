@@ -30,6 +30,31 @@ restores the original in a ``finally`` (a stale sidecar from an interrupted run
 is recovered on the next start). The committed ``[tool.mutmut]`` defaults -- and
 the sibling ``scripts/mutmut_shortlist.py`` / scheduled cluster-verb sweep that
 depend on them -- are therefore never perturbed.
+
+**paths_to_mutate is RELATIVE, and chdir'ing tests are deselected, not dodged.**
+mutmut 3.6.0 derives each mutant's *identity* from the ``paths_to_mutate`` string
+at mutant-creation time: a relative ``src/hpc_agent/...`` yields a clean dotted
+key (``hpc_agent.execution.mapreduce.combiner.x_...``) that the stats-phase
+coverage-join keys on, whereas an ABSOLUTE path bakes the runner's cwd into the
+key (``.home.runner.work.....src.hpc_agent....``) and the join then finds no test
+covering the module and aborts every mutant -- the triage-2 regression that
+zeroed the whole curated matrix (docs/plans/mutation-triage-2-2026-07-17.md,
+Finding #1). So the path MUST stay relative.
+
+The reason triage-1 reached for an absolute path was a *different* mutmut
+behaviour: ``record_trampoline_hit`` runs ``p.resolve(strict=True)`` over the
+(relative) source paths on EVERY mutated-function call, resolving them against
+the LIVE cwd -- and mutmut runs the tests under ``change_cwd("mutants")``. An
+in-process test that ``monkeypatch.chdir(tmp_path)``\\ s out of the mutants tree
+makes ``src/hpc_agent/...`` unresolvable there, so the trampoline raises
+``FileNotFoundError`` and crashes stats collection. That is a genuine mutmut-3.6.0
+incompatibility with cwd-relocating tests, not something an absolute path should
+paper over. The correct fix is to keep the path relative and DESELECT the
+handful of chdir'ing in-process tests from the scoped run (``ModuleScope.deselect``
+-> pytest ``--deselect``); the module's remaining in-process tests still produce
+verdicts. The curated zero-signal tripwire (``--tripwire``) backstops this: if a
+newly-added chdir test slips past the deselect list and re-crashes a module, that
+module reports zero signal and the tripwire turns the job RED instead of green.
 """
 
 from __future__ import annotations
@@ -59,6 +84,14 @@ class ModuleScope:
     source: str  # repo-relative .py file to mutate
     tests: tuple[str, ...]  # repo-relative test file(s) that exercise it
     note: str
+    # pytest node-IDs (``file.py::Class`` or ``file.py::Class::test``) to
+    # ``--deselect`` from the scoped run. USE ONLY for in-process tests that
+    # ``chdir`` out of the mutants tree: mutmut 3.6.0's ``record_trampoline_hit``
+    # resolves the relative source path against the live cwd on every mutated
+    # call, so such a test crashes stats collection and zeroes the module (see
+    # the module docstring). The deselected node-IDs must live in ``tests``; a
+    # unit test pins that. Empty for the common case.
+    deselect: tuple[str, ...] = ()
 
 
 # ── the curated module map ────────────────────────────────────────────────────
@@ -152,9 +185,31 @@ MODULE_MAP: dict[str, ModuleScope] = {
         ),
         note="Deterministic reduce/combine -- the module that computes every "
         "aggregate number. HEAVY (~650 lines): its scoped sweep is the slowest; "
-        "budget the most CI time for this key. Its end-to-end tests chdir(), which "
-        "broke mutmut's relative source_paths.resolve(strict=True) -- fixed by the "
-        "ABSOLUTE paths_to_mutate render below (memo Unit B).",
+        "budget the most CI time for this key. Its end-to-end main() tests chdir() "
+        "out of the mutants tree, which crashes mutmut 3.6.0's relative "
+        "source_paths.resolve(strict=True); they are DESELECTED (below) so the "
+        "in-process reduce-math tests (grid-key / weighted-mean / Neumaier-sum) "
+        "still produce verdicts. paths_to_mutate stays RELATIVE (triage-2 Finding #1: "
+        "an absolute path zeroed the whole matrix via the coverage-join).",
+        # The chdir'ing end-to-end main() tests. Each drives combiner.main()
+        # after monkeypatch.chdir(tmp_path); under mutmut that crashes the
+        # trampoline's cwd-relative resolve. Class-level except TestGroupSizeWeighting,
+        # whose two non-chdir weighting-math tests are KEPT (only its two chdir
+        # methods are named).
+        deselect=(
+            "tests/execution/mapreduce/test_combiner.py::TestMainEndToEnd",
+            "tests/execution/mapreduce/test_combiner.py::TestMainMissingMetrics",
+            "tests/execution/mapreduce/test_combiner.py::TestMainParallelReads",
+            "tests/execution/mapreduce/test_combiner.py::TestMainMultipleGridPoints",
+            "tests/execution/mapreduce/test_combiner.py::TestMainWritesOutputAtomically",
+            "tests/execution/mapreduce/test_combiner.py::TestFrozenManifestCombine",
+            "tests/execution/mapreduce/test_combiner.py::TestGroupSizeWeighting::test_wave_partial_carries_group_count",
+            "tests/execution/mapreduce/test_combiner.py::TestGroupSizeWeighting::test_nine_one_wave_split_is_task_weighted",
+            "tests/execution/mapreduce/test_combiner.py::TestRuntimeAggregation",
+            "tests/execution/mapreduce/test_combiner.py::TestForeignPartialOverwrite",
+            "tests/execution/mapreduce/test_combiner.py::TestTasksReadEvidence",
+            "tests/execution/mapreduce/test_combiner.py::TestFinalReduceForeignSkip",
+        ),
     ),
     # ── the correctness / consent / journal core (memo Unit D) ─────────────────
     # These rank ABOVE renders on the risk ordering yet were in NO target set
@@ -171,6 +226,14 @@ MODULE_MAP: dict[str, ModuleScope] = {
         ),
         note="Per-run journal RMW (load/upsert/update/mark) + paired index refresh. "
         "Correctness core: a silent wrong-path corrupts the run record.",
+        # test_stamp_tick_defaults_experiment_dir_to_cwd monkeypatch.chdir(tmp_path)
+        # then calls journal RMW to prove the cwd-default -- exactly the in-process
+        # chdir that crashes mutmut's cwd-relative resolve. Deselected so the rest
+        # of the journal covering set produces verdicts (the other tests pass an
+        # explicit experiment_dir and never chdir).
+        deselect=(
+            "tests/state/test_watchdog_and_kill_state.py::test_stamp_tick_defaults_experiment_dir_to_cwd",
+        ),
     ),
     "state-index": ModuleScope(
         key="state-index",
@@ -277,24 +340,100 @@ def render_scoped_pyproject(scope: ModuleScope) -> str:
     lever that keeps one sweep inside a CI step. Every other key (``also_copy``,
     ``do_not_mutate``, the xdist-override ``pytest_add_cli_args``) is preserved.
 
-    ``paths_to_mutate`` is written as an ABSOLUTE path (memo Unit B). mutmut's
-    trampoline records each hit via ``Config.source_paths[p].resolve(strict=True)``,
-    which resolves *relative* source paths against the CURRENT cwd -- and the
-    combiner's end-to-end tests ``monkeypatch.chdir(tmp_path)``, so a relative
-    ``src/hpc_agent/...`` blew up with ``FileNotFoundError: 'src'`` and produced
-    ZERO verdicts on the highest-value curated module. An absolute path resolves
-    identically regardless of cwd. Emitted as POSIX (``as_posix()``) so the value
-    is valid TOML on every host -- a Windows ``\\`` would be an illegal escape and
-    break both ``--dry-run`` and this function's tests (mutmut itself only ever
-    runs the sweep on Linux, where POSIX == the native absolute form).
+    ``paths_to_mutate`` is written RELATIVE (``scope.source``, a repo-relative
+    POSIX path), exactly like ``scripts/mutmut_shortlist.py``'s working sweep.
+    mutmut 3.6.0 derives each mutant's IDENTITY from this string at creation
+    time; a relative ``src/hpc_agent/...`` produces the clean dotted key the
+    stats-phase coverage-join keys on, while an absolute path bakes the runner
+    cwd into the key and the join then covers nothing -- the triage-2 regression
+    that zeroed the whole curated matrix (docs/plans/mutation-triage-2-2026-07-17.md).
+
+    The cwd-relative ``resolve(strict=True)`` crash that triage-1's absolute path
+    was dodging (an in-process test ``chdir``\\ ing out of the mutants tree) is
+    handled the correct way instead: ``scope.deselect`` names the chdir'ing tests
+    and they are ``--deselect``\\ ed from the scoped ``pytest_add_cli_args`` below,
+    so the relative path never has to resolve while a test sits in a foreign cwd.
     """
     text = PYPROJECT.read_text(encoding="utf-8")
-    abs_source = (REPO_ROOT / scope.source).resolve().as_posix()
-    text = _replace_named_array(text, "paths_to_mutate", [abs_source])
+    text = _replace_named_array(text, "paths_to_mutate", [scope.source])
     text = _replace_named_array(text, "tests_dir", list(scope.tests))
+    if scope.deselect:
+        # Append --deselect args to the existing pytest_add_cli_args (never
+        # replace the xdist/addopts overrides the committed block carries).
+        existing = tomllib.loads(text)["tool"]["mutmut"]["pytest_add_cli_args"]
+        combined = list(existing) + [f"--deselect={node_id}" for node_id in scope.deselect]
+        text = _replace_named_array(text, "pytest_add_cli_args", combined)
     # Fail loudly if the rewrite produced non-parseable TOML.
     tomllib.loads(text)
     return text
+
+
+# mutant exit codes in a ``*.meta`` ``exit_code_by_key`` map: 1 = killed,
+# 0 = survived, 33/34 = no-tests/skipped, ``null`` = NEVER EXECUTED. This mirrors
+# ``mutmut_shortlist.count_checked_mutants`` but returns the STRONGER *signal*
+# count the curated tripwire gates on.
+def count_mutant_signal(mutants_dir: Path) -> tuple[int, int, int]:
+    """Return ``(signal, checked, total)`` across every ``*.meta`` under *dir*.
+
+    * ``total`` -- every mutant key mutmut generated.
+    * ``checked`` -- keys with a NON-NULL exit code (killed / survived / no-tests /
+      skipped): mutmut evaluated them at all.
+    * ``signal`` -- keys that were killed (1) OR survived (0): a mutant that
+      actually exercised the module. This is what the tripwire gates on -- a run
+      whose mutants are ALL exit-33 "no tests" is ``checked > 0`` but carries no
+      mutation signal (the triage-2 caveat), so ``checked`` alone can read green
+      on a dark run. Pure I/O over the same ``*.meta`` artifacts CI uploads, so it
+      is unit-testable without ever launching mutmut.
+    """
+    import json
+
+    signal = 0
+    checked = 0
+    total = 0
+    for meta in sorted(mutants_dir.rglob("*.meta")):
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        codes = data.get("exit_code_by_key")
+        if not isinstance(codes, dict):
+            continue
+        for code in codes.values():
+            total += 1
+            if code is not None:
+                checked += 1
+            if code in (0, 1):
+                signal += 1
+    return signal, checked, total
+
+
+def _tripwire(mutants_dir: Path) -> int:
+    """Curated zero-signal tripwire: exit 1 unless a mutant was killed or survived.
+
+    The curated matrix inherits mutmut's "survivors are not a failure" semantics,
+    so a module that aborted with ZERO verdicts (e.g. a chdir test crashed stats
+    collection, or the paths_to_mutate coverage-join found nothing) still concluded
+    GREEN before this existed (triage-2 Finding #2). Mirrors the sweep tripwire in
+    ``mutmut_shortlist.py`` so the same green==signal guarantee holds per curated
+    module.
+    """
+    signal, checked, total = count_mutant_signal(mutants_dir)
+    print(
+        f"curated mutation tripwire: {signal} with-signal (killed/survived) / "
+        f"{checked} checked / {total} generated mutant(s)."
+    )
+    if signal == 0:
+        print(
+            "CURATED TRIPWIRE FAILED: not one mutant was killed or survived -- the "
+            "module produced NO mutation signal (aborted stats / all 'no tests'). A "
+            "green curated job must mean signal. This is the triage-2 zero-signal-but-"
+            "green failure; check the scoped paths_to_mutate + tests_dir + deselect "
+            "(a chdir'ing in-process test crashes mutmut's cwd-relative resolve).",
+            file=sys.stderr,
+        )
+        return 1
+    print("tripwire OK: the curated module produced at least one killed/survived mutant.")
+    return 0
 
 
 def _recover_stale_backup() -> None:
@@ -381,7 +520,25 @@ def main(argv: list[str] | None = None) -> int:
         help="validate the module + render the scoped [tool.mutmut] block "
         "WITHOUT running mutmut (works on every platform).",
     )
+    parser.add_argument(
+        "--tripwire",
+        action="store_true",
+        help="curated zero-signal tripwire: FAIL (exit 1) unless a mutant in "
+        "--mutants-dir was killed or survived (a green curated job MUST mean signal).",
+    )
+    parser.add_argument(
+        "--mutants-dir",
+        metavar="DIR",
+        default="mutants",
+        help="--tripwire: the mutmut output dir to scan for *.meta (default: mutants).",
+    )
     args = parser.parse_args(argv)
+
+    if args.tripwire:
+        mutants_dir = Path(args.mutants_dir)
+        if not mutants_dir.is_absolute():
+            mutants_dir = REPO_ROOT / mutants_dir
+        return _tripwire(mutants_dir)
 
     if args.keys:
         import json

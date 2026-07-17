@@ -91,6 +91,23 @@ def test_tripwire_fails_when_no_mutants_generated(tmp_path):
     assert ms.main(["tripwire", "--mutants-dir", str(tmp_path)]) == 1
 
 
+def test_tally_mutants_separates_signal_from_checked(tmp_path):
+    """_tally_mutants returns (signal, checked, total): signal = killed(1)+
+    survived(0); checked adds 33 no-tests / 34 skipped; total counts every key."""
+    _write_meta(tmp_path / "a.meta", {"m1": 1, "m2": 0, "m3": 33, "m4": 34, "m5": None})
+    signal, checked, total = ms._tally_mutants(tmp_path)
+    assert (signal, checked, total) == (2, 4, 5)
+
+
+def test_tripwire_fails_when_all_no_tests(tmp_path, capsys):
+    """triage-2 refinement: a sweep where every mutant is exit-33 'no tests' is
+    checked>0 but has ZERO real signal → RED (the exit-33 green loophole closed)."""
+    _write_meta(tmp_path / "a.meta", {"m1": 33, "m2": 33, "m3": 34})
+    rc = ms.main(["tripwire", "--mutants-dir", str(tmp_path)])
+    assert rc == 1
+    assert "TRIPWIRE FAILED" in capsys.readouterr().err
+
+
 # ── tests_dir scoping ──────────────────────────────────────────────────────
 
 

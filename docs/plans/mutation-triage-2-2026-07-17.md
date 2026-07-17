@@ -223,3 +223,17 @@ work is entirely un-validated because a single Unit-B path-style choice zeroes t
   empty-waves gate, anchored wave regex, ordered glob pair). Sensitivity proven
   against 9 representative mutations (all killed) via faithful mutated copies;
   no src touched. Built in an isolated worktree, integrated by the coordinator.
+
+- 2026-07-17 (fix-2, integrated) — the curated regression FIXED: relative
+  paths_to_mutate restored (the absolute path poisoned mutmut 3.6.0's
+  coverage-join key derivation); the combiner chdir crash re-solved the RIGHT
+  way — mutmut's record_trampoline_hit resolves relative source paths against
+  the LIVE cwd on every mutated call, so the chdir'ing IN-PROCESS tests are
+  --deselect'ed per-module (combiner e2e classes + one journal cwd test; a
+  unit test pins every deselect node-id exists so a typo can't silently
+  re-crash a module); mutmut==3.6.0 pinned via a [mutation] extra; the
+  curated matrix gains its own NON-continue-on-error tripwire and both
+  tripwires now gate on killed+survived>0 (an all-exit-33 run can't fake
+  signal); describe-cache baseline skip under the mutants tree. 47 script
+  tests red-then-green; re-dispatch off main owed to finally read the
+  core-seam data.

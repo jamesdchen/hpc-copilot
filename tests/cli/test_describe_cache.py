@@ -195,7 +195,22 @@ def test_load_path_drags_no_heavy_imports(tmp_path):
     both. Subprocess-isolated so a sibling test that already imported them can't
     mask a regression. BUILD_SHA is forced set so ``load`` actually reaches the
     homedir resolver (proving the leaf module skips ``run_record`` too).
+
+    Skipped under mutmut's ``mutants/`` tree: mutmut rewrites every function with a
+    trampoline shim whose module-scope machinery drags ``importlib.metadata`` onto
+    the import path, so this no-heavy-import assertion cannot hold there and the
+    module's mutation baseline fails on clean source (mutation-triage-2 Finding #1b).
+    The assertion is a SOURCE-TREE invariant; the normal suite still enforces it.
     """
+    from pathlib import Path
+
+    import hpc_agent
+
+    if "mutants" in Path(hpc_agent.__file__).resolve().parts:
+        pytest.skip(
+            "mutmut mutated-tree layout drags importlib.metadata via the trampoline "
+            "shim; the no-heavy-import guard is a source-tree invariant (triage-2 #1b)."
+        )
     code = (
         "import sys; "
         "import hpc_agent._build_info as _b; "
