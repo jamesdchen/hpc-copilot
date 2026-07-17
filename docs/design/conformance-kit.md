@@ -582,6 +582,17 @@ catalog updated if exposed; `pyproject.toml` package-data for
 
 ## Drift log
 
+- **Anti-vendor-lockout risk register reserved here (2026-07-17, T1):** the kit
+  certifies capability BEHAVIOR only, never install/activation, and TODAY only
+  capability 1 has an independent (non-Claude-Code) exercise (`notebook_render.py`,
+  PARTIAL on 2 & 3). The CANONICAL living gap list — every capability with no
+  independent proof, and its owed adapter/fixture/probe — lives in
+  `docs/plans/anti-vendor-lockout-2026-07-17.md` §2 (the risk register), not here;
+  the kit's owed rows (the gateway ACT adapter, the OTel-GenAI INSPECT fixture, the
+  foreign-backgrounding adapter, the capability 4/5 probes, and the newly-named
+  capabilities 6/7 seams) are that plan's Waves C/D. This note reserves the
+  cross-reference so the kit doc points at the gap surface rather than duplicating
+  it.
 - **Status flip lag (2026-07-09):** K1-K10 landed in the slate merge train
   and the CI conformance matrix went live on `b5cb2540`, but this doc's
   status stayed `plan` — caught two days later by the anti-vendor-lockout

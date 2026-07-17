@@ -504,3 +504,192 @@ so a harness can provide each independently:
 A harness that provides INSPECT (e.g. via OTel GenAI) plus either ACT
 implementation earns capability 2's trust property; absent both, the relay audit
 degrades to the VERB-ONLY posture named above.
+
+## Capabilities 6 & 7 — the code-backstopped enforcement behaviors (RULED 2026-07-17)
+
+Two guarantees the reference harness ALREADY enforces mapped to NO named
+contract capability until now. R4 (`docs/plans/anti-vendor-lockout-2026-07-17.md`
+§5) ruled them PROMOTED to named capabilities 6 and 7: recording an
+already-enforced behavior is docs-only bookkeeping with no downside, and an
+UNNAMED capability can never acquire a second-harness proof. They are named here.
+They are, TODAY, **code-backstopped-only** — there is no negotiation seam in the
+`harness-capabilities` verb for either, and no conformance-kit behavioral
+assertion for either. The seams are NAMED FOLLOW-ONS below, never silently
+implied. Per the doctrine guardrail, each bullet describes the MECHANISM the
+behavior enforces, never an authorization the harness grants — installing a
+provider grants no trust; the behavior is what a foreign harness must reproduce.
+
+### Capability 6 — the scheduler-write fence
+
+**What it IS.** A pre-execution seam at which the harness INSPECTS a command the
+agent is about to run and BLOCKS it when the command would EXECUTE a mutating
+scheduler verb (`qsub`, `sbatch`, `qdel`, `scancel`, `qmod`, `qalter`) — in
+command position, including inside `ssh` / `bash -c` / `eval` / `xargs` / a
+command substitution — while letting every read-only probe (`qstat` / `squeue` /
+`qacct`, plain `ssh`, a `grep qsub log`) through. Conduct rule 7 mechanized:
+"consequences are gated, curiosity isn't." Mutating cluster actions belong to
+block CODE, which runs them remotely through `ssh_run` inside Python and gates
+each on a journaled human greenlight; the agent's own shell surface never carries
+them.
+
+**Trust property earned.** The agent cannot improvise a cluster mutation. Before
+this seam, prose was the only guard, and prose drifts with every model/harness
+update. The fence moves the guarantee OUT of the model's reach: even a model that
+decides to `qdel` a job is stopped at the seam, not trusted to refrain.
+
+**A conforming harness MUST / MUST NEVER.** MUST intercept the agent's
+shell/tool-execution surface BEFORE the command runs and refuse — surfacing the
+reason to the agent, never silently dropping — any command whose command-position
+analysis finds a fenced verb. MUST let read-only probes AND any command that
+merely NAMES a fenced verb as an argument (`grep qsub log`, a help string that
+prints `qsub`) through: the fence blocks EXECUTION, not mention. MUST NEVER fence
+the `hpc-agent` CLI itself — the blocks' command line is `hpc-agent <verb> …`,
+which carries no fenced token; they dial the scheduler remotely inside Python.
+MUST NEVER treat the fence as authorization to run mutations from block code
+WITHOUT a journaled greenlight — the fence is one layer; the greenlight gate is
+the other.
+
+**Detection (declared == detected == behaved).** HONEST STATUS: there is NO
+negotiation seam in `harness-capabilities` for capability 6 today — that verb
+reports capabilities 1–5 only. The reference provider IS install-detectable by
+the same canonical matcher the other needles use
+(`agent_assets._find_hook_entry_index` over the `scheduler_write_fence` needle in
+`hooks.PreToolUse`, pinned by `tests/cli/test_agent_assets_settings_hook.py`), but
+that detection is not surfaced as a negotiated capability and there is no
+BEHAVIORAL kit assertion a foreign fence must pass. So the declared == detected ==
+behaved triangle is UNCLOSED for capability 6. Naming it does not close it; the
+seam is a named follow-on.
+
+**Enforcing code.** `_kernel/hooks/scheduler_write_fence.py` — a `PreToolUse(Bash)`
+command hook, **exit 2 blocks the tool call** with the reason on stderr;
+`_fenced_in_command` → `_analyze_tokens` → `_first_real_token` do the
+command-position analysis (subshell/redirect/wrapper skipping, transport
+recursion, command-substitution scan). Installed by `install_agent_assets` into
+`hooks.PreToolUse` (`agent_assets.py`, the `settings_write_fence_hook` spec).
+
+**Follow-on seam (named, not implied).** A negotiated capability-6 report in
+`harness-capabilities` + a conformance-kit behavioral assertion (a foreign
+PreToolUse-equivalent provider proving the fence-vs-mention discrimination). Size:
+M. That unit OWNS the MINOR contract-version bump (`HARNESS_CONTRACT_VERSION` in
+`ops/harness_capabilities.py` and the three-way pin), which this docs-only naming
+deliberately does NOT take — the version stays 1.1.0 until a seam actually lands.
+
+### Capability 7 — the decision-rendezvous commit-then-continue
+
+**What it IS.** A turn-final seam at which the harness DETECTS that a human
+greenlight (`response == "y"`) has been committed to the decision journal for a
+parked block boundary while the `block-drive` driver has NOT advanced past it, and
+FORCES the agent to continue (advance the driver) instead of ending the turn. It
+fires ONLY on committed-but-unadvanced: while the driver is merely waiting for the
+human (no committed `y` targeting this boundary) the stop is VALID and the seam
+stays silent — forcing a continuation there would loop the harness into a void.
+Self-healing: the next `block-drive` tick consumes the approved spec and clears
+the marker, after which there is nothing to force.
+
+**Trust property earned.** A committed approval always ADVANCES the workflow. The
+failure this closes: the model commits the `y` and then ends its turn ("recorded,
+done"), stranding the driver un-advanced. The guarantee — an approval never dies
+in the journal — moves out of the model's diligence into a code seam.
+
+**A conforming harness MUST / MUST NEVER.** MUST provide the same primitive
+capability 2 names — inspect the turn-final state and force ONE continuation — and
+at that seam read the journal to distinguish committed-but-unadvanced from
+merely-awaiting. MUST block AT MOST ONCE per stop (loop-safe; a
+`stop_hook_active`-equivalent re-entry passes straight through). MUST fail-open: a
+malformed payload, an unreadable journal, or no committed-unadvanced decision is a
+clean no-op, never a wedge. MUST NEVER force continuation while the driver is only
+waiting for the human. When the harness ALSO declares the `stop-hook-append`
+capability (capability 5) AND the parked next verb is MECHANICAL AND transport is
+healthy, it MAY complete the mechanical tick in code rather than bouncing — but
+absent any of those it degrades to the byte-identical bounce.
+
+**Detection (declared == detected == behaved).** HONEST STATUS: like capability 6,
+there is NO distinct negotiation seam for capability 7 in `harness-capabilities`
+today. The reference provider is one of the three fused Stop guards installed
+under the `stop_multiplex` dispatcher; it is install-detectable via the Stop-entry
+needle, but the verb reports it as part of neither capability 2 (relay) nor a
+distinct capability 7, and no kit assertion exercises a foreign
+commit-then-continue provider. The triangle is UNCLOSED. Naming it is the
+prerequisite, not the proof.
+
+**Enforcing code.** `_kernel/hooks/decision_rendezvous_stop_guard.py` —
+`build_hook_output(payload)` → `find_committed_unadvanced` (the
+committed-`y`-targets-this-boundary predicate, via
+`block_drive.committed_greenlight_for_boundary`); `_rejector_output` is the
+block-once bounce, `_completer_output` the capability-5-gated in-code advance.
+Fused into the one Stop entry by the `stop_multiplex` dispatcher; installed by
+`install_agent_assets`.
+
+**Follow-on seam (named, not implied).** A negotiated capability-7 report + a kit
+assertion that a foreign turn-final provider forces exactly-one continuation on a
+committed-unadvanced journal AND stays silent while merely awaiting. Size: M.
+Shares the MINOR version-bump follow-on with capability 6.
+
+## Capabilities 4 & 5 — the detection-seam audit (anti-vendor-lockout T3)
+
+Both capability 4 (trusted display) and capability 5 (Stop-hook append channel)
+are reported `"unknown"` by `harness-capabilities` — honest non-answers, never
+`False` (a caller distinguishes "declared absent" from "never probed"). This
+section records, per capability, what a SECOND harness would need to PROVE
+conformance and what seam is MISSING, per the T3 charter. Guardrail G3 is
+restated and unchanged: the elicitation path stays NON-LOAD-BEARING — nothing here
+makes a client-render capability a trust precondition; the MCP elicitation channel
+degrades to the hook path silently and introduces no sign-off verb, and the
+authorship BAR is untouched.
+
+### Capability 4 — trusted display
+
+- **What conformance would require.** A render surface the harness DISPLAYS to the
+  human that code can PROVE the human saw VERBATIM — the trusted projection of a
+  relay / verdict / brief, uncorrupted by the model. A second harness proves it
+  with a conformance probe that emits a known code-rendered payload and confirms
+  the surface displayed it byte-for-byte, with no model-authored substitution.
+- **What seam is MISSING.** There is NO code-observable install marker for a
+  trusted-render surface — `harness_capabilities` asserts nothing and reads
+  `"unknown"` (`ops/harness_capabilities.py`, the `trusted_display`
+  `CapabilityEntry`). There is no second render surface and no kit noun. A
+  negotiated report needs EITHER a passive detection seam OR a conformance probe
+  in the shape capability 5 already sketches.
+- **Verdict.** KEEP `"unknown"` in Wave A. Naming/probing is deferred.
+- **Follow-on unit.** T9 (plan Wave D) — a trusted-display detection seam + a
+  second render surface. Files: `ops/harness_capabilities.py` + a kit noun. Size: M.
+
+### Capability 5 — the Stop-hook append channel
+
+- **What conformance would require.** The harness DISPLAYS a hook `systemMessage`
+  to the human — the channel that lets the relay-audit Stop hook COMPLETE
+  (code-append the owed render / verdict / correction and PROCEED) instead of
+  bouncing the model into re-relaying what code already holds verbatim. A
+  conforming prober MUST confirm BOTH output shapes display (D1): a bare
+  `systemMessage` on a PROCEEDING stop, AND a `systemMessage` combined with
+  `decision:"block"` — display may differ between them.
+- **What seam is MISSING.** There is NO passive install seam — a hook
+  `systemMessage` leaves zero evidence in `settings.json` — so the channel is
+  ENV-DECLARED only (`HPC_STOP_HOOK_APPEND` / `HPC_STOP_HOOK_APPEND_ON_BLOCK`, read
+  tri-state by `detect_stop_hook_append` / `detect_stop_hook_append_on_block` in
+  `ops/harness_capabilities.py`) and reads `"unknown"` until a conforming harness's
+  probe confirms `systemMessage` display. No conforming prober exists yet.
+  Env-declared activation is trust-by-self-assertion's next-door risk (guardrail
+  G2), which is exactly why the completer path is gated on a PROBE-confirmed bit,
+  not on the env marker alone.
+- **Verdict.** KEEP `"unknown"` in Wave A. Activation stays PROBE-gated.
+- **Follow-on unit.** T10 (plan Wave D) — a stop-hook-append conformance prober
+  (the D1 two-shape probe) so a foreign harness activates capability 5 by
+  BEHAVIOR, not just env markers. Size: M.
+
+## Drift log
+
+- **2026-07-17 (anti-vendor-lockout Wave A, T2 + T3).** Named the two
+  previously-unnamed enforcement behaviors as **capabilities 6 (scheduler-write
+  fence) and 7 (decision-rendezvous commit-then-continue)** — R4 RULED
+  (`docs/plans/anti-vendor-lockout-2026-07-17.md` §5). Recorded them
+  code-backstopped-only: NO negotiation seam and NO kit assertion for either, so
+  the declared == detected == behaved triangle is UNCLOSED for both; the seams are
+  named follow-ons that OWN the MINOR contract-version bump. Contract version left
+  at 1.1.0 deliberately — this landing is docs-only and adds no reported
+  capability. Added the **capability 4/5 detection-seam audit (T3)**: both stay
+  `"unknown"` in Wave A, with the missing seam and the Wave-D follow-on unit
+  (T9/T10) recorded per capability; the elicitation-non-load-bearing posture (G3)
+  restated unchanged. No code touched; the enforcing hooks
+  (`_kernel/hooks/scheduler_write_fence.py`,
+  `_kernel/hooks/decision_rendezvous_stop_guard.py`) predate this record.

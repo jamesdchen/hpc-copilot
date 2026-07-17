@@ -189,8 +189,30 @@ exercise:**
 | (commit-then-continue) rendezvous | NO | folded into relay/backgrounding assumptions; unnamed |
 
 Capability 1 is the only one whose portability is CHECKED by a foreign
-implementation. Everything else is portable-BY-SPEC-only. That list is the plan's
-priority order.
+implementation. Everything else is portable-BY-SPEC-only. **This table is the
+CANONICAL living gap list** (T1): the burn-down waves (C/D) close its rows, and a
+new capability with no independent exercise is added here first. That list is the
+plan's priority order.
+
+### The memory-note stale-claims reconciliation (T1)
+
+The standing memory note `project_anti_vendor_lockout.md` (2026-07-09, "the large
+one") is 7 days stale at plan time. T1 verifies every "planned / unbuilt / missing"
+claim it carries against code and records the current truth with a citation. Each
+row is the note's framing, the VERDICT, and the `path::symbol` (or verb/test)
+proving it — so the note can be trusted-by-reconciliation, not re-archaeologied.
+
+| Memory-note claim (2026-07-09) | Verdict | Code citation proving current truth |
+|---|---|---|
+| The conformance CERTIFICATION path is "the missing artifact" / kit is skeleton-only | **STALE — SHIPPED** | `src/hpc_agent/conformance/` (adapter protocol, capability tests, `report.py`, reference adapters `claude_code.py` + `notebook_render.py`); `docs/design/conformance-kit.md` status `shipped`, K1–K10 landed; the `conformance:` CI matrix job self-certifies both adapters. The status FLIP itself lagged the landing — the drift T1 is chartered to catch (recorded in that doc's header + drift log). |
+| The `claude -p` worker is a live component; #137 OAuth auth blocker is in-scope | **STALE — worker DELETED, auth OUT OF SCOPE** | `_kernel/lifecycle/detached.py` runs detached blocks as harness-neutral `hpc-agent` subprocesses ("NO `claude -p` worker"); `_wire/spawn_contract.py::spawn_request` survives as the shared shape only, always `None`. The auth boundary is contract-OUT-OF-SCOPE: `docs/internals/harness-contract.md`, "The AUTH boundary … anti-vendor-lockout T2". |
+| MCP assumes / requires a Claude client (an MCP-only lockout) | **STALE — MCP is a strict derived subset, non-load-bearing** | `_kernel/extension/mcp_server.py::_declares_next_block` curates the MCP catalog as a SUBSET of the CLI registry; `scripts/lint_skill_mcp_reachability.py` pins skills to curated-reachable verbs only. Some CLI verbs are deliberately NOT MCP-exposed — the opposite of lockout. MCP-projection ruling (2026-07-17): non-load-bearing on trust. |
+| `ANTHROPIC_*` / Claude-namespaced env reads are load-bearing in core | **STALE — none load-bearing** | Grep over `src/hpc_agent/` returns zero `ANTHROPIC_*` reads; every `claude -p` mention is a docstring for the removed transport. The only Claude-namespaced reads are benign toggles: `CLAUDE_CONFIG_DIR` (probe read path), `CLAUDE_CODE_SESSION_ID` (`cli/skill_returns.py`, graceful-absent), `CLAUDE_HPC_VALIDATE_OUTPUTS` (`_kernel/contract/schema.py`, opt-in). |
+| The two enforcement guarantees (scheduler fence, rendezvous continue) map to a named capability | **CONFIRMED-UNNAMED at plan time → RULED promoted 2026-07-17 (R4)** | `_kernel/hooks/scheduler_write_fence.py` (rule 7 fence) and `_kernel/hooks/decision_rendezvous_stop_guard.py` (commit-then-continue) enforce real guarantees with NO named contract capability. T2 records them as capabilities 6/7 (`docs/internals/harness-contract.md`), code-backstopped-only. |
+
+The reconciled verdicts feed forward: the SHIPPED-kit and DELETED-worker rows
+retire the note's "unbuilt certification path" and "auth-assumption" framings; the
+risk register above (not the note) is now the live gap surface.
 
 ---
 
@@ -332,3 +354,17 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   portability (guardrail G3 keeps it non-load-bearing) and does NOT chase the
   auth blocker (contract T2 out-of-scope). The real residual is activation (T4),
   the unproven capabilities 2–5 (Wave C/D), and prose (T5).
+- **Wave A landed (2026-07-17): T1 + T2 + T3, docs-only.** T1 — the memory-note
+  stale-claims reconciliation table (§2) verifies every "planned/unbuilt/missing"
+  claim against code with a citation, and the risk register is marked the CANONICAL
+  living gap list. T2 — capabilities 6 (scheduler-write fence) and 7
+  (decision-rendezvous commit-then-continue) named in
+  `docs/internals/harness-contract.md` under the R4 ruling, recorded
+  code-backstopped-only (no negotiation seam, no kit assertion; declared == detected
+  == behaved UNCLOSED for both; the seam-wiring follow-on OWNS the MINOR
+  contract-version bump, so the version stays 1.1.0). T3 — the capability 4/5
+  detection-seam audit: both KEEP `"unknown"` in Wave A, missing seam + Wave-D
+  follow-on (T9/T10) recorded per capability, G3 restated. No code touched; the
+  enforcing hooks predate the record. A reservation note is added to
+  `docs/design/conformance-kit.md`'s drift log pointing here as the living gap
+  list.
