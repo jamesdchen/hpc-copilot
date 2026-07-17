@@ -32,17 +32,31 @@ That file has its own file-level autouse fixture that ``cache_clear()``s
 probe-state tests. Pytest applies the file-level fixture AFTER this
 directory-level one, so:
 
-1. This conftest's autouse warms the GCM cache.
+1. This conftest's autouse warms the probe caches.
 2. The file-level fixture (in tests where it applies) clears the
    named-pipe cache (it does NOT clear the GCM cache — only the
    named-pipe + ssh-config caches).
 3. Test runs with the intended probe state for that test.
 
-Tests outside ``test_remote_windows_compat.py`` see a warm GCM cache for
-every test, so the version probe never fires inside a mocking context.
+**Why BOTH probes must be warmed (the 661a6ca7 CI double-red).** Warming
+only the GCM cache left ``_windows_openssh_named_pipe_supported`` — its
+own independent ``functools.cache`` over the same ``ssh -V`` probe — cold
+whenever ``test_remote_windows_compat.py``'s fixture had cleared it
+earlier in the SAME xdist worker. The next test in that worker to enter a
+``patch("...subprocess.Popen")`` window and call ``ssh_argv("ssh")``
+(``test_transport_pull.py::test_pull_transfer_drives_bounded_runner_not_ssh_run``)
+then fired the real probe against the mocked ``Popen``:
+``MagicMock.communicate()`` iterates empty, so ``subprocess.run``'s
+``stdout, stderr = process.communicate(...)`` raised ``ValueError: not
+enough values to unpack (expected 2, got 0)`` — Windows-only (only win32
+multiplex opts consult the named-pipe probe) and xdist-order-dependent.
+Warming both here means every test starts with every ssh-probe cache
+warm, whatever ran before it in the worker.
 """
 
 from __future__ import annotations
+
+import sys
 
 import pytest
 
@@ -51,12 +65,16 @@ from hpc_agent.infra import ssh_options
 
 @pytest.fixture(autouse=True)
 def _warm_ssh_version_probe_cache() -> None:
-    """Pre-warm :func:`_local_openssh_supports_gcm` before each test.
+    """Pre-warm BOTH cached ``ssh -V`` probes before each test.
 
     Idempotent on a warm cache (``functools.cache`` returns the cached
     value without re-firing the probe). On a cold cache this fires
     ``subprocess.run(["ssh", "-V"])`` against the REAL subprocess module
     *before* any test's mocking begins, so the probe never lands inside
-    a ``patch("...subprocess.run")`` scope.
+    a ``patch("...subprocess.run")`` / ``patch("...subprocess.Popen")``
+    scope. The named-pipe probe is win32-gated in product code, so warm
+    it only there (on POSIX it is never consulted).
     """
     ssh_options._local_openssh_supports_gcm()
+    if sys.platform == "win32":
+        ssh_options._windows_openssh_named_pipe_supported()
