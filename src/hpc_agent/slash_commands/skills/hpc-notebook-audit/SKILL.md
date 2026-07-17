@@ -10,6 +10,23 @@ Drive the **notebook-audit prelude** — the surface (`docs/design/notebook-audi
 
 The audit runs over a **source `.py`** in jupytext percent format (`# %%` cells) carrying opaque section markers (`# hpc-audit-section: <slug>` as the first non-blank line inside a cell), diffed against a **template `.py`** whose section slugs are the required inventory. You orchestrate four in-tree verbs — `notebook-lint`, `notebook-auto-clear`, `notebook-audit-view`, `notebook-status` — plus `append-decision` for the sign-off. The verbs compute everything; you relay their code-rendered projections and translate the human's `y`/nudge. The graduation gate (`ops/notebook_gate.py::assert_source_audited`, raising `errors.SourceUnaudited`) refuses an opted-in repo whose audit is stale, so a `passed` audit is the ticket into submit.
 
+## This skill is the Claude-Code profile of the audit prelude
+
+This SKILL is **one harness's profile** of a harness-NEUTRAL procedure. The notebook-audit prelude is not one of the four `block-drive` workflows the harness runbook projects (submit / status / aggregate / campaign — [`docs/generated/harness-runbook.md`](../../../../docs/generated/harness-runbook.md)), but it rides the SAME consent protocol that runbook states once — **park → typed `y` → `append-decision` → advance** — and its trust substrate is harness-neutral: the sign-off is an ordinary `append-decision` over the **utterance-log write API** plus the audit verbs (`notebook-lint` / `notebook-auto-clear` / `notebook-audit-view` / `notebook-status`), specified vendor-neutrally in [`docs/internals/harness-contract.md`](../../../../docs/internals/harness-contract.md) (capability 1 + the second-conforming-harness sketch). The `hpc-agent` CLI verbs are the invariant substrate; a foreign harness drives the identical audit from them, and the notebook render already proves the sign-off portable with NO Claude Code in the loop.
+
+Everything Claude-specific below is this profile's binding of a neutral step — a foreign harness supplies its own for the same step:
+
+| Claude-Code idiom in this skill | Neutral step it binds |
+|---|---|
+| "The Claude Code harness IS the audit surface"; the typed chat utterance as the strongest authorship tier | Capability 1 — the out-of-band human-utterance log (harness-contract §2). The audit surface is whatever conforming harness writes that log; Claude Code is one, the notebook render is another |
+| The sign-off POPUP / MCP elicitation E-render; `append-decision`'s elicit-then-retry wrap | A second capability-1 capture channel (harness-contract, "MCP elicitation as a second capability-1 channel") — NON-load-bearing; it degrades to the chat / hook path |
+| Free-text elicitation, never a pre-filled button | The authorship BAR — the sign-off must derive from human-typed text, however the harness distinguishes typed from clicked |
+| The relay ladder (SEND the `render_path` file / popup / inline retype) | Capability 4 (trusted display), reported `"unknown"` — the skill picks the strongest rung the session's harness actually has |
+| "Your final action MUST be a tool call"; end-of-turn on a non-tool-call message | *Advance* — make a verb call the turn's last act so the loop is not stranded; a foreign harness ends its turn however it does |
+| Batch tool calls in one message; the `&`-compound permission-classifier note; MCP-first typed tools | Claude Code's concurrency / gating / typed-tool surfaces over the same CLI verbs (the MCP catalog is a projection of the CLI registry) |
+
+The audit loop below is load-bearing and unchanged — this framing only separates the neutral substrate from this harness's binding.
+
 ## Skill invariants (the doctrine this skill enforces)
 
 - **The skill never resolves a decision.** Each human-required section is signed by the human, or nudged; you never sign on their behalf and never mark a section cleared yourself (auto-clear is a code verb, not your judgment).

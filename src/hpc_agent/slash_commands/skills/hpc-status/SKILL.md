@@ -12,6 +12,23 @@ The two status blocks (`ops/status_blocks.py`) `block-drive` composes are `statu
 
 The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous agent invokes this skill directly.
 
+## This skill is the Claude-Code profile of the harness runbook
+
+This SKILL is **one harness's profile** of a harness-NEUTRAL procedure — it is NOT the source of truth for the workflow. The block SEQUENCE (`status-snapshot` → `status-watch`), the decision points (each tagged code-vs-judgement with its backing verb), and the consent protocol — **park → typed `y` → `append-decision` → the driver advances** (this workflow has NO consent boundary: the chain is ungated and self-chains in code) — are the SUBSTRATE, stated harness-neutrally in [`docs/generated/harness-runbook.md`](../../../../docs/generated/harness-runbook.md). That page is GENERATED from `_wire/spawn_contract.py::DECISION_POINTS` + `infra/block_chain.py` (edit `DECISION_POINTS`, never the runbook prose or this framing). A foreign (non-Claude-Code) harness drives this same workflow from that runbook and the `hpc-agent` CLI verbs alone — the CLI is the invariant substrate ([`docs/internals/harness-contract.md`](../../../../docs/internals/harness-contract.md)).
+
+Everything ELSE below is this profile's Claude-Code-specific shim: the same neutral relay/translate role, bound to Claude Code's surfaces. Where a Claude idiom appears it is the **Claude-Code binding** of a neutral runbook step — a foreign harness supplies its own binding for the same step:
+
+| Claude-Code idiom in this skill | Neutral runbook step it binds |
+|---|---|
+| "Your final action MUST be a tool call"; end-of-turn on any non-tool-call message | *Advance* — commit the `y` and fire the next `block-drive` tick without ending the turn (Claude Code fires end-of-turn on a non-tool-call message; another harness advances however it ends a turn) |
+| `run_in_background` / `wait-detached` for a detached `status-watch` (never a shell `&`) | Backgrounding/wake — harness-contract capability 3: detach the poll and re-invoke on terminal; a harness without it polls synchronously |
+| `CronCreate` / `CronDelete` for a `monitor_arm` cadence | Arm the code-decided monitor cadence (`decide-monitor-arm`) from the same `cron_create_args`; a foreign harness arms its own scheduler |
+| A background tail of the local supervisor output; `/loop` wake avoidance | Liveness DISPLAY only, never state — the harness shows progress however it can; reconcile stays the sole state source |
+| Batch tool calls in one message; the `&`-compound permission-classifier note; MCP-first typed tools (`attention-queue` read-only) | Claude Code's concurrency / gating / typed-tool surfaces over the CLI verbs (the MCP catalog is a projection of the CLI registry) |
+| The relay itself — render the brief / queue render, take `y`/nudge, re-present | The neutral relay contract (runbook, "Relay each decision brief"); this skill is the Claude-Code translator at those rendezvous |
+
+The block-loop relay below is load-bearing and unchanged — this framing only names what is substrate versus what is this harness's binding.
+
 ## Invocation surface
 
 - **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.

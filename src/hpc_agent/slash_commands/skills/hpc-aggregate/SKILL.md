@@ -12,6 +12,21 @@ The two aggregate blocks (`ops/aggregate_blocks.py`) `block-drive` composes are 
 
 The slash `/aggregate-hpc` is the human-interview wrapper; an external autonomous agent invokes this skill directly.
 
+## This skill is the Claude-Code profile of the harness runbook
+
+This SKILL is **one harness's profile** of a harness-NEUTRAL procedure — it is NOT the source of truth for the workflow. The block SEQUENCE (`aggregate-check` → `aggregate-run`), the decision points (each tagged code-vs-judgement with its backing verb — the reducer being the sole source of every aggregate number is a substrate fact, not this profile's), and the consent protocol — **park → typed `y` → `append-decision` → the driver advances** (the driver PARKS before `aggregate-run`, the consent boundary) — are the SUBSTRATE, stated harness-neutrally in [`docs/generated/harness-runbook.md`](../../../../docs/generated/harness-runbook.md). That page is GENERATED from `_wire/spawn_contract.py::DECISION_POINTS` + `infra/block_chain.py` (edit `DECISION_POINTS`, never the runbook prose or this framing). A foreign (non-Claude-Code) harness drives this same workflow from that runbook and the `hpc-agent` CLI verbs alone — the CLI is the invariant substrate ([`docs/internals/harness-contract.md`](../../../../docs/internals/harness-contract.md)).
+
+Everything ELSE below is this profile's Claude-Code-specific shim: the same neutral relay/translate role, bound to Claude Code's surfaces. Where a Claude idiom appears it is the **Claude-Code binding** of a neutral runbook step — a foreign harness supplies its own binding for the same step:
+
+| Claude-Code idiom in this skill | Neutral runbook step it binds |
+|---|---|
+| "Your final action MUST be a tool call"; end-of-turn on any non-tool-call message | *Advance* — commit the `y` and fire the next `block-drive` tick without ending the turn (Claude Code fires end-of-turn on a non-tool-call message; another harness advances however it ends a turn) |
+| `run_in_background` for a slow `aggregate-run` pull (never a shell `&`) | Backgrounding/wake — harness-contract capability 3: detach the combine+pull and re-invoke on the results-table brief |
+| Batch tool calls in one message; the `&`-compound permission-classifier note; MCP-first typed tools | Claude Code's concurrency / gating / typed-tool surfaces over the CLI verbs (the MCP catalog is a projection of the CLI registry) |
+| The relay itself — render the check / run brief, take `y`/nudge, re-present | The neutral relay contract (runbook, "Relay each decision brief"); this skill is the Claude-Code translator at those rendezvous |
+
+The block-loop relay below is load-bearing and unchanged — this framing only names what is substrate versus what is this harness's binding.
+
 > **NEVER compute an aggregate metric yourself, and NEVER write `metrics.json` from your own arithmetic or a `Read`-then-mean-in-your-head shortcut.** Aggregation is the `aggregate-run` block's reducer — deterministic code (cluster-reduce when an `aggregate_cmd` is set, the cluster combiner, or a per-task `metrics.json` weighted-mean otherwise). That reducer is the SoT for every number; an LLM in the compute loop is the exact failure this skill exists to prevent (wrong arithmetic *and* `ok: true`). If the reducer cannot run — a readiness or integrity gate blocked, partials missing — surface the block's typed failure or park the anomaly; do NOT fabricate a number or "fill in" a missing `metrics.json`.
 
 ## Invocation surface
