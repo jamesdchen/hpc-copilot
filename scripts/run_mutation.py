@@ -95,6 +95,14 @@ MODULE_MAP: dict[str, ModuleScope] = {
         tests=("tests/cli/test_fast_dispatch.py",),
         note="CLI single-verb fast-path resolution cache. Guard + fingerprint logic.",
     ),
+    "capabilities-cache": ModuleScope(
+        key="capabilities-cache",
+        source="src/hpc_agent/state/capabilities_cache.py",
+        tests=("tests/cli/test_capabilities_cache.py",),
+        note="Build+dist-keyed capabilities-envelope cache -- guard-heavy (disable / "
+        "dirty / dist-signature / partial-registry / per-variant). Byte-identity to "
+        "the walk is the load-bearing invariant. Some lazy imports blind mutmut.",
+    ),
     "combiner": ModuleScope(
         key="combiner",
         source="src/hpc_agent/execution/mapreduce/combiner.py",

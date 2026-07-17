@@ -49,6 +49,7 @@ via `--keys`, so the two never drift):
 | `attestation` | `state/attestation.py` | `tests/state/test_attestation.py` | Attestation kernel (validate/bind/reduce). Pure logic. |
 | `describe-cache` | `state/describe_cache.py` | `tests/cli/test_describe_cache.py` | Build-content-keyed cache; guard-heavy. Some lazy imports blind mutmut. |
 | `fast-path-cache` | `cli/_fast_path_cache.py` | `tests/cli/test_fast_dispatch.py` | CLI fast-path resolution cache. Guard + fingerprint logic. |
+| `capabilities-cache` | `state/capabilities_cache.py` | `tests/cli/test_capabilities_cache.py` | Build+dist-keyed capabilities-envelope cache; guard-heavy, byte-identical to the walk. Some lazy imports blind mutmut. |
 | `combiner` | `execution/mapreduce/combiner.py` | `tests/execution/mapreduce/test_combiner*.py` | The reduce/combine that computes every aggregate number. **Heavy (~650 lines)** — the slowest key. |
 
 The runner backs up `pyproject.toml` to a sidecar, writes the scoped

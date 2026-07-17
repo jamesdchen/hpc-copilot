@@ -32,17 +32,40 @@ from hpc_agent.state.run_record import HPC_HOMEDIR
 
 
 def _capabilities_handler(args: argparse.Namespace) -> int:
-    """CLI adapter — emits llms-full text on ``--full``, else the envelope."""
+    """CLI adapter — emits llms-full text on ``--full``, else the envelope.
+
+    A build+dist-keyed disk cache (:mod:`hpc_agent.state.capabilities_cache`)
+    short-circuits the catalog projection / llms-full render on the second-and-
+    later cold call in a build/env. A hit is re-emitted through the SAME path
+    (byte-identical stdout); the cache is disabled on a source checkout, so this
+    is a pure pass-through in dev.
+    """
+    from hpc_agent.state import capabilities_cache
+
     if getattr(args, "full", False):
+        cached_full = capabilities_cache.load("full")
+        if isinstance(cached_full, str):
+            sys.stdout.write(cached_full)
+            sys.stdout.flush()
+            return EXIT_OK
         from hpc_agent._kernel.registry.operations import render_llms_full
 
-        sys.stdout.write(render_llms_full())
+        text = render_llms_full()
+        capabilities_cache.store("full", text)
+        sys.stdout.write(text)
         sys.stdout.flush()
+        return EXIT_OK
+
+    cached_bare = capabilities_cache.load("bare")
+    if isinstance(cached_bare, dict):
+        _ok(cached_bare, name="capabilities")
         return EXIT_OK
 
     from hpc_agent.cli.dispatch import _live_subcommands
 
-    _ok(capabilities(subcommands=_live_subcommands()), name="capabilities")
+    data = capabilities(subcommands=_live_subcommands())
+    capabilities_cache.store("bare", data)
+    _ok(data, name="capabilities")
     return EXIT_OK
 
 
@@ -98,7 +121,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
         # plugin backend), not a frozen list — a pure-API plugin backend
         # advertises itself here too (#337).
         "supported_schedulers": sorted(registered_backend_names()),
-        "schemas_dir": str(hpc_agent._PACKAGE_ROOT / "schemas"),
+        "schemas_dir": os.path.join(hpc_agent._PACKAGE_ROOT, "schemas"),
         "journal_dir": str(HPC_HOMEDIR),
         "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
         "required_env": [
