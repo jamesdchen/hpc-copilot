@@ -8,6 +8,8 @@ env var, resource grammar, finished-state token, history query).
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from hpc_agent.infra.backends import get_backend, get_backend_class
@@ -269,6 +271,27 @@ def test_pbs_parse_states(family):
 def test_pbs_log_paths(family):
     cls = get_backend_class(family)
     assert cls.stderr_log_path("/repo", "job", "555", 0) == "/repo/logs/job.o555.1"
+
+
+@pytest.mark.parametrize("family", ["pbspro", "torque"])
+def test_pbs_array_log_path_strips_bracket_to_match_template(family):
+    # Regression: #F36 STORES the array id bracket-preserving (``12345[]``) so
+    # ``qstat -t`` / ``qdel`` address the real array — that bracketed id is what
+    # the run record persists and the log-fetch layer
+    # (``cluster_logs.fetch_task_logs``) threads straight into stderr_log_path.
+    # But the PBS array template names each per-task log with the BARE
+    # leading-digit sequence (``PBS_SEQ="${PBS_JOBID%%[!0-9]*}"`` ->
+    # ``<job_name>.o12345.<idx>``). If the path builder leaks the bracket the
+    # probe looks for ``<job_name>.o12345[].<idx>`` and misses EVERY real log,
+    # silently blanking PBS array-task diagnostics. The path must normalise the
+    # stored id to the bare sequence.
+    cls = get_backend_class(family)
+    stored_id = cls.JOB_ID_REGEX.search("12345[].pbs01\n").group(1)
+    assert stored_id == "12345[]"  # the record persists the bracketed id
+    assert cls.stderr_log_path("/repo", "job", stored_id, 0) == "/repo/logs/job.o12345.1"
+    assert cls.err_log_disk_path("/ld", "/scratch", "job", stored_id, 0) == os.path.join(
+        "/scratch", "job.o12345.0"
+    )
 
 
 @pytest.mark.parametrize(

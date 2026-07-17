@@ -1351,8 +1351,17 @@ class ProfileBackend(HPCBackend):
         if cls.profile.family == "slurm":
             # sbatch --error <log_dir>/%x_%A_%a.err -> job_name_jobid_idx.err
             return f"{base}/logs/{job_name}_{job_id}_{array_idx}.err"
-        # sge: ``-j y`` merges streams into <job_name>.o<job_id>.<array_idx>
-        return f"{base}/logs/{job_name}.o{job_id}.{array_idx}"
+        # sge: ``-j y`` merges streams into <job_name>.o<job_id>.<array_idx>.
+        # PBS (#F36) STORES the array id bracket-preserving (``12345[]``) so
+        # qstat -t / qdel address the real array — that bracketed id is what the
+        # record persists and threads here. But the PBS array template names each
+        # per-task log with the BARE leading-digit sequence
+        # (``PBS_SEQ="${PBS_JOBID%%[!0-9]*}"`` -> ``<job_name>.o12345.<idx>``), so
+        # the bracket must be stripped or the probe misses every real log (blanked
+        # PBS array diagnostics). Normalise to the bare sequence — a no-op for
+        # SGE's pure-numeric ids, matching the row parsers' own normalisation.
+        seq = job_id.split(".")[0].split("[")[0]
+        return f"{base}/logs/{job_name}.o{seq}.{array_idx}"
 
     @classmethod
     def err_log_disk_path(
@@ -1361,7 +1370,11 @@ class ProfileBackend(HPCBackend):
         """Local-disk path used by ``status.get_err_log_paths``."""
         if cls.profile.family == "slurm":
             return os.path.join(log_dir, f"{job_name}_{job_id}_{task_id}.err")
-        return os.path.join(scratch_dir, f"{job_name}.o{job_id}.{task_id}")
+        # PBS stores the bracket-preserving array id (#F36); strip it to the bare
+        # sequence so the disk path matches the template's ``PBS_SEQ`` filename
+        # (see :meth:`stderr_log_path`). No-op for SGE's pure-numeric ids.
+        seq = job_id.split(".")[0].split("[")[0]
+        return os.path.join(scratch_dir, f"{job_name}.o{seq}.{task_id}")
 
     @classmethod
     def query_jobs(
