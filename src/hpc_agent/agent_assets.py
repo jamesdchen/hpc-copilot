@@ -15,91 +15,52 @@ Optional plugins may ship their own ``commands/`` + ``skills/`` +
 ``hpc_agent.plugins`` seam; those are installed *after* the core
 assets, so a plugin's copy of an asset overrides the core one of the
 same name (last writer wins by path).
+
+**Activation profile (harness-activation Wave 2).** WHAT this installer wires —
+the hook inventory, the fused Stop dispatcher, and the MCP server invocation — is
+now a declarative :data:`CLAUDE_CODE_PROFILE` (a frozen
+:class:`~hpc_agent.harness_profile.HarnessProfile` carrying MECHANISM DESCRIPTION
+only, never a self-asserted capability claim). Turning that neutral description
+into Claude Code's exact ``settings.json`` / ``.claude.json`` layout is
+:class:`~hpc_agent.harness_profile.ClaudeCodeProfile` — the FIRST renderer; a
+foreign harness ships its own reading the same descriptors. This module is the
+Claude-Code install ENGINE (merge / prune / manifest / deny) driving that
+renderer; the render is byte-identical to the pre-profile install (pinned by
+``tests/cli/test_profile_golden.py``). Installing the profile grants ZERO trust
+— capability presence is proven only by BEHAVIOR and read only from the DETECTED
+settings-seam (:mod:`hpc_agent.ops.harness_capabilities`); see
+:mod:`hpc_agent.harness_profile` for the doctrine.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from hpc_agent.harness_profile import (
+    ClaudeCodeProfile,
+    HarnessProfile,
+    HookDescriptor,
+    HookEvent,
+    McpServerDescriptor,
+    StopMultiplexDescriptor,
+    ToolClass,
+)
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.io import atomic_write_text
 
-__all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets", "resolve_claude_dir"]
-
-
-def _hook_python() -> str:
-    """Bash-safe path to the current Python interpreter for hook commands.
-
-    Claude Code runs hooks via ``bash -c '<command>'``. Two Windows pitfalls
-    the raw ``sys.executable`` walks into:
-
-    * **Backslashes.** ``sys.executable`` is a native backslash path on Windows
-      (e.g. ``C:\\Users\\james\\.venv\\Scripts\\python.exe``). Bash treats
-      ``\\U``, ``\\j``, ``\\d`` etc. as escape sequences and collapses the
-      backslash, turning the path into ``C:Usersjames.venvScriptspython.exe``
-      → "command not found". Forward slashes are universally accepted by
-      Windows for executable invocation and pass through bash unchanged.
-    * **Spaces.** Some interpreter paths contain spaces (e.g.
-      ``C:/Program Files/Python311/python.exe`` or a repo dir with a space).
-      Without quoting bash splits on the space and tries to run a non-existent
-      first token. ``shlex.quote`` wraps the path in single quotes when needed.
-    """
-    return shlex.quote(sys.executable.replace("\\", "/"))
-
-
-def _hook_command(module: str, prefilter: tuple[str, ...] = ()) -> str:
-    """The ``bash -c`` command string for a hook that runs ``python -m <module>``.
-
-    Two shapes, selected by *prefilter*:
-
-    * **Bare** (``prefilter=()``): ``<python> -m <module>``. Used by the hooks
-      that fire rarely — once per turn (Stop guards, relay audit), once per
-      session (alert count), once per prompt (utterance capture), or once per
-      matched tool call (answer capture) — where the interpreter start is paid
-      seldom and no pre-filter is worth its complexity.
-    * **Pre-filtered** (non-empty *prefilter*): a bash ``case`` gate that only
-      pipes the payload into Python when it contains one of the *prefilter*
-      substrings, keeping the every-Bash-call common path at bash-builtin cost.
-      A Python interpreter start costs ~300-500ms on Windows (#288), so the
-      ``matcher: "Bash"`` hooks (skill-return / rendezvous autofetch, the
-      scheduler write-fence) gate on their trigger verbs. The substring scan can
-      false-positive on an unrelated command echoing a verb — that costs one
-      no-op interpreter start, nothing more.
-    """
-    py = _hook_python()
-    if not prefilter:
-        return f"{py} -m {module}"
-    pattern = "|".join(f"*{verb}*" for verb in prefilter)
-    return (
-        'input=$(cat); case "$input" in '
-        f"{pattern}) "
-        f"printf '%s' \"$input\" | {py} "
-        f"-m {module};; esac"
-    )
-
-
-def _hook_entry(command: str, *, matcher: str | None) -> dict[str, Any]:
-    """A single ``settings.json`` hook entry running *command*.
-
-    Emits ``{"matcher": ..., "hooks": [...]}`` when *matcher* is set (the
-    tool-matched events — ``Bash``, ``AskUserQuestion``) and the matcher-less
-    ``{"hooks": [...]}`` shape otherwise (``Stop`` / ``SessionStart`` /
-    ``UserPromptSubmit`` have no tool to match). Key order — matcher before
-    hooks — is preserved so the written JSON is byte-stable.
-    """
-    entry: dict[str, Any] = {}
-    if matcher is not None:
-        entry["matcher"] = matcher
-    entry["hooks"] = [{"type": "command", "command": command}]
-    return entry
+__all__ = [
+    "CLAUDE_CODE_PROFILE",
+    "DEFAULT_CLAUDE_DIR",
+    "install_agent_assets",
+    "resolve_claude_dir",
+]
 
 
 # Every hook module lives under this package; the full module path is also the
@@ -111,15 +72,16 @@ _HOOK_MODULE_PREFIX = "hpc_agent._kernel.hooks."
 
 # Needle constants imported by :mod:`hpc_agent.ops.harness_capabilities` to probe
 # an installed settings.json for the capability hooks. Kept as explicit importable
-# names, byte-identical to the corresponding needles in :data:`_HOOK_SPECS`.
+# names, byte-identical to the corresponding needles in :data:`CLAUDE_CODE_PROFILE`.
 _UTTERANCE_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "utterance_capture"
 _ANSWER_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "answer_capture"
 _RELAY_AUDIT_NEEDLE = _HOOK_MODULE_PREFIX + "relay_audit_stop"
 _ALERT_COUNT_NEEDLE = _HOOK_MODULE_PREFIX + "alert_count"
 # Capability 6 (scheduler-write fence): the ``PreToolUse(Bash)`` hook needle the
-# ``harness-capabilities`` verb probes. Byte-identical to the needle in the
-# ``settings_write_fence_hook`` _HOOK_SPEC below — an explicit importable name so
-# the negotiation probe reuses the ONE canonical matcher, never a re-derived scan.
+# ``harness-capabilities`` verb probes. It IS the needle the scheduler-write-fence
+# ``HookDescriptor`` in :data:`CLAUDE_CODE_PROFILE` below carries — an explicit
+# importable name so both the profile and the negotiation probe reuse the ONE
+# canonical matcher, never a re-derived scan.
 _SCHEDULER_WRITE_FENCE_NEEDLE = _HOOK_MODULE_PREFIX + "scheduler_write_fence"
 
 # ── Fused Stop hook (stop_multiplex) ─────────────────────────────────────────
@@ -144,111 +106,96 @@ _STOP_MULTIPLEX_GUARDS: tuple[str, ...] = (
 )
 
 
-class _HookSpec(NamedTuple):
-    """One hook to merge into ``settings.json``: result key, event, needle, shape.
-
-    *result_key* is the field the merge report lands under in
-    :func:`install_agent_assets`'s return dict; *event* the ``settings.json``
-    hook event; *needle* the full module path (match key AND the ``-m`` target);
-    *matcher* the tool matcher (``None`` for matcher-less events); *prefilter*
-    the bash ``case`` trigger substrings (empty → bare invocation).
-    """
-
-    result_key: str
-    event: str
-    needle: str
-    matcher: str | None
-    prefilter: tuple[str, ...]
-
-
-# The nine hooks install-commands wires into ``~/.claude/settings.json``,
-# additively + idempotently + self-healing (see :func:`_merge_hook_entry`).
-# Order is load-bearing: each hook is merged in sequence, so within one event
-# the entries append in this order. The one-line rationale per hook:
+# ── The declarative activation profile ───────────────────────────────────────
+# CLAUDE_CODE_PROFILE is the SINGLE SOURCE OF TRUTH for the hook inventory the
+# installer wires (retiring the former ``_HOOK_SPECS`` tuple + Stop special-case
+# split). It carries harness-NEUTRAL descriptors (module-path needles, neutral
+# turn-boundary events, neutral tool-matcher intents, pre-filter verbs) plus the
+# MCP invocation and the core asset package — mechanism description only, no
+# self-asserted capability claim (frozen, closed field set: see
+# :mod:`hpc_agent.harness_profile`). :class:`ClaudeCodeProfile` renders these into
+# today's exact settings.json/.claude.json layout.
 #
-# * skill_return_autofetch — PostToolUse: auto-fetches a sub-skill's return
+# The one-line rationale per hook (order is load-bearing — entries append per
+# event in this order):
+#
+# * skill_return_autofetch — post-tool/shell: auto-fetches a sub-skill's return
 #   envelope the moment its ``emit-skill-return`` Bash call commits it (the Skill
 #   tool returns before the sub-skill body runs, so a Skill-matched hook can
 #   never see a fresh envelope).
-# * decision_rendezvous_autofetch — PostToolUse: injects the brief a block-drive
-#   tick parked (the ``block-drive`` half of the rendezvous pair).
-# * scheduler_write_fence — PreToolUse: blocks mutating scheduler verbs
+# * decision_rendezvous_autofetch — post-tool/shell: injects the brief a
+#   block-drive tick parked (the ``block-drive`` half of the rendezvous pair).
+# * scheduler_write_fence — pre-tool/shell: blocks mutating scheduler verbs
 #   (qsub/sbatch/qdel/scancel/qmod/qalter, ssh transport included) while
 #   read-only probes stay allowed (conduct rule 7; command-position analysis so
 #   ``grep qsub log`` passes).
-# * alert_count — SessionStart: prints the unacknowledged watchdog-alert count
+# * alert_count — session-start: prints the unacknowledged watchdog-alert count
 #   into session context (proving run #3: detection without delivery is silence).
-# * utterance_capture — UserPromptSubmit: appends each human prompt to the repo's
+# * utterance_capture — on-prompt: appends each human prompt to the repo's
 #   utterances log so the authorship gate can require human-typed evidence
 #   (proving run #4). Silent no-op outside an hpc repo.
-# * answer_capture — PostToolUse(AskUserQuestion): captures TYPED selector answer
-#   text (never a click on an agent-authored option) as authorship evidence too
+# * answer_capture — post-tool/question: captures TYPED selector answer text
+#   (never a click on an agent-authored option) as authorship evidence too
 #   (proving run #5).
 #
 # The THREE ``Stop`` guards — skill_return_stop_guard, decision_rendezvous_stop_guard,
-# and relay_audit_stop — are NOT in this tuple: they are fused into ONE Stop entry
+# and relay_audit_stop — are NOT descriptors: they are fused into ONE Stop entry
 # by :func:`_merge_stop_multiplex_hook` (the ``stop_multiplex`` dispatcher), so a
 # Stop event costs one interpreter start, not three (#288).
-_HOOK_SPECS: tuple[_HookSpec, ...] = (
-    _HookSpec(
-        "settings_hook",
-        "PostToolUse",
-        _HOOK_MODULE_PREFIX + "skill_return_autofetch",
-        "Bash",
-        ("emit-skill-return",),
+#
+# The registry-projected MCP server (``hpc-agent mcp-serve``) is the preferred,
+# shell-free block-invocation surface (design §3, "The tool surface subsumes the
+# shell"). Registered venv-pinned via the current interpreter (resolved at render
+# time) so it does not depend on ``hpc-agent`` being on PATH. ``--allow-mutations``
+# exposes the submit/aggregate verbs (cancel/raw-submit are never registry
+# primitives, so they stay unreachable either way); ``--catalog curated``
+# advertises exactly the human-amplification block verbs plus the recovery/opt-in
+# verbs (doctor, kill, submit-speculate), keeping the rest out of the model's
+# context.
+CLAUDE_CODE_PROFILE: HarnessProfile = HarnessProfile(
+    hook_descriptors=(
+        HookDescriptor(
+            _HOOK_MODULE_PREFIX + "skill_return_autofetch",
+            HookEvent.POST_TOOL,
+            ToolClass.SHELL,
+            ("emit-skill-return",),
+        ),
+        HookDescriptor(
+            _HOOK_MODULE_PREFIX + "decision_rendezvous_autofetch",
+            HookEvent.POST_TOOL,
+            ToolClass.SHELL,
+            ("block-drive",),
+        ),
+        HookDescriptor(
+            _SCHEDULER_WRITE_FENCE_NEEDLE,
+            HookEvent.PRE_TOOL,
+            ToolClass.SHELL,
+            ("qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"),
+        ),
+        HookDescriptor(_ALERT_COUNT_NEEDLE, HookEvent.SESSION_START, ToolClass.NONE, ()),
+        HookDescriptor(_UTTERANCE_CAPTURE_NEEDLE, HookEvent.ON_PROMPT, ToolClass.NONE, ()),
+        HookDescriptor(_ANSWER_CAPTURE_NEEDLE, HookEvent.POST_TOOL, ToolClass.QUESTION, ()),
     ),
-    _HookSpec(
-        "settings_rendezvous_hook",
-        "PostToolUse",
-        _HOOK_MODULE_PREFIX + "decision_rendezvous_autofetch",
-        "Bash",
-        ("block-drive",),
+    stop_hook=StopMultiplexDescriptor(_STOP_MULTIPLEX_NEEDLE, _STOP_MULTIPLEX_GUARDS),
+    mcp_server=McpServerDescriptor(
+        "hpc-agent",
+        "hpc_agent",
+        ("mcp-serve", "--allow-mutations", "--catalog", "curated"),
     ),
-    _HookSpec(
-        "settings_write_fence_hook",
-        "PreToolUse",
-        _SCHEDULER_WRITE_FENCE_NEEDLE,
-        "Bash",
-        ("qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"),
-    ),
-    _HookSpec(
-        "settings_alert_count_hook",
-        "SessionStart",
-        _ALERT_COUNT_NEEDLE,
-        None,
-        (),
-    ),
-    _HookSpec(
-        "settings_utterance_hook",
-        "UserPromptSubmit",
-        _UTTERANCE_CAPTURE_NEEDLE,
-        None,
-        (),
-    ),
-    _HookSpec(
-        "settings_answer_capture_hook",
-        "PostToolUse",
-        _ANSWER_CAPTURE_NEEDLE,
-        "AskUserQuestion",
-        (),
-    ),
+    asset_package="hpc_agent.slash_commands",
 )
 
-
-# The registry-projected MCP server (``hpc-agent mcp-serve``) — the preferred,
-# shell-free invocation surface for blocks (design §3, "The tool surface subsumes
-# the shell"). Registered venv-pinned via the current interpreter so it does not
-# depend on ``hpc-agent`` being on PATH. ``--allow-mutations`` exposes the
-# submit/aggregate verbs (cancel/raw-submit are never registry primitives, so they
-# stay unreachable either way); ``--catalog curated`` advertises exactly the
-# human-amplification block verbs (those returning a next_block) plus the
-# recovery/opt-in verbs (doctor, kill, submit-speculate), keeping the rest of the
-# catalog out of the model's context.
-_MCP_SERVER_NAME = "hpc-agent"
-_MCP_SERVER_ENTRY: dict[str, Any] = {
-    "type": "stdio",
-    "command": sys.executable,
-    "args": ["-m", "hpc_agent", "mcp-serve", "--allow-mutations", "--catalog", "curated"],
+# The Claude-Code install-report field each hook descriptor's merge result lands
+# under in :func:`install_agent_assets`'s return dict — a Claude-Code report-shape
+# detail, keyed by the neutral descriptor's needle (a foreign renderer produces
+# its own report shape, so this mapping is the renderer's, not the profile's).
+_HOOK_REPORT_KEYS: dict[str, str] = {
+    _HOOK_MODULE_PREFIX + "skill_return_autofetch": "settings_hook",
+    _HOOK_MODULE_PREFIX + "decision_rendezvous_autofetch": "settings_rendezvous_hook",
+    _HOOK_MODULE_PREFIX + "scheduler_write_fence": "settings_write_fence_hook",
+    _ALERT_COUNT_NEEDLE: "settings_alert_count_hook",
+    _UTTERANCE_CAPTURE_NEEDLE: "settings_utterance_hook",
+    _ANSWER_CAPTURE_NEEDLE: "settings_answer_capture_hook",
 }
 
 
@@ -378,7 +325,13 @@ def _merge_json(
     }
 
 
-def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
+def _register_mcp_server(
+    claude_dir: Path,
+    *,
+    dry_run: bool,
+    mcp: McpServerDescriptor | None = None,
+    executable: str | None = None,
+) -> dict[str, Any]:
     """Additively, idempotently register the ``hpc-agent`` MCP server in
     ``.claude.json``'s ``mcpServers`` object.
 
@@ -390,31 +343,42 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
     preserved verbatim. Idempotent: a byte-equal entry is ``already-present``; a
     stale entry (e.g. a moved venv changing the interpreter path) is ``updated``.
 
+    The desired entry is RENDERED from the profile's MCP descriptor (*mcp*,
+    default :data:`CLAUDE_CODE_PROFILE`'s) via :class:`ClaudeCodeProfile`, pinning
+    the interpreter to *executable* (default the live ``sys.executable``) at render
+    time rather than at import — so a moved venv heals and the golden can inject a
+    hermetic interpreter.
+
     Returns ``{config_path, action, wrote}`` where ``action`` is ``"added"`` /
     ``"updated"`` / ``"already-present"`` / ``"skipped-unparseable"`` /
     ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
     """
+    if mcp is None:
+        mcp = CLAUDE_CODE_PROFILE.mcp_server
+    if executable is None:
+        executable = sys.executable
+    desired_base = ClaudeCodeProfile.render_mcp_entry(mcp, executable)
 
     def plan(config: dict[str, Any]) -> _MergeOutcome:
         servers = config.get("mcpServers")
         if not isinstance(servers, dict):
             servers = {}
 
-        existing = servers.get(_MCP_SERVER_NAME)
+        existing = servers.get(mcp.name)
         # A user-set ``env`` on the existing registration (e.g.
         # ``HPC_SSH_ENGINE=asyncssh`` opting the demo server into the connection
         # engine) is the USER'S config, not ours: an install heals OUR keys
         # (command/args after a moved venv) but must never destroy theirs —
         # rewriting the entry wholesale silently un-set the engine flag on every
         # install-commands run.
-        desired: dict[str, Any] = dict(_MCP_SERVER_ENTRY)
+        desired: dict[str, Any] = dict(desired_base)
         if isinstance(existing, dict) and isinstance(existing.get("env"), dict) and existing["env"]:
             desired["env"] = existing["env"]
         if existing == desired:
             return _MergeOutcome(False, config, "", "", {}, {})
 
         servers = dict(servers)
-        servers[_MCP_SERVER_NAME] = desired
+        servers[mcp.name] = desired
         config["mcpServers"] = servers
         return _MergeOutcome(
             True,
@@ -589,18 +553,6 @@ def _merge_hook_entry(
     )
 
 
-def _stop_multiplex_command() -> str:
-    """The fused ``Stop`` hook command: ``<py> -m stop_multiplex <g1> <g2> <g3>``.
-
-    Names the three guard modules explicitly as arguments (the dispatch list AND
-    the legacy needles the capability probe keys on), so the fused entry's command
-    still mentions each of them.
-    """
-    py = _hook_python()
-    guards = " ".join(_STOP_MULTIPLEX_GUARDS)
-    return f"{py} -m {_STOP_MULTIPLEX_NEEDLE} {guards}"
-
-
 def _entry_mentions(entry: Any, needle: str) -> bool:
     """True when *entry* has a ``command`` hook whose command mentions *needle*."""
     if not isinstance(entry, dict):
@@ -632,16 +584,19 @@ def _is_legacy_standalone_stop(entry: Any) -> bool:
     return any(_entry_mentions(entry, needle) for needle in _STOP_MULTIPLEX_GUARDS)
 
 
-def _merge_stop_multiplex_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
-    """Install the fused ``Stop`` hook, removing the three legacy standalone entries.
+def _merge_stop_multiplex_hook(
+    claude_dir: Path, *, entry: dict[str, Any], dry_run: bool
+) -> dict[str, Any]:
+    """Install the fused ``Stop`` hook *entry*, removing the three legacy standalone entries.
 
     ONE atomic write on ``settings.json``'s ``hooks.Stop`` array (F2 — the
     539c1cdc regression zone the memo names): the legacy standalone Stop guards
     (``skill_return_stop_guard`` / ``decision_rendezvous_stop_guard`` /
-    ``relay_audit_stop``) are dropped and the single ``stop_multiplex`` entry is
+    ``relay_audit_stop``) are dropped and the single ``stop_multiplex`` *entry*
+    (rendered by :class:`ClaudeCodeProfile` from the profile's stop descriptor) is
     added/healed in the same write, so an upgrade from the three-entry shape can
-    never leave a duplicate Stop guard behind. Every other ``Stop`` entry (a user's
-    own hook) and every other key is preserved verbatim.
+    never leave a duplicate Stop guard behind. Every other ``Stop`` entry (a
+    user's own hook) and every other key is preserved verbatim.
 
     Idempotent: with the fused entry already present byte-equal and no legacy left,
     it is ``already-present``. Self-healing: a stale fused entry (moved venv) is
@@ -654,7 +609,6 @@ def _merge_stop_multiplex_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, 
     ``"dry-run-would-add"`` / ``"dry-run-would-update"``, and ``removed_legacy``
     lists the legacy guard needles dropped.
     """
-    entry = _hook_entry(_stop_multiplex_command(), matcher=None)
 
     def plan(settings: dict[str, Any]) -> _MergeOutcome:
         hooks = settings.get("hooks")
@@ -1190,14 +1144,22 @@ def _write_asset_manifest(
     commands: set[str],
     skills: set[str],
     agents: set[str],
+    version: str | None = None,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Stamp the names + package version this install owns (skipped on dry-run)."""
-    from hpc_agent import __version__
+    """Stamp the names + package *version* this install owns (skipped on dry-run).
 
+    *version* is injectable (premortem D5 — the install path passes it so the
+    hermetic golden is not tied to the live wheel version); it defaults to the
+    live :data:`hpc_agent.__version__` when omitted.
+    """
+    if version is None:
+        from hpc_agent import __version__
+
+        version = __version__
     path = _asset_manifest_path(claude_dir)
     payload = {
-        "version": __version__,
+        "version": version,
         "commands": sorted(commands),
         "skills": sorted(skills),
         "agents": sorted(agents),
@@ -1260,6 +1222,12 @@ def install_agent_assets(
     ``dry_run=True`` nothing is written — the returned dict still
     reports what would have been copied.
 
+    The public entrypoint: resolves the live install inputs (the current
+    interpreter, the wheel version, the configured cluster hosts, and the core +
+    plugin asset roots) and drives :func:`_install_from_profile` over
+    :data:`CLAUDE_CODE_PROFILE`. The declarative WHAT-to-wire lives in that
+    profile; :class:`ClaudeCodeProfile` renders it into the exact layout below.
+
     Result shape::
 
         {
@@ -1314,8 +1282,8 @@ def install_agent_assets(
     ``<claude>/settings.json`` — see :func:`_merge_hook_entry`. Each
     ``action`` is ``"added"`` / ``"already-present"`` / ``"updated"`` /
     ``"skipped-unparseable"`` / ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
-    The full set of non-Stop hooks wired (in order) is enumerated in
-    :data:`_HOOK_SPECS`.
+    The full set of non-Stop hooks wired (in order) is the profile's
+    ``hook_descriptors`` (:data:`CLAUDE_CODE_PROFILE`).
 
     ``settings_stop_multiplex_hook`` reports the fused ``Stop`` hook merge — the
     single ``stop_multiplex`` entry that dispatches all three Stop guards in one
@@ -1331,6 +1299,48 @@ def install_agent_assets(
     ``"dry-run-would-add"``, and ``added`` lists the rule strings
     actually appended (or that *would* have been on dry-run).
     """
+    from hpc_agent import __version__
+    from hpc_agent._kernel.registry.plugins import plugin_slash_command_roots
+
+    profile = CLAUDE_CODE_PROFILE
+    # Core asset tree first, then plugin overlays (last writer wins by path).
+    asset_roots: list[Any] = [files(profile.asset_package), *plugin_slash_command_roots()]
+    return _install_from_profile(
+        profile,
+        claude_dir=claude_dir,
+        dry_run=dry_run,
+        executable=sys.executable,
+        version=__version__,
+        cluster_hosts=_configured_cluster_hosts(),
+        asset_roots=asset_roots,
+    )
+
+
+def _install_from_profile(
+    profile: HarnessProfile,
+    *,
+    claude_dir: Path | None,
+    dry_run: bool,
+    executable: str,
+    version: str,
+    cluster_hosts: Sequence[str],
+    asset_roots: Sequence[Any],
+) -> dict[str, Any]:
+    """Render *profile* into Claude Code config under INJECTED inputs.
+
+    The pure, hermetic-input core of :func:`install_agent_assets` — every source
+    of install non-determinism the golden pins is a PARAMETER, never captured
+    live (premortem D5):
+
+    * ``executable`` — embedded in every hook command AND the MCP server command;
+    * ``version`` — stamped into the asset manifest;
+    * ``cluster_hosts`` — the host-scoped raw-ssh/scp deny rules;
+    * ``asset_roots`` — the ``commands/skills/agents`` trees to distribute, in
+      install order (core first, plugins overlaid).
+
+    The public wrapper supplies the live values; ``tests/cli/test_profile_golden``
+    injects hermetic ones to pin ``ClaudeCodeProfile``'s render byte-for-byte.
+    """
     target = (claude_dir or resolve_claude_dir()).expanduser()
 
     commands: set[str] = set()
@@ -1338,53 +1348,45 @@ def install_agent_assets(
     agents: set[str] = set()
     cleared: list[str] = []
 
-    core_commands, core_skills, core_agents, core_cleared = _install_tree(
-        files("hpc_agent.slash_commands"), target, dry_run=dry_run
-    )
-    commands.update(core_commands)
-    skills.update(core_skills)
-    agents.update(core_agents)
-    cleared.extend(core_cleared)
-
-    # Optional plugins overlay their own assets last — a plugin's
-    # skills/<name>/ (or agents/<name>.md) overrides the core copy of the
-    # same name.
-    from hpc_agent._kernel.registry.plugins import plugin_slash_command_roots
-
-    for root in plugin_slash_command_roots():
-        plugin_commands, plugin_skills, plugin_agents, plugin_cleared = _install_tree(
+    for root in asset_roots:
+        tree_commands, tree_skills, tree_agents, tree_cleared = _install_tree(
             root, target, dry_run=dry_run
         )
-        commands.update(plugin_commands)
-        skills.update(plugin_skills)
-        agents.update(plugin_agents)
-        cleared.extend(plugin_cleared)
+        commands.update(tree_commands)
+        skills.update(tree_skills)
+        agents.update(tree_agents)
+        cleared.extend(tree_cleared)
 
-    # Wire every hook in _HOOK_SPECS into settings.json — additive + idempotent,
-    # never clobbering existing hooks/keys, matched on each hook's module-path
-    # needle. Order is load-bearing (entries append per event in spec order), so
-    # iterate the tuple as-is and key each merge report by the spec's result_key.
+    # Wire every hook descriptor from the profile into settings.json — additive +
+    # idempotent, never clobbering existing hooks/keys, matched on each hook's
+    # module-path needle. Order is load-bearing (entries append per event in
+    # descriptor order); the renderer maps the neutral event/matcher/prefilter to
+    # Claude Code's strings and the report key comes from _HOOK_REPORT_KEYS.
     hook_reports: dict[str, Any] = {}
-    for spec in _HOOK_SPECS:
-        hook_reports[spec.result_key] = _merge_hook_entry(
+    for descriptor in profile.hook_descriptors:
+        hook_reports[_HOOK_REPORT_KEYS[descriptor.needle]] = _merge_hook_entry(
             target,
-            event=spec.event,
-            entry=_hook_entry(_hook_command(spec.needle, spec.prefilter), matcher=spec.matcher),
-            needle=spec.needle,
+            event=ClaudeCodeProfile.event_string(descriptor.event),
+            entry=ClaudeCodeProfile.render_hook_entry(descriptor, executable),
+            needle=descriptor.needle,
             dry_run=dry_run,
         )
 
     # Install the fused Stop hook (stop_multiplex), removing the three legacy
     # standalone Stop entries in the same write (F2). This is the ONLY Stop-event
-    # writer — the three guards are no longer in _HOOK_SPECS.
+    # writer — the three guards are dispatched by the one fused entry.
     hook_reports["settings_stop_multiplex_hook"] = _merge_stop_multiplex_hook(
-        target, dry_run=dry_run
+        target,
+        entry=ClaudeCodeProfile.render_stop_entry(profile.stop_hook, executable),
+        dry_run=dry_run,
     )
 
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +
     # idempotent into .claude.json's mcpServers, never clobbering other servers.
-    mcp_server = _register_mcp_server(target, dry_run=dry_run)
+    mcp_server = _register_mcp_server(
+        target, mcp=profile.mcp_server, executable=executable, dry_run=dry_run
+    )
 
     # Prune assets a prior install owned that this tree no longer ships (#F34) —
     # the removal step _install_tree lacks. Runs against the manifest the last
@@ -1399,7 +1401,7 @@ def install_agent_assets(
         target, assets_pruned["skills"], dry_run=dry_run
     )
     asset_manifest = _write_asset_manifest(
-        target, commands=commands, skills=skills, agents=agents, dry_run=dry_run
+        target, commands=commands, skills=skills, agents=agents, version=version, dry_run=dry_run
     )
 
     # Grant Skill(<name>) for every installed skill so Claude Code's auto-mode
@@ -1419,7 +1421,7 @@ def install_agent_assets(
     # agent Bash) and are unaffected either way.
     settings_deny = _merge_deny_rules(
         target,
-        _raw_ssh_deny_rules(_configured_cluster_hosts()),
+        _raw_ssh_deny_rules(list(cluster_hosts)),
         remove_rules=_BLANKET_SSH_DENY_RULES,
         dry_run=dry_run,
     )

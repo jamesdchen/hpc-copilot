@@ -529,3 +529,70 @@ the grant — the refactor and the read verb are pure engineering under G1/G2/G4
   sole out-of-tree write and guards the default `~/.claude` is never touched.
   Stale `interview.py #190` comment corrected. Built in an isolated worktree,
   integrated by the coordinator.
+
+- **2026-07-17 — U-PROFILE BUILT (Wave 2, by fiat), with D5–D9 applied.** The
+  MEASURE-THEN-DECIDE cut-line (§2, R1) was OVERRIDDEN by user fiat ("build the
+  anti-lockout program NOW"), so the FULL profile (option (b)) ships without a
+  chartered Wave-C adapter as its firing artifact (D9's trigger is thus recorded
+  UNMET-but-waived, not satisfied). What landed: a new `hpc_agent.harness_profile`
+  module — the frozen, CLOSED-field-set `HarnessProfile` (fields:
+  `hook_descriptors`, `stop_hook`, `mcp_server`, `asset_package`) + neutral
+  `HookDescriptor` / `StopMultiplexDescriptor` / `McpServerDescriptor` + neutral
+  `HookEvent` / `ToolClass` enums + the `ClaudeCodeProfile` renderer (the FIRST
+  renderer, RD-1). `install_agent_assets`'s body became the renderer-driven
+  install ENGINE: the hook inventory is now the single-source-of-truth
+  `agent_assets.CLAUDE_CODE_PROFILE` (retiring the `_HOOK_SPECS` tuple + Stop
+  special-case split), and `_install_from_profile` is the pure hermetic-input core
+  the public wrapper feeds live values into. Output is byte-identical to the
+  pre-refactor install (verified: `settings.json` + `.claude.json` bit-for-bit).
+  RD-2 (package vs `_kernel`): landed as a SIBLING module, NOT the planned
+  `agent_assets/` package split — the needle constants stay defined in
+  `agent_assets.py` (so `harness_capabilities` + the conformance adapter import
+  them UNCHANGED, honoring the U-PROFILE "forbidden: harness_capabilities.py"
+  fence), and `harness_profile.py` holds only types + renderer (no
+  `agent_assets` import → no cycle). RD-3 (verb not MCP-curated): N/A — the verb
+  was NOT built (see below). The deltas:
+  - **D5 (golden-of-a-pure-function):** `tests/cli/test_profile_golden.py` pins
+    the render byte-for-byte over PINNED HERMETIC inputs — a fixed fake
+    interpreter, a fixed cluster host, a FIXTURE asset tree (and an injected
+    version) — captured from the PRE-refactor body, NEVER a live install. Scoped
+    to `settings.json` / `.claude.json`, EXCLUDING the version-stamped manifest.
+    A `test_a_profile_field_change_breaks_the_golden` case proves sensitivity.
+    Required parameterizing three non-determinism sources: `sys.executable` +
+    `__version__` + the clusters config all became injected params
+    (`_install_from_profile` args; `_write_asset_manifest` version made optional;
+    the MCP command resolves the interpreter at render time, not import).
+  - **D6 (trust boundary AS PINS, not prose):**
+    `tests/contracts/test_harness_profile_boundary.py` — (a) the frozen, closed
+    field set is equality-pinned and a `capabilities=`-style field is a
+    construction-time `TypeError` (impossible by construction; no
+    `capabilit*`/`provides`/`grant*`/`trust`/`conformant` field may exist); (b) a
+    consumer-trace AST walk asserts NO module outside the install engine
+    (`agent_assets.py` / `harness_profile.py`) imports or reads the profile /
+    renderer / singleton — the trust path (gates/verify/journal/conformance)
+    never sees "profile installed" as "capability present." NOTE re the plan's
+    §2b "grant intents" field: DROPPED — it collides with D6's forbidden `grant*`
+    substring; the Claude Code skill auto-invoke allowance stays a RENDERING
+    behavior over the discovered skills, never a self-asserted profile field.
+  - **D7 (neutral machine-independent descriptors):** honored in the type design
+    — descriptors carry needles + neutral events/matchers + prefilter verbs; the
+    `sys.executable`/rendered-command/host-scoped-deny specifics live only in the
+    `ClaudeCodeProfile` render, never the neutral profile. (The verb that would
+    EMIT these — where D7's leak-free output schema bites — is the split unit
+    below, so its schema pin is owed there.)
+  - **D8 (foreign-renderer needle-embed obligation):** STATED as a normative
+    contract in the `harness_profile` module docstring (a foreign renderer MUST
+    embed each descriptor's needle substring or the capability probe / re-find
+    orphan the hook) — documented, not enforced (no foreign-renderer seam exists
+    yet). Our own renderer's compliance is pinned by the golden test's
+    `test_every_rendered_hook_command_embeds_its_needle`.
+  - **D9 + the read verb:** the plan SPLITS `U-PROFILE-VERB` into its own unit
+    (§4), so per the dispatch instruction this unit built the profile + renderer
+    ONLY — `harness-activation-profile` (the machine-independent, non-MCP-curated
+    query verb) was NOT built and is left for that unit. No regen needed
+    (`regen --check` clean, 174 operations unchanged).
+  Verification: byte-identity inert; golden (4) + boundary (12) new tests green;
+  the 66 existing install/asset/capability tests UNTOUCHED and green; full
+  `tests/contracts/` 1375 passed / 0 failed; lint gauntlet 26/26; `regen --check`
+  8/8; ruff + format + mypy clean. Built in an isolated worktree, UNCOMMITTED,
+  for the coordinator to integrate.
