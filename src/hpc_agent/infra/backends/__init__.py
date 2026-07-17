@@ -733,6 +733,23 @@ class HPCBackend(abc.ABC):
         prev_wave_ids: list[str] = []
         gate_ids = list(gate_job_ids or [])
 
+        # submit-once (U3, Δ5): flag ON, each dispatch through this plan carries a
+        # DISTINCT ``HPC_SUBMIT_WAVE_KEY`` so the woven jobmap writes ONE write-once
+        # id-file per submitted wave (`<run_id>.jobmap.wave-<i>.id`) instead of
+        # clobbering a single shared file — the reconcile adopt reconstructs the
+        # per-wave ``{wave_key: job_id}`` map by set-difference over these keys. A
+        # single-dispatch plan (the ≤cap main array, or the canary) PRESERVES a
+        # caller-set key (the canary's ``canary`` key), else falls to ``wave-0``.
+        # Double-gated exactly like the dispatch weave (`_dispatch_core`): the flag
+        # AND an ``HPC_RUN_ID`` in ``job_env``. Flag OFF ⇒ ``batch_env`` is
+        # untouched, byte-identical to today.
+        from hpc_agent.infra.jobmap import submit_once_enabled, wave_key
+
+        _jobmap_on = submit_once_enabled() and bool(job_env.get("HPC_RUN_ID"))
+        _caller_wave_key = job_env.get("HPC_SUBMIT_WAVE_KEY")
+        _n_dispatch = len(plan.batches)
+        _dispatch_idx = 0
+
         for wave_num in sorted(waves):
             # Every wave success-gates on the canary (gate_ids); waves after the
             # first ALSO complete-gate on the prior wave for concurrency bounding
@@ -763,6 +780,18 @@ class HPCBackend(abc.ABC):
                     batch_env = (
                         {**job_env, _TASK_OFFSET_ENV: str(offset)} if offset > 0 else job_env
                     )
+                if _jobmap_on:
+                    # A single-dispatch plan preserves a caller-set key (canary /
+                    # ≤cap main); a multi-dispatch plan gets a distinct per-wave key
+                    # so the id-files never collide (Δ5). ``{**batch_env, ...}``
+                    # copies — never mutates the shared ``job_env``.
+                    wk = (
+                        _caller_wave_key
+                        if (_n_dispatch == 1 and _caller_wave_key)
+                        else wave_key(_dispatch_idx)
+                    )
+                    batch_env = {**batch_env, "HPC_SUBMIT_WAVE_KEY": wk}
+                    _dispatch_idx += 1
                 try:
                     job_id = self.submit_one(
                         task_range,

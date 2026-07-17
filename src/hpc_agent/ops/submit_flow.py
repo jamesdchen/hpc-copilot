@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
+from hpc_agent._kernel.contract.vocabulary import JournalStatus
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
@@ -2605,6 +2606,42 @@ def _fire_canary(
     canary_resources, canary_mpi_ranks = _mpi_canary_resources(spec.resources)
     if canary_mpi_ranks is not None:
         canary_env["HPC_MPI_RANKS"] = str(canary_mpi_ranks)
+
+    # ── submit-once LIVE FLIP for the canary leg (U3, Δ5) ────────────────────
+    # The canary is a DISTINCT run_id (``<run_id>-canary``), so flag ON it mints
+    # its OWN ``submitting`` record + its OWN ``<canary_run_id>.jobmap`` for free
+    # (SUBMIT-ONCE-DESIGN §5 / premortem A3). Mint BEFORE the canary dispatch, thread
+    # the real ``attempt`` + the CANARY_WAVE_KEY (belt-and-suspenders so a canary
+    # marker is never read as the main array's wave-0), then PROMOTE after the id.
+    # The canary deliberately omits the #299/#240 auto-resume keystones (a canary
+    # is never auto-resumed — matches the flag-off canary ``submit_and_record``).
+    # Flag OFF: none of this runs, byte-identical to today.
+    from hpc_agent.infra.jobmap import CANARY_WAVE_KEY, submit_once_enabled
+    from hpc_agent.ops.submit.runner import mint_submitting_record, promote_submitting_record
+
+    _canary_once = submit_once_enabled()
+    _canary_minted = False
+    if _canary_once:
+        _c_rec, _canary_minted = mint_submitting_record(
+            experiment_dir,
+            run_id=canary_run_id,
+            profile=spec.profile,
+            cluster=spec.cluster,
+            ssh_target=spec.ssh_target,
+            remote_path=spec.remote_path,
+            job_name=f"{spec.job_name}_canary",
+            total_tasks=1,
+            campaign_id=spec.campaign_id or "",
+        )
+        if _canary_minted:
+            canary_env["HPC_SUBMIT_ATTEMPT"] = str(_c_rec.attempt)
+            canary_env["HPC_SUBMIT_WAVE_KEY"] = CANARY_WAVE_KEY
+        # ``_canary_minted`` False here means an existing live/complete canary
+        # record stood — the caller's replay branch should have caught it; proceed
+        # as flag-off would (record via submit_and_record below) so a rare race
+        # never strands the leg. A ``submitting`` canary RAISES in the mint (route
+        # to reconcile), propagating out — never a blind duplicate.
+
     canary_job_ids = _make_single_array_submission(
         backend_obj,
         job_name=f"{spec.job_name}_canary",
@@ -2623,22 +2660,30 @@ def _fire_canary(
 
     with contextlib.suppress(Exception):
         update_run_sidecar_job_ids(experiment_dir, canary_run_id, canary_job_ids)
-    from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
-    submit_and_record(
-        experiment_dir,
-        spec=_SubmitSpec(
-            profile=spec.profile,
-            cluster=spec.cluster,
-            ssh_target=spec.ssh_target,
-            remote_path=spec.remote_path,
-            job_name=f"{spec.job_name}_canary",
-            run_id=canary_run_id,
-            job_ids=canary_job_ids,
-            total_tasks=1,
-            campaign_id=spec.campaign_id or None,
-        ),
-    )
+    if _canary_once and _canary_minted:
+        # Promote the pre-minted canary ``submitting`` record to ``in_flight`` with
+        # the parsed id (§3.3 step 3) — ``submit_and_record`` would route the
+        # ``submitting`` record to ``_RECONCILE``. A drop between mint and here left
+        # a durable ``submitting`` canary reconcile-recovery owns, not a lost id.
+        promote_submitting_record(experiment_dir, canary_run_id, list(canary_job_ids))
+    else:
+        from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
+
+        submit_and_record(
+            experiment_dir,
+            spec=_SubmitSpec(
+                profile=spec.profile,
+                cluster=spec.cluster,
+                ssh_target=spec.ssh_target,
+                remote_path=spec.remote_path,
+                job_name=f"{spec.job_name}_canary",
+                run_id=canary_run_id,
+                job_ids=canary_job_ids,
+                total_tasks=1,
+                campaign_id=spec.campaign_id or None,
+            ),
+        )
     return canary_job_ids
 
 
@@ -2788,7 +2833,11 @@ def _submit_one_spec(
     if run_canary:
         canary_run_id = f"{spec.run_id}-canary"
         existing_canary = load_run(experiment_dir, canary_run_id)
-        if existing_canary is not None and not is_resubmittable_terminal(existing_canary):
+        if (
+            existing_canary is not None
+            and not is_resubmittable_terminal(existing_canary)
+            and existing_canary.status != JournalStatus.SUBMITTING
+        ):
             # Replay: a prior call landed the canary but failed before
             # recording the main run, so the main-run dedup check (keyed
             # on spec.run_id) misses it. Reuse the recorded canary
@@ -2799,6 +2848,14 @@ def _submit_one_spec(
             # ``abandoned``) is excluded — it is NOT a live canary to reuse (the
             # monitor gave up, e.g. on a transient status-probe flake). Fall
             # through and fire a fresh one rather than gating main on a corpse.
+            #
+            # submit-once (flag ON): a ``submitting`` canary is a prior canary
+            # orphaned in its dispatch→id window (empty job_ids). It is NOT a live
+            # canary to reuse — reusing it would gate main on empty ids and leave
+            # the orphan. Fall through: ``_fire_canary``'s mint re-reads it and
+            # routes to ``_RECONCILE`` (refuse a blind duplicate; reconcile-recovery
+            # owns it), exactly the front-door guard replacing the F47 empty-ids
+            # gap. Flag-off, ``status`` is never ``submitting`` → byte-identical.
             canary_job_ids = list(existing_canary.job_ids)
             canary_done = True
         else:
@@ -2866,6 +2923,70 @@ def _submit_one_spec(
         else []
     )
 
+    # ── submit-once LIVE FLIP (U3, HPC_SUBMIT_ONCE, default OFF) ──────────────
+    # Flag ON: mint the main run's ``submitting`` record BEFORE the dispatch, so a
+    # drop in the dispatch→job-id window (a kill after the scheduler accepts the
+    # array but before its stdout id reaches the client) is at worst a durable
+    # ``submitting`` record with empty ``job_ids`` — a state reconcile-recovery can
+    # own (`_recover_submitting`) — instead of the orphan→duplicate hazard the
+    # contract exists to close (SUBMIT-ONCE-DESIGN §3.3). We then thread the real
+    # ``attempt`` + the run_id into ``job_env`` so the woven jobmap marker
+    # (`_dispatch_core`) and the correlation flag (`_weave_correlation_flags`)
+    # carry the true attempt (fixing the U3-b markers-carry-attempt-0 finding);
+    # the per-wave ``HPC_SUBMIT_WAVE_KEY`` is stamped per dispatch by
+    # ``submit_plan`` (Δ5). Flag OFF: none of this runs, so the sequence — ordering,
+    # command strings, journal-write timing — is byte-identical to today.
+    from hpc_agent.infra.jobmap import submit_once_enabled
+    from hpc_agent.ops.submit.runner import mint_submitting_record, promote_submitting_record
+
+    _submit_once = submit_once_enabled()
+    _main_minted = False
+    if _submit_once:
+        _minted_rec, _main_minted = mint_submitting_record(
+            experiment_dir,
+            run_id=spec.run_id,
+            profile=spec.profile,
+            cluster=spec.cluster,
+            ssh_target=spec.ssh_target,
+            remote_path=spec.remote_path,
+            job_name=spec.job_name,
+            total_tasks=spec.total_tasks,
+            campaign_id=spec.campaign_id or "",
+            # #299/#240 keystones so the promoted in_flight record matches the
+            # flag-off ``submit_and_record`` record field-for-field.
+            script=spec.script,
+            backend=spec.backend,
+            job_env=job_env_full,
+            auto_resume_on_kill=spec.auto_resume_on_kill,
+            max_auto_resumes=spec.max_auto_resumes,
+            auto_recover_on_failure=spec.auto_recover_on_failure,
+            max_auto_recovers=spec.max_auto_recovers,
+        )
+        if not _main_minted:
+            # An existing in_flight / complete record stood (a live run or a
+            # completed replay) — the compare-and-mint safety net for a dedup the
+            # upstream ``_dedup_existing`` did not already catch (a concurrent
+            # submit that minted between that check and here). Nothing dispatches;
+            # return the existing record as a deduped result. (A ``submitting`` /
+            # cross-cluster record RAISES inside the mint — the front-door
+            # ``_RECONCILE`` / proving-run-#5 refusal — and propagates here.)
+            return SubmitFlowResult(
+                run_id=_minted_rec.run_id,
+                job_ids=list(_minted_rec.job_ids),
+                total_tasks=int(_minted_rec.total_tasks),
+                deduped=True,
+                canary_done=canary_done,
+                canary_run_id=canary_run_id,
+                canary_job_ids=canary_job_ids,
+            )
+        # Thread the REAL attempt + run_id so the woven dispatch marker / token
+        # carry them (a fresh dict — never mutate the canary's already-fired env).
+        job_env_full = {
+            **job_env_full,
+            "HPC_RUN_ID": spec.run_id,
+            "HPC_SUBMIT_ATTEMPT": str(_minted_rec.attempt),
+        }
+
     try:
         job_ids, job_task_spans = _submit_main_array(
             backend_obj,
@@ -2910,6 +3031,17 @@ def _submit_one_spec(
                     # sidecar-reading recovery paths probe logs correctly.
                     job_task_spans=getattr(exc, "partial_submit_job_task_spans", None),
                 )
+        # submit-once flip, flag ON: the ``submitting`` record minted before this
+        # dispatch is DELIBERATELY left in place — it is NOT stranded. The process
+        # survives (we re-raise a typed error the caller sees), and reconcile-
+        # recovery (`_recover_submitting`) owns the transition out: it reads the
+        # cluster jobmap marker and either ADOPTS the ids of any waves that DID
+        # land (Δ4, rc==0) or, on a confirmed-not-landed / never-dispatched read,
+        # safe-resubmits at attempt+1 (§3.4). A blind re-submit of this run_id is
+        # refused at the front door (`_dedup_existing` → `_RECONCILE`) until
+        # reconcile resolves it, so the orphan→duplicate class stays closed. No
+        # in-process transition is correct here: the process does not KNOW whether
+        # the array landed (the id-read is exactly what the drop severed).
         raise
     # Crash-safety pre-stamp — same rationale as the canary stamp above: the
     # 2026-06-11 demo lost main-array job id 13610902 to a process kill in
@@ -2960,45 +3092,59 @@ def _submit_one_spec(
         dedup_node_sha = _resolve_node_sha(
             experiment_dir, cmd_sha=dedup_cmd_sha, parent_run_ids=spec.parents
         )
-    submit_and_record(
-        experiment_dir,
-        spec=_SubmitSpec(
-            profile=spec.profile,
-            cluster=spec.cluster,
-            ssh_target=spec.ssh_target,
-            remote_path=spec.remote_path,
-            job_name=spec.job_name,
-            run_id=spec.run_id,
-            job_ids=job_ids,
-            total_tasks=spec.total_tasks,
-            campaign_id=spec.campaign_id or None,
+    if _submit_once and _main_minted:
+        # submit-once flip, flag ON: the id is in hand, so PROMOTE the pre-minted
+        # ``submitting`` record to ``in_flight`` with the parsed ``job_ids`` (§3.3
+        # step 3) instead of freshly recording. ``submit_and_record`` cannot run
+        # here — it would see the ``submitting`` record and route it to
+        # ``_RECONCILE`` (refuse). ``promote_submitting_record`` is a status-only
+        # transition (update_run_status(job_ids) → mark_run(in_flight)) that
+        # preserves the #299/#240 keystones carried at mint, so the resulting
+        # in_flight record matches the flag-off ``submit_and_record`` record. A
+        # crash BETWEEN the two locked writes leaves a ``submitting`` record that
+        # already carries ``job_ids`` — still recoverable, strictly better than a
+        # loss.
+        promote_submitting_record(experiment_dir, spec.run_id, list(job_ids))
+    else:
+        submit_and_record(
+            experiment_dir,
+            spec=_SubmitSpec(
+                profile=spec.profile,
+                cluster=spec.cluster,
+                ssh_target=spec.ssh_target,
+                remote_path=spec.remote_path,
+                job_name=spec.job_name,
+                run_id=spec.run_id,
+                job_ids=job_ids,
+                total_tasks=spec.total_tasks,
+                campaign_id=spec.campaign_id or None,
+                invalidate_on_code_change=spec.invalidate_on_code_change,
+            ),
+            cmd_sha=dedup_cmd_sha,
+            node_sha=dedup_node_sha,
             invalidate_on_code_change=spec.invalidate_on_code_change,
-        ),
-        cmd_sha=dedup_cmd_sha,
-        node_sha=dedup_node_sha,
-        invalidate_on_code_change=spec.invalidate_on_code_change,
-        # Reproduction-receipt lever: a deliberate reproduction of an ORIGINAL
-        # run must not dedup against it (nor a prior reproduction of it) at the
-        # layer-2 cmd_sha fallback, so it actually re-runs. None → unchanged.
-        reproduction_of=spec.reproduction_of,
-        # #299 auto-resume keystone — persist what a monitor-side auto-resume
-        # would re-submit *with* (the actual augmented env that shipped to the
-        # scheduler, the cluster script, and the backend), plus the opt-in
-        # policy + cap. Default-OFF: a spec that didn't set auto_resume_on_kill
-        # is never auto-resubmitted. The canary record above deliberately omits
-        # these — a canary is never auto-resumed.
-        script=spec.script,
-        backend=spec.backend,
-        job_env=job_env_full,
-        auto_resume_on_kill=spec.auto_resume_on_kill,
-        max_auto_resumes=spec.max_auto_resumes,
-        # #240 resolve-and-recover opt-in — persist the general-resolver
-        # auto-act policy + cap alongside the #299 auto-resume keystone. Same
-        # default-OFF zero-blast-radius posture: a spec that didn't set
-        # auto_recover_on_failure is never auto-recovered.
-        auto_recover_on_failure=spec.auto_recover_on_failure,
-        max_auto_recovers=spec.max_auto_recovers,
-    )
+            # Reproduction-receipt lever: a deliberate reproduction of an ORIGINAL
+            # run must not dedup against it (nor a prior reproduction of it) at the
+            # layer-2 cmd_sha fallback, so it actually re-runs. None → unchanged.
+            reproduction_of=spec.reproduction_of,
+            # #299 auto-resume keystone — persist what a monitor-side auto-resume
+            # would re-submit *with* (the actual augmented env that shipped to the
+            # scheduler, the cluster script, and the backend), plus the opt-in
+            # policy + cap. Default-OFF: a spec that didn't set auto_resume_on_kill
+            # is never auto-resubmitted. The canary record above deliberately omits
+            # these — a canary is never auto-resumed.
+            script=spec.script,
+            backend=spec.backend,
+            job_env=job_env_full,
+            auto_resume_on_kill=spec.auto_resume_on_kill,
+            max_auto_resumes=spec.max_auto_resumes,
+            # #240 resolve-and-recover opt-in — persist the general-resolver
+            # auto-act policy + cap alongside the #299 auto-resume keystone. Same
+            # default-OFF zero-blast-radius posture: a spec that didn't set
+            # auto_recover_on_failure is never auto-recovered.
+            auto_recover_on_failure=spec.auto_recover_on_failure,
+            max_auto_recovers=spec.max_auto_recovers,
+        )
 
     if spec.partial_ok:
         from hpc_agent.state.runs import run_sidecar_path

@@ -769,8 +769,29 @@ def mint_submitting_record(
     total_tasks: int,
     campaign_id: str = "",
     jobmap_attempt: int = 0,
+    script: str = "",
+    backend: str = "",
+    job_env: dict[str, str] | None = None,
+    auto_resume_on_kill: bool = False,
+    max_auto_resumes: int = 2,
+    auto_recover_on_failure: bool = False,
+    max_auto_recovers: int = 2,
 ) -> tuple[RunRecord, bool]:
     """Atomic compare-and-mint of the pre-dispatch ``submitting`` record (Δ1/§3.3).
+
+    The ``script`` / ``backend`` / ``job_env`` / ``auto_resume_on_kill`` /
+    ``max_auto_resumes`` / ``auto_recover_on_failure`` / ``max_auto_recovers``
+    keystones are the SAME #299/#240 fields ``submit_and_record`` stamps onto its
+    in_flight record, carried at mint so a ``submitting`` record promoted to
+    ``in_flight`` (:func:`promote_submitting_record`, a status-only transition that
+    preserves every other field) is field-identical to the flag-off record — a run
+    that opted into monitor-side auto-resume keeps that opt-in under the flip. They
+    default to the zero-blast-radius baseline (empty / False), so a caller that
+    threads nothing gets exactly today's behaviour and the U3-b tests are
+    unaffected. (The layer-2 cross-machine cmd_sha / executor-drift provenance
+    ``submit_and_record`` also resolves is NOT replicated here: it is a dedup
+    nicety guarded at the front door by ``_dedup_existing``'s F47 pre-stamp check
+    before the mint is ever reached, and the flag is proving-run-gated.)
 
     Mints ``RunRecord(status="submitting", job_ids=[], attempt=N)`` BEFORE the
     remote dispatch so an orphan (a drop in the dispatch→id window) is at worst a
@@ -853,6 +874,17 @@ def mint_submitting_record(
             campaign_id=campaign_id or "",
             status=str(JournalStatus.SUBMITTING),
             attempt=attempt,
+            # #299/#240 keystones carried at mint so the promoted in_flight record
+            # is field-identical to submit_and_record's (the flip does not lose a
+            # run's auto-resume / auto-recover opt-in). Empty/False defaults keep
+            # the zero-blast-radius baseline for callers that thread nothing.
+            script=script,
+            backend=backend,
+            job_env=dict(job_env or {}),
+            auto_resume_on_kill=auto_resume_on_kill,
+            max_auto_resumes=int(max_auto_resumes),
+            auto_recover_on_failure=auto_recover_on_failure,
+            max_auto_recovers=int(max_auto_recovers),
         )
 
     record, minted = upsert_run_compare_and_mint(experiment_dir, run_id, _decide)

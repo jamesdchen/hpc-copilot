@@ -133,11 +133,14 @@ def submit_once_enabled() -> bool:
     import-time snapshot) so a test / a proving-run operator can flip it without
     a re-import.
 
-    CAUTION (U3-b scope): ON is currently inert-for-correctness — markers are
-    written but no ``submitting`` record is minted (the live submit_flow wiring
-    is deferred with U3-d's recovery reader) and nothing consumes the markers
-    yet, so every marker carries ``attempt=0``/``wave-0``. Do NOT enable in a
-    proving run until the mint wiring + per-wave key plumbing + U3-d land.
+    LIVE (U3 live flip landed): ON, the submit atom MINTS a ``submitting``
+    record before dispatch, threads the real ``attempt`` + a per-wave-distinct
+    wave key, writes the jobmap markers, and PROMOTES to ``in_flight`` after the
+    id is read; a drop leaves a ``submitting`` record reconcile-recovery adopts.
+    The ONE remaining gate is proving-run validation: this has never been
+    exercised against a real cluster, so enable it only in a controlled proving
+    run (refresh the cluster wheel first), not on a production submit, until the
+    default is flipped after that run passes.
     """
     return os.environ.get(SUBMIT_ONCE_FLAG, "").strip() == "1"
 
