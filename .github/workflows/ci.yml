@@ -370,10 +370,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The two reference adapters shipped with the kit. ``claude-code`` is the
-        # FULLY-conforming reference; ``notebook-render`` is honestly PARTIAL
-        # (capability 1 only). Each maps to a ``module.path:factory`` below.
-        adapter: ["claude-code", "notebook-render"]
+        # The reference adapters shipped with the kit. ``claude-code`` is the
+        # FULLY-conforming reference; the rest are honestly PARTIAL. Each maps to a
+        # ``module.path:factory`` below.
+        #  * ``notebook-render`` — capability 1 only (utterance-log).
+        # The Wave-C second-harness proofs (non-Claude conforming shapes,
+        # ``docs/plans/anti-vendor-lockout-2026-07-17.md`` Wave C):
+        #  * ``response-gateway`` — capability 2 / ACT via ``verify_relay`` pre-delivery.
+        #  * ``otel-genai`` — capability 2 / INSPECT (the disclosed weaker tier).
+        #  * ``foreign-backgrounding`` — capability 3 via a plain subprocess detach/wake.
+        adapter:
+          - "claude-code"
+          - "notebook-render"
+          - "response-gateway"
+          - "otel-genai"
+          - "foreign-backgrounding"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -417,6 +428,9 @@ jobs:
           case "${{ matrix.adapter }}" in
             claude-code) factory="hpc_agent.conformance.adapters.claude_code:build" ;;
             notebook-render) factory="hpc_agent.conformance.adapters.notebook_render:build" ;;
+            response-gateway) factory="hpc_agent.conformance.adapters.response_gateway:build" ;;
+            otel-genai) factory="hpc_agent.conformance.adapters.otel_genai:build" ;;
+            foreign-backgrounding) factory="hpc_agent.conformance.adapters.foreign_backgrounding:build" ;;
             *) echo "unknown adapter ${{ matrix.adapter }}" >&2; exit 1 ;;
           esac
           pytest -o addopts= -p no:cacheprovider -q \

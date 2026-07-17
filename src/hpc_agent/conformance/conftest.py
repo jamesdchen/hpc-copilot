@@ -28,6 +28,7 @@ from hpc_agent.conformance._loader import load_adapter
 from hpc_agent.conformance.adapter import (
     CAP_BACKGROUNDING,
     CAP_RELAY_ENFORCEMENT,
+    CAP_RELAY_INSPECT,
     CAP_UTTERANCE_LOG,
     declared_capabilities,
     skip_reason_for,
@@ -43,9 +44,13 @@ if TYPE_CHECKING:
 _STATE_KEY = pytest.StashKey["_KitState"]()
 
 # module filename NEEDLE -> capability, for attributing a failing test to the
-# capability whose module it lives in (report ``failed`` tally).
+# capability whose module it lives in (report ``failed`` tally). ``relay_inspect``
+# is listed BEFORE ``relay`` because the former's nodeid contains the latter as a
+# substring; first-match wins in :func:`pytest_runtest_makereport`, so the more
+# specific needle must be checked first.
 _MODULE_CAPABILITY: dict[str, str] = {
     "capability_utterance_log": CAP_UTTERANCE_LOG,
+    "capability_relay_inspect": CAP_RELAY_INSPECT,
     "capability_relay": CAP_RELAY_ENFORCEMENT,
     "capability_backgrounding": CAP_BACKGROUNDING,
 }
@@ -112,6 +117,25 @@ def require_relay_enforcement(request: pytest.FixtureRequest) -> None:
 @pytest.fixture
 def require_backgrounding(request: pytest.FixtureRequest) -> None:
     _require(request, CAP_BACKGROUNDING)
+
+
+@pytest.fixture
+def require_relay_inspect(request: pytest.FixtureRequest) -> None:
+    """Skip the INSPECT module WITH its tier — but do NOT tally the skip.
+
+    ``relay-inspection`` is an OPTIONAL WEAKER tier within capability 2, NOT one of
+    the three core contract capabilities (:data:`CAPABILITIES`). The three core
+    skips are always disclosed in the verdict; this optional add-on is not, so its
+    absence must NOT flip a conforming harness to partial (that would mark down
+    Claude Code — which provides the STRONGER ACT bar — for lacking an observe-only
+    tier, and change the pinned reference results). So unlike :func:`_require`, this
+    gate skips WITHOUT adding to ``state.skipped``: the tier is disclosed by
+    APPEARING in the report's ``passed`` set when PRESENT, never as a verdict-
+    affecting skip when absent.
+    """
+    adapter = request.getfixturevalue("harness_adapter")
+    if CAP_RELAY_INSPECT not in declared_capabilities(adapter):
+        pytest.skip(skip_reason_for(CAP_RELAY_INSPECT))
 
 
 @pytest.fixture

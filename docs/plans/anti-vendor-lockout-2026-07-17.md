@@ -180,9 +180,9 @@ exercise:**
 | Capability | Independent proof today? | Gap |
 |---|---|---|
 | 1 — utterance log | YES — `notebook_render` | none |
-| 2 — relay-enforcement (INSPECT) | NO | OTel-GenAI INSPECT fixture unbuilt |
-| 2 — relay-enforcement (ACT) | NO | response-gateway reference adapter unbuilt |
-| 3 — backgrounding/wake | NO | only core-constant + our in-process adapter; no foreign detach/wake adapter |
+| 2 — relay-enforcement (INSPECT) | **YES — `otel_genai` (Wave C)** | closed — OTel-GenAI INSPECT adapter certifies the disclosed weaker tier |
+| 2 — relay-enforcement (ACT) | **YES — `response_gateway` (Wave C)** | closed — response-gateway adapter (`verify_relay` pre-delivery, no hook) passes `test_capability_relay` |
+| 3 — backgrounding/wake | **YES — `foreign_backgrounding` (Wave C)** | closed — plain-subprocess detach/wake adapter passes `test_capability_backgrounding` |
 | 4 — trusted display | NO | no detection seam, no second render surface, no kit noun |
 | 5 — stop-hook append | NO | no passive seam; env-declared only; no conforming prober |
 | (rule 7) scheduler-mutation fence | NO | not a named capability at all |
@@ -258,21 +258,27 @@ in §4.**
   `docs/internals/harness-runbook.md` + light SKILL.md front-matter edits
   (disjoint from T4). Gated on R5. Size: M.
 
-### Wave C — burn down the risk register (parallel; new adapter files, disjoint)
+### Wave C — burn down the risk register (parallel; new adapter files, disjoint) — LANDED 2026-07-17
 
-- **T6 — response-gateway reference adapter (capability 2 / ACT).** A
-  `conformance/adapters/response_gateway.py` implementing `run_enforcement_point`
+- **T6 — response-gateway reference adapter (capability 2 / ACT). LANDED.**
+  `conformance/adapters/response_gateway.py` implements `run_enforcement_point`
   as a pre-delivery `verify_relay` pass (no hooks), certified by the EXISTING
   `test_capability_relay.py` triples (outcome-shaped seam already supports it).
-  Files: new adapter + CI matrix row. Gated on R3. Size: M.
-- **T7 — OTel-GenAI INSPECT fixture (capability 2 / INSPECT).** A fixture proving
-  the final agent-visible message is readable from GenAI-conformant telemetry,
-  feeding the same ACT assertions. Files: new fixture under
-  `conformance/fixtures/`. Gated on R3. Size: M.
-- **T8 — foreign-backgrounding adapter (capability 3).** A non-Claude detach/wake
-  adapter exercising `test_capability_backgrounding.py` against the journal
-  rendezvous, proving backgrounding is not Claude-Code-shaped. Files: new
-  adapter + CI row. Size: M.
+  Files: new adapter + CI matrix row.
+- **T7 — OTel-GenAI INSPECT adapter (capability 2 / INSPECT). LANDED.**
+  `conformance/adapters/otel_genai.py` reads the final agent-visible message off a
+  modeled GenAI-conformant span and REPORTS a contradiction without blocking. The
+  kit gained an ADDITIVE optional weaker tier `relay-inspection`
+  (`adapter.CAP_RELAY_INSPECT` + `inspect_relay` method + `InspectionOutcome`) and
+  the assertion module `test_capability_relay_inspect.py`; the ACT bar
+  `relay-enforcement` is SKIPPED at its verb-only tier for an INSPECT-only harness,
+  so INSPECT is recorded as the disclosed weaker tier, never a false ACT pass.
+  Files: new adapter + kit module + additive `adapter.py`/`conftest.py` edits + CI
+  matrix row.
+- **T8 — foreign-backgrounding adapter (capability 3). LANDED.**
+  `conformance/adapters/foreign_backgrounding.py` is a plain-subprocess detach +
+  OS-wait + journal-rendezvous shape exercising `test_capability_backgrounding.py`,
+  proving backgrounding is not Claude-Code-shaped. Files: new adapter + CI row.
 
 ### Wave D — capability 4/5 second implementations (needs R4 outcomes)
 
@@ -465,3 +471,49 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   enforcing hooks predate the record. A reservation note is added to
   `docs/design/conformance-kit.md`'s drift log pointing here as the living gap
   list.
+- **Wave C landed (2026-07-17): T6 + T7 + T8 — the second-harness proof
+  adapters (R3's build-now branch).** Capabilities 2 (relay-enforcement) and 3
+  (backgrounding) now have NON-Claude conforming exercises, closing the top rows
+  of the risk register (§2):
+  - **T6 — response-gateway (capability 2 / ACT).**
+    `conformance/adapters/response_gateway.py` gates the OUTGOING message through
+    `verify_relay` pre-delivery (a shared pure core `adapters/_relay_audit_core.py`
+    runs the SAME public `verify_relay`/`verify_notebook_relay` + mention scans +
+    `CONTRADICTION_KINDS` the Stop hook drives, off the string not a transcript).
+    It passes all `test_capability_relay.py` triples + loop-safety driven as the
+    adapter → `partial: relay-enforcement`. Proves the ACT bar is implementable
+    outside Claude Code's hook model.
+  - **T7 — otel-genai (capability 2 / INSPECT).**
+    `conformance/adapters/otel_genai.py` reads the final message off a modeled
+    OTel-GenAI span and REPORTS a contradiction without enforcing. The kit was
+    extended ADDITIVELY to express INSPECT-vs-ACT honestly: a new OPTIONAL weaker
+    tier `relay-inspection` (`adapter.CAP_RELAY_INSPECT`, the `inspect_relay`
+    method, the `InspectionOutcome` shape, `test_capability_relay_inspect.py`, and
+    a `require_relay_inspect` gate that SKIPS-WITHOUT-TALLYING so an optional
+    add-on never marks a conforming harness down). Driven through the full kit the
+    OTel adapter earns `partial: relay-inspection` WITH `relay-enforcement` SKIPPED
+    at its verb-only tier — INSPECT recorded as the disclosed weaker tier, never a
+    false ACT pass. `relay-inspection` is DELIBERATELY not in `CAPABILITIES` (the
+    conforming bar).
+  - **T8 — foreign-backgrounding (capability 3).**
+    `conformance/adapters/foreign_backgrounding.py` is a plain `subprocess.Popen`
+    detach + OS-wait + journal-namespace rendezvous, no Claude machinery; passes
+    `test_capability_backgrounding.py` → `partial: backgrounding`.
+  - **Regression pins held byte-identical (clean env):** `claude_code` stays
+    `conforming: harness contract v1` (zero skips) and `notebook_render` stays
+    `partial: utterance-log` with its two original skips — the new `relay-inspection`
+    tier does NOT pollute either verdict (the untallied gate). A planted
+    non-conforming gateway that delivers BEFORE the verdict FAILS the ACT assertion
+    (guard-can-fire, `tests/conformance_kit/test_wave_c_adapters.py`). Three CI
+    matrix rows added (`response-gateway`, `otel-genai`, `foreign-backgrounding`).
+  - **Doctrine note (env parity):** the reference Stop hook's completer path keys
+    off `HPC_STOP_HOOK_APPEND`; when set in a dev shell it reshapes `claude_code`'s
+    output (block → `systemMessage`), so LOCAL kit runs against `claude_code` must
+    scrub it. The three Wave-C adapters are immune (they call `verify_relay` /
+    `subprocess` directly, never `build_hook_output`). CI does not set the var.
+  - **NOT built (unchanged scope):** Wave D (T9/T10, capabilities 4/5 second
+    implementations) remains deferred; the seam-wiring follow-on that OWNED the
+    MINOR contract-version bump for capabilities 6/7 already LANDED separately
+    (version now 1.2.0). Wave C adds no negotiated capability — only kit ADAPTERS +
+    one optional kit tier noun with no `harness-capabilities` report field — so it
+    bumps the version no further (stays 1.2.0).

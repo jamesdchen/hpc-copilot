@@ -532,6 +532,20 @@ A harness that provides INSPECT (e.g. via OTel GenAI) plus either ACT
 implementation earns capability 2's trust property; absent both, the relay audit
 degrades to the VERB-ONLY posture named above.
 
+**Both non-hook shapes now have a conforming exercise (anti-vendor-lockout Wave
+C, 2026-07-17).** The response-gateway ACT shape is
+`conformance/adapters/response_gateway.py` (certified by
+`test_capability_relay.py`); the OTel-GenAI INSPECT shape is
+`conformance/adapters/otel_genai.py`, certified by the ADDITIVE kit tier
+`relay-inspection` (`conformance/adapter.py::CAP_RELAY_INSPECT` +
+`test_capability_relay_inspect.py`). An INSPECT-only harness is recorded HONESTLY:
+it earns the disclosed weaker `relay-inspection` tier while the ACT bar
+`relay-enforcement` is SKIPPED at its verb-only tier — never rounded up to a false
+ACT pass. `relay-inspection` is NOT one of the three conforming-bar capabilities;
+it carries no `harness-capabilities` report field, so Wave C bumps no version —
+the contract stands at 1.2.0 (bumped by the separate capability 6/7 landing, not
+by this kit-only addition).
+
 ## Capabilities 6 & 7 — the code-backstopped enforcement behaviors (RULED 2026-07-17)
 
 Two guarantees the reference harness ALREADY enforces mapped to NO named
@@ -763,6 +777,23 @@ authorship BAR is untouched.
 
 ## Drift log
 
+- **2026-07-17 (anti-vendor-lockout Wave C, T6 + T7 + T8).** The two non-hook
+  conforming shapes this page SPECIFIED under "Capability 2, split: INSPECT vs
+  ACT" are now BUILT and certified: the **response-gateway** ACT adapter
+  (`conformance/adapters/response_gateway.py`, `verify_relay` pre-delivery, passes
+  `test_capability_relay.py`) and the **OTel-GenAI** INSPECT adapter
+  (`conformance/adapters/otel_genai.py`). Expressing INSPECT-vs-ACT honestly
+  required an ADDITIVE kit tier `relay-inspection` (`conformance/adapter.py::
+  CAP_RELAY_INSPECT` + `InspectionOutcome` + `inspect_relay` + the assertion module
+  `test_capability_relay_inspect.py` + a skip-without-tally gate) so an INSPECT-only
+  harness is recorded at the disclosed weaker tier, never a false ACT pass. A
+  foreign **plain-subprocess backgrounding** adapter
+  (`conformance/adapters/foreign_backgrounding.py`) exercises capability 3 without
+  Claude machinery. No contract capability changed; `relay-inspection` is not a
+  conforming-bar noun and has no `harness-capabilities` report field, so Wave C
+  bumps no version (the contract stands at **1.2.0** from the capability 6/7
+  landing — Wave C is kit-adapter-only). The reference adapters `claude_code`
+  (conforming) and `notebook_render` (partial: utterance-log) stay byte-identical.
 - **2026-07-17 (anti-vendor-lockout, capability 4/5 kit behavioral batteries —
   T9/T10, the Wave-D follow-ons).** Closed the BEHAVED-for-the-reference-adapter
   leg for capabilities 4 (trusted display) and 5 (Stop-hook append channel); a

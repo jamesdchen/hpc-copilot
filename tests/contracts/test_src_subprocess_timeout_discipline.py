@@ -55,6 +55,11 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # capability under test: a background worker deliberately outlives the call
     # (await_wake carries the bounded timeout_s instead).
     "src/hpc_agent/conformance/adapters/claude_code.py": {"start_background"},
+    # The Wave-C foreign-backgrounding proof adapter — the SAME detached-worker
+    # capability under test via a non-Claude plain-subprocess shape: the worker
+    # deliberately outlives start_background; await_wake carries the bounded
+    # timeout_s (proc.wait(timeout=timeout_s)) instead.
+    "src/hpc_agent/conformance/adapters/foreign_backgrounding.py": {"start_background"},
     # The compliant capture wrappers themselves — the S2-wedge fix. Every
     # wait inside is bounded: `_capture_windows` kills on deadline then
     # drains for at most _POST_KILL_DRAIN_SEC; `capture_via_select` bounds

@@ -29,6 +29,7 @@ __all__ = [
     "CAP_BACKGROUNDING",
     "CAP_DECISION_RENDEZVOUS",
     "CAP_RELAY_ENFORCEMENT",
+    "CAP_RELAY_INSPECT",
     "CAP_SCHEDULER_FENCE",
     "CAP_STOP_HOOK_APPEND",
     "CAP_TRUSTED_DISPLAY",
@@ -37,6 +38,7 @@ __all__ = [
     "DisplayOutcome",
     "EnforcementOutcome",
     "HarnessAdapter",
+    "InspectionOutcome",
     "StopAppendOutcome",
     "WakeEvent",
     "declared_capabilities",
@@ -51,6 +53,19 @@ __all__ = [
 CAP_UTTERANCE_LOG = "utterance-log"
 CAP_RELAY_ENFORCEMENT = "relay-enforcement"
 CAP_BACKGROUNDING = "backgrounding"
+
+# An OPTIONAL, WEAKER tier within capability 2 (relay/verbatim enforcement): the
+# INSPECT half — OBSERVE the final agent-visible message and REPORT a
+# contradiction — WITHOUT the ACT half (forcing a continuation). The contract
+# splits capability 2 into INSPECT + ACT (``docs/internals/harness-contract.md``,
+# "Capability 2, split: INSPECT vs ACT"): a harness that only INSPECTS (e.g. via
+# OTel-GenAI telemetry) sees a contradiction but cannot stop it reaching the
+# human, so the ENFORCEMENT guarantee still degrades to the verb-only posture.
+# This noun is DELIBERATELY NOT in :data:`CAPABILITIES` (the conforming bar) — it
+# is a disclosed weaker tier a harness may ALSO earn, never a substitute for the
+# ACT bar :data:`CAP_RELAY_ENFORCEMENT`. Recording it honestly is the whole point
+# (an INSPECT harness must never round up to a false ACT pass).
+CAP_RELAY_INSPECT = "relay-inspection"
 
 CAPABILITIES: frozenset[str] = frozenset(
     {CAP_UTTERANCE_LOG, CAP_RELAY_ENFORCEMENT, CAP_BACKGROUNDING}
@@ -88,6 +103,11 @@ _CAPABILITY_METHODS: dict[str, tuple[str, ...]] = {
     CAP_UTTERANCE_LOG: ("write_utterance",),
     CAP_RELAY_ENFORCEMENT: ("run_enforcement_point",),
     CAP_BACKGROUNDING: ("start_background", "await_wake"),
+    # The OPTIONAL weaker INSPECT tier — declared by implementing ``inspect_relay``
+    # (observe + report) WITHOUT ``run_enforcement_point`` (the ACT bar). An
+    # existing adapter that implements neither is byte-unchanged: it declares
+    # neither noun.
+    CAP_RELAY_INSPECT: ("inspect_relay",),
     # Capabilities 6 & 7 — declared by implementing the optional adapter method;
     # the reference batteries fall back to the real core when a method is absent.
     CAP_SCHEDULER_FENCE: ("run_scheduler_fence",),
@@ -108,6 +128,12 @@ DEGRADED_TIERS: dict[str, str] = {
     CAP_UTTERANCE_LOG: "journal-response friction tier",
     CAP_RELAY_ENFORCEMENT: "verb-only relay-audit posture",
     CAP_BACKGROUNDING: "synchronous in-turn execution; correctness unaffected",
+    # The INSPECT tier's own "absent" degrade: with no telemetry-inspection
+    # channel the audit cannot even OBSERVE the final message out-of-band, so it
+    # collapses to the same verb-only posture the ACT bar does. Named so a skip
+    # line for this optional tier stays honest; the ACT bar's absence is disclosed
+    # SEPARATELY under CAP_RELAY_ENFORCEMENT.
+    CAP_RELAY_INSPECT: "verb-only relay-audit posture (no telemetry-inspection channel)",
     # Capabilities 6 & 7 tiers track harness-contract.md's "Degrades when absent"
     # clauses (prose-only fence / doctor-tick-backstop-only rendezvous).
     CAP_SCHEDULER_FENCE: "prose-only scheduler-mutation guard",
@@ -125,6 +151,20 @@ class EnforcementOutcome(NamedTuple):
 
     blocked: bool  # the harness forced a continuation
     reason: str | None  # itemized mismatch summary when blocked
+
+
+class InspectionOutcome(NamedTuple):
+    """The outcome of a harness's relay INSPECT seam over one final message.
+
+    The weaker half of capability 2: the harness OBSERVED the final message and
+    REPORTS whether it contradicts the journal — but never ACTS (never forces a
+    continuation). ``detected`` is the observe-and-report verdict; ``report`` is
+    the telemetry line the harness emitted (a span/event summary), carried so the
+    kit can confirm the INSPECT harness disclosed rather than enforced.
+    """
+
+    detected: bool  # a contradiction was observed and reported
+    report: str | None  # the telemetry the harness emitted (never a block)
 
 
 class WakeEvent(NamedTuple):
@@ -182,6 +222,15 @@ class HarnessAdapter(Protocol):
         their Stop seam; gateway-shaped harnesses run their pre-delivery
         ``verify_relay`` pass. ``previously_blocked=True`` models the
         ``stop_hook_active`` re-entry — a conforming seam NEVER blocks twice."""
+
+    # --- capability 2 (INSPECT half); OPTIONAL — the weaker observe-only tier ---
+    def inspect_relay(self, experiment_dir: Path, final_message: str) -> InspectionOutcome:
+        """OBSERVE *final_message* and REPORT whether it contradicts the journal —
+        WITHOUT forcing a continuation (the INSPECT half of capability 2). A
+        harness that provides this but NOT ``run_enforcement_point`` (e.g. an
+        OTel-GenAI telemetry stream) earns the weaker :data:`CAP_RELAY_INSPECT`
+        tier; the ACT bar :data:`CAP_RELAY_ENFORCEMENT` still degrades to its
+        verb-only posture. The kit skips the matching assertions when absent."""
 
     # --- capability 3: backgrounding / wake ---
     def start_background(self, experiment_dir: Path, argv: list[str]) -> Any: ...
