@@ -70,6 +70,7 @@ _EXPECTED_SOURCES = frozenset(
         "pack-manifest",
         "pack-journal",
         "live-conformance",
+        "recipe",  # BR-4: the derived clean-reproduction recipe (framework noun)
     }
 )
 

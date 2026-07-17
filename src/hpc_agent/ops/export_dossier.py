@@ -93,7 +93,14 @@ DOSSIER_DIRNAME = "_dossier"
 # Bump when the emitted manifest shape changes in a way a consumer (the
 # repo-side renderer, an integrity checker) would need to branch on. Mirrored
 # on the manifest's ``dossier_schema_version``.
-DOSSIER_SCHEMA_VERSION: int = 1
+#
+# v2 (2026-07-17, BR-4): the derived clean-reproduction ``recipe`` joins the
+# sealed members (a first-class ``recipe`` store noun) and the manifest gains a
+# ``recipe`` provenance block (present/member_path/extracted_at/seed/note). The
+# bump is additive — a v1 reader that iterates ``entries`` by known source and
+# ignores the ``recipe`` envelope key still reads a v2 dossier; a v1 dossier on
+# disk simply has no recipe member (it predates the walk).
+DOSSIER_SCHEMA_VERSION: int = 2
 
 # The closed set of source-store names a bundled entry may be typed by. Every
 # value is a concrete on-disk STORE NOUN — never a caller-owned role. The wire
@@ -118,8 +125,23 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "pack-manifest",  # the bound domain-pack manifest file (raw bytes; T10)
         "pack-journal",  # <exp>/.hpc/packs/<pack>.decisions.jsonl (bind/receipt journal; T10)
         "live-conformance",  # <exp>/_aggregated/_conformance/<registration_id>.jsonl
+        # The DERIVED clean-reproduction recipe (extract-recipe output; BR-4).
+        # UNLIKE every other noun this member is not read verbatim off disk — it
+        # is MINTED at seal time by composing the shipped extract-recipe walk over
+        # the run, serialized deterministically, and sealed as opaque-to-the-
+        # bundler bytes (the same posture as the ``manifest.json`` seal, which is
+        # also framework-derived json). It is FRAMEWORK vocabulary (the name of a
+        # reproduction recipe), never a caller-owned experiment role — so it does
+        # not cross the substrate-vs-semantics boundary any more than "sidecar"
+        # or "briefs" does. The recipe travels WITH the archived evidence so a
+        # reviewer with only the zip can re-derive + re-check the signature.
+        "recipe",  # <archive>/recipe/recipe.json — the sealed extract-recipe output
     }
 )
+
+# The one archive path the derived recipe member is sealed under (BR-4). A fixed
+# path so the member sorts + addresses deterministically across re-gathers.
+RECIPE_MEMBER_PATH = "recipe/recipe.json"
 
 # Per-run identity fields lifted off the sidecar into the manifest's ``runs``
 # projection — an EXPLICIT allowlist (like provenance_manifest's
@@ -193,6 +215,34 @@ def _project_run_identity(
     return projection
 
 
+def _seal_bytes(
+    source: str,
+    archive_path: str,
+    data: bytes,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+) -> None:
+    """Register *data* for the zip under *archive_path* and append its entry.
+
+    The one place bytes become a sealed member: ``data`` → sha256 → a
+    ``{source, path, sha256, bytes}`` store-provenance record. Content is never
+    decoded or parsed, so a member round-trips byte-identical. Used both for the
+    on-disk stores (via :func:`_seal`, which reads the bytes first) and for the
+    DERIVED recipe member (BR-4), whose bytes are minted in memory rather than
+    read off disk — the entry shape is identical either way.
+    """
+    write_map[archive_path] = data
+    entries.append(
+        {
+            "source": source,
+            "path": archive_path,
+            "sha256": _sha256_hex(data),
+            "bytes": len(data),
+        }
+    )
+
+
 def _seal(
     source: str,
     disk_path: Path,
@@ -208,16 +258,7 @@ def _seal(
     never decoded or parsed, so any store (the aggregated one especially) round-
     trips byte-identical.
     """
-    data = disk_path.read_bytes()
-    write_map[archive_path] = data
-    entries.append(
-        {
-            "source": source,
-            "path": archive_path,
-            "sha256": _sha256_hex(data),
-            "bytes": len(data),
-        }
-    )
+    _seal_bytes(source, archive_path, disk_path.read_bytes(), write_map=write_map, entries=entries)
 
 
 def _gather_optional(
@@ -645,6 +686,67 @@ def _gather_conformance(
         _seal("live-conformance", ledger, archive_path, write_map=write_map, entries=entries)
 
 
+def _gather_recipe(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal the DERIVED clean-reproduction recipe for the dossier's run (BR-4).
+
+    Invokes the shipped ``extract-recipe`` walk (read-only — it composes the
+    sidecars + lineage + harvest ledger + signed provenance manifest) seeded by
+    the dossier's PRIMARY run. A run/lineage dossier seeds naturally with its head
+    ``run_id``, which extract-recipe resolves to the contributing minimal set (or
+    the supersession lineage, disclosing the gap inside the recipe). The recipe
+    carries its OWN provenance: the seeds (``seed_kind`` / ``seed_ref``) and the
+    per-run wheel-sha source (``hpc_agent_version_source``) ride the recipe body;
+    the extraction MOMENT is the dossier's ``generated_at`` (recorded in the
+    manifest ``recipe`` block, deliberately OUT of the sealed pre-image so the seal
+    stays deterministic — the same discipline that keeps ``generated_at`` /
+    ``tool_version`` out of ``bundle_sha256``).
+
+    The recipe is minted deterministically (extract-recipe is a pure projection,
+    no wall-clock inside it), serialized sorted-keys, and sealed as opaque-to-the-
+    bundler bytes under the ``recipe`` store noun at :data:`RECIPE_MEMBER_PATH` —
+    so it IS part of ``bundle_sha256`` and tampering the member breaks the seal,
+    exactly like every other member. Sealed ONCE per signature (not per lineage
+    member), keyed by its fixed archive path. Its drift-on-accrual is the
+    determinism-fingerprint ledger's disclosed staleness by another name: if a
+    contributing run is superseded / harvested after export, the recipe member
+    moves and a registration's dossier leg reads stale (re-export is the remedy).
+
+    DISCLOSURE-NOT-GATE (BR-4): extraction that raises for ANY reason NEVER blocks
+    the export — it records a ``recipe`` gap naming why and seals no member (a
+    dossier without a recipe SAYS why). The whole seam rides this (export + the
+    registration recompute lock + evidence-brief + attention-queue), so a recipe
+    walk that trips degrades disclosed, it never takes a consumer down.
+    """
+    if RECIPE_MEMBER_PATH in write_map:
+        return  # already sealed for this signature
+    from hpc_agent._wire.queries.extract_recipe import ExtractRecipeInput
+    from hpc_agent.ops import extract_recipe as _recipe
+
+    try:
+        recipe = _recipe.extract_recipe(experiment_dir, spec=ExtractRecipeInput(run_id=run_id))
+        # json.dumps SERIALIZES the derived provenance (allowed — the boundary ban
+        # is on json.load/loads reading opaque content back into structure, never
+        # on serializing a framework-derived record, same as the manifest seal).
+        data = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except Exception as exc:  # noqa: BLE001 - disclosure-not-gate: never block the export
+        gaps.append(
+            {
+                "source": "recipe",
+                "run_id": run_id,
+                "note": f"clean-reproduction recipe extraction failed: {exc}",
+            }
+        )
+        return
+    _seal_bytes("recipe", RECIPE_MEMBER_PATH, data, write_map=write_map, entries=entries)
+
+
 def _gather_scope(
     experiment_dir: Path,
     tag: str,
@@ -680,6 +782,34 @@ def _gather_scope(
         entries=entries,
         gaps=gaps,
     )
+
+
+def _recipe_provenance_block(
+    sig: DossierSignature, run_id: str, extracted_at: str
+) -> dict[str, Any]:
+    """The manifest's ``recipe`` provenance envelope (BR-4) — NOT part of the seal.
+
+    Describes the derived recipe member by its OWN provenance: whether it sealed,
+    at which archive path, the ``extracted_at`` moment (the export's
+    ``generated_at`` — the recipe is minted during THIS export), and the seed it
+    was walked back from. A recipe that failed to extract discloses ``present:
+    false`` + the ``note`` from its gap (disclosure-not-gate). Lives in the
+    manifest envelope like ``generated_at`` / ``tool_version``, so it never enters
+    the ``bundle_sha256`` pre-image (the sealed recipe member itself carries the
+    deterministic seeds + wheel-sha source in its body).
+    """
+    member = next((e for e in sig.entries if e.get("source") == "recipe"), None)
+    note = next(
+        (g.get("note") for g in sig.gaps if g.get("source") == "recipe"),
+        None,
+    )
+    return {
+        "present": member is not None,
+        "member_path": member["path"] if member is not None else None,
+        "extracted_at": extracted_at,
+        "seed": {"kind": "run", "ref": run_id},
+        "note": note,
+    }
 
 
 @dataclass(frozen=True)
@@ -789,6 +919,14 @@ def compute_dossier_signature(
     # signature (not per run), absent-tolerant (no gap when none exist).
     _gather_conformance(experiment_dir, write_map=write_map, entries=entries)
 
+    # The DERIVED clean-reproduction recipe (BR-4) — sealed ONCE per signature,
+    # seeded by the PRIMARY run (the head of the run set, i.e. the ``run_id``
+    # argument; the lineage members ride the recipe's own minimal-set walk). It is
+    # part of the seal (bundle_sha256) so the recipe travels with the evidence and
+    # a tamper is caught; extraction that trips DEGRADES DISCLOSED (a ``recipe``
+    # gap), never blocks the signature.
+    _gather_recipe(experiment_dir, run_id, write_map=write_map, entries=entries, gaps=gaps)
+
     # Path-sort the entries (and the write order) so a store hashes identically
     # regardless of gather order.
     entries.sort(key=lambda e: e["path"])
@@ -860,14 +998,18 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
     # the lineage resolution live in the seam.
     sig = compute_dossier_signature(experiment_dir, run_id, include_lineage=spec.include_lineage)
 
+    generated_at = utcnow_iso()
     manifest: dict[str, Any] = {
         "dossier_schema_version": DOSSIER_SCHEMA_VERSION,
-        "generated_at": utcnow_iso(),
+        "generated_at": generated_at,
         "tool_version": full_version(),
         "runs": sig.run_projections,
         "entries": sig.entries,
         "gaps": sig.gaps,
         "bundle_sha256": sig.bundle_sha256,
+        # The derived clean-reproduction recipe's own provenance (BR-4) — an
+        # envelope block OUTSIDE the sealed pre-image (like generated_at).
+        "recipe": _recipe_provenance_block(sig, run_id, generated_at),
     }
 
     # Resolve the output path (caller's or the derived default) and overwrite any

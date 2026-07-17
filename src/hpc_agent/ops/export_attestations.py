@@ -98,6 +98,11 @@ PREDICATE_TYPES: dict[str, str] = {
     "pack-manifest": f"{PREDICATE_TYPE_SCHEME}/pack-manifest/v1",
     "pack-journal": f"{PREDICATE_TYPE_SCHEME}/pack-journal/v1",
     "live-conformance": f"{PREDICATE_TYPE_SCHEME}/live-conformance/v1",
+    # BR-4 pair-edit (with _EXPECTED_PREDICATE_TYPES in the boundary test): the
+    # derived clean-reproduction recipe member gets its own predicateType URI, so
+    # a dossier that seals a recipe projects it into a well-typed in-toto Statement
+    # instead of a KeyError in ``_statement``.
+    "recipe": f"{PREDICATE_TYPE_SCHEME}/recipe/v1",
 }
 
 

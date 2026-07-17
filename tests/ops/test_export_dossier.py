@@ -589,6 +589,147 @@ def test_appending_a_sample_between_exports_changes_the_bundle_sha(
     assert third.bundle_sha256 == second.bundle_sha256
 
 
+# --- clean-reproduction recipe member (BR-4) ---------------------------------
+
+
+def test_recipe_member_is_sealed_and_disclosed(journal_home: Path, experiment: Path) -> None:
+    """The dossier carries the derived clean-reproduction recipe as a first-class
+    sealed member: a ``recipe`` source entry with the exact 4-key store shape, the
+    member in the zip at ``recipe/recipe.json``, and a manifest ``recipe`` block
+    disclosing its own provenance (present / member_path / extracted_at / seed)."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    by_path = {e["path"]: e for e in result.manifest["entries"]}
+    entry = by_path["recipe/recipe.json"]
+    assert entry["source"] == "recipe"
+    assert set(entry) == {"source", "path", "sha256", "bytes"}  # no meaning field
+
+    # The member is in the zip and parses to a recipe walked back from the run.
+    with zipfile.ZipFile(result.archive_path) as zf:
+        member = zf.read("recipe/recipe.json")
+    recipe = json.loads(member)
+    assert recipe["seed_kind"] == "run"
+    assert recipe["seed_ref"] == _RID
+    assert len(recipe["recipe_signature"]) == 64
+
+    # The manifest's recipe block discloses the recipe's OWN provenance.
+    block = result.manifest["recipe"]
+    assert block["present"] is True
+    assert block["member_path"] == "recipe/recipe.json"
+    assert block["seed"] == {"kind": "run", "ref": _RID}
+    assert block["extracted_at"] == result.manifest["generated_at"]
+    assert block["note"] is None
+    assert result.manifest["dossier_schema_version"] == 2
+
+
+def test_recipe_member_equals_a_direct_extract_recipe_on_the_same_seed(
+    journal_home: Path, experiment: Path
+) -> None:
+    """Parity pin: the recipe sealed INSIDE the dossier equals a direct
+    extract-recipe run on the same seed — the dossier composes the shipped walk,
+    it never forks a second recipe."""
+    from hpc_agent._wire.queries.extract_recipe import ExtractRecipeInput
+    from hpc_agent.ops.extract_recipe import extract_recipe
+
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+    with zipfile.ZipFile(result.archive_path) as zf:
+        sealed = json.loads(zf.read("recipe/recipe.json"))
+
+    direct = extract_recipe(experiment, spec=ExtractRecipeInput(run_id=_RID))
+    assert sealed == direct
+
+
+def test_recipe_member_rides_the_seal_and_a_tamper_is_caught(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The recipe member IS part of ``bundle_sha256`` (the seal), matching every
+    other member's discipline: its entry sha256 binds the sealed bytes, and a
+    tampered recipe re-hashes to a different sha — so seal verification catches
+    it, and flipping the recipe entry's sha changes the whole bundle signature."""
+    import hashlib
+
+    from hpc_agent.ops.provenance_manifest import manifest_signature
+
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+    entries = result.manifest["entries"]
+    (recipe_entry,) = [e for e in entries if e["source"] == "recipe"]
+
+    # The entry sha256 binds the sealed member bytes (integrity binding).
+    with zipfile.ZipFile(result.archive_path) as zf:
+        member = zf.read("recipe/recipe.json")
+    assert recipe_entry["sha256"] == hashlib.sha256(member).hexdigest()
+    # A tamper changes the member sha — verification against the sealed sha fails.
+    assert hashlib.sha256(member + b" tampered").hexdigest() != recipe_entry["sha256"]
+
+    # And the recipe entry is IN the bundle_sha256 pre-image: flipping its sha
+    # changes the whole bundle signature (the member is inside the seal).
+    assert manifest_signature(entries) == result.bundle_sha256  # type: ignore[arg-type]
+    tampered = [dict(e) for e in entries]
+    for e in tampered:
+        if e["source"] == "recipe":
+            e["sha256"] = "0" * 64
+    assert manifest_signature(tampered) != result.bundle_sha256  # type: ignore[arg-type]
+
+
+def test_recipe_extraction_failure_degrades_disclosed_and_never_blocks_export(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disclosure-not-gate: an extract-recipe walk that raises NEVER blocks the
+    export — the dossier is still written, no recipe member is sealed, and a
+    ``recipe`` gap + a manifest recipe block with present=false say WHY."""
+    import hpc_agent.ops.extract_recipe as recipe_mod
+
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    def _boom(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("simulated recipe walk failure")
+
+    monkeypatch.setattr(recipe_mod, "extract_recipe", _boom)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    # Export still succeeded and the archive is intact.
+    assert zipfile.is_zipfile(result.archive_path)
+    # No recipe member sealed; a disclosed recipe gap instead.
+    assert "recipe" not in _sources_of(result.manifest)
+    recipe_gaps = [g for g in result.gaps if g["source"] == "recipe"]
+    assert len(recipe_gaps) == 1
+    assert recipe_gaps[0]["run_id"] == _RID
+    assert "simulated recipe walk failure" in recipe_gaps[0]["note"]
+    # The manifest recipe block discloses the absence + the reason.
+    block = result.manifest["recipe"]
+    assert block["present"] is False
+    assert block["member_path"] is None
+    assert block["note"] and "simulated recipe walk failure" in block["note"]
+
+
+def test_recipe_member_is_additive_existing_stores_unaffected(
+    journal_home: Path, experiment: Path
+) -> None:
+    """Back-compat: the recipe member is purely additive — every pre-BR-4 store
+    still seals exactly as before alongside the new ``recipe`` member, and the
+    seam still equals the export byte-for-byte with the recipe inside."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    sig = compute_dossier_signature(experiment, _RID)
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    sources = set(_sources_of(result.manifest))
+    # The prior stores are all still present.
+    assert {"sidecar", "decision-journal", "briefs", "journal-record", "aggregated"} <= sources
+    # The recipe is sealed in BOTH the dry seam and the export (one-seam property
+    # extends to the new member).
+    assert "recipe" in {e["source"] for e in sig.entries}
+    assert sig.bundle_sha256 == result.bundle_sha256
+    assert sig.entries == result.manifest["entries"]
+
+
 # --- missing run -------------------------------------------------------------
 
 

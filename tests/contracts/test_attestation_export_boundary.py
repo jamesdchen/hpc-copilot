@@ -66,6 +66,7 @@ _EXPECTED_PREDICATE_TYPES = {
     "pack-manifest": f"{_PREDICATE_TYPE_SCHEME}/pack-manifest/v1",
     "pack-journal": f"{_PREDICATE_TYPE_SCHEME}/pack-journal/v1",
     "live-conformance": f"{_PREDICATE_TYPE_SCHEME}/live-conformance/v1",
+    "recipe": f"{_PREDICATE_TYPE_SCHEME}/recipe/v1",  # BR-4 pair-edit (see PREDICATE_TYPES)
 }
 
 # The DSSE envelope's fixed key set and the in-toto Statement's fixed key set —
