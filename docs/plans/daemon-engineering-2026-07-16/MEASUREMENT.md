@@ -201,3 +201,34 @@ daemon's other prize, SSH-handshake amortization across verb invocations
 is argued in the maintainer's transport-brittleness thread; (b) the
 per-fused-hook-turn cost (~600 ms at 3 hooks/turn) is now the larger
 recurring stateless tax.
+
+## GATE RUN — 2026-07-17, wheel e9ee1f4e (CI-green fb498ff7), uv-tool env
+
+Wave-2 cold-path datum (the fb498ff7 wave: describe-cache BUILD_SHA
+content-keying, leaf homedir resolver, host-first schema roots,
+error-path-only ssh_agent). `--runs 9`. NOTE an earlier same-wheel run was
+DISCARDED as load-poisoned per the honest-reporting rules — its own `bare`
+medians (162/217 ms vs the quiet-box ~84 ms) proved ambient load, not code;
+this run's spawn variance is 2.4 ms (quiet box, cleanest conditions of the
+three gate runs — cross-run comparisons should lean on the bare-relative
+deltas, not absolute medians alone).
+
+| surface | median | min |
+|---|---|---|
+| bare interpreter | 84 ms | 75 ms |
+| import hpc_agent (lazy root) | 126 ms | 121 ms |
+| cold fast-path (describe/find, baked) | **321 ms** | 305 ms |
+| cold full-walk (capabilities, deferred) | 2199 ms | 2196 ms |
+| dry Stop hook (single) | 152 ms | 144 ms |
+| WARM in-process (daemon target) | **13 ms** | 12 ms |
+
+**Cold fast-path 566 → 321 ms (wave-2); cumulative pre-bake ~7000 → 321 ms
+(~22×).** full_walk rode along 3750 → 2199 ms. Residual composition:
+~84 ms spawn+AV (irreducible stateless), ~42 ms lazy-root import over bare,
+~195 ms registry/parser/catalog dispatch over import. Hook single 152 ms
+(~456 ms/turn at 3 hooks); the hook's only reachable stateless lever is the
+`_PACKAGE_ROOT` Path→str ruling (~10-15 ms/fire — `re` is anchored by
+`json`, see the 2026-07-17 hook-floor investigation), which is PARKED
+awaiting the maintainer. Wave-2 also closed the describe-cache
+same-version-reinstall staleness trap (content-keyed on BUILD_SHA;
+source-checkout/dirty-wheel = cache disabled).
