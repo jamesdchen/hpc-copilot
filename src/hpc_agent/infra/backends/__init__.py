@@ -329,6 +329,29 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement scheduler_query_ran")
 
     @staticmethod
+    def build_correlation_flags(run_id: str, attempt: int) -> list[str]:
+        """Submit-argv fragment carrying the ``run_id#attempt`` correlation token
+        (submit-once U3-c, Δ2). Emitted into a scheduler CONTEXT/COMMENT field —
+        NEVER ``job_name``. The default returns ``[]`` (no token carrier) so a
+        family that cannot carry it degrades to marker-only recovery rather than
+        crashing the submit; engine backends override per family."""
+        return []
+
+    @staticmethod
+    def build_token_query_cmd(*, user: str | None = None) -> str:
+        """Ack-gated query pairing each live job's correlation token with its id
+        (submit-once U3-c, Δ2 — the U3-d rung-1b fallback). Default raises so an
+        unmigrated backend is loud, matching the other query hooks."""
+        raise NotImplementedError("backend does not implement build_token_query_cmd")
+
+    @staticmethod
+    def parse_token_query(stdout: str) -> dict[str, str]:
+        """Map correlation-token → base job id from :meth:`build_token_query_cmd`
+        stdout (submit-once U3-c). Default raises so an unmigrated backend is
+        loud."""
+        raise NotImplementedError("backend does not implement parse_token_query")
+
+    @staticmethod
     def classify_scheduler_state(state: str) -> str:
         """Bucket a raw scheduler state token into ``alive`` / ``error`` / ``held``."""
         raise NotImplementedError("backend does not implement classify_scheduler_state")

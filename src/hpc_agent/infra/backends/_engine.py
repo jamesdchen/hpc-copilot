@@ -468,7 +468,7 @@ class ProfileBackend(HPCBackend):
         semantics (per-wave combine checkpoints, staged canary gates).
         """
         if self.profile.family == "slurm":
-            return self._build_slurm_command(
+            cmd = self._build_slurm_command(
                 task_range,
                 job_name,
                 job_env,
@@ -476,8 +476,8 @@ class ProfileBackend(HPCBackend):
                 array=array,
                 concurrency_cap=concurrency_cap,
             )
-        if self.profile.family in ("pbspro", "torque"):
-            return self._build_pbs_command(
+        elif self.profile.family in ("pbspro", "torque"):
+            cmd = self._build_pbs_command(
                 task_range,
                 job_name,
                 job_env,
@@ -485,14 +485,41 @@ class ProfileBackend(HPCBackend):
                 array=array,
                 concurrency_cap=concurrency_cap,
             )
-        return self._build_sge_command(
-            task_range,
-            job_name,
-            job_env,
-            extra_flags=extra_flags,
-            array=array,
-            concurrency_cap=concurrency_cap,
-        )
+        else:
+            cmd = self._build_sge_command(
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                array=array,
+                concurrency_cap=concurrency_cap,
+            )
+        return self._weave_correlation_flags(cmd, job_env)
+
+    def _weave_correlation_flags(self, cmd: list[str], job_env: dict[str, str]) -> list[str]:
+        """Inject the U3-c ``run_id#attempt`` correlation flag before the script arg.
+
+        DOUBLE-GATED exactly like the jobmap dispatch weave (``_dispatch_core``):
+        ``HPC_SUBMIT_ONCE`` set AND an ``HPC_RUN_ID`` in *job_env*. Flag OFF (or no
+        run_id, or a family with no comment field) ⇒ the returned command is
+        BYTE-IDENTICAL to the family builder's output — the same regression pin
+        the marker weave carries (test_correlation_key + the golden command
+        tests). The flag is inserted before the LAST arg (the script, which every
+        family appends last) so the qsub grammar is undisturbed.
+        """
+        from hpc_agent.infra.jobmap import submit_once_enabled
+
+        run_id = job_env.get("HPC_RUN_ID", "")
+        if not (submit_once_enabled() and run_id and cmd):
+            return cmd
+        try:
+            attempt = int(job_env.get("HPC_SUBMIT_ATTEMPT", "0"))
+        except ValueError:
+            attempt = 0
+        flags = type(self).build_correlation_flags(run_id, attempt)
+        if not flags:
+            return cmd
+        return [*cmd[:-1], *flags, cmd[-1]]
 
     def submit_non_contiguous(
         self,
@@ -1045,6 +1072,112 @@ class ProfileBackend(HPCBackend):
             # UNKNOWN without re-breaking the finished-id rule (#5 / #F35).
             return clean, rc not in (126, 127)
         return clean, rc == 0
+
+    # ------------------------------------------------------------------
+    # U3-c — the run+attempt correlation key (submit-once Δ2/OPEN-1(i)).
+    # The token ``run_id#attempt`` rides a length-unconstrained scheduler
+    # CONTEXT/COMMENT field (never job_name), emitted at submit and read back
+    # by U3-d rung-1b to discover an orphan's job id when the marker append
+    # never landed. Per-scheduler shape lives HERE (B5-PR2), keyed off
+    # ``cls.profile.family`` like every other query classmethod above.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def build_correlation_flags(cls, run_id: str, attempt: int) -> list[str]:
+        """Submit-argv fragment carrying the ``run_id#attempt`` token (Δ2).
+
+        Slurm ``--comment <token>``; SGE/UGE ``-ac HPC_TOKEN=<token>`` (a job
+        CONTEXT variable, visible via ``qstat -j``). The token is NEVER put in
+        ``job_name`` — SGE caps names at 15 chars and ``job_name`` is consumed
+        byte-for-byte by log paths + canary naming (the whole reason OPEN-1(iii)
+        was rejected). Returns ``[]`` for families with no clean submit-time
+        comment field (PBS Pro / TORQUE): the cluster-durable jobmap MARKER
+        (``infra.jobmap``) stays the authoritative id binding, so a family that
+        cannot carry the key degrades to marker-only recovery — never a
+        duplicate. The caller injects the fragment before the script arg ONLY
+        under the ``HPC_SUBMIT_ONCE`` flag with a run_id in hand, so flag-off is
+        byte-identical (see :meth:`_build_command`).
+        """
+        from hpc_agent.infra.jobmap import CORRELATION_KEY_ENV, jobmap_token
+
+        token = jobmap_token(run_id, attempt)
+        if cls.profile.family == "slurm":
+            return ["--comment", token]
+        if cls.profile.family == "sge":
+            return ["-ac", f"{CORRELATION_KEY_ENV}={token}"]
+        return []
+
+    @classmethod
+    def build_token_query_cmd(cls, *, user: str | None = None) -> str:
+        """Ack-gated query pairing each live job's correlation token with its id.
+
+        The U3-d rung-1b fallback: when a ``submitting`` orphan's marker is
+        ``pending`` with no id (``qsub`` accepted the array but SIGKILL cut the
+        stdout before the id reached the client AND before the marker append),
+        the id can still be recovered from the scheduler by the token the submit
+        stamped (Δ2). Slurm: ``squeue -o '%i|%k'`` (job id | comment). SGE: the
+        context lives only in ``qstat -j <id>``, so the user's live queue is
+        enumerated and each job's detail dumped. PBS carries no token → a ``true``
+        no-op (recovery falls back to the marker alone). Ack-wrapped so a severed
+        / binary-missing query reads UNKNOWN (:meth:`scheduler_query_ran`), never
+        "token absent" — the positive-evidence discipline the whole ladder rests
+        on.
+        """
+        if cls.profile.family == "slurm":
+            u = f"-u {shlex.quote(user)}" if user else '-u "$USER"'
+            return _with_ack(f"squeue {u} -h -o '%i|%k' 2>/dev/null")
+        if cls.profile.family == "sge":
+            u = shlex.quote(user) if user else '"$USER"'
+            # Enumerate the user's live job ids, then dump each job's detail
+            # (``qstat -j`` is the only place the ``-ac`` context surfaces). The
+            # ``awk`` keeps only digit-led id rows (skips the 2-line header).
+            enum = (
+                f"qstat -u {u} 2>/dev/null | awk 'NR>2 && $1 ~ /^[0-9]+$/ {{print $1}}' | sort -u"
+            )
+            return _with_ack(f'for __hpc_j in $({enum}); do qstat -j "$__hpc_j" 2>/dev/null; done')
+        return _with_ack("true")
+
+    @classmethod
+    def parse_token_query(cls, stdout: str) -> dict[str, str]:
+        """Map correlation-token → base job id from :meth:`build_token_query_cmd`.
+
+        The ack line is assumed already stripped by
+        :meth:`scheduler_query_ran`. Slurm rows are ``<jobid>|<comment>`` (the
+        comment IS the token); the id is normalised to its base sequence
+        (``12345_7`` / ``12345.batch`` → ``12345``). SGE output is concatenated
+        ``qstat -j`` blocks: track ``job_number:`` and read the token off the
+        ``context:`` line (``HPC_TOKEN=<token>[,other=…]``). First occurrence of
+        a token wins (a token is run+attempt-unique by construction, so a second
+        hit would be a re-used attempt the adopt gate already forbids).
+        """
+        from hpc_agent.infra.jobmap import CORRELATION_KEY_ENV
+
+        out: dict[str, str] = {}
+        if cls.profile.family == "slurm":
+            for line in stdout.splitlines():
+                line = line.strip()
+                if "|" not in line:
+                    continue
+                jid, comment = line.split("|", 1)
+                token = comment.strip()
+                base = jid.strip().split(".")[0].split("_")[0]
+                if token and base:
+                    out.setdefault(token, base)
+            return out
+        if cls.profile.family == "sge":
+            current: str | None = None
+            for raw in stdout.splitlines():
+                line = raw.strip()
+                if line.startswith("job_number:"):
+                    current = line.split(":", 1)[1].strip()
+                elif line.startswith("context:") and current:
+                    ctx = line.split(":", 1)[1].strip()
+                    for kv in ctx.split(","):
+                        key, _, val = kv.partition("=")
+                        if key.strip() == CORRELATION_KEY_ENV and val.strip():
+                            out.setdefault(val.strip(), current)
+            return out
+        return out
 
     @classmethod
     def parse_scheduler_states(cls, stdout: str, job_ids: list[str]) -> dict[str, str]:

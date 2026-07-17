@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.contract.vocabulary import LifecycleState
+from hpc_agent._kernel.contract.vocabulary import JournalStatus, LifecycleState
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
@@ -673,6 +673,347 @@ def reconcile(
     return primary
 
 
+# ── submit-once recovery (U3-d): reconcile is the SOLE transition-out owner ────
+#
+# A ``submitting`` record is a submit caught in — or orphaned in — its
+# dispatch→job-id window (``mint_submitting_record`` ran, the id-read/promote did
+# not). No monitor poll, no plain resubmit, no prune touches it: reconcile is the
+# ONE path that transitions it out (submit-once §3.3 containment). The recovery
+# read re-derives truth from the cluster-durable jobmap MARKER (the id the
+# dispatching shell persisted) + the U3-c correlation-key query, landing every
+# rung on POSITIVE evidence — an acked read, never absence (SUBMIT-ONCE-DESIGN §4).
+
+
+def _adoptable_wave_ids(parsed: Any, backend_cls: Any) -> dict[str, str]:
+    """The jobmap waves that pass the Δ4 adopt gate → ``{wave_key: job_id}``.
+
+    A wave is adoptable ONLY when BOTH hold (premortem Δ4, the phantom-id guard):
+    the recorded ``rc == 0`` (the ``qsub`` did NOT fail) AND the raw scheduler
+    stdout blob yields a job id under the SAME ``JOB_ID_REGEX`` the client applies
+    on the happy path (one id-parsing source — the recovery reader never
+    re-implements it). A wave that fails EITHER (``rc≠0`` = confirmed failed
+    dispatch, or a blob with no parseable id) is dropped here and the run falls to
+    rung-1b disambiguation, never a blind adopt of a job that names no live array.
+    """
+    out: dict[str, str] = {}
+    for wkey, (blob, rc) in parsed.waves.items():
+        if rc != 0:
+            continue
+        match = backend_cls.JOB_ID_REGEX.search(blob or "")
+        if match:
+            out[wkey] = match.group(1)
+    return out
+
+
+def _clear_jobmap(*, ssh_target: str, remote_path: str, run_id: str) -> None:
+    """Best-effort remove the jobmap marker + wave id-files for *run_id*.
+
+    Called on a safe-resubmit transition (the orphan is resolved: never
+    dispatched / confirmed-not-landed) so a stale marker cannot ``attempt``-match
+    and be falsely adopted onto a future same-run_id submit. Best-effort by
+    contract — a failed clear never gates the transition (the ``attempt+1`` bump
+    is the real guard, OPEN-4); the ``rm -f`` glob keeps ``run_id`` quoted and the
+    ``.jobmap*`` suffix literal so it expands.
+    """
+    from hpc_agent.infra.jobmap import jobmap_dir
+
+    d = shlex.quote(jobmap_dir(remote_path))
+    rid = shlex.quote(run_id)
+    try:
+        remote.ssh_run(
+            f"rm -f {d}/{rid}.jobmap {d}/{rid}.jobmap.*.id 2>/dev/null; true", ssh_target=ssh_target
+        )
+    except Exception:  # noqa: BLE001 — clearing is hygiene, never gates the transition
+        _log.warning("reconcile: jobmap clear failed for %s (non-fatal)", run_id, exc_info=True)
+
+
+def _recover_submitting(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: RunRecord,
+    scheduler: str,
+) -> RunRecord:
+    """The submit-once recovery ladder for a ``submitting`` record (§3.4 / §4).
+
+    Every rung lands on POSITIVE evidence; absence is NEVER trusted:
+
+    * **rung 3 (severed)** — the jobmap read's SSH transport failed (rc≠0), or the
+      ack sentinel was absent (:attr:`JobmapRead.present` False under a rc-0 read
+      is a ``cd`` that failed) with no cross-evidence: UNKNOWN → leave
+      ``submitting``, re-census next tick. Never a settle.
+    * **rung 1a (adopt)** — the marker carries ≥1 wave id passing the Δ4 gate
+      (``rc==0`` + ``JOB_ID_REGEX``): ADOPT — promote ``submitting → in_flight``
+      with those ids, then Δ6 cross-check the announce census, and hand to the
+      normal monitor/announce path.
+    * **rung 1b (disambiguate)** — marker present + ack + no adoptable id: query
+      the scheduler by the U3-c correlation token. A severed / not-run query stays
+      UNKNOWN (``submitting``). A hit ADOPTs the recovered id; a clean miss (query
+      ran, ack fired, token absent) is proof the array never entered the queue →
+      SAFE RE-SUBMIT.
+    * **rung 2 (never dispatched)** — jobmap dir absent under a clean read AND the
+      announce census also absent (Δ6 shared-FS cross-check): the pre-dispatch
+      marker write never ran → SAFE RE-SUBMIT.
+
+    SAFE RE-SUBMIT transitions ``submitting → abandoned`` (a resubmittable-terminal
+    verdict, ``is_resubmittable_terminal``) and clears the jobmap, so the operator
+    /campaign's next submit PROCEEDs and mints ``attempt+1`` (``allocate_attempt``)
+    — a stale marker can never adopt onto it. Returns the (possibly transitioned)
+    record; the ``bool`` alive-check-failed the caller expects is always ``False``
+    here (recovery owns its own UNKNOWN posture).
+    """
+    from hpc_agent.infra.backends import get_backend_class
+    from hpc_agent.infra.jobmap import build_read_shell, jobmap_token, parse_jobmap_read
+
+    ssh_target = resolve_ssh_target(record)
+    attempt = int(record.attempt)
+
+    # --- Read the jobmap marker (ack-gated, one bounded ssh exec). ---
+    try:
+        proc = remote.ssh_run(
+            build_read_shell(remote_path=record.remote_path, run_id=run_id),
+            ssh_target=ssh_target,
+        )
+    except Exception as exc:  # noqa: BLE001 — a raised transport error is UNKNOWN, not a settle
+        return _stay_submitting(experiment_dir, run_id, reason=f"jobmap read severed: {exc}")
+    if proc.returncode != 0:
+        # SSH transport failure (rc 255) — severed. UNKNOWN, stay submitting.
+        return _stay_submitting(
+            experiment_dir, run_id, reason=f"jobmap read transport rc {proc.returncode}"
+        )
+    parsed = parse_jobmap_read(proc.stdout)
+
+    backend_cls = get_backend_class(scheduler)
+
+    if parsed.present:
+        marker_attempt = parsed.attempt if parsed.attempt is not None else attempt
+        # rung 1a — adopt any wave whose id passes the Δ4 gate.
+        adoptable = _adoptable_wave_ids(parsed, backend_cls)
+        if adoptable:
+            return _adopt_and_promote(
+                experiment_dir,
+                run_id,
+                job_ids=sorted(set(adoptable.values())),
+                record=record,
+                ssh_target=ssh_target,
+                source="cluster jobmap marker",
+            )
+        # rung 1b — marker pending, no adoptable id: query the scheduler by token.
+        return _disambiguate_by_token(
+            experiment_dir,
+            run_id,
+            record=record,
+            scheduler=scheduler,
+            ssh_target=ssh_target,
+            token=jobmap_token(run_id, int(marker_attempt)),
+        )
+
+    # parsed.present is False under a clean (rc-0) read: the ``.hpc/submit/`` dir
+    # was never created ⇒ the pre-dispatch marker write never ran ⇒ candidate
+    # rung-2 "never dispatched". Δ6: cross-check the announce census before
+    # trusting absence — on a non-shared FS a marker written on another login node
+    # would read absent here yet the array be live. Require the announce dir ALSO
+    # absent before a safe re-submit.
+    return _rung2_never_dispatched(experiment_dir, run_id, record=record, ssh_target=ssh_target)
+
+
+def _stay_submitting(experiment_dir: Path, run_id: str, *, reason: str) -> RunRecord:
+    """Leave the run ``submitting`` (UNKNOWN) and record why — never a settle."""
+    _log.info("reconcile: run %s stays submitting (recovery UNKNOWN): %s", run_id, reason)
+    rec = update_run_status(
+        experiment_dir,
+        run_id,
+        last_status={
+            "verdict": "submitting",
+            "verdict_reason": "recovery_unknown_recensus",
+            "recovery_note": reason,
+        },
+    )
+    return rec
+
+
+def _adopt_and_promote(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    job_ids: list[str],
+    record: RunRecord,
+    ssh_target: str,
+    source: str,
+) -> RunRecord:
+    """ADOPT the recovered id: promote ``submitting → in_flight`` + Δ6 cross-check.
+
+    The promote is the SAME two locked writes ``ops.submit.runner.
+    promote_submitting_record`` performs (stamp ``job_ids``, then transition
+    ``in_flight``) — MIRRORED here over the public ``state.journal`` seam rather
+    than imported, because ``ops/monitor`` reaching into ``ops/submit`` is a
+    cross-subject layering violation (``lint_subject_imports``); the settle_run /
+    ``_harvest_if_owed`` mirror precedent. A crash BETWEEN the two writes leaves a
+    ``submitting`` record that already carries ``job_ids`` — still recoverable
+    (this same rung re-adopts it next tick), strictly better than losing it.
+    """
+    _log.warning(
+        "reconcile: adopted orphaned array %s: jobs %s (recovered from %s) — "
+        "promoting submitting→in_flight, no re-qsub.",
+        run_id,
+        job_ids,
+        source,
+    )
+    update_run_status(experiment_dir, run_id, job_ids=list(job_ids))
+    promoted = mark_run(experiment_dir, run_id, status=str(JournalStatus.IN_FLIGHT))
+
+    # Δ6 — cross-check the adoption against the announce census where available
+    # (best-effort, positive-only: the marker id is already positive evidence, so
+    # a severed census never un-adopts; a census that CONFIRMS the dispatcher
+    # started is recorded for visibility).
+    census_note = "unavailable"
+    try:
+        announce = read_announcements(
+            ssh_target=ssh_target,
+            remote_path=record.remote_path,
+            run_id=run_id,
+            task_count=record.total_tasks,
+        )
+        census_note = "confirmed" if announce.get("present") else "dir-absent"
+    except Exception:  # noqa: BLE001 — cross-check is best-effort; the marker id stands
+        census_note = "unavailable"
+    merged = {
+        **(promoted.last_status or {}),
+        "verdict_reason": "submit_once_adopted_from_marker",
+        "adopted_job_ids": list(job_ids),
+        "announce_crosscheck": census_note,
+    }
+    return update_run_status(experiment_dir, run_id, last_status=merged)
+
+
+def _disambiguate_by_token(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: RunRecord,
+    scheduler: str,
+    ssh_target: str,
+    token: str,
+) -> RunRecord:
+    """rung 1b: the marker is pending with no id — ask the scheduler by token."""
+    from hpc_agent.infra.backends import get_backend_class
+
+    backend_cls = get_backend_class(scheduler)
+    try:
+        proc = remote.ssh_run(backend_cls.build_token_query_cmd(), ssh_target=ssh_target)
+    except Exception as exc:  # noqa: BLE001 — a raised query error is UNKNOWN, not a miss
+        return _stay_submitting(experiment_dir, run_id, reason=f"token query severed: {exc}")
+    if proc.returncode != 0:
+        return _stay_submitting(
+            experiment_dir, run_id, reason=f"token query transport rc {proc.returncode}"
+        )
+    clean, ran_ok = backend_cls.scheduler_query_ran(proc.stdout)
+    if not ran_ok:
+        # The query did NOT run to completion (silent/truncated read, or the
+        # scheduler binary itself failed) — UNKNOWN, never "token absent".
+        return _stay_submitting(
+            experiment_dir, run_id, reason="token query no positive-evidence ack"
+        )
+    token_map = backend_cls.parse_token_query(clean)
+    hit = token_map.get(token)
+    if hit:
+        return _adopt_and_promote(
+            experiment_dir,
+            run_id,
+            job_ids=[hit],
+            record=record,
+            ssh_target=ssh_target,
+            source=f"scheduler token query ({token})",
+        )
+    # Clean miss: the query RAN, the ack fired, and the token is absent from the
+    # user's queue → the array was never accepted → safe to re-submit.
+    return _safe_resubmit(
+        experiment_dir,
+        run_id,
+        record=record,
+        ssh_target=ssh_target,
+        reason="token query clean-miss: array never entered the scheduler queue",
+    )
+
+
+def _rung2_never_dispatched(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: RunRecord,
+    ssh_target: str,
+) -> RunRecord:
+    """rung 2: jobmap dir absent under a clean read — Δ6-cross-check then resubmit."""
+    # Δ6 shared-FS cross-check: if the announce dir is PRESENT (the dispatcher
+    # started) OR the census read is severed, we cannot trust "never dispatched"
+    # — stay submitting. Only a jobmap-absent AND announce-absent pair is proof
+    # the submit never actuated.
+    try:
+        announce = read_announcements(
+            ssh_target=ssh_target,
+            remote_path=record.remote_path,
+            run_id=run_id,
+            task_count=record.total_tasks,
+        )
+    except Exception as exc:  # noqa: BLE001 — a severed census is UNKNOWN, never "never dispatched"
+        return _stay_submitting(
+            experiment_dir, run_id, reason=f"announce cross-check severed: {exc}"
+        )
+    if announce.get("present") or int(announce.get("announced", 0)) > 0:
+        # The dispatcher DID start (announce dir exists / tasks announced) but no
+        # jobmap — a non-shared-FS split or a marker write that lost the race.
+        # Adopting is impossible (no id) and resubmitting would duplicate a live
+        # array — stay submitting (UNKNOWN), surface for the operator.
+        return _stay_submitting(
+            experiment_dir,
+            run_id,
+            reason="jobmap absent but announce census present — possible non-shared-FS "
+            "split; refusing to resubmit a possibly-live array",
+        )
+    return _safe_resubmit(
+        experiment_dir,
+        run_id,
+        record=record,
+        ssh_target=ssh_target,
+        reason="jobmap dir absent and announce census absent: submit never dispatched",
+    )
+
+
+def _safe_resubmit(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: RunRecord,
+    ssh_target: str,
+    reason: str,
+) -> RunRecord:
+    """Transition ``submitting → abandoned`` (resubmittable) and clear the jobmap.
+
+    The next plain submit sees a resubmittable-terminal record
+    (:func:`is_resubmittable_terminal`) → ``_PROCEED`` and mints ``attempt+1``
+    (:func:`allocate_attempt`); the cleared marker cannot adopt onto it. Reconcile
+    is the ONLY path that performs this transition (the sole-owner invariant).
+    """
+    _log.warning(
+        "reconcile: run %s was never accepted by the scheduler (%s) — transitioning "
+        "submitting→abandoned (safe to re-submit as attempt %d); clearing jobmap.",
+        run_id,
+        reason,
+        int(record.attempt) + 1,
+    )
+    _clear_jobmap(ssh_target=ssh_target, remote_path=record.remote_path, run_id=run_id)
+    update_run_status(
+        experiment_dir,
+        run_id,
+        last_status={
+            "verdict": "abandoned",
+            "verdict_reason": "submit_once_never_dispatched_safe_resubmit",
+            "recovery_note": reason,
+        },
+    )
+    return mark_run(experiment_dir, run_id, status=str(JournalStatus.ABANDONED))
+
+
 def _reconcile_one(
     experiment_dir: Path,
     run_id: str,
@@ -779,6 +1120,17 @@ def _reconcile_one(
     # never reassigned in this function (only ``updated`` is), so this stays the
     # status as loaded even after ``update_run_status`` writes fresh fields.
     pre_reconcile_status = str(record.status)
+
+    # Submit-once entry condition (U3-d): a ``submitting`` record is caught in /
+    # orphaned in its dispatch→id window. Reconcile is the SOLE transition-out
+    # owner — route to the recovery ladder (adopt from the cluster jobmap marker,
+    # disambiguate by the U3-c correlation token, or safe-resubmit) instead of the
+    # normal alive/reporter probe path, which has nothing to probe (no job_ids
+    # yet) and would leave the run stranded ``submitting`` forever.
+    if record.status == str(JournalStatus.SUBMITTING):
+        return _recover_submitting(
+            experiment_dir, run_id, record=record, scheduler=scheduler
+        ), False
 
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)

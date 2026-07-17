@@ -334,6 +334,28 @@ complete:
 
 ## Drift log
 
+- 2026-07-17: **U3-c + U3-d + U3-e built (program complete except the live-wiring flip).**
+  U3-c carries the `run_id#attempt` token in a scheduler CONTEXT/COMMENT field
+  (Slurm `--comment`, SGE `-ac HPC_TOKEN=`), NEVER `job_name` — OPEN-1 resolved to
+  (i) as this doc rejected (iii); the per-family emission
+  (`ProfileBackend.build_correlation_flags`) folds into the ONE `_build_command`
+  funnel double-gated on `HPC_SUBMIT_ONCE` + a run_id (flag-off byte-identity
+  re-pinned), and the rung-1b query (`build_token_query_cmd`/`parse_token_query`,
+  ack-gated) reads it back via `squeue -o %k` / `qstat -j`. U3-d makes reconcile
+  the SOLE transition-out owner (`_recover_submitting`, entry-conditioned in
+  `_reconcile_one`): the §3.4 outcome table with the Δ4 adopt gate (rc==0 AND
+  `JOB_ID_REGEX`, else 1b), the Δ6 announce cross-check on rung-2, and the ruled
+  safe-resubmit (`submitting→abandoned` + jobmap clear → `attempt+1`). U3-e drilled
+  the apex dispatch→id-window (adopt-no-reqsub) + the sever/prune/race/phantom-id
+  fires; **O5 confirmed reachable-only as the qsub-killed window, not the append —
+  the marker append is a single fork-free `mv`, so the append-killed drill is
+  documented unreachable-in-process (`xfail(strict=False)`, harness §4-row-15
+  precedent) and rung-1b (the token query) is the load-bearing recovery, exactly
+  as this premortem argued.** Δ1–Δ7 all mechanized behind the flag; the lone
+  remaining OWED clause is the live `submit_flow` mint-before-dispatch + promote
+  wiring (the single final flip). Enforcement row (§7 / `lifecycle-verdicts.md`)
+  amended: reconcile-sole-owner + adopt-gate moved OWED→mechanized with the
+  `test_correlation_key` / `test_reconcile_submitting` / `test_submit_once` pins.
 - 2026-07-17: Created. Premortem of SUBMIT-ONCE-DESIGN.md against source @ `c893d2fa`.
   Verdict GO-WITH-CHANGES, 8 binding deltas (Δ1/Δ2/Δ3 build-blocking). Key catches:
   the compare-and-mint is unlocked (`runner.py:420`→`:634`) so the `submitting`

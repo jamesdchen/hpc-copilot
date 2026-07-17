@@ -67,6 +67,7 @@ __all__ = [
     "JOBMAP_STATE_PENDING",
     "SUBMIT_ONCE_FLAG",
     "CANARY_WAVE_KEY",
+    "CORRELATION_KEY_ENV",
     "submit_once_enabled",
     "wave_key",
     "jobmap_token",
@@ -99,6 +100,19 @@ SUBMIT_ONCE_FLAG = "HPC_SUBMIT_ONCE"
 # never be read as the main array's wave-0 even if a future refactor co-located
 # them.
 CANARY_WAVE_KEY = "canary"
+
+# The scheduler CONTEXT/COMMENT key the run+attempt correlation token rides
+# (U3-c, Δ2/OPEN-1(i)). Carried in a length-unconstrained context field — SGE
+# ``qsub -ac HPC_TOKEN=<run_id>#<attempt>`` context, and (as the whole comment,
+# no key) Slurm ``sbatch --comment <run_id>#<attempt>`` — NEVER ``job_name``
+# (SGE ≤15 chars; ``job_name`` is consumed byte-for-byte by log paths + canary
+# naming). U3-d's rung-1b reads it back via ``qstat -j`` / ``squeue -o %k`` to
+# discover an orphan's job id when the marker append never landed. The
+# per-scheduler submit-flag emission + the query/parse live on the backend class
+# (``ProfileBackend.build_correlation_flags`` / ``build_token_query_cmd`` /
+# ``parse_token_query``) — the family-shape home (B5-PR2); this constant is the
+# one shared name both sides key on.
+CORRELATION_KEY_ENV = "HPC_TOKEN"
 
 # Positive-evidence ack sentinel, SAME discipline as ``announce.py``'s
 # ``_ANNOUNCE_ACK`` (echoed only after a successful ``cd`` into ``.hpc/submit/``).
