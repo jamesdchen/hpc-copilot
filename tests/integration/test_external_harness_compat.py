@@ -271,7 +271,9 @@ def test_error_code_ssh_unreachable_on_failed_ssh_probe(
     )
     with (
         patch("hpc_agent.ops.submit_flow.ssh_run", return_value=fake_probe),
-        patch("hpc_agent.cli._helpers.agent_available", return_value=False),
+        # ``_err_from_hpc`` resolves ``agent_available`` on the source module at
+        # call time (lazy import), so patch it there, not on ``cli._helpers``.
+        patch("hpc_agent.infra.ssh_agent.agent_available", return_value=False),
         patch("hpc_agent.cli._helpers._emit", side_effect=captured.append),
     ):
         rc = _cli_main(["submit-flow", "--experiment-dir", str(tmp_path), "--spec", str(spec_path)])

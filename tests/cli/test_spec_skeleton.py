@@ -9,9 +9,16 @@ against real verb schemas, (b) the run-#11 case (submit-s3 missing ``monitor``),
 
 from __future__ import annotations
 
+import ast
 import json
+import subprocess
+import sys
+import textwrap
 from importlib.resources import files as _resource_files
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from hpc_agent import errors
 from hpc_agent._kernel.contract.schema import validate as _schema_validate
@@ -258,3 +265,109 @@ def test_cli_refusal_carries_spec_skeleton(tmp_path: Any) -> None:
     assert isinstance(skel, dict)
     # Names the required submit fields (job_ids is a required array → []).
     assert {"profile", "cluster", "ssh_target", "run_id", "total_tasks"} <= set(skel)
+
+
+# ─── cold-path import discipline ───────────────────────────────────────────
+
+
+def test_helpers_import_and_core_validate_stay_off_heavy_paths() -> None:
+    """Importing ``cli._helpers`` — and validating a CORE schema — must not
+    pull the two cold-path import taxes into ``sys.modules``:
+
+    * ``hpc_agent.infra.ssh_agent`` (→ ssh_options → tempfile/glob/subprocess/
+      shutil) — now imported only on the ``SshUnreachable`` branch of
+      ``_err_from_hpc``, never at module scope.
+    * ``hpc_agent._kernel.registry.plugins`` (→ importlib.metadata entry-point
+      walk) — now imported only when the HOST schema-root lookup misses.
+
+    A CORE schema (``append_decision``) hits the host root, so the plugin
+    import must stay absent even after a validation call. Subprocess-isolated
+    so a sibling test that already imported either module cannot mask a
+    regression. If ``jsonschema`` is absent in the subprocess env the validate
+    short-circuits before the root lookup — the assertion is guarded on it.
+    """
+    code = textwrap.dedent(
+        """
+        import sys
+        import hpc_agent.cli._helpers as h
+        after_import = {
+            "ssh_agent": "hpc_agent.infra.ssh_agent" in sys.modules,
+            "plugins": "hpc_agent._kernel.registry.plugins" in sys.modules,
+        }
+        try:
+            import jsonschema  # noqa: F401
+            has_js = True
+        except ImportError:
+            has_js = False
+        if has_js:
+            h._validate_against_schema(
+                {"scope_kind": "run", "scope_id": "r",
+                 "block": "greenlight", "response": "y"},
+                "append_decision",
+            )
+        print({
+            "after_import": after_import,
+            "plugins_after_validate":
+                "hpc_agent._kernel.registry.plugins" in sys.modules,
+            "has_js": has_js,
+        })
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    result = ast.literal_eval(proc.stdout.strip())
+    assert result["after_import"]["ssh_agent"] is False, (
+        "importing cli._helpers eagerly loaded hpc_agent.infra.ssh_agent — it "
+        f"must stay on the SshUnreachable error path only. stderr:\n{proc.stderr}"
+    )
+    assert result["after_import"]["plugins"] is False, (
+        "importing cli._helpers eagerly loaded hpc_agent._kernel.registry.plugins "
+        f"(→ importlib.metadata). stderr:\n{proc.stderr}"
+    )
+    if result["has_js"]:
+        assert result["plugins_after_validate"] is False, (
+            "validating a CORE schema (host-root hit) imported the plugin roots "
+            "— the plugin import must defer until the host root misses. "
+            f"stderr:\n{proc.stderr}"
+        )
+
+
+def test_plugin_root_fallback_still_fires_on_host_miss(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Defence-in-depth for PLUGIN-owned primitives: when the host schema root
+    misses, ``_validate_against_schema`` must fall through to the plugin roots
+    and validate against a plugin-owned schema.
+
+    A plugin's ``schemas/`` tree is resolved via ``plugin_schema_roots`` — here
+    faked with a tmp dir Path (Path supports ``root / name`` + ``read_text``,
+    the Traversable surface the lookup uses). The schema name is one that does
+    NOT exist in the host ``hpc_agent.schemas`` package, so the only way
+    validation can fire is the plugin fallback. Proves the lazy split did not
+    silently drop plugin coverage.
+    """
+    schema_name = "fake_plugin_primitive_xyz"
+    schema = {
+        "type": "object",
+        "properties": {"widgets": {"type": "integer", "minimum": 1}},
+        "required": ["widgets"],
+        "additionalProperties": False,
+    }
+    (tmp_path / f"{schema_name}.input.json").write_text(json.dumps(schema), encoding="utf-8")
+
+    import hpc_agent._kernel.registry.plugins as plugins
+
+    monkeypatch.setattr(plugins, "plugin_schema_roots", lambda: (tmp_path,))
+
+    # Invalid against the plugin schema → the fallback lookup found it and the
+    # defence-in-depth layer fired (a host-only lookup would silently no-op).
+    with pytest.raises(errors.SpecInvalid):
+        _validate_against_schema({"widgets": 0}, schema_name)
+
+    # And a valid payload passes cleanly through the same plugin-root path.
+    _validate_against_schema({"widgets": 3}, schema_name)

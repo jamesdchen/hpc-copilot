@@ -24,6 +24,7 @@ Runs in the default tier (not a CI workflow step) so it also covers the
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 import warnings
@@ -173,6 +174,66 @@ def test_infra_reexport_lazy() -> None:
     assert proc.stdout.strip() == "False", (
         "importing a hpc_agent.infra submodule eagerly loaded clusters "
         f"(pydantic/yaml) via the package __init__. stderr:\n{proc.stderr}"
+    )
+
+
+def test_fast_path_cache_hit_does_not_import_run_record(tmp_path: Path) -> None:
+    """cold.fast-path-cache-hit-floor: a verdict-cache HIT stays off ``run_record``.
+
+    ``_fast_path_cache._cache_path`` derives the cache file location from the
+    journal home. It used to import ``state.run_record.current_homedir`` (the
+    dataclasses + inspect chain, ~85ms cold) on EVERY fast-path dispatch,
+    including verdict-cache hits, just to build a path. It now resolves via the
+    leaf ``state._homedir.journal_homedir`` instead, so a cache HIT touches
+    neither ``run_record`` nor the ``entry_points`` plugin scan.
+
+    Subprocess-isolated in two sequential runs sharing one ``HPC_JOURNAL_DIR``:
+    the first WARMS the cache file (a miss that scans plugins + writes), the
+    second HITS it. Only the hit run is asserted — on it, both
+    ``hpc_agent.state.run_record`` (the homedir tax this change removes) and
+    ``hpc_agent._kernel.registry.plugins`` (the pre-existing lazy-on-hit
+    behavior, now pinned) must be absent from ``sys.modules``.
+    """
+    env = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path)}
+    env.pop("HPC_AGENT_NO_FAST_PATH_CACHE", None)
+
+    warm = (
+        "from hpc_agent.cli._fast_path_cache import cached_cli_reshaping_verdict; "
+        "cached_cli_reshaping_verdict()"
+    )
+    subprocess.run(
+        [sys.executable, "-c", warm],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+        env=env,
+    )
+
+    hit = (
+        "import sys; "
+        "from hpc_agent.cli._fast_path_cache import cached_cli_reshaping_verdict; "
+        "cached_cli_reshaping_verdict(); "
+        "print({"
+        "'hpc_agent.state.run_record': 'hpc_agent.state.run_record' in sys.modules, "
+        "'hpc_agent._kernel.registry.plugins': "
+        "'hpc_agent._kernel.registry.plugins' in sys.modules})"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", hit],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+        env=env,
+    )
+    loaded = ast.literal_eval(proc.stdout.strip())
+    offenders = sorted(name for name, present in loaded.items() if present)
+    assert not offenders, (
+        "a fast-path verdict-cache HIT eagerly imported "
+        f"{offenders} — the cache-path derivation must stay off run_record "
+        f"(via state._homedir.journal_homedir) and off the plugin scan. "
+        f"stderr:\n{proc.stderr}"
     )
 
 

@@ -216,9 +216,15 @@ def test_err_from_hpc_enriches_ssh_unreachable_without_agent(
     the old precheck gave — without it blocking valid IdentityFile auth."""
     import hpc_agent.cli._helpers as helpers
     from hpc_agent import errors
+    from hpc_agent.infra import ssh_agent as ssh_agent_module
 
-    monkeypatch.setattr(helpers, "agent_available", lambda: False)
-    monkeypatch.setattr(helpers, "agent_detail", lambda: "SSH_AUTH_SOCK is not set")
+    # ``_err_from_hpc`` lazy-imports ``hpc_agent.infra.ssh_agent`` and resolves
+    # ``agent_available`` / ``agent_detail`` as attributes at call time, so the
+    # monkeypatch seam is the SOURCE module (not ``helpers``, which no longer
+    # re-exports these — they were pulled off the module scope to keep
+    # ssh_options/tempfile/glob out of every cold dispatch).
+    monkeypatch.setattr(ssh_agent_module, "agent_available", lambda: False)
+    monkeypatch.setattr(ssh_agent_module, "agent_detail", lambda: "SSH_AUTH_SOCK is not set")
     captured: dict = {}
     monkeypatch.setattr(helpers, "_emit", lambda payload: captured.update(payload))
 
@@ -237,8 +243,11 @@ def test_err_from_hpc_no_agent_hint_when_agent_present(
     cause — don't append the misleading 'no agent' hint."""
     import hpc_agent.cli._helpers as helpers
     from hpc_agent import errors
+    from hpc_agent.infra import ssh_agent as ssh_agent_module
 
-    monkeypatch.setattr(helpers, "agent_available", lambda: True)
+    # Patch the SOURCE module — ``_err_from_hpc`` resolves the name there at
+    # call time (see the sibling test for why the seam moved off ``helpers``).
+    monkeypatch.setattr(ssh_agent_module, "agent_available", lambda: True)
     captured: dict = {}
     monkeypatch.setattr(helpers, "_emit", lambda payload: captured.update(payload))
 

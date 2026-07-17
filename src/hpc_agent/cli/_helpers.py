@@ -34,12 +34,6 @@ from typing import Any
 
 from hpc_agent import errors
 
-# Module-scope (a deliberate monkeypatch seam: tests patch ``helpers.agent_available``
-# / ``agent_detail``). Cheap now that ``hpc_agent.infra.__init__`` is lazy —
-# importing ``ssh_agent`` pulls only ``ssh_options`` (~8ms), not the pydantic
-# ``clusters`` / asyncssh ``remote`` chain the eager package init used to drag in.
-from hpc_agent.infra.ssh_agent import agent_available, agent_detail
-
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
 EXIT_CLUSTER_ERROR = 2
@@ -218,15 +212,27 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
     # precheck gave without the false negative. ``agent_detail()`` also
     # describes the Windows named-pipe agent (which never sets
     # SSH_AUTH_SOCK).
-    if isinstance(exc, errors.SshUnreachable) and not agent_available():
-        hint = (
-            f"No SSH agent reachable ({agent_detail()}). If you authenticate "
-            "via an IdentityFile in ~/.ssh/config this is fine; otherwise load "
-            "a key — Unix/macOS: `ssh-add ~/.ssh/<key>` (and forward "
-            "SSH_AUTH_SOCK into spawned envs); Windows: `Start-Service "
-            "ssh-agent; ssh-add ~/.ssh/<key>`."
-        )
-        remediation = f"{remediation} {hint}" if remediation else hint
+    #
+    # Import the ssh_agent MODULE lazily and only on this SSH error path — a
+    # module-scope ``from ...ssh_agent import agent_available`` dragged
+    # ssh_options → tempfile/glob/subprocess/shutil into EVERY dispatch. The
+    # ``hpc_agent.infra`` package __init__ is already lazy (PEP 562), so this
+    # pulls only ssh_agent+ssh_options, and only when an SSH op has failed.
+    # Referencing the names as ``ssh_agent.agent_available`` (attribute lookup
+    # at call time) keeps the monkeypatch seam alive — tests patch the SOURCE
+    # module ``hpc_agent.infra.ssh_agent``.
+    if isinstance(exc, errors.SshUnreachable):
+        from hpc_agent.infra import ssh_agent
+
+        if not ssh_agent.agent_available():
+            hint = (
+                f"No SSH agent reachable ({ssh_agent.agent_detail()}). If you authenticate "
+                "via an IdentityFile in ~/.ssh/config this is fine; otherwise load "
+                "a key — Unix/macOS: `ssh-add ~/.ssh/<key>` (and forward "
+                "SSH_AUTH_SOCK into spawned envs); Windows: `Start-Service "
+                "ssh-agent; ssh-add ~/.ssh/<key>`."
+            )
+            remediation = f"{remediation} {hint}" if remediation else hint
     # Structured evidence for the spec_invalid class (WS3/WS4): the pydantic
     # dispatch seam attaches a rich ``failure_features`` (naming the offending
     # field paths) onto the exception; every other SpecInvalid raise site
@@ -571,27 +577,40 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
             stacklevel=2,
         )
         return
-    # Search the core schema package first, then every plugin-contributed
-    # schema root. A plugin-owned primitive (e.g. a forecasting plugin's
-    # ``predict_queue_wait``) keeps its schema in the plugin's own
-    # ``schemas/`` tree; without consulting those roots the bare
-    # ``hpc_agent.schemas`` lookup would silently no-op and this
+    # Search the core schema package FIRST, then (only on a miss) every
+    # plugin-contributed schema root. The overwhelmingly common case is a
+    # host-owned primitive whose schema lives in ``hpc_agent.schemas`` — so
+    # split the lookup: resolve the host root eagerly, and defer the
+    # ``plugin_schema_roots`` import (→ importlib.metadata entry-point walk,
+    # ~40ms cold) until the host root actually misses. Semantics are
+    # byte-identical to the old ``(host, *plugins)`` single pass — a host hit
+    # short-circuits before any plugin is consulted, and the plugin fallback
+    # still fires on a host miss. A plugin-owned primitive (e.g. a forecasting
+    # plugin's ``predict_queue_wait``) keeps its schema in the plugin's own
+    # ``schemas/`` tree; without consulting those roots on a host miss this
     # defence-in-depth layer would never fire for any plugin primitive.
-    # ``plugin_schema_roots`` resolves each loaded plugin's root by
-    # convention (or its explicit ``schema_assets``), so the host stays
-    # agnostic to which plugins are installed.
+    # ``plugin_schema_roots`` resolves each loaded plugin's root by convention
+    # (or its explicit ``schema_assets``), so the host stays agnostic to which
+    # plugins are installed. Per-root exception tolerance is preserved.
     from importlib.resources import files as _resource_files
 
-    from hpc_agent._kernel.registry.plugins import plugin_schema_roots
-
-    schema_text: str | None = None
-    roots = (_resource_files("hpc_agent.schemas"), *plugin_schema_roots())
-    for root in roots:
+    def _read_from(root: Any) -> str | None:
         try:
-            schema_text = (root / f"{schema_name}.input.json").read_text(encoding="utf-8")
-            break
+            text: str = (root / f"{schema_name}.input.json").read_text(encoding="utf-8")
         except (FileNotFoundError, ModuleNotFoundError, OSError):
-            continue
+            return None
+        return text
+
+    schema_text = _read_from(_resource_files("hpc_agent.schemas"))
+    if schema_text is None:
+        # Host root missed — NOW pull the plugin roots (lazy: keeps
+        # registry.plugins → importlib.metadata off the common host-hit path).
+        from hpc_agent._kernel.registry.plugins import plugin_schema_roots
+
+        for root in plugin_schema_roots():
+            schema_text = _read_from(root)
+            if schema_text is not None:
+                break
     if schema_text is None:
         return
     schema = json.loads(schema_text)

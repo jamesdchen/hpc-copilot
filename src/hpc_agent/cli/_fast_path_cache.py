@@ -51,10 +51,18 @@ def cache_disabled() -> bool:
 
 
 def _cache_path() -> Path:
-    """Global cache file under the journal home (honours ``HPC_JOURNAL_DIR``)."""
-    from hpc_agent.state.run_record import current_homedir
+    """Global cache file under the journal home (honours ``HPC_JOURNAL_DIR``).
 
-    return current_homedir() / "_fast_path_verdict_cache.json"
+    Resolves the journal home via the leaf :func:`journal_homedir`, which does
+    NOT import the heavy ``state.run_record`` module (dataclasses + inspect
+    chain, ~85ms cold) just to derive this path — so a verdict-cache HIT stays
+    off that import. ``journal_homedir`` is byte-identical to
+    ``run_record.current_homedir`` and still delegates to it (honouring the
+    ``HPC_HOMEDIR`` test seam) whenever ``run_record`` is already loaded.
+    """
+    from hpc_agent.state._homedir import journal_homedir
+
+    return journal_homedir() / "_fast_path_verdict_cache.json"
 
 
 def installed_dist_signature() -> str:
