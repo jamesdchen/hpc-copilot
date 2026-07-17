@@ -25,8 +25,15 @@ def _seed_iteration(
     run_id: str,
     campaign_id: str,
     status: str,
+    last_status: dict | None = None,
 ) -> None:
-    """Seed a sidecar + a journal RunRecord with an explicit terminal status."""
+    """Seed a sidecar + a journal RunRecord with an explicit terminal status.
+
+    *last_status* threads the durable ``last_status`` dict onto the record —
+    e.g. ``{"verdict_reason": NEVER_DISPATCHED_VERDICT_REASON}`` to mint the
+    submit-once never-dispatched abandon the circuit breaker must attribute to
+    its SEPARATE control-plane streak rather than an iteration failure.
+    """
     from hpc_agent.state.journal import upsert_run
     from hpc_agent.state.run_record import RunRecord
 
@@ -60,6 +67,7 @@ def _seed_iteration(
             experiment_dir=str(experiment_dir.resolve()),
             campaign_id=campaign_id,
             status=status,
+            last_status=last_status or {},
         ),
     )
 

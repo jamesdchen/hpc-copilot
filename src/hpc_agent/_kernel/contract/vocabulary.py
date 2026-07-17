@@ -44,10 +44,26 @@ else:  # pragma: no cover - fallback for Python 3.10
 __all__ = [
     "JournalStatus",
     "TERMINAL_STATUSES",
+    "NEVER_DISPATCHED_VERDICT_REASON",
     "LifecycleState",
     "TaskStatus",
     "FailureCategory",
 ]
+
+
+# The ``last_status.verdict_reason`` a submit-once safe-resubmit stamps on a
+# ``submitting -> abandoned`` transition for a child whose array NEVER entered
+# the scheduler (a dispatch-window infra event; zero tasks ran). ONE shared
+# definition, imported by both sides — not a duplicated literal, so there is no
+# copy to drift: the WRITER
+# (:func:`hpc_agent.ops.monitor.reconcile._safe_resubmit`) stamps this value and
+# the READER
+# (:func:`hpc_agent.meta.campaign.atoms.circuit_breaker.consecutive_terminal_failures`)
+# classifies a record carrying it into the SEPARATE never-dispatched streak
+# rather than counting it as a genuine iteration failure. It lives here, the
+# cross-subject vocabulary home, because writer and reader are in different
+# subjects that must not import each other directly.
+NEVER_DISPATCHED_VERDICT_REASON = "submit_once_never_dispatched_safe_resubmit"
 
 
 class JournalStatus(StrEnum):

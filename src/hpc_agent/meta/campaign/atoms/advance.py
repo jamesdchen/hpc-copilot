@@ -298,17 +298,28 @@ def campaign_advance(
 
     def _circuit_breaker(e: dict[str, Any]) -> CandidateAction | None:
         b = e["breaker"]
+        trip = _breaker_trip(b)
+        if trip is None:
+            return None
+        kind, tripped_count, tripped_run_ids = trip
         threshold = b["threshold"]
-        if threshold is not None and threshold > 0 and b["count"] >= threshold:
-            return CandidateAction(
-                action="stop_circuit_breaker",
-                rationale=(
-                    f"{b['count']} consecutive iteration failure(s) "
-                    f">= circuit_breaker_failures ({threshold}); "
-                    f"failing runs (newest-first): {b['run_ids']}"
-                ),
+        if kind == "never_dispatched":
+            # Honest attribution (F1 twin): the halt is a control-plane/dispatch
+            # fault (submit-once never-dispatched safe-resubmits), NOT N failed
+            # experiments. Same terminal decision, truthful rationale.
+            rationale = (
+                f"{tripped_count} consecutive never-dispatched submit(s) "
+                f">= circuit_breaker_failures ({threshold}) — control-plane/dispatch "
+                "fault, no iteration executed; check cluster connectivity/reconcile; "
+                f"never-dispatched runs (newest-first): {tripped_run_ids}"
             )
-        return None
+        else:
+            rationale = (
+                f"{tripped_count} consecutive iteration failure(s) "
+                f">= circuit_breaker_failures ({threshold}); "
+                f"failing runs (newest-first): {tripped_run_ids}"
+            )
+        return CandidateAction(action="stop_circuit_breaker", rationale=rationale)
 
     def _resubmit_cap(e: dict[str, Any]) -> CandidateAction | None:
         r = e["resubmit_cap"]
@@ -462,6 +473,36 @@ def _as_positive_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+def _breaker_trip(breaker: dict[str, Any]) -> tuple[str, int, list[str]] | None:
+    """Which trailing streak trips the circuit breaker, if any.
+
+    Returns ``(kind, count, run_ids)`` — *kind* is ``"iteration_failure"`` or
+    ``"never_dispatched"`` — or ``None`` when neither streak meets the
+    threshold. Genuine iteration failures take PRECEDENCE over never-dispatched
+    when both are at threshold: a real experiment failure is the louder signal,
+    and reporting it keeps the historical rationale for the common case.
+
+    The single home for the "which streak, with what evidence" decision, so the
+    breaker rule (``_circuit_breaker``) and the anomaly brief (``_anomaly_brief``)
+    can never disagree about what tripped or misattribute a control-plane fault
+    (never-dispatched safe-resubmits) to N failed experiments (F1 twin).
+    """
+    threshold = breaker.get("threshold")
+    if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold <= 0:
+        return None
+    count = int(breaker.get("count", 0))
+    if count >= threshold:
+        return ("iteration_failure", count, list(breaker.get("run_ids", [])))
+    nd_count = int(breaker.get("never_dispatched_count", 0))
+    if nd_count >= threshold:
+        return (
+            "never_dispatched",
+            nd_count,
+            list(breaker.get("never_dispatched_run_ids", [])),
+        )
+    return None
+
+
 def _anomaly_brief(
     decision: str,
     breaker: dict[str, Any],
@@ -504,11 +545,31 @@ def _anomaly_brief(
             ),
         }
     if decision == "stop_circuit_breaker":
-        count = breaker["count"]
         threshold = breaker["threshold"]
-        run_ids = breaker.get("run_ids", [])
+        trip = _breaker_trip(breaker)
+        # The caller only passes this decision when a streak tripped, so *trip*
+        # is non-None; the iteration-streak fallback keeps the brief total.
+        kind = trip[0] if trip is not None else "iteration_failure"
+        count = trip[1] if trip is not None else int(breaker.get("count", 0))
+        run_ids = trip[2] if trip is not None else list(breaker.get("run_ids", []))
+        if kind == "never_dispatched":
+            recommendation = (
+                f"{count} consecutive never-dispatched submit(s) met the circuit "
+                f"breaker ({threshold}) — a control-plane/dispatch fault, no "
+                "iteration executed; never-dispatched runs (newest-first): "
+                f"{run_ids}. Recommend: {framing} — check cluster "
+                "connectivity/reconcile before resuming (this is NOT an "
+                "experiment failure)."
+            )
+        else:
+            recommendation = (
+                f"{count} consecutive iteration failure(s) met the circuit breaker "
+                f"({threshold}); failing runs (newest-first): {run_ids}. "
+                f"Recommend: {framing} — diagnose the shared failure before resuming."
+            )
         return {
             "tripped": "circuit_breaker",
+            "breaker_kind": kind,
             "decision": decision,
             "on_anomaly": on_anomaly,
             "recommended_action": recommended_action,
@@ -516,13 +577,10 @@ def _anomaly_brief(
                 "count": count,
                 "threshold": threshold,
                 "run_ids": run_ids,
+                "kind": kind,
                 "last_status": breaker.get("last_status"),
             },
-            "recommendation": (
-                f"{count} consecutive iteration failure(s) met the circuit breaker "
-                f"({threshold}); failing runs (newest-first): {run_ids}. "
-                f"Recommend: {framing} — diagnose the shared failure before resuming."
-            ),
+            "recommendation": recommendation,
         }
     return None
 

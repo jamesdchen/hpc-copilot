@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.contract.vocabulary import JournalStatus, LifecycleState
+from hpc_agent._kernel.contract.vocabulary import (
+    NEVER_DISPATCHED_VERDICT_REASON,
+    JournalStatus,
+    LifecycleState,
+)
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
@@ -1007,7 +1011,7 @@ def _safe_resubmit(
         run_id,
         last_status={
             "verdict": "abandoned",
-            "verdict_reason": "submit_once_never_dispatched_safe_resubmit",
+            "verdict_reason": NEVER_DISPATCHED_VERDICT_REASON,
             "recovery_note": reason,
         },
     )
