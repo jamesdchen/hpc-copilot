@@ -729,8 +729,14 @@ def test_background_sweeper_reaps_without_a_triggering_run(
     conn = _StubConn()
     _install_connect(monkeypatch, lambda _t: conn)
     engine.run("echo x", ssh_target="u@h", timeout=15)  # opens conn + starts the reaper
+    # Poll until EVERY post-condition holds, not just the dict eviction: the
+    # reaper's ``del self._conns[host]`` and ``conn.close()`` are not one atomic
+    # step, so waiting only on ``"h" not in engine._conns`` can exit in the window
+    # after eviction but before the close flag is set — the intermittent
+    # ``assert conn.closed is True`` -> ``assert False is True`` flake seen on the
+    # windows + 3.11 legs. Waiting on the conjunction is race-free either ordering.
     deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and "h" in engine._conns:
+    while time.monotonic() < deadline and ("h" in engine._conns or not conn.closed):
         time.sleep(0.05)
     assert "h" not in engine._conns, "the background reaper never closed the idle connection"
     assert conn.closed is True  # the idle login-node session was closed
