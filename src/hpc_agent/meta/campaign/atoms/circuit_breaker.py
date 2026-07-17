@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES
+
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
 
@@ -56,9 +58,12 @@ def consecutive_terminal_failures(runs: list[RunRecord]) -> dict[str, Any]:
     last_terminal_status: str | None = None
     for record in reversed(runs):  # newest-first
         status = getattr(record, "status", None)
-        if status == "in_flight":
-            # Not yet terminal — carries no verdict, so it neither breaks
-            # nor extends the streak.
+        if status not in TERMINAL_STATUSES:
+            # Not yet terminal (``in_flight`` OR ``submitting``) — carries no
+            # verdict, so it neither breaks nor extends the streak. A
+            # ``submitting`` orphan (U3 live flip, mid-dispatch process death)
+            # must NOT be mis-read as a terminal non-failure that ends the
+            # streak and silently disarms the breaker (provenance-review F1).
             continue
         if last_terminal_status is None:
             last_terminal_status = status

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.state.index import find_runs_by_campaign
@@ -42,7 +43,12 @@ def campaign_status(*, experiment_dir: Path, campaign_id: str) -> dict[str, Any]
     sidecars = find_sidecars_by_campaign(experiment_dir, campaign_id)
     history = prior(experiment_dir, campaign_id)
     in_flight_records = find_runs_by_campaign(experiment_dir, campaign_id)
-    in_flight = sum(1 for r in in_flight_records if r.status == "in_flight")
+    # Count every NON-TERMINAL outstanding run, not just ``in_flight``: a
+    # ``submitting`` orphan (U3 live flip) can name a LIVE array whose id-read
+    # was severed, so the wait/idle checks that consume this count must block on
+    # it too rather than let the campaign stop it unmonitored (provenance-review
+    # F2). ``submitting`` is absent from ``TERMINAL_STATUSES``.
+    in_flight = sum(1 for r in in_flight_records if r.status not in TERMINAL_STATUSES)
     return {
         "campaign_id": campaign_id,
         "iterations": len(sidecars),
