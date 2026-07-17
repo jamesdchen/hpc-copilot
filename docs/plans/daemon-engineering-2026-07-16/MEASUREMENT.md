@@ -232,3 +232,30 @@ deltas, not absolute medians alone).
 awaiting the maintainer. Wave-2 also closed the describe-cache
 same-version-reinstall staleness trap (content-keyed on BUILD_SHA;
 source-checkout/dirty-wheel = cache disabled).
+
+## GATE RUN — 2026-07-17, wheel 8a940f3b (CI-green 6af9a24e), uv-tool env — LOAD-AFFECTED
+
+Post-mega-wave measure (the 6af9a24e train: pathlib-free root/hooks,
+capabilities cache, reconcile backstop, verify-relay, consent hints,
+transport hardening). **NOT a clean gate number — the box was under load
+from concurrent build/measure activity: `bare` measured 115 ms vs the
+84 ms of the wave-2 quiet-box run, and `fast_path` max spiked to 4734 ms
+(a single load blip). Read bare-RELATIVE deltas, not absolutes.**
+
+| surface | median | vs bare |
+|---|---|---|
+| bare interpreter | 115 ms | — |
+| import hpc_agent | 138 ms | **+23 ms** (was +42 ms wave-2 — the pathlib cut) |
+| cold fast-path (describe/find) | 402 ms | +287 ms (inflated by load; cf. wave-2 clean 321 ms) |
+| cold full-walk (capabilities) | 2945 ms | — |
+| dry Stop hook (single) | 212 ms | +97 ms over bare |
+| WARM in-process | 16 ms | — |
+
+**Read:** the pathlib-free work shows up where it should — import-over-bare
+fell ~42→~23 ms. The absolute 402 ms cold median is load-inflated, NOT a
+regression against wave-2's 321 ms (bare itself rose ~37 %); a clean re-run
+on a quiet box is the number to cite for the record. Warm floor holds at
+16 ms. The mega-wave's value was correctness + robustness (reconcile bug,
+verify-relay, transport hardening, consent) and the capabilities-cache /
+hook-floor latency cuts; the stateless cold floor was already near its
+spawn+import plateau after wave-2.
