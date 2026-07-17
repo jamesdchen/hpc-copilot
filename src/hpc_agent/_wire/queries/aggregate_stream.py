@@ -69,6 +69,25 @@ class StreamArmPending(BaseModel):
     owner_run_id: str = Field(description="The parent run whose leg still owes this arm.")
 
 
+class StreamArmReduceFailed(BaseModel):
+    """One COMPLETE arm whose OWN reducer failed — disclosed verbatim, never masked.
+
+    A custom-reducer run streams per-arm values from the RUN'S OWN reducer. When
+    that reducer errors on a complete arm, the arm is disclosed here (its error
+    verbatim) and the stream continues over the other arms — it is NEVER replaced
+    by a built-in mean, because a built-in number for one arm amid the run's own
+    numbers for the rest is exactly the divergence bug streaming closes.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="aggregate-stream reduce-failed arm")
+
+    arm: str
+    owner_run_id: str
+    error: str = Field(
+        description="The run's own reducer's failure, verbatim (exit + stderr tail / transport error)."
+    )
+
+
 class AggregateStreamResult(BaseModel):
     """A partial-but-honest aggregate over the arms complete NOW.
 
@@ -90,17 +109,41 @@ class AggregateStreamResult(BaseModel):
     )
     arms_complete: list[str]
     arms_pending: list[StreamArmPending]
+    arms_reduce_failed: list[StreamArmReduceFailed] = Field(
+        default_factory=list,
+        description=(
+            "Complete arms whose OWN reducer failed — disclosed verbatim; the other "
+            "arms still stream. Empty on the built-in path (never a silent fallback)."
+        ),
+    )
     newly_complete: list[str] = Field(
         description="Arms complete in THIS snapshot that were not in the prior one."
     )
     arms_regressed: list[str] = Field(
         description="Arms complete in a prior snapshot but not now (disclosed, never masked)."
     )
+    completeness_label: str = Field(
+        default="",
+        description="'N-of-M arms complete' — the partiality named on every emission.",
+    )
+    value_scope: str | None = Field(
+        default=None,
+        description=(
+            "For a custom-reducer run: per-arm values are per-arm-final; cross-arm / "
+            "union / pairwise statistics stay final-harvest-only. Null on the built-in path."
+        ),
+    )
     aggregated_metrics: dict[str, Any] = Field(
-        description="Reducer weighted-mean over ALL complete arms' task summaries."
+        description=(
+            "Built-in weighted-mean over ALL complete arms' task summaries. Empty {} "
+            "on the custom-reducer path — cross-arm aggregation is final-harvest-only."
+        )
     )
     per_arm_metrics: dict[str, Any] = Field(
-        description="Per-complete-arm reducer rows (the progressive table), keyed owner:arm."
+        description=(
+            "Per-complete-arm reducer rows (the progressive table), keyed owner:arm. "
+            "On the custom path each row is the RUN'S OWN reducer output, per-arm-final."
+        )
     )
     output_path_local: str = Field(
         description="Where the partial metrics_aggregate.json was written."

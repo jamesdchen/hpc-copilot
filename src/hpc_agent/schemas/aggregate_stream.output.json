@@ -63,6 +63,14 @@
       "title": "Arms Pending",
       "type": "array"
     },
+    "arms_reduce_failed": {
+      "description": "Complete arms whose OWN reducer failed — disclosed verbatim; the other arms still stream. Empty on the built-in path (never a silent fallback).",
+      "items": {
+        "$ref": "#/$defs/StreamArmReduceFailed"
+      },
+      "title": "Arms Reduce Failed",
+      "type": "array"
+    },
     "newly_complete": {
       "description": "Arms complete in THIS snapshot that were not in the prior one.",
       "items": {
@@ -79,15 +87,34 @@
       "title": "Arms Regressed",
       "type": "array"
     },
+    "completeness_label": {
+      "default": "",
+      "description": "'N-of-M arms complete' — the partiality named on every emission.",
+      "title": "Completeness Label",
+      "type": "string"
+    },
+    "value_scope": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "For a custom-reducer run: per-arm values are per-arm-final; cross-arm / union / pairwise statistics stay final-harvest-only. Null on the built-in path.",
+      "title": "Value Scope"
+    },
     "aggregated_metrics": {
       "additionalProperties": true,
-      "description": "Reducer weighted-mean over ALL complete arms' task summaries.",
+      "description": "Built-in weighted-mean over ALL complete arms' task summaries. Empty {} on the custom-reducer path — cross-arm aggregation is final-harvest-only.",
       "title": "Aggregated Metrics",
       "type": "object"
     },
     "per_arm_metrics": {
       "additionalProperties": true,
-      "description": "Per-complete-arm reducer rows (the progressive table), keyed owner:arm.",
+      "description": "Per-complete-arm reducer rows (the progressive table), keyed owner:arm. On the custom path each row is the RUN'S OWN reducer output, per-arm-final.",
       "title": "Per Arm Metrics",
       "type": "object"
     },
@@ -166,6 +193,32 @@
         "owner_run_id"
       ],
       "title": "aggregate-stream pending arm",
+      "type": "object"
+    },
+    "StreamArmReduceFailed": {
+      "additionalProperties": false,
+      "description": "One COMPLETE arm whose OWN reducer failed — disclosed verbatim, never masked.\n\nA custom-reducer run streams per-arm values from the RUN'S OWN reducer. When\nthat reducer errors on a complete arm, the arm is disclosed here (its error\nverbatim) and the stream continues over the other arms — it is NEVER replaced\nby a built-in mean, because a built-in number for one arm amid the run's own\nnumbers for the rest is exactly the divergence bug streaming closes.",
+      "properties": {
+        "arm": {
+          "title": "Arm",
+          "type": "string"
+        },
+        "owner_run_id": {
+          "title": "Owner Run Id",
+          "type": "string"
+        },
+        "error": {
+          "description": "The run's own reducer's failure, verbatim (exit + stderr tail / transport error).",
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "arm",
+        "owner_run_id",
+        "error"
+      ],
+      "title": "aggregate-stream reduce-failed arm",
       "type": "object"
     }
   }

@@ -39,13 +39,21 @@ def _seed_record(experiment: Path, run_id: str) -> None:
     )
 
 
-def _seed_sidecar(experiment: Path, run_id: str, *, wave_map, task_count: int) -> None:
+def _seed_sidecar(
+    experiment: Path,
+    run_id: str,
+    *,
+    wave_map,
+    task_count: int,
+    aggregate_cmd: str | None = None,
+    cmd_sha: str = "0" * 64,
+) -> None:
     from hpc_agent.state.runs import write_run_sidecar
 
     write_run_sidecar(
         experiment,
         run_id=run_id,
-        cmd_sha="0" * 64,
+        cmd_sha=cmd_sha,
         hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 run.py",
@@ -53,7 +61,31 @@ def _seed_sidecar(experiment: Path, run_id: str, *, wave_map, task_count: int) -
         task_count=task_count,
         tasks_py_sha="1" * 64,
         wave_map=wave_map,
+        aggregate_defaults={"aggregate_cmd": aggregate_cmd} if aggregate_cmd else None,
     )
+
+
+def _make_reduce_fn(
+    rows_by_arm: dict[tuple[str, str], dict], *, fail_arms: frozenset[str] = frozenset()
+):
+    """A cluster_reduce seam: returns the run's OWN reducer row per (run_id, arm).
+
+    Records every invocation (run_id, arm, the HPC_STREAM_TASK_IDS allowlist) so a
+    test can assert incomplete arms are never reduced and the memo skips re-reduce.
+    An arm in *fail_arms* raises RemoteCommandFailed (the reducer-failure drill).
+    """
+
+    def _fn(
+        experiment_dir, *, run_id, aggregate_cmd, output_path, local_dir, extra_env, timeout_sec
+    ):
+        arm = extra_env["HPC_STREAM_ARM"]
+        _fn.calls.append((run_id, arm, extra_env["HPC_STREAM_TASK_IDS"]))
+        if arm in fail_arms:
+            raise errors.RemoteCommandFailed(f"reducer for arm {arm} exited 1: boom-{arm}")
+        return {"ok": True, "reduced": rows_by_arm[(run_id, arm)], "exit_code": 0}
+
+    _fn.calls = []  # type: ignore[attr-defined]
+    return _fn
 
 
 def _make_census_fn(done_by_run: dict[str, set[int]]):
@@ -235,3 +267,160 @@ def test_exactly_one_target_enforced() -> None:
         _spec(run_id="r1", parents=["r2"])
     with pytest.raises(ValueError, match="EXACTLY ONE"):
         _spec()
+
+
+# ── custom-reducer streaming (s4-gaps item 5: the wrong-citable fix) ───────────
+
+
+def test_custom_reducer_streams_run_own_values_only_for_complete_arms(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """A run WITH aggregate_cmd streams the RUN'S OWN reducer per complete arm;
+    the incomplete arm is never reduced, and no built-in mean is emitted."""
+    _seed_record(tmp_path, "r1")
+    _seed_sidecar(
+        tmp_path,
+        "r1",
+        wave_map={"0": [0, 1], "1": [2, 3]},
+        task_count=4,
+        aggregate_cmd="python3 specs/reduce_qlike.py",
+    )
+    census_fn = _make_census_fn({"r1": {0, 1, 2}})  # arm 0 whole, arm 1 half
+    reduce_fn = _make_reduce_fn({("r1", "0"): {"qlike": 0.123, "dm_better": True, "n": 100}})
+
+    res = aggregate_stream(
+        tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _reduce_fn=reduce_fn
+    )
+
+    assert res.reduce_path == "custom"
+    # per-arm value is EXACTLY the run's own reducer output (not a weighted mean).
+    assert res.per_arm_metrics["r1:0"] == {"qlike": 0.123, "dm_better": True, "n": 100}
+    # cross-arm aggregation deferred to final harvest.
+    assert res.aggregated_metrics == {}
+    # incomplete arm 1 disclosed pending, NEVER reduced (only arm 0 was invoked).
+    assert [p.arm for p in res.arms_pending] == ["1"]
+    assert reduce_fn.calls == [("r1", "0", "0,1")]  # allowlist = arm 0's task ids
+    # N-of-M labeling on the emission + per-arm-final labels on the snapshot.
+    assert res.completeness_label == "1-of-2 arms complete"
+    assert res.value_scope is not None
+    snap = json.loads(Path(res.output_path_local).read_text(encoding="utf-8"))
+    assert snap["provenance"]["completeness_label"] == "1-of-2 arms complete"
+    assert snap["provenance"]["value_labels"]["per_arm_metrics"] == "per-arm-final"
+    assert snap["provenance"]["arms_reduce_failed"] == []
+
+
+def test_custom_reducer_memo_skips_re_reduce_and_cmd_sha_change_re_fires(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """One reduce per newly-complete arm: a re-call hits the durable memo (no new
+    invocation); a changed cmd_sha invalidates the receipt and re-fires."""
+    _seed_record(tmp_path, "r1")
+    _seed_sidecar(
+        tmp_path,
+        "r1",
+        wave_map={"0": [0, 1], "1": [2, 3]},
+        task_count=4,
+        aggregate_cmd="python3 specs/reduce_qlike.py",
+        cmd_sha="a" * 64,
+    )
+    reduce_fn = _make_reduce_fn({("r1", "0"): {"qlike": 0.1}})
+    census_fn = _make_census_fn({"r1": {0, 1}})  # only arm 0 complete
+
+    # First call reduces arm 0.
+    r1 = aggregate_stream(
+        tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _reduce_fn=reduce_fn
+    )
+    assert r1.per_arm_metrics["r1:0"] == {"qlike": 0.1}
+    assert len(reduce_fn.calls) == 1
+
+    # Second call, same cmd_sha → memo hit, NO new reduce invocation.
+    r2 = aggregate_stream(
+        tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _reduce_fn=reduce_fn
+    )
+    assert r2.per_arm_metrics["r1:0"] == {"qlike": 0.1}
+    assert len(reduce_fn.calls) == 1  # unchanged — served from the receipt
+
+    # Re-resolve the run (new cmd_sha) → the receipt key invalidates → re-fire.
+    _seed_sidecar(
+        tmp_path,
+        "r1",
+        wave_map={"0": [0, 1], "1": [2, 3]},
+        task_count=4,
+        aggregate_cmd="python3 specs/reduce_qlike.py",
+        cmd_sha="b" * 64,
+    )
+    r3 = aggregate_stream(
+        tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _reduce_fn=reduce_fn
+    )
+    assert r3.per_arm_metrics["r1:0"] == {"qlike": 0.1}
+    assert len(reduce_fn.calls) == 2  # cmd_sha moved → arm 0 reduced again
+
+
+def test_custom_reducer_failure_arm_disclosed_others_continue(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """A reducer failure on one complete arm is disclosed VERBATIM; the other
+    complete arms still stream, and the failed arm gets NO built-in fallback."""
+    _seed_record(tmp_path, "r1")
+    _seed_sidecar(
+        tmp_path,
+        "r1",
+        wave_map={"0": [0, 1], "1": [2, 3]},
+        task_count=4,
+        aggregate_cmd="python3 specs/reduce_qlike.py",
+    )
+    census_fn = _make_census_fn({"r1": {0, 1, 2, 3}})  # both arms complete
+    reduce_fn = _make_reduce_fn({("r1", "1"): {"qlike": 0.2}}, fail_arms=frozenset({"0"}))
+
+    res = aggregate_stream(
+        tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _reduce_fn=reduce_fn
+    )
+
+    assert res.ok is True  # never aborts
+    # arm 1 streamed; arm 0 NOT present (no silent built-in number for it).
+    assert res.per_arm_metrics == {"r1:1": {"qlike": 0.2}}
+    assert [f.arm for f in res.arms_reduce_failed] == ["0"]
+    assert "boom-0" in res.arms_reduce_failed[0].error  # verbatim reducer error
+    snap = json.loads(Path(res.output_path_local).read_text(encoding="utf-8"))
+    assert snap["provenance"]["arms_reduce_failed"][0]["arm"] == "0"
+    assert "boom-0" in snap["provenance"]["arms_reduce_failed"][0]["error"]
+
+
+def test_builtin_path_byte_unchanged_for_non_custom_run(tmp_path: Path, journal_home: Path) -> None:
+    """A run WITHOUT aggregate_cmd keeps the built-in weighted-mean path, and the
+    snapshot provenance carries NONE of the custom-only disclosure keys."""
+    _seed_record(tmp_path, "r1")
+    _seed_sidecar(tmp_path, "r1", wave_map={"0": [0, 1], "1": [2, 3]}, task_count=4)
+    census_fn = _make_census_fn({"r1": {0, 1}})
+    pull_fn = _make_pull_fn(
+        {"r1": {0: {"qlike": 0.1, "n_samples": 5}, 1: {"qlike": 0.3, "n_samples": 5}}}
+    )
+
+    res = aggregate_stream(
+        tmp_path, spec=_spec(run_id="r1"), _census_fn=census_fn, _pull_fn=pull_fn
+    )
+
+    assert res.reduce_path == "builtin"
+    assert res.aggregated_metrics["qlike"] == pytest.approx(0.2)  # built-in mean intact
+    assert res.arms_reduce_failed == []
+    snap = json.loads(Path(res.output_path_local).read_text(encoding="utf-8"))
+    prov = snap["provenance"]
+    # the byte-shape pin: custom-only keys must NOT appear on the built-in path.
+    assert "completeness_label" not in prov
+    assert "value_scope" not in prov
+    assert "value_labels" not in prov
+    assert "arms_reduce_failed" not in prov
+    assert set(prov) == {
+        "source",
+        "reduced_at",
+        "parents",
+        "arms_complete",
+        "arms_pending",
+        "snapshot_seq",
+        "superseded",
+        "newly_complete",
+        "arms_regressed",
+        "reduce_path",
+        "ownership_dedup",
+        "disagreement",
+    }

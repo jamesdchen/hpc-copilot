@@ -5,10 +5,13 @@ set of parent run_ids, it:
 
 * **censuses per-arm completeness** (:mod:`hpc_agent.ops.aggregate.arm_census`) —
   which arms have every task announced ``.complete`` right now;
-* **reduces ONLY the complete arms** through the deterministic reducer
-  (``reduce_metrics`` per complete arm, or ``migrate.harvest.multi_parent_reduce``
-  when a persisted ownership map names a source+derived pair) — every emitted
-  number is reducer-computed, never the LLM;
+* **reduces ONLY the complete arms** through the RUN'S OWN deterministic reducer.
+  A run that declares a custom ``aggregate_cmd`` gets its own reducer invoked
+  once per complete arm (arm-complete-gated, via ``cluster_reduce`` with an
+  ``HPC_STREAM_TASK_IDS`` allowlist) — per-arm-final values, never the built-in
+  mean; a run WITHOUT a custom reducer stays on the built-in ``reduce_metrics``
+  per complete arm; a persisted migrate ownership pair uses
+  ``multi_parent_reduce``. Every emitted number is reducer-computed, never the LLM;
 * **emits a partial ``metrics_aggregate.json``** carrying ``arms_complete`` plus
   an ``arms_pending:[{arm, tasks_done, tasks_expected, owner_run_id}]`` disclosure
   block — the never-silent-cap rule (SPEC §4);
@@ -45,6 +48,7 @@ from hpc_agent._wire.queries.aggregate_stream import (
     AggregateStreamInput,
     AggregateStreamResult,
     StreamArmPending,
+    StreamArmReduceFailed,
 )
 from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_metrics
@@ -243,6 +247,215 @@ def _builtin_reduce(
     return aggregated, per_arm
 
 
+#: A per-arm stream reduce is bounded SMALL — it reduces ONE complete arm, never
+#: the whole run — so it never blocks like the 30-min final-harvest default.
+_STREAM_REDUCE_TIMEOUT_SEC = 300
+
+
+def _parent_aggregate_cmd(sidecar: dict[str, Any]) -> str | None:
+    """The run's declared custom reducer command, or ``None`` (built-in path).
+
+    Read from the SAME ``aggregate_defaults.aggregate_cmd`` key ``cluster_reduce``
+    resolves — so "does this run have a custom reducer?" has one answer. A run
+    that declares it gets its OWN reducer's per-arm numbers streamed; a run
+    without it stays byte-for-byte on the built-in weighted-mean path.
+    """
+    defaults = sidecar.get("aggregate_defaults") or {}
+    cmd = defaults.get("aggregate_cmd")
+    return cmd if isinstance(cmd, str) and cmd.strip() else None
+
+
+def _stream_reduce_memo_path(experiment_dir: Path, run_id: str) -> Path:
+    """The per-run durable receipt ledger for streamed per-arm reductions.
+
+    Keyed by run_id at the FILE level (and by ``(run_id, arm, cmd_sha)`` inside),
+    so a second run's receipts can never clobber this one's — the combine-cache
+    B1 cross-run-clobber class (``7aaff88f``) does not recur.
+    """
+    return experiment_dir / "_aggregated" / "_stream_reduce_memo" / f"{run_id}.jsonl"
+
+
+def _stream_reduce_key(run_id: str, arm: str, cmd_sha: str) -> str:
+    """A stable receipt key over ``(run_id, arm, cmd_sha)``.
+
+    ``cmd_sha`` is the run's tree fingerprint (the SoT for its resolved reducer);
+    a nudge / re-resolve rewrites it, so the key naturally invalidates and the
+    arm re-reduces — a changed reducer never serves a stale cached row.
+    """
+    import json
+
+    canonical = json.dumps({"run_id": run_id, "arm": arm, "cmd_sha": cmd_sha}, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _read_stream_reduce_memo(path: Path) -> dict[str, dict[str, Any]]:
+    """Parse the receipt ledger → ``{key: entry}`` (newest wins).
+
+    Best-effort: a torn / absent / non-UTF-8 ledger yields ``{}`` — the memo is
+    an optimization and never gates on its own IO (the ``_read_aggregate_memo``
+    posture).
+    """
+    import json
+
+    out: dict[str, dict[str, Any]] = {}
+    if not path.is_file():
+        return out
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and isinstance(rec.get("key"), str):
+            out[rec["key"]] = rec
+    return out
+
+
+def _record_stream_reduce(
+    path: Path, *, key: str, run_id: str, arm: str, cmd_sha: str, reduced: dict[str, Any]
+) -> None:
+    """Append one durable per-arm receipt (best-effort; never masks the reduce).
+
+    The reduce already ran and its value is in hand; a bookkeeping failure must
+    not lose it, so a memo-write error is swallowed (the arm simply re-reduces
+    next call — correct, just not amortized).
+    """
+    from hpc_agent.infra.io import append_jsonl_line
+
+    try:
+        append_jsonl_line(
+            path,
+            {
+                "key": key,
+                "run_id": run_id,
+                "arm": arm,
+                "cmd_sha": cmd_sha,
+                "reduced": reduced,
+                "reduced_at": utcnow_iso(),
+            },
+        )
+    except (OSError, ValueError):
+        return
+
+
+def _custom_reduce(
+    per_parent: list[tuple[RunRecord, dict[str, Any], ArmCensus]],
+    *,
+    experiment_dir: Path,
+    snapshot_dir: Path,
+    pull_fn: Callable[..., Any],
+    reduce_fn: Callable[..., Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Reduce each COMPLETE arm through the run's OWN reducer (arm-complete-gated).
+
+    The fix for the wrong-citable class: a run that declares a custom
+    ``aggregate_cmd`` no longer gets built-in weighted-mean numbers streamed.
+    Instead, for each parent that declares a reducer, ``reduce_fn``
+    (``cluster_reduce``, the SAME guarded/breaker ssh reduce leg the final harvest
+    runs) is invoked ONCE per complete arm — restricted to that arm's task ids via
+    the ``HPC_STREAM_TASK_IDS`` allowlist so the reducer only ever sees a WHOLE,
+    complete arm. Its output is therefore per-arm-final; NO partial-arm reduction
+    ever happens (the census already gated on whole-arm completeness).
+
+    Amortized: each reduced arm is memoized with a durable receipt keyed
+    ``(run_id, arm, cmd_sha)`` — one reduce invocation per NEWLY-complete arm, not
+    per tick; a changed ``cmd_sha`` re-fires. A reducer FAILURE on a complete arm
+    is disclosed verbatim in the returned ``arms_reduce_failed`` and the stream
+    continues over the other arms — never a silent built-in fallback for that arm.
+
+    A parent with no custom reducer inside a MIXED multi-leg set falls back to the
+    built-in per-arm mean over its pulled mirror: a built-in number for a
+    genuinely built-in run is correct — the divergence bug is only a built-in
+    number for a *custom* run.
+
+    Returns ``(per_arm_metrics, arms_reduce_failed)``. ``aggregated_metrics`` stays
+    ``{}`` on this path — cross-arm / union / pairwise statistics are
+    final-harvest-only (the caller discloses that residual).
+    """
+    from hpc_agent.state.runs import read_run_cmd_sha, resolved_summary_artifact
+
+    per_arm: dict[str, Any] = {}
+    arms_reduce_failed: list[dict[str, Any]] = []
+    for record, sidecar, census in per_parent:
+        cmd = _parent_aggregate_cmd(sidecar)
+        if cmd is None:
+            # Built-in parent inside a mixed set — per-arm weighted mean over its
+            # own mirror (a built-in number for a built-in run is not divergence).
+            summary_name = resolved_summary_artifact(sidecar)
+            mirror = snapshot_dir / "_stream_mirror" / record.run_id
+            _pull_parent_mirror(
+                record, sidecar, mirror=mirror, summary_name=summary_name, pull_fn=pull_fn
+            )
+            dirs_by_task = _scan_mirror(mirror, summary_name)
+            for arm in census.complete_arms:
+                arm_dirs = [str(dirs_by_task[t]) for t in arm.task_ids if t in dirs_by_task]
+                per_arm[f"{arm.owner_run_id}:{arm.arm}"] = reduce_metrics(
+                    arm_dirs, filename=summary_name
+                )
+            continue
+
+        cmd_sha = read_run_cmd_sha(experiment_dir, record.run_id)
+        memo_path = _stream_reduce_memo_path(experiment_dir, record.run_id)
+        memo = _read_stream_reduce_memo(memo_path)
+        for arm in census.complete_arms:
+            arm_key = f"{record.run_id}:{arm.arm}"
+            key = _stream_reduce_key(record.run_id, arm.arm, cmd_sha)
+            hit = memo.get(key)
+            if hit is not None and isinstance(hit.get("reduced"), dict):
+                per_arm[arm_key] = hit["reduced"]
+                continue
+            extra_env = {
+                "HPC_STREAM_ARM": arm.arm,
+                "HPC_STREAM_TASK_IDS": ",".join(str(t) for t in arm.task_ids),
+            }
+            try:
+                cr = reduce_fn(
+                    experiment_dir,
+                    run_id=record.run_id,
+                    aggregate_cmd=cmd,
+                    output_path=f"_aggregated/_stream/{record.run_id}/arm_{arm.arm}.json",
+                    local_dir=snapshot_dir / "_stream_reduce" / record.run_id,
+                    extra_env=extra_env,
+                    timeout_sec=_STREAM_REDUCE_TIMEOUT_SEC,
+                )
+            except (errors.HpcError, OSError) as exc:
+                # Reducer error OR severed reduce leg — disclose verbatim, continue;
+                # NEVER fall back to a built-in number for this arm.
+                arms_reduce_failed.append(
+                    {"arm": arm.arm, "owner_run_id": record.run_id, "error": str(exc)}
+                )
+                continue
+            reduced = cr.get("reduced") if isinstance(cr, dict) else None
+            if not isinstance(reduced, dict):
+                arms_reduce_failed.append(
+                    {
+                        "arm": arm.arm,
+                        "owner_run_id": record.run_id,
+                        "error": (
+                            f"reducer output for arm {arm.arm!r} was not a JSON object "
+                            f"(got {type(reduced).__name__}) — refusing to stream a "
+                            "non-dict arm value"
+                        ),
+                    }
+                )
+                continue
+            _record_stream_reduce(
+                memo_path,
+                key=key,
+                run_id=record.run_id,
+                arm=arm.arm,
+                cmd_sha=cmd_sha,
+                reduced=reduced,
+            )
+            per_arm[arm_key] = reduced
+    return per_arm, arms_reduce_failed
+
+
 def _ownership_reduce(
     per_parent: list[tuple[RunRecord, dict[str, Any], ArmCensus]],
     *,
@@ -370,6 +583,7 @@ def aggregate_stream(
     spec: AggregateStreamInput,
     _census_fn: Callable[..., ArmCensus] | None = None,
     _pull_fn: Callable[..., Any] | None = None,
+    _reduce_fn: Callable[..., Any] | None = None,
 ) -> AggregateStreamResult:
     """Stream the current best table over the complete arms [SPEC §1].
 
@@ -377,9 +591,10 @@ def aggregate_stream(
     ----------
     spec
         Exactly one of ``run_id`` (single run) or ``parents`` (multi-leg).
-    _census_fn / _pull_fn
+    _census_fn / _pull_fn / _reduce_fn
         Injection seams for testing (default the real ``census_arms`` / the
-        summary-only ``rsync_pull``). They keep the fire-path tests off ssh.
+        summary-only ``rsync_pull`` / the guarded ``cluster_reduce``). They keep
+        the fire-path tests off ssh.
 
     Refusals (guards that CAN fire):
 
@@ -431,9 +646,23 @@ def aggregate_stream(
 
         pull_fn = _rsync_pull
 
+    if _reduce_fn is not None:
+        reduce_fn = _reduce_fn
+    else:
+        from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce as _cluster_reduce
+
+        reduce_fn = _cluster_reduce
+
     # ── reduce the complete arms through the deterministic reducer ──────────────
+    # Path selection (NO new gate — a projection of the sidecar's declared reducer):
+    #   ownership  — a persisted migrate source+derived pair (dedupe the raced cell);
+    #   custom     — ANY parent declares aggregate_cmd → the run's OWN reducer, per
+    #                complete arm (arm-complete-gated); the wrong-citable fix;
+    #   builtin    — no custom reducer → the built-in weighted-mean (byte-unchanged).
     ownership = _load_ownership_for_pair(experiment_dir, parents)
+    any_custom = any(_parent_aggregate_cmd(sc) is not None for _, sc, _ in per_parent)
     ownership_dedup: dict[str, Any] | None = None
+    arms_reduce_failed: list[dict[str, Any]] = []
     if ownership is not None:
         aggregated, per_arm, ownership_dedup = _ownership_reduce(
             per_parent,
@@ -443,6 +672,18 @@ def aggregate_stream(
             ownership=ownership,
         )
         reduce_path = "ownership"
+    elif any_custom:
+        per_arm, arms_reduce_failed = _custom_reduce(
+            per_parent,
+            experiment_dir=experiment_dir,
+            snapshot_dir=snapshot_dir,
+            pull_fn=pull_fn,
+            reduce_fn=reduce_fn,
+        )
+        # Cross-arm / union / pairwise statistics are final-harvest-only — the
+        # stream never means the run's own per-arm rows into a built-in aggregate.
+        aggregated = {}
+        reduce_path = "custom"
     else:
         aggregated, per_arm = _builtin_reduce(
             per_parent,
@@ -463,6 +704,19 @@ def aggregate_stream(
     reduced_at = utcnow_iso()
     snapshot_seq = prior_seq + 1
     arms_pending_rows = [StreamArmPending(**a.pending_digest()) for a in pending_all]
+    reduce_failed_rows = [StreamArmReduceFailed(**d) for d in arms_reduce_failed]
+
+    # N-of-M partiality named on EVERY emission (M = every censused arm).
+    arms_total = len(complete_all) + len(pending_all)
+    completeness_label = f"{len(complete_all)}-of-{arms_total} arms complete"
+    # The custom path streams per-arm-final values only; cross-arm aggregation is
+    # deferred. Null on the built-in path (its aggregated_metrics IS the table).
+    value_scope = (
+        "per-arm values are per-arm-final; cross-arm / union / pairwise statistics "
+        "are final-harvest-only (not streamed)"
+        if reduce_path == "custom"
+        else None
+    )
 
     provenance = {
         "source": "stream",
@@ -478,6 +732,17 @@ def aggregate_stream(
         "ownership_dedup": ownership_dedup,
         "disagreement": disagreement,
     }
+    # Custom-only provenance additions — the built-in / ownership snapshot stays
+    # byte-for-byte unchanged (the regression pin), so these keys appear ONLY when
+    # the run's own reducer produced the numbers.
+    if reduce_path == "custom":
+        provenance["completeness_label"] = completeness_label
+        provenance["value_scope"] = value_scope
+        provenance["arms_reduce_failed"] = arms_reduce_failed
+        provenance["value_labels"] = {
+            "per_arm_metrics": "per-arm-final",
+            "aggregated_metrics": "cross-arm final-harvest-only (not streamed)",
+        }
     _write_snapshot(snapshot_path, aggregated=aggregated, per_arm=per_arm, provenance=provenance)
 
     return AggregateStreamResult(
@@ -487,8 +752,11 @@ def aggregate_stream(
         superseded=prior_seq or None,
         arms_complete=complete_names,
         arms_pending=arms_pending_rows,
+        arms_reduce_failed=reduce_failed_rows,
         newly_complete=newly_complete,
         arms_regressed=arms_regressed,
+        completeness_label=completeness_label,
+        value_scope=value_scope,
         aggregated_metrics=aggregated,
         per_arm_metrics=per_arm,
         output_path_local=str(snapshot_path),

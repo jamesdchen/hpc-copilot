@@ -116,11 +116,25 @@ How your reducer reaches the cluster depends on whether `aggregate_cmd` names a 
 
 Because a file-path reducer is shipped *from disk*, it **must exist under the experiment repo at submit time**. If `aggregate_cmd` declares `specs/reduce_x.py` but that file is absent, submit **refuses at stage** (the reducer stage-gate in `submit_flow`) rather than letting the run compute for hours and then die mid-harvest with "no such file." Commit or create the reducer at the declared path before you submit — or switch to a `python -m` module reducer if it is genuinely installed in the run env.
 
-## Streaming does not run your reducer yet (current limitation)
+## Streaming runs YOUR reducer, per complete arm
 
-`aggregate-stream` — the progressive partial-aggregate that reports arms as they finish — reduces through the **built-in** weighted-mean (`reduce_metrics`) only. It does **not** invoke a run's custom `aggregate_cmd`. So for a run with a custom reducer, the streamed partial table can carry numbers that **differ from what your reducer would compute** (a QLIKE, a Diebold–Mariano statistic, a median — none of these is a plain mean of per-task scalars). Treat streaming output for a custom-reducer run as a liveness/progress signal, **not** as your reducer's result; the authoritative numbers come from the final `cluster-reduce` / `aggregate-flow` harvest, which does run your reducer.
+`aggregate-stream` — the progressive partial-aggregate that reports arms as they finish — runs **your** reducer, not the built-in mean, for a run that declares a custom `aggregate_cmd`. It reduces **per arm**, and an arm becomes eligible only when **every** task in it is complete, so your reducer is invoked over **whole, complete arms only** — its contract holds and the per-arm value it emits is **final** for that arm. There is **no partial-arm reduction, ever**: a half-drained arm is disclosed PENDING by name and never reduced.
 
-This is a known open gap (tracked in [`docs/plans/s4-gaps-2026-07-17.md`](../plans/s4-gaps-2026-07-17.md), item 5); the resolution — invoke the custom reducer per complete arm, or refuse to stream a custom-reducer run — is pending a ruling and not yet built. See [`docs/primitives/aggregate-stream.md`](../primitives/aggregate-stream.md).
+What this means for the streamed table:
+
+- **Per-arm values are per-arm-final.** Each row in `per_arm_metrics` (keyed `owner:arm`) is exactly what your reducer computed for that one complete arm — a real QLIKE / median / Diebold–Mariano over that arm's tasks, not a mean of scalars.
+- **Cross-arm / union / pairwise statistics stay final-harvest-only.** The stream does **not** combine your per-arm rows into a run-level aggregate — `aggregated_metrics` is `{}` on the custom path, and the emission is labeled `table-partial`. Any statistic that spans arms (a pooled QLIKE, a cross-arm DM test) comes from the final `cluster-reduce` / `aggregate-flow` harvest, which is the authoritative citable.
+- **Every emission names its partiality.** Each snapshot carries `completeness_label` (`"N-of-M arms complete"`) and value labels (`per-arm-final` / `table-partial`), so a partial table is never mistaken for the final one.
+- **A reducer failure on a complete arm is disclosed verbatim, never hidden.** If your reducer exits non-zero (or the reduce leg is severed) for one complete arm, that arm is listed in `arms_reduce_failed` with the error verbatim and the **other** arms still stream — the framework never substitutes a built-in number for the failed arm (a built-in number for one arm amid your numbers for the rest is exactly the divergence this closes).
+
+### The `HPC_STREAM_TASK_IDS` allowlist (streaming only)
+
+So the reducer sees exactly one complete arm, `aggregate-stream` runs it cluster-side (via `cluster-reduce`, the same guarded reduce leg as the final harvest — it rides the per-host breaker) with two extra environment variables:
+
+- **`HPC_STREAM_TASK_IDS`** — a comma-separated list of the global task ids that make up this arm. A reducer participating in streaming **should restrict its inputs to these task ids** (in addition to `$HPC_RUN_ID`) so its output covers exactly the one complete arm. The portable pattern: read `HPC_STREAM_TASK_IDS` when set and filter your per-task glob to those ids; ignore it (reduce everything for the run) when unset — which is the final-harvest case.
+- **`HPC_STREAM_ARM`** — the arm's identifier (the wave number in the wave-aligned v1), for labeling.
+
+A reduce over one arm is memoized with a durable receipt keyed `(run_id, arm, cmd_sha)`: each complete arm is reduced **once**, not once per stream tick, and a re-resolved run (new `cmd_sha`) re-fires. A reducer that ignores `HPC_STREAM_TASK_IDS` still gets invoked only when the arm is complete, but its row may fold in other on-disk arms — so honoring the allowlist is what makes the per-arm value precisely per-arm. See [`docs/primitives/aggregate-stream.md`](../primitives/aggregate-stream.md) and, for the scoping, [`docs/plans/s4-gaps-2026-07-17.md`](../plans/s4-gaps-2026-07-17.md) item 5.
 
 ## When NOT to use cluster-reduce
 
