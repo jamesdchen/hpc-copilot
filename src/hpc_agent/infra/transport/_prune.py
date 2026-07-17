@@ -300,7 +300,7 @@ def _journal_deploy_prune(local_path: str | Path, record: dict[str, Any]) -> Non
 
 #: The stdlib-only python the control plane pipes cluster-side to prune the
 #: manifest-known extras AND re-seal the push manifest in ONE trailing leg
-#: (delta-push round-trip Option 3 — collapses the former ``rm`` leg + union-seal
+#: (delta-push round-trip Option 4 — collapses the former ``rm`` leg + union-seal
 #: leg). It removes each proven-ours path (``os.remove``, no shell), computes the
 #: retained set REMOTE-SIDE (which paths the delete could NOT remove — a
 #: raced/failed delete stays ours, fail-open per-path), then writes the manifest
@@ -351,7 +351,7 @@ def _prune_and_reseal(
 ) -> None:
     """Delete *prune_paths* AND reseal the push manifest in ONE bounded ssh leg.
 
-    The delta-push round-trip Option 3 fold: the prune ``rm`` and the
+    The delta-push round-trip Option 4 fold: the prune ``rm`` and the
     retained-union manifest seal — formerly two separate un-guarded dials
     (``_execute_prune`` + :func:`_write_push_manifest`) — collapse into a single
     trailing leg fired ONLY when a prune actually has paths to delete. One

@@ -108,6 +108,7 @@ from ._disclose import (
     _disclose_no_rsync,  # noqa: F401
     _disclose_payload,  # noqa: F401
     _disclose_prune,  # noqa: F401
+    _disclose_seal_uncommitted,  # noqa: F401
     _emit_progress,  # noqa: F401
     _pump_with_progress,  # noqa: F401
     _write_all,  # noqa: F401
@@ -928,6 +929,7 @@ def _prune_manifest_known_extras(
     extra: tuple[str, ...],
     seal_paths: list[str],
     timeout: float | None,
+    seal_folded: bool = False,
 ) -> None:
     """Plan + disclose + journal + execute the bounded auto-prune (ruling 6) AND
     seal the push manifest — the WHOLE trailing leg of the delta push.
@@ -937,14 +939,17 @@ def _prune_manifest_known_extras(
     manifest — a prune we cannot do cleanly is a prune we skip, never a broken
     push.
 
-    Owns EXACTLY ONE trailing leg (delta-push round-trip Options 1+3):
+    Owns AT MOST ONE trailing leg (delta-push round-trip Options 1 + 3 + 4):
 
     * *known* is the prior-manifest ``paths`` set folded into the remote hash
       read (Option 1) — there is NO separate ``_read_prior_push_manifest`` dial.
     * When the prune actually has paths to delete, the ``rm`` + the retained-union
       manifest seal collapse into ONE trailing :func:`_prune_and_reseal` leg
-      (Option 3), fired ONLY-when-extras. The retained survivors (paths the ``rm``
+      (Option 4), fired ONLY-when-extras. The retained survivors (paths the ``rm``
       could not remove) are computed REMOTE-SIDE and folded into the same seal.
+      This ``rm``+reseal leg fires regardless of *seal_folded* — it OVERWRITES the
+      last batch's provisional seal with the retained-union (the authoritative
+      one) — so the pruning case is unaffected by the fold.
     * Otherwise (no candidates, an all-anomaly set, a cap-refused plan, or the
       kill-switch) a standalone :func:`_write_push_manifest` leg seals the
       manifest as ``sorted(seal_paths ∪ retained)`` — where *retained* keeps the
@@ -952,10 +957,28 @@ def _prune_manifest_known_extras(
       cap-refused/failed prune must stay ``manifest-known (prunable)`` for the
       next push, or the disclosed ``raise the cap and re-push`` remediation can
       never fire (the extras would downgrade to never-touched ANOMALYs).
+
+    *seal_folded* (delta-push round-trip Option 3) says the LAST delta batch
+    already rode the FINAL provisional seal on its own tar-push leg (its cumulative
+    checkpoint payload — ``base ∪ all-shipped`` — equals ``sorted(set(seal_paths))``,
+    the full local entry set). When True, the standalone
+    :func:`_write_push_manifest` seal is SKIPPED for the no-retained case (leg E is
+    fully absorbed — the common warm re-push), since it would rewrite exactly the
+    bytes the fold already wrote. It is NOT skipped when *retained* adds paths
+    beyond the provisional (a cap-refused/all-anomaly prune whose survivors the
+    fold did not carry), and the ``rm``+reseal tail always overwrites it when a
+    prune fires. A last-batch fold whose ack was absent is a fail-open seal lag
+    (Invariant 2) — the skip is unconditional on the ack, never a corrective dial.
     """
     seal_base = sorted(set(seal_paths))
 
     def _seal(extra_paths: set[str]) -> None:
+        # Option 3: when the last batch already rode the FINAL provisional seal
+        # (``seal_base``), a no-retained standalone seal would rewrite identical
+        # bytes — skip it (leg E absorbed). A non-empty *extra_paths* (retained
+        # survivors the provisional did not carry) is still written.
+        if seal_folded and not extra_paths:
+            return
         _write_push_manifest(
             ssh_target=ssh_target,
             remote_path=remote_path,
@@ -1038,9 +1061,11 @@ def _prune_manifest_known_extras(
             _seal(retained)
         return
 
-    # COMBINED TAIL (Option 3): the prune ``rm`` + the retained-union reseal in
+    # COMBINED TAIL (Option 4): the prune ``rm`` + the retained-union reseal in
     # ONE trailing leg, fired ONLY-when-extras (reached only when a prune has
-    # paths to delete). Outside the try so it fires exactly once; itself fail-open.
+    # paths to delete). Overwrites the last batch's provisional seal (Option 3)
+    # with the authoritative retained-union. Outside the try so it fires exactly
+    # once; itself fail-open.
     _prune_and_reseal(
         ssh_target=ssh_target,
         remote_path=remote_path,
@@ -1186,20 +1211,22 @@ def rsync_push(
                     _disclose_delta_batch(
                         index=i, total=len(batches), n_files=len(batch), batch_bytes=batch_bytes
                     )
-                    # Delta-push round-trip Option 2: RIDE this batch's push-manifest
-                    # checkpoint inside its tar-push leg — no separate
-                    # ``_write_push_manifest`` dial (2N+1 → N+2 legs for large N).
-                    # The checkpoint payload — base_paths ∪ everything landed
-                    # INCLUDING this batch — is known before the push and recorded
-                    # remote-side AFTER ``tar x``, ack-gated by ``__HPC_PUSH_CP_OK__``.
-                    # The LAST batch carries NO checkpoint: the trailing seal/prune
-                    # leg below covers it (and folds in the prune's retained extras),
-                    # so a folded checkpoint there would be immediately overwritten.
-                    checkpoint_b64: str | None = None
-                    if i < len(batches):
-                        checkpoint_b64 = _push_manifest_payload_b64(
-                            sorted(set(base_paths) | set(landed) | set(batch))
-                        )
+                    # Delta-push round-trip Options 2+3: RIDE this batch's
+                    # push-manifest write inside its tar-push leg — no separate
+                    # ``_write_push_manifest`` dial. The payload — base_paths ∪
+                    # everything landed INCLUDING this batch — is known before the
+                    # push and recorded remote-side AFTER ``tar x``, ack-gated by
+                    # ``__HPC_PUSH_CP_OK__``. For a NON-last batch it is a mid-ship
+                    # CHECKPOINT (Option 2, 2N+1 → N+2). For the LAST batch the
+                    # cumulative set base ∪ all-shipped IS the full local entry set,
+                    # i.e. the FINAL provisional SEAL (Option 3) — so leg E folds
+                    # into the last batch's leg (N+2 → N+1 for the no-prune warm
+                    # re-push). When a prune fires, the trailing
+                    # ``_prune_and_reseal`` (Option 4) overwrites this provisional
+                    # seal with the authoritative retained-union.
+                    checkpoint_b64 = _push_manifest_payload_b64(
+                        sorted(set(base_paths) | set(landed) | set(batch))
+                    )
                     pushed = guarded_call(
                         ssh_target,
                         functools.partial(
@@ -1224,32 +1251,46 @@ def rsync_push(
                         # the remote as-is (no prune, no final seal) for a clean retry.
                         return pushed
                     landed.extend(batch)
-                    # Positive-evidence ack read (Option 2 contract): the batch landed
-                    # (rc 0), but whether its FOLDED checkpoint COMMITTED is proven
-                    # only by the sentinel. Its ABSENCE is never read as a batch
-                    # failure — the batch is durable; the manifest lag re-derives next
-                    # push (fail-open, Invariant 2). No corrective dial: re-adding one
-                    # would re-introduce the very leg Option 2 removes. A later batch's
-                    # cumulative checkpoint (base ∪ ALL landed) subsumes a missed one.
-                    if i < len(batches) and _PUSH_CP_SENTINEL not in (pushed.stdout or ""):
-                        _disclose_checkpoint_uncommitted(index=i, total=len(batches))
+                    # Positive-evidence ack read (Options 2+3 contract): the batch
+                    # landed (rc 0, ``tar x`` authoritative), but whether its FOLDED
+                    # manifest write COMMITTED is proven only by the sentinel. Its
+                    # ABSENCE is never read as a batch failure — the batch is durable;
+                    # the manifest lag re-derives next push (fail-open, Invariant 2).
+                    # No corrective dial: re-adding one would re-introduce the very
+                    # leg the fold removes. A NON-last miss is a checkpoint lag a later
+                    # cumulative fold or the final seal subsumes; a LAST-batch miss is a
+                    # SEAL lag (Option 3) the next push re-derives from the live remote
+                    # hash and re-seals — never a re-transfer.
+                    if _PUSH_CP_SENTINEL not in (pushed.stdout or ""):
+                        if i < len(batches):
+                            _disclose_checkpoint_uncommitted(index=i, total=len(batches))
+                        else:
+                            _disclose_seal_uncommitted(total=len(batches))
+                # Option 3: the last batch rode the FINAL provisional seal on its leg.
+                seal_folded = True
             else:
                 pushed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+                # No batch shipped -> no leg carried the seal; the trailing step must
+                # write the standalone seal E (nothing to fold it into).
+                seal_folded = False
 
             # Bounded auto-prune of MANIFEST-KNOWN remote extras (ruling 6) AND
-            # the push-manifest seal, folded into ONE trailing leg (delta-push
-            # round-trip Options 1+3). The delta tar cannot prune, but a file WE
-            # shipped in a prior push and since dropped is safe to delete under a
+            # the push-manifest seal — AT MOST ONE trailing leg (delta-push
+            # round-trip Options 1 + 3 + 4). The delta tar cannot prune, but a file
+            # WE shipped in a prior push and since dropped is safe to delete under a
             # disclosed cap. ``remote_known`` is the prior manifest's ``paths``
             # folded into leg A (Option 1 — no separate prior-read dial). When a
             # prune actually fires, the ``rm`` + the retained-union manifest seal
-            # collapse into ONE ``_prune_and_reseal`` leg (Option 3), fired
-            # only-when-extras; otherwise a standalone seal writes the manifest.
-            # Rides this same delete=True dial (no new cold SSH); anomalies are
-            # never touched. Fully fail-open — none of it can break a successful
-            # transfer. ``seal_paths`` is the current local path set (the base of
-            # the manifest); any manifest-known extra a cap-refused/failed prune
-            # did NOT delete keeps its provenance in the union (#F58).
+            # collapse into ONE ``_prune_and_reseal`` leg (Option 4), fired
+            # only-when-extras. Otherwise: if the last batch already rode the FINAL
+            # provisional seal on its tar leg (``seal_folded`` — Option 3), the
+            # standalone seal E is ABSORBED (skipped) for the no-retained warm case;
+            # only a cap-refused/all-anomaly retained set still writes a seal. Rides
+            # this same delete=True dial (no new cold SSH); anomalies are never
+            # touched. Fully fail-open — none of it can break a successful transfer.
+            # ``seal_paths`` is the current local path set (the base of the
+            # manifest); any manifest-known extra a cap-refused/failed prune did NOT
+            # delete keeps its provenance in the union (#F58).
             _prune_manifest_known_extras(
                 ssh_target=ssh_target,
                 remote_path=remote_path,
@@ -1259,6 +1300,7 @@ def rsync_push(
                 extra=delta.extra,
                 seal_paths=[e.path for e in local_manifest.entries],
                 timeout=effective_timeout,
+                seal_folded=seal_folded,
             )
             return pushed
 

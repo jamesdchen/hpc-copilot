@@ -1756,37 +1756,54 @@ def _warm_delta_push_ssh_cmds(tmp_path: Path, *, n_extra: int = 0) -> list[str]:
     return [c for c in cmds if c != "-V"]
 
 
-def test_warm_delta_push_no_prune_is_three_legs(tmp_path: Path) -> None:
-    """Delta-push round-trip leg-count pin (memo §5 table, "small warm delta,
-    nothing dropped" = 3): a WARM rsync-less re-push with nothing to prune costs
-    EXACTLY 3 cold ssh opens — remote hash manifest (A), the single delta batch
-    (B), the final push-manifest seal (E). Unchanged by this unit (E can't fold
-    without the tar-leg append, Option 2/out of scope); the pin fixes the WARM
-    floor so a future edit that re-added a per-op cold round-trip turns RED."""
+def test_warm_delta_push_no_prune_is_two_legs(tmp_path: Path) -> None:
+    """Delta-push round-trip leg-count pin (memo §4 table, "small warm delta,
+    nothing dropped" -> 2 = "A, B+seal"): a WARM rsync-less re-push with nothing to
+    prune costs EXACTLY 2 cold ssh opens — remote hash manifest (A) + the single
+    delta batch (B) which now ALSO RIDES the FINAL push-manifest seal (Option 3).
+    DOWN from the pre-Option-3 3 (A, B, standalone seal E): leg E is absorbed into
+    the last batch's leg. The seal's HPC_PM_PAYLOAD merge now rides the SAME leg as
+    ``tar x`` — there is NO standalone manifest write. (This is the verified count;
+    the memo's §4 large-re-ship "after" column undercounts by one — it omits leg A —
+    so its "N"/"3" read as N+1/"2" here, consistent with this small-delta row.) A
+    future edit that re-split the seal into its own cold round-trip turns RED."""
     cmds = _warm_delta_push_ssh_cmds(tmp_path)
-    assert len(cmds) == 3, f"warm no-prune push opened {len(cmds)} ssh connections: {cmds}"
-    # The exact warm shape: manifest read, one delta batch, final seal.
+    assert len(cmds) == 2, f"warm no-prune push opened {len(cmds)} ssh connections: {cmds}"
+    # The exact warm shape: manifest read, one delta batch that folds the final seal.
     assert sum("HPC_DELTA_EXCLUDES" in c for c in cmds) == 1  # remote hash manifest (A)
     assert sum("tar x -C /r" in c for c in cmds) == 1  # the single delta batch (B)
-    assert sum("HPC_PM_PAYLOAD" in c for c in cmds) == 1  # the standalone seal (E)
+    # Option 3: the final seal RIDES the batch leg (tar x + HPC_PM_PAYLOAD merge on
+    # ONE leg, ack-gated), not a standalone write.
+    folded = [c for c in cmds if "tar x -C /r" in c and "HPC_PM_PAYLOAD" in c]
+    standalone = [c for c in cmds if "HPC_PM_PAYLOAD" in c and "tar x -C /r" not in c]
+    assert len(folded) == 1  # B carries the folded final seal
+    assert len(standalone) == 0  # no standalone seal E survives
+    assert transport._PUSH_CP_SENTINEL in folded[0]  # ack-gated by the sentinel
     # Option 1: NO separate prior-manifest read leg (folded into A).
     assert not any("cat " in c and "push_manifest" in c for c in cmds), f"D1 leg present: {cmds}"
 
 
 def test_warm_delta_push_with_prune_is_three_legs(tmp_path: Path) -> None:
-    """Delta-push round-trip leg-count pin (memo §5 fallback table, "small warm
-    delta, a file pruned" 5 -> 3): the SAME warm re-push that must ALSO prune one
+    """Delta-push round-trip leg-count pin (memo §4 table, "small warm delta, a
+    file pruned" 5 -> 3): the SAME warm re-push that must ALSO prune one
     manifest-known remote extra costs EXACTLY 3 cold ssh opens, down from 5 —
-    Option 1 folds the prior-manifest read (D1) into leg A, and Option 3 collapses
-    the prune ``rm`` (D2) + the union-reseal (E) into ONE trailing leg. A future
-    edit that re-split either fold turns RED."""
+    Option 1 folds the prior-manifest read (D1) into leg A, and Option 4 collapses
+    the prune ``rm`` (D2) + the union-reseal (E) into ONE trailing leg. UNCHANGED by
+    Option 3: the pruning tail is still its own leg, so Option 3's last-batch seal
+    fold saves nothing here (the retained-union reseal overwrites the provisional).
+    The single batch DOES now also carry the provisional seal on its tar leg
+    (Option 3), so HPC_PM_PAYLOAD appears on BOTH the batch leg and the reseal tail.
+    A future edit that re-split either fold turns RED."""
     cmds = _warm_delta_push_ssh_cmds(tmp_path, n_extra=1)
     assert len(cmds) == 3, f"warm pruning push opened {len(cmds)} ssh connections: {cmds}"
     assert sum("HPC_DELTA_EXCLUDES" in c for c in cmds) == 1  # remote hash manifest (A, folds D1)
     assert sum("tar x -C /r" in c for c in cmds) == 1  # the single delta batch (B)
-    # Option 3: the prune rm + reseal are ONE trailing python leg (HPC_PM_PAYLOAD),
-    # NOT a separate shell ``rm`` leg and NOT a separate seal.
-    assert sum("HPC_PM_PAYLOAD" in c for c in cmds) == 1  # the combined prune+reseal tail
+    # Option 3: the batch leg carries the provisional seal (tar x + HPC_PM_PAYLOAD).
+    assert sum("tar x -C /r" in c and "HPC_PM_PAYLOAD" in c for c in cmds) == 1
+    # Option 4: the prune rm + retained-union reseal are ONE trailing python leg
+    # (a standalone HPC_PM_PAYLOAD, no tar x), NOT a separate shell ``rm`` and NOT a
+    # separate seal — it OVERWRITES the batch's provisional seal.
+    assert sum("HPC_PM_PAYLOAD" in c and "tar x -C /r" not in c for c in cmds) == 1  # reseal tail
     assert not any("rm -f -- " in c for c in cmds), f"separate rm leg present (D2): {cmds}"
     assert not any("cat " in c and "push_manifest" in c for c in cmds), f"D1 leg present: {cmds}"
 
@@ -1837,18 +1854,21 @@ def _multibatch_delta_ssh_cmds(tmp_path: Path, *, n_files: int) -> list[str]:
     return [c for c in cmds if c != "-V"]
 
 
-def test_large_delta_push_folds_checkpoints_into_batch_legs(tmp_path: Path) -> None:
-    """Delta-push round-trip Option 2 leg-count pin (memo table, "large re-ship, N
-    batches, nothing dropped"): a cold N=3-batch delta costs EXACTLY N+2 = 5 cold
-    ssh opens — remote hash manifest (A), 3 delta batches (B), the final seal (E) —
-    DOWN from the pre-Option-2 2N+1 = 7 (the 2 mid-ship ``_write_push_manifest``
-    checkpoint dials are gone: they ride their tar legs). The first N-1 batch legs
-    carry the folded ack-gated checkpoint; the last batch and the standalone seal
-    do not. A regression that re-split a per-batch checkpoint into its own dial
-    turns this RED."""
+def test_large_delta_push_folds_every_checkpoint_and_the_final_seal(tmp_path: Path) -> None:
+    """Delta-push round-trip Options 2+3 leg-count pin (memo table, "large re-ship,
+    N batches, nothing dropped"): a cold N=3-batch delta costs EXACTLY N+1 = 4 cold
+    ssh opens — remote hash manifest (A) + 3 delta batches (B) — DOWN from the
+    pre-Option-3 N+2 = 5 (Option 2 removed the N-1 mid-ship checkpoint dials; Option
+    3 now removes the final standalone seal E by folding it into the LAST batch's
+    leg). ALL N batch legs carry an ack-gated folded manifest write: the first N-1
+    are mid-ship checkpoints, the last is the FINAL provisional seal. NO standalone
+    ``_write_push_manifest`` dial survives (the no-prune warm case). (This is the
+    verified N+1 count; the memo's "after" column reads "N"/"3" only because it
+    undercounts by one — it omits leg A — see the small-delta rows.) A regression
+    that re-split any per-batch write or re-added a standalone seal turns this RED."""
     cmds = _multibatch_delta_ssh_cmds(tmp_path, n_files=3)
-    # N+2 legs for N=3 (was 2N+1 = 7 before Option 2).
-    assert len(cmds) == 5, f"large delta push opened {len(cmds)} ssh connections: {cmds}"
+    # N+1 legs for N=3 (was N+2 = 5 before Option 3, 2N+1 = 7 before Option 2).
+    assert len(cmds) == 4, f"large delta push opened {len(cmds)} ssh connections: {cmds}"
     assert sum("HPC_DELTA_EXCLUDES" in c for c in cmds) == 1  # remote hash manifest (A)
 
     tar_legs = [c for c in cmds if "tar x -C /r" in c]
@@ -1856,15 +1876,11 @@ def test_large_delta_push_folds_checkpoints_into_batch_legs(tmp_path: Path) -> N
     seal_only_legs = [c for c in cmds if "HPC_PM_PAYLOAD" in c and "tar x -C /r" not in c]
 
     assert len(tar_legs) == 3  # 3 delta batches (B)
-    assert len(folded_legs) == 2  # the first N-1 fold their checkpoint into the tar leg
-    assert "HPC_PM_PAYLOAD" not in tar_legs[-1]  # the LAST batch carries no checkpoint
-    assert len(seal_only_legs) == 1  # exactly ONE standalone manifest write: the final seal
-    # Every folded checkpoint is ack-gated by the sentinel (positive evidence).
+    assert len(folded_legs) == 3  # EVERY batch folds its manifest write (Options 2+3)
+    assert "HPC_PM_PAYLOAD" in tar_legs[-1]  # Option 3: the LAST batch carries the final seal
+    assert len(seal_only_legs) == 0  # no standalone manifest write survives (leg E absorbed)
+    # Every folded write is ack-gated by the sentinel (positive evidence).
     assert all(transport._PUSH_CP_SENTINEL in c for c in folded_legs)
-    # No separate mid-ship checkpoint dial survives (that was the eliminated leg).
-    assert not any("HPC_PM_PAYLOAD" in c and "tar x -C /r" not in c for c in cmds[:-1]), (
-        f"a standalone mid-ship checkpoint dial survived: {cmds}"
-    )
 
 
 def test_large_delta_push_batch_legs_are_preamble_free(tmp_path: Path) -> None:

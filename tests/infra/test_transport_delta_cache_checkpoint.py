@@ -213,13 +213,17 @@ def _remote_from(state: dict[str, bytes]) -> Manifest:
     return Manifest(entries=tuple(sorted(entries, key=lambda e: e.path)))
 
 
-def test_folded_checkpoint_rides_tar_leg_except_the_last(tmp_path: Path, monkeypatch) -> None:
-    """Delta-push round-trip Option 2: with N batches, the first N-1 push-manifest
-    checkpoints RIDE their tar-push legs (a ``checkpoint_payload_b64`` folded into
-    ``_tar_ssh_push``, NOT a separate ``_write_push_manifest`` dial); the last
-    batch carries NONE (the final seal covers it). Each folded checkpoint's path
-    set still GROWS as batches land — the per-batch cadence the fix promises, now
-    at ZERO extra ssh legs. Only the final seal remains a standalone write."""
+def test_every_batch_folds_its_write_and_the_last_is_the_final_seal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Delta-push round-trip Options 2+3: with N batches, EVERY push-manifest write
+    RIDES its tar-push leg (a ``checkpoint_payload_b64`` folded into ``_tar_ssh_push``,
+    NOT a separate ``_write_push_manifest`` dial). The first N-1 are mid-ship
+    CHECKPOINTS (Option 2); the LAST batch's cumulative payload (base ∪ all-shipped =
+    the full local entry set) IS the FINAL provisional SEAL (Option 3), so leg E is
+    absorbed. Each folded write's path set GROWS as batches land, and the last equals
+    the whole set. NO standalone ``_write_push_manifest`` dial survives (no-prune
+    warm case)."""
     for name in ("a", "b", "c"):
         (tmp_path / name).write_text(name * 3)
     monkeypatch.setenv("HPC_DELTA_BATCH_MAX_FILES", "1")  # one file per batch -> 3 batches
@@ -248,25 +252,24 @@ def test_folded_checkpoint_rides_tar_leg_except_the_last(tmp_path: Path, monkeyp
         patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_capture_tar),
         # NOT patching _prune_manifest_known_extras: the empty remote has no extras,
-        # so it runs to its standalone _write_push_manifest FINAL SEAL — the ONE
-        # remaining standalone manifest write.
+        # so it runs to its seal step — which, with the last batch already carrying
+        # the folded provisional seal (Option 3), SKIPS the standalone write entirely.
         patch("hpc_agent.infra.transport._write_push_manifest", side_effect=_record_seal),
     ):
         result = transport.rsync_push(
             ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
         )
     assert result.returncode == 0
-    # 3 batches: the first 2 FOLD a checkpoint into their tar leg; the last folds
-    # NONE (the final seal covers it).
+    # 3 batches: EVERY one folds a manifest write into its tar leg — the last one
+    # being the final provisional seal (Option 3), not None.
     assert len(folds) == 3
-    assert folds[2] is None  # last batch: no folded checkpoint
-    f0, f1 = folds[0], folds[1]
-    assert f0 is not None and f1 is not None
-    assert [len(f0), len(f1)] == [1, 2]  # path set grows batch by batch
-    assert set(f0).issubset(set(f1))
-    # The mid-ship checkpoints cost NO separate dial now — only the final seal is a
-    # standalone _write_push_manifest write.
-    assert len(seals) == 1
+    f0, f1, f2 = folds
+    assert f0 is not None and f1 is not None and f2 is not None  # every batch folded
+    assert [len(f0), len(f1), len(f2)] == [1, 2, 3]  # path set grows to the full set
+    assert set(f0).issubset(set(f1)) and set(f1).issubset(set(f2))
+    assert set(f2) == {"a", "b", "c"}  # the LAST fold is the FINAL seal (all entries)
+    # Option 3: leg E is fully absorbed — NO standalone _write_push_manifest dial.
+    assert len(seals) == 0
 
 
 def test_folded_checkpoint_cmd_is_ack_gated_and_rc_authoritative() -> None:
@@ -340,8 +343,10 @@ def test_tar_ssh_push_folds_checkpoint_into_extract_and_returns_sentinel(tmp_pat
 
 def test_tar_ssh_push_without_checkpoint_is_a_bare_extract(tmp_path: Path) -> None:
     """The default (``checkpoint_payload_b64=None``) leaves the delete=False
-    extract command exactly as before — no merge, no sentinel — so non-delta
-    callers (the last delta batch, ``_deploy_transfer``) are unchanged."""
+    extract command exactly as before — no merge, no sentinel — so the non-fold
+    caller ``_deploy_transfer`` is unchanged. (Since Option 3 EVERY delta batch,
+    including the last, passes a payload, so the delta path no longer exercises this
+    default; ``_deploy_transfer`` and any additive non-delta caller still do.)"""
     captured: dict[str, str] = {}
 
     def _capture_run(cmd, *_a, **_kw):  # noqa: ANN001

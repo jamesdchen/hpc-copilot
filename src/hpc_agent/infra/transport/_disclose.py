@@ -345,6 +345,31 @@ def _disclose_checkpoint_uncommitted(*, index: int, total: int) -> None:
         )
 
 
+def _disclose_seal_uncommitted(*, total: int) -> None:
+    """One ``[transport]`` line when the LAST batch's FOLDED FINAL SEAL did NOT ack.
+
+    Delta-push round-trip Option 3 rides the final push-manifest seal inside the
+    LAST batch's tar-push leg (its cumulative payload — ``base ∪ all-shipped`` =
+    the full local entry set — IS the final provisional seal), ack-gated by
+    ``__HPC_PUSH_CP_OK__``. The last batch itself LANDED (rc 0, ``tar x``
+    authoritative); only the seal's remote merge did not confirm — a drop after
+    ``tar x`` before the ack, or a best-effort merge hiccup. This is fail-open, NOT
+    a failure: the manifest is simply not resealed THIS push and the NEXT push
+    re-derives the (now-empty) delta from the live remote hash and re-seals
+    (Invariant 2). No corrective standalone seal fires — that would re-introduce
+    the very leg E Option 3 removes. Naming it keeps the tail-able log honest about
+    whether the manifest sealed. Fail-open like the sibling disclosures.
+    """
+    with contextlib.suppress(Exception):
+        print(
+            f"[transport] content-hash DELTA: last batch {total}/{total} landed but its "
+            "folded FINAL manifest seal did not ack (__HPC_PUSH_CP_OK__ absent); the "
+            "manifest is not resealed this push and the next push re-derives from the "
+            "live remote hash and re-seals — the tree is durable, no re-transfer.",
+            file=sys.stderr,
+        )
+
+
 def _disclose_prune(plan: Any, *, remote_path: str) -> None:
     """One ``[transport]`` line per prune outcome (disclosure, never blocking).
 

@@ -1,5 +1,5 @@
 """Wiring tests for the bounded auto-prune of manifest-known remote extras and
-its folded trailing leg (delta-push round-trip Options 1 + 3).
+its folded trailing leg (delta-push round-trip Options 1 + 3 + 4).
 
 Exercises :func:`hpc_agent.infra.transport._prune_manifest_known_extras`
 end-to-end with the ssh legs monkeypatched, pinning the ruling-6 properties at
@@ -15,10 +15,15 @@ PLUS the round-trip folds this unit adds:
 * **Option 1** — the prior-manifest ``paths`` come in as ``known`` (folded into
   the remote hash read), so there is NO separate ``_read_prior_push_manifest``
   dial; the prune uses whatever ``known`` the caller threads through.
-* **Option 3** — the prune step OWNS the single trailing leg: when a prune
+* **Option 4** — the prune step OWNS at most one trailing leg: when a prune
   actually fires, the ``rm`` + the retained-union reseal collapse into ONE
   ``_prune_and_reseal`` leg (fired only-when-extras); otherwise a standalone
-  ``_write_push_manifest`` seal fires. Either way EXACTLY ONE trailing leg.
+  ``_write_push_manifest`` seal fires.
+* **Option 3** — when the caller passes ``seal_folded=True`` (the last delta batch
+  already rode the FINAL provisional seal on its tar leg), the no-retained
+  standalone seal is SKIPPED (leg E absorbed); a non-empty retained set still
+  writes, and the ``rm``+reseal tail always overwrites the provisional. Default
+  ``seal_folded=False`` keeps the standalone seal (the direct-call tests below).
 
 The prune rides the delete=True delta push (already holding the dial), so these
 tests stub the trailing ssh legs — the combined prune+reseal tail and the
@@ -56,8 +61,8 @@ def _journal_lines(experiment: Path) -> list[dict]:
 
 @pytest.fixture
 def capture_legs(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
-    """Capture the trailing leg: the combined prune+reseal tail (Option 3) and
-    the standalone seal. Exactly one of them fires per call."""
+    """Capture the trailing leg: the combined prune+reseal tail (Option 4) and
+    the standalone seal. Exactly one of them fires per call (seal_folded default)."""
     reseal: list[dict] = []
     seal: list[list[str]] = []
 
@@ -76,7 +81,7 @@ def test_manifest_known_extra_is_journaled_and_resealed(
     tmp_path: Path, capture_legs: dict[str, list]
 ) -> None:
     """A manifest-known extra is journaled (what / why / old sha) and pruned via
-    the COMBINED prune+reseal tail (Option 3) — no separate standalone seal."""
+    the COMBINED prune+reseal tail (Option 4) — no separate standalone seal."""
     remote = _remote_manifest([FileEntry(path="ours/dropped.py", size=42, sha256="oldsha123")])
 
     transport._prune_manifest_known_extras(
@@ -223,7 +228,7 @@ def test_own_push_manifest_is_never_an_anomaly(
 
 
 def test_trailing_leg_fires_only_when_extras(tmp_path: Path, capture_legs: dict[str, list]) -> None:
-    """Doctrine pin (Option 3, 'fires only-when-extras'): the combined prune+reseal
+    """Doctrine pin (Option 4, 'fires only-when-extras'): the combined prune+reseal
     tail fires IFF there is a manifest-known extra to delete; with none, only the
     standalone seal fires. Both directions in one place."""
     # (a) a manifest-known extra -> combined tail fires, no standalone seal.
@@ -253,6 +258,72 @@ def test_trailing_leg_fires_only_when_extras(tmp_path: Path, capture_legs: dict[
     )
     assert len(capture_legs["reseal"]) == 1  # unchanged from (a)
     assert capture_legs["seal"] == [["keep.py"]]
+
+
+def test_seal_folded_absorbs_the_standalone_seal_only_when_no_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capture_legs: dict[str, list]
+) -> None:
+    """Option 3 seal-fold skip: with ``seal_folded=True`` (the last batch already
+    rode the FINAL provisional seal on its tar leg), the no-retained standalone seal
+    is ABSORBED (leg E fully gone); but a cap-refused RETAINED set — which the
+    provisional did NOT carry — STILL writes a standalone seal so provenance is not
+    lost. Both directions in one place."""
+    # (a) no extras, seal_folded -> NEITHER a reseal tail NOR a standalone seal.
+    transport._prune_manifest_known_extras(
+        ssh_target="host",
+        remote_path="/r",
+        local_path=tmp_path,
+        remote_manifest=_remote_manifest([]),
+        known=set(),
+        extra=(),
+        seal_paths=["keep.py"],
+        timeout=30,
+        seal_folded=True,
+    )
+    assert capture_legs["reseal"] == []
+    assert capture_legs["seal"] == []  # leg E absorbed — the fold already sealed
+
+    # (b) a cap-REFUSED manifest-known extra, seal_folded -> no reseal tail, but the
+    # standalone seal STILL fires to carry the retained provenance beyond the
+    # provisional (which only had the local base).
+    monkeypatch.setenv("HPC_DEPLOY_PRUNE_MAX_FILES", "0")  # force REFUSE
+    remote = _remote_manifest([FileEntry(path="ours/dropped.py", size=1, sha256="s")])
+    transport._prune_manifest_known_extras(
+        ssh_target="host",
+        remote_path="/r",
+        local_path=tmp_path,
+        remote_manifest=remote,
+        known={"ours/dropped.py"},
+        extra=("ours/dropped.py",),
+        seal_paths=["keep.py"],
+        timeout=30,
+        seal_folded=True,
+    )
+    assert capture_legs["reseal"] == []  # refused -> nothing pruned
+    assert capture_legs["seal"] == [sorted({"keep.py", "ours/dropped.py"})]  # retained union sealed
+
+
+def test_seal_folded_still_fires_the_prune_reseal_tail(
+    tmp_path: Path, capture_legs: dict[str, list]
+) -> None:
+    """Option 3 does NOT suppress the Option 4 tail: when a prune actually fires,
+    the ``rm``+retained-union reseal leg runs regardless of ``seal_folded`` — it
+    OVERWRITES the last batch's provisional seal with the authoritative union. No
+    standalone seal (that is what the reseal replaces)."""
+    remote = _remote_manifest([FileEntry(path="ours/dropped.py", size=1, sha256="s")])
+    transport._prune_manifest_known_extras(
+        ssh_target="host",
+        remote_path="/r",
+        local_path=tmp_path,
+        remote_manifest=remote,
+        known={"ours/dropped.py"},
+        extra=("ours/dropped.py",),
+        seal_paths=["keep.py"],
+        timeout=30,
+        seal_folded=True,
+    )
+    assert capture_legs["reseal"] == [{"prune": ["ours/dropped.py"], "seal": ["keep.py"]}]
+    assert capture_legs["seal"] == []  # the reseal tail is the authoritative seal
 
 
 def test_delta_path_does_not_read_prior_manifest_separately(
@@ -331,7 +402,7 @@ def test_rsync_push_writes_union_manifest_on_refused_prune(
     assert "ours/dropped.py" in written["paths"]
 
 
-# --- Option 3: the combined prune+reseal leg (client + real remote script) -----
+# --- Option 4: the combined prune+reseal leg (client + real remote script) -----
 
 
 def test_prune_and_reseal_is_one_bounded_leg(monkeypatch: pytest.MonkeyPatch) -> None:

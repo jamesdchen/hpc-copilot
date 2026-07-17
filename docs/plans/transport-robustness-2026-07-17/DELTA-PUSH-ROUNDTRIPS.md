@@ -267,12 +267,21 @@ Combine **Options 1 + 2 + 3** (with Option 4 as the pruning tail):
 |---|---|---|---|
 | Small warm delta, nothing dropped (N=1, P=0) | **3** (A,B,E) | **2** (A, B+seal) | −1 |
 | Small warm delta, a file pruned (N=1, P=2) | **5** | **3** (A, B+provisional-seal, prune-tail) | −2 |
-| Large re-ship, N batches, nothing dropped | **2N+1** | **N** (each B carries its own checkpoint/seal) | −(N+1) |
-| Large re-ship, N batches, with prune | **2N+3** | **N+1** | −(N+2) |
+| Large re-ship, N batches, nothing dropped | **2N+1** | **N+1** (A + N B's, each carrying its own checkpoint/seal) | −N |
+| Large re-ship, N batches, with prune | **2N+3** | **N+2** (A + N B's + prune-tail) | −(N+1) |
 
 Headline: the live native-Windows warm re-push drops **3→2** (no prune) or
-**5→3** (with prune); a large 10-batch re-ship drops **21→10**. And ~4 formerly
+**5→3** (with prune); a large 10-batch re-ship drops **21→11**. And ~4 formerly
 un-guarded dials per push move under the breaker/slot.
+
+> **Count correction (verified at build, 2026-07-17).** The two large-re-ship
+> `After` cells above were originally written **N** / **N+1** (headline "21→10"),
+> undercounting by one — they omitted the constant leg **A** (the remote hash
+> read), which is present on every delta push. The small-delta `After` rows,
+> written explicitly as "A, B+seal" = 2, always carried it and are correct; the
+> general formula is **A(1) + N tar legs (self-sealing) [+ 1 prune-tail]**, i.e.
+> **N+1** no-prune / **N+2** with-prune. The pins encode the verified counts (see
+> the drift log's Option-3 entry).
 
 ### Files / functions touched
 
@@ -434,3 +443,56 @@ drops 5→3; only the large-N per-batch checkpoint saving is forgone.
     param + delta-loop fold + re-exports). Verified: targeted transport + delta +
     faultinject + full `tests/contracts/` green; lint gauntlet (incl. `lint_no_raw_ssh`
     + `lint_remote_read_ack`) + regen `--check` + ruff/format/mypy clean.
+- 2026-07-17: **BUILT — Option 3 (the final-seal fold), the last deferred item —
+  the delta-push round-trip consolidation is now COMPLETE (Options 1 + 2 + 3 + 4).**
+  The LAST delta batch now carries the FINAL provisional seal on its own tar-push
+  leg, so the separate final-seal dial (leg E) is absorbed for the no-prune warm
+  re-push:
+  - **The fold is free of a new mechanism.** After the last batch, the Option-2
+    cumulative checkpoint payload — `base_paths ∪ landed ∪ batch` — EQUALS the full
+    local entry set = the final provisional seal (`sorted(seal_paths)`). So Option 3
+    is exactly "extend the Option-2 fold to the LAST batch too": the delta loop drops
+    its `if i < len(batches)` guard and EVERY batch rides its cumulative write
+    (`_push_manifest_payload_b64`), ack-gated by the SAME `__HPC_PUSH_CP_OK__`
+    sentinel via `_folded_checkpoint_cmd`. No new remote script, no new sentinel.
+  - **`seal_folded` skip.** `rsync_push` passes `seal_folded=True` (whenever ≥1 batch
+    shipped) into `_prune_manifest_known_extras`; its `_seal` helper SKIPS the
+    standalone `_write_push_manifest` when the retained set is empty (leg E fully
+    absorbed — the common warm case), but STILL writes when a cap-refused/all-anomaly
+    RETAINED set adds paths the provisional did not carry (#F58 provenance intact).
+    The Option-4 `_prune_and_reseal` tail fires unchanged when a prune has paths —
+    it OVERWRITES the provisional with the authoritative retained-union — so the
+    pruning case is untouched.
+  - **Orthogonality (load-bearing).** `tar x` rc governs batch-LANDED; the sentinel
+    governs SEALED. A last-batch drop after `tar x` before the seal ack leaves the
+    tree durable and only the reseal lagged; the next push re-derives the (empty)
+    delta from the live remote hash, ships NOTHING (no re-transfer), and re-seals via
+    the standalone leg (`seal_folded=False` on an empty ship). NO corrective dial —
+    that would re-introduce leg E. A new `_disclose_seal_uncommitted` line keeps the
+    log honest on an absent final-seal ack.
+  - **Round-trips (verified by pins).** No-prune warm re-push: N=1 **3 → 2**
+    (`test_warm_delta_push_no_prune_is_two_legs`), large N **N+2 → N+1**
+    (N=3 **5 → 4**, `test_large_delta_push_folds_every_checkpoint_and_the_final_seal`).
+    WITH-prune is UNCHANGED (the Option-4 tail is still its own leg): small stays 3
+    (`test_warm_delta_push_with_prune_is_three_legs`), large stays N+2. This is the
+    §4 table's `−1 on the no-prune cases`, with the table's off-by-one corrected
+    above (its large `After` omitted leg A). `test_every_batch_folds_its_write_and_
+    the_last_is_the_final_seal` pins that every batch (incl. the last) folds and no
+    standalone seal survives; `test_seal_folded_absorbs_the_standalone_seal_only_
+    when_no_retained` + `test_seal_folded_still_fires_the_prune_reseal_tail` pin the
+    skip logic; faultinject Drill 2 updated (last batch now folds), Drill 2b extended
+    (final-seal ack absence), new **Drill 6**
+    `test_last_batch_seal_ack_absent_durable_then_reseals_without_retransfer` pins the
+    resume-after-drop-before-seal-ack → durable → re-seal, no re-transfer.
+  - **Numbering reconciliation.** The source (`_prune.py`, `transport/__init__.py`)
+    and two tests (`test_transport_prune.py`, `test_remote_rsync_fallback.py`) had
+    MISLABELED the prune-`rm`+reseal collapse as "Option 3"; per this memo's §3/§4 it
+    is **Option 4** (Option 3 is the final-seal fold). All such labels are corrected
+    to Option 4, and the final-seal fold now owns "Option 3" — the code, the
+    faultinject drills, and this memo now agree. Files touched:
+    `transport/__init__.py` (drop the last-batch guard + `seal_folded` param/skip +
+    `_disclose_seal_uncommitted` re-export + relabel), `_disclose.py`
+    (`_disclose_seal_uncommitted`), `_prune.py` (relabel Option 3→4), plus the four
+    test files. Verified: targeted transport/prune/delta/rsync-fallback + faultinject
+    + full `tests/contracts/` green; `run_lint_gauntlet` (incl. `lint_no_raw_ssh` +
+    `lint_remote_read_ack`) + regen `--check` + ruff/format/mypy clean.
