@@ -33,6 +33,19 @@ The contract is transport-neutral; only *where* the command runs depends on the 
 
 A portable reducer reads `$HPC_RESULTS_DIR` when set and falls back to its cluster convention otherwise, so the same script works on both paths.
 
+## Where the interpreter comes from
+
+`aggregate_cmd` is a shell command line, so a literal `python3` (or `python`) at the front of it has to resolve to *some* interpreter. On the cluster path, `cluster-reduce` prepends the **run's own environment activation** before running the command — the same activation the run's tasks used, derived from the run sidecar (`remote_activation_for_sidecar`). If the sidecar carries no env, it degrades to bare login `python`, the historical behaviour. So `python3 specs/reduce_x.py` binds the run's env interpreter, not whatever `python3` the login node happens to expose.
+
+Two consequences for the author:
+
+- Your reducer's imports (numpy/pandas/…) resolve against the **run's** environment — the exact environment the tasks ran under — so you don't install anything extra on the login node.
+- A missing import is a miss in the run's pinned environment (surfaced as the interpreter/activation that was used), not a mystery cluster bug. Fix it where the run env is defined.
+
+This retired a class where a run's tasks executed under one Python (say 3.13) but the reducer ran under the login node's default (say 3.8) and crashed on a version mismatch — the reducer now shares the run's interpreter.
+
+On the local / pure-API path (`local-reduce`) there is no cluster env to activate, so the reducer runs under the control plane's interpreter and its deps must be importable *there* — as already noted under [Where the reducer runs](#where-the-reducer-runs-cluster-vs-local).
+
 ## Minimal Python example
 
 ```python
@@ -93,6 +106,21 @@ write_run_sidecar(
 ```
 
 Now `/aggregate-hpc` (and `/campaign-hpc`'s iter-score step) auto-routes through `cluster-reduce`. No bulk pull. The 1200-chunk failure mode is structurally eliminated.
+
+## Deployment and the on-disk requirement
+
+How your reducer reaches the cluster depends on whether `aggregate_cmd` names a **file** or a **module**:
+
+- **File-path reducer** — `python3 specs/reduce_x.py`. At submit, the framework derives the repo-relative reducer path from `aggregate_cmd` (`reducer_relpath_from_aggregate_cmd`, in the transport deploy-items layer), content-hashes the file, and **ships it with the run's staging** — alongside `.hpc/_hpc_combiner.py`. You never scp it by hand.
+- **Module reducer** — `python -m pkg.reduce_x`. This names an *installed* module, not a repo file, so nothing extra is shipped: the run's environment push already carried whatever package provides it. If the module isn't importable in the run env, that's an env-definition problem, not a deployment one.
+
+Because a file-path reducer is shipped *from disk*, it **must exist under the experiment repo at submit time**. If `aggregate_cmd` declares `specs/reduce_x.py` but that file is absent, submit **refuses at stage** (the reducer stage-gate in `submit_flow`) rather than letting the run compute for hours and then die mid-harvest with "no such file." Commit or create the reducer at the declared path before you submit — or switch to a `python -m` module reducer if it is genuinely installed in the run env.
+
+## Streaming does not run your reducer yet (current limitation)
+
+`aggregate-stream` — the progressive partial-aggregate that reports arms as they finish — reduces through the **built-in** weighted-mean (`reduce_metrics`) only. It does **not** invoke a run's custom `aggregate_cmd`. So for a run with a custom reducer, the streamed partial table can carry numbers that **differ from what your reducer would compute** (a QLIKE, a Diebold–Mariano statistic, a median — none of these is a plain mean of per-task scalars). Treat streaming output for a custom-reducer run as a liveness/progress signal, **not** as your reducer's result; the authoritative numbers come from the final `cluster-reduce` / `aggregate-flow` harvest, which does run your reducer.
+
+This is a known open gap (tracked in [`docs/plans/s4-gaps-2026-07-17.md`](../plans/s4-gaps-2026-07-17.md), item 5); the resolution — invoke the custom reducer per complete arm, or refuse to stream a custom-reducer run — is pending a ruling and not yet built. See [`docs/primitives/aggregate-stream.md`](../primitives/aggregate-stream.md).
 
 ## When NOT to use cluster-reduce
 
