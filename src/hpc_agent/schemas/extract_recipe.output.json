@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/extract_recipe.output.json",
+  "title": "extract-recipe output data",
+  "description": "The derived clean-reproduction recipe — minimal set, fingerprints, gaps.\n\n``recipe_signature`` is a deterministic digest over ONLY the minimal run-set's\nfingerprints (a table-specific attestation, not a whole-campaign one): a\nreviewer re-derives the same recipe and re-hashes to confirm the minimal set\nhas not drifted. Every excluded run rides ``excluded`` with a countable\nreason; every gap the walk cannot bridge rides ``gaps`` — disclosed, never\npapered.",
+  "type": "object",
+  "required": [
+    "recipe_schema_version",
+    "seed_kind",
+    "seed_ref",
+    "recipe_signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "recipe_schema_version": {
+      "description": "Bumped when the emitted recipe shape changes incompatibly.",
+      "minimum": 1,
+      "title": "Recipe Schema Version",
+      "type": "integer"
+    },
+    "seed_kind": {
+      "description": "Which seed reference the recipe was walked back from.",
+      "enum": [
+        "run",
+        "campaign",
+        "aggregate"
+      ],
+      "title": "Seed Kind",
+      "type": "string"
+    },
+    "seed_ref": {
+      "description": "The seed's identity / path verbatim.",
+      "title": "Seed Ref",
+      "type": "string"
+    },
+    "artifact_opaque": {
+      "default": false,
+      "description": "True when the cited artifact was accepted as an OPAQUE citation (a pack *.csv whose content is never parsed) — its provenance is its containing run's, disclosed as a gap (R2).",
+      "title": "Artifact Opaque",
+      "type": "boolean"
+    },
+    "minimal_run_ids": {
+      "description": "The minimal contributing run-set, after all exclusions.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Minimal Run Ids",
+      "type": "array"
+    },
+    "runs": {
+      "description": "One fingerprint per minimal run: {run_id, cmd_sha, tasks_py_sha, data_sha, data_manifest_sha, env_hash, hpc_agent_version, cluster, profile} — identity fields only, no metric value.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Runs",
+      "type": "array"
+    },
+    "excluded": {
+      "description": "One entry per mechanically-excluded run: {run_id, reason} where reason is 'canary' / 'superseded' / 'dead-end'. Every exclusion is a disclosed, countable fact.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Excluded",
+      "type": "array"
+    },
+    "recipe_signature": {
+      "description": "Deterministic 64-hex digest over ONLY the minimal set's fingerprints.",
+      "title": "Recipe Signature",
+      "type": "string"
+    },
+    "rederivation_steps": {
+      "description": "The runnable re-derivation steps as structured hints: a reproduce-run + submit-s2 pair per contributing run, then the aggregate invocation. Emitted as a runnable artifact, not prose; extract-recipe NEVER executes them.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Rederivation Steps",
+      "type": "array"
+    },
+    "receipts": {
+      "description": "The receipts chain, walked per run: {run_id, harvest_receipt (bool), reproduction_receipt (bool), greenlights (count)} — presence / counts only, never a verdict.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Receipts",
+      "type": "array"
+    },
+    "gaps": {
+      "description": "Every receipts-chain gap the walk could not bridge, disclosed: {code, detail} for the G4 breaks (table→run-set absent, pack-csv opaque, operator-bypass / journal-provenance-absent).",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Gaps",
+      "type": "array"
+    },
+    "markdown": {
+      "default": "",
+      "description": "The code-rendered recipe (empty when not requested).",
+      "title": "Markdown",
+      "type": "string"
+    }
+  }
+}

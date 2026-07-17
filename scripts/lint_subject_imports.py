@@ -496,6 +496,10 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("auto_resume_flow.py", "ops", "recover"),
         ("campaign_refill.py", "meta", "campaign"),
         ("dag_frontier.py", "ops", "validate"),
+        # extract-recipe composes the shipped provenance walks: the harvest-receipt
+        # ledger + canary-family / lineage helpers live in ops/monitor (functions,
+        # not primitives, so they earn an inventory entry rather than a composes=).
+        ("extract_recipe.py", "ops", "monitor"),
         ("field_ownership.py", "ops", "submit"),
         ("monitor_flow.py", "ops", "aggregate"),
         ("monitor_flow.py", "ops", "monitor"),

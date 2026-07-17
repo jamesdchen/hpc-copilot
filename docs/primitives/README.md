@@ -120,6 +120,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [doctor](doctor.md) | yes | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` |
 | [evidence-brief](evidence-brief.md) | yes | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` |
 | [evidence-period](evidence-period.md) | yes | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` |
+| [extract-recipe](extract-recipe.md) | yes | _none_ | `hpc-agent extract-recipe --spec <path> [--experiment-dir <dir>]` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` |
 | [fetch-skill-return](fetch-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` |
 | [find](find.md) | yes | _none_ | `hpc-agent find <query> [--limit <limit>]` |
@@ -267,6 +268,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [resolve-submit-inputs](resolve-submit-inputs.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` |
 | [retarget-run](retarget-run.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<new_run_id>.json`; ssh: `<old-cluster>` | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` |
 | [revise-resolved](revise-resolved.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` |
+| [settle-aggregate](settle-aggregate.md) | no | writes-journal: `<experiment>/.hpc/runs/<run_id>.decisions.jsonl` | `hpc-agent settle-aggregate --spec <path> [--experiment-dir <dir>]` |
 | [settle-run](settle-run.md) | yes | writes-journal: `<experiment>/.hpc/decisions/run/<run_id>.jsonl`; ssh: `<cluster>` | `hpc-agent settle-run --spec <path> [--experiment-dir <dir>]` |
 | [status-pipeline](status-pipeline.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [status-snapshot](status-snapshot.md) | yes | ssh: `<cluster>` | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` |

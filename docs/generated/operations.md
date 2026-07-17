@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**172 operations total**: 142 primitive atoms + 30 workflow atoms.
+**174 operations total**: 143 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (77)
+## `query` (78)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -55,6 +55,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`doctor`](../primitives/doctor.md) | ✓ | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`evidence-brief`](../primitives/evidence-brief.md) | ✓ | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`evidence-period`](../primitives/evidence-period.md) | ✓ | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`extract-recipe`](../primitives/extract-recipe.md) | ✓ | _none_ | `hpc-agent extract-recipe --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`failures`](../primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `_(none)_` | — | — |
 | [`fetch-skill-return`](../primitives/fetch-skill-return.md) | ✓ | filesystem | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` | `_(none)_` | — | — |
 | [`find`](../primitives/find.md) | ✓ | _none_ | `hpc-agent find <query> [--limit <limit>]` | `_(none)_` | — | — |
@@ -191,7 +192,7 @@ Creates new files (e.g. starter executor templates).
 | [`scaffold-strategy`](../primitives/scaffold-strategy.md) | ✓ | writes-file | `hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]` | `_(none)_` | — | — |
 | [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` | `_(none)_` | — | — |
 
-## `workflow` (30)
+## `workflow` (31)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -212,6 +213,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`resolve-submit-inputs`](../primitives/resolve-submit-inputs.md) | ✓ | writes-sidecar | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`retarget-run`](../primitives/retarget-run.md) | ✓ | ssh; writes-sidecar | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`revise-resolved`](../primitives/revise-resolved.md) | ✓ | writes-sidecar | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`settle-aggregate`](../primitives/settle-aggregate.md) | ✗ | writes-journal | `hpc-agent settle-aggregate --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`settle-run`](../primitives/settle-run.md) | ✓ | ssh; writes-journal | `hpc-agent settle-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-pipeline`](../primitives/status-pipeline.md) | ✓ | ssh; writes-tick-log | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-snapshot`](../primitives/status-snapshot.md) | ✓ | ssh | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

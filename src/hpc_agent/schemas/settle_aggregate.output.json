@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/settle_aggregate.output.json",
+  "title": "settle-aggregate output data",
+  "description": "The aggregate-settle outcome — the journaled human-directed record.\n\n``artifact_sha256`` is the sha computed over the table's bytes at record time\n(a hash is never asserted into existence). ``contributing_run_ids`` echoes the\nhuman-asserted derives-from set now authorized for ``verify-relay``.\n``authorship`` names the evidence tier the utterance cleared\n(``harness-captured`` when the utterance log verified it, ``unverified-\nfallback`` when no log existed — the friction posture, disclosed not hidden).\nThe record says ``operator-settled, provenance human-asserted`` — the numbers\nare NEVER blessed.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "run_id",
+    "aggregate_ref",
+    "artifact_sha256",
+    "authorship",
+    "decision_ts"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "const": "settled",
+      "description": "Always 'settled' — the directed aggregate settle was journaled.",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "The run scope the settle was journaled under.",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "aggregate_ref": {
+      "description": "The settled table artifact path.",
+      "title": "Aggregate Ref",
+      "type": "string"
+    },
+    "artifact_sha256": {
+      "description": "sha256 over the table's bytes, computed at record time (64-hex).",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "contributing_run_ids": {
+      "description": "The human-asserted derives-from run-set now authorized for verify-relay.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Contributing Run Ids",
+      "type": "array"
+    },
+    "authorship": {
+      "description": "The evidence tier the utterance cleared ('harness-captured' / 'unverified-fallback').",
+      "title": "Authorship",
+      "type": "string"
+    },
+    "decision_ts": {
+      "description": "Timestamp of the journaled directed-aggregate-settle record.",
+      "title": "Decision Ts",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the settle outcome.",
+      "title": "Reason",
+      "type": "string"
+    }
+  }
+}

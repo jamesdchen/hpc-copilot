@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/settle_aggregate.input.json",
+  "title": "settle-aggregate input spec",
+  "description": "Inputs to ``settle-aggregate``: the table + its derives-from set + consent.\n\n``run_id`` is the run scope the settle is journaled under (the run the table\nis cited under — it need not have gone through the sanctioned flow).\n``aggregate_ref`` is the path to the table artifact; it MUST exist (an absent\nartifact is refused) so its sha256 can be computed at record time.\n``derives_from`` is the run-set the human claims the table derives from; every\nnamed run MUST exist (a record or sidecar) — the settle records a\nhuman-asserted lineage, it does not invent runs. ``utterance`` is the human's\ntyped consent naming the artifact — REQUIRED and human-authored (an\nagent-composed utterance is refused). ``provenance`` optionally notes how the\nsettle was captured.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "aggregate_ref",
+    "derives_from",
+    "utterance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The run scope the aggregate settle is journaled under (the table's citation).",
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "aggregate_ref": {
+      "description": "Path to the table artifact. MUST exist — its sha256 is computed at record time and journaled; an absent artifact is refused.",
+      "minLength": 1,
+      "title": "Aggregate Ref",
+      "type": "string"
+    },
+    "derives_from": {
+      "description": "The run-set the human claims the table derives from; every named run must exist. Recorded as the settle's contributing_run_ids.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Derives From",
+      "type": "array"
+    },
+    "utterance": {
+      "description": "The human's typed consent naming the artifact (REQUIRED, human-authored). An agent-composed utterance is refused — the verb never synthesizes consent.",
+      "minLength": 1,
+      "title": "Utterance",
+      "type": "string"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional note on how the directed settle was captured.",
+      "title": "Provenance"
+    }
+  }
+}

@@ -1306,6 +1306,27 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                         if key == "job_ids":
                             job_ids.add(str(v))
 
+    # A ``settle-aggregate`` sign-off's human-asserted ``contributing_run_ids`` are
+    # authoritative identifiers for the run it was journaled under (the operator-
+    # bypass table's citation): a truthful relay of the operator-settled table's
+    # run-set names those runs, and each would otherwise flag as an unknown run-id.
+    # Folded through the SAME auth_ids join as ``campaign_id`` / ``parent_run_ids``
+    # (settle-aggregate never blesses the numbers; verify-relay still audits every
+    # numeric claim). The records ride ``source_objs`` (the decision journal is the
+    # first corpus source), so no extra read.
+    for obj in source_objs:
+        if not isinstance(obj, dict) or obj.get("block") != "settle-aggregate":
+            continue
+        for holder_key in ("provenance", "resolved"):
+            holder = obj.get(holder_key)
+            if not isinstance(holder, dict):
+                continue
+            ids = holder.get("contributing_run_ids")
+            if isinstance(ids, list):
+                for v in ids:
+                    if isinstance(v, str) and v:
+                        auth_ids.add(v)
+
     mismatches: list[RelayMismatch] = []
     claims_checked = 0
     consumed_spans: list[tuple[int, int]] = []
