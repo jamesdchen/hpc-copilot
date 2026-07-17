@@ -4,7 +4,8 @@ verb: workflow
 side_effects:
 - writes-journal: <experiment>/.hpc/decisions/run/<run_id>.jsonl (the directed-settle
     sign-off) + the run record's terminal status
-- ssh: <cluster> (harvest_on_terminal summary pull; best-effort, on a transition)
+- ssh: <cluster> (harvest_on_terminal summary pull; best-effort, on a transition or
+    a terminal-with-no-receipt backstop)
 idempotent: true
 idempotency_key: run_id
 error_codes:

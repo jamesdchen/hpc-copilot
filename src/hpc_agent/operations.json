@@ -2069,7 +2069,7 @@
       "ssh",
       "writes-journal"
     ],
-    "summary": "Human-directed terminal settle (run-12 finding 25): given directed terminal evidence, journal it as a sign-off, set the terminal status, and run the SAME mark_run + harvest_on_terminal transition the probe path runs — no journal surgery. Refuses a non-terminal status or empty evidence. The harvest fires only on a status TRANSITION (an idempotent re-settle does not re-pull).",
+    "summary": "Human-directed terminal settle (run-12 finding 25): given directed terminal evidence, journal it as a sign-off, set the terminal status, and run the SAME mark_run + harvest_on_terminal the probe path runs — no journal surgery. Refuses a non-terminal status or empty evidence. The harvest fires on a status TRANSITION OR, absent one, as a journal-evidence backstop when the run is terminal with NO harvest receipt (a dropped harvest self-heals); a receipted re-settle does not re-pull.",
     "verb": "workflow"
   },
   {

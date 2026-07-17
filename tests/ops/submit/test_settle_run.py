@@ -23,6 +23,8 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.workflows.settle_run import SettleRunInput
+from hpc_agent.infra.io import append_jsonl_line
+from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path, harvest_receipt_exists
 from hpc_agent.ops.settle_run import settle_run
 
 if TYPE_CHECKING:
@@ -134,13 +136,24 @@ def test_real_harvest_marker_is_written(tmp_path: Path, monkeypatch: Any) -> Non
     assert "harvested_at" in res.harvest
 
 
-# ── the transition gate ───────────────────────────────────────────────────────
+# ── the receipt-gated harvest: transition OR terminal-with-no-receipt backstop ──
 
 
-def test_already_terminal_resettle_does_not_reharvest(tmp_path: Path, monkeypatch: Any) -> None:
-    """A re-settle of an already-``complete`` run records the sign-off but does NOT
-    re-fire the harvest (the reconcile arm's transition gate)."""
+def _write_receipt(tmp_path: Path, run_id: str = _RUN_ID) -> None:
+    """Lay down a durable harvest receipt (mirrors ``harvest_on_terminal``'s last
+    step) so the journal-evidence backstop reads the harvest as already performed."""
+    append_jsonl_line(
+        harvest_marker_path(tmp_path, run_id),
+        {"run_id": run_id, "terminal_cause": "complete", "harvest_ok": True},
+    )
+
+
+def test_already_terminal_with_receipt_does_not_reharvest(tmp_path: Path, monkeypatch: Any) -> None:
+    """A re-settle of an already-``complete`` run whose harvest receipt is already on
+    the ledger records the sign-off but does NOT re-fire the harvest — no transition,
+    receipt present, so the backstop is satisfied (idempotent no-op)."""
     _setup(tmp_path, monkeypatch, status="complete")
+    _write_receipt(tmp_path)  # the guaranteed harvest already ran for this run.
     with mock.patch(_HARVEST_SEAM) as harvest:
         res = settle_run(
             tmp_path,
@@ -149,6 +162,78 @@ def test_already_terminal_resettle_does_not_reharvest(tmp_path: Path, monkeypatc
     harvest.assert_not_called()
     assert res.harvested is False
     assert res.stage_reached == "already_terminal"
+
+
+# ── the journal-evidence backstop (the sibling of reconcile's _harvest_if_owed) ─
+
+
+def test_terminal_with_no_receipt_backstops_harvest_exactly_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """THE GAP: a run already ``complete`` (mark landed) but with NO harvest receipt
+    (a session-death between ``mark_run`` and the harvest dropped it) MUST re-fire the
+    guaranteed harvest on a directed re-settle — NOT solely on an in-process transition
+    — and a SECOND re-settle (receipt now present) must NOT re-pull. Idempotent both
+    ways, keyed off durable journal evidence, exactly like reconcile's ``_harvest_if_owed``.
+    """
+    _setup(tmp_path, monkeypatch, status="complete")
+    assert not harvest_receipt_exists(tmp_path, _RUN_ID)
+
+    def _fake_aggregate(_exp: Path, _rid: str) -> Any:
+        raise RuntimeError("no cluster in this test")  # harvest_on_terminal never raises
+
+    # First re-settle: no transition (already complete) but NO receipt → the backstop
+    # fires the guaranteed harvest exactly once and it writes its durable receipt.
+    res1 = settle_run(
+        tmp_path,
+        spec=SettleRunInput(run_id=_RUN_ID, status="complete", evidence="proven on disk"),
+        _aggregate=_fake_aggregate,
+        _sweep=lambda _rid: {},
+    )
+    assert res1.harvested is True, "terminal-with-no-receipt must re-fire the harvest"
+    assert res1.stage_reached == "harvest_backstopped"
+    assert res1.harvest["run_id"] == _RUN_ID
+    assert res1.harvest["terminal_cause"] == "complete"
+    assert harvest_receipt_exists(tmp_path, _RUN_ID)
+
+    # Second re-settle: still no transition, but the receipt now exists → no re-pull.
+    with mock.patch(_HARVEST_SEAM) as harvest:
+        res2 = settle_run(
+            tmp_path,
+            spec=SettleRunInput(run_id=_RUN_ID, status="complete", evidence="proven on disk"),
+        )
+    harvest.assert_not_called()
+    assert res2.harvested is False
+    assert res2.stage_reached == "already_terminal"
+
+
+def test_transition_settle_then_resettle_is_idempotent(tmp_path: Path, monkeypatch: Any) -> None:
+    """The normal path is unchanged and self-consistent: an ``in_flight`` → ``complete``
+    directed settle harvests once (writing its receipt), and a re-settle of the now
+    already-``complete`` run does NOT re-fire (receipt present)."""
+    _setup(tmp_path, monkeypatch)
+
+    def _fake_aggregate(_exp: Path, _rid: str) -> Any:
+        raise RuntimeError("no cluster in this test")
+
+    res1 = settle_run(
+        tmp_path,
+        spec=SettleRunInput(run_id=_RUN_ID, status="complete", evidence="reporter RC=0"),
+        _aggregate=_fake_aggregate,
+        _sweep=lambda _rid: {},
+    )
+    assert res1.harvested is True
+    assert res1.stage_reached == "settled"
+    assert harvest_receipt_exists(tmp_path, _RUN_ID)
+
+    with mock.patch(_HARVEST_SEAM) as harvest:
+        res2 = settle_run(
+            tmp_path,
+            spec=SettleRunInput(run_id=_RUN_ID, status="complete", evidence="reporter RC=0"),
+        )
+    harvest.assert_not_called()
+    assert res2.harvested is False
+    assert res2.stage_reached == "already_terminal"
 
 
 # ── the load-bearing guards ───────────────────────────────────────────────────

@@ -18,9 +18,13 @@ makeable on DIRECTED evidence through the SAME machinery. ``settle-run``:
 (b) journals it as a DECISION (a sign-off — the directed evidence + its
     provenance, so the settle carries a trail, not a silent hand-edit);
 (c) sets the terminal status via the SAME ``mark_run`` the probe path uses;
-(d) runs the SAME transition-gated ``harvest_on_terminal`` the automatic path
-    runs (summary pull + transition stamp), so a directed settle is
-    byte-for-byte the same lifecycle event as a probed one.
+(d) runs the SAME receipt-gated ``harvest_on_terminal`` the automatic path runs
+    (summary pull + transition stamp): the harvest fires on a status TRANSITION
+    OR — absent a transition — as a journal-evidence BACKSTOP when the run is
+    terminal with NO harvest receipt (a session-death between ``mark_run`` and the
+    harvest), never solely on in-process transition state (the sibling of
+    reconcile's ``_harvest_if_owed``). So a directed settle is byte-for-byte the
+    same lifecycle event as a probed one, and it self-heals a dropped harvest.
 
 I/O contracts:
 
@@ -88,26 +92,44 @@ class SettleRunInput(BaseModel):
 class SettleRunResult(BaseModel):
     """The settle outcome — the journaled sign-off + the terminal transition.
 
-    ``stage_reached`` is ``settled`` when the status actually transitioned (the
-    common case: a stuck in_flight run → terminal) or ``already_terminal`` when
-    the run already carried the target status (idempotent re-settle — the harvest
-    is NOT re-fired, mirroring the probe path's transition gate). ``harvested`` is
-    True exactly when ``harvest_on_terminal`` ran (only on a transition);
-    ``harvest`` carries its marker (finding 25's requirement: the same summary
-    pull + transition stamp the automatic path produces). ``decision_ts`` is the
-    journaled sign-off's timestamp.
+    ``stage_reached`` says what ACTUALLY happened (no silent re-interpretation of a
+    backstop as a plain transition):
+
+    * ``settled`` — the status actually transitioned (the common case: a stuck
+      in_flight run → terminal) and the harvest fired.
+    * ``harvest_backstopped`` — the run was ALREADY terminal but carried NO harvest
+      receipt (a session-death between ``mark_run`` and the harvest dropped the
+      guaranteed harvest), so the harvest re-fired via the journal-evidence backstop
+      — NOT a status transition. The sibling of reconcile's ``_harvest_if_owed``.
+    * ``already_terminal`` — the run already carried the target status AND its harvest
+      receipt was on the ledger: a true idempotent no-op, the harvest is NOT re-fired.
+
+    ``harvested`` is True exactly when ``harvest_on_terminal`` ran — on a transition
+    (``settled``) OR the no-receipt backstop (``harvest_backstopped``); ``harvest``
+    carries its marker (finding 25's requirement: the same summary pull + transition
+    stamp the automatic path produces). ``decision_ts`` is the journaled sign-off's
+    timestamp.
     """
 
     model_config = ConfigDict(extra="forbid", title="settle-run output data")
 
-    stage_reached: Literal["settled", "already_terminal"] = Field(
-        description="Whether the directed settle transitioned the status or it was already terminal.",
+    stage_reached: Literal["settled", "harvest_backstopped", "already_terminal"] = Field(
+        description=(
+            "What actually happened: 'settled' (status transitioned + harvested), "
+            "'harvest_backstopped' (already terminal with NO harvest receipt — the "
+            "guaranteed harvest re-fired via the journal-evidence backstop, not a "
+            "transition), or 'already_terminal' (already terminal, receipt present — "
+            "an idempotent no-op)."
+        ),
     )
     run_id: str = Field(description="The settled run.")
     status: str = Field(description="The terminal status now recorded.")
     prior_status: str = Field(description="The run's status before the settle.")
     harvested: bool = Field(
-        description="True exactly when harvest_on_terminal ran (only on a status transition).",
+        description=(
+            "True exactly when harvest_on_terminal ran — on a status transition OR "
+            "the terminal-with-no-receipt journal-evidence backstop."
+        ),
     )
     harvest: dict = Field(
         default_factory=dict,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/settle_run.output.json",
   "title": "settle-run output data",
-  "description": "The settle outcome — the journaled sign-off + the terminal transition.\n\n``stage_reached`` is ``settled`` when the status actually transitioned (the\ncommon case: a stuck in_flight run → terminal) or ``already_terminal`` when\nthe run already carried the target status (idempotent re-settle — the harvest\nis NOT re-fired, mirroring the probe path's transition gate). ``harvested`` is\nTrue exactly when ``harvest_on_terminal`` ran (only on a transition);\n``harvest`` carries its marker (finding 25's requirement: the same summary\npull + transition stamp the automatic path produces). ``decision_ts`` is the\njournaled sign-off's timestamp.",
+  "description": "The settle outcome — the journaled sign-off + the terminal transition.\n\n``stage_reached`` says what ACTUALLY happened (no silent re-interpretation of a\nbackstop as a plain transition):\n\n* ``settled`` — the status actually transitioned (the common case: a stuck\n  in_flight run → terminal) and the harvest fired.\n* ``harvest_backstopped`` — the run was ALREADY terminal but carried NO harvest\n  receipt (a session-death between ``mark_run`` and the harvest dropped the\n  guaranteed harvest), so the harvest re-fired via the journal-evidence backstop\n  — NOT a status transition. The sibling of reconcile's ``_harvest_if_owed``.\n* ``already_terminal`` — the run already carried the target status AND its harvest\n  receipt was on the ledger: a true idempotent no-op, the harvest is NOT re-fired.\n\n``harvested`` is True exactly when ``harvest_on_terminal`` ran — on a transition\n(``settled``) OR the no-receipt backstop (``harvest_backstopped``); ``harvest``\ncarries its marker (finding 25's requirement: the same summary pull + transition\nstamp the automatic path produces). ``decision_ts`` is the journaled sign-off's\ntimestamp.",
   "type": "object",
   "required": [
     "stage_reached",
@@ -15,9 +15,10 @@
   "additionalProperties": false,
   "properties": {
     "stage_reached": {
-      "description": "Whether the directed settle transitioned the status or it was already terminal.",
+      "description": "What actually happened: 'settled' (status transitioned + harvested), 'harvest_backstopped' (already terminal with NO harvest receipt — the guaranteed harvest re-fired via the journal-evidence backstop, not a transition), or 'already_terminal' (already terminal, receipt present — an idempotent no-op).",
       "enum": [
         "settled",
+        "harvest_backstopped",
         "already_terminal"
       ],
       "title": "Stage Reached",
@@ -39,7 +40,7 @@
       "type": "string"
     },
     "harvested": {
-      "description": "True exactly when harvest_on_terminal ran (only on a status transition).",
+      "description": "True exactly when harvest_on_terminal ran — on a status transition OR the terminal-with-no-receipt journal-evidence backstop.",
       "title": "Harvested",
       "type": "boolean"
     },
