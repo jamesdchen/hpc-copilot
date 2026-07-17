@@ -37,6 +37,7 @@ harvests partial data.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -53,6 +54,7 @@ __all__ = [
     "TERMINAL_CAUSES",
     "harvest_marker_path",
     "harvest_on_terminal",
+    "harvest_receipt_exists",
 ]
 
 _log = logging.getLogger(__name__)
@@ -96,6 +98,62 @@ def harvest_marker_path(experiment_dir: Path, run_id: str) -> Path:
     run (idempotent by design) accretes evidence rather than clobbering it.
     """
     return runs_dir(experiment_dir) / f"{run_id}.harvest.jsonl"
+
+
+def harvest_receipt_exists(experiment_dir: Path, run_id: str) -> bool:
+    """True when the harvest ledger records at least one PERFORMED harvest.
+
+    The durable, JOURNAL-side evidence that :func:`harvest_on_terminal` was
+    reached for this run. The marker is written LAST (``_write_marker``), after
+    the metrics harvest + error sweep, and even a harvest that FAILED
+    (``harvest_ok: false``) or hit a deliberate ``scope_locked`` skip records
+    one — so a present marker proves the guaranteed harvest ran for a terminal
+    state, and an ABSENT ledger proves it never did (the terminal-with-no-
+    harvest gap: a session-death between ``mark_run(terminal)`` and this guard).
+
+    This is the backstop trigger the reconcile/settle terminal arms derive
+    "harvest owed" from: a run that is terminal but has NO receipt is owed a
+    harvest REGARDLESS of a verdict transition, so a death in the mark→harvest
+    window is re-driven on the next reconcile — and once a receipt lands the
+    backstop stops re-firing (idempotent both ways; the transition gate still
+    covers the normal, receipt-writing path).
+
+    The abnormal-exit ``run_not_terminal`` clean-skip marker (the watch died
+    while the run was NOT terminal — nothing was pulled) is deliberately NOT a
+    receipt: it records a no-op, not a performed terminal harvest.
+
+    Best-effort read: a missing / unreadable ledger reads as "no receipt", so
+    the backstop errs toward re-harvesting (harvest_on_terminal is itself
+    idempotent). Whole-line-atomic appends keep prior markers intact, so a
+    crash-torn final line still leaves earlier markers readable — the scan runs
+    over every line, newest-first, and returns on the first qualifying marker.
+    """
+    path = harvest_marker_path(experiment_dir, run_id)
+    if not path.is_file():
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        # A `run_not_terminal` skip is the abnormal-exit sentinel's no-op (the
+        # watch died, the run wasn't terminal) — NOT a performed harvest. Every
+        # other marker (a real harvest, a failed-but-recorded harvest, or a
+        # deliberate scope-locked skip) means the guaranteed harvest was REACHED
+        # for a terminal state, so the run is not "harvest owed".
+        if parsed.get("harvest_skipped_reason") == "run_not_terminal":
+            continue
+        return True
+    return False
 
 
 def harvest_on_terminal(

@@ -24,7 +24,9 @@ from pathlib import Path
 import pytest
 
 from hpc_agent import errors
+from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.ops.monitor import reconcile as recon
+from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
 from hpc_agent.state.journal import is_kill_confirmed, load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -84,6 +86,14 @@ def _count_harvests(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     def _fake(experiment_dir, run_id, *, terminal_cause, record=None, **_kw):
         calls.append(terminal_cause)
+        # Mirror the real guard's LAST step: append a durable receipt to the
+        # ledger, so the reconcile backstop's receipt-derived idempotency holds
+        # (a real harvest ALWAYS writes a marker — a receipt-less fake would let
+        # the terminal-with-no-receipt backstop re-fire on every re-reconcile).
+        append_jsonl_line(
+            harvest_marker_path(experiment_dir, run_id),
+            {"run_id": run_id, "terminal_cause": terminal_cause, "harvest_ok": True},
+        )
         return {}
 
     monkeypatch.setattr(recon, "harvest_on_terminal", _fake)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import shlex
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -19,7 +20,7 @@ from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.announce import read_announcements
 from hpc_agent.ops.monitor.classify import settle
-from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
+from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal, harvest_receipt_exists
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import (
     is_kill_confirmed,
@@ -30,6 +31,57 @@ from hpc_agent.state.journal import (
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
+
+_log = logging.getLogger(__name__)
+
+
+def _harvest_if_owed(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    terminal_cause: str,
+    record: RunRecord,
+    pre_reconcile_status: str,
+) -> None:
+    """Fire the guaranteed terminal harvest on a verdict TRANSITION, OR as a
+    journal-evidence backstop when the run is terminal but carries NO receipt.
+
+    The transition gate (``terminal_cause != pre_reconcile_status``) covers the
+    normal path and keeps an idempotent re-reconcile from re-paying the pull +
+    reduce + ledger append. But a session-death BETWEEN ``mark_run(terminal)``
+    and ``harvest_on_terminal`` leaves the run terminal-with-no-harvest, and the
+    next reconcile sees NO transition (the journal already reads terminal) — so a
+    transition-ONLY gate would drop the guaranteed harvest forever (audit U8 /
+    rank 2, ``docs/plans/transport-robustness-2026-07-17``). Unlike
+    ``monitor_flow`` (which harvests from a ``finally``), reconcile is invoked
+    directly by drivers / the skill and has no such backstop.
+
+    "Harvest owed" is therefore derived from DURABLE JOURNAL EVIDENCE, never
+    in-process state: :func:`harvest_receipt_exists` reads the run's
+    ``<run_id>.harvest.jsonl`` ledger, so a terminal run with no receipt re-fires
+    EXACTLY once and a run whose receipt already landed does not — idempotent both
+    ways (the harvest itself is idempotent: an ``ensure_all_combined=False``
+    aggregate re-run over atomic cluster writes + an append-only ledger). This is
+    NOT a "terminal is sticky" guard: the verdict stays revisable
+    (engineering-principles — the verdict is revisable, the evidence is durable);
+    a legit complete→failed downgrade IS a transition and still harvests.
+    """
+    if terminal_cause != pre_reconcile_status:
+        harvest_on_terminal(experiment_dir, run_id, terminal_cause=terminal_cause, record=record)
+        return
+    if not harvest_receipt_exists(experiment_dir, run_id):
+        # No verdict transition, but the run is terminal with NO harvest receipt:
+        # a session-death in the mark_run→harvest window dropped the guaranteed
+        # harvest. Re-drive it now, loudly (the harvest appends its own durable
+        # marker, so a repair is never silent — disclosure discipline).
+        _log.warning(
+            "reconcile: run %s is terminal (%s) with NO harvest receipt — a "
+            "session-death between mark_run and harvest dropped the guaranteed "
+            "harvest; re-firing it now (journal-evidence backstop, audit U8).",
+            run_id,
+            terminal_cause,
+        )
+        harvest_on_terminal(experiment_dir, run_id, terminal_cause=terminal_cause, record=record)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -392,16 +444,18 @@ def _settle_from_announcements(
     else:
         update_run_status(experiment_dir, run_id, last_status=recorded)
         updated = mark_run(experiment_dir, run_id, status=str(decision.verdict))
-    # Guaranteed harvest (§5), gated on a verdict TRANSITION — identical to the
-    # reporter-backed settle arm: an idempotent re-reconcile of an already-terminal
-    # run does NOT re-fire (each fire pays an rsync pull + reduce + a ledger append).
-    if str(decision.verdict) != pre_reconcile_status:
-        harvest_on_terminal(
-            experiment_dir,
-            run_id,
-            terminal_cause=str(decision.verdict),
-            record=updated,
-        )
+    # Guaranteed harvest (§5) — fire on a verdict TRANSITION, OR as a
+    # journal-evidence backstop when the run is terminal with no harvest receipt
+    # (a death in the mark_run→harvest window). Identical policy to the
+    # reporter-backed settle arm; an idempotent re-reconcile of an
+    # already-harvested run does NOT re-fire.
+    _harvest_if_owed(
+        experiment_dir,
+        run_id,
+        terminal_cause=str(decision.verdict),
+        record=updated,
+        pre_reconcile_status=pre_reconcile_status,
+    )
     return updated
 
 
@@ -992,17 +1046,19 @@ def _reconcile_one(
             failed_waves=[w for w in record.failed_waves if w not in set(combined)],
         )
         updated = mark_run(experiment_dir, run_id, status=str(LifecycleState.ABANDONED))
-        # Guaranteed harvest (§5), gated on a verdict TRANSITION — identical to the
-        # settle arm below: reconcile is invoked directly (kill / driver), so its
-        # terminal transitions never pass through the poll loop's finally. An
-        # idempotent re-reconcile of an already-``abandoned`` kill does NOT re-fire.
-        if str(LifecycleState.ABANDONED) != pre_reconcile_status:
-            harvest_on_terminal(
-                experiment_dir,
-                run_id,
-                terminal_cause=str(LifecycleState.ABANDONED),
-                record=updated,
-            )
+        # Guaranteed harvest (§5) — identical to the settle arm below: reconcile
+        # is invoked directly (kill / driver), so its terminal transitions never
+        # pass through the poll loop's finally. Fire on a verdict TRANSITION, OR
+        # as a journal-evidence backstop when the run is terminal with no harvest
+        # receipt (a death in the mark_run→harvest window); an idempotent
+        # re-reconcile of an already-harvested kill does NOT re-fire.
+        _harvest_if_owed(
+            experiment_dir,
+            run_id,
+            terminal_cause=str(LifecycleState.ABANDONED),
+            record=updated,
+            pre_reconcile_status=pre_reconcile_status,
+        )
         return updated, alive_check_failed
 
     # #258 + 0.10.12: when either the alive-check or the status reporter
@@ -1084,24 +1140,26 @@ def _reconcile_one(
         else:
             update_run_status(experiment_dir, run_id, last_status=recorded)
             updated = mark_run(experiment_dir, run_id, status=str(decision.verdict))
-        # Guaranteed harvest (§5), gated on a verdict TRANSITION. reconcile's
-        # settle arms are terminal transitions the poll loop's own finally never
-        # sees (reconcile is invoked directly by drivers / the skill), so the "no
-        # path ends in silence" sweep must fire HERE too — but ONLY when the
-        # verdict actually changed from the pre-reconcile status. An idempotent
-        # re-reconcile (same verdict) must NOT re-fire the harvest (each fire
-        # pays an rsync pull + reduce + a ledger append). This is NOT a "terminal
-        # is sticky" guard — the verdict stays revisable (engineering-principles):
-        # a legit complete→failed downgrade IS a transition and still harvests.
-        # Best-effort and loud by contract — never raises, never masks the
-        # verdict just recorded.
-        if str(decision.verdict) != pre_reconcile_status:
-            harvest_on_terminal(
-                experiment_dir,
-                run_id,
-                terminal_cause=str(decision.verdict),
-                record=updated,
-            )
+        # Guaranteed harvest (§5). reconcile's settle arms are terminal
+        # transitions the poll loop's own finally never sees (reconcile is
+        # invoked directly by drivers / the skill), so the "no path ends in
+        # silence" sweep must fire HERE too. It fires on a verdict TRANSITION
+        # from the pre-reconcile status, OR — the rank-2/U8 backstop — when the
+        # run is terminal but carries NO harvest receipt (a session-death in the
+        # mark_run→harvest window), derived from the durable harvest ledger. An
+        # idempotent re-reconcile of an already-harvested run does NOT re-fire
+        # (each fire pays an rsync pull + reduce + a ledger append). Not a
+        # "terminal is sticky" guard — the verdict stays revisable
+        # (engineering-principles): a legit complete→failed downgrade IS a
+        # transition and still harvests. Best-effort and loud by contract —
+        # never raises, never masks the verdict just recorded.
+        _harvest_if_owed(
+            experiment_dir,
+            run_id,
+            terminal_cause=str(decision.verdict),
+            record=updated,
+            pre_reconcile_status=pre_reconcile_status,
+        )
     return updated, alive_check_failed
 
 
