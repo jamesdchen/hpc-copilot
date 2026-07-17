@@ -354,6 +354,32 @@ schema regen + registry-count pins. New CI matrix rows for T6/T8 adapters.
   portability (guardrail G3 keeps it non-load-bearing) and does NOT chase the
   auth blocker (contract T2 out-of-scope). The real residual is activation (T4),
   the unproven capabilities 2–5 (Wave C/D), and prose (T5).
+- **T5 landed (2026-07-17): the prose-neutral harness runbook, GENERATED.** R5
+  answered "generated projection": `docs/generated/harness-runbook.md` is
+  projected from `_wire/spawn_contract.py::DECISION_POINTS` + the
+  `infra/block_chain` sequence (`ORDER`) / consent (`GATED_BLOCKS`) tables by
+  `scripts/build_harness_runbook.py` (`--check`/`--write` per house convention,
+  bare refused rc 2, standard GENERATED banner). Per workflow it renders the
+  block sequence (consent boundaries flagged inline), the park → typed `y` →
+  `append-decision` consent protocol (stated once + per-workflow), and the
+  decision-point table (id · shape · code-vs-judgement · backing verb) — in
+  CLI-verb vocabulary with NO Claude idioms. Wired into `scripts/regen_all.py`
+  `_STEPS` + `REGEN_SCRIPTS` as step 8 (before `check_no_pending_primitive_docs`,
+  alongside `build_principles_index`); the pipeline is now 9 steps
+  (`test_doc_frozen_counts` reads the length via AST — no literal to bump). Tests
+  (`tests/scripts/test_build_harness_runbook.py`): `--check`/`--write` round-trip
+  fires on a hand-edit; a COMPLETENESS pin (every `DECISION_POINTS` workflow +
+  every decision-point id/verb projected; a new workflow without regen drifts);
+  and a DENYLIST pin over `CLAUDE_IDIOM_DENYLIST` (`run_in_background`,
+  `AskUserQuestion`, `CronCreate`/`CronDelete`, `tool call`, `final action`,
+  `Skill(`) asserting the render carries none. A pointer added to
+  `docs/internals/harness-contract.md` ("The CLI is the invariant substrate"):
+  edit `DECISION_POINTS`, never the runbook prose; it is a translation aid, not a
+  trust surface. Guardrails held: G1/G4 (no new write affordance; the CLI stays
+  the substrate — the runbook is a read-only projection), G5 (bare `y` stands —
+  stated verbatim in the protocol). Gates green: `regen_all --check` (9/9), lint
+  gauntlet (26/26), ruff/format/mypy, 9 runbook tests. The SKILL.md re-cast as the
+  Claude-Code PROFILE (light front-matter edits) is NOT in this unit — deferred.
 - **Wave A landed (2026-07-17): T1 + T2 + T3, docs-only.** T1 — the memory-note
   stale-claims reconciliation table (§2) verifies every "planned/unbuilt/missing"
   claim against code with a citation, and the risk register is marked the CANONICAL

@@ -312,6 +312,17 @@ or fork the verb surface. This is what lets a second harness be additive: the
 audit records, gates, and journal are identical; only the capability providers
 differ.
 
+**The harness-neutral runbook.** A foreign harness drives the four workflows
+from `docs/generated/harness-runbook.md` — a prose-neutral projection of the
+code-homed procedure (block sequences, decision points tagged code-vs-judgement
+with their backing verbs, and the park → typed `y` → `append-decision` consent
+boundaries), stated in CLI-verb vocabulary with none of the Claude-Code SKILL.md
+idioms. That page is GENERATED (`scripts/build_harness_runbook.py`, a
+`regen_all` step) from `_wire/spawn_contract.py::DECISION_POINTS` +
+`infra/block_chain.py` — **edit `DECISION_POINTS`, never the runbook prose**
+(anti-vendor-lockout T5/R5). It is a translation aid, NOT a trust surface: the
+trust anchor stays the journal + the utterance log.
+
 ## The second-conforming-harness sketch
 
 The ceiling this contract earns. A jupytext notebook render (scheduled v1.5,

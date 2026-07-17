@@ -43,6 +43,7 @@ _EXPECTED_ORDER = (
     "build_operations_index",
     "build_verb_module_map",
     "build_principles_index",
+    "build_harness_runbook",
     "check_no_pending_primitive_docs",
 )
 
@@ -76,6 +77,7 @@ def test_steps_argv_map_matches_script_flag_semantics() -> None:
         "build_primitive_frontmatter",
         "build_verb_module_map",
         "build_principles_index",
+        "build_harness_runbook",
     ):
         assert argv_by_stem[stem][1] == ("--write",), stem
     # check_no_pending is always a check (no flags, both modes).

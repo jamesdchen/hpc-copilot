@@ -13,7 +13,7 @@ bare-argv semantics (``build_schemas`` previews a diff, the index scripts
 WRITE, ``build_verb_module_map`` checks-without-writing), so a single entry
 point must not inherit that ambiguity — the caller states intent explicitly.
 
-The eight steps run as **subprocesses of the current interpreter** (never
+The nine steps run as **subprocesses of the current interpreter** (never
 in-process imports) in the dependency order below. Subprocess isolation
 matches exactly how pre-commit and CI invoke them today, so behaviour is
 provably unchanged, and it sidesteps the env-timing / registry-cache
@@ -37,16 +37,21 @@ Order (WS1 DC1, verified against the scripts):
    ``docs/internals/engineering-principles.md`` from the ``principles/<slug>.md``
    frontmatter; registry-free (reads only the section files), so its only
    ordering constraint is that it precede the pending-docs check.
-8. ``check_no_pending_primitive_docs`` — LAST, so a freshly scaffolded stub fails
+8. ``build_harness_runbook``    — projects ``_wire/spawn_contract.py::DECISION_POINTS``
+   + the ``infra/block_chain`` sequence/consent tables into the harness-neutral
+   ``docs/generated/harness-runbook.md`` (imports those two pure modules only, no
+   registry walk), so like the principles index its only ordering constraint is
+   that it precede the pending-docs check.
+9. ``check_no_pending_primitive_docs`` — LAST, so a freshly scaffolded stub fails
    loudly (correct: the human must fill the body).
 
 Failure policy (both modes): run EVERY step regardless of failures, print one
 PASS/FAIL line per step, exit non-zero if any step failed. Full visibility
-beats a truncated report for a ~20s, seven-step run — in ``--check`` one run
+beats a truncated report for a ~20s, nine-step run — in ``--check`` one run
 surfaces ALL drift; in ``--write`` a failed earlier step only makes later
 diffs loud, never silently wrong.
 
-``REGEN_SCRIPTS`` is the module-level canonical list of the eight steps (the
+``REGEN_SCRIPTS`` is the module-level canonical list of the nine steps (the
 tuple other units probe — e.g. a count gate — since the pre-commit hooks may
 collapse to one). It is the single source of truth for the pipeline order.
 """
@@ -80,6 +85,7 @@ _STEPS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("build_operations_index", ("--check",), ()),
     ("build_verb_module_map", ("--check",), ("--write",)),
     ("build_principles_index", ("--check",), ("--write",)),
+    ("build_harness_runbook", ("--check",), ("--write",)),
     ("check_no_pending_primitive_docs", (), ()),
 )
 
@@ -98,6 +104,7 @@ REGEN_SCRIPTS: tuple[str, ...] = (
     "build_operations_index",
     "build_verb_module_map",
     "build_principles_index",
+    "build_harness_runbook",
     "check_no_pending_primitive_docs",
 )
 assert tuple(stem for stem, _check, _write in _STEPS) == REGEN_SCRIPTS
