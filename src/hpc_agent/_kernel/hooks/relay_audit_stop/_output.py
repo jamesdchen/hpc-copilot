@@ -82,8 +82,26 @@ def _rate_bound(violations: list[_Violation]) -> tuple[list[_Violation], int]:
     return kept, len(violations) - len(kept)
 
 
+def _ambiguous_scope_note(ambiguous_skipped: int) -> str:
+    """The count-and-disclose note for cross-scope claims owned by no single audit.
+
+    Run-14 finding 5: a status/sha claim EQUIDISTANT between two named audits is
+    provably owned by neither, so the scope guard emits NO correction (a false
+    correction is worse than silence). This note discloses the COUNT so the skip is
+    never silent (the no-silent-caps rule, mirroring the flood cap's tail).
+    """
+    return (
+        f"hpc-agent relay audit — {ambiguous_skipped} audit claim(s) skipped: "
+        "ambiguous scope (a status/sha sits equidistant between two named audits and "
+        "could not be attributed to ONE journal; conduct rule 10 — a false correction "
+        "is worse than silence). Run `hpc-agent verify-relay` per audit for the full set."
+    )
+
+
 def _rejector_output(
-    violations: list[_Violation], absent_markers: list[_AbsentMarker]
+    violations: list[_Violation],
+    absent_markers: list[_AbsentMarker],
+    ambiguous_skipped: int = 0,
 ) -> dict[str, Any] | None:
     """Today's REJECTOR shape — the capability-absent (dark) default (D1).
 
@@ -93,12 +111,19 @@ def _rejector_output(
     reason, or ``None`` when there is nothing to say. This is what the
     completer degrades to wherever the ``stop-hook-append`` capability is
     absent/unknown.
+
+    *ambiguous_skipped* (run-14 finding 5) is DISCLOSED as an extra segment, but
+    only when the rejector is ALREADY blocking for a finding/omission — the block
+    is the rejector's only channel, and manufacturing a block purely to disclose a
+    scope-ambiguous skip would be a worse disruption than the silence it replaces
+    (a clean relay must never be blocked). The completer, whose ``systemMessage``
+    is non-blocking, discloses it unconditionally.
     """
     surfaced, suppressed = _rate_bound(_dedupe_violations(violations))
     findings = [v.text for v in surfaced]
     omissions = [am.omission_text for am in absent_markers]
     if not findings and not omissions:
-        return None
+        return None  # never manufacture a block solely to disclose an ambiguous skip
 
     segments: list[str] = []
     if findings:
@@ -118,6 +143,8 @@ def _rejector_output(
         )
     if omissions:
         segments.append("hpc-agent relay-due discharge (the omission gate): " + " ".join(omissions))
+    if ambiguous_skipped:
+        segments.append(_ambiguous_scope_note(ambiguous_skipped))
     return {"decision": "block", "reason": " ".join(segments)}
 
 
@@ -261,6 +288,7 @@ def _completer_output(
     append_on_block_ok: bool,
     violations: list[_Violation],
     absent_markers: list[_AbsentMarker],
+    ambiguous_skipped: int = 0,
 ) -> dict[str, Any] | None:
     """The COMPLETER shape (D1–D4): APPEND what code holds, bounce only on poison.
 
@@ -335,6 +363,11 @@ def _completer_output(
                 f"{suppressed} more correction(s) suppressed (rate-bounded to reduce "
                 "flood; conduct rule 10). Run `hpc-agent verify-relay` for the full set."
             )
+        if ambiguous_skipped:
+            # A cross-scope tie (run-14 finding 5): owned by no single audit, so NO
+            # correction — disclosed here because ``systemMessage`` is non-blocking
+            # (unlike the rejector, this path never manufactures a bounce to inform).
+            append_parts.append(_ambiguous_scope_note(ambiguous_skipped))
 
     out: dict[str, Any] = {}
     if append_parts:

@@ -283,17 +283,28 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
             )
 
     # Violation-class findings (rule-10 + paraphrase + decision-state). Fail-open.
+    # ``ambiguous_spans`` (run-14 finding 5): the ONE shared set the notebook
+    # cross-scope guard records a tied/untagged claim's span into — deduped across
+    # per-audit scopes — so its COUNT can be disclosed (no-silent-caps) instead of
+    # firing a false correction against the wrong journal.
+    ambiguous_spans: set[tuple[int, int]] = set()
     try:
-        violations = _gather_violations(cwd_dir, relay_text, run_ids, audit_ids)
+        violations = _gather_violations(
+            cwd_dir, relay_text, run_ids, audit_ids, ambiguous_out=ambiguous_spans
+        )
     except Exception:
         violations = []
+        ambiguous_spans = set()
+    ambiguous_skipped = len(ambiguous_spans)
 
     if not run_ids and not audit_ids and not absent_markers and not violations:
         return None  # nothing attributable to audit — the run path stays untouched
 
     if not completer_active:
-        return _rejector_output(violations, absent_markers)
-    return _completer_output(cwd_dir, forced, append_on_block_ok, violations, absent_markers)
+        return _rejector_output(violations, absent_markers, ambiguous_skipped)
+    return _completer_output(
+        cwd_dir, forced, append_on_block_ok, violations, absent_markers, ambiguous_skipped
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

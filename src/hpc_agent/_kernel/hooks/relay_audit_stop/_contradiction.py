@@ -121,13 +121,26 @@ def _cite_nearest(claim: str, union_floats: list[float]) -> str | None:
 
 
 def _gather_violations(
-    experiment_dir: Path, relay_text: str, run_ids: list[str], audit_ids: list[str]
+    experiment_dir: Path,
+    relay_text: str,
+    run_ids: list[str],
+    audit_ids: list[str],
+    *,
+    ambiguous_out: set[tuple[int, int]] | None = None,
 ) -> list[_Violation]:
     """Every violation-class finding (rule-10 + paraphrase + decision-state).
 
     The order is preserved from the pre-completer rejector: run rule-10, then
     notebook rule-10, then the paraphrase pass, then decision-state. Each helper
     is fail-open; the whole gather is additionally wrapped by the caller.
+
+    *ambiguous_out* (run-14 finding 5): the ONE shared set threaded into every
+    per-audit :func:`verify_notebook_relay` call so a cross-scope claim that is
+    provably owned by NEITHER live audit (an equidistant tie) is skipped WITHOUT a
+    correction under any scope, and its span recorded ONCE (deduped across scopes).
+    The caller reads ``len(ambiguous_out)`` to disclose the skipped count to the
+    human — the no-silent-caps rule — instead of the pre-fix confident false
+    correction against the wrong journal.
     """
     violations: list[_Violation] = []
 
@@ -210,7 +223,11 @@ def _gather_violations(
             others = [a for a in audited if a != audit_id]
             try:
                 nb_result = verify_notebook_relay(
-                    experiment_dir, audit_id, relay_text, other_audit_ids=others
+                    experiment_dir,
+                    audit_id,
+                    relay_text,
+                    other_audit_ids=others,
+                    ambiguous_out=ambiguous_out,
                 )
             except Exception:
                 continue  # an audit we cannot check is a silent pass for that audit

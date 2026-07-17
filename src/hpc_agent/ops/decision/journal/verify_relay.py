@@ -1813,50 +1813,72 @@ def _nb_nearest_span(start: int, end: int, spans: list[tuple[int, int]]) -> tupl
     return best
 
 
-def _nb_claim_in_scope(
+# Tri-state ownership of a cross-scope claim (run-14 finding 5). A claim is checked
+# ONLY under the scope that provably OWNS it; a tie (provably owned by neither) is
+# corrected by NO scope — a false correction is worse than silence.
+_NB_OWN = "own"
+_NB_SIBLING = "sibling"
+_NB_AMBIGUOUS = "ambiguous"
+
+
+def _nb_claim_ownership(
     start: int,
     end: int,
     this_id_spans: list[tuple[int, int]],
     sibling_id_spans: list[tuple[int, int]],
-) -> bool:
-    """True unless a SIBLING audit id is mentioned strictly NEARER this claim.
+) -> str:
+    """Which live audit provably OWNS the claim at ``[start, end)`` — tri-state.
 
-    The run-14 cross-scope defect: the relay named two audits whose sections share
-    slug names (``causal_tune_linear`` + ``causal_tune_tree``, both with
-    ``data-selection`` / ``baseline`` / ...). :func:`verify_notebook_relay` runs
-    once PER mentioned audit over the WHOLE text, so the tree audit's shas — near
-    the shared slug names — were also attributed under the LINEAR scope and checked
-    against LINEAR's journal, emitting confident false corrections labelled
+    The run-14 cross-scope defect (finding 5): the relay named two audits whose
+    sections share slug names (``causal_tune_linear`` + ``causal_tune_tree``, both
+    with ``data-selection`` / ``baseline`` / ...). :func:`verify_notebook_relay`
+    runs once PER mentioned audit over the WHOLE text, so the tree audit's shas —
+    near the shared slug names — were also attributed under the LINEAR scope and
+    checked against LINEAR's journal, emitting confident false corrections labelled
     ``[causal_tune_linear]`` about tree's shas.
 
     A claim is bound to the audit whose id is mentioned NEAREST it (its own
-    context), not to every audit that merely shares the text. With no sibling
-    mention the claim always stays in scope; a sibling mentioned strictly nearer
-    than this audit's own id means the claim belongs to that sibling and is skipped
-    here (it is checked when the sibling is the scope). A tie keeps the claim in
-    scope for both (the conservative direction: a genuinely-wrong claim is still
-    caught; the false-correction channel is the ONE-sided mis-scope this closes).
+    context), not to every audit that merely shares the text:
+
+    * :data:`_NB_OWN` — this audit's id is mentioned strictly NEARER the claim than
+      any sibling's (or there is no sibling, or no sibling mention at all): check it
+      under this scope.
+    * :data:`_NB_SIBLING` — a sibling's id is mentioned strictly nearer: skip here,
+      it is checked when THAT audit is the scope (no correction is lost).
+    * :data:`_NB_AMBIGUOUS` — the nearest this-id and sibling-id mentions are
+      EQUIDISTANT (a tie): the claim is provably owned by NEITHER audit, so NO scope
+      may correct it. This is the run-14 finding-5 ruling made mechanical — a false
+      correction shown to the human is worse than silence, so a tied/untagged claim
+      yields NO correction (and is counted-and-disclosed by the caller, per the
+      no-silent-caps rule). BEFORE this, a tie stayed in scope for BOTH audits and
+      fired a confident false correction under the wrong journal (a tree sha
+      equidistant between the two audit ids was corrected against LINEAR's journal —
+      the exact demonstrated defect).
     """
     if not sibling_id_spans:
-        return True
+        return _NB_OWN
     sibling = _nb_span_distance(start, end, sibling_id_spans)
     if sibling is None:
-        return True
+        return _NB_OWN
     mine = _nb_span_distance(start, end, this_id_spans)
     if mine is None:
-        return False  # this audit's id is not mentioned near the claim; the sibling owns it
-    return sibling >= mine
+        return _NB_SIBLING  # this audit's id is not mentioned near the claim; a sibling owns it
+    if mine < sibling:
+        return _NB_OWN
+    if sibling < mine:
+        return _NB_SIBLING
+    return _NB_AMBIGUOUS  # a tie — provably owned by neither; no scope may correct it
 
 
-def _nb_claim_owned(
+def _nb_claim_ownership_for(
     slug: str,
     start: int,
     end: int,
     slug_spans: dict[str, list[tuple[int, int]]],
     this_id_spans: list[tuple[int, int]],
     sibling_id_spans: list[tuple[int, int]],
-) -> bool:
-    """True when THIS audit owns the claim about *slug* (cross-scope guard).
+) -> str:
+    """Tri-state ownership of a claim about *slug* (anchored on the slug identity).
 
     Anchored on the SLUG's own nearest occurrence (the section identity), NOT the
     claim token: a sha at a digest line's END abuts the NEXT line — which may open
@@ -1865,7 +1887,7 @@ def _nb_claim_owned(
     so it is the stable anchor.
     """
     anchor = _nb_nearest_span(start, end, slug_spans.get(slug, [])) or (start, end)
-    return _nb_claim_in_scope(anchor[0], anchor[1], this_id_spans, sibling_id_spans)
+    return _nb_claim_ownership(anchor[0], anchor[1], this_id_spans, sibling_id_spans)
 
 
 def _nb_hex_matches(token: str, candidates: Iterable[str]) -> bool:
@@ -2005,6 +2027,7 @@ def verify_notebook_relay(
     relay_text: str,
     *,
     other_audit_ids: Iterable[str] = (),
+    ambiguous_out: set[tuple[int, int]] | None = None,
 ) -> VerifyRelayResult:
     """Audit *relay_text*'s claims about notebook audit *audit_id* (T11).
 
@@ -2039,10 +2062,19 @@ def verify_notebook_relay(
     *other_audit_ids* names the OTHER audits the same relay mentions (the Stop hook
     passes the siblings). A status/sha claim sitting NEARER a sibling audit's id
     than *audit_id*'s own mention belongs to that sibling and is skipped here — the
-    run-14 cross-scope guard (:func:`_nb_claim_in_scope`): two audits whose sections
+    run-14 cross-scope guard (:func:`_nb_claim_ownership`): two audits whose sections
     share slug names (``causal_tune_linear`` / ``causal_tune_tree``) must each have
     its shas checked against ITS OWN journal, never a sibling's. Empty by default,
     so a single-audit relay is unchanged.
+
+    A claim EQUIDISTANT between this audit's id and a sibling's (an ambiguous tie)
+    is provably owned by NEITHER, so it yields NO correction under any scope — the
+    run-14 finding-5 ruling (a false correction is worse than silence). When
+    *ambiguous_out* is provided, each such skipped claim's ``(start, end)`` span is
+    recorded into it; the Stop hook passes ONE shared set across every per-audit
+    call so the same tied span (seen once per scope) DEDUPES to a single entry, and
+    discloses the count to the human (the no-silent-caps rule) rather than dropping
+    it silently.
     """
     from hpc_agent.state import notebook_audit as nb
     from hpc_agent.state.decision_journal import read_decisions
@@ -2090,10 +2122,18 @@ def verify_notebook_relay(
         slug = _nb_nearest_slug(m.start(), m.end(), slug_spans)
         if slug is None:
             continue  # not attributable to a section — module-level / noise
-        if not _nb_claim_owned(
+        ownership = _nb_claim_ownership_for(
             slug, m.start(), m.end(), slug_spans, this_id_spans, sibling_id_spans
-        ):
-            continue  # a sibling audit's section (run-14 cross-scope guard)
+        )
+        if ownership == _NB_SIBLING:
+            continue  # a sibling audit's section — checked under the sibling's scope
+        if ownership == _NB_AMBIGUOUS:
+            # Provably owned by NEITHER live audit (equidistant): no scope corrects
+            # it (run-14 finding 5 — a false correction is worse than silence).
+            # Counted (span-deduped across scopes) so the hook can DISCLOSE the skip.
+            if ambiguous_out is not None:
+                ambiguous_out.add((m.start(), m.end()))
+            continue
         claims_checked += 1
         if parsed is None:
             mismatches.append(
@@ -2155,10 +2195,18 @@ def verify_notebook_relay(
         slug = _nb_attribute_slug(relay, m.start(), m.end(), slug_spans)
         if slug is None:
             continue  # a hex bound to no section — block-level / module_sha (skip, run-14)
-        if not _nb_claim_owned(
+        ownership = _nb_claim_ownership_for(
             slug, m.start(), m.end(), slug_spans, this_id_spans, sibling_id_spans
-        ):
-            continue  # a sibling audit's sha (run-14 cross-scope guard)
+        )
+        if ownership == _NB_SIBLING:
+            continue  # a sibling audit's sha — checked under the sibling's scope
+        if ownership == _NB_AMBIGUOUS:
+            # Provably owned by NEITHER live audit (equidistant): no scope corrects
+            # it (run-14 finding 5 — a false correction is worse than silence).
+            # Counted (span-deduped across scopes) so the hook can DISCLOSE the skip.
+            if ambiguous_out is not None:
+                ambiguous_out.add((m.start(), m.end()))
+            continue
         claims_checked += 1
         if parsed is None:
             mismatches.append(

@@ -1283,6 +1283,47 @@ def test_completer_rate_bounds_flood_with_suppressed_tail(
     assert "7 more correction(s) suppressed" in msg
 
 
+# ─── run-14 finding 5: cross-scope ambiguous-skip is counted-and-disclosed ─────
+
+
+def test_rejector_discloses_ambiguous_scope_skip_alongside_a_finding() -> None:
+    """A scope-ambiguous skip (a claim owned by no single audit) is DISCLOSED on the
+    block the rejector already emits for a real finding — never silently dropped."""
+    from hpc_agent._kernel.hooks.relay_audit_stop._output import _rejector_output
+    from hpc_agent._kernel.hooks.relay_audit_stop._shared import _Violation
+
+    v = _Violation(
+        scope_kind="run",
+        scope_id="pi-run",
+        claim="70010",
+        journal_value=None,
+        text="[pi-run] '70010': numeric claim unsupported",
+        kind="number",
+    )
+    out = _rejector_output([v], [], 2)
+    assert out is not None and out["decision"] == "block"
+    assert "2 audit claim(s) skipped: ambiguous scope" in out["reason"]
+    assert "70010" in out["reason"]  # the real finding still surfaces
+
+
+def test_rejector_never_manufactures_a_block_solely_to_disclose_ambiguous() -> None:
+    """A clean relay whose ONLY event is a scope-ambiguous skip must NOT be blocked:
+    blocking to inform is a worse disruption than the silence it would replace."""
+    from hpc_agent._kernel.hooks.relay_audit_stop._output import _rejector_output
+
+    assert _rejector_output([], [], 3) is None
+
+
+def test_completer_discloses_ambiguous_scope_skip_even_when_alone(tmp_path: Path) -> None:
+    """Completer mode: the ``systemMessage`` is non-blocking, so a scope-ambiguous
+    skip is disclosed UNCONDITIONALLY (count-and-disclose), never a bounce."""
+    from hpc_agent._kernel.hooks.relay_audit_stop._output import _completer_output
+
+    out = _completer_output(tmp_path, False, True, [], [], 2)
+    assert out is not None and "decision" not in out
+    assert "2 audit claim(s) skipped: ambiguous scope" in out["systemMessage"]
+
+
 # ─── finding 8e: quoting the gate's own rendered brief line must not fire ─────
 
 

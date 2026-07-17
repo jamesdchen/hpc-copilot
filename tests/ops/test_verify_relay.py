@@ -1458,6 +1458,91 @@ def test_notebook_genuinely_wrong_claim_about_this_audit_still_flagged(tmp_path:
     assert num[0].claim == wrong
 
 
+# ── run-14 finding 5: an AMBIGUOUS (equidistant) claim is corrected by NO scope ─
+#
+# 5bf7a17a bound a claim to the audit mentioned NEAREST it, but left a tie in
+# scope for BOTH audits ("a genuinely-wrong claim is still caught"). The docket
+# verdict is the OPPOSITE priority: a claim provably owned by neither (equidistant)
+# must yield NO correction — a false correction shown to the human is worse than
+# silence — and the skip is counted-and-disclosed, never silent. These pin the
+# equidistant tie both ways: no correction under either scope, counted exactly once.
+
+
+def _tie_relay(b_sha: str) -> str:
+    """A relay where the shared slug sits EXACTLY equidistant between the two audit
+    ids (an ambiguous ownership tie), carrying B's ``data-selection`` sha.
+
+    Constructed by searching the left padding that equalises the slug anchor's
+    distance to each audit-id mention; asserts a genuine tie was built so the test
+    can never silently degrade into a non-tie (which the nearest-id guard resolves).
+    """
+    from hpc_agent.ops.decision.journal.verify_relay import _nb_id_spans, _nb_span_distance
+
+    for pad in range(1, 400):
+        relay = (
+            f"{_AUDIT_A}" + (" " * pad) + "data-selection section_sha " + b_sha + f" {_AUDIT_B}.\n"
+        )
+        i = relay.find("data-selection")
+        span = (i, i + len("data-selection"))
+        if _nb_span_distance(*span, _nb_id_spans(relay, _AUDIT_A)) == _nb_span_distance(
+            *span, _nb_id_spans(relay, _AUDIT_B)
+        ):
+            return relay
+    raise AssertionError("could not construct an equidistant tie relay")
+
+
+def test_notebook_ambiguous_tie_yields_no_correction_under_either_scope(tmp_path: Path) -> None:
+    """B's sha, EQUIDISTANT between the two audit ids, is owned by NEITHER — so it
+    draws no correction under A's scope (the pre-ruling false correction) NOR B's."""
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
+
+    _a_sha, b_sha = _seed_two_audits(tmp_path)
+    relay = _tie_relay(b_sha)
+
+    out_a = verify_notebook_relay(tmp_path, _AUDIT_A, relay, other_audit_ids=[_AUDIT_B])
+    out_b = verify_notebook_relay(tmp_path, _AUDIT_B, relay, other_audit_ids=[_AUDIT_A])
+    assert out_a.clean is True, [m.detail for m in out_a.mismatches]
+    assert out_b.clean is True, [m.detail for m in out_b.mismatches]
+
+
+def test_notebook_ambiguous_tie_counted_once_across_scopes(tmp_path: Path) -> None:
+    """The ONE tied claim, skipped once per scope, dedupes to a single recorded span
+    in the shared ``ambiguous_out`` — the count the hook discloses (no-silent-caps)."""
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
+
+    _a_sha, b_sha = _seed_two_audits(tmp_path)
+    relay = _tie_relay(b_sha)
+
+    ambiguous: set[tuple[int, int]] = set()
+    verify_notebook_relay(
+        tmp_path, _AUDIT_A, relay, other_audit_ids=[_AUDIT_B], ambiguous_out=ambiguous
+    )
+    verify_notebook_relay(
+        tmp_path, _AUDIT_B, relay, other_audit_ids=[_AUDIT_A], ambiguous_out=ambiguous
+    )
+    assert len(ambiguous) == 1
+
+
+def test_notebook_owned_wrong_claim_flagged_and_not_recorded_ambiguous(tmp_path: Path) -> None:
+    """The ambiguity guard is not over-broad: A's OWN wrong sha (strictly nearer A's
+    id, not a tie) still fires AND is never recorded in ``ambiguous_out``."""
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
+
+    _seed_two_audits(tmp_path)
+    wrong = "cafe" * 16  # 64 hex, not A's sha
+    relay = (
+        f"Audit {_AUDIT_A}: data-selection is signed_current (section_sha {wrong}).\n"
+        f"Audit {_AUDIT_B}: nothing to say.\n"
+    )
+    ambiguous: set[tuple[int, int]] = set()
+    out = verify_notebook_relay(
+        tmp_path, _AUDIT_A, relay, other_audit_ids=[_AUDIT_B], ambiguous_out=ambiguous
+    )
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1 and num[0].claim == wrong
+    assert ambiguous == set()
+
+
 # ── supersession links are authoritative identifiers ──────────────────────────
 
 
