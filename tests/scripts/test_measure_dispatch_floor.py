@@ -168,11 +168,36 @@ def test_collect_samples_interleaves_and_counts(tmp_path):
 
     raw = mdf.collect_samples(cfg, surface_runner=fake_surface, warm_runner=fake_warm)
     for key in mdf.SUBPROCESS_KEYS:
-        assert len(raw[key]) == 4
+        if key == "full_walk":
+            # Advisory surface: capped at the default --full-runs (3), not --runs.
+            assert len(raw[key]) == 3
+        else:
+            assert len(raw[key]) == 4
     assert len(raw["warm"]) == 4
-    # Interleave: the first surface of round 0 and round 1 differ (rotation).
-    n = len(mdf.SUBPROCESS_KEYS)
-    assert seen_order[0] != seen_order[n]
+    # Interleave: the first surface of round 0 differs from the first of the
+    # next round (rotation); full_walk's cap drops samples, not the rotation.
+    assert seen_order[0] != seen_order[len(mdf.SUBPROCESS_KEYS)]
+
+
+def test_collect_samples_full_runs_cap(tmp_path):
+    """--full-runs caps only full_walk; a cap above --runs is a no-op."""
+    calls: dict[str, int] = {}
+
+    def fake_surface(key, _cfg):
+        calls[key] = calls.get(key, 0) + 1
+        return 0.001
+
+    ns = mdf.parse_args(["--runs", "5", "--full-runs", "2"])
+    cfg = mdf.build_config(ns)
+    raw = mdf.collect_samples(cfg, surface_runner=fake_surface, warm_runner=lambda _a: 0.002)
+    assert len(raw["full_walk"]) == 2
+    assert calls["full_walk"] == 2  # capped calls, not discarded samples
+    assert all(len(raw[k]) == 5 for k in mdf.SUBPROCESS_KEYS if k != "full_walk")
+
+    ns = mdf.parse_args(["--runs", "2", "--full-runs", "9"])
+    cfg = mdf.build_config(ns)
+    raw = mdf.collect_samples(cfg, surface_runner=fake_surface, warm_runner=lambda _a: 0.002)
+    assert len(raw["full_walk"]) == 2  # effective max is --runs
 
 
 # ── slow smoke: real spawns of the two cheapest surfaces ─────────────────────

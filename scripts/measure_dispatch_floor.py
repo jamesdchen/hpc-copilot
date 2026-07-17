@@ -21,7 +21,10 @@ Surfaces measured (each ``--runs`` samples, median + min + all samples):
 * ``fast_path`` — a fast-path verb cold in a fresh subprocess (default
   ``describe find``; override with ``--fast-verb``).
 * ``full_walk`` — a full-registry-walk verb cold (default ``capabilities``;
-  override with ``--full-verb``).
+  override with ``--full-verb``). ADVISORY reference only (it gates nothing —
+  the sec-2a gate reads ``fast_path`` + ``warm``), and at ~8-9s per cold sample
+  it dominates the harness wall-clock, so it samples ``--full-runs`` times
+  (default 3) instead of ``--runs``.
 * ``hook``      — a Stop-hook-shaped invocation: ``python -m
   hpc_agent._kernel.hooks.stop_multiplex`` with a minimal Stop payload on stdin.
   Measured in DRY mode (payload ``cwd`` has no ``.hpc`` and ``HPC_JOURNAL_DIR``
@@ -101,6 +104,7 @@ class Config:
     """Resolved run parameters."""
 
     runs: int
+    full_runs: int
     fast_verb: list[str]
     full_verb: list[str]
     out_path: Path
@@ -211,7 +215,10 @@ def collect_samples(
     Subprocess surfaces are interleaved: each round rotates the surface order so
     no single surface consistently pays (or dodges) the coldest filesystem
     state. The warm surface runs one discarded warm-up, then ``cfg.runs`` timed
-    in-process calls.
+    in-process calls. ``full_walk`` stops sampling after ``cfg.full_runs`` — it
+    is the advisory heavy-rung reference, not a gate number, and its ~8-9s cold
+    samples would otherwise dominate the harness wall-clock (11 runs of it alone
+    exceed a 2-minute shell timeout).
     """
     results: dict[str, list[float]] = {k: [] for k in SUBPROCESS_KEYS}
     order = list(SUBPROCESS_KEYS)
@@ -220,6 +227,8 @@ def collect_samples(
         shift = i % n
         rotated = order[shift:] + order[:shift]
         for key in rotated:
+            if key == "full_walk" and len(results[key]) >= cfg.full_runs:
+                continue
             results[key].append(surface_runner(key, cfg))
 
     # Warm reference: one discarded warm-up call, then timed samples.
@@ -435,7 +444,10 @@ def render_table(report: dict[str, Any]) -> str:
         f"  git HEAD  : {git['head']}  dirty={git['dirty']} ({git['dirty_line_count']} lines)"
     )
     lines.append(f"  boot_state: {report['boot_state']}")
-    lines.append(f"  runs/surf : {report['runs_per_surface']}")
+    lines.append(
+        f"  runs/surf : {report['runs_per_surface']}"
+        f"  (full_walk advisory: n={report['surfaces']['full_walk']['n']})"
+    )
     if git.get("dirty"):
         lines.append("")
         lines.append(
@@ -502,6 +514,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--runs", type=int, default=7, help="samples per surface (default 7)")
     p.add_argument(
+        "--full-runs",
+        type=int,
+        default=3,
+        help=(
+            "samples for the ADVISORY full_walk surface only (default 3; "
+            "effective max is --runs). It is ~8-9s per cold sample and gates "
+            "nothing, so it gets fewer samples than the gate surfaces."
+        ),
+    )
+    p.add_argument(
         "--fast-verb",
         nargs="+",
         default=["describe", "find"],
@@ -537,6 +559,7 @@ def build_config(ns: argparse.Namespace) -> Config:
         out_path = Path(tempfile.gettempdir()) / f"dispatch_floor_{stamp}.json"
     return Config(
         runs=max(1, int(ns.runs)),
+        full_runs=max(1, int(ns.full_runs)),
         fast_verb=list(ns.fast_verb),
         full_verb=list(ns.full_verb),
         out_path=out_path,
