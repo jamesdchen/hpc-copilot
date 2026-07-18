@@ -498,3 +498,19 @@ proving-run flag, never a production default.**
     **The flip remains the maintainer's call**; the honest caveat is the
     fault-injection construction of (2) — mitigated by the hermetic drill
     corpus + the live adoption path being fully real.
+- 2026-07-18 (addendum): **apex S4 harvest — pull fix validated, aggregate
+  honestly blocked; two product findings.** The win32 fallback-pull
+  command-line-too-long defect (found by the apex harvest) was fixed same-day
+  (stdin `-T -` streamed list, worktree B4) and VALIDATED live: the apex pull
+  completed through the fixed path. The aggregate then refused twice on
+  cross-run contamination — the shared demo `results/` tree interleaves all
+  drill runs, and the puller lists the results ROOT rather than the run's own
+  `results/{run_id}/` subtree, re-importing foreign rows on every attempt
+  (local cleanup cannot converge). FINDINGS: (1) pull scoping under shared
+  results trees — the template is run-scoped, the pull is not (docket, fix
+  with B-wave); (2) the aggregate integrity gate correctly refused foreign
+  rows BOTH times — refusal machinery live-proven. The apex harvest row was
+  bonus rigor beyond the §5 bar; §2.3's load-bearing pair stands unchanged.
+  Breaker/storm remediations built same-day in worktrees: B1/B3 graduated
+  cooldown + demand probe + self-storm attribution, B2 cross-process
+  establishment pacing, B4 streamed pull — all pending verify + 0.11.3.
