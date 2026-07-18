@@ -52,6 +52,22 @@ class DoctorSpec(BaseModel):
             "durable spec so an asleep human's chain self-heals then alerts."
         ),
     )
+    fleet: bool = Field(
+        default=False,
+        description=(
+            "Opt-in fleet mode: scan for stalled drivers across EVERY journaled "
+            "experiment on this machine (the non-creating repo.json glob), not "
+            "just --experiment-dir's own repo_hash namespace. The §5 stalled scan "
+            "is per-repo namespaced, so a driver stalled under repo A is invisible "
+            "to a doctor scoped to repo B — and the OS-scheduled watchdog "
+            "hard-codes its --experiment-dir at install, covering only that one "
+            "dir. When True the stalled scan is the fleet union and each proposal "
+            "names its experiment_dir so the human knows WHERE. Default False keeps "
+            "the single-namespace scan byte-identical; the OS-scheduled installer "
+            "bakes fleet=true into its durable spec so the one unattended watchdog "
+            "covers every journaled repo, never just the one it was installed for."
+        ),
+    )
 
 
 class StalledRunProposal(BaseModel):

@@ -48,7 +48,52 @@ from hpc_agent.state.index import find_parked_runs, find_stalled_runs
 from hpc_agent.state.journal import read_pending_decision
 from hpc_agent.state.run_record import current_homedir
 
-__all__ = ["doctor", "scan_dead_detached_workers"]
+__all__ = ["doctor", "find_stalled_runs_fleet", "scan_dead_detached_workers"]
+
+
+def find_stalled_runs_fleet(now_iso: str) -> list[dict[str, Any]]:
+    """Union of the §5 stalled-driver scan across EVERY journaled experiment.
+
+    :func:`hpc_agent.state.index.find_stalled_runs` reads exactly ONE
+    experiment's per-``repo_hash`` journal namespace, so a driver stalled under
+    repo A is invisible to a doctor scoped to repo B — and the OS-scheduled
+    watchdog (``doctor-install`` hard-codes ``--experiment-dir`` at install)
+    covers only the single dir it was installed for. This helper closes that
+    cross-repo blind spot: it iterates
+    :func:`hpc_agent.ops.attention_queue.discover_fleet_experiments` (the ONE
+    non-creating ``*/repo.json`` glob — reused, never re-implemented here) and
+    UNIONS each experiment's own ``find_stalled_runs(now_iso, exp_dir)``,
+    stamping every hit with its ``experiment_dir`` so a downstream proposal can
+    name WHERE.
+
+    Lives in ``ops/recover`` — NOT ``state/index`` — because the union needs
+    ``discover_fleet_experiments`` and ``state`` must not import ``ops`` (the
+    ``_STATE_TO_OPS`` layering rule); ``doctor`` already sits above both layers.
+
+    Non-creating + fail-open PER namespace: ``discover_fleet_experiments`` never
+    scaffolds a namespace on read (attention-queue watermark-neutrality — a
+    fleet read persists no projection), and a namespace whose per-repo scan
+    raises (torn / unreadable) is skipped so one broken repo can never blind the
+    whole fleet scan. Parked-vs-stalled stays the ONE definition — each hit
+    routes through ``find_stalled_runs``, which already excludes runs parked on a
+    human decision. *now_iso* must be ISO-8601 UTC (fail loud, mirroring
+    ``find_stalled_runs``); a malformed value raises :class:`ValueError`.
+    """
+    from hpc_agent.ops.attention_queue import discover_fleet_experiments
+
+    if parse_iso_utc_or_none(now_iso) is None:
+        raise ValueError(f"find_stalled_runs_fleet: now_iso {now_iso!r} is not ISO-8601")
+
+    experiments, _skipped = discover_fleet_experiments()
+    stalled: list[dict[str, Any]] = []
+    for exp_dir in experiments:
+        try:
+            hits = find_stalled_runs(now_iso, experiment_dir=exp_dir)
+        except Exception:  # noqa: BLE001 — a torn namespace must never blind the fleet scan
+            continue
+        for hit in hits:
+            stalled.append({**hit, "experiment_dir": str(exp_dir)})
+    return stalled
 
 
 def _overdue_seconds(next_tick_due: str | None, now: str) -> int | None:
@@ -66,6 +111,12 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
     next_tick_due = stalled.get("next_tick_due")
     overdue = _overdue_seconds(next_tick_due, now)
     since = last_tick_at or "an unknown time"
+    # Fleet mode (find_stalled_runs_fleet) stamps each hit with the experiment_dir
+    # its namespace belongs to so the human knows WHERE across sibling repos. A
+    # single-namespace (non-fleet) hit carries no such key, so `where` is empty
+    # and both the proposal text and evidence stay byte-identical to today.
+    exp_dir = stalled.get("experiment_dir")
+    where = f" [{exp_dir}]" if exp_dir else ""
     if stalled.get("status") == "submitting":
         # A submit that died in its dispatch→job-id window (submit-once §3.3):
         # the durable evidence is a submitting-with-no-job-ids orphan. The safe
@@ -73,7 +124,7 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
         # array if it landed, else safe re-submit) — NEVER a blind re-arm/re-run
         # of the submit, which risks the duplicate array the contract prevents.
         proposal = (
-            f"submit stalled since {since}, status submitting: the dispatch window "
+            f"submit stalled since {since}, status submitting{where}: the dispatch window "
             f"lapsed (next tick was due {next_tick_due}, now {now}) with no job id "
             "recorded. Reconcile to recover — re-derive from the cluster whether the "
             "array landed (adopt it) or never dispatched (safe to re-submit); do NOT "
@@ -81,10 +132,18 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
         )
     else:
         proposal = (
-            f"driver stalled since {since}, status {stalled.get('status')}: next tick was due "
-            f"{next_tick_due} but has not fired (now {now}). Re-arm the driver? "
-            f"Re-running is safe — tick idempotency loses nothing."
+            f"driver stalled since {since}, status {stalled.get('status')}{where}: "
+            f"next tick was due {next_tick_due} but has not fired (now {now}). "
+            f"Re-arm the driver? Re-running is safe — tick idempotency loses nothing."
         )
+    evidence: dict[str, Any] = {
+        "last_tick_at": last_tick_at,
+        "next_tick_due": next_tick_due,
+        "now": now,
+        "overdue_seconds": overdue,
+    }
+    if exp_dir:
+        evidence["experiment_dir"] = exp_dir
     return StalledRunProposal(
         run_id=stalled["run_id"],
         status=stalled.get("status", "in_flight"),
@@ -93,12 +152,7 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
         cluster=stalled.get("cluster"),
         ssh_target=stalled.get("ssh_target"),
         proposal=proposal,
-        evidence={
-            "last_tick_at": last_tick_at,
-            "next_tick_due": next_tick_due,
-            "now": now,
-            "overdue_seconds": overdue,
-        },
+        evidence=evidence,
     )
 
 
@@ -525,7 +579,17 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     if parse_iso_utc_or_none(now) is None:
         raise errors.SpecInvalid(f"doctor: now override {spec.now!r} is not ISO-8601 UTC")
 
-    stalled = find_stalled_runs(now, experiment_dir=experiment_dir)
+    # Fleet mode (spec.fleet, baked into the OS-scheduled durable spec): the
+    # stalled scan is the union across EVERY journaled experiment, closing the
+    # cross-repo blind spot where a driver stalled under a sibling repo is
+    # invisible to a doctor scoped to --experiment-dir. The union stamps each hit
+    # with its experiment_dir so the drafted proposal names WHERE; the
+    # single-namespace scan (default) is byte-identical to today. Parked/dead-
+    # worker/version-skew scans below stay scoped to --experiment-dir.
+    if spec.fleet:
+        stalled = find_stalled_runs_fleet(now)
+    else:
+        stalled = find_stalled_runs(now, experiment_dir=experiment_dir)
     proposals = [_draft_proposal(hit, now=now) for hit in stalled]
 
     # Parked ≠ stalled (§5): runs awaiting a human decision are surfaced as a

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/alerts_ack.input.json",
+  "title": "alerts-ack input spec",
+  "description": "Input spec for the ``alerts-ack`` verb.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "up_to_ts": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Acknowledge every alert at or before this ISO-8601 UTC instant. When omitted, acknowledges up to the newest alert currently in the log (or 'now' if the log is empty/unreadable) — the common 'dismiss what I've seen' case. Monotonic: a watermark already past this instant is left alone, so a stale call never resurrects acknowledged alerts.",
+      "title": "Up To Ts"
+    }
+  }
+}

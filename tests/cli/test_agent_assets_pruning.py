@@ -16,6 +16,7 @@ from pathlib import Path
 
 from hpc_agent.agent_assets import (
     _ASSET_MANIFEST_NAME,
+    _LEGACY_OWNED,
     _prune_stale_assets,
     _write_asset_manifest,
     install_agent_assets,
@@ -66,7 +67,12 @@ def test_prune_is_a_noop_without_a_prior_manifest(tmp_path: Path) -> None:
         current={"commands": set(), "skills": {"hpc-submit"}, "agents": set()},
         dry_run=False,
     )
-    assert pruned == {"commands": [], "skills": [], "agents": []}
+    assert pruned == {
+        "commands": [],
+        "skills": [],
+        "agents": [],
+        "legacy_name_skipped": [],
+    }
 
 
 def test_prune_dry_run_reports_without_deleting(tmp_path: Path) -> None:
@@ -112,6 +118,129 @@ def test_install_prunes_stale_skill_and_drops_its_grant(tmp_path: Path) -> None:
     manifest = json.loads((tmp_path / _ASSET_MANIFEST_NAME).read_text(encoding="utf-8"))
     assert "ghost-skill" not in manifest["skills"]
     assert "hpc-submit" in manifest["skills"]
+
+
+def test_prune_sweeps_legacy_pre_manifest_orphan(tmp_path: Path) -> None:
+    """FIRE PATH: a _LEGACY_OWNED orphan is swept even with NO prior manifest.
+
+    The preflight → hpc-preflight incident: a ``commands/preflight.md`` orphan
+    (and the retired ``hpc-preflight`` skill) that no manifest ever owned is
+    still pruned, because the curated legacy set reaches names the manifest
+    subtraction cannot.
+    """
+    assert "preflight" in _LEGACY_OWNED["commands"]
+    assert "hpc-preflight" in _LEGACY_OWNED["skills"]
+    # Both orphans carry an hpc-agent authorship marker (the retired assets are
+    # known content — they drive hpc-agent machinery, so they name it), so the
+    # legacy sweep's authorship gate lets them through.
+    orphan = tmp_path / "commands" / "preflight.md"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_text("Invoke the `hpc-preflight` skill", encoding="utf-8")
+    dead_skill = tmp_path / "skills" / "hpc-preflight"
+    dead_skill.mkdir(parents=True)
+    (dead_skill / "SKILL.md").write_text("Retired hpc-agent preflight skill.", encoding="utf-8")
+
+    pruned = _prune_stale_assets(
+        tmp_path,
+        current={"commands": {"submit-hpc"}, "skills": {"hpc-submit"}, "agents": set()},
+        dry_run=False,
+    )
+
+    assert "preflight" in pruned["commands"]
+    assert "hpc-preflight" in pruned["skills"]
+    assert not orphan.exists()
+    assert not dead_skill.exists()
+
+
+def test_prune_spares_legacy_name_owned_by_current_tree(tmp_path: Path) -> None:
+    """A legacy-owned name the CURRENT install re-ships is never swept.
+
+    ``sync`` is in ``_LEGACY_OWNED["commands"]``; if a future tree ships a
+    command by that name, the current-ownership guard spares the on-disk file.
+    """
+    assert "sync" in _LEGACY_OWNED["commands"]
+    keep = tmp_path / "commands" / "sync.md"
+    keep.parent.mkdir(parents=True)
+    keep.write_text("current install owns this", encoding="utf-8")
+
+    pruned = _prune_stale_assets(
+        tmp_path,
+        current={"commands": {"sync"}, "skills": set(), "agents": set()},
+        dry_run=False,
+    )
+
+    assert "sync" not in pruned["commands"]
+    assert keep.exists()  # current-owned name is never touched
+
+
+def test_legacy_sweep_prunes_hpc_authored_orphan(tmp_path: Path) -> None:
+    """AUTHORSHIP GATE (a): a legacy-owned name whose on-disk content carries the
+    hpc-agent authorship marker IS an hpc-agent orphan → pruned, no collision."""
+    assert "sync" in _LEGACY_OWNED["commands"]
+    authored = tmp_path / "commands" / "sync.md"
+    authored.parent.mkdir(parents=True)
+    authored.write_text("Run `hpc-agent sync` to reconcile the current repo.", encoding="utf-8")
+
+    pruned = _prune_stale_assets(
+        tmp_path,
+        current={"commands": set(), "skills": set(), "agents": set()},
+        dry_run=False,
+    )
+
+    assert "sync" in pruned["commands"]  # authored orphan is pruned
+    assert not authored.exists()
+    assert pruned["legacy_name_skipped"] == []  # no user collision
+
+
+def test_legacy_sweep_spares_user_authored_same_named_file(tmp_path: Path) -> None:
+    """AUTHORSHIP GATE (b): a user's OWN hand-authored file at a legacy-owned name
+    (no hpc-agent marker) is NEVER deleted — it is kept and reported in
+    ``legacy_name_skipped`` so the human learns of the collision. The sync.md
+    incident: a name match alone must not destroy a user's file."""
+    assert "sync" in _LEGACY_OWNED["commands"]
+    mine = tmp_path / "commands" / "sync.md"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("# My personal sync notes\nrsync -av ./src/ ./backup/\n", encoding="utf-8")
+
+    pruned = _prune_stale_assets(
+        tmp_path,
+        current={"commands": set(), "skills": set(), "agents": set()},
+        dry_run=False,
+    )
+
+    assert "sync" not in pruned["commands"]  # NOT pruned
+    assert mine.exists()  # the user's file survives intact
+    assert "commands/sync" in pruned["legacy_name_skipped"]  # collision reported
+
+
+def test_legacy_sweep_fails_open_on_unreadable_asset(tmp_path: Path) -> None:
+    """A legacy-owned skill DIR whose ``SKILL.md`` cannot be read is left in place
+    (fail-open): an asset we cannot read is never assumed hpc-authored, so it is
+    neither deleted nor reported as a user collision."""
+    assert "hpc-preflight" in _LEGACY_OWNED["skills"]
+    dead = tmp_path / "skills" / "hpc-preflight"
+    dead.mkdir(parents=True)  # no SKILL.md → unreadable content
+
+    pruned = _prune_stale_assets(
+        tmp_path,
+        current={"commands": set(), "skills": set(), "agents": set()},
+        dry_run=False,
+    )
+
+    assert "hpc-preflight" not in pruned["skills"]  # not deleted
+    assert dead.exists()  # fail-open kept it
+    assert pruned["legacy_name_skipped"] == []  # unreadable ≠ user collision
+
+
+def test_is_hpc_authored_marker_discrimination(tmp_path: Path) -> None:
+    """The sentinel anchors on the hyphenated ``hpc-agent`` token (+ the generated
+    skill idioms); a generic user file that merely says "sync" does not trip it."""
+    from hpc_agent.agent_assets import _is_hpc_authored
+
+    assert _is_hpc_authored("Run `hpc-agent sync` from the repo root.")
+    assert _is_hpc_authored("Invoke the `hpc-preflight` skill via the Skill tool.")
+    assert not _is_hpc_authored("# my sync command\ngit pull && git push\n")
+    assert not _is_hpc_authored("Preflight checklist before a flight: fuel, flaps, trim.")
 
 
 def test_write_manifest_stamps_owned_names(tmp_path: Path) -> None:

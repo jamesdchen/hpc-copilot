@@ -198,7 +198,9 @@ def test_durable_spec_carries_notify_true(tmp_path: Path, monkeypatch: pytest.Mo
     r = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
     assert r.notify is True
     spec_on_disk = json.loads(Path(r.spec_path).read_text(encoding="utf-8"))
-    assert spec_on_disk == {"notify": True}
+    # fleet=true is baked in so the one unattended watchdog covers every journaled
+    # repo, not just the --experiment-dir it was installed for (cross-repo blind spot).
+    assert spec_on_disk == {"notify": True, "fleet": True}
     # The scheduled command reads that durable spec non-interactively.
     assert r.spec_path in r.command
 

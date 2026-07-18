@@ -30,6 +30,12 @@
       "description": "Opt-in overnight self-heal (item 8 ruling, 2026-07-09): when True, for every campaign under a LIVE standing consent whose reconcile self-chain reads DEAD from local state, respawn the sanctioned detached WATCHER (status-watch) up to the consent's heal cap, then flip the consent dead and fail loud on exhaustion. Reads only local state — never opens SSH — and re-arms the watcher only, never the scheduler. Default False keeps the plain detection-only verb unchanged; the OS-scheduled installer bakes self_heal=true into its durable spec so an asleep human's chain self-heals then alerts.",
       "title": "Self Heal",
       "type": "boolean"
+    },
+    "fleet": {
+      "default": false,
+      "description": "Opt-in fleet mode: scan for stalled drivers across EVERY journaled experiment on this machine (the non-creating repo.json glob), not just --experiment-dir's own repo_hash namespace. The §5 stalled scan is per-repo namespaced, so a driver stalled under repo A is invisible to a doctor scoped to repo B — and the OS-scheduled watchdog hard-codes its --experiment-dir at install, covering only that one dir. When True the stalled scan is the fleet union and each proposal names its experiment_dir so the human knows WHERE. Default False keeps the single-namespace scan byte-identical; the OS-scheduled installer bakes fleet=true into its durable spec so the one unattended watchdog covers every journaled repo, never just the one it was installed for.",
+      "title": "Fleet",
+      "type": "boolean"
     }
   }
 }

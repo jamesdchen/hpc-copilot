@@ -1,6 +1,20 @@
 [
   {
     "agent_facing": true,
+    "cli": "hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "alerts_ack.input.json",
+    "name": "alerts-ack",
+    "output_schema": "alerts_ack.output.json",
+    "python": "hpc_agent.ops.recover.alerts_ack.alerts_ack",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Acknowledge the unacknowledged `doctor` watchdog alerts for this experiment dir — advance the doctor.alerts 'seen' watermark to the newest recorded alert (or an --spec up_to_ts) so they stop surfacing as new (proving run #3: detection without delivery is silence). The same watermark a status snapshot advances via --mark-seen, exposed standalone. Monotonic + idempotent: re-running never resurrects an already-acknowledged alert. Notify only — it never truncates the append-only alert log and never touches the cluster.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent append-decision --spec <path> [--experiment-dir <dir>]",
     "idempotent": false,
     "input_schema": "append_decision.input.json",
@@ -241,6 +255,20 @@
       "file_write"
     ],
     "summary": "Journal a CODE draft attestation for one section of an audited source .py — the drafter-attribution seam (multi-human). Records the actor whose SESSION drove the drafting as the section's author, at DRAFT time (the reviewer!=author gate resolves it). Parses the source ON DISK and binds the draft to the freshly-parsed section sha (a draft can only be recorded against current source, and the old draft reads stale the moment the section is redrafted). The actor is resolved SERVER-SIDE from the session env (HPC_ACTOR) and validated against the interview's declared actors.ids — NEVER a wire field (an agent-suppliable actor would let the model choose its identity). Refuses when >1 actor is declared and no session actor resolves (an anonymous act is the laundering channel); records attestor_id=None when zero/one actor is declared. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent notebook-dry-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "notebook_dry_run.input.json",
+    "name": "notebook-dry-run",
+    "output_schema": "notebook_dry_run.output.json",
+    "python": "hpc_agent.ops.notebook.dry_run_op.notebook_dry_run",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "PREVIEW-run an audited (or standalone) percent-format .py over a small slice of data in the CURRENT LOCAL env, to see what it will do before committing to the audit. Executes section-by-section in one namespace, reporting per-section ran/raised (verbatim traceback tail), which declared assert lines actually RAN and their verdict, and — with an audit_id whose config names observables — the declared observables measured in the final namespace. The sample cap is exposed via the HPC_NOTEBOOK_SAMPLE_N env var (advisory; the source must honor it — core never silently truncates inputs). SAMPLE, NOT PROOF: receipts are journaled with execution_scope='sampled', which the clearing path filters out, so a dry-run can never auto-clear an assertion-bearing section (a full run does that). Standalone mode (no audit_id) touches no .hpc state. The result includes markdown — the code-rendered projection relayed VERBATIM; the LLM never interprets the run.",
     "verb": "mutate"
   },
   {
@@ -1741,7 +1769,7 @@
     "output_schema": "notebook_lint.output.json",
     "python": "hpc_agent.ops.notebook.lint.notebook_lint",
     "side_effects": [],
-    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Four read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; a literal under a declared output_root is a WRITE target — reported in declared_outputs, never flagged; computed paths recorded as unverifiable), linked_sources (imports resolving under source_roots reported with their module_sha), and template_import_shadowed (a source section defining or rebinding a name the template imports — the template's imports are the declared engines; a verbatim re-import is clean). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
+    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Four read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; a literal under a declared output_root is a WRITE target — reported in declared_outputs, never flagged; computed paths recorded as unverifiable), linked_sources (imports resolving under source_roots reported with their module_sha), and template_import_shadowed (a source section defining or rebinding a name the template imports — the template's imports are the declared engines; a verbatim re-import is clean), and executor_module_drift (a module imported by both the interview.json executor and the audited source at different module_shas — advisory, fail-open). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
     "verb": "validate"
   },
   {

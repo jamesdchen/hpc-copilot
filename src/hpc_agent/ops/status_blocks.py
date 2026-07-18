@@ -340,6 +340,16 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         is not None
     ]
 
+    # F4a — fleet-terminal completeness: the journal ground truth an
+    # experiment-scope completeness claim ("both fleets drained / all runs
+    # journaled") is audited against. ``has_live`` is the ONE non-terminal
+    # predicate over the digested records (it also gates the watch successor
+    # below); the brief additively surfaces its inverse plus each non-terminal
+    # (run_id, status) pair. Additive only — an all-terminal fleet yields
+    # ``all_terminal=True`` + ``[]`` and every other brief field is byte-unchanged.
+    has_live = any(r.status not in TERMINAL_STATUSES for r in records)
+    non_terminal_runs = [[r.run_id, r.status] for r in records if r.status not in TERMINAL_STATUSES]
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -350,6 +360,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         "open_ssh_circuits": open_ssh_circuits,
         "attention": attention,
         "overnight": overnight,
+        "fleet_terminal": {"all_terminal": not has_live, "non_terminal": non_terminal_runs},
         # Env-vs-record drift disclosure (run-12 finding 24 addendum, B15): echo
         # every exported HPC_* override verbatim on the surface an agent already
         # reads at the top of a session. The seat that let HPC_SSH_ENGINE sit
@@ -376,7 +387,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         )
     # A live (non-terminal) run means watching is the deterministic next step;
     # an all-terminal / empty fleet has no successor block → next_block null.
-    has_live = any(r.status not in TERMINAL_STATUSES for r in records)
+    # ``has_live`` was computed once above (F4a) and reused here.
     return StatusBlockResult(
         block="snapshot",
         stage_reached="snapshot_clean",

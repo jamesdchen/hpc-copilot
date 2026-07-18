@@ -28,6 +28,19 @@ def _journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _write_alert(exp: Path, ts: str = _TS, message: str = _MSG) -> None:
+    """Append one alert in the NEW canonical JSON-record format (dedup writer)."""
+    from hpc_agent.state.run_record import journal_dir
+
+    log = journal_dir(exp) / "doctor.alerts.log"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": ts, "kind": "stall", "message": message}) + "\n")
+
+
+def _write_legacy_alert(exp: Path, ts: str = _TS, message: str = _MSG) -> None:
+    """Append one alert in the LEGACY plaintext ``<ts> <message>`` format.
+
+    Tolerant-reader regression: the hook must still read a pre-flip plaintext log.
+    """
     from hpc_agent.state.run_record import journal_dir
 
     log = journal_dir(exp) / "doctor.alerts.log"
@@ -44,6 +57,15 @@ def test_context_line_carries_count_and_newest_alert(tmp_path: Path) -> None:
     assert line.startswith("2 unacknowledged hpc-agent watchdog alert(s)")
     assert "second stall" in line  # newest alert leads the pointer
     assert "hpc-agent doctor" in line  # names the surface to run
+
+
+def test_context_line_reads_legacy_plaintext_alert(tmp_path: Path) -> None:
+    """Tolerant-reader regression: a pre-flip legacy plaintext alert still counts."""
+    _write_legacy_alert(tmp_path)
+    line = alert_count.build_context_line({"cwd": str(tmp_path)})
+    assert line is not None
+    assert line.startswith("1 unacknowledged hpc-agent watchdog alert(s)")
+    assert _MSG in line
 
 
 def test_silent_when_no_alerts(tmp_path: Path) -> None:

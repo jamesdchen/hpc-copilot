@@ -463,3 +463,46 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
                 if changed:
                     _atomic_write_json(idx_path, idx)
     return len(removed_ids)
+
+
+def discover_journaled_experiments() -> tuple[list[Path], list[dict[str, str]]]:
+    """Every experiment this machine has journaled — via a NON-CREATING glob.
+
+    The ONE definition of fleet discovery (moved from ``ops.attention_queue``
+    so substrate readers — e.g. the Stop-hook completeness witness — can reach
+    it without a ``_kernel``-imports-``ops`` layering inversion; the ops seat
+    delegates here). Globs the journal home for ``*/repo.json`` (never
+    ``journal_dir``, which mkdirs + writes ``repo.json`` — a read must never
+    scaffold a namespace) and recovers each ``experiment_dir``. Returns
+    ``(experiment_dirs, skipped)``: a ``repo.json`` that is unreadable / torn,
+    or whose ``experiment_dir`` no longer exists on disk, is skipped silently
+    and counted (a wiped demo repo must never crash the morning read). A
+    missing journal home yields nothing.
+    """
+    import json
+    from pathlib import Path
+
+    from hpc_agent.state.run_record import current_homedir
+
+    experiments: list[Path] = []
+    skipped: list[dict[str, str]] = []
+    home = current_homedir()
+    if not home.exists():
+        return experiments, skipped
+    for repo_json in sorted(home.glob("*/repo.json")):
+        namespace = repo_json.parent.name
+        try:
+            doc = json.loads(repo_json.read_text(encoding="utf-8"))
+            experiment_dir = doc["experiment_dir"]
+        except (OSError, ValueError, KeyError, TypeError):
+            skipped.append({"ref": namespace, "reason": "unreadable/torn repo.json"})
+            continue
+        if not isinstance(experiment_dir, str) or not experiment_dir:
+            skipped.append({"ref": namespace, "reason": "repo.json has no experiment_dir"})
+            continue
+        path = Path(experiment_dir)
+        if not path.exists():
+            skipped.append({"ref": namespace, "reason": "experiment_dir no longer exists"})
+            continue
+        experiments.append(path)
+    return experiments, skipped

@@ -56,6 +56,12 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "notebook-record-receipt",
         "notebook-scaffold-template",
         "notebook-record-config",
+        # notebook-dry-run — the sampled preview run (drafting prelude);
+        # human-sequenced like the loop, unioned explicitly (2026-07-18).
+        "notebook-dry-run",
+        # alerts-ack — the watchdog-backlog acknowledgment mutate (recovery
+        # class beside doctor; 2026-07-18).
+        "alerts-ack",
         # The audit prelude's non-notebook-prefixed companions (run #11: the
         # skill calls both MCP-first; human-sequenced, no next_block, so
         # unioned explicitly like the loop verbs).

@@ -19,6 +19,7 @@ we always pass an explicit ``log_dir`` and ``remote_repo``.
 from __future__ import annotations
 
 import os
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -266,41 +267,108 @@ class TestAliveAndStateCommands:
     # so a silent/truncated read (no ack) is UNKNOWN rather than "no jobs".
     _ACK = '; echo "__HPC_SCHED_ACK__=$?"'
 
+    @staticmethod
+    def _login_inner(out: str) -> str:
+        """Assert *out* is a ``bash -lc <inner>`` login-shell command; return <inner>.
+
+        Every remote scheduler-query builder wraps its command in a
+        NON-interactive LOGIN shell (``bash -lc``), so the scheduler binary
+        (qstat/squeue/sacct) resolves on ``PATH``: Hoffman2/UGE et al. install it
+        onto PATH only via the login profile chain, and ssh_run's transport uses a
+        non-login ``bash -c`` (the reconcile ``unable_to_verify`` incident,
+        2026-07-17 — a bare ``qstat -u "$USER"`` was rc 127 on hoffman2's non-login
+        shell). This mirrors the SUBMIT leg's idiom EXACTLY
+        (``infra/backends/_remote_base.py::_execute_command`` — ``bash -lc
+        {shlex.quote(inner)}`` with the marker echo INSIDE the login shell); it is
+        ``-lc`` NOT ``-lic`` (interactive init hangs a PTY-less exec channel,
+        proving-run #2). ``shlex.split`` reverses ``shlex.quote``, so the third
+        token is the exact ack-suffixed inner the login shell runs.
+        """
+        parts = shlex.split(out)
+        assert parts[:2] == ["bash", "-lc"], f"not a login-shell command: {out!r}"
+        assert len(parts) == 3, f"expected `bash -lc <inner>`, got {out!r}"
+        return parts[2]
+
     def test_slurm_build_alive_check_cmd(self):
         cls = get_backend_class("slurm")
-        assert (
-            cls.build_alive_check_cmd(["1", "2"])
-            == "squeue -j 1,2 -h -o '%i' 2>/dev/null" + self._ACK
-        )
-        assert cls.build_alive_check_cmd([]) == "true"
+        out = cls.build_alive_check_cmd(["1", "2"])
+        assert out.startswith("bash -lc ")  # login-shell contract (see _login_inner)
+        inner = self._login_inner(out)
+        assert inner == "squeue -j 1,2 -h -o '%i' 2>/dev/null" + self._ACK
+        assert self._ACK in inner  # ack rides INSIDE the quoted login-shell inner
+        assert cls.build_alive_check_cmd([]) == "true"  # empty short-circuit no-op
 
     def test_sge_build_alive_check_cmd(self):
         cls = get_backend_class("sge")
-        assert cls.build_alive_check_cmd(["1", "2"]) == 'qstat -u "$USER" 2>/dev/null' + self._ACK
+        out = cls.build_alive_check_cmd(["1", "2"])
+        assert out.startswith("bash -lc ")
+        inner = self._login_inner(out)
+        assert inner == 'qstat -u "$USER" 2>/dev/null' + self._ACK
+        assert self._ACK in inner
         assert cls.build_alive_check_cmd([]) == "true"
 
     def test_slurm_build_scheduler_state_cmd(self):
         cls = get_backend_class("slurm")
-        assert (
-            cls.build_scheduler_state_cmd(["1"])
-            == "squeue -j 1 -h -o '%i %T' 2>/dev/null" + self._ACK
-        )
+        out = cls.build_scheduler_state_cmd(["1"])
+        assert out.startswith("bash -lc ")
+        inner = self._login_inner(out)
+        assert inner == "squeue -j 1 -h -o '%i %T' 2>/dev/null" + self._ACK
+        assert self._ACK in inner
         assert cls.build_scheduler_state_cmd([]) == "true"
 
     def test_sge_build_scheduler_state_cmd(self):
         cls = get_backend_class("sge")
-        assert cls.build_scheduler_state_cmd(["1"]) == 'qstat -u "$USER" 2>/dev/null' + self._ACK
+        out = cls.build_scheduler_state_cmd(["1"])
+        assert out.startswith("bash -lc ")
+        inner = self._login_inner(out)
+        assert inner == 'qstat -u "$USER" 2>/dev/null' + self._ACK
+        assert self._ACK in inner
         assert cls.build_scheduler_state_cmd([]) == "true"
+
+    def test_every_scheduler_query_builder_is_login_shell_wrapped(self):
+        """The login-shell contract, uniform across families and query builders.
+
+        Every non-empty ``build_alive_check_cmd`` / ``build_scheduler_state_cmd`` /
+        ``build_token_query_cmd`` output is a ``bash -lc <inner>`` command whose
+        <inner> carries the sentinel-ack token — so the scheduler binary resolves
+        on a non-login ssh channel AND the ack rides inside the login shell (a
+        PATH-less login shell that can't run the query still emits no ack, never a
+        spurious rc-0 empty read). Mirrors the submit-leg precedent
+        (``_remote_base.py::_execute_command``)."""
+        for name in ("slurm", "sge", "pbspro", "torque"):
+            cls = get_backend_class(name)
+            outs = [
+                cls.build_alive_check_cmd(["1", "2"]),
+                cls.build_scheduler_state_cmd(["1", "2"]),
+                cls.build_token_query_cmd(),
+            ]
+            for out in outs:
+                assert out.startswith("bash -lc "), f"{name}: not login-wrapped: {out!r}"
+                inner = self._login_inner(out)
+                assert "__HPC_SCHED_ACK__=" in inner, (
+                    f"{name}: ack not inside the login-shell inner: {out!r}"
+                )
 
     def test_slurm_build_cancel_cmd(self):
         cls = get_backend_class("slurm")
-        assert cls.build_cancel_cmd(["1", "2"]) == "scancel 1 2"
-        # Empty ids short-circuit to a no-op — matching the alive/state builders.
+        out = cls.build_cancel_cmd(["1", "2"])
+        # Login-shell wrapped so scancel resolves on PATH (ssh_run's non-login
+        # transport is rc 127 for a bare scancel) — but NO ack: cancel's success
+        # is confirmed by the follow-up alive-check, not its own exit code, so it
+        # is the PLAIN login wrap, not the ack-bearing query wrap.
+        assert out.startswith("bash -lc ")
+        assert self._login_inner(out) == "scancel 1 2"
+        assert self._ACK not in out  # cancel carries no sentinel-ack
+        # Empty ids short-circuit to a bare ``true`` no-op — matching the
+        # alive/state builders — with no login shell.
         assert cls.build_cancel_cmd([]) == "true"
 
     def test_sge_build_cancel_cmd(self):
         cls = get_backend_class("sge")
-        assert cls.build_cancel_cmd(["1", "2"]) == "qdel 1 2"
+        out = cls.build_cancel_cmd(["1", "2"])
+        assert out.startswith("bash -lc ")
+        assert self._login_inner(out) == "qdel 1 2"
+        assert self._ACK not in out
         assert cls.build_cancel_cmd([]) == "true"
 
 

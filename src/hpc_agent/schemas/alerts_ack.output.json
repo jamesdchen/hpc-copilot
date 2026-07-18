@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/alerts_ack.output.json",
+  "title": "alerts-ack output data",
+  "description": "Shape of the ``data`` field on an ``alerts-ack`` envelope.",
+  "type": "object",
+  "required": [
+    "acknowledged_up_to",
+    "acknowledged_count",
+    "remaining"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "acknowledged_up_to": {
+      "description": "The ISO-8601 UTC instant the acknowledgment watermark was advanced to.",
+      "title": "Acknowledged Up To",
+      "type": "string"
+    },
+    "acknowledged_count": {
+      "description": "How many previously-unacknowledged alerts this call cleared from the standing queue (before minus after).",
+      "title": "Acknowledged Count",
+      "type": "integer"
+    },
+    "remaining": {
+      "description": "Unacknowledged alerts still newer than the watermark after this call (non-zero only if new alerts carry a ts past up_to_ts).",
+      "title": "Remaining",
+      "type": "integer"
+    }
+  }
+}

@@ -1542,3 +1542,196 @@ def test_hook_flags_fabricated_number_word(tmp_path: Path) -> None:
     assert nums[0].claim == "fifty"
     assert nums[0].journal_value is None  # 19 is > 10% away — not a citable neighbour
     assert "journal:" not in nums[0].text
+
+
+# ─── experiment-scope completeness claims (the drain-claim incident) ──────────
+#
+# A final message can assert whole-experiment completeness ("both fleets are
+# drained, all runs journaled") while naming NO run id, so the numeric / decision-
+# state passes (which bind a claim to a NAMED scope) can never fire. One run
+# stayed in_flight under exactly that claim. The completeness pass audits the
+# claim against the WHOLE experiment's non-terminal set (state/index.py), so it
+# fires even when the relay names no run — the __init__ early-return keeps the
+# stop alive on a run-id-less violation.
+
+
+def test_completeness_claim_blocks_when_run_still_in_flight(tmp_path: Path) -> None:
+    """The incident shape: 'both fleets drained / all runs journaled' relayed while
+    a run is journaled in_flight → block, the witness run id named in the reason."""
+    _seed_run(tmp_path, status="in_flight")
+    transcript = _transcript(
+        tmp_path, "Both fleets are drained, all runs journaled, monitors retired."
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "completeness claim" in out["reason"]
+    assert "non-terminal" in out["reason"]
+    assert RUN_ID in out["reason"]  # the witness run id, though the relay named none
+
+
+def test_completeness_claim_silent_when_all_runs_terminal(tmp_path: Path) -> None:
+    """A TRUE completeness claim — every run really is terminal — is no finding
+    (the witness set is empty)."""
+    _seed_run(tmp_path, status="complete")
+    transcript = _transcript(tmp_path, "Both fleets are drained, all runs journaled.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_completeness_lexicon_ignores_single_run_phrasing(tmp_path: Path) -> None:
+    """Lexicon conservatism: single-run phrasing ('the run is complete') carries no
+    all/both/everything/fleet quantifier, so it must NOT fire — even with a
+    non-terminal run present as a would-be witness (contrast the fleet-phrased
+    claim above, which DOES fire on the same journal)."""
+    _seed_run(tmp_path, status="in_flight")
+    transcript = _transcript(tmp_path, "The run is complete; wrapping up here.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_completeness_fires_when_relay_names_no_run_id(tmp_path: Path) -> None:
+    """The __init__ early-return path: a completeness claim binds NO run id (and no
+    audit / marker), so ``run_ids``/``audit_ids`` are empty — yet the violation is
+    non-empty, so the stop is kept alive and blocks."""
+    from hpc_agent._kernel.hooks.relay_audit_stop._shared import (
+        _journal_runs_dir,
+        mentioned_run_ids,
+    )
+
+    _seed_run(tmp_path, status="in_flight")
+    text = "Everything is settled; monitors retired for the night."
+    # The relay names NO journaled run id — the numeric/decision-state passes cannot fire.
+    assert mentioned_run_ids(text, _journal_runs_dir(tmp_path)) == []
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, _transcript(tmp_path, text)))
+    assert out is not None and out["decision"] == "block"
+    assert "completeness claim" in out["reason"]
+    assert RUN_ID in out["reason"]
+
+
+def test_completeness_fail_open_when_index_scan_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-open: any exception in the non-terminal scan → no finding, the stop
+    proceeds (a hook that can wedge a session on one bad scan is the failure class
+    this posture exists to prevent)."""
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("index scan exploded")
+
+    monkeypatch.setattr("hpc_agent.state.index.find_in_flight_runs", _boom)
+    transcript = _transcript(tmp_path, "Both fleets are drained, all runs journaled.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_completer_appends_completeness_correction_no_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Completer mode: an experiment-scope completeness finding rides the append
+    (systemMessage) path — experiment scope is NEVER poisoned (poison is
+    run/campaign scope only), so the stop PROCEEDS with a code-appended
+    correction, never the bounce."""
+    _activate_completer(monkeypatch)
+    _seed_run(tmp_path, status="in_flight")
+    transcript = _transcript(tmp_path, "Both fleets are drained, all runs journaled.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert "decision" not in out  # experiment scope never bounces
+    msg = out["systemMessage"]
+    assert "relay correction" in msg
+    assert "completeness claim" in msg
+    assert RUN_ID in msg
+
+
+def test_experiment_scope_violation_never_poisons_output_unchanged(tmp_path: Path) -> None:
+    """_output.py needs NO change: ``_is_poisoned_decision`` only poisons
+    run/campaign scope, so an experiment-scope completeness finding rides the
+    rejector's block-reason AND the completer's append (systemMessage) — never the
+    poison bounce. Pinned directly on the two composers."""
+    from hpc_agent._kernel.hooks.relay_audit_stop._output import (
+        _completer_output,
+        _is_poisoned_decision,
+        _rejector_output,
+    )
+    from hpc_agent._kernel.hooks.relay_audit_stop._shared import _Violation
+
+    v = _Violation(
+        scope_kind="experiment",
+        scope_id="",
+        claim="all runs terminal",
+        journal_value=None,
+        text='[exp] completeness claim ("all runs done") contradicts the journal — '
+        "1 run(s) non-terminal: r1",
+        kind="state",
+    )
+    # Experiment scope is never classified as a poisoned decision.
+    assert _is_poisoned_decision(tmp_path, v) is False
+    # Rejector: itemized into the block reason.
+    rej = _rejector_output([v], [])
+    assert rej is not None and rej["decision"] == "block"
+    assert "completeness claim" in rej["reason"]
+    # Completer: rides the append (systemMessage), never bounces.
+    comp = _completer_output(tmp_path, False, True, [v], [])
+    assert comp is not None and "decision" not in comp
+    assert "relay correction" in comp["systemMessage"]
+
+
+# ─── completeness lexicon precision: sentence-level suppression ───────────────
+#
+# The bare regex fires on shapes that only LOOK like a completeness claim —
+# negations, questions, futures/conditionals, the duration sense, and quoted
+# intent. Each would wrongly block a benign stop while a live run exists. The
+# suppression pass excuses the hit on any of the five governors (a false
+# correction is worse than a miss). Every phrase below carries a live in-flight
+# run as a would-be witness, yet must NOT fire.
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Not all runs are complete.",  # (a) negation
+        "I have not confirmed all runs complete yet.",  # (a) negation + trailing 'yet'
+        "Are all runs complete?",  # (b) interrogative
+        "Once all runs are complete, we will retire the monitors.",  # (c) conditional/temporal
+        "All runs complete in under 5 minutes on this cluster.",  # (d) duration idiom
+        "The goal is all runs journaled by tonight.",  # (e) intent governor
+    ],
+)
+def test_completeness_suppresses_benign_phrasings(tmp_path: Path, phrase: str) -> None:
+    """Sentence-level suppression: a negation / question / conditional / duration /
+    intent context excuses the lexical hit — NO finding even with a live run."""
+    _seed_run(tmp_path, status="in_flight")
+    transcript = _transcript(tmp_path, phrase)
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_completeness_fleet_phrase_fires_on_foreign_experiment_witness(tmp_path: Path) -> None:
+    """FLEET WITNESS WIDENING: a ``fleet`` phrase asserts machine-wide completeness,
+    so the witness widens across every journaled experiment. The cwd repo's own
+    runs are terminal, but a SIBLING experiment (same journal home) has an in-flight
+    run — the fleet claim is contradicted, and the foreign witness is stamped with
+    its experiment dir."""
+    _seed_run(tmp_path, status="complete")  # cwd IS an hpc repo; its own runs terminal
+    other = tmp_path / "sibling-exp"
+    other.mkdir()
+    _seed_extra_run(other, "foreign-fleet-run", status="in_flight")
+
+    transcript = _transcript(tmp_path, "Both fleets are drained, all runs journaled.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    assert "completeness claim" in out["reason"]
+    assert "foreign-fleet-run" in out["reason"]  # the foreign witness fires the claim
+    assert "sibling-exp" in out["reason"]  # stamped with its experiment dir
+    assert RUN_ID not in out["reason"]  # cwd's own terminal run is NOT a witness
+
+
+def test_completeness_plain_phrase_ignores_foreign_experiment_run(tmp_path: Path) -> None:
+    """CWD SCOPING: a plain ``all runs`` claim is cwd-scoped — a sibling repo's
+    unrelated live run must NOT block it. The cwd repo's own runs are all terminal,
+    so the plain claim is TRUE for its scope and does not fire, even though a
+    foreign experiment has an in-flight run."""
+    _seed_run(tmp_path, status="complete")  # cwd's own runs are all terminal
+    other = tmp_path / "sibling-exp"
+    other.mkdir()
+    _seed_extra_run(other, "foreign-plain-run", status="in_flight")
+
+    transcript = _transcript(tmp_path, "All runs journaled; wrapping up here.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None

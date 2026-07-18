@@ -53,6 +53,7 @@ LintRule = Literal[
     "executes_live",
     "linked_sources",
     "template_import_shadowed",
+    "executor_module_drift",
 ]
 
 

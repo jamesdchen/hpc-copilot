@@ -10,6 +10,7 @@ out-of-array index is caught is the kill primitive's range guard (SpecInvalid).
 from __future__ import annotations
 
 import dataclasses
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -22,6 +23,33 @@ from hpc_agent.ops.monitor import kill as kill_mod
 from hpc_agent.ops.monitor.kill import kill
 from hpc_agent.state.journal import load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
+
+
+def _login_inners(cmd: str) -> list[str]:
+    """Unwrap one-or-more ``;``-joined ``bash -lc <inner>`` login-shell cancels.
+
+    ``build_cancel_cmd`` runs its cancel under a NON-interactive LOGIN shell so
+    the scheduler binary (qdel/scancel) resolves on ``PATH`` over ssh_run's
+    non-login transport — the query builders' wrap minus the sentinel-ack
+    (cancel's success is confirmed by the follow-up alive-check). A single builder
+    output is ONE login shell (its inner may itself carry ``;``-joined SGE
+    segments, all inside the one shell). A WAVED range cancel composes one
+    login-wrapped builder output per covering wave, joined at the TOP level with
+    ``;`` (``kill._range_cancel_cmd``) — so ``shlex.split`` tokenises those
+    top-level ``;`` as their own tokens while an inner ``;`` stays inside its
+    quoted token. Returns the inner cancel(s) in order.
+    """
+    toks = shlex.split(cmd)
+    inners: list[str] = []
+    i = 0
+    while i < len(toks):
+        assert toks[i : i + 2] == ["bash", "-lc"], f"cancel not login-wrapped: {cmd!r}"
+        inners.append(toks[i + 2])
+        i += 3
+        if i < len(toks):
+            assert toks[i] == ";", f"expected top-level ';' between login shells: {cmd!r}"
+            i += 1
+    return inners
 
 
 @pytest.fixture(autouse=True)
@@ -88,8 +116,9 @@ def test_range_kill_dispatches_slurm_bracket_and_stays_in_flight(
         spec=KillSpec(run_id="r1", scheduler="slurm", task_range="4,8,13-15"),
     )
 
-    # The range cancel is the SLURM subscript form over the array job id.
-    assert sent == ["scancel 555_[4,8,13-15]"]
+    # The range cancel is the SLURM subscript form over the array job id,
+    # login-shell wrapped so scancel resolves on the non-login ssh transport.
+    assert _login_inners(sent[0]) == ["scancel 555_[4,8,13-15]"]
     assert out["backend_cancel_attempted"] is True
     assert out["backend_cancel_available"] is True
     # PARTIAL by construction: never settled, run left in flight.
@@ -119,7 +148,8 @@ def test_range_kill_dispatches_sge_dash_t(tmp_path: Path, monkeypatch: pytest.Mo
         spec=KillSpec(run_id="r1", scheduler="sge", task_range="4,8,13-15"),
     )
 
-    assert sent == ["qdel 12345 -t 4 ; qdel 12345 -t 8 ; qdel 12345 -t 13-15"]
+    # One login shell whose inner is the ``;``-joined SGE decomposition.
+    assert _login_inners(sent[0]) == ["qdel 12345 -t 4 ; qdel 12345 -t 8 ; qdel 12345 -t 13-15"]
     assert out["settled"] is False
 
 
@@ -203,7 +233,7 @@ def test_in_bounds_range_at_the_ceiling_is_allowed(
         experiment_dir=tmp_path,
         spec=KillSpec(run_id="r1", scheduler="slurm", task_range="13-15"),
     )
-    assert sent == ["scancel 555_[13-15]"]
+    assert _login_inners(sent[0]) == ["scancel 555_[13-15]"]
     assert out["settled"] is False
 
 
@@ -237,7 +267,7 @@ def test_range_kill_waved_maps_global_index_to_the_covering_waves_local(
         spec=KillSpec(run_id="r1", scheduler="slurm", task_range="150"),
     )
 
-    assert sent == ["scancel 802_[50]"]
+    assert _login_inners(sent[0]) == ["scancel 802_[50]"]
     assert out["backend_cancel_attempted"] is True
     assert out["settled"] is False
 
@@ -264,7 +294,9 @@ def test_range_kill_waved_splits_a_range_that_straddles_two_waves(
         spec=KillSpec(run_id="r1", scheduler="slurm", task_range="99-102"),
     )
 
-    assert sent == ["scancel 801_[99-100] ; scancel 802_[1-2]"]
+    # Each wave's cancel is its own login shell; kill._range_cancel_cmd joins the
+    # per-wave login-wrapped builder outputs at the top level with ``;``.
+    assert _login_inners(sent[0]) == ["scancel 801_[99-100]", "scancel 802_[1-2]"]
 
 
 def test_non_waved_range_kill_unchanged_when_no_spans(
@@ -284,7 +316,7 @@ def test_non_waved_range_kill_unchanged_when_no_spans(
         spec=KillSpec(run_id="r1", scheduler="slurm", task_range="4,8,13-15"),
     )
 
-    assert sent == ["scancel 555_[4,8,13-15]"]
+    assert _login_inners(sent[0]) == ["scancel 555_[4,8,13-15]"]
 
 
 def test_malformed_task_range_rejected_at_spec_construction() -> None:

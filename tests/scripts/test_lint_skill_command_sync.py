@@ -41,3 +41,33 @@ def test_stale_slash_only_ok_fires(monkeypatch, capsys) -> None:
     monkeypatch.setattr(lint, "SLASH_ONLY_OK", lint.SLASH_ONLY_OK | {"ghost-slash"})
     assert lint.main() == 1
     assert "ghost-slash" in capsys.readouterr().err
+
+
+def test_workflow_grammar_passes_on_real_tree() -> None:
+    """The frozen ``hpc-<stem>`` <-> ``<stem>-hpc`` grammar holds on the real tree.
+
+    The two grandfathered divergences (``monitor-hpc``, ``new-experiment-hpc``)
+    are covered by ``_GRAMMAR_EXEMPT_PAIRS``, so no error is raised.
+    """
+    errors: list[str] = []
+    lint._check_workflow_grammar(errors)
+    assert errors == []
+
+
+def test_workflow_grammar_fails_on_bad_pair(monkeypatch) -> None:
+    """A non-conforming, non-exempt WORKFLOW_PAIRS entry is a hard error."""
+    monkeypatch.setattr(lint, "WORKFLOW_PAIRS", [("hpc-foo", "bar-hpc")])
+    errors: list[str] = []
+    lint._check_workflow_grammar(errors)
+    assert len(errors) == 1
+    assert "hpc-foo" in errors[0]
+    assert "bar-hpc" in errors[0]
+    assert "grammar" in errors[0].lower()
+
+
+def test_workflow_grammar_exempt_pair_is_grandfathered(monkeypatch) -> None:
+    """An exempt divergent pair passes even though its stems differ."""
+    monkeypatch.setattr(lint, "WORKFLOW_PAIRS", [("hpc-status", "monitor-hpc")])
+    errors: list[str] = []
+    lint._check_workflow_grammar(errors)
+    assert errors == []

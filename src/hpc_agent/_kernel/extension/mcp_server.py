@@ -227,6 +227,15 @@ _CURATED_EXTRA_VERBS = frozenset(
         # run-#10 rootless-canonical fix); unreachable it would be the next
         # hand-authored spec JSON.
         "notebook-record-config",
+        # ``notebook-dry-run`` — the sampled preview run (drafting prelude);
+        # human-sequenced like the rest of the audit loop (no ``next_block``),
+        # unioned explicitly — unreachable, the agent execs the source by hand
+        # (the exact python -c improvisation the verb mechanized away).
+        "notebook-dry-run",
+        # ``alerts-ack`` — the watchdog-backlog acknowledgment mutate (recovery
+        # class, beside ``doctor``); unreachable, a flooded session hand-edits
+        # the watermark file.
+        "alerts-ack",
         # ``audit-preflight`` — the GO/NO-GO substrate-prereq brief the
         # notebook-audit skill runs FIRST (before drafting). Human-sequenced
         # like the rest of the audit loop (no ``next_block``), so it is

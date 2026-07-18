@@ -1,9 +1,9 @@
-"""``notebook-lint`` primitive — four structural checks over an audit source.
+"""``notebook-lint`` primitive — five structural checks over an audit source.
 
 Notebook-audit substrate, Wave B / T4 (see ``docs/design/notebook-audit.md``).
 A read-only ``validate`` verb over a jupytext percent-format ``.py`` (parsed by
 :mod:`hpc_agent.state.audit_source`, the ONE reader of that grammar) plus its
-template and caller-declared, OPAQUE path/import roots. Four rules:
+template and caller-declared, OPAQUE path/import roots. Five rules:
 
 1. **structural completeness** — the template's marker slugs must appear in the
    source's slugs as an ORDER-PRESERVING SUBSEQUENCE. Missing and reordered
@@ -49,6 +49,15 @@ template and caller-declared, OPAQUE path/import roots. Four rules:
    mechanizes "call the engine, never re-derive" as POINTING (a shadowing
    section is already modified/added → human-required; this finding NAMES the
    hazard at sign-off instead of hiding it in a diff).
+5. **executor_module_drift** — an ADVISORY finding when a module imported by
+   BOTH the experiment's executor (the ``interview.json`` entry point) and the
+   audited source resolves to DIFFERENT ``module_shas``: the submission script
+   and the audited analysis have drifted apart. Both sides route through the ONE
+   resolver (:func:`hpc_agent.ops.notebook.linked_sources.module_sha_map`); the
+   executor resolves under its own directory first (Python's ``sys.path[0]``
+   posture), so a stale local copy diverges from the shared one. Fail-open: no
+   detectable executor (no ``interview.json`` entry point) → no finding. Never a
+   refusal, never section-attributed.
 
 Findings are REPORTED, never raised — the graduation gate refuses, the lint
 reports. Only a malformed spec or unparseable source raises
@@ -70,8 +79,13 @@ from hpc_agent._wire.actions.notebook_lint import (
     NotebookLintResult,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.notebook.linked_sources import resolve_linked_sources
+from hpc_agent.ops.notebook.linked_sources import (
+    module_sha_map,
+    resolve_linked_sources,
+    resolve_module_file,
+)
 from hpc_agent.state.audit_source import parse_percent_source
+from hpc_agent.state.interview_doc import iter_interview_docs
 
 _PRIMITIVE = "notebook-lint"
 
@@ -665,6 +679,127 @@ def _check_template_import_shadowed(
     return findings
 
 
+# ── rule 5: executor↔notebook module-sha drift ──────────────────────────────
+#
+# The submission ENTRY POINT (the executor) and the audited ANALYSIS should bind
+# the SAME engine code. This advisory rule fires when a module imported by BOTH
+# resolves to DIFFERENT module_shas — the submission script and the audited source
+# have drifted apart. It NEVER refuses (the gate refuses, the lint reports) and
+# NEVER attributes to a section (module-scoped, so it cannot flip a tier). Both
+# sides route through the ONE resolver (``linked_sources.module_sha_map`` over
+# ``resolve_module_file``); the executor resolves under ITS OWN directory first
+# (Python's runtime sys.path[0] posture) then the shared ``source_roots``, so a
+# module that resolves to a LOCAL shadow beside the executor diverges from the
+# root-shared one. If no executor can be located (no interview.json entry point),
+# the check silently yields nothing — fail-open.
+
+
+def _entry_point_pyfile(
+    experiment_dir: Path, source_root_dirs: list[Path], entry: object
+) -> Path | None:
+    """Resolve ONE interview ``entry_point`` block to its ``.py`` file, or ``None``.
+
+    Honors the two shapes that name a concrete Python file: a materialized
+    ``wrapper_path`` (a ``.py`` relpath) and an importable ``module`` (dotted,
+    resolved through the ONE resolver under the experiment dir + ``source_roots``).
+    Anything else — a bare ``register_run`` run_name (ambiguous — several files can
+    carry the decoration), a ``shell_command`` with no wrapper — yields ``None``,
+    the fail-open default (a mis-detected executor would be worse than none).
+    """
+    if not isinstance(entry, dict):
+        return None
+    wrapper = entry.get("wrapper_path")
+    if isinstance(wrapper, str) and wrapper:
+        p = Path(wrapper)
+        p = p if p.is_absolute() else experiment_dir / p
+        if p.is_file():
+            return p
+    module = entry.get("module")
+    if isinstance(module, str) and module:
+        resolved = resolve_module_file(module, [experiment_dir, *source_root_dirs])
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _detect_executor_file(experiment_dir: Path, source_root_dirs: list[Path]) -> Path | None:
+    """Locate the experiment's executor ``.py`` from ``interview.json``, or ``None``.
+
+    Reads the interview docs (the ONE tolerant loader) and returns the first
+    resolvable entry point — the ``_materialized.entry_point`` wrapper first (the
+    submit-side executor), else a top-level ``entry_point`` module. ``None`` when no
+    interview.json exists or no block names a concrete ``.py`` (the fail-open path —
+    the drift check then yields nothing).
+    """
+    for doc in iter_interview_docs(experiment_dir):
+        materialized = doc.get("_materialized")
+        if isinstance(materialized, dict):
+            entry = materialized.get("entry_point")
+            path = _entry_point_pyfile(experiment_dir, source_root_dirs, entry)
+            if path is not None:
+                return path
+        path = _entry_point_pyfile(experiment_dir, source_root_dirs, doc.get("entry_point"))
+        if path is not None:
+            return path
+    return None
+
+
+def _check_executor_module_drift(
+    source_tree: ast.Module, experiment_dir: Path, source_root_dirs: list[Path]
+) -> list[NotebookLintFinding]:
+    """Report modules imported by BOTH the executor and the audited source at drifted shas.
+
+    Fail-open at every gap (no executor, an unreadable/unparseable executor, no
+    shared module, or identical shas → no finding). The executor resolves imports
+    under ``[executor_dir, *source_roots]`` (runtime posture) and the source under
+    ``source_roots`` (the audit's declared roots — the same the linked-sources rule
+    uses), so a shared module that both resolve to the SAME file agrees and stays
+    silent; only a genuinely divergent binding (a vendored/stale local copy)
+    surfaces. Module-scoped (``section=None``) — advisory, never a tier input.
+    """
+    executor = _detect_executor_file(experiment_dir, source_root_dirs)
+    if executor is None:
+        return []
+    try:
+        executor_tree = ast.parse(executor.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return []
+    try:
+        executor_rel = executor.resolve().relative_to(experiment_dir.resolve()).as_posix()
+    except ValueError:
+        executor_rel = executor.resolve().as_posix()
+
+    source_shas = module_sha_map(source_tree, source_root_dirs)
+    executor_shas = module_sha_map(executor_tree, [executor.parent, *source_root_dirs])
+
+    findings: list[NotebookLintFinding] = []
+    for module in sorted(set(source_shas) & set(executor_shas)):
+        e_sha = executor_shas[module]
+        s_sha = source_shas[module]
+        if e_sha == s_sha:
+            continue
+        findings.append(
+            NotebookLintFinding(
+                rule="executor_module_drift",
+                section=None,
+                detail=(
+                    f"module {module!r} is imported by both the executor "
+                    f"({executor_rel}) and the audited source but at DIFFERENT "
+                    f"versions (executor module_sha {e_sha[:12]}, source module_sha "
+                    f"{s_sha[:12]}) — the submission script and the audited analysis "
+                    "have drifted apart. Advisory: confirm both bind the same code."
+                ),
+                evidence={
+                    "module": module,
+                    "executor": executor_rel,
+                    "executor_module_sha": e_sha,
+                    "source_module_sha": s_sha,
+                },
+            )
+        )
+    return findings
+
+
 def _root_dirs(experiment_dir: Path, roots: list[str]) -> list[Path]:
     """Resolve caller-declared roots to directories (relative → experiment_dir)."""
     out: list[Path] = []
@@ -694,8 +829,11 @@ def _root_dirs(experiment_dir: Path, roots: list[str]) -> list[Path]:
             "source_roots reported with their module_sha), and "
             "template_import_shadowed (a source section defining or rebinding a "
             "name the template imports — the template's imports are the declared "
-            "engines; a verbatim re-import is clean). Findings are REPORTED, "
-            "never raised — the graduation gate refuses, the lint reports."
+            "engines; a verbatim re-import is clean), and executor_module_drift "
+            "(a module imported by both the interview.json executor and the "
+            "audited source at different module_shas — advisory, fail-open). "
+            "Findings are REPORTED, never raised — the graduation gate refuses, "
+            "the lint reports."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
@@ -750,6 +888,9 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
             [(s.slug, s.source) for s in template_module.sections],
         )
     )
+    # rule 5: executor↔notebook module-sha drift — advisory, fail-open (yields
+    # nothing when no executor is detectable). Module-scoped, never a refusal.
+    findings.extend(_check_executor_module_drift(tree, experiment_dir, source_root_dirs))
     linked = resolve_linked_sources(tree, experiment_dir, source_root_dirs)
 
     # Carry the caller-supplied pack echo verbatim ONLY when a matched reader

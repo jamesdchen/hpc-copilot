@@ -100,6 +100,8 @@ __all__ = [
     "DRAFT_SUBJECT_KIND",
     "AUTO_CLEAR_RESPONSE",
     "RENDER_RECEIPT_RESPONSE",
+    "EXECUTION_SCOPE_FULL",
+    "EXECUTION_SCOPE_SAMPLED",
     "DRAFT_RESPONSE",
     "AUDIT_CONFIG_RESPONSE",
     "SIGNED_CURRENT",
@@ -160,6 +162,21 @@ RENDER_RECEIPT_BLOCK = "notebook-render-receipt"
 #: a clearance token (not ``"auto_cleared"``): a receipt is evidence, not a
 #: sign-off class.
 RENDER_RECEIPT_RESPONSE = "rendered"
+
+#: The two EXECUTION SCOPES a render receipt can carry (``notebook-dry-run``).
+#: ``"full"`` — the receipt attests a FULL execution of the section (the whole
+#: input, the cluster-shaped run the plugin's ``notebook-render --execute``
+#: journals); it is CLEARING evidence the D-attention assertions-green leg
+#: consumes. ``"sampled"`` — the receipt attests a bounded PREVIEW run over a
+#: small slice of data (``notebook-dry-run``); it is provenance the human can
+#: inspect but is NON-CLEARING by construction — :func:`read_render_receipts`
+#: (the ONLY reader feeding the clearing/tier path) filters it out, so a sampled
+#: run can never green an assertion-bearing section the way a full run can (the
+#: trust-model boundary: a preview is not a proof). Records written before this
+#: field existed carry no ``execution_scope`` and read ``"full"`` (byte-compatible
+#: with every pre-dry-run receipt — the full-run semantics are unchanged).
+EXECUTION_SCOPE_FULL = "full"
+EXECUTION_SCOPE_SAMPLED = "sampled"
 
 #: The DRAFT-attestation block (multi-human MH5). A block class riding the SAME
 #: notebook journal: a CODE attestation that a section's source was DRAFTED by
@@ -482,6 +499,12 @@ def _project_receipt(record: dict[str, Any]) -> dict[str, Any] | None:
         return None
     resolved = record.get("resolved")
     resolved = resolved if isinstance(resolved, dict) else {}
+    # ``execution_scope`` defaults to FULL on read: a receipt written before the
+    # field existed is a full-run receipt (byte-compatible), and only an explicit
+    # ``"sampled"`` marks the non-clearing preview class.
+    scope = resolved.get("execution_scope")
+    if scope not in (EXECUTION_SCOPE_FULL, EXECUTION_SCOPE_SAMPLED):
+        scope = EXECUTION_SCOPE_FULL
     return {
         "attestor": "code",
         "subject_kind": SUBJECT_KIND,
@@ -490,6 +513,7 @@ def _project_receipt(record: dict[str, Any]) -> dict[str, Any] | None:
         "evidence": {
             "output_sha": resolved.get("output_sha"),
             "error": resolved.get("error"),
+            "execution_scope": scope,
         },
     }
 
@@ -503,6 +527,7 @@ def record_render_receipt(
     recompute: Callable[[], str] | str,
     output_sha: str,
     error: bool,
+    execution_scope: str = EXECUTION_SCOPE_FULL,
 ) -> dict[str, Any]:
     """Journal a CODE render receipt for *section*, bound to its sha, un-fakeably.
 
@@ -511,6 +536,14 @@ def record_render_receipt(
     D-attention tier's assertions-green leg needs. It is NOT a clearance and NOT
     a sign-off; it carries the honest mechanical response :data:`RENDER_RECEIPT_RESPONSE`
     (``"rendered"``), never a human-ack token.
+
+    *execution_scope* records WHAT was run: :data:`EXECUTION_SCOPE_FULL` (the
+    default — a full execution, clearing evidence) or
+    :data:`EXECUTION_SCOPE_SAMPLED` (a bounded ``notebook-dry-run`` preview over a
+    small slice of data). A SAMPLED receipt is journaled as honest provenance but
+    is NON-CLEARING: :func:`read_render_receipts` (the only reader feeding the
+    tier / clearing path) filters it out, so a preview can never green an
+    assertion-bearing section the way a full run can.
 
     Un-fakeable + fresh-by-construction: the receipt is bound through the ONE
     attestation kernel (:func:`~hpc_agent.state.attestation.bind`) against the
@@ -535,6 +568,11 @@ def record_render_receipt(
         "error": error,
         "attestor": "code",
     }
+    # SAMPLED is the only non-default scope worth persisting; a FULL receipt stays
+    # byte-identical to a pre-dry-run record (the field is simply absent), so the
+    # newest-valid full receipt of an existing audit never changes shape.
+    if execution_scope == EXECUTION_SCOPE_SAMPLED:
+        resolved["execution_scope"] = EXECUTION_SCOPE_SAMPLED
     # Bind on the SECTION sha (routes through the ONE kernel; never re-inlined):
     # the receipt is stale-by-construction when the section moves, and can only
     # be recorded against the sha the source currently carries.
@@ -570,13 +608,29 @@ def read_render_receipts(
     (:func:`_newest_valid` + :func:`~hpc_agent.state.attestation.reduce`), never
     a re-inlined newest-first / sha-compare. Malformed receipt records are
     skipped, never fatal.
+
+    **SAMPLED receipts are invisible here (the trust chokepoint).** A receipt
+    whose ``execution_scope`` is :data:`EXECUTION_SCOPE_SAMPLED` (a
+    ``notebook-dry-run`` preview) is filtered out BEFORE newest-valid selection —
+    this is the ONE reader feeding the D-attention tier / auto-clear / graduation
+    path, so a preview run can never green an assertion-bearing section, and a
+    later sampled run never revokes an earlier FULL receipt (the newest FULL wins,
+    unchanged). Full receipts (the default, and every pre-dry-run record) behave
+    exactly as before.
     """
     records = read_decisions(experiment_dir, "notebook", audit_id)
     projected: list[dict[str, Any]] = []
     for record in records:
         receipt = _project_receipt(record)
-        if receipt is not None:
-            projected.append(receipt)
+        if receipt is None:
+            continue
+        # Filter the non-clearing SAMPLED class out of the clearing/tier reader:
+        # a preview is provenance, never proof (the trust-model boundary).
+        evidence = receipt.get("evidence")
+        scope = evidence.get("execution_scope") if isinstance(evidence, dict) else None
+        if scope == EXECUTION_SCOPE_SAMPLED:
+            continue
+        projected.append(receipt)
 
     out: dict[str, dict[str, Any]] = {}
     slugs = {p["subject_id"] for p in projected if isinstance(p.get("subject_id"), str)}

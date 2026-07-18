@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 from pathlib import Path
 
+from ._completeness import _completeness_findings
 from ._decision_state import _decision_state_findings
 from ._paraphrase import _paraphrase_findings
 from ._shared import _Violation
@@ -263,4 +264,10 @@ def _gather_violations(
     # Decision-state claims — an unjournaled decision EVENT contradicts the record.
     with contextlib.suppress(Exception):
         violations.extend(_decision_state_findings(experiment_dir, relay_text, run_ids))
+    # Experiment-scope completeness claims (the incident: "both fleets drained /
+    # all runs journaled" bound NO run id, so no per-scope detector could fire).
+    # The witness is the WHOLE experiment's non-terminal set, so this runs even
+    # when the relay names no run id — outside the run_ids/audit_ids blocks above.
+    with contextlib.suppress(Exception):
+        violations.extend(_completeness_findings(experiment_dir, relay_text))
     return violations

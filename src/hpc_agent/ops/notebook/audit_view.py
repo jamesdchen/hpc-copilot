@@ -72,7 +72,7 @@ import difflib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hpc_agent.execution.mapreduce.data_trace_contract import (
     RECEIPT_GRADE_SOURCES,
@@ -82,6 +82,9 @@ from hpc_agent.state.audit_source import ParsedModule, normalize_source
 from hpc_agent.state.data_trace import records_sha
 from hpc_agent.state.determinism import canonical_sha
 
+if TYPE_CHECKING:
+    from hpc_agent.ops.notebook.linked_sources import LinkedEngine
+
 __all__ = [
     "INHERITED",
     "ADDED",
@@ -89,12 +92,17 @@ __all__ = [
     "AUTO_CLEARED",
     "HUMAN_REQUIRED",
     "Assertion",
+    "PriorSignoff",
     "SectionView",
     "AuditView",
     "build_audit_view",
     "render_markdown",
     "render_summary_markdown",
 ]
+
+#: How many linked-source engines the src-digest block lists before eliding to
+#: "+N more" (slice 1: keep the block short — a signing surface, not a listing).
+_MAX_LINKED_ENGINES = 6
 
 #: Classification of a source section against the template (by source-hash, D6).
 INHERITED = "inherited"
@@ -131,6 +139,22 @@ class Assertion:
 
 
 @dataclass(frozen=True)
+class PriorSignoff:
+    """A DIFFERENT audit's HUMAN sign-off of byte-identical section content (slice 3).
+
+    Advisory disclosure only — display, never a trust input: it NEVER changes a
+    section's status/tier/clearing. ``date`` is the sign-off record's calendar day
+    (``YYYY-MM-DD``); ``audit_id`` is the other audit under this experiment's
+    ``.hpc/notebooks/`` whose journal recorded it; ``count`` is how many distinct
+    prior audits signed this exact content (``1`` unless several).
+    """
+
+    date: str
+    audit_id: str
+    count: int = 1
+
+
+@dataclass(frozen=True)
 class SectionView:
     """The deterministic projection of ONE source section (the primary object).
 
@@ -150,6 +174,15 @@ class SectionView:
     view_sha: str
     payload: Mapping[str, Any]
     trace_summary: Mapping[str, Any] | None = None
+    #: PRESENTATION-ONLY enrichment (slices 1 + 3) — NOT part of ``payload`` and so
+    #: NEVER part of ``view_sha`` (identical to the next-actions footer's posture).
+    #: Populated by ``render_store.write_render`` (the seat with the experiment dir +
+    #: audit config); default-empty so every existing view renders byte-identically
+    #: (the byte-absent pin). ``linked_engines`` = the section's imports resolved to
+    #: engine files under ``source_roots`` (the src digest the human signs against);
+    #: ``prior_signoff`` = a different audit's human sign-off of identical content.
+    linked_engines: tuple[LinkedEngine, ...] = ()
+    prior_signoff: PriorSignoff | None = None
 
 
 @dataclass(frozen=True)
@@ -601,8 +634,54 @@ def _render_section(sv: SectionView) -> list[str]:
         lines.append("(none)")
     lines.append("")
 
+    lines.extend(_render_linked_sources(sv))
+    lines.extend(_render_prior_signoff(sv))
     lines.extend(_render_trace_summary(sv))
     return lines
+
+
+def _render_linked_sources(sv: SectionView) -> list[str]:
+    """The src-digest block (slice 1) — the engine versions the section binds, or nothing.
+
+    Rendered ONLY when the section has resolvable linked engines; byte-ABSENT
+    otherwise (the pin: a section with no linked sources renders exactly as it did
+    before this feature). One line per engine — ``module @ path:lineno `signature`
+    (module_sha <sha12>)`` — capped at :data:`_MAX_LINKED_ENGINES` with a disclosed
+    ``+N more``. Presentation only (not in ``view_sha``); the human signs knowing
+    which source version bound.
+    """
+    engines = sv.linked_engines
+    if not engines:
+        return []
+    lines = ["### linked sources", ""]
+    for eng in engines[:_MAX_LINKED_ENGINES]:
+        loc = f"{eng.file}:{eng.lineno}" if eng.lineno is not None else eng.file
+        sig = f"  `{eng.signature}`" if eng.signature else ""
+        lines.append(f"- {eng.module} @ {loc}{sig}  (module_sha {eng.module_sha12})")
+    extra = len(engines) - _MAX_LINKED_ENGINES
+    if extra > 0:
+        lines.append(f"- … +{extra} more")
+    lines.append("")
+    return lines
+
+
+def _render_prior_signoff(sv: SectionView) -> list[str]:
+    """The prior-sign-off advisory block (slice 3), or nothing.
+
+    Rendered ONLY when this exact section content was HUMAN-signed under a DIFFERENT
+    audit; byte-ABSENT otherwise. Advisory display: it NEVER changes status/tier —
+    ``notebook-status`` and the graduation gate ignore it entirely.
+    """
+    prior = sv.prior_signoff
+    if prior is None:
+        return []
+    more = f" (+{prior.count - 1} other audit(s))" if prior.count > 1 else ""
+    return [
+        "### prior sign-off",
+        "",
+        f"- identical content signed {prior.date} under audit {prior.audit_id}{more}",
+        "",
+    ]
 
 
 def _render_trace_summary(sv: SectionView) -> list[str]:

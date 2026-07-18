@@ -1501,37 +1501,15 @@ def _count_campaign_pending_runs(experiment_dir: Path, campaign_id: str) -> int:
 def discover_fleet_experiments() -> tuple[list[Path], list[dict[str, str]]]:
     """Every experiment this machine has journaled — via a NON-CREATING glob (D3).
 
-    Globs the journal home for ``*/repo.json`` (never ``journal_dir``, which
-    mkdirs + writes ``repo.json`` — a read must never scaffold a namespace) and
-    recovers each ``experiment_dir``. Returns ``(experiment_dirs, skipped)``: a
-    ``repo.json`` that is unreadable / torn, or whose ``experiment_dir`` no longer
-    exists on disk, is skipped silently and counted (a wiped demo repo must never
-    crash the morning read). A missing journal home yields nothing.
+    Thin delegate: the ONE definition moved to
+    :func:`hpc_agent.state.index.discover_journaled_experiments` so substrate
+    readers (the Stop-hook completeness witness) can reach it without a
+    ``_kernel``-imports-``ops`` layering inversion. This seat keeps the public
+    fleet API (and its D3 semantics docs) stable for ops callers.
     """
-    from hpc_agent.state.run_record import current_homedir
+    from hpc_agent.state.index import discover_journaled_experiments
 
-    experiments: list[Path] = []
-    skipped: list[dict[str, str]] = []
-    home = current_homedir()
-    if not home.exists():
-        return experiments, skipped
-    for repo_json in sorted(home.glob("*/repo.json")):
-        namespace = repo_json.parent.name
-        try:
-            doc = json.loads(repo_json.read_text(encoding="utf-8"))
-            experiment_dir = doc["experiment_dir"]
-        except (OSError, ValueError, KeyError, TypeError):
-            skipped.append({"ref": namespace, "reason": "unreadable/torn repo.json"})
-            continue
-        if not isinstance(experiment_dir, str) or not experiment_dir:
-            skipped.append({"ref": namespace, "reason": "repo.json has no experiment_dir"})
-            continue
-        path = Path(experiment_dir)
-        if not path.exists():
-            skipped.append({"ref": namespace, "reason": "experiment_dir no longer exists"})
-            continue
-        experiments.append(path)
-    return experiments, skipped
+    return discover_journaled_experiments()
 
 
 def collect_fleet(*, now: str) -> QueueCollection:

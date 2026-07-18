@@ -597,3 +597,53 @@ def test_section_join_binds_view_sha() -> None:
     base = _section(build_audit_view(src, tmpl, []), "model")
     joined = _section(build_audit_view(src, tmpl, [], audit_traces=traces), "model")
     assert joined.view_sha != base.view_sha
+
+
+# ── slices 1 + 3: presentation-only enrichment fields (byte-absent by default) ─
+
+
+def test_enrichment_fields_default_empty_and_absent_in_render() -> None:
+    # build_audit_view never populates the enrichment fields (write_render does):
+    # they default empty and the code-rendered markdown carries neither block.
+    from hpc_agent.ops.notebook.audit_view import render_markdown
+
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    for sv in view.sections:
+        assert sv.linked_engines == ()
+        assert sv.prior_signoff is None
+    md = render_markdown(view)
+    assert "### linked sources" not in md
+    assert "### prior sign-off" not in md
+
+
+def test_render_section_renders_enrichment_when_present() -> None:
+    # When the presentation fields ARE populated (as write_render does via replace),
+    # _render_section emits both blocks — and neither is in the hashed payload.
+    from dataclasses import replace
+
+    from hpc_agent.ops.notebook.audit_view import PriorSignoff, _render_section
+    from hpc_agent.ops.notebook.linked_sources import LinkedEngine
+
+    src, tmpl = _mods(SOURCE_MIXED)
+    base = _section(build_audit_view(src, tmpl, []), "model")
+    enriched = replace(
+        base,
+        linked_engines=(
+            LinkedEngine(
+                module="engine.train",
+                file="src/engine.py",
+                lineno=3,
+                signature="x, y=1",
+                module_sha12="abcdef012345",
+            ),
+        ),
+        prior_signoff=PriorSignoff(date="2026-05-01", audit_id="audit-OLD"),
+    )
+    md = "\n".join(_render_section(enriched))
+    assert "### linked sources" in md
+    assert "engine.train @ src/engine.py:3  `x, y=1`  (module_sha abcdef012345)" in md
+    assert "### prior sign-off" in md
+    assert "identical content signed 2026-05-01 under audit audit-OLD" in md
+    # Presentation-only: the view_sha (over payload) is identical to the base's.
+    assert enriched.view_sha == base.view_sha

@@ -25,16 +25,27 @@ Mechanism (chosen for reliability without third-party deps):
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import json
+import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.run_record import journal_dir
 
+_log = logging.getLogger(__name__)
+
 _NOTIFY_TIMEOUT_SEC = 10
+
+# Alert-record ``kind`` tags — the second component of the dedup identity.
+_KIND_STALL = "stall"
+_KIND_ALERT = "alert"
 
 _ALERTS_LOG_NAME = "doctor.alerts.log"
 # Acknowledgment watermark for the alert log (proving run #3: the watchdog
@@ -63,15 +74,56 @@ def _alerts_paths(experiment_dir: Path) -> tuple[Path, Path]:
     return base / _ALERTS_LOG_NAME, base / _ALERTS_WATERMARK_NAME
 
 
+def _parse_alert_line(line: str) -> tuple[str, str] | None:
+    """Parse one alert-log line into ``(ts, message)``, tolerant of BOTH formats.
+
+    * **New format** — a JSON object carrying at least ``ts`` + ``message`` (the
+      canonical dedup write path, :func:`_append_alert_log`). Extra identity
+      fields (``alert_id`` / ``run_id`` / ``kind`` / ``since``) are ignored here:
+      the returned shape stays exactly ``(ts, message)`` so every consumer that
+      spreads it (``doctor``'s ``AlertRecord(**a)``, ``extra="forbid"``) is
+      unaffected.
+    * **Legacy format** — a bare ``<iso-ts> <message>`` line (the pre-dedup
+      writer). Kept readable forever so an existing log survives the format flip.
+
+    Returns ``None`` for a blank / torn / structurally-unparseable line so a
+    broken alert channel never breaks a status read (the fail-open posture).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+    if stripped.startswith("{"):
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None  # torn / corrupt JSON line — skip, never raise
+        if not isinstance(obj, dict):
+            return None
+        ts = obj.get("ts")
+        message = obj.get("message")
+        if isinstance(ts, str) and isinstance(message, str) and message.strip():
+            return ts, message.strip()
+        return None
+    # Legacy plaintext: "<ts> <message>".
+    ts_str, sep, message = stripped.partition(" ")
+    if not sep or not message.strip():
+        return None
+    return ts_str, message.strip()
+
+
 def read_unacknowledged_alerts(experiment_dir: Path) -> list[dict[str, str]]:
     """Alerts in ``doctor.alerts.log`` newer than the acknowledgment watermark.
 
     Returns ``[{"ts": <iso>, "message": <text>}, ...]`` in log (chronological)
-    order. Fail-open everywhere: a missing log, an unreadable log or watermark,
-    or a line that does not start with a parseable ISO timestamp yields no
-    alerts / skips the line — a broken alert channel must never break a status
-    read. Never mutates anything (the log is an audit trail; acknowledgment is
-    the separate :func:`acknowledge_alerts` watermark write).
+    order — exactly the two keys every consumer expects (``doctor``'s
+    ``AlertRecord(**a)`` forbids extras, the alert-count hook + snapshot brief
+    read ``ts``/``message``, the attention queue peeks both). Each line is parsed
+    dual-format via :func:`_parse_alert_line` (JSON records first, legacy
+    plaintext as a tolerant fallback). Fail-open everywhere: a missing log, an
+    unreadable log or watermark, or a line that does not parse / lacks a parseable
+    ISO timestamp yields no alerts / skips the line — a broken alert channel must
+    never break a status read. Never mutates anything (the log is an audit trail;
+    acknowledgment is the separate :func:`acknowledge_alerts` watermark write).
     """
     try:
         log_path, watermark_path = _alerts_paths(experiment_dir)
@@ -92,16 +144,48 @@ def read_unacknowledged_alerts(experiment_dir: Path) -> list[dict[str, str]]:
 
     alerts: list[dict[str, str]] = []
     for line in lines:
-        ts_str, sep, message = line.partition(" ")
-        if not sep or not message.strip():
+        parsed = _parse_alert_line(line)
+        if parsed is None:
             continue
+        ts_str, message = parsed
         ts = parse_iso_utc_or_none(ts_str)
         if ts is None:
             continue  # corrupt line — skip, never raise
         if watermark is not None and ts <= watermark:
             continue  # already surfaced once
-        alerts.append({"ts": ts_str, "message": message.strip()})
+        alerts.append({"ts": ts_str, "message": message})
     return alerts
+
+
+def newest_alert_ts(experiment_dir: Path) -> str | None:
+    """The newest alert timestamp recorded in the log, or ``None`` if none/unreadable.
+
+    Scans the RAW log (NOT watermark-filtered, dual-format) so the ``alerts-ack``
+    verb can advance the watermark past EVERY recorded alert — an already-acked
+    alert must never lower the ack target. Fail-open: a missing / unreadable /
+    empty log yields ``None``.
+    """
+    try:
+        log_path, _ = _alerts_paths(experiment_dir)
+        if not log_path.is_file():
+            return None
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, ValueError):
+        return None
+    newest_ts: str | None = None
+    newest_dt = None
+    for line in lines:
+        parsed = _parse_alert_line(line)
+        if parsed is None:
+            continue
+        ts_str, _message = parsed
+        dt = parse_iso_utc_or_none(ts_str)
+        if dt is None:
+            continue
+        if newest_dt is None or dt > newest_dt:
+            newest_dt = dt
+            newest_ts = ts_str
+    return newest_ts
 
 
 def acknowledge_alerts(experiment_dir: Path, *, up_to_ts: str) -> None:
@@ -147,12 +231,90 @@ def summarize_proposals(proposals: list[dict[str, Any]]) -> str:
     return text
 
 
-def _append_alert_log(text: str, *, experiment_dir: Path) -> str:
-    """Append *text* to the loud fallback log; return its path."""
-    log_path = journal_dir(experiment_dir) / "doctor.alerts.log"
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(f"{utcnow_iso()} {text}\n")
+def _alert_identity(*, run_id: str | None, kind: str, since: str | None, message: str) -> str:
+    """Stable dedup identity for one live alert — ``<run_id>|<kind>|<subject>``.
+
+    The subject is the stall's stable ``since`` (``last_tick_at``) when present —
+    so every 15-min watchdog re-tick for the SAME stall (identity fixed, only the
+    leading ``ts`` varies) replays to a no-op — else a short hash of the message
+    so a free-form alert dedups by its own text.
+    """
+    subject = since if since else hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+    return f"{run_id or ''}|{kind}|{subject}"
+
+
+def _append_alert_log(
+    message: str,
+    *,
+    experiment_dir: Path,
+    kind: str,
+    run_id: str | None = None,
+    since: str | None = None,
+) -> str:
+    """Append one JSON alert record to the loud fallback log; return its path.
+
+    Routes through the canonical JSONL-append seam
+    (:func:`hpc_agent.infra.io.append_jsonl_line`) — the ONE flock + fsync +
+    sort_keys, whole-line-atomic, append-only discipline every ledger shares — so
+    a torn / interleaved final line can never strand a prior alert. The record is
+    ``{alert_id, ts, run_id, kind, since, message}``; ``dedup_key=("alert_id",
+    <identity>)`` makes each repeat tick for a live stall a REPLAY NO-OP (one
+    durable line per identity, never 55 near-identical lines for one stall).
+
+    ``fsync_required=False`` keeps the notifier's never-raise delivery floor (an
+    fsync OSError on a full disk is suppressed, io.py); the whole append is
+    additionally wrapped best-effort so no I/O failure can raise out of the
+    delivery path (the ``harvest_guard._write_marker`` precedent — the seam CAN
+    raise OSError, and a watchdog notification must never crash on a bad log).
+    """
+    log_path = journal_dir(experiment_dir) / _ALERTS_LOG_NAME
+    alert_id = _alert_identity(run_id=run_id, kind=kind, since=since, message=message)
+    record: dict[str, Any] = {
+        "alert_id": alert_id,
+        "ts": utcnow_iso(),
+        "run_id": run_id or "",
+        "kind": kind,
+        "since": since or "",
+        "message": message,
+    }
+    try:
+        append_jsonl_line(
+            log_path,
+            record,
+            fsync_required=False,
+            dedup_key=("alert_id", alert_id),
+        )
+    except Exception as exc:  # noqa: BLE001 — notifier's never-raise delivery floor
+        with contextlib.suppress(Exception):
+            _log.warning("notify: could not append alert record to %s: %s", log_path, exc)
     return str(log_path)
+
+
+def _log_stall_proposals(proposals: list[dict[str, Any]], *, experiment_dir: Path) -> str:
+    """Append ONE deduped JSON record per stalled-run proposal; return the log path.
+
+    Each proposal carries its own identity (``run_id`` + ``last_tick_at``), so a
+    per-proposal record deduplicates on ``<run_id>|stall|<last_tick_at>`` — the
+    per-stall granularity the summary line lacked. The degenerate no-proposals
+    case still writes one summary line so an empty notification is never silent.
+    """
+    if not proposals:
+        return _append_alert_log(
+            summarize_proposals(proposals), experiment_dir=experiment_dir, kind=_KIND_STALL
+        )
+    log_path = str(journal_dir(experiment_dir) / _ALERTS_LOG_NAME)
+    for proposal in proposals:
+        run_id = str(proposal.get("run_id") or "") or None
+        since_val = proposal.get("last_tick_at")
+        since = str(since_val) if since_val else None
+        log_path = _append_alert_log(
+            summarize_proposals([proposal]),
+            experiment_dir=experiment_dir,
+            kind=_KIND_STALL,
+            run_id=run_id,
+            since=since,
+        )
+    return log_path
 
 
 def _try_run(argv: list[str]) -> bool:
@@ -181,7 +343,7 @@ def raise_alert_notification(text: str, *, experiment_dir: Path) -> dict[str, An
     ``{mechanism, delivered, text, log_path}`` delivery record as
     :func:`raise_stall_notification`. Best-effort, never acts on the cluster.
     """
-    log_path = _append_alert_log(text, experiment_dir=experiment_dir)
+    log_path = _append_alert_log(text, experiment_dir=experiment_dir, kind=_KIND_ALERT)
     mechanism = "logfile"
     if os.name == "nt":
         user = os.environ.get("USERNAME") or "*"
@@ -203,7 +365,7 @@ def raise_stall_notification(
     richest channel that fired (``msg`` / ``notify-send`` / ``logfile``).
     """
     text = summarize_proposals(proposals)
-    log_path = _append_alert_log(text, experiment_dir=experiment_dir)
+    log_path = _log_stall_proposals(proposals, experiment_dir=experiment_dir)
 
     mechanism = "logfile"
     if os.name == "nt":

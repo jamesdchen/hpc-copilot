@@ -1084,6 +1084,87 @@ _MANIFEST_KINDS: tuple[tuple[str, str, str | None], ...] = (
     ("agents", "agents", ".md"),
 )
 
+# Pre-manifest orphans — asset names an install shipped BEFORE ownership was
+# tracked (the manifest stamp landed with #F34). ``_prune_stale_assets`` derives
+# "stale" as ``previous_manifest[kind] - current[kind]``, so a name that no
+# manifest EVER owned is invisible to that subtraction and can never be swept.
+# This curated set closes the gap for the known assets retired before ownership
+# tracking existed, so the next ``install-commands`` finally prunes them.
+#
+# Incident (the preflight → hpc-preflight dead-skill orphan, 2026-07-18): a fresh
+# session ran ``/preflight``; the installed ``commands/preflight.md`` orphan told
+# it to "Invoke the ``hpc-preflight`` skill" — a skill retired when
+# environment-authority work moved to ``hpc-agent setup`` (see
+# ``scripts/lint_skill_command_sync.py``). Neither the dead command nor the dead
+# skill was ever manifest-owned, so the pruner had never removed them.
+#
+# The legacy sweep keeps the pruner's safety posture: it acts ONLY when the file
+# is actually present AND the name is not owned by the current install (a name
+# the current tree re-ships is never touched), and a missing file is fine.
+_LEGACY_OWNED: dict[str, frozenset[str]] = {
+    "commands": frozenset({"preflight", "sync", "validate-campaign", "hpc-axes-init"}),
+    "skills": frozenset({"hpc-preflight"}),
+    "agents": frozenset(),
+}
+
+
+# hpc-agent authorship sentinel — the guard the LEGACY sweep needs (the sync.md
+# collision, 2026-07-18). The manifest-stale sweep deletes only names THIS project
+# stamped, so authorship is PROVEN. The legacy sweep, by contrast, deletes by NAME
+# with no manifest proof: a user's own hand-authored ``~/.claude/commands/sync.md``
+# (``sync`` is a perfectly ordinary name a user might pick) would be destroyed on
+# first install — violating the module doctrine that "a user's own hand-added
+# skill/command is safe". Before unlinking a legacy-owned name we therefore READ
+# the file and require a conservative hpc-agent authorship marker in its content.
+#
+# The retired assets are known content — they drive hpc-agent machinery, so they
+# NAME it. ``hpc-agent`` (the hyphenated package name) is the anchor: no generic
+# user-authored ``sync`` / ``preflight`` note would plausibly contain that exact
+# hyphenated token, whereas EVERY generated command/skill does (it references the
+# CLI, the skills, the hook module path). The skill-invocation idiom
+# ("Invoke the ``hpc-…`` skill") and the retired skill ids are equally
+# hpc-specific corroborators. A name-matched file WITHOUT any marker is treated as
+# a user collision: KEPT in place and reported (``legacy_name_skipped``) so the
+# human learns of the clash without losing their file.
+_HPC_AUTHORSHIP_MARKERS: tuple[str, ...] = (
+    "hpc-agent",  # the hyphenated package name — the primary, high-confidence anchor
+    "hpc-preflight",  # a retired-skill id the dead ``preflight`` command still names
+    "invoke the `hpc-",  # the generated skill-invocation idiom (backtick-fenced)
+    "hpc-submit",  # a shipped skill id every generated command surface references
+    "hpc-status",
+    "hpc-aggregate",
+    "hpc-campaign",
+)
+
+
+def _is_hpc_authored(text: str) -> bool:
+    """True when *text* carries a conservative hpc-agent authorship marker.
+
+    Keyed on strings no user-authored generic file would plausibly contain — the
+    hyphenated package name ``hpc-agent`` is the anchor (see
+    :data:`_HPC_AUTHORSHIP_MARKERS`). Case-insensitive. Deliberately conservative:
+    a legacy-owned name whose on-disk content fails this test is treated as a
+    user's own collision (kept + reported), never deleted — a false delete of a
+    user's file is far worse than leaving one stale orphan in place.
+    """
+    low = text.lower()
+    return any(marker in low for marker in _HPC_AUTHORSHIP_MARKERS)
+
+
+def _read_asset_text(path: Path) -> str | None:
+    """Read a legacy asset's text for the authorship check (``None`` if unreadable).
+
+    Commands/agents are ``<name>.md`` FILES read directly; a skill is a DIRECTORY
+    whose authorship lives in its ``SKILL.md``. Any read/decode error → ``None``
+    so the caller fails OPEN (skips, never deletes): an asset we cannot read is
+    never assumed hpc-authored.
+    """
+    try:
+        target = path / "SKILL.md" if path.is_dir() else path
+        return target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
 
 def _asset_manifest_path(claude_dir: Path) -> Path:
     """Path to the install manifest stamping which asset names hpc-agent owns."""
@@ -1116,24 +1197,67 @@ def _prune_stale_assets(
     manifest-owned names are touched (a user's own asset was never stamped, so it
     is never pruned). Returns ``{commands, skills, agents}`` of the names pruned
     from ownership (a stale skill's ``Skill(...)`` grant is dropped for these).
+
+    Additionally sweeps the curated :data:`_LEGACY_OWNED` set — pre-manifest
+    orphans that no manifest ever owned, so the manifest subtraction above can
+    never reach them (the preflight → hpc-preflight incident). These are swept
+    conservatively: only when the file is actually present, the name is not owned
+    by the current install (a name the current tree re-ships is spared), AND the
+    on-disk content passes the hpc-agent authorship check (:func:`_is_hpc_authored`)
+    — because a legacy NAME is not proof WE wrote the file. A name-matched file
+    that is unreadable is left in place (fail-open); one that is readable but
+    UNAUTHORED (a user's own same-named file) is left in place and recorded under
+    the ``legacy_name_skipped`` result key, so the human learns of the collision
+    without losing their file (the sync.md collision).
     """
     previous = _read_asset_manifest(claude_dir)
     pruned: dict[str, list[str]] = {kind: [] for kind, _s, _x in _MANIFEST_KINDS}
-    if not previous:
-        return pruned
+    # A user's own file at a legacy-owned name — kept, not deleted, and surfaced
+    # here as ``"<kind>/<name>"`` so the install result discloses the clash.
+    pruned["legacy_name_skipped"] = []
+
+    def _remove(subdir: str, suffix: str | None, name: str) -> None:
+        leaf = name if suffix is None else f"{name}{suffix}"
+        target = claude_dir / subdir / leaf
+        if not dry_run and target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+
     for kind, subdir, suffix in _MANIFEST_KINDS:
-        stale = sorted(set(previous.get(kind, ())) - current[kind])
-        for name in stale:
+        current_owned = current[kind]
+        # Manifest-owned names the current tree drops: recorded regardless of
+        # whether the file survives, so the manifest stamp and (for skills) the
+        # Skill(...) grant are cleared even if the file was hand-deleted.
+        manifest_stale = sorted(set(previous.get(kind, ())) - current_owned)
+        for name in manifest_stale:
+            _remove(subdir, suffix, name)
+            pruned[kind].append(name)
+        # Legacy pre-manifest orphans: never stamped, so unreachable above. Swept
+        # only when the file exists AND the current install does not own the name
+        # (and not already handled as manifest-stale). A missing orphan is a
+        # no-op — nothing to prune and no grant to drop.
+        legacy_stale = sorted(
+            (_LEGACY_OWNED.get(kind, frozenset()) - current_owned) - set(manifest_stale)
+        )
+        for name in legacy_stale:
             leaf = name if suffix is None else f"{name}{suffix}"
-            target = claude_dir / subdir / leaf
-            if not dry_run and target.exists():
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            # Record it either way — it is no longer owned, so its manifest
-            # stamp and (for skills) its Skill(...) grant must go regardless of
-            # whether the file was already hand-deleted.
+            asset_path = claude_dir / subdir / leaf
+            if not asset_path.exists():
+                continue
+            # Authorship gate (the sync.md collision): a legacy-owned NAME proves
+            # nothing about who wrote the FILE. Read it and require an hpc-agent
+            # authorship marker before deleting. Unreadable → skip (fail-open).
+            # Readable-but-unauthored → a user's own same-named file: keep it and
+            # report the collision, never delete.
+            text = _read_asset_text(asset_path)
+            if text is None:
+                continue  # fail-open: never delete what we could not read
+            if not _is_hpc_authored(text):
+                pruned["legacy_name_skipped"].append(f"{kind}/{name}")
+                continue
+            _remove(subdir, suffix, name)
             pruned[kind].append(name)
     return pruned
 

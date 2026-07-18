@@ -191,6 +191,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
+| [alerts-ack](alerts-ack.md) | yes | file_write: `~/.claude/hpc/<repo_hash>/doctor.alerts.seen` | `hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]` |
 | [append-decision](append-decision.md) | no | file_write: `<experiment>/.hpc/runs/<run_id>.decisions.jsonl` | `hpc-agent append-decision --spec <path> [--experiment-dir <dir>]` |
 | [archive-dossier](archive-dossier.md) | yes | network-upload: `s3://<bucket>/<key>` | `hpc-agent archive-dossier --spec <path>` |
 | [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; sync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]` |
@@ -208,6 +209,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
 | [notebook-auto-clear](notebook-auto-clear.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` |
 | [notebook-draft](notebook-draft.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]` |
+| [notebook-dry-run](notebook-dry-run.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-dry-run --spec <path> [--experiment-dir <dir>]` |
 | [notebook-record-config](notebook-record-config.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` |
 | [notebook-record-receipt](notebook-record-receipt.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` |
 | [notebook-scaffold-template](notebook-scaffold-template.md) | no | file_write: `<experiment>/<output_path>` | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` |

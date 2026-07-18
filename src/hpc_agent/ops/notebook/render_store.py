@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,7 +42,13 @@ from hpc_agent._kernel.contract.layout import RepoLayout
 from hpc_agent.ops.notebook.audit_view import _render_section
 
 if TYPE_CHECKING:
-    from hpc_agent.ops.notebook.audit_view import SectionView
+    from hpc_agent.ops.notebook.audit_view import PriorSignoff, SectionView
+    from hpc_agent.ops.notebook.linked_sources import LinkedEngine
+
+#: How many ``.hpc/notebooks/*.decisions.jsonl`` journals the prior-sign-off scan
+#: reads before giving up (slice 3: the scan is BOUNDED + fail-open — a huge
+#: notebooks dir must never turn a render write into an unbounded walk).
+_PRIOR_SIGNOFF_MAX_JOURNALS = 256
 
 __all__ = [
     "HEADER_KEYS",
@@ -101,18 +107,136 @@ def _render_bytes(*, audit_id: str, view: SectionView) -> str:
     return "\n".join([*header, *body]).rstrip() + "\n"
 
 
+def _enrich_view(experiment_dir: Path, audit_id: str, view: SectionView) -> SectionView:
+    """Return *view* enriched with the src digest (slice 1) + prior sign-off (slice 3).
+
+    The ONE seat that holds both the experiment dir and the audit id, so it is where
+    the two PRESENTATION-ONLY blocks are resolved. Fully FAIL-OPEN: any error (no
+    opt-in, unreadable source, a corrupt journal) returns *view* unchanged, so a
+    standalone or broken audit renders exactly as it did before this feature (the
+    byte-absent pin). Neither block enters ``view_sha`` — the content address is
+    unchanged, only the human-readable body gains lines.
+    """
+    engines: tuple[LinkedEngine, ...] = ()
+    prior: PriorSignoff | None = None
+    try:
+        engines = _resolve_linked_engines(experiment_dir, audit_id, view)
+    except Exception:  # noqa: BLE001 — enrichment is advisory; never fail a render
+        engines = ()
+    try:
+        prior = _find_prior_signoff(experiment_dir, audit_id, view)
+    except Exception:  # noqa: BLE001 — advisory disclosure only, fail-open
+        prior = None
+    if not engines and prior is None:
+        return view
+    return replace(view, linked_engines=engines, prior_signoff=prior)
+
+
+def _resolve_linked_engines(
+    experiment_dir: Path, audit_id: str, view: SectionView
+) -> tuple[LinkedEngine, ...]:
+    """The section's imports resolved to engine digests under the audit's ``source_roots``.
+
+    Reads the source ``.py`` relpath + roots from the RECORDED audit config
+    (interview.json's ``audited_source`` — the opt-in seat that carries the source
+    path), parses the source, finds THIS section by slug, and routes its imports
+    through the ONE resolver (``linked_sources.resolve_section_engines``). Returns
+    ``()`` when the audit is not opted-in (a standalone audit's config carries roots
+    but no source path) or the section is absent — the fail-open default.
+    """
+    from hpc_agent.ops.notebook.canonical import (
+        read_interview_audited_source,
+        read_recorded_config,
+    )
+    from hpc_agent.ops.notebook.linked_sources import resolve_section_engines
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    block = read_interview_audited_source(experiment_dir, audit_id)
+    source_rel = block.get("source") if isinstance(block, dict) else None
+    if not isinstance(source_rel, str) or not source_rel:
+        return ()
+    source_path = Path(source_rel)
+    if not source_path.is_absolute():
+        source_path = experiment_dir / source_path
+    if not source_path.is_file():
+        return ()
+    parsed = parse_percent_source(source_path.read_text(encoding="utf-8"))
+    section = next((s for s in parsed.sections if s.slug == view.slug), None)
+    if section is None:
+        return ()
+    cfg = read_recorded_config(experiment_dir, audit_id)
+    root_dirs = [
+        (Path(r) if Path(r).is_absolute() else experiment_dir / r) for r in cfg.source_roots
+    ]
+    if not root_dirs:
+        return ()
+    return tuple(resolve_section_engines(section.source, experiment_dir, root_dirs))
+
+
+def _find_prior_signoff(
+    experiment_dir: Path, audit_id: str, view: SectionView
+) -> PriorSignoff | None:
+    """A DIFFERENT audit's HUMAN sign-off of this section's exact current content, or ``None``.
+
+    Scans every ``.hpc/notebooks/<other>.decisions.jsonl`` (bounded by
+    :data:`_PRIOR_SIGNOFF_MAX_JOURNALS`, fail-open) for a ``notebook-sign-off``
+    record whose ``resolved.section_sha`` equals THIS section's sha and whose audit
+    id differs from *audit_id*. Returns the EARLIEST such sign-off (with a count of
+    distinct prior audits) as a :class:`~hpc_agent.ops.notebook.audit_view.PriorSignoff`
+    — advisory display only, never a status/clearing input.
+    """
+    from hpc_agent.ops.notebook.audit_view import PriorSignoff
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.notebook_audit import SIGN_OFF_BLOCK
+
+    notebooks = RepoLayout(experiment_dir).hpc / "notebooks"
+    if not notebooks.is_dir():
+        return None
+    hits: list[tuple[str, str]] = []  # (ts, other_audit_id)
+    seen: set[str] = set()
+    for i, journal in enumerate(sorted(notebooks.glob("*.decisions.jsonl"))):
+        if i >= _PRIOR_SIGNOFF_MAX_JOURNALS:
+            break
+        other = journal.name[: -len(".decisions.jsonl")]
+        if other == audit_id or "/" in other or "\\" in other:
+            continue
+        for record in read_decisions(experiment_dir, "notebook", other):
+            if record.get("block") != SIGN_OFF_BLOCK:
+                continue
+            resolved = record.get("resolved")
+            if not isinstance(resolved, dict) or resolved.get("section_sha") != view.section_sha:
+                continue
+            ts = record.get("ts")
+            if isinstance(ts, str) and ts and other not in seen:
+                seen.add(other)
+                hits.append((ts, other))
+            break
+    if not hits:
+        return None
+    hits.sort()
+    ts, other = hits[0]
+    return PriorSignoff(date=ts[:10], audit_id=other, count=len(hits))
+
+
 def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> Path:
     """Write *view*'s content-addressed render file and return its path.
 
     Creates the ``.hpc/renders/<audit_id>/`` parent lazily (the ``RepoLayout``
     idiom) and writes the header + markdown at the ``view_sha``-addressed path.
+    Before rendering, the view is ENRICHED (:func:`_enrich_view`, fail-open) with
+    the src digest (slice 1) + a prior-sign-off advisory (slice 3) — both
+    presentation-only, so ``view_sha`` (and the content address) are unchanged; a
+    section with no linked sources and no prior sign-off renders byte-identically.
+
     The write is idempotent by construction: the bytes are deterministic and the
     path is content-addressed — and a file already carrying the identical bytes
     is left UNTOUCHED, never rewritten. The skip is load-bearing, not an
     optimization: the file's mtime is the sign-off gate's temporal anchor (a
     candidate utterance must post-date the render the human saw — run-#12
-    finding 10), so a re-view of an unchanged section must not move it.
+    finding 10), so a re-view of an unchanged section (same source, same journals)
+    must not move it.
     """
+    view = _enrich_view(experiment_dir, audit_id, view)
     path = render_path(experiment_dir, audit_id=audit_id, section=view.slug, view_sha=view.view_sha)
     content = _render_bytes(audit_id=audit_id, view=view)
     try:
@@ -257,6 +381,14 @@ class RenderDigest:
     assertions: tuple[str, ...]
     lint_flag_count: int
     lint_flags: tuple[str, ...]
+    #: The src-digest block (slice 1): one ``module @ path:lineno … (module_sha …)``
+    #: string per bound engine, capped; ``linked_engine_count`` is the full count.
+    #: Empty tuple / 0 when the section binds no linked sources (byte-absent block).
+    linked_engine_count: int = 0
+    linked_engines: tuple[str, ...] = ()
+    #: The prior-sign-off advisory line (slice 3), or ``None`` when this content was
+    #: not human-signed under any other audit. Display-only — never a status input.
+    prior_signoff: str | None = None
 
 
 def _parse_tier(text: str) -> str:
@@ -445,6 +577,67 @@ def _count_lint_flag_lines(text: str) -> int:
     return count
 
 
+#: How many linked-engine lines the digest lists before eliding (matches the
+#: render's own cap; the disclosed ``… +N more`` line is read for the full count).
+_DIGEST_MAX_LINKED_ENGINES = 6
+
+#: The render's engine-elision disclosure line ``- … +N more`` — parsed so the
+#: digest's ``linked_engine_count`` recovers the full total (visible + N).
+_LINKED_MORE_RE = re.compile(r"^- … \+(?P<more>\d+) more$")
+
+
+def _parse_linked_engines(text: str) -> tuple[tuple[str, ...], int]:
+    """The src-digest engine lines (bounded) + full count, from a render body.
+
+    Each rendered engine is a ``- <module> @ …`` line under ``### linked sources``;
+    the disclosed ``- … +N more`` elision line is NOT an engine — it is READ to
+    recover the FULL count (visible engines + N) so ``linked_engine_count`` is the
+    full total, like ``assertion_count`` / ``lint_flag_count``. ``(none)`` never
+    appears — the block is byte-absent when there are no engines — so a body without
+    the header yields ``((), 0)``. Fail-soft: unknown shapes contribute nothing.
+    """
+    engines: list[str] = []
+    count = 0
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "### linked sources":
+            in_block = True
+            continue
+        if stripped.startswith("### ") or stripped.startswith("## "):
+            in_block = False
+            continue
+        if not in_block or not stripped.startswith("- "):
+            continue
+        m = _LINKED_MORE_RE.match(stripped)
+        if m is not None:
+            count += int(m.group("more"))
+            continue
+        count += 1
+        if len(engines) < _DIGEST_MAX_LINKED_ENGINES:
+            engines.append(_trunc_hunk_line(stripped[2:]))
+    return tuple(engines), count
+
+
+def _parse_prior_signoff(text: str) -> str | None:
+    """The prior-sign-off advisory line (slice 3) from a render body, or ``None``.
+
+    The single ``- identical content signed …`` line under ``### prior sign-off``;
+    absent block → ``None`` (fail-soft)."""
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "### prior sign-off":
+            in_block = True
+            continue
+        if stripped.startswith("### ") or stripped.startswith("## "):
+            in_block = False
+            continue
+        if in_block and stripped.startswith("- "):
+            return stripped[2:]
+    return None
+
+
 def read_render_digest(path: Path) -> RenderDigest | None:
     """Read a section render off disk and compute its bounded digest, or ``None``.
 
@@ -470,6 +663,8 @@ def read_render_digest(path: Path) -> RenderDigest | None:
         assertions,
     ) = _parse_body_digest(text)
     lint_flags, lint_flag_count = _parse_lint_flags(text)
+    linked_engines, linked_engine_count = _parse_linked_engines(text)
+    prior_signoff = _parse_prior_signoff(text)
     return RenderDigest(
         audit_id=header["audit_id"],
         section=header["section"],
@@ -485,4 +680,7 @@ def read_render_digest(path: Path) -> RenderDigest | None:
         assertions=assertions,
         lint_flag_count=lint_flag_count,
         lint_flags=lint_flags,
+        linked_engine_count=linked_engine_count,
+        linked_engines=linked_engines,
+        prior_signoff=prior_signoff,
     )

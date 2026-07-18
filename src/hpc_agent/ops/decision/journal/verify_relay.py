@@ -774,6 +774,27 @@ _PATH_SHAPED_TOKEN_RE = re.compile(r"[/\\]|\.[A-Za-z][A-Za-z0-9]*$")
 _WRAP_PUNCT = ".,;:!?()[]{}\"'`"
 
 
+def _is_path_segment_token(text: str, start: int, end: int, token: str) -> bool:
+    """True when the *token* at ``text[start:end]`` is a filesystem-path fragment.
+
+    The relay-token analogue of the corpus scan's :data:`_PATH_SHAPED_TOKEN_RE`
+    defang. Two shapes are path fragments, never run-id claims:
+
+    * the token itself carries a separator or a filename-extension tail
+      (``a/b``, ``run-12345.json``) — reuse of the corpus regex verbatim; and
+    * the token ABUTS a directory separator in the surrounding text. ``_IDENT_RE``
+      never captures ``/`` or ``\\`` (they are not in its char class), so a
+      backslash-delimited Windows path (``...\\experiments-2026\\run-12345``) is
+      split into bare id-shaped segments whose only path signal is the adjoining
+      separator. Checking the char immediately before/after the span recovers it.
+    """
+    if _PATH_SHAPED_TOKEN_RE.search(token):
+        return True
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    return before in "/\\" or after in "/\\"
+
+
 def _is_path_key(key: str) -> bool:
     """True when *key* names a filesystem-path field (segment-equality)."""
     return any(seg in _PATH_KEY_SEGMENTS for seg in re.split(r"[._\-]", key.lower()))
@@ -1357,6 +1378,18 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
             # Registry verb vocabulary ("Next: submit-s3"), not a run-id
             # claim. Consume the span so the digit inside the verb name is
             # not read as a numeric claim, but audit nothing.
+            consumed_spans.append((m.start(), m.end()))
+            continue
+        if _is_path_segment_token(relay, m.start(), m.end(), token):
+            # A filesystem-path fragment, not a run-id claim — the same defang
+            # the corpus scan applies via _PATH_SHAPED_TOKEN_RE, here at the
+            # relay-token level. A Windows dir like
+            # ``[C:\Users\...\experiments-2026\run-12345]`` (the doctor fleet
+            # proposal's ``[<experiment_dir>]`` bracket) is split by _IDENT_RE
+            # on its backslashes into bare id-shaped segments (``experiments-2026``,
+            # ``run-12345``) that each read run-id-like and flag spuriously.
+            # Consume the span (so the digit runs inside never leak into the
+            # numeric pre-pass) but audit nothing — exactly like the verb branch.
             consumed_spans.append((m.start(), m.end()))
             continue
         consumed_spans.append((m.start(), m.end()))

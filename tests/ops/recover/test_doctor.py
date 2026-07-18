@@ -6,6 +6,7 @@ restarts or re-arms anything.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -490,6 +491,21 @@ def test_doctor_version_skew_skipped_for_non_hpc_agent_repo(
 
 
 def _write_alert(exp: Path, ts: str, message: str) -> Path:
+    """Append one alert in the NEW canonical JSON-record format (dedup writer)."""
+    from hpc_agent.state.run_record import journal_dir
+
+    log = journal_dir(exp) / "doctor.alerts.log"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": ts, "kind": "stall", "message": message}) + "\n")
+    return log
+
+
+def _write_legacy_alert(exp: Path, ts: str, message: str) -> Path:
+    """Append one alert in the LEGACY plaintext ``<ts> <message>`` format.
+
+    The tolerant-reader regression: a log written before the JSON-record flip
+    must still read back (the reader is dual-format).
+    """
     from hpc_agent.state.run_record import journal_dir
 
     log = journal_dir(exp) / "doctor.alerts.log"
@@ -559,6 +575,17 @@ def test_doctor_alerts_fail_open_on_corrupt_log(tmp_path: Path) -> None:
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
     assert out["alerts"] == []
     assert out["needs_attention"] is False
+
+
+def test_doctor_reads_legacy_plaintext_alert(tmp_path: Path) -> None:
+    """Tolerant-reader regression: a pre-flip legacy plaintext alert line still
+    rides the doctor envelope as ``{ts, message}`` after the JSON-record flip."""
+    ts = "2026-07-04T23:25:05+00:00"
+    msg = "hpc-agent doctor: driver stalled since 23:01, run pi-estimation-canary — re-arm?"
+    _write_legacy_alert(tmp_path, ts, msg)
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-05T01:00:00+00:00"))
+    assert out["alerts"] == [{"ts": ts, "message": msg}]
 
 
 # ─── env-echo disclosure (run-12 finding 24 addendum) ────────────────────────

@@ -44,15 +44,21 @@ if TYPE_CHECKING:
 
 
 # Sentinel-ack transport verdict (docs/design/connection-broker.md, 2026-07-10).
-# Every scheduler-liveness / -state query (:meth:`ProfileBackend.build_alive_check_cmd`
-# / :meth:`~ProfileBackend.build_scheduler_state_cmd`) ends by echoing this token
-# with the scheduler command's own exit code. Its PRESENCE is the affirmative
-# proof that the remote shell ran the query to completion; an empty read that
-# does NOT carry it is a silently-truncated / never-executed channel — UNKNOWN,
-# never "no jobs left the queue". This kills the silence-as-terminal class the
-# old ``… || true`` masking created: a scheduler binary that failed (qstat
-# missing, slurmctld down) returned rc 0 + empty stdout, indistinguishable from
-# an empty queue, so every job read as terminal. See
+# Every scheduler-liveness / -state / token query
+# (:meth:`ProfileBackend.build_alive_check_cmd` /
+# :meth:`~ProfileBackend.build_scheduler_state_cmd` /
+# :meth:`~ProfileBackend.build_token_query_cmd`)
+# runs its query in a LOGIN shell and ends by echoing this token with the
+# scheduler command's own exit code (both composed by :func:`_login_ack`). Its
+# PRESENCE is the affirmative proof that the remote shell ran the query to
+# completion; an empty read that does NOT carry it is a silently-truncated /
+# never-executed channel — UNKNOWN, never "no jobs left the queue". This kills
+# the silence-as-terminal class the old ``… || true`` masking created: a
+# scheduler binary that failed (qstat missing on a non-login shell, slurmctld
+# down) returned rc 0 + empty stdout, indistinguishable from an empty queue, so
+# every job read as terminal. The login shell (:func:`_login_ack`) additionally
+# ensures the scheduler binary is ON PATH — a bare ``qstat`` on ssh_run's
+# non-login ``bash -c`` transport is rc 127 on Hoffman2/UGE. See
 # :meth:`ProfileBackend.scheduler_query_ran`.
 _SCHED_ACK_PREFIX = "__HPC_SCHED_ACK__="
 
@@ -75,6 +81,71 @@ def _with_ack(cmd: str) -> str:
     scheduler prefix as the call-site default.
     """
     return wrap_with_ack(cmd, _SCHED_ACK_PREFIX)
+
+
+def _login(cmd: str) -> str:
+    """Run *cmd* under a NON-interactive LOGIN shell — ``bash -lc {shlex.quote(cmd)}``.
+
+    The bare login-shell wrap, WITHOUT the sentinel-ack layer :func:`_login_ack`
+    adds. Its one job is to put the scheduler binary (``qstat`` / ``qdel`` /
+    ``scancel``) on ``PATH``: Hoffman2/UGE et al. install it onto ``PATH`` ONLY
+    via the login profile chain (``/etc/profile`` → ``/etc/profile.d/*.sh`` →
+    ``~/.bash_profile``), and ``ssh_run``'s transport wraps every command in a
+    NON-login ``timeout … bash -c '<cmd>'``, so a bare ``qdel <id>`` returns rc
+    127 (``command not found``) — the identical non-login-PATH failure the query
+    builders hit (see :func:`_login_ack`). ``-lc`` NOT ``-lic``: an interactive
+    bash on a PTY-less ssh exec channel blocks until the deadline fires
+    (proving-run #2).
+
+    Used by write commands that carry NO ack — :meth:`ProfileBackend.build_cancel_cmd`,
+    whose success is confirmed by a FOLLOW-UP alive-check, not by a sentinel echo
+    of its own exit code — so the login shell is all that is needed. The
+    ack-bearing query builders compose this via :func:`_login_ack`.
+    """
+    return f"bash -lc {shlex.quote(cmd)}"
+
+
+def _login_ack(cmd: str) -> str:
+    """Ack-wrap a remote scheduler-query *cmd*, then run it in a LOGIN shell.
+
+    The single composition every remote scheduler-query builder returns, in two
+    ordered layers:
+
+    1. :func:`_with_ack` suffixes the positive-evidence sentinel echo carrying
+       *cmd*'s own exit code — the affirmative token
+       :meth:`ProfileBackend.scheduler_query_ran` reads to distinguish "the
+       query ran" from a silent/truncated channel.
+    2. The whole ack-suffixed string is then run under a NON-interactive LOGIN
+       shell — ``bash -lc {shlex.quote(inner)}`` — so the scheduler binary
+       (``qstat`` / ``squeue`` / ``sacct``) resolves on ``PATH``. Hoffman2/UGE,
+       CARC, etc. install the scheduler onto ``PATH`` ONLY via the login profile
+       chain (``/etc/profile`` → ``/etc/profile.d/*.sh`` → ``~/.bash_profile``),
+       and ``ssh_run``'s transport wraps every command in a NON-login
+       ``timeout … bash -c '<cmd>'``, so a bare ``qstat -u "$USER"`` returns rc
+       127 (``command not found``). Echoed with the ack, that read as a rc-0
+       empty queue and settled live runs abandoned — the reconcile
+       ``unable_to_verify`` incident (``qstat -u "$USER"`` failing silently on
+       hoffman2's non-login shell, 2026-07-17).
+
+    This mirrors the SUBMIT leg's idiom EXACTLY — see
+    ``infra/backends/_remote_base.py::RemoteBackendMixin._execute_command``,
+    where the ``command -v`` marker echo rides INSIDE ``bash -lc
+    {shlex.quote(inner)}``. As there, it is ``-lc`` NOT ``-lic``: an interactive
+    bash on a PTY-less ssh exec channel blocks until the deadline fires
+    (proving-run #2 hung the Hoffman2 canary on ``bash -lic``; ``bash -lc``
+    resolved ``qsub`` cleanly). A cluster that genuinely needs an
+    interactivity-guarded PATH must express it through the run preamble
+    (``conda_source`` / ``modules``), never a globally-hanging ``-i``.
+
+    The ack echo rides INSIDE the login shell (it is part of *inner*, quoted
+    whole), so its ``$?`` still captures the scheduler binary's own exit code —
+    the ack semantics :meth:`~ProfileBackend.scheduler_query_ran` depends on are
+    byte-for-byte unchanged; a login shell that cannot even start still emits no
+    ack (transport UNKNOWN), never a spurious rc-0 empty read. Discovery
+    tolerates the login shell's stderr module noise: the parsers read stdout
+    only.
+    """
+    return _login(_with_ack(cmd))
 
 
 def _fmt_hms(total_seconds: int) -> str:
@@ -806,6 +877,14 @@ class ProfileBackend(HPCBackend):
     def build_alive_check_cmd(cls, job_ids: list[str], *, cluster: str | None = None) -> str:
         """Shell command whose stdout lists the live job ids.
 
+        The query is wrapped in a LOGIN shell + sentinel-ack by :func:`_login_ack`
+        (``bash -lc``): the scheduler binary resolves on ``PATH`` over ssh_run's
+        non-login transport (a bare ``qstat`` is rc 127 on Hoffman2/UGE), and the
+        ack proves the query ran. A non-empty *job_ids* always yields a
+        ``bash -lc <inner>`` command; the empty-list short-circuit below is a bare
+        ``true`` no-op (the caller guards on ``if not job_ids`` and never dispatches
+        it through :meth:`scheduler_query_ran`).
+
         *cluster* (#F37) is the federated-SLURM cluster NAME the jobs were
         submitted to (the ``slurm_cluster`` value, i.e. the ``sbatch
         --clusters=`` argument — NOT the hpc-agent clusters.yaml config key).
@@ -826,7 +905,7 @@ class ProfileBackend(HPCBackend):
             # leak history and make abandoned-run detection useless.
             csv = ",".join(job_ids)
             m = f"-M {shlex.quote(cluster)} " if cluster else ""
-            return _with_ack(f"squeue {m}-j {shlex.quote(csv)} -h -o '%i' 2>/dev/null")
+            return _login_ack(f"squeue {m}-j {shlex.quote(csv)} -h -o '%i' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # PBS: query the explicit ids (NOT ``qstat -u``). ``-u`` triggers PBS's
             # *wide* alternate listing where the state column is no longer index 4
@@ -835,10 +914,10 @@ class ProfileBackend(HPCBackend):
             # ``-t`` expands array parents into subjobs; ids that have left the
             # queue print to stderr (discarded) and are simply absent from stdout.
             ids = " ".join(shlex.quote(str(j)) for j in job_ids)
-            return _with_ack(f"qstat -t {ids} 2>/dev/null")
+            return _login_ack(f"qstat -t {ids} 2>/dev/null")
         # sge: one ``qstat -u $USER`` call regardless of N; filtering happens
-        # in parse_alive_output. $USER expands cluster-side.
-        return _with_ack('qstat -u "$USER" 2>/dev/null')
+        # in parse_alive_output. $USER expands cluster-side (inside the login shell).
+        return _login_ack('qstat -u "$USER" 2>/dev/null')
 
     @classmethod
     def parse_alive_output(cls, stdout: str, job_ids: list[str]) -> set[str]:
@@ -911,6 +990,19 @@ class ProfileBackend(HPCBackend):
         ever dispatched. The command only *requests* cancellation: gone-ness is
         confirmed by the alive-check verification, not by its exit code.
 
+        **Login-shell wrap.** The assembled inner command is run under a
+        NON-interactive LOGIN shell — ``bash -lc {shlex.quote(inner)}`` via
+        :func:`_login` — for the SAME reason the query builders use
+        :func:`_login_ack`: the scheduler binary (``qdel`` / ``scancel``)
+        resolves on ``PATH`` only through the login profile chain, and
+        ``ssh_run``'s transport is a NON-login ``bash -c``, so a bare ``qdel``
+        is rc 127 (``command not found``) on Hoffman2/UGE. Cancel carries NO
+        sentinel-ack (unlike the query builders) — its success is confirmed by
+        the follow-up alive-check, not by echoing its own exit code — so this is
+        the PLAIN login wrap, not :func:`_login_ack`. The empty-id ``true``
+        no-op stays bare (no login shell needed for a no-op), matching the
+        alive/state builders' empty short-circuit.
+
         *task_range* (the submit-side array-index grammar ``"4,8,13-15"``, the
         SAME expression :meth:`submit_one` accepts, so submit and cancel speak
         ONE range vocabulary) scopes the cancel to those array indices of each
@@ -956,10 +1048,11 @@ class ProfileBackend(HPCBackend):
             if task_range is not None:
                 # Per-id ``<id>_[<indices>]`` — scancel's array-subscript form.
                 targets = " ".join(f"{shlex.quote(str(j))}_[{task_range}]" for j in job_ids)
-                return f"scancel {m}{targets}"
-            return f"scancel {m}{ids}"
+                inner = f"scancel {m}{targets}"
+            else:
+                inner = f"scancel {m}{ids}"
         # sge / pbspro / torque all cancel via ``qdel <id> <id> ...``.
-        if task_range is not None:
+        elif task_range is not None:
             # SGE addresses array tasks with ``-t <range>`` (the submit ``-t``
             # dialect); the PBS families reuse it in this codepath (no PBS range
             # cancel is exercised today).
@@ -969,11 +1062,19 @@ class ProfileBackend(HPCBackend):
                 # contiguous comma segment (see the docstring). ``;`` — never
                 # ``&&`` — so every segment is cancelled even if an earlier one
                 # errors on an already-gone task. A single segment collapses to
-                # the original single ``qdel -t`` string.
+                # the original single ``qdel -t`` string. The whole ``;``-joined
+                # chain rides inside ONE login shell (``bash -lc``), so every
+                # segment gets the login PATH.
                 segments = [seg.strip() for seg in str(task_range).split(",") if seg.strip()]
-                return " ; ".join(f"qdel {ids} -t {seg}" for seg in segments)
-            return f"qdel {ids} -t {task_range}"
-        return f"qdel {ids}"
+                inner = " ; ".join(f"qdel {ids} -t {seg}" for seg in segments)
+            else:
+                inner = f"qdel {ids} -t {task_range}"
+        else:
+            inner = f"qdel {ids}"
+        # Non-interactive LOGIN shell so the scheduler binary resolves on PATH
+        # over ssh_run's non-login transport (see :func:`_login`). Cancel carries
+        # no ack — the plain login wrap, NOT :func:`_login_ack`.
+        return _login(inner)
 
     @classmethod
     def build_scheduler_state_cmd(cls, job_ids: list[str], *, cluster: str | None = None) -> str:
@@ -988,14 +1089,14 @@ class ProfileBackend(HPCBackend):
         if cls.profile.family == "slurm":
             csv = ",".join(job_ids)
             m = f"-M {shlex.quote(cluster)} " if cluster else ""
-            return _with_ack(f"squeue {m}-j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null")
+            return _login_ack(f"squeue {m}-j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # See build_alive_check_cmd: explicit ids (+ ``-t`` for arrays) keep
             # PBS in its brief format so the state token stays at column 4.
             ids = " ".join(shlex.quote(str(j)) for j in job_ids)
-            return _with_ack(f"qstat -t {ids} 2>/dev/null")
+            return _login_ack(f"qstat -t {ids} 2>/dev/null")
         # sge: qstat -u output already carries the state column.
-        return _with_ack('qstat -u "$USER" 2>/dev/null')
+        return _login_ack('qstat -u "$USER" 2>/dev/null')
 
     @classmethod
     def scheduler_query_ran(cls, stdout: str) -> tuple[str, bool]:
@@ -1118,14 +1219,16 @@ class ProfileBackend(HPCBackend):
         stamped (Δ2). Slurm: ``squeue -o '%i|%k'`` (job id | comment). SGE: the
         context lives only in ``qstat -j <id>``, so the user's live queue is
         enumerated and each job's detail dumped. PBS carries no token → a ``true``
-        no-op (recovery falls back to the marker alone). Ack-wrapped so a severed
+        no-op (recovery falls back to the marker alone). Login-shell + ack-wrapped
+        (:func:`_login_ack`): the query runs under ``bash -lc`` so ``qstat`` /
+        ``squeue`` resolve on a non-login ssh channel (Hoffman2/UGE), and a severed
         / binary-missing query reads UNKNOWN (:meth:`scheduler_query_ran`), never
         "token absent" — the positive-evidence discipline the whole ladder rests
         on.
         """
         if cls.profile.family == "slurm":
             u = f"-u {shlex.quote(user)}" if user else '-u "$USER"'
-            return _with_ack(f"squeue {u} -h -o '%i|%k' 2>/dev/null")
+            return _login_ack(f"squeue {u} -h -o '%i|%k' 2>/dev/null")
         if cls.profile.family == "sge":
             u = shlex.quote(user) if user else '"$USER"'
             # Enumerate the user's live job ids, then dump each job's detail
@@ -1134,8 +1237,8 @@ class ProfileBackend(HPCBackend):
             enum = (
                 f"qstat -u {u} 2>/dev/null | awk 'NR>2 && $1 ~ /^[0-9]+$/ {{print $1}}' | sort -u"
             )
-            return _with_ack(f'for __hpc_j in $({enum}); do qstat -j "$__hpc_j" 2>/dev/null; done')
-        return _with_ack("true")
+            return _login_ack(f'for __hpc_j in $({enum}); do qstat -j "$__hpc_j" 2>/dev/null; done')
+        return _login_ack("true")
 
     @classmethod
     def parse_token_query(cls, stdout: str) -> dict[str, str]:

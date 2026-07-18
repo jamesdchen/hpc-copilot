@@ -168,6 +168,42 @@ def test_wrong_job_id_flagged(tmp_path: Path) -> None:
     assert rid[0].claim == "99999999"
 
 
+# ── path-segment false positives: a bracketed [<experiment_dir>] Windows path ───
+
+
+def test_windows_path_in_relay_not_flagged_as_run_id(tmp_path: Path) -> None:
+    """A doctor fleet proposal embeds the stalled run's ``[<experiment_dir>]``.
+    A Windows path (``...\\experiments-2026\\run-12345``) is split by _IDENT_RE
+    on its backslashes into bare id-shaped segments; each abuts a separator and
+    must be defanged as a path fragment, not flagged as an unknown run-id."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path, task_count=10)
+
+    relay = "Run run-1: driver stalled [C:\\Users\\james\\experiments-2026\\run-12345] — re-arm?"
+    out = _run(tmp_path, relay)
+    # The two path segments (experiments-2026, run-12345) must not surface.
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    assert out.clean is True
+    claims = {m.claim for m in out.mismatches}
+    assert "experiments-2026" not in claims
+    assert "run-12345" not in claims
+
+
+def test_prose_run_id_still_flags_beside_bracketed_path(tmp_path: Path) -> None:
+    """No loss of detection: the path defang must not blanket-exempt run-ids.
+    A genuinely wrong run-id named in PROSE (no abutting separator) beside a
+    clean bracketed path still flags, and ONLY it — both directions pinned."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path, task_count=10)
+
+    relay = (
+        "Run run-1 stalled [C:\\Users\\james\\experiments-2026\\run-12345]; "
+        "the prior attempt run-88888 diverged."
+    )
+    out = _run(tmp_path, relay)
+    assert [m.claim for m in out.mismatches if m.kind == "run_id"] == ["run-88888"]
+
+
 # ── conversational numbers ──────────────────────────────────────────────────────
 
 

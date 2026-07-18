@@ -107,6 +107,55 @@ SKILL_ONLY_OK: set[str] = {
 SLASH_ONLY_OK: set[str] = set()
 
 
+# Naming grammar (frozen 2026-07-18). Every WORKFLOW_PAIRS entry must read
+# ``skill hpc-<stem>`` ⇔ ``command <stem>-hpc`` for one shared ``<stem>``, so a
+# new workflow cannot drift into an ad-hoc name no convention predicts. The
+# complementary half — every repo-tree command/skill NOT in WORKFLOW_PAIRS must
+# be explicitly allow-listed — is enforced by the ``undeclared_skills`` /
+# ``undeclared_slashes`` guards in ``main`` (via ``SKILL_ONLY_OK`` /
+# ``SLASH_ONLY_OK``); together they freeze the surface.
+#
+# The two pairs below diverged BEFORE the freeze and keep their human-facing
+# verbs; each is grandfathered explicitly:
+#   * (hpc-status, monitor-hpc)             — you *monitor* a running job; the
+#     skill's workflow noun is "status" but the slash verb is "monitor".
+#   * (hpc-notebook-audit, new-experiment-hpc) — the audit is the prelude
+#     reached via the idea→computation on-ramp, not a 1:1 rename of the skill.
+_GRAMMAR_EXEMPT_PAIRS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("hpc-status", "monitor-hpc"),
+        ("hpc-notebook-audit", "new-experiment-hpc"),
+    }
+)
+
+
+def _check_workflow_grammar(errors: list[str]) -> None:
+    """Freeze the ``skill hpc-<stem>`` ⇔ ``command <stem>-hpc`` naming grammar.
+
+    Every :data:`WORKFLOW_PAIRS` entry must share a single ``<stem>`` across both
+    surfaces, unless it is explicitly grandfathered in
+    :data:`_GRAMMAR_EXEMPT_PAIRS`. A non-conforming, non-exempt pair appends an
+    error naming the offending pair and the expected command name.
+    """
+    prefix, suffix = "hpc-", "-hpc"
+    for skill_id, slash_stem in WORKFLOW_PAIRS:
+        if (skill_id, slash_stem) in _GRAMMAR_EXEMPT_PAIRS:
+            continue
+        stem = skill_id[len(prefix) :] if skill_id.startswith(prefix) else None
+        if stem is not None and slash_stem == f"{stem}{suffix}":
+            continue
+        expected = f"{stem}{suffix}" if stem is not None else "<stem>-hpc (with skill hpc-<stem>)"
+        errors.append(
+            f"workflow pair ({skill_id!r}, {slash_stem!r}) violates the "
+            "skill/command naming grammar `skill hpc-<stem>` <-> `command "
+            f"<stem>-hpc`. For skill {skill_id!r} the command must be "
+            f"{expected!r}. If this is a sanctioned divergence (like "
+            "monitor-hpc), add the pair to "
+            "scripts/lint_skill_command_sync.py:_GRAMMAR_EXEMPT_PAIRS with a "
+            "rationale."
+        )
+
+
 # A workflow command must explicitly route to its skill rather than
 # run the workflow from the slash body alone. Under the three-layer
 # architecture (slash → skill → execution), the slash's routing is the
@@ -232,6 +281,9 @@ def main() -> int:
 
     declared_skills = {pair[0] for pair in WORKFLOW_PAIRS}
     declared_slashes = {pair[1] for pair in WORKFLOW_PAIRS}
+
+    # Freeze the naming grammar over WORKFLOW_PAIRS before the pairing checks.
+    _check_workflow_grammar(errors)
 
     # SKILL_ONLY_OK / SLASH_ONLY_OK must each be a SUBSET of what is actually
     # on disk. Otherwise an allow-list entry passes VACUOUSLY for a file that

@@ -52,10 +52,17 @@ def _write_durable_spec(experiment_dir: Path, *, notify: bool) -> Path:
 
     The scheduled command reads this instead of taking flags, so the firing is
     fully deterministic. ``notify=true`` makes the scheduled scan surface stalls
-    as an OS notification (design §5).
+    as an OS notification (design §5). ``fleet=true`` makes the ONE unattended
+    watchdog scan every journaled repo, not just the ``--experiment-dir`` it was
+    installed for: the scheduled command still pins a single ``--experiment-dir``
+    (that dir owns the parked / dead-worker / version-skew scans), but the §5
+    stalled-driver scan then unions across sibling repos so a driver stalled
+    under any journaled experiment is caught out of session.
     """
     spec_path = journal_dir(experiment_dir) / "doctor.spec.json"
-    spec_path.write_text(json.dumps({"notify": notify}, indent=2) + "\n", encoding="utf-8")
+    spec_path.write_text(
+        json.dumps({"notify": notify, "fleet": True}, indent=2) + "\n", encoding="utf-8"
+    )
     return spec_path
 
 

@@ -8,6 +8,7 @@ and the verification-failure honesty rule.
 from __future__ import annotations
 
 import dataclasses
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,22 @@ from hpc_agent.ops.monitor import kill as kill_mod
 from hpc_agent.ops.monitor.kill import kill
 from hpc_agent.state.journal import load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
+
+
+def _login_inner(cmd: str) -> str:
+    """Unwrap a dispatched ``bash -lc <inner>`` login-shell cancel; return <inner>.
+
+    ``build_cancel_cmd`` now runs its cancel under a NON-interactive LOGIN shell
+    so the scheduler binary (qdel/scancel) resolves on ``PATH`` over ssh_run's
+    non-login transport — the same wrap the query builders carry, minus the
+    sentinel-ack (cancel's success is confirmed by the follow-up alive-check).
+    ``shlex.split`` reverses ``shlex.quote``, so the third token is the exact
+    inner cancel the login shell runs.
+    """
+    parts = shlex.split(cmd)
+    assert parts[:2] == ["bash", "-lc"], f"cancel not login-wrapped: {cmd!r}"
+    assert len(parts) == 3, f"expected `bash -lc <inner>`, got {cmd!r}"
+    return parts[2]
 
 
 @pytest.fixture(autouse=True)
@@ -114,8 +131,10 @@ def test_kill_journals_intent_and_reports_confirmed_gone(
     # The backend cancel affordance now exists and was dispatched through the seam.
     assert out["backend_cancel_available"] is True
     assert out["backend_cancel_attempted"] is True
-    # The dispatched command is the SLURM-correct scancel over all requested ids.
-    assert sent == ["scancel 100 200 300"]
+    # The dispatched command is the SLURM-correct scancel over all requested ids,
+    # login-shell wrapped so scancel resolves on the non-login ssh transport.
+    assert len(sent) == 1
+    assert _login_inner(sent[0]) == "scancel 100 200 300"
 
     # Intent + verified subset are both durable on the journal record.
     rec = load_run(tmp_path, "r1")
@@ -137,7 +156,7 @@ def test_kill_dispatches_sge_qdel(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     out = kill(experiment_dir=tmp_path, spec=KillSpec(run_id="r1", scheduler="sge"))
 
-    assert sent == ["qdel 100 200"]
+    assert _login_inner(sent[0]) == "qdel 100 200"
     assert out["backend_cancel_available"] is True
     assert out["backend_cancel_attempted"] is True
     assert out["confirmed_count"] == 2
@@ -197,7 +216,7 @@ def test_kill_counts_nothing_gone_on_verification_failure(
     assert out["still_alive_job_ids"] == ["100", "200"]
     assert out["summary"] == "2 requested, 0 confirmed gone"
     # Cancel was still requested even though verification later failed.
-    assert sent == ["scancel 100 200"]
+    assert _login_inner(sent[0]) == "scancel 100 200"
     assert out["backend_cancel_attempted"] is True
     # Intent is still journaled even though verification failed.
     rec = load_run(tmp_path, "r1")

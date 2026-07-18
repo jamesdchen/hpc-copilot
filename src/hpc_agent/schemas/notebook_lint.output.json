@@ -110,7 +110,8 @@
             "structural_completeness",
             "executes_live",
             "linked_sources",
-            "template_import_shadowed"
+            "template_import_shadowed",
+            "executor_module_drift"
           ],
           "title": "Rule",
           "type": "string"

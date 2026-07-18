@@ -521,7 +521,7 @@ def project_notebook_decisions(
         resolved = record.get("resolved")
         resolved = resolved if isinstance(resolved, dict) else {}
         evidence: dict[str, Any] = {}
-        for key in ("section_sha", "view_sha", "output_sha"):
+        for key in ("section_sha", "view_sha", "output_sha", "execution_scope"):
             val = resolved.get(key)
             if val:
                 evidence[key] = str(val)

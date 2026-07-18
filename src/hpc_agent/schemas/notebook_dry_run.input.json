@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_dry_run.input.json",
+  "title": "notebook-dry-run input spec",
+  "description": "Inputs to ``notebook-dry-run``.\n\n``source`` is required; everything else has a small, bounded default. With an\n``audit_id`` the run resolves the observation plan (declared observables) from\nthe recorded audit config and journals sampled receipts under that scope; WITHOUT\none it runs standalone (no ``.hpc`` state touched) — the experiment-agnostic case.",
+  "type": "object",
+  "required": [
+    "source"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "description": "Experiment-relative path to the percent-format .py to preview-run (jupytext `# %%` cells; `# hpc-audit-section:` markers segment sections). Executed section-by-section in ONE namespace in the CURRENT LOCAL env.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "audit_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional notebook decision-journal scope id. When PRESENT: roots + the observation plan are read from the recorded audit config, and one SAMPLED (non-clearing) render receipt is journaled per executed section. When ABSENT: standalone mode — no .hpc state is read or written (the experiment-agnostic case).",
+      "title": "Audit Id"
+    },
+    "sample_n": {
+      "default": 50,
+      "description": "The advisory sample cap exposed to the source via the HPC_NOTEBOOK_SAMPLE_N env var. Small by default so the preview is cheap. The source must READ the var to honor it — core never silently truncates arbitrary inputs (disclosed in `sample_disclosure`).",
+      "minimum": 1,
+      "title": "Sample N",
+      "type": "integer"
+    },
+    "sections": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional section-slug filter. When given, execution runs every section in source order UP TO AND INCLUDING the last-named one (so earlier sections a named one depends on still run); later sections are reported `skipped`. A named slug the source lacks is a loud spec_invalid. Default (null) runs every section.",
+      "title": "Sections"
+    },
+    "timeout_sec": {
+      "default": 300,
+      "description": "Hard wall-clock cap on the whole preview run (generous but bounded). A runaway source is abandoned and the in-progress section is reported `timeout`; the verb always returns within this bound.",
+      "minimum": 1,
+      "title": "Timeout Sec",
+      "type": "integer"
+    }
+  }
+}

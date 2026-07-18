@@ -8,9 +8,29 @@ present. These cover the pure, scheduler-shape-only backend helpers.
 
 from __future__ import annotations
 
+import shlex
+
 import pytest
 
 from hpc_agent.infra.backends import get_backend_class
+
+
+def _login_inner(out: str) -> str:
+    """Assert *out* is a ``bash -lc <inner>`` login-shell command; return <inner>.
+
+    The remote scheduler-query builders wrap their command in a NON-interactive
+    LOGIN shell so qstat/squeue resolve on ``PATH`` over ssh_run's non-login
+    ``bash -c`` transport (the reconcile ``unable_to_verify`` incident — bare
+    ``qstat -u "$USER"`` was rc 127 on hoffman2's non-login shell, 2026-07-17),
+    mirroring the submit leg (``_remote_base.py::_execute_command``). ``-lc`` NOT
+    ``-lic`` (interactive init hangs a PTY-less exec channel, proving-run #2).
+    ``shlex.split`` reverses the builder's ``shlex.quote``.
+    """
+    parts = shlex.split(out)
+    assert parts[:2] == ["bash", "-lc"], f"not a login-shell command: {out!r}"
+    assert len(parts) == 3, f"expected `bash -lc <inner>`, got {out!r}"
+    return parts[2]
+
 
 SGE = get_backend_class("sge")
 SLURM = get_backend_class("slurm")
@@ -121,24 +141,36 @@ def test_slurm_builders_thread_federated_cluster_M_flag() -> None:
     """#F37: the liveness / state / cancel builders emit ``-M <cluster>`` for a
     federated SLURM job (the ``sbatch --clusters=`` member), so the probe/kill
     reach the cluster the job actually lives on. Default (no cluster) stays
-    byte-identical — the non-federated path is unchanged."""
+    byte-identical — the non-federated path is unchanged. All three builders'
+    payload is unwrapped from the ``bash -lc`` login shell (see _login_inner)
+    before comparing: the QUERY builders carry a sentinel-ack inside the login
+    shell, ``build_cancel_cmd`` carries none (its success is confirmed by the
+    follow-up alive-check) but is login-wrapped all the same, so the scheduler
+    binary resolves on PATH over ssh_run's non-login transport."""
     ack = '; echo "__HPC_SCHED_ACK__=$?"'
-    # Threaded cluster → -M appears; the rest of the command is unchanged.
+    # Threaded cluster → -M appears in the login-shell inner; the rest unchanged.
+    # (cluster= is a ProfileBackend override kwarg absent from the HPCBackend base
+    # stub get_backend_class is typed to return — a src-only concern CI mypy scopes
+    # out; suppressed for the whole-file hook.)
     assert (
-        SLURM.build_alive_check_cmd(["1", "2"], cluster="gpu")
+        _login_inner(SLURM.build_alive_check_cmd(["1", "2"], cluster="gpu"))  # type: ignore[call-arg]
         == "squeue -M gpu -j 1,2 -h -o '%i' 2>/dev/null" + ack
     )
     assert (
-        SLURM.build_scheduler_state_cmd(["1"], cluster="gpu")
+        _login_inner(SLURM.build_scheduler_state_cmd(["1"], cluster="gpu"))  # type: ignore[call-arg]
         == "squeue -M gpu -j 1 -h -o '%i %T' 2>/dev/null" + ack
     )
-    assert SLURM.build_cancel_cmd(["1", "2"], cluster="gpu") == "scancel -M gpu 1 2"
-    # Default (no federation) is byte-identical to the pre-#F37 command.
-    assert SLURM.build_alive_check_cmd(["1", "2"]) == "squeue -j 1,2 -h -o '%i' 2>/dev/null" + ack
-    assert SLURM.build_cancel_cmd(["1", "2"]) == "scancel 1 2"
+    # cancel is login-wrapped too (no ack), so unwrap before comparing the -M inner.
+    assert _login_inner(SLURM.build_cancel_cmd(["1", "2"], cluster="gpu")) == "scancel -M gpu 1 2"
+    # Default (no federation) is byte-identical to the pre-#F37 command (inner).
+    assert (
+        _login_inner(SLURM.build_alive_check_cmd(["1", "2"]))
+        == "squeue -j 1,2 -h -o '%i' 2>/dev/null" + ack
+    )
+    assert _login_inner(SLURM.build_cancel_cmd(["1", "2"])) == "scancel 1 2"
     # PBS/SGE ignore the kwarg (no cross-cluster routing here) — still no -M.
-    assert "-M" not in PBSPRO.build_alive_check_cmd(["12345"], cluster="gpu")
-    assert "-M" not in SGE.build_cancel_cmd(["1"], cluster="gpu")
+    assert "-M" not in PBSPRO.build_alive_check_cmd(["12345"], cluster="gpu")  # type: ignore[call-arg]
+    assert "-M" not in _login_inner(SGE.build_cancel_cmd(["1"], cluster="gpu"))
 
 
 def test_sge_classify_suspended_states_are_held() -> None:

@@ -9,6 +9,7 @@ env var, resource grammar, finished-state token, history query).
 from __future__ import annotations
 
 import os
+import shlex
 
 import pytest
 
@@ -145,16 +146,24 @@ def test_pbs_classify(family, state, bucket):
 def test_pbs_live_cmds_use_explicit_ids_not_wide_u_format(family):
     # ``qstat -u`` would trigger PBS's wide alternate listing (state column
     # shifts off index 4); passing explicit ids keeps the brief format and
-    # ``-t`` expands array subjobs.
+    # ``-t`` expands array subjobs. Each query is wrapped in a ``bash -lc``
+    # LOGIN shell (so qstat resolves on ssh_run's non-login transport — the
+    # reconcile unable_to_verify incident, mirroring the submit leg); unwrap it
+    # before inspecting the qstat invocation.
     cls = get_backend_class(family)
     for cmd in (
         cls.build_alive_check_cmd(["12345", "12346"]),
         cls.build_scheduler_state_cmd(["12345", "12346"]),
     ):
-        assert cmd.startswith("qstat -t ")
-        assert "-u" not in cmd
-        assert "12345" in cmd and "12346" in cmd
-    # empty id list short-circuits (no stray ``qstat -t`` with no args)
+        assert cmd.startswith("bash -lc ")  # login-shell contract
+        parts = shlex.split(cmd)
+        assert parts[:2] == ["bash", "-lc"] and len(parts) == 3
+        inner = parts[2]
+        assert inner.startswith("qstat -t ")
+        assert "-u" not in inner
+        assert "12345" in inner and "12346" in inner
+    # empty id list short-circuits (no stray ``qstat -t`` with no args); a bare
+    # ``true`` no-op the caller guards on (never dispatched through the ack gate).
     assert cls.build_alive_check_cmd([]) == "true"
     assert cls.build_scheduler_state_cmd([]) == "true"
 
@@ -162,9 +171,14 @@ def test_pbs_live_cmds_use_explicit_ids_not_wide_u_format(family):
 @pytest.mark.parametrize("family", ["pbspro", "torque"])
 def test_pbs_build_cancel_cmd_uses_qdel(family):
     # PBS (like SGE) cancels via ``qdel <id> <id> ...``; empty ids short-circuit.
+    # The cancel is login-wrapped too (qdel must resolve on ssh_run's non-login
+    # transport) — but WITHOUT the query builders' sentinel-ack: cancel's success
+    # is confirmed by the follow-up alive-check, not its own exit code.
     cls = get_backend_class(family)
-    assert cls.build_cancel_cmd(["12345", "12346"]) == "qdel 12345 12346"
-    assert cls.build_cancel_cmd([]) == "true"
+    out = cls.build_cancel_cmd(["12345", "12346"])
+    assert out.startswith("bash -lc ")  # login-shell contract
+    assert shlex.split(out)[2] == "qdel 12345 12346"
+    assert cls.build_cancel_cmd([]) == "true"  # no-op stays bare
 
 
 # --- #F36: PBS array ids keep their ``[]`` through the whole round-trip ------
@@ -182,7 +196,8 @@ def test_pbs_array_id_survives_regex_and_builders(family):
     assert array_id == "12345[]"
     assert "'12345[]'" in cls.build_alive_check_cmd([array_id])
     assert "'12345[]'" in cls.build_scheduler_state_cmd([array_id])
-    assert cls.build_cancel_cmd([array_id]) == "qdel '12345[]'"
+    # cancel is login-wrapped (no ack); unwrap to see the bracket-quoted qdel.
+    assert shlex.split(cls.build_cancel_cmd([array_id]))[2] == "qdel '12345[]'"
 
 
 @pytest.mark.parametrize("family", ["pbspro", "torque"])

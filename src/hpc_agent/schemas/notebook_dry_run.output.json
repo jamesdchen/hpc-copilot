@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_dry_run.output.json",
+  "title": "notebook-dry-run output data",
+  "description": "The whole sampled-run projection: per-section outcomes + disclosures + render.\n\n``markdown`` is the code-rendered artifact for VERBATIM relay (the LLM never\ninterprets the run). ``executed_scope`` is always ``\"sampled\"`` — a reminder,\ncarried into the journaled receipts, that this run cleared nothing.",
+  "type": "object",
+  "required": [
+    "env_disclosure",
+    "interpreter",
+    "sample_n",
+    "sample_disclosure",
+    "markdown"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audit Id"
+    },
+    "executed_scope": {
+      "default": "sampled",
+      "description": "Always 'sampled' — a preview run; it never clears or signs a section.",
+      "title": "Executed Scope",
+      "type": "string"
+    },
+    "env_disclosure": {
+      "description": "Explicit statement that the run executed in the CURRENT LOCAL env (naming the interpreter), NOT the cluster.",
+      "title": "Env Disclosure",
+      "type": "string"
+    },
+    "interpreter": {
+      "description": "The local interpreter path the run executed under.",
+      "title": "Interpreter",
+      "type": "string"
+    },
+    "sample_n": {
+      "title": "Sample N",
+      "type": "integer"
+    },
+    "sample_env_var": {
+      "default": "HPC_NOTEBOOK_SAMPLE_N",
+      "description": "The env var the sample cap was exposed to the source through.",
+      "title": "Sample Env Var",
+      "type": "string"
+    },
+    "sample_disclosure": {
+      "description": "How the sample cap was applied: the env var + advisory note that the source must honor it (no silent input truncation), and — when detectable — whether the source appeared to consume the cap.",
+      "title": "Sample Disclosure",
+      "type": "string"
+    },
+    "sample_cap_consumed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Whether the source was observed to READ HPC_NOTEBOOK_SAMPLE_N (true), observed NOT to (false), or undetectable (null — the advisory case).",
+      "title": "Sample Cap Consumed"
+    },
+    "timed_out": {
+      "default": false,
+      "description": "True when the run hit `timeout_sec` and the in-progress section was abandoned.",
+      "title": "Timed Out",
+      "type": "boolean"
+    },
+    "sections": {
+      "description": "Per-section outcome, in source order.",
+      "items": {
+        "$ref": "#/$defs/NotebookDryRunSection"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "receipts_recorded": {
+      "description": "Slugs a SAMPLED (non-clearing) render receipt was journaled for (empty in standalone mode — no audit_id, no journal scope).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Receipts Recorded",
+      "type": "array"
+    },
+    "observables": {
+      "description": "Declared observables measured in the final namespace (audit config only).",
+      "items": {
+        "$ref": "#/$defs/NotebookDryRunObservable"
+      },
+      "title": "Observables",
+      "type": "array"
+    },
+    "markdown": {
+      "description": "The code-rendered projection for VERBATIM relay. Deterministic (no timing).",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "NotebookDryRunAssertion": {
+      "additionalProperties": false,
+      "description": "One statically-declared ``assert`` with its EXECUTED verdict.\n\nDistinct from the static assertion table: ``outcome`` reflects whether the\nassert LINE actually ran in this sampled execution — ``passed`` (reached, did\nnot raise), ``failed`` (reached and raised AssertionError), or ``not_run``\n(never reached — the section raised earlier, or the branch was not taken).",
+      "properties": {
+        "test": {
+          "title": "Test",
+          "type": "string"
+        },
+        "lineno": {
+          "title": "Lineno",
+          "type": "integer"
+        },
+        "msg": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Msg"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "test",
+        "lineno",
+        "outcome"
+      ],
+      "title": "notebook-dry-run assertion outcome",
+      "type": "object"
+    },
+    "NotebookDryRunObservable": {
+      "additionalProperties": false,
+      "description": "One declared observable measured in the final namespace (audit config only).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section"
+        },
+        "atoms": {
+          "additionalProperties": true,
+          "title": "Atoms",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "notebook-dry-run observable",
+      "type": "object"
+    },
+    "NotebookDryRunSection": {
+      "additionalProperties": false,
+      "description": "The deterministic per-section outcome of the sampled run.",
+      "properties": {
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "ran": {
+          "title": "Ran",
+          "type": "boolean"
+        },
+        "error": {
+          "title": "Error",
+          "type": "boolean"
+        },
+        "elapsed_sec": {
+          "title": "Elapsed Sec",
+          "type": "number"
+        },
+        "traceback_tail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Traceback Tail"
+        },
+        "stdout_tail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stdout Tail"
+        },
+        "output_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Sha"
+        },
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/NotebookDryRunAssertion"
+          },
+          "title": "Assertions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "slug",
+        "outcome",
+        "ran",
+        "error",
+        "elapsed_sec"
+      ],
+      "title": "notebook-dry-run section outcome",
+      "type": "object"
+    }
+  }
+}

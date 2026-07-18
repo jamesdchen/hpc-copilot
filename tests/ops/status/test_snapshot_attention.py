@@ -12,6 +12,7 @@ brief field is unchanged.
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import pytest
@@ -121,8 +122,12 @@ def test_snapshot_alerts_and_attention_alert_items_agree(tmp_path: Path) -> None
     base = _current_homedir() / repo_hash(tmp_path)
     base.mkdir(parents=True, exist_ok=True)
     ts = "2026-07-06T09:00:00+00:00"
+    # NEW canonical JSON-record format (the dedup writer); the reader is
+    # dual-format, so ts+message still project out unchanged.
     (base / "doctor.alerts.log").write_text(
-        f"{ts} driver stalled, run run-live — re-arm?\n", encoding="utf-8"
+        json.dumps({"ts": ts, "kind": "stall", "message": "driver stalled, run run-live — re-arm?"})
+        + "\n",
+        encoding="utf-8",
     )
 
     result = status_snapshot(tmp_path, spec=StatusSnapshotSpec(now_iso=_NOW, mark_seen=True))
@@ -143,3 +148,52 @@ def test_snapshot_calls_the_shared_collect_queue_seat_not_a_local_sort() -> None
     src = inspect.getsource(status_snapshot)
     assert "collect_queue(" in src
     assert "order_items(" not in src  # no local re-sort — the seat owns ordering
+
+
+# ─── F4a: the additive ``fleet_terminal`` completeness field ──────────────────
+#
+# The journal ground truth an experiment-scope completeness claim ("both fleets
+# drained / all runs journaled") is audited against — additive only.
+
+
+def test_snapshot_fleet_terminal_flags_non_terminal_runs(tmp_path: Path) -> None:
+    """F4a: while a run is still non-terminal, ``fleet_terminal`` reads
+    ``all_terminal=False`` and names the (run_id, status) pair."""
+    _mk(tmp_path, "run-live")  # in_flight
+    result = status_snapshot(tmp_path, spec=StatusSnapshotSpec(now_iso=_NOW, mark_seen=False))
+    ft = result.brief["fleet_terminal"]
+    assert ft["all_terminal"] is False
+    assert ["run-live", "in_flight"] in ft["non_terminal"]
+
+
+def test_snapshot_fleet_terminal_all_terminal_when_run_terminal(tmp_path: Path) -> None:
+    """F4a: a digested terminal run reads ``all_terminal=True`` with an empty
+    non_terminal list — the completeness claim is TRUE for this fleet."""
+    _mk(tmp_path, "run-done", status="complete")
+    result = status_snapshot(
+        tmp_path, spec=StatusSnapshotSpec(run_id="run-done", now_iso=_NOW, mark_seen=False)
+    )
+    ft = result.brief["fleet_terminal"]
+    assert ft["all_terminal"] is True
+    assert ft["non_terminal"] == []
+
+
+def test_snapshot_fleet_terminal_is_additive(tmp_path: Path) -> None:
+    """F4a is byte-additive: adding ``fleet_terminal`` leaves every pre-existing
+    brief key present."""
+    _mk(tmp_path, "run-live")
+    result = status_snapshot(tmp_path, spec=StatusSnapshotSpec(now_iso=_NOW, mark_seen=False))
+    assert "fleet_terminal" in result.brief
+    for key in (
+        "now",
+        "running_where",
+        "changed_since_seen",
+        "stalled_runs",
+        "anomalies",
+        "alerts",
+        "open_ssh_circuits",
+        "attention",
+        "overnight",
+        "active_env_overrides",
+    ):
+        assert key in result.brief
