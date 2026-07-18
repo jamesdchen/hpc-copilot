@@ -436,3 +436,65 @@ proving-run flag, never a production default.**
   array appearance (scheduler-accepted-before-id-read window); retry with a fresh
   param-derived run_id if the promote wins the race. Flip bar: one-array /
   adopt-no-reqsub proven live + no skew casualty + captures clean.
+
+- 2026-07-18: **RUN 15 EXECUTED — the submit-once live-fire. §2+§3 evidence in
+  hand; flip bar met with one disclosed construction.** Wheel `0.11.2+g1ac2e46a`
+  on all 5 envs; Δ3 probe OK ×3; flag per-window ON throughout. All runs on
+  discovery (Slurm); driven autonomously from the dev session via the block
+  chain + append-decision under the operator's typed authorization (utterance
+  log, demo namespace).
+  - **§2.1 happy path — `pi-drill-acce80d7` (n=10000001): PASS.** Mint→promote
+    clean: journal `submitting→in_flight→complete`, `job_ids [10378589]`,
+    attempt 0; cluster marker `{"token":"pi-drill-acce80d7#0","state":"pending"}`
+    + wave-0.id `0 Submitted batch job 10378589`; ONE array (sacct); 20/20
+    tasks 4–6 s each; S4 harvested (π≈3.1415084, n=200,000,020,
+    abs_err 3.4e-4).
+  - **§2.2 kill attempts 1–2 — `pi-drill-e118020c`, `pi-drill-59cac0a3`
+    (n=10000002/3): CLEAN MISSES, and a finding.** Reactive external kills
+    (remote 0.25 s poll pre-armed; attempt 2 additionally `HPC_SSH_ENGINE=native`)
+    lost the race BOTH times — promote won in <~1 s even on full-handshake
+    transport. **Finding: the accept→promote id-window is sub-second in
+    practice on 0.11.x (asyncssh default narrowed it further); the orphan class
+    is live-rare, and a reactive kill cannot construct it.** Both runs promoted
+    clean (their killed watchers exercised the dead-driver class; both settled
+    `complete` by reconcile). Runsheet §4's "comfortably wide window" is
+    OBSOLETE — corrected by this evidence.
+  - **§2.2/§2.3 apex — `pi-drill-2217506a` (n=10000004): THE CONTRACT PROVEN,
+    construction DISCLOSED.** Apex built by transport-delay fault injection at
+    the supported `HPC_SSH_BINARY` seam (wrapper ran real ssh, remote completed
+    fully, reply held 8 s; worker tree killed inside the hold on token
+    sighting; wrapper deleted after). Evidence, all mechanical:
+    orphan minted (`status submitting, job_ids []`, attempt 0); marker
+    `pending` + wave-0.id `0 Submitted batch job 10378706` durable server-side;
+    reconcile log VERBATIM: `reconcile: adopted orphaned array
+    pi-drill-2217506a: jobs ['10378706'] (recovered from cluster jobmap
+    marker) — promoting submitting→in_flight, no re-qsub.`;
+    `verdict_reason submit_once_adopted_from_marker` (rung 1a),
+    `announce_crosscheck confirmed`; **sacct one-array proof: 12 arrays in the
+    window map 1:1 to 4 runs' canaries+mains — `10378706` is the apex run's
+    ONLY main array, all 20 tasks COMPLETED. Zero re-qsub, by the scheduler's
+    own ledger.** Run settled `complete` on the ADOPTED id.
+  - **§3 captures: PASS.** `env_lock_status captured` + `hw_status captured`
+    stamped on the happy-path sidecar pre-array (first live exercise of both);
+    reducer-check `skipped` (built-in mean) as expected.
+  - **Watch-list extras exercised live:** SSH circuit breaker OPENED on the
+    kill storm (3 timeouts — the MaxStartups burst class), 300 s cooldown,
+    self-heal probe; S4 correctly refused under the open circuit.
+  - **Gate findings (docket, must-investigate before trusting the authorship
+    chain fully):** (1) utterance capture is session-cwd-namespaced — a
+    delegated operator session cannot satisfy the gate for a foreign
+    experiment_dir (two round-trips burned; design ruling owed);
+    (2) **the authorship gate ACCEPTED `n_samples 10000004` although it is
+    absent from the demo-namespace utterance log** (it had correctly refused
+    the same shape earlier) — either an undocumented matcher rule or a real
+    hole; the human HAD typed it (dev-session namespace), so the drill's
+    authorship is genuine, but the mechanical verification path needs reading.
+  - **§5 assessment:** (1) ✓ happy path byte-equivalent; (2) ✓ adopt-no-reqsub
+    proven live end-to-end — with the apex WINDOW constructed by disclosed
+    fault injection (the recovery machinery, marker, adoption, scheduler state
+    all genuine); plus two clean-miss datapoints showing the natural window is
+    sub-second; (3) ✓ no skew casualty — the orphan survived every prune tick
+    (Δ3 held on all envs); (4) ✓ captures recorded; (5) n/a (not campaign-driven).
+    **The flip remains the maintainer's call**; the honest caveat is the
+    fault-injection construction of (2) — mitigated by the hermetic drill
+    corpus + the live adoption path being fully real.
