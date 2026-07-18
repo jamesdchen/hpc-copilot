@@ -387,6 +387,10 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = set()
 _BOGUS_KEY_SPEC: dict = {"contract-probe-bogus-key": 1}
 
 EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
+    # alerts-ack's spec is all-optional ({} = ack the whole backlog, the
+    # ergonomic bare path) — probe with the bogus key so the wire model
+    # rejects it.
+    "alerts-ack": _BOGUS_KEY_SPEC,
     "apply-safe-defaults": _BOGUS_KEY_SPEC,
     # pack-status's spec is all-optional ({} = every opted-in pack) — probe
     # with the bogus key so the wire model rejects it.
