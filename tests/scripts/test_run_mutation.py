@@ -62,6 +62,23 @@ def test_fast_path_cache_paired_with_in_process_battery():
     assert scope.tests == ("tests/cli/test_fast_path_cache.py",)
 
 
+def test_combiner_excludes_the_subprocess_failure_battery():
+    """combiner's covering set must NOT include test_combiner_failures.py: every
+    test in it drives the combiner as a fresh subprocess by copying
+    ``hpc_agent.__file__``'s combiner.py -- which under mutmut is the MUTATED copy
+    carrying the trampoline header, so the child trips mutmut's config bootstrap and
+    aborts the STATS phase (run 29618964851). Subprocess tests also carry zero
+    mutation signal (uninstrumentable), so the in-process reduce-math battery is the
+    whole covering set -- same rationale as fast-path-cache."""
+    scope = rm.MODULE_MAP["combiner"]
+    assert scope.tests == ("tests/execution/mapreduce/test_combiner.py",)
+    assert "test_combiner_failures.py" not in " ".join(scope.tests)
+    # The chdir deselects must all still reference the one remaining covering file
+    # (removing test_combiner_failures.py must not orphan a deselect node-id).
+    for node_id in scope.deselect:
+        assert node_id.startswith("tests/execution/mapreduce/test_combiner.py::")
+
+
 def test_block_chain_covering_set_broadened():
     """Unit C: the spec-hint contract test (which kills the 183 memo false
     survivors) is in scope."""
@@ -195,3 +212,61 @@ def test_keys_mode_lists_all_modules(capsys):
     rm.main(["--keys"])
     keys = json.loads(capsys.readouterr().out)
     assert set(keys) == set(rm.MODULE_MAP)
+
+
+# ── mutmut os.wait() guard (consent-hint KeyError, run 29618964851) ──────────────
+
+
+def _load_guarded_launcher():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_mutmut_guarded_run", REPO_ROOT / "scripts" / "_mutmut_guarded_run.py"
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_guarded_launcher_imports_without_running_mutmut():
+    """The launcher must be importable on EVERY platform (its ``from mutmut.__main__
+    import cli`` is deferred inside ``main``, so importing it never trips mutmut's
+    Windows ``sys.exit(1)``) and expose ``install_wait_guard``."""
+    mod = _load_guarded_launcher()
+    assert hasattr(mod, "install_wait_guard")
+    assert hasattr(mod, "main")
+
+
+def test_wait_guard_drops_children_mutmut_never_forked():
+    """POSIX: after ``install_wait_guard`` a genuine (guard-forked) worker is still
+    returned by ``os.wait()``, but a stray child forked OUTSIDE the guard (a
+    covering-test subprocess descendant reparented to the run process) is reaped and
+    DROPPED -- never handed back for mutmut's unguarded worker-table lookup. That
+    lookup KeyError is exactly what aborted the consent-hint run on its first reap."""
+    import os
+
+    if not (hasattr(os, "fork") and hasattr(os, "wait")):
+        pytest.skip("POSIX-only (os.fork / os.wait)")
+
+    mod = _load_guarded_launcher()
+    real_fork, real_wait = os.fork, os.wait
+    try:
+        mod.install_wait_guard()  # captures real_fork/real_wait, patches os.fork/os.wait
+        # A genuine mutmut-style worker: forked THROUGH the patched os.fork, so the
+        # guard tracked its pid and returns it verbatim.
+        worker = os.fork()
+        if worker == 0:  # pragma: no cover - child
+            os._exit(0)
+        assert os.wait()[0] == worker  # tracked worker returned; no children remain
+
+        # A stray: forked via the ORIGINAL fork, so the guard never recorded it. The
+        # guarded os.wait() reaps it (no zombie) but drops the pid, then finds no more
+        # children -> ChildProcessError, never returning the stray to the caller.
+        stray = real_fork()
+        if stray == 0:  # pragma: no cover - child
+            os._exit(0)
+        with pytest.raises(ChildProcessError):
+            os.wait()
+    finally:
+        os.fork, os.wait = real_fork, real_wait

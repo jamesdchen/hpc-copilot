@@ -179,18 +179,37 @@ MODULE_MAP: dict[str, ModuleScope] = {
     "combiner": ModuleScope(
         key="combiner",
         source="src/hpc_agent/execution/mapreduce/combiner.py",
-        tests=(
-            "tests/execution/mapreduce/test_combiner.py",
-            "tests/execution/mapreduce/test_combiner_failures.py",
-        ),
+        # test_combiner_failures.py is DELIBERATELY EXCLUDED (was paired here). Every
+        # test in it drives the combiner as a fresh SUBPROCESS -- and it materializes
+        # that child by copying ``Path(hpc_agent.__file__).parent/.../combiner.py``.
+        # Under mutmut ``hpc_agent.__file__`` resolves INTO the mutants/ tree, so the
+        # copied script is the MUTATED combiner, which carries mutmut's trampoline
+        # header (``from mutmut.mutation.trampoline import ...``). Running that script
+        # as a child re-triggers mutmut's config discovery in the child's cwd (a
+        # pytest tmp dir with no src/), which raises "Could not figure out where the
+        # code to mutate is" -- so the child prints that instead of the expected
+        # HPC_WAVE error, the assertion fails, and mutmut's STATS phase aborts with
+        # "failed to collect stats. runner returned 1" (run 29618964851). Being
+        # subprocess-only, those tests are also invisible to mutmut's instrumentation
+        # (it cannot reach into a child interpreter), so they carry ZERO mutation
+        # signal anyway -- the same reason fast-path-cache drops its subprocess battery.
+        # The trade-off is honest: combiner.main()'s failure-mode branches (missing
+        # env / missing sidecar / malformed metrics) get no mutation verdict here;
+        # they are exercised only via subprocess, which mutmut can never instrument.
+        tests=("tests/execution/mapreduce/test_combiner.py",),
         note="Deterministic reduce/combine -- the module that computes every "
         "aggregate number. HEAVY (~650 lines): its scoped sweep is the slowest; "
-        "budget the most CI time for this key. Its end-to-end main() tests chdir() "
-        "out of the mutants tree, which crashes mutmut 3.6.0's relative "
-        "source_paths.resolve(strict=True); they are DESELECTED (below) so the "
-        "in-process reduce-math tests (grid-key / weighted-mean / Neumaier-sum) "
-        "still produce verdicts. paths_to_mutate stays RELATIVE (triage-2 Finding #1: "
-        "an absolute path zeroed the whole matrix via the coverage-join).",
+        "budget the most CI time for this key. Two classes of test are held out of "
+        "the mutmut run: its end-to-end main() tests chdir() out of the mutants tree "
+        "(crashing mutmut 3.6.0's relative source_paths.resolve(strict=True)) and are "
+        "DESELECTED (below); its SUBPROCESS failure-mode battery "
+        "(test_combiner_failures.py) copies + runs the MUTATED combiner as a child, "
+        "tripping mutmut's config bootstrap and aborting stats, so it is dropped from "
+        "the covering set entirely (subprocess tests carry no mutation signal). What "
+        "remains is the in-process reduce-math battery (grid-key / weighted-mean / "
+        "Neumaier-sum), which still produces verdicts. paths_to_mutate stays RELATIVE "
+        "(triage-2 Finding #1: an absolute path zeroed the whole matrix via the "
+        "coverage-join).",
         # The chdir'ing end-to-end main() tests. Each drives combiner.main()
         # after monkeypatch.chdir(tmp_path); under mutmut that crashes the
         # trampoline's cwd-relative resolve. Class-level except TestGroupSizeWeighting,
@@ -468,11 +487,23 @@ def run_sweep(scope: ModuleScope) -> int:
         # mutmut exits non-zero when any mutant survives -- that is the SIGNAL,
         # not a runner failure, so a non-zero ``run`` is tolerated and the
         # results step below carries the outcome.
+        #
+        # Launch through scripts/_mutmut_guarded_run.py, NOT ``-m mutmut``: mutmut
+        # 3.6.0's run loop reaps children with a bare os.wait() and looks the pid up
+        # in its worker table unguarded, so a stray child reparented to the run
+        # process -- a subprocess a covering test spawns during the IN-PROCESS stats
+        # phase, orphaned when its parent exits -- raises KeyError and aborts the whole
+        # module on the FIRST reap, leaving every mutant "not checked" (consent-hint,
+        # run 29618964851). The launcher makes os.wait() drop pids mutmut never forked.
+        # ``stderr=STDOUT`` merges mutmut's stderr into the tee'd stdout so a mutmut
+        # traceback lands in the artifact instead of being lost (that KeyError read as
+        # a silent exit 1 because the workflow's ``| tee`` captured stdout only).
         run = subprocess.run(
-            [sys.executable, "-m", "mutmut", "run"],
+            [sys.executable, str(REPO_ROOT / "scripts" / "_mutmut_guarded_run.py")],
             cwd=REPO_ROOT,
             text=True,
             encoding="utf-8",
+            stderr=subprocess.STDOUT,
         )
         print(
             f"\nmutmut run exit code: {run.returncode} (non-zero = survivors/skips, not a failure)"
