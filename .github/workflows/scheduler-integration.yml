@@ -37,6 +37,12 @@ on:
           (scripts/sandbox_kill_drill.py) after the U3 chain"
         type: boolean
         default: false
+      with_anomaly_matrix:
+        description:
+          "sandbox-proving: also run the U6 anomaly matrix
+          (scripts/sandbox_anomaly_matrix.py) after the U3 chain"
+        type: boolean
+        default: false
   pull_request:
     # Scope to the surfaces that can affect the submit spine or this harness,
     # so ordinary PRs don't pay for a container spin-up. The trailing broad
@@ -59,6 +65,8 @@ on:
       # kept explicit so each lane's trigger set reads on its own).
       - "ci/**"
       - "scripts/run_sandbox_proving.py"
+      - "scripts/sandbox_kill_drill.py"
+      - "scripts/sandbox_anomaly_matrix.py"
       - "src/hpc_agent/**"
 
 # One in-flight run per ref; a new push cancels the old container spin-up.
@@ -547,6 +555,22 @@ jobs:
             echo "scripts/sandbox_kill_drill.py is not landed yet (U4 builds it in"
             echo "parallel) — skipping the kill drill; this is NOT a failure."
           fi
+
+      - name: Anomaly matrix (U6 — dispatch opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.with_anomaly_matrix
+        env:
+          HPC_CLUSTERS_CONFIG: ${{ github.workspace }}/ci_clusters.yaml
+          # A SEPARATE ephemeral home from the U3/U4 runs above (no shared
+          # namespace, no cross-run dedup).
+          HPC_JOURNAL_DIR: ${{ runner.temp }}/hpc-journal-matrix
+          HPC_SUBMIT_ONCE: "1"
+          HPC_STATUS_POLL_INTERVAL_SEC: "5"
+        run: |
+          python scripts/sandbox_anomaly_matrix.py \
+            --clusters-config "$PWD/ci_clusters.yaml" \
+            --workdir "$RUNNER_TEMP/sandbox-work-matrix" \
+            --out "$RUNNER_TEMP/sandbox-evidence/anomaly-matrix.json" \
+            --markdown "$RUNNER_TEMP/sandbox-evidence/anomaly-matrix.md"
 
       - name: Upload the sandbox evidence
         if: always()
