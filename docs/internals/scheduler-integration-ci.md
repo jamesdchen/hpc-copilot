@@ -8,6 +8,7 @@ have historically only found live in a proving run is caught in CI instead.
 - Containers: [`ci/slurm/`](../../ci/slurm) (`Dockerfile`, `entrypoint.sh`, `slurm.conf`)
   and its SGE twin [`ci/sge/`](../../ci/sge) (`Dockerfile`, `entrypoint.sh`, `qconf/` templates)
 - Test: [`tests/integration/scheduler/`](../../tests/integration/scheduler) (`test_scheduler_smoke.py`, `conftest.py`, `README.md`)
+- Sandbox lane: the `sandbox-proving` job (plan U7) — the same slurm container, driving the full block loop via [`scripts/run_sandbox_proving.py`](../../scripts/run_sandbox_proving.py) after `slurm-smoke`; see [`sandbox-proving-run.md`](sandbox-proving-run.md) §7
 
 ## What it covers
 

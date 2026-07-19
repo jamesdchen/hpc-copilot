@@ -9,6 +9,15 @@
 # non-login PATH — see ci/sge/Dockerfile. It covers the SGE DIALECT, never a
 # specific site's login profile.
 #
+# A third job, sandbox-proving (plan U7, rung 2 —
+# docs/plans/sandbox-proving-run-2026-07-18.md), reuses the SAME slurm
+# container to drive the FULL block loop (block-drive -> S1 walk+resolve ->
+# fused greenlights -> S2 stage+canary -> S3 submit+watch -> S4 harvest) via
+# scripts/run_sandbox_proving.py, after slurm-smoke has proven the cluster
+# primitives. The smoke jobs prove the flow atoms; the sandbox job proves
+# the harness contract (block chain, briefs, gates) against the real
+# scheduler API.
+#
 # Posture (see docs/internals/scheduler-integration-ci.md):
 #   * This is a SEPARATE workflow, deliberately NOT added to branch-protection
 #     required checks — a first-run flake must never block main CI. Iterate on
@@ -20,10 +29,21 @@
 name: scheduler-integration
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      with_kill_drill:
+        description:
+          "sandbox-proving: also run the U4 kill drill
+          (scripts/sandbox_kill_drill.py) after the U3 chain"
+        type: boolean
+        default: false
   pull_request:
     # Scope to the surfaces that can affect the submit spine or this harness,
-    # so ordinary PRs don't pay for a container spin-up.
+    # so ordinary PRs don't pay for a container spin-up. The trailing broad
+    # entries are the sandbox-proving lane's surfaces (plan U7: ci/,
+    # scripts/run_sandbox_proving.py, src/hpc_agent/**) — the block loop can
+    # kink on any src change, and sandbox-proving needs: slurm-smoke, so the
+    # whole lane fires together on them.
     paths:
       - "ci/slurm/**"
       - "ci/sge/**"
@@ -35,6 +55,11 @@ on:
       - "src/hpc_agent/infra/transport/**"
       - "src/hpc_agent/infra/backends/**"
       - "src/hpc_agent/execution/mapreduce/**"
+      # U7 sandbox-proving surfaces (supersets of the smoke scoping above,
+      # kept explicit so each lane's trigger set reads on its own).
+      - "ci/**"
+      - "scripts/run_sandbox_proving.py"
+      - "src/hpc_agent/**"
 
 # One in-flight run per ref; a new push cancels the old container spin-up.
 concurrency:
@@ -358,3 +383,188 @@ jobs:
       - name: Tear down the container
         if: always()
         run: docker rm -f sgeci || true
+
+  # The rung-2 sandbox proving lane (plan U7 —
+  # docs/plans/sandbox-proving-run-2026-07-18.md): the SAME slurm container
+  # build as slurm-smoke, but instead of the flow atoms it drives the FULL
+  # block loop the way a harness does (block-drive fresh-start -> S1
+  # walk+resolve -> fused greenlights -> S2 stage+canary -> S3 submit+watch
+  # -> S4 harvest) via scripts/run_sandbox_proving.py, with every gate firing
+  # for real against a seeded, ephemeral journal home (HPC_JOURNAL_DIR under
+  # runner.temp — the plan §3 guard refuses a production namespace).
+  # needs: slurm-smoke so the cluster primitives are proven before the block
+  # loop burns wall-clock on them. Same posture as the smoke jobs: this
+  # workflow is deliberately NOT a branch-protection required check
+  # (advisory forever — the 2026-07-19 maintainer ruling), so no
+  # continue-on-error: a contract regression shows red on the PR without
+  # gating the merge.
+  sandbox-proving:
+    needs: slurm-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # slurm-smoke's 20 + the block loop's minutes (plan §6)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build the hpc-agent wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist
+          ls -l dist
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the Slurm container (gha-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ci/slurm/Dockerfile
+          tags: hpc-agent-slurm-ci:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate a throwaway SSH keypair
+        run: |
+          ssh-keygen -t ed25519 -N '' -f "$PWD/ci_key" -C scheduler-integration
+          chmod 600 "$PWD/ci_key"
+
+      - name: Start the Slurm container
+        run: |
+          docker run -d --name slurmci \
+            -p 2222:22 \
+            -v "$PWD/ci_key.pub:/pubkey:ro" \
+            hpc-agent-slurm-ci:latest
+          echo "waiting for the container to boot..."
+          sleep 5
+          docker logs slurmci || true
+
+      - name: Install the freshly-built wheel INTO the container python
+        run: |
+          docker cp dist/*.whl slurmci:/tmp/
+          docker exec slurmci bash -lc 'pip3 install /tmp/*.whl'
+          # The cluster-side reporter + combiner must import cleanly.
+          docker exec slurmci python3 -c 'import hpc_agent; print("container hpc_agent", hpc_agent.__version__)'
+
+      - name: Wait for Slurm + sshd to be ready
+        run: |
+          # Node IDLE within the budget.
+          for i in $(seq 1 30); do
+            state="$(docker exec slurmci sinfo -h -o '%T' 2>/dev/null | head -n1 || true)"
+            echo "attempt $i: node state=${state:-<none>}"
+            case "$state" in idle*) echo "node idle"; break ;; esac
+            sleep 2
+          done
+          docker exec slurmci sinfo || true
+
+      - name: Configure SSH access to the container
+        run: |
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/config <<EOF
+          Host slurmci
+            HostName 127.0.0.1
+            Port 2222
+            User hpcuser
+            IdentityFile $PWD/ci_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+          chmod 600 ~/.ssh/config
+          # Prove login + scheduler reachability before the driver drives them.
+          for i in $(seq 1 15); do
+            if ssh slurmci 'echo ok && sbatch --version'; then break; fi
+            echo "ssh not ready yet (attempt $i)"; sleep 2
+          done
+
+      - name: Write the container's clusters.yaml
+        run: |
+          cat > "$PWD/ci_clusters.yaml" <<EOF
+          slurmci:
+            host: slurmci
+            user: hpcuser
+            scheduler: slurm
+            scratch: /home/hpcuser/scratch
+            modules: []
+            max_walltime_sec: 3600
+            constraints:
+              max_array_size: 100
+              max_walltime: "1:00:00"
+              max_concurrent_jobs: 4
+              est_spin_up: "10s"
+          EOF
+          cat "$PWD/ci_clusters.yaml"
+
+      - name: Install the wheel into the driver env
+        run: |
+          # The driver imports the SAME wheel the container runs (src/ layout,
+          # so cwd doesn't shadow it). It is a plain script — no pytest — and
+          # pyyaml rides in as a wheel dependency.
+          python -m pip install dist/*.whl
+
+      - name: Run the sandbox proving chain (U3 driver)
+        env:
+          HPC_CLUSTERS_CONFIG: ${{ github.workspace }}/ci_clusters.yaml
+          # REQUIRED-EPHEMERAL (plan §3): the driver refuses to run without an
+          # ephemeral journal home outside ~/.claude/hpc.
+          HPC_JOURNAL_DIR: ${{ runner.temp }}/hpc-journal
+          HPC_SUBMIT_ONCE: "1"
+          # Faster polling than the 10s floor default keeps the short run snappy.
+          HPC_STATUS_POLL_INTERVAL_SEC: "5"
+        run: |
+          python scripts/run_sandbox_proving.py \
+            --clusters-config "$PWD/ci_clusters.yaml" \
+            --workdir "$RUNNER_TEMP/sandbox-work" \
+            --out "$RUNNER_TEMP/sandbox-evidence/evidence.json" \
+            --markdown "$RUNNER_TEMP/sandbox-evidence/evidence.md"
+
+      - name: Kill drill (U4 — dispatch opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.with_kill_drill
+        env:
+          HPC_CLUSTERS_CONFIG: ${{ github.workspace }}/ci_clusters.yaml
+          # A SEPARATE ephemeral home from the U3 run above (no shared
+          # namespace, no cross-run dedup).
+          HPC_JOURNAL_DIR: ${{ runner.temp }}/hpc-journal-drill
+          HPC_SUBMIT_ONCE: "1"
+          HPC_STATUS_POLL_INTERVAL_SEC: "5"
+        run: |
+          if [ -f scripts/sandbox_kill_drill.py ]; then
+            python scripts/sandbox_kill_drill.py --clusters-config "$PWD/ci_clusters.yaml"
+          else
+            echo "scripts/sandbox_kill_drill.py is not landed yet (U4 builds it in"
+            echo "parallel) — skipping the kill drill; this is NOT a failure."
+          fi
+
+      - name: Upload the sandbox evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Ruling 2026-07-19 #2: the evidence JSON is a CI ARTIFACT (per-run
+          # evidence), never a committed ledger.
+          name: sandbox-proving-evidence
+          path: ${{ runner.temp }}/sandbox-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Container diagnostics (on failure)
+        if: failure()
+        run: |
+          echo "===== docker logs ====="; docker logs slurmci || true
+          echo "===== sinfo ====="; docker exec slurmci sinfo || true
+          echo "===== squeue ====="; docker exec slurmci squeue || true
+          echo "===== sacct ====="; docker exec slurmci sacct --format=JobID,JobName,State,ExitCode -P || true
+          echo "===== slurmctld log ====="; docker exec slurmci tail -n 100 /var/log/slurm/slurmctld.log || true
+          echo "===== slurmd log ====="; docker exec slurmci tail -n 100 /var/log/slurm/slurmd.log || true
+          echo "===== remote scratch tree ====="; docker exec slurmci bash -lc 'find /home/hpcuser/scratch -maxdepth 4 -print 2>/dev/null | head -n 200' || true
+          echo "===== sandbox evidence (markdown) ====="; cat "$RUNNER_TEMP/sandbox-evidence/evidence.md" 2>/dev/null || true
+          echo "===== sandbox workdir ====="; find "$RUNNER_TEMP/sandbox-work" -maxdepth 3 -print 2>/dev/null | head -n 100 || true
+
+      - name: Tear down the container
+        if: always()
+        run: docker rm -f slurmci || true

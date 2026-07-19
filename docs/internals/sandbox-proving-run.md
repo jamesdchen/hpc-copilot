@@ -128,7 +128,42 @@ copy it into each new runsheet's pre-flight as it is written. The lane stays
 advisory (ruling 1): the line is a question with a cited sha, never a
 required check.
 
+## 7. Invocation surfaces (U7)
+
+Three bindings drive the same driver
+([`scripts/run_sandbox_proving.py`](../../scripts/run_sandbox_proving.py)),
+in decreasing order of sanction for this repo's dev box:
+
+- **CI dispatch — the sanctioned native-Windows binding.** The dev box has
+  no docker, so the autonomous path is the GitHub lane:
+  `gh workflow run scheduler-integration.yml` then `gh run watch` (add
+  `-f with_kill_drill=true` to also run the U4 kill drill — the workflow
+  tolerates the script's absence with a skip, never an error, until U4
+  lands). The `sandbox-proving` job runs after `slurm-smoke` on the same
+  container build; the evidence JSON + markdown land as the
+  `sandbox-proving-evidence` workflow artifact (ruling 2 — per-run evidence,
+  never a committed ledger).
+- **CI on pull_request.** The lane fires on its surfaces (`ci/`,
+  `scripts/run_sandbox_proving.py`, `src/hpc_agent/**`, plus the smoke
+  lanes' original scoping) and stays advisory — never a required check
+  (ruling 1).
+- **Docker-capable machines: `--local`.** `python scripts/run_sandbox_proving.py
+  --local` is the self-contained binding: it stands the [`ci/slurm/`](../../ci/slurm)
+  container up itself (build, throwaway keypair, wheel install, readiness
+  wait — the workflow's bring-up mirrored step-for-step), runs the chain
+  with `HPC_SUBMIT_ONCE=1`, and tears the container down on exit
+  (`--keep-container` to keep it for inspection). `HPC_JOURNAL_DIR` must
+  still point at an ephemeral tmpdir — the §2 guard refuses otherwise —
+  and on a docker-less host `--local` errors with the dispatch binding
+  above as its guidance.
+
 ## Drift log
+
+- 2026-07-19: U7 invocation surfaces landed — the `sandbox-proving` job in
+  `scheduler-integration.yml` (`needs: slurm-smoke`; path-filtered +
+  dispatchable; the `with_kill_drill` dispatch input skips cleanly until U4
+  lands) and this §7 (dispatch binding for docker-less Windows; the
+  `--local` contract for docker-capable machines).
 
 - 2026-07-19: Created (plan U8). The ladder, trust doctrine, never-certify
   list, traceability table, and the 2026-07-19 rulings are lifted normative
