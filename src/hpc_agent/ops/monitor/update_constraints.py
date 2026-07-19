@@ -27,6 +27,9 @@ Idempotent on (run_id, target features set): re-running with the
 same final feature set produces the same on-cluster state.
 """
 
+# MIRROR: features <-> features_by_job pinned-by tests/ops/monitor/test_update_run_constraints.py
+# (last-uniform vs per-id divergence record; ::test_partial_failure_mirrors_only_updated_ids)
+
 from __future__ import annotations
 
 import re
