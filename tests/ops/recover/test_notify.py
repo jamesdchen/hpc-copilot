@@ -11,6 +11,7 @@ acknowledgment watermark standalone.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -102,6 +103,100 @@ def test_free_form_alert_dedups_on_message(tmp_path: Path) -> None:
     notify.raise_alert_notification("overnight self-heal FAILED", experiment_dir=tmp_path)
     notify.raise_alert_notification("a different alert", experiment_dir=tmp_path)
     assert len(_raw_lines(tmp_path)) == 2
+
+
+# ── (ii-b) the last_tick_at=None collapse ────────────────────────────────────
+#
+# With ``last_tick_at`` absent the templated summary line varies ONLY by run_id,
+# so the old message-hash subject collapsed two DISTINCT stalls of one run onto
+# a single identity — the second alert deduped away and never landed. The
+# identity now anchors on the stall's durable fields (``next_tick_due`` /
+# ``status`` / ``awaiting_since``) instead.
+
+
+def test_none_since_distinct_stalls_of_same_run_both_land(tmp_path: Path) -> None:
+    """Two DISTINCT stalls of ONE run, both ``last_tick_at=None`` but with
+    different missed deadlines, are different identities — BOTH alerts land."""
+    props = [
+        {
+            "run_id": "run-a",
+            "last_tick_at": None,
+            "next_tick_due": "2026-07-17T00:15:00+00:00",
+            "status": "in_flight",
+        },
+        {
+            "run_id": "run-a",
+            "last_tick_at": None,
+            "next_tick_due": "2026-07-17T03:15:00+00:00",
+            "status": "in_flight",
+        },
+    ]
+    # The hazard premise: both proposals render the IDENTICAL summary line.
+    assert notify.summarize_proposals([props[0]]) == notify.summarize_proposals([props[1]])
+
+    for prop in props:
+        notify.raise_stall_notification([prop], experiment_dir=tmp_path)
+
+    lines = _raw_lines(tmp_path)
+    assert len(lines) == 2
+    identities = {json.loads(ln)["alert_id"] for ln in lines}
+    assert len(identities) == 2
+    # Neither identity is the old message-hash subject (the collapsing one).
+    msg = notify.summarize_proposals([props[0]])
+    collapsed = f"run-a|stall|{hashlib.sha256(msg.encode('utf-8')).hexdigest()[:16]}"
+    assert collapsed not in identities
+
+
+def test_none_since_awaiting_since_distinguishes_stalls(tmp_path: Path) -> None:
+    """A proposal carrying only the parked marker's ``awaiting_since`` (no
+    ``last_tick_at``, no ``next_tick_due``) anchors on it: two stalls of one run
+    with different ``awaiting_since`` both land."""
+    props = [
+        {"run_id": "run-a", "last_tick_at": None, "awaiting_since": "2026-07-17T00:00:00+00:00"},
+        {"run_id": "run-a", "last_tick_at": None, "awaiting_since": "2026-07-17T05:00:00+00:00"},
+    ]
+    for prop in props:
+        notify.raise_stall_notification([prop], experiment_dir=tmp_path)
+    assert len(_raw_lines(tmp_path)) == 2
+
+
+def test_none_since_same_stall_retick_dedups(tmp_path: Path) -> None:
+    """Idempotent replay: the SAME stall (same run, same missed deadline,
+    ``last_tick_at=None``) re-detected on later watchdog ticks is a dedup no-op
+    — one durable line, exactly like the since-present path."""
+    prop = {
+        "run_id": "run-a",
+        "last_tick_at": None,
+        "next_tick_due": "2026-07-17T00:15:00+00:00",
+        "status": "in_flight",
+    }
+    for _ in range(3):
+        notify.raise_stall_notification([prop], experiment_dir=tmp_path)
+    assert len(_raw_lines(tmp_path)) == 1
+
+
+def test_since_present_identity_shape_pinned() -> None:
+    """With ``last_tick_at`` present the identity is byte-identical to the
+    pre-fix shape — ``<run_id>|<kind>|<since>`` verbatim, no hash — and the new
+    distinguishing kwargs are inert while ``since`` is present. The free-form
+    path with NO distinguishing fields still dedups by message hash."""
+    since = "2026-07-17T00:00:00+00:00"
+    base = notify._alert_identity(run_id="run-a", kind="stall", since=since, message="m")
+    assert base == f"run-a|stall|{since}"
+    with_extras = notify._alert_identity(
+        run_id="run-a",
+        kind="stall",
+        since=since,
+        message="m",
+        next_tick_due="2026-07-17T00:15:00+00:00",
+        status="in_flight",
+        awaiting_since="2026-07-17T00:00:00+00:00",
+    )
+    assert with_extras == base
+    digest = hashlib.sha256(b"m").hexdigest()[:16]
+    assert notify._alert_identity(run_id=None, kind="alert", since=None, message="m") == (
+        f"|alert|{digest}"
+    )
 
 
 # ── (iii) legacy plaintext lines still read back ─────────────────────────────

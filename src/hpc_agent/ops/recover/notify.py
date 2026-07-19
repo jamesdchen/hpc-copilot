@@ -231,15 +231,40 @@ def summarize_proposals(proposals: list[dict[str, Any]]) -> str:
     return text
 
 
-def _alert_identity(*, run_id: str | None, kind: str, since: str | None, message: str) -> str:
+def _alert_identity(
+    *,
+    run_id: str | None,
+    kind: str,
+    since: str | None,
+    message: str,
+    next_tick_due: str | None = None,
+    status: str | None = None,
+    awaiting_since: str | None = None,
+) -> str:
     """Stable dedup identity for one live alert — ``<run_id>|<kind>|<subject>``.
 
     The subject is the stall's stable ``since`` (``last_tick_at``) when present —
     so every 15-min watchdog re-tick for the SAME stall (identity fixed, only the
-    leading ``ts`` varies) replays to a no-op — else a short hash of the message
-    so a free-form alert dedups by its own text.
+    leading ``ts`` varies) replays to a no-op.
+
+    When ``since`` is None the rendered message varies ONLY by ``run_id`` (the
+    ``summarize_proposals`` template fills the unknown time with a constant), so
+    hashing it would collapse two DISTINCT stalls of the same run onto one
+    identity — the second alert would dedup away and never land. The subject is
+    then a short hash of the stall's own durable distinguishing fields
+    (``next_tick_due`` — the missed deadline, fixed while the driver stays dead
+    and re-stamped on re-arm — plus ``status`` and the parked marker's
+    ``awaiting_since`` when a caller carries one): identical across re-ticks of
+    the SAME stall, distinct across DIFFERENT stalls of the same run. The
+    message hash remains the final fallback when no distinguishing field is
+    available (the free-form ``kind=alert`` path), preserving its dedup-by-text.
     """
-    subject = since if since else hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+    if since:
+        subject = since
+    else:
+        token = "|".join(part for part in (next_tick_due, status, awaiting_since) if part)
+        material = token if token else message
+        subject = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
     return f"{run_id or ''}|{kind}|{subject}"
 
 
@@ -250,6 +275,9 @@ def _append_alert_log(
     kind: str,
     run_id: str | None = None,
     since: str | None = None,
+    next_tick_due: str | None = None,
+    status: str | None = None,
+    awaiting_since: str | None = None,
 ) -> str:
     """Append one JSON alert record to the loud fallback log; return its path.
 
@@ -268,7 +296,15 @@ def _append_alert_log(
     raise OSError, and a watchdog notification must never crash on a bad log).
     """
     log_path = journal_dir(experiment_dir) / _ALERTS_LOG_NAME
-    alert_id = _alert_identity(run_id=run_id, kind=kind, since=since, message=message)
+    alert_id = _alert_identity(
+        run_id=run_id,
+        kind=kind,
+        since=since,
+        message=message,
+        next_tick_due=next_tick_due,
+        status=status,
+        awaiting_since=awaiting_since,
+    )
     record: dict[str, Any] = {
         "alert_id": alert_id,
         "ts": utcnow_iso(),
@@ -295,7 +331,11 @@ def _log_stall_proposals(proposals: list[dict[str, Any]], *, experiment_dir: Pat
 
     Each proposal carries its own identity (``run_id`` + ``last_tick_at``), so a
     per-proposal record deduplicates on ``<run_id>|stall|<last_tick_at>`` — the
-    per-stall granularity the summary line lacked. The degenerate no-proposals
+    per-stall granularity the summary line lacked. When ``last_tick_at`` is
+    absent the identity anchors on the proposal's durable stall fields
+    (``next_tick_due`` / ``status`` / ``awaiting_since``) instead of the rendered
+    message — which varies only by ``run_id`` and would collapse two distinct
+    stalls of one run onto a single dedup identity. The degenerate no-proposals
     case still writes one summary line so an empty notification is never silent.
     """
     if not proposals:
@@ -307,12 +347,21 @@ def _log_stall_proposals(proposals: list[dict[str, Any]], *, experiment_dir: Pat
         run_id = str(proposal.get("run_id") or "") or None
         since_val = proposal.get("last_tick_at")
         since = str(since_val) if since_val else None
+        due_val = proposal.get("next_tick_due")
+        next_tick_due = str(due_val) if due_val else None
+        status_val = proposal.get("status")
+        status = str(status_val) if status_val else None
+        awaiting_val = proposal.get("awaiting_since")
+        awaiting_since = str(awaiting_val) if awaiting_val else None
         log_path = _append_alert_log(
             summarize_proposals([proposal]),
             experiment_dir=experiment_dir,
             kind=_KIND_STALL,
             run_id=run_id,
             since=since,
+            next_tick_due=next_tick_due,
+            status=status,
+            awaiting_since=awaiting_since,
         )
     return log_path
 
