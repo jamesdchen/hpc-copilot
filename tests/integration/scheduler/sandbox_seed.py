@@ -48,8 +48,14 @@ which REFUSES (raises :class:`SandboxSeedError`) when:
    mismatch means the caller's declaration diverges from where the record
    will actually land: a loud bug, never a silent redirect.
 
-That makes the helper structurally incapable of touching a production
-namespace. It lives under ``tests/`` and is NOT shipped in the wheel.
+Legs 2–4 delegate to the ONE shared guard, :mod:`sandbox_guard`: the
+containment test de-aliases the ``\\?\\`` / admin-share spellings of the SAME
+directory BEFORE comparing (Defect 1 — ``resolve()`` alone does not
+canonicalize them) with a samefile backstop, and the agreement leg is
+:func:`sandbox_guard.same_journal_target`, so two spellings of one home agree
+while two different homes never do. That makes the helper structurally
+incapable of touching a production namespace. It lives under ``tests/`` and
+is NOT shipped in the wheel.
 
 Why ``seed_utterance`` does not call ``state.utterances.append_utterance``:
 the frozen harness writer has no provenance channel (deliberately — the LLM
@@ -65,9 +71,12 @@ above stands in for the harness's out-of-band-ness.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from hpc_agent.infra.time import utcnow_iso
@@ -99,20 +108,37 @@ class SandboxSeedError(RuntimeError):
     """
 
 
-def _production_home() -> Path:
-    """The production journal home the guard exists to protect."""
-    return Path.home() / ".claude" / "hpc"
+# MIRROR: sandbox_fixture.py::_load_shared_guard — identical loaders so every
+#   consumer binds the ONE guard module object
+#   pinned-by tests/integration/scheduler/test_sandbox_guard.py::test_one_guard_module_object
+def _load_shared_guard() -> ModuleType:
+    """Import the ONE §3 guard module as the same object in every load context.
 
-
-def _within(child: Path, parent: Path) -> bool:
-    """True when resolved *child* equals — or lives anywhere under — *parent*.
-
-    ``PurePath`` comparison is case-normalizing on Windows and case-sensitive
-    on POSIX, so this matches each platform's own filesystem semantics.
+    This file is loaded three ways: pytest's sys.path-prepend (bare module
+    name), the ``tests.integration.scheduler`` package path (a
+    ``tests.contracts`` consumer), and by-path exec from
+    ``scripts/run_sandbox_proving.py`` (neither import root on sys.path). The
+    sys.modules probe + the guard's own exec-time alias registration make the
+    first load the ONLY load, so every consumer binds one guard object.
     """
-    resolved_child = child.resolve()
-    resolved_parent = parent.resolve()
-    return resolved_child == resolved_parent or resolved_parent in resolved_child.parents
+    cached = sys.modules.get("sandbox_guard")
+    if cached is not None:
+        return cached
+    try:
+        return importlib.import_module("sandbox_guard")
+    except ImportError:
+        pass
+    guard_path = Path(__file__).resolve().with_name("sandbox_guard.py")
+    spec = importlib.util.spec_from_file_location("sandbox_guard", guard_path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load the shared sandbox guard at {guard_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sandbox_guard"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_GUARD = _load_shared_guard()
 
 
 def assert_sandbox_journal_home(journal_home: str | Path) -> Path:
@@ -120,6 +146,10 @@ def assert_sandbox_journal_home(journal_home: str | Path) -> Path:
 
     Refuses (see the module docstring for the four conditions) so no seed can
     ever land in — or be redirected into — the production journal namespace.
+    The containment and agreement tests delegate to the ONE shared guard
+    (:mod:`sandbox_guard`), so an alias spelling (``\\?\\`` prefix, admin
+    share) of the production home refuses exactly like the plain spelling,
+    and two spellings of ONE sandbox home agree.
     """
     env_val = os.environ.get("HPC_JOURNAL_DIR")
     if env_val is None or env_val == "":
@@ -129,28 +159,29 @@ def assert_sandbox_journal_home(journal_home: str | Path) -> Path:
             "attribute or the ~/.claude/hpc production default — the seeder "
             "refuses to guess (plan §3)"
         )
-    env_home = Path(env_val)
-    production = _production_home()
-    if _within(env_home, production):
+    if _GUARD.is_within_production_home(env_val):
         raise SandboxSeedError(
             f"HPC_JOURNAL_DIR resolves inside the production journal home "
-            f"({production}): {env_home} — the seeder is structurally barred "
-            "from a production namespace (plan §3)"
+            f"({_GUARD.production_journal_home()}): "
+            f"{_GUARD.canonical_journal_path(env_val)} — the seeder is "
+            "structurally barred from a production namespace (plan §3)"
         )
-    declared = Path(journal_home)
-    if _within(declared, production):
+    if _GUARD.is_within_production_home(journal_home):
         raise SandboxSeedError(
             f"journal_home resolves inside the production journal home "
-            f"({production}): {declared} — refused (plan §3)"
+            f"({_GUARD.production_journal_home()}): "
+            f"{_GUARD.canonical_journal_path(journal_home)} — refused (plan §3)"
         )
-    if declared.resolve() != env_home.resolve():
+    if not _GUARD.same_journal_target(journal_home, env_val):
         raise SandboxSeedError(
-            f"journal_home ({declared.resolve()}) disagrees with "
-            f"HPC_JOURNAL_DIR ({env_home.resolve()}): seeded records resolve "
-            "through the env var, so the declaration must name the same "
-            "sandbox home the write will actually use"
+            f"journal_home ({_GUARD.canonical_journal_path(journal_home)}) "
+            f"disagrees with HPC_JOURNAL_DIR "
+            f"({_GUARD.canonical_journal_path(env_val)}): seeded records "
+            "resolve through the env var, so the declaration must name the "
+            "same sandbox home the write will actually use"
         )
-    return env_home.resolve()
+    home: Path = _GUARD.canonical_journal_path(env_val)
+    return home
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
