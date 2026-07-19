@@ -51,6 +51,7 @@ import logging
 import os
 import re
 import shutil
+import string
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -560,10 +561,56 @@ def _combine_missing(
     return combined_now, failures
 
 
+def _render_known_placeholders(template: str, known: dict[str, Any]) -> str:
+    """Render the placeholders aggregate-time code KNOWS; re-emit the rest verbatim.
+
+    The dispatcher renders ``result_dir_template`` with full ``str.format``
+    semantics (``_format_result_dir``: ``task_id`` / ``run_id`` / task kwargs).
+    At aggregate time only the RUN identity is known — the per-task keys vary
+    — so this renders just those, leaving unknown fields (and any nested
+    format spec) byte-intact for the static-prefix cut below. Run-15 finding
+    (pull root-scoping): with the framework-default
+    ``results/{run_id}/task_{task_id}`` the RAW template's first placeholder
+    IS ``{run_id}``, so the static prefix collapsed to the shared ``results``
+    root and every pull enumerated foreign runs' dirs — the cardinality gate
+    then refused the rows the pull itself imported. Rendering ``run_id``
+    first scopes the pull to ``results/<run_id>``: foreign rows are never
+    enumerated, and the ``<run_id>-canary`` sibling is excluded structurally
+    (directory-root scoping, no prefix-glob over-match). A malformed template
+    degrades to the raw string (the prefix cut + root guard below stay the
+    gate) — scoping is an optimization, never a gate.
+    """
+    formatter = string.Formatter()
+    parts: list[str] = []
+    try:
+        for literal, field_name, format_spec, conversion in formatter.parse(template):
+            parts.append(literal)
+            if field_name is None:
+                continue
+            spec = format_spec or ""
+            if field_name in known and "{" not in spec:
+                value: Any = known[field_name]
+                if conversion:
+                    value = formatter.convert_field(value, conversion)
+                parts.append(formatter.format_field(value, spec))
+            else:
+                parts.append(
+                    "{"
+                    + field_name
+                    + ("!" + conversion if conversion else "")
+                    + (":" + format_spec if format_spec else "")
+                    + "}"
+                )
+    except ValueError:  # malformed template — degrade to the raw string
+        return template
+    return "".join(parts)
+
+
 def _run_scoped_results_subdir(
     experiment_dir: Path, run_id: str, record: Any, results_subdir: str
 ) -> str:
-    """The run's OWN results subtree — the static prefix of its result_dir_template.
+    """The run's OWN results subtree — the static prefix of its result_dir_template,
+    with the aggregate-time-known placeholders (``run_id``) rendered FIRST.
 
     Finding 19 (run #12): pulling the whole ``results/`` root drags every
     prior run's outputs through the transfer — the scp fallback cannot
@@ -571,8 +618,20 @@ def _run_scoped_results_subdir(
     template's static prefix (``results/causal_tune_linear/{estimator}/…`` →
     ``results/causal_tune_linear``) scopes the pull to this run. Falls back
     to *results_subdir* when the template is absent, carries no directory,
-    or would escape the configured root. Canary siblings render under the
-    same prefix, so the downstream canary exclusion is unchanged.
+    or would escape the configured root.
+
+    Run-15 finding (pull root-scoping): the cut ran on the RAW template, so
+    the framework-default ``results/{run_id}/task_{task_id}`` scoped to the
+    shared ``results`` ROOT even though run_id is fully known at aggregate
+    time — the puller enumerated every run's dirs under the shared tree and
+    the cardinality gate refused the foreign rows the pull itself imported,
+    so the mirror could never converge. Rendering the known placeholders
+    (:func:`_render_known_placeholders`, same ``str.format`` semantics as the
+    dispatcher) BEFORE the cut scopes that template to ``results/<run_id>``;
+    non-run-scoped templates degrade to the pre-fix root scope + cardinality
+    gate — never worse. Canary siblings that render under the same prefix
+    (non-run-scoped templates) keep the downstream canary exclusion;
+    run-scoped ones are now excluded structurally.
     """
     template = getattr(record, "result_dir_template", None)
     if not (isinstance(template, str) and template):
@@ -584,6 +643,7 @@ def _run_scoped_results_subdir(
             template = None
     if not (isinstance(template, str) and template):
         return results_subdir
+    template = _render_known_placeholders(template, {"run_id": run_id})
     head = template.split("{", 1)[0]
     scoped = head.rsplit("/", 1)[0] if "{" in template else head.rstrip("/")
     root = results_subdir.rstrip("/")
