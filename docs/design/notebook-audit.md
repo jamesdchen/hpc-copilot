@@ -1105,3 +1105,26 @@ compose-and-record tests in the same commit (the refusals moved off the append
 path). If a future change re-adds a caps/wake REFUSAL on the append path, the
 gate-fire tests above will still pass but the compose behavior will regress
 silently — the compose-and-record tests are what pin the poka-yoke.
+
+## Ruling record (2026-07-19 user): reuse-ledger scope CONFIRMED as-built (docket item 6b)
+
+- **The section-attestation reuse ledger's scope is CONFIRMED as-built (user,
+  2026-07-19): repo-scoped, slug-agnostic, exact-sha — a module signed once is
+  signed for every audit in the repo.** The as-built ledger the ruling
+  confirms (wave 3, `1d2c35f4`):
+  `state/notebook_audit.py::read_signoff_ledger` scans every
+  `.hpc/notebooks/*.decisions.jsonl` journal in the experiment repo (the
+  journals ARE the ledger — no new store, pure read) and matches on the EXACT
+  `section_sha` / `module_sha`, never the slug: a human-required section whose
+  exact bytes were human-signed under a different `audit_id` earns a code
+  auto-clear stamped `reuse_of` (the distinct `reused` status), and a
+  `notebook-module-sign-off` at a module's current sha clears every dependent
+  section's linked-source drift check repo-wide. One byte of change moves the
+  sha and no reuse fires — changed content NEVER reuses. Rationale (user,
+  verbatim): "the attestation binds bytes, not names; fleet-wide reuse would
+  break attribution context; same-slug reuse would conflate naming with
+  content."
+- **Companion ruling 6a ("track-total, attend-drift" — the four-tier
+  transitive-closure audit net) is PENDING, being implemented separately.** It
+  builds ON this confirmed scope (its INHERITED tier counts a ledger-attested
+  sha) and journals its own record when it lands; this entry journals 6b only.
