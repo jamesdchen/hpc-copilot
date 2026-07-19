@@ -17,7 +17,11 @@ This primitive exposes ``scontrol update`` as a first-class operation:
    the ONLY success signal; a non-zero rc OR a missing ack (UNKNOWN — the
    channel was truncated / killed mid-batch) is a failure, never assumed ok.
 3. Update the sidecar's recorded features so subsequent observers see
-   the new set.
+   the new set — PER ID: a partially-failed batch mirrors the new set only
+   onto the ids whose update actually landed (``constraints.features_by_job``
+   carries the per-id record while ids diverge; the run-level
+   ``constraints.features`` stays at the last UNIFORM set), never claiming
+   constraints the cluster never applied.
 
 Idempotent on (run_id, target features set): re-running with the
 same final feature set produces the same on-cluster state.
@@ -176,7 +180,10 @@ def update_run_constraints(
             "cluster routing"
         )
 
-    # Compute the new Features expression.
+    # Compute the new Features expression. The run-level ``features`` key is
+    # the last UNIFORM mirror (per-id divergence rides ``features_by_job``,
+    # written by the mirror step below); one expr is applied to every id in
+    # the batch, so the uniform set is the only well-defined extension base.
     constraints = sidecar.get("constraints") or {}
     existing = list(constraints.get("features") or [])
     if spec.set_features is not None:
@@ -262,15 +269,46 @@ def update_run_constraints(
     # writes atomically. The earlier hand-rolled read/mutate/tempfile
     # path lost concurrent updates from monitor_flow / status writes
     # because it locked nothing.
+    #
+    # The mirror is PER-ID truthful: a partially-failed batch must NOT
+    # mirror the new set onto ids whose ``scontrol update`` never landed —
+    # the sidecar would then claim constraints the cluster never applied.
+    # Updated ids take ``new_features``; failed/unupdated ids keep their
+    # prior recorded state. While ids diverge, the per-id record rides
+    # ``constraints.features_by_job`` (authoritative) and the run-level
+    # ``features`` key keeps the last UNIFORM set (the base a later
+    # ``add_features`` extends) — it claims nothing new. Once a batch lands
+    # every id on the same set the mirror converges back to the single
+    # run-level key and the per-id map is dropped.
     if updated:
         target = run_sidecar_path(experiment_dir, spec.run_id)
+        updated_keys = {str(jid) for jid in updated}
 
         def _apply(doc: dict | None) -> dict:
             base = dict(doc) if isinstance(doc, dict) else dict(sidecar)
             cstr = base.get("constraints")
             if not isinstance(cstr, dict):
                 cstr = {}
-            cstr["features"] = new_features
+            prior_uniform = list(cstr.get("features") or [])
+            prior_by_job = cstr.get("features_by_job")
+            if not isinstance(prior_by_job, dict):
+                prior_by_job = {}
+            by_job = {
+                str(jid): (
+                    list(new_features)
+                    if str(jid) in updated_keys
+                    else list(prior_by_job.get(str(jid)) or prior_uniform)
+                )
+                for jid in job_ids
+            }
+            if len({tuple(features) for features in by_job.values()}) == 1:
+                # Uniform again — the single run-level key is the whole truth.
+                cstr["features"] = list(new_features)
+                cstr.pop("features_by_job", None)
+            else:
+                # Divergent — the per-id map is authoritative; the run-level
+                # key stays at the last uniform set, claiming nothing new.
+                cstr["features_by_job"] = by_job
             base["constraints"] = cstr
             return base
 

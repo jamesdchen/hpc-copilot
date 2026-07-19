@@ -173,6 +173,78 @@ def test_partial_failure_reports_per_job(tmp_path: Path) -> None:
     assert out.job_ids_failed == ["2"]
 
 
+def test_partial_failure_mirrors_only_updated_ids(tmp_path: Path) -> None:
+    """TWO-SIDED mirror pin: a partially-failed batch must mirror the new
+    feature set ONLY onto the ids whose update landed — mirroring it onto the
+    failed ids would claim constraints the cluster never applied. The failed
+    id keeps its prior recorded set under the authoritative per-id record, and
+    the run-level key stays at the last UNIFORM set. This test fails if the
+    mirror regresses to writing the new set for every id."""
+    _seed_sidecar(tmp_path, job_ids=["1", "2"], features=["v100"])
+    with patch(
+        "hpc_agent.infra.remote.ssh_run",
+        return_value=_ok_cp(stdout=_acks(("1", 0), ("2", 1))),
+    ):
+        out = update_run_constraints(
+            tmp_path,
+            spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),
+        )
+    assert out.job_ids_updated == ["1"]
+    assert out.job_ids_failed == ["2"]
+    sidecar = json.loads((tmp_path / ".hpc" / "runs" / f"{_RUN_ID}.json").read_text())
+    cstr = sidecar["constraints"]
+    # Per-id truth: id 1 mirrored the new set; id 2 keeps its prior set.
+    assert cstr["features_by_job"] == {"1": ["a100"], "2": ["v100"]}
+    # The run-level key must NOT claim the new set while id 2 never got it —
+    # it stays at the last uniform mirror (the prior set).
+    assert cstr["features"] == ["v100"]
+
+
+def test_all_fail_mirrors_nothing(tmp_path: Path) -> None:
+    """When every id's update fails the cluster applied nothing, so the
+    sidecar is left byte-identical — no mirror at all."""
+    _seed_sidecar(tmp_path, job_ids=["1", "2"], features=["v100"])
+    sidecar_path = tmp_path / ".hpc" / "runs" / f"{_RUN_ID}.json"
+    before = sidecar_path.read_text()
+    with patch(
+        "hpc_agent.infra.remote.ssh_run",
+        return_value=_ok_cp(stdout=_acks(("1", 1), ("2", 1))),
+    ):
+        out = update_run_constraints(
+            tmp_path,
+            spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),
+        )
+    assert out.job_ids_updated == []
+    assert out.job_ids_failed == ["1", "2"]
+    assert sidecar_path.read_text() == before
+
+
+def test_full_success_after_divergence_converges_the_mirror(tmp_path: Path) -> None:
+    """A sidecar left divergent by an earlier partial failure converges back
+    to the single run-level mirror once a batch lands every id on the same
+    set — the stale per-id map is dropped (the update is idempotent, so a
+    re-run converges)."""
+    _seed_sidecar(tmp_path, job_ids=["1", "2"], features=["v100"])
+    with patch(
+        "hpc_agent.infra.remote.ssh_run",
+        return_value=_ok_cp(stdout=_acks(("1", 0), ("2", 1))),
+    ):
+        update_run_constraints(
+            tmp_path,
+            spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),
+        )
+    with patch(
+        "hpc_agent.infra.remote.ssh_run",
+        return_value=_ok_cp(stdout=_acks(("1", 0), ("2", 0))),
+    ):
+        update_run_constraints(
+            tmp_path,
+            spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),
+        )
+    sidecar = json.loads((tmp_path / ".hpc" / "runs" / f"{_RUN_ID}.json").read_text())
+    assert sidecar["constraints"] == {"features": ["a100"]}
+
+
 def test_missing_ack_is_unknown_never_ok(tmp_path: Path) -> None:
     """An id whose ack line never came back (truncated / killed mid-batch) is
     UNKNOWN — reported failed, NEVER assumed ok. Here id 2's ack is absent."""
