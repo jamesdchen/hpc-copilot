@@ -1,8 +1,13 @@
 # Scheduler-in-a-container integration CI (EXPERIMENTAL, NON-REQUIRED).
 #
 # Runs the REAL submit spine (submit_flow -> monitor_flow -> aggregate_flow)
-# against a real single-node Slurm inside a container, over SSH. This converts
-# the "found live in proving run #N" bug class into "found in CI".
+# against real single-node schedulers inside containers, over SSH — Slurm
+# (slurm-smoke) and Son-of-Grid-Engine (sge-smoke). This converts the
+# "found live in proving run #N" bug class into "found in CI". The SGE lane
+# exists for run-15 finding F7 (the SGE login-shell PATH dialect): its
+# container resolves qsub/qstat ONLY via the login profile chain, never the
+# non-login PATH — see ci/sge/Dockerfile. It covers the SGE DIALECT, never a
+# specific site's login profile.
 #
 # Posture (see docs/internals/scheduler-integration-ci.md):
 #   * This is a SEPARATE workflow, deliberately NOT added to branch-protection
@@ -21,6 +26,7 @@ on:
     # so ordinary PRs don't pay for a container spin-up.
     paths:
       - "ci/slurm/**"
+      - "ci/sge/**"
       - ".github/workflows/scheduler-integration.yml"
       - "tests/integration/scheduler/**"
       - "src/hpc_agent/ops/submit_flow.py"
@@ -175,3 +181,180 @@ jobs:
       - name: Tear down the container
         if: always()
         run: docker rm -f slurmci || true
+
+  # The SGE twin of slurm-smoke: the SAME smoke test
+  # (HPC_SCHEDULER_IT_FAMILY=sge selects backend+script in
+  # tests/integration/scheduler/test_scheduler_smoke.py) against a single-node
+  # Son-of-Grid-Engine container whose scheduler binaries resolve ONLY through
+  # the login profile chain — the run-15 F7 dialect (ci/sge/Dockerfile).
+  # Same posture: separate workflow, non-required, no continue-on-error.
+  sge-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build the hpc-agent wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist
+          ls -l dist
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the SGE container (gha-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ci/sge/Dockerfile
+          tags: hpc-agent-sge-ci:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate a throwaway SSH keypair
+        run: |
+          ssh-keygen -t ed25519 -N '' -f "$PWD/ci_key" -C scheduler-integration
+          chmod 600 "$PWD/ci_key"
+
+      - name: Start the SGE container
+        run: |
+          # --hostname is LOAD-BEARING: sge_qmaster's identity + sge_execd's
+          # registration are keyed on it (the image's debconf preseed and the
+          # entrypoint's cell bootstrap both assume it). Port 2222 is free on
+          # this runner — each job gets its own VM.
+          docker run -d --name sgeci --hostname sgeci \
+            -p 2222:22 \
+            -v "$PWD/ci_key.pub:/pubkey:ro" \
+            hpc-agent-sge-ci:latest
+          echo "waiting for the container to boot..."
+          sleep 5
+          docker logs sgeci || true
+
+      - name: Install the freshly-built wheel INTO the container python
+        run: |
+          docker cp dist/*.whl sgeci:/tmp/
+          docker exec sgeci bash -lc 'pip3 install /tmp/*.whl'
+          # The cluster-side reporter + combiner must import cleanly.
+          docker exec sgeci python3 -c 'import hpc_agent; print("container hpc_agent", hpc_agent.__version__)'
+
+      - name: Wait for SGE + sshd to be ready
+        run: |
+          # qstat/qsub resolve ONLY through the login profile chain (the F7
+          # dialect), so every probe here goes through bash -lc — same as the
+          # framework's own scheduler queries. Queue all.q must appear with
+          # its instance on sgeci within the budget.
+          for i in $(seq 1 30); do
+            if docker exec sgeci bash -lc 'qstat -f 2>/dev/null' | grep -q '^all.q@'; then
+              echo "queue up"; break
+            fi
+            echo "queue not ready yet (attempt $i)"; sleep 2
+          done
+          docker exec sgeci bash -lc 'qhost' || true
+          docker exec sgeci bash -lc 'qstat -f' || true
+
+      - name: Configure SSH access to the container
+        run: |
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/config <<EOF
+          Host sgeci
+            HostName 127.0.0.1
+            Port 2222
+            User hpcuser
+            IdentityFile $PWD/ci_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+          chmod 600 ~/.ssh/config
+          # Prove login + scheduler reachability before the test drives them.
+          # The scheduler probe MUST go through a login shell (bash -lc): that
+          # is the dialect this lane exists to exercise.
+          for i in $(seq 1 15); do
+            if ssh sgeci 'echo ok && bash -lc "command -v qsub && command -v qstat"'; then break; fi
+            echo "ssh not ready yet (attempt $i)"; sleep 2
+          done
+
+      - name: Guard the F7 login-shell dialect
+        run: |
+          # The lane is worthless if the container sanitizes PATH the way
+          # hoffman2 doesn't: a NON-login ssh exec must NOT resolve the
+          # scheduler binaries (rc 127 / not found), exactly like the real
+          # SGE login nodes. If this guard fails, the image regressed (e.g. a
+          # base-image change re-linked qsub into /usr/bin) and every "green"
+          # sge-smoke run below would prove nothing about the login wrap.
+          if ssh sgeci 'command -v qstat'; then
+            echo "DIALECT BROKEN: qstat resolved on a NON-login shell (rc 0)."
+            echo "The SGE binaries must be reachable only via the login profile chain."
+            exit 1
+          else
+            rc=$?
+            echo "dialect intact: non-login qstat probe rc=$rc (expected nonzero)"
+          fi
+          # And the positive leg: a login shell MUST resolve them.
+          ssh sgeci 'bash -lc "command -v qsub && command -v qstat && command -v qacct"'
+
+      - name: Write the container's clusters.yaml
+        run: |
+          cat > "$PWD/ci_clusters.yaml" <<EOF
+          sgeci:
+            host: sgeci
+            user: hpcuser
+            scheduler: sge
+            scratch: /home/hpcuser/scratch
+            modules: []
+            max_walltime_sec: 3600
+            constraints:
+              max_array_size: 100
+              max_walltime: "1:00:00"
+              max_concurrent_jobs: 4
+              est_spin_up: "10s"
+          EOF
+          cat "$PWD/ci_clusters.yaml"
+
+      - name: Install the wheel into the test-driver env
+        run: |
+          # The driver imports the SAME wheel the container runs (src/ layout,
+          # so cwd doesn't shadow it), plus pytest to run the smoke test.
+          # pytest runs with the repo as rootdir, so pyproject's addopts
+          # apply: pytest-xdist (-n auto) and pytest-timeout (timeout=300)
+          # must be present or pytest exits 4 on the unrecognized -n before
+          # collecting a single test.
+          python -m pip install dist/*.whl pytest pytest-xdist pytest-timeout
+
+      - name: Run the scheduler-integration smoke test
+        env:
+          HPC_SCHEDULER_IT: "1"
+          HPC_SCHEDULER_IT_FAMILY: sge
+          HPC_SCHEDULER_IT_SSH_TARGET: hpcuser@sgeci
+          HPC_SCHEDULER_IT_CLUSTER: sgeci
+          HPC_SCHEDULER_IT_REMOTE_BASE: /home/hpcuser/scratch
+          HPC_CLUSTERS_CONFIG: ${{ github.workspace }}/ci_clusters.yaml
+          HPC_JOURNAL_DIR: ${{ runner.temp }}/hpc-journal
+          # Faster polling than the 10s floor default keeps the short run snappy.
+          HPC_STATUS_POLL_INTERVAL_SEC: "5"
+        run: |
+          python -m pytest tests/integration/scheduler -q -m scheduler_integration
+
+      - name: Container diagnostics (on failure)
+        if: failure()
+        run: |
+          echo "===== docker logs ====="; docker logs sgeci || true
+          echo "===== qhost ====="; docker exec sgeci bash -lc 'qhost' || true
+          echo "===== qstat -f ====="; docker exec sgeci bash -lc 'qstat -f' || true
+          echo "===== qacct ====="; docker exec sgeci bash -lc 'qacct -j 2>&1 | tail -n 80' || true
+          echo "===== qmaster/execd messages ====="
+          docker exec sgeci bash -c 'find /var/spool/gridengine /var/lib/gridengine -name messages 2>/dev/null -exec sh -c "echo == {}; tail -n 50 {}" \;' || true
+          echo "===== global config (enforce_user) ====="; docker exec sgeci bash -lc 'qconf -sconf global 2>/dev/null | grep -i enforce_user' || true
+          echo "===== remote scratch tree ====="; docker exec sgeci bash -lc 'find /home/hpcuser/scratch -maxdepth 4 -print 2>/dev/null | head -n 200' || true
+
+      - name: Tear down the container
+        if: always()
+        run: docker rm -f sgeci || true

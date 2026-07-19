@@ -5,7 +5,8 @@ submit spine against a real Slurm inside a container, so the class of bug we
 have historically only found live in a proving run is caught in CI instead.
 
 - Workflow: [`.github/workflows/scheduler-integration.yml`](../../.github/workflows/scheduler-integration.yml)
-- Container: [`ci/slurm/`](../../ci/slurm) (`Dockerfile`, `entrypoint.sh`, `slurm.conf`)
+- Containers: [`ci/slurm/`](../../ci/slurm) (`Dockerfile`, `entrypoint.sh`, `slurm.conf`)
+  and its SGE twin [`ci/sge/`](../../ci/sge) (`Dockerfile`, `entrypoint.sh`, `qconf/` templates)
 - Test: [`tests/integration/scheduler/`](../../tests/integration/scheduler) (`test_scheduler_smoke.py`, `conftest.py`, `README.md`)
 
 ## What it covers
@@ -39,12 +40,12 @@ self-recursion, empty `EXECUTOR`) — now under a real round-trip.
 
 ## What it deliberately does NOT cover (known gaps)
 
-- **SGE (Hoffman2's scheduler).** There is no maintained single-container SGE/UGE
-  story comparable to the Slurm images; standing one up reliably in CI is a
-  project of its own. Hoffman2 is where several live incidents originated, so
-  this is a real gap. **Revisit trigger:** if a maintained SGE/OpenGridScheduler
-  container appears, add an `sge` variant mirroring `ci/slurm/` and parametrize
-  the smoke test over `backend`.
+- **Site login profiles.** The SGE lane (`ci/sge/`) covers the SGE *dialect*
+  — `qsub -t`/`qstat -u`/`qacct` grammar and the login-shell PATH chain (the
+  run-15 F7 class) — via the distro Son-of-Grid-Engine packages. Per §6 of
+  `docs/plans/sandbox-proving-run-2026-07-18.md` ("do not oversell U9"), it
+  can never reproduce a specific *site's* login profile (hoffman2's exact
+  PATH shape, banners, module tree); that residue stays live-only.
 - **GPU / MPI paths.** The container is CPU-only; `gpu_array` / `mpi` templates
   are not exercised here.
 - **Multi-wave (>cap) sweeps.** The smoke stays a single wave (2 tasks). The
@@ -85,6 +86,41 @@ public half at `/pubkey` (the entrypoint installs it as `hpcuser`'s
 `authorized_keys`), maps container `22 → host 2222`, and writes a `~/.ssh/config`
 `Host slurmci` alias (HostName 127.0.0.1, Port 2222, User hpcuser, the throwaway
 key, `StrictHostKeyChecking no`). The test's `ssh_target` is `hpcuser@slurmci`.
+
+## The SGE twin (`ci/sge/`)
+
+The `sge-smoke` job runs the same smoke test (`HPC_SCHEDULER_IT_FAMILY=sge`
+selects backend `sge` + script `.hpc/templates/cpu_array.sh`) against a
+single-node Son-of-Grid-Engine container. Design choices that differ from the
+slurm lane:
+
+- **Base: `ubuntu:22.04` + the distro `gridengine-{master,exec,client}`
+  packages** (SoGE 8.1.9+dfsg, jammy universe) — the closest thing to a vanilla
+  Son-of-Grid-Engine install that ships as a maintained package; there is no
+  maintained single-container SGE/UGE image to pull (HPC Gridware's Open
+  Cluster Scheduler publishes a multi-node compose recipe, not a single
+  image). Same distro-package philosophy as `slurm-wlm`.
+- **The login-shell PATH dialect is the point.** Run-15 F7: on real SGE sites
+  the scheduler binaries resolve ONLY via the login profile chain, so a
+  non-login `ssh host qstat` is rc 127 — which is why the framework wraps
+  every remote scheduler query in `bash -lc` (`_engine.py::_login_ack`).
+  Debian would FHS-install the clients into `/usr/bin` (reachable from every
+  shell), sanitizing PATH the way hoffman2 doesn't. The Dockerfile therefore
+  RELOCATES the clients to `/opt/sge/bin/lx-amd64` and exposes them only via
+  `/etc/profile.d/sge.sh`; a workflow step (`Guard the F7 login-shell
+  dialect`) hard-fails if a non-login `command -v qstat` ever resolves.
+  Deliberate consequence: the cluster-side reporter's non-login `qstat`/
+  `qacct` subprocess degrades to file-based completion detection — the same
+  path a real SGE login node exercises.
+- **`--hostname sgeci` is load-bearing** (qmaster identity + execd
+  registration); the cell is bootstrapped at entrypoint time by `qconf` from
+  `ci/sge/qconf/` (the `slurm.conf` twin — SGE has no single config file).
+  `all.q` sets `load_thresholds NONE` because the container shares the CI
+  runner's kernel load (the SGE analogue of the slurm lane's resource
+  under-reporting); the `shared` PE exists because the framework's SGE cpu
+  path requests `-pe shared N`.
+- debconf is preseeded + `policy-rc.d` blocks service starts at build time,
+  so the postinst never bakes a build-container hostname into the cell.
 
 ## Local reproduction
 
@@ -155,3 +191,19 @@ docker locally):
    and consider enabling minimal `sacct` (or asserting on result-file presence).
 7. **PEP 668 / pip** — if `pip3 install` refuses on a newer base image, add
    `--break-system-packages` to the container install step.
+
+SGE-lane first-run candidates (ci/sge, likewise never run locally):
+
+1. **gridengine postinst** — if the image build fails or the cell is absent at
+   runtime, the `gridengine-master` postinst derailed (debconf keys renamed or
+   an FQDN check); check the build log, and the entrypoint's
+   `$CELL_COMMON missing` warning.
+2. **execd not registering** — if `qstat -f` never shows `all.q@sgeci`, check
+   the exec-host entry (`qconf -sel`) and the execd messages (the diagnostics
+   step dumps them); the `--hostname sgeci` flag is load-bearing here.
+3. **Jobs pending in `qw`** — the queue alarms on load if `load_thresholds`
+   crept back in, or the `shared` PE is missing (`-pe shared 1` is requested
+   whenever `cpus` is set). `qstat -f` shows `a`/`au` states.
+4. **qsub env transport** — if tasks fail with `EXECUTOR is not set`, confirm
+   the job_env keys rode `qsub -v` (the diagnostics' scratch-tree dump plus the
+   task logs under `<remote>/logs/`).

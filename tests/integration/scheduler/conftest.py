@@ -22,7 +22,8 @@ import pytest
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "scheduler_integration: real submit spine against a real Slurm in a "
-        "container (see docs/internals/scheduler-integration-ci.md). Inert "
+        "scheduler_integration: real submit spine against a real scheduler "
+        "(Slurm or SGE, per HPC_SCHEDULER_IT_FAMILY) in a container (see "
+        "docs/internals/scheduler-integration-ci.md). Inert "
         "unless HPC_SCHEDULER_IT=1 and the container env vars are present.",
     )

@@ -2,7 +2,8 @@
 
 This is the one test that converts the "found live in proving run #N" bug class
 into "found in CI". It drives the framework's three workflow atoms against a
-REAL single-node Slurm running inside a container (over SSH):
+REAL single-node scheduler running inside a container (over SSH) — Slurm or
+SGE, selected by ``HPC_SCHEDULER_IT_FAMILY`` (default ``slurm``):
 
     submit_flow  →  monitor_flow  →  aggregate_flow
 
@@ -12,16 +13,21 @@ exercising, with NO mocks on the transport or scheduler seam:
   * runtime deploy (``deploy_runtime`` scp's the job templates + framework
     stubs into ``<remote>/.hpc/``)
   * the tiny-batch canary auto-skip (``total_tasks <= 4`` → no canary; #263)
-  * ``sbatch --array=1-2`` over SSH via ``RemoteSlurmBackend``
+  * array submit over SSH via the family's remote backend
+    (``sbatch --array=1-2`` on slurm, ``qsub -t 1-2`` on sge)
   * the cluster-side dispatcher (``.hpc/_hpc_dispatch.py``) resolving each
     task's kwargs from ``.hpc/tasks.py`` and running the per-task executor,
     which writes ``metrics.json`` into the promoted ``RESULT_DIR``
-  * the real status reporter polled to terminal over SSH (``sacct``/``squeue``)
+  * the real status reporter polled to terminal over SSH
+    (``sacct``/``squeue`` on slurm; ``qstat``/``qacct`` on sge — where, by
+    container design (ci/sge), those binaries resolve ONLY via the login
+    profile chain, so the reporter's non-login subprocess degrades to
+    file-based completion detection exactly as on a real SGE login node)
   * the cluster-side combiner + local reduce (``aggregate_flow``)
 
 It is INERT anywhere the container env vars are absent (local dev, the main CI
 matrix): the module-level ``skipif`` collects it but skips cleanly. The
-container + workflow that make it live are in ``ci/slurm/`` and
+containers + workflow that make it live are in ``ci/slurm/`` / ``ci/sge/`` and
 ``.github/workflows/scheduler-integration.yml``; the design + local-repro
 recipe are in ``docs/internals/scheduler-integration-ci.md``.
 """
@@ -56,7 +62,7 @@ pytestmark = [
         reason=(
             "scheduler-in-a-container integration test: set HPC_SCHEDULER_IT=1 "
             "and provide the container env (HPC_CLUSTERS_CONFIG + the SSH-able "
-            "Slurm container). See docs/internals/scheduler-integration-ci.md."
+            "scheduler container). See docs/internals/scheduler-integration-ci.md."
         ),
     ),
 ]
@@ -96,6 +102,21 @@ def _env(name: str, default: str) -> str:
     return val if val else default
 
 
+# Scheduler families the smoke can run against, selected by
+# ``HPC_SCHEDULER_IT_FAMILY`` (default ``slurm`` so the original lane and the
+# local-repro docs keep working unchanged). Each entry: the ``backend`` wire
+# value for :class:`SubmitFlowSpec` + the array-script path ``deploy_runtime``
+# lands for that family (the ``("sge", False)`` / ``("slurm", False)`` rows of
+# build/submit_spec.py's template map). Env selection rather than
+# ``pytest.mark.parametrize``: the workflow runs ONE container per job (the
+# slurm-smoke and sge-smoke jobs are separate runner VMs), so parametrizing
+# over families would demand both containers on one runner for zero gain.
+_FAMILIES: dict[str, tuple[str, str]] = {
+    "slurm": ("slurm", ".hpc/templates/cpu_array.slurm"),
+    "sge": ("sge", ".hpc/templates/cpu_array.sh"),
+}
+
+
 def _fabricate_experiment(experiment_dir: Path, *, run_id: str, remote_path: str, cluster: str):
     """Lay down a minimal, complete 2-task experiment and its run sidecar.
 
@@ -132,7 +153,9 @@ def _fabricate_experiment(experiment_dir: Path, *, run_id: str, remote_path: str
     return cmd_sha
 
 
-def _submit_spec(*, run_id, cmd_sha, ssh_target, remote_path, cluster) -> SubmitFlowSpec:
+def _submit_spec(
+    *, run_id, cmd_sha, ssh_target, remote_path, cluster, backend, script
+) -> SubmitFlowSpec:
     return SubmitFlowSpec(
         profile="cpu",
         cluster=cluster,
@@ -141,9 +164,9 @@ def _submit_spec(*, run_id, cmd_sha, ssh_target, remote_path, cluster) -> Submit
         job_name="scheduler_it",
         run_id=run_id,
         total_tasks=2,
-        backend="slurm",
+        backend=backend,
         # Deployed by deploy_runtime into <remote_path>/.hpc/templates/.
-        script=".hpc/templates/cpu_array.slurm",
+        script=script,
         job_env={
             # The job-script command = the dispatcher (NOT the per-task cmd).
             "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",
@@ -165,8 +188,12 @@ def _submit_spec(*, run_id, cmd_sha, ssh_target, remote_path, cluster) -> Submit
     )
 
 
-def test_submit_monitor_aggregate_against_real_slurm(tmp_path: Path) -> None:
-    """The full spine: submit → poll-to-terminal → reduce, on a real Slurm."""
+def test_submit_monitor_aggregate_against_real_scheduler(tmp_path: Path) -> None:
+    """The full spine: submit → poll-to-terminal → reduce, on a real scheduler."""
+    family = _env("HPC_SCHEDULER_IT_FAMILY", "slurm")
+    if family not in _FAMILIES:
+        raise ValueError(f"unknown HPC_SCHEDULER_IT_FAMILY {family!r}; known: {sorted(_FAMILIES)}")
+    backend, script = _FAMILIES[family]
     ssh_target = _env("HPC_SCHEDULER_IT_SSH_TARGET", "hpcuser@slurmci")
     remote_base = _env("HPC_SCHEDULER_IT_REMOTE_BASE", "/home/hpcuser/scratch")
     cluster = _env("HPC_SCHEDULER_IT_CLUSTER", "slurmci")
@@ -180,7 +207,7 @@ def test_submit_monitor_aggregate_against_real_slurm(tmp_path: Path) -> None:
         experiment_dir, run_id=run_id, remote_path=remote_path, cluster=cluster
     )
 
-    # 1) SUBMIT — real pre-flight + rsync push + deploy + sbatch over SSH.
+    # 1) SUBMIT — real pre-flight + rsync push + deploy + array submit over SSH.
     submit = submit_flow(
         experiment_dir,
         spec=_submit_spec(
@@ -189,6 +216,8 @@ def test_submit_monitor_aggregate_against_real_slurm(tmp_path: Path) -> None:
             ssh_target=ssh_target,
             remote_path=remote_path,
             cluster=cluster,
+            backend=backend,
+            script=script,
         ),
     )
     assert not submit.deduped, "fresh run_id must not dedup"
@@ -197,7 +226,11 @@ def test_submit_monitor_aggregate_against_real_slurm(tmp_path: Path) -> None:
     assert submit.job_ids, f"expected a scheduler job id, got {submit.job_ids!r}"
     assert submit.total_tasks == 2
 
-    # 2) MONITOR — the real reporter (sacct/squeue over SSH) polled to terminal.
+    # 2) MONITOR — the real reporter polled to terminal over SSH. On sge the
+    # reporter's qstat/qacct subprocess runs on the NON-login channel (where
+    # the container deliberately does NOT resolve the scheduler binaries —
+    # the F7 dialect), so completion is detected from the result files, the
+    # same degradation path a real SGE login node exercises.
     monitored = monitor_flow(
         experiment_dir,
         spec=MonitorFlowSpec(

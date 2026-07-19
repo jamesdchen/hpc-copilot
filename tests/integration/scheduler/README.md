@@ -1,10 +1,12 @@
-# tests/integration/scheduler — real Slurm, in a container
+# tests/integration/scheduler — real scheduler, in a container
 
 One smoke test (`test_scheduler_smoke.py`) drives the framework's real submit
 spine — `submit_flow → monitor_flow → aggregate_flow` — against a real
-single-node Slurm running in a container, over SSH. No mocks on the transport or
-scheduler seam. It converts the "found live in proving run #N" class of bug into
-"found in CI".
+single-node scheduler running in a container, over SSH. No mocks on the
+transport or scheduler seam. It converts the "found live in proving run #N"
+class of bug into "found in CI". Two scheduler families are wired: Slurm
+(`ci/slurm/`) and Son-of-Grid-Engine (`ci/sge/`), selected with
+`HPC_SCHEDULER_IT_FAMILY`.
 
 ## It is inert unless you opt in
 
@@ -25,10 +27,9 @@ Markers: `scheduler_integration` (this tier's selector, registered in the local
 
 ## Running it for real
 
-The whole harness lives in `ci/slurm/` (container) and
-`.github/workflows/scheduler-integration.yml` (the CI job). The local-repro
-docker recipe and the design rationale — including what it deliberately does NOT
-cover (SGE) — are in
+The harness lives in `ci/slurm/` + `ci/sge/` (containers) and
+`.github/workflows/scheduler-integration.yml` (one CI job per family). The
+local-repro docker recipe and the design rationale are in
 [`docs/internals/scheduler-integration-ci.md`](../../../docs/internals/scheduler-integration-ci.md).
 
 Env vars the test reads (all set by the workflow):
@@ -37,6 +38,7 @@ Env vars the test reads (all set by the workflow):
 | --- | --- | --- |
 | `HPC_SCHEDULER_IT` | must be `1` to run | — (skips) |
 | `HPC_CLUSTERS_CONFIG` | points the framework at the container's `clusters.yaml` | — |
+| `HPC_SCHEDULER_IT_FAMILY` | scheduler family: `slurm` or `sge` (backend + script template) | `slurm` |
 | `HPC_SCHEDULER_IT_SSH_TARGET` | ssh target/alias for the login node | `hpcuser@slurmci` |
 | `HPC_SCHEDULER_IT_CLUSTER` | cluster name in `clusters.yaml` | `slurmci` |
 | `HPC_SCHEDULER_IT_REMOTE_BASE` | remote scratch base for staged runs | `/home/hpcuser/scratch` |
