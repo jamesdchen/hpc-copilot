@@ -69,6 +69,43 @@ If the human ends the turn at a sign-off boundary without the audit passing, mak
 
 A nudge at a section is not a request for you to re-explain the view — it is a request to change the source. The cycle is fixed: re-draft the named section in the `.py` → the `section_sha` (and the module `view_sha`) move → the section's prior sign-off/auto-clear no longer matches its hash, so `notebook-status` reads it `unsigned` (or `signed_stale`) by construction → re-run `notebook-lint`, `notebook-audit-view`, and re-present the fresh VERBATIM view for a new sign-off. There is no "amend the approval in place"; trust is bound to a hash and a moved hash is a fresh audit. This is why the skill must not edit the source between a view and its sign-off — an edit there voids the view the human is signing.
 
+## The audit net (a module sign-off carries its transitive closure — notebook-audit 6a)
+
+A **module sign-off** (wave-3: src modules as signable attention units) attests a WHOLE linked
+source module the audited source imports. notebook-audit 6a widens that attestation to the
+module's **transitive import closure** — the "audit net". When a `notebook-module-sign-off`
+record is written, it CARRIES the net resolved at sign-off time:
+`resolved["audit_net"] = {env_hash, modules: {module: {tier, module_sha}}}` — one entry per
+module the signed module transitively reaches, each classified into one of four tiers:
+
+| Tier | Meaning | Gate behaviour |
+|---|---|---|
+| `inherited` | Baseline — the current sha is unchanged from the record, OR carries a fresh proof leg: **ledger-attested** (a human module sign-off of the current sha) OR **template-identical** (the template's own closure imports it at that sha). | Accepted — no attention. |
+| `external` | Resolves (via `importlib.util.find_spec`, metadata-only — never imported/executed) to the installed environment, not a local file under a `source_root`. | **Disclosed** as bound to the record's `env_hash` (the local environment the classification rested on); NEVER refused. A moved origin discloses `env_status="drifted"`. |
+| `new_drifted` | A local module whose sha moved since sign-off with NO fresh proof leg (neither re-signed nor template-identical). | **Refused** — `errors.SourceUnaudited` names it. |
+| `unresolved` | Resolves to nothing — neither a local file nor installed (a deleted / never-installed dependency). | **Refused** — `errors.SourceUnaudited` names it. |
+
+The graduation gate (`ops/notebook_gate.py::assert_source_audited`) RECOMPUTES each carried
+module's current tier at submit time and refuses on `new_drifted` / `unresolved` — the SAME
+recompute-and-refuse pattern as the T8 `view_sha` gate: a hash carried on the record is re-derived
+from disk, and a mismatch refuses. **One module re-sign of a moved sha restores the whole closure**
+(the ledger-attested INHERITED leg), exactly the "one re-sign clears all dependents" flow.
+`build_audit_net` (`ops/notebook_gate.py`) mints the carried shape; the closure walk rides
+machinery's `resolve_audit_net` (`ops/notebook/linked_sources.py`).
+
+**Operator flow.** When the human signs a module other sections depend on, resolve its audit net
+first (`build_audit_net`) and carry it on the `notebook-module-sign-off` record, so the sign-off
+attests the whole closure at its current shas — the human signs knowing which version of every
+transitive dependency bound. Relay any `external` entries the sign-off surfaces as env-bound (their
+`env_hash`), honestly. If a later submit refuses with `audit-net drift` naming modules, the remedy
+is a module re-sign of the moved sha (clears the closure) or fixing an `unresolved` dependency —
+relay the named modules VERBATIM; never mask a drifted closure to clear the gate (that is exactly
+the posture the gate exists to defeat).
+
+**Legacy records are grandfathered.** A `notebook-module-sign-off` written before 6a (no
+`audit_net`) validates under the old per-section linked-source rule; the net path NEVER
+retro-refuses it. An audit with no net-carrying records is byte-identical to pre-6a.
+
 ## Inputs
 
 | Field | Source |

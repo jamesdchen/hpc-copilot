@@ -25,11 +25,32 @@ per-section verdict; this gate adds one more revocation the reduction cannot see
 if any linked file no longer matches its recorded ``sha256_normalized`` (a
 changed imported dependency revokes the section's trust).
 
-Pure local reads — no SSH, no ``_wire`` import, no scheduler.
+notebook-audit 6a ("track-total, attend-drift") adds a TRANSITIVE-import-closure
+**audit net** on top of the per-section linked-source check. A
+``notebook-module-sign-off`` record CARRIES the net — ``resolved["audit_net"] =
+{env_hash, modules: {module: {tier, module_sha}}}`` — resolved at SIGN-OFF time
+(:func:`build_audit_net`). The gate RECOMPUTES each carried module's current tier
+(:func:`_classify_net_module`) and REFUSES the submit on a drifted closure
+(:data:`NET_NEW_DRIFTED` / :data:`NET_UNRESOLVED` => :class:`errors.SourceUnaudited`
+naming the modules); :data:`NET_EXTERNAL` entries are DISCLOSED as ``env_hash``-bound
+(the record carries the local ``env_hash`` the EXTERNAL classification rested on),
+never refused. A closure module reads :data:`NET_INHERITED` (no attention) when its
+current sha is UNCHANGED OR carries a fresh proof leg — ledger-attested
+(:func:`module_sha_signed`) OR template-identical. Net-LESS sign-off records (the
+pre-6a shape) are GRANDFATHERED: validated under the old rule above, never
+retro-refused by the net path.
+
+Pure local reads — no SSH, no TOP-LEVEL ``_wire`` import, no scheduler (the net's
+shared module resolver and the sign-off-time closure walk are LAZY imports, reached
+only inside the opted-in net surface). The EXTERNAL classification uses
+``importlib.util.find_spec`` — metadata-only; it NEVER imports (executes) a module.
 """
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -38,6 +59,7 @@ from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.interview_doc import iter_interview_docs
 from hpc_agent.state.notebook_audit import (
     AUTO_CLEAR_BLOCK,
+    MODULE_SIGN_OFF_BLOCK,
     PASSING_STATUSES,
     REUSED,
     SIGN_OFF_BLOCK,
@@ -47,11 +69,23 @@ from hpc_agent.state.notebook_audit import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
     from hpc_agent.state.audit_source import ParsedModule
 
-__all__ = ["assert_source_audited", "audit_currency", "audited_source_echo"]
+__all__ = [
+    "assert_source_audited",
+    "audit_currency",
+    "audited_source_echo",
+    "audit_net_disclosures",
+    "build_audit_net",
+    "AUDIT_NET_FIELD",
+    "NET_INHERITED",
+    "NET_EXTERNAL",
+    "NET_NEW_DRIFTED",
+    "NET_UNRESOLVED",
+]
 
 #: The two notebook-attestation blocks a sign-off/auto-clear record can carry —
 #: used to locate the winning record for a passing section's linked-source check.
@@ -348,3 +382,375 @@ def assert_source_audited(experiment_dir: Path) -> None:
 
     if failures:
         raise errors.SourceUnaudited.for_sections(str(audit_id), failures)
+
+    # notebook-audit 6a — the audit-net recompute-and-refuse. Reached ONLY when every
+    # required section is signed-current (the section path above already passed). A
+    # module-sign-off record CARRIES the transitive closure (module -> {tier,
+    # module_sha}); the gate recomputes each carried module's current tier and refuses
+    # on NEW_DRIFTED / UNRESOLVED (naming the modules). EXTERNAL entries are disclosed
+    # (env_hash-bound), never refused. Net-less records are grandfathered — the section
+    # path above already validated them under the old rule, so they never reach here.
+    net_refusals, _net_disclosures = _evaluate_audit_net(experiment_dir, block, audit_id)
+    if net_refusals:
+        detail = ", ".join(f"{module!r} ({status})" for module, status in net_refusals)
+        raise errors.SourceUnaudited(
+            f"audited source for audit_id {audit_id!r} is not cleared for graduation — "
+            f"audit-net drift: {len(net_refusals)} module(s) in a signed module's "
+            f"transitive import closure no longer match the net recorded at sign-off: "
+            f"{detail}. A NEW_DRIFTED closure module changed with no module re-sign; an "
+            "UNRESOLVED one no longer resolves (deleted / never installed). Re-sign the "
+            "affected module (append-decision, scope_kind='notebook', "
+            "block='notebook-module-sign-off') at its current hash — one module re-sign "
+            "of the new sha clears the closure, exactly as the linked-source flow does."
+        )
+
+
+# --- audit-net recompute-and-refuse (notebook-audit 6a) ----------------------
+# The transitive import-closure "audit net". A notebook-module-sign-off record
+# CARRIES the net (module -> {tier, module_sha}) resolved at sign-off time; the
+# gate RECOMPUTES each carried module's current tier and REFUSES on drift
+# (NEW_DRIFTED / UNRESOLVED), DISCLOSES EXTERNAL entries as env_hash-bound, and
+# GRANDFATHERS net-less records (validated under the old rule, never retro-refused).
+# The module RESOLUTION is the ONE definition shared by the gate and the sign-off-
+# time builder (build_audit_net) — never a second copy. Pure local reads + stdlib
+# importlib.util.find_spec (metadata-only — NEVER imports/executes a module).
+
+#: The durable tier vocabulary carried on a module-sign-off record's
+#: ``resolved["audit_net"]["modules"][<module>]["tier"]``. Machinery's
+#: ``AuditNetTier`` enum (``ops/notebook/linked_sources.py``) maps onto these strings
+#: at the sign-off-time build seam (:func:`_resolve_closure_machinery`).
+NET_INHERITED = "inherited"
+#: A module that resolves to the installed environment (``find_spec``), not a local
+#: file under a ``source_root`` — disclosed as bound to the record's ``env_hash``,
+#: never refused.
+NET_EXTERNAL = "external"
+#: A local module whose current sha differs from the recorded one AND carries no fresh
+#: proof leg (neither ledger-attested nor template-identical) — refused.
+NET_NEW_DRIFTED = "new_drifted"
+#: A module that resolves to nothing — neither a local file nor ``find_spec``-able (a
+#: deleted / never-installed dependency) — refused.
+NET_UNRESOLVED = "unresolved"
+
+#: The tiers that REFUSE at gate time (ruling 2: NEW_DRIFTED / UNRESOLVED => refuse).
+_NET_REFUSE_TIERS = frozenset({NET_NEW_DRIFTED, NET_UNRESOLVED})
+
+#: The ``resolved`` key a net-carrying ``notebook-module-sign-off`` record carries.
+AUDIT_NET_FIELD = "audit_net"
+
+
+def _find_spec_origin(module: str) -> str | None:
+    """The ``find_spec`` ORIGIN for *module*, or ``None`` when it does not resolve.
+
+    METADATA-ONLY — ``importlib.util.find_spec`` locates a module WITHOUT importing
+    (executing) it, so a module whose body raises on import still resolves here (the
+    EXTERNAL-classification seam; ruling: the env-bound classification uses
+    ``find_spec`` only, never exec). A bad name (``ValueError``) or an unresolvable
+    parent package (``ImportError``) reads ``None`` — the module is not installed.
+    """
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError):
+        return None
+    return spec.origin if spec is not None else None
+
+
+def _compute_env_hash(external_origins: Mapping[str, str | None]) -> str:
+    """The local ``env_hash`` binding the EXTERNAL classification (6a).
+
+    A deterministic sha over the sorted ``{module: origin}`` map of the net's EXTERNAL
+    modules — the environment's fingerprint AS SEEN THROUGH the closure's external
+    dependencies (each origin encodes the installed location a module resolved to).
+    The sign-off record carries this; the gate recomputes it and DISCLOSES a drift (an
+    origin moved → the EXTERNAL classification was bound to a different environment).
+    An empty external set → the sha of ``{}`` (a stable sentinel). Opaque throughout:
+    origins are hashed, never parsed. Same canonical-JSON + sha256 posture as
+    ``state/env_lock.py::env_lock_sha`` / ``state/run_sha.py::compute_env_hash``.
+    """
+    canonical = json.dumps(
+        {m: (external_origins[m] or "") for m in sorted(external_origins)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _resolve_net_module(
+    experiment_dir: Path, module: str, source_roots: Sequence[Path]
+) -> tuple[str | None, str | None]:
+    """Resolve ONE module to ``(local_sha, external_origin)`` — the ONE resolution.
+
+    Exactly the resolution the gate and the sign-off-time builder share (never a second
+    copy): a file under a ``source_root`` (the ONE ``resolve_module_file`` from
+    ``ops/notebook/linked_sources.py``) → ``(sha, None)``; else a ``find_spec``-able
+    installed module → ``(None, origin)``; else (a deleted / never-installed name) →
+    ``(None, None)``. ``find_spec`` is metadata-only (never exec). An unreadable local
+    file reads as unresolved (``(None, None)``) — a file mid-rewrite contributes no sha.
+    """
+    from hpc_agent.ops.notebook.linked_sources import resolve_module_file
+
+    resolved = resolve_module_file(module, list(source_roots))
+    if resolved is not None:
+        try:
+            return sha256_normalized(resolved.read_text(encoding="utf-8")), None
+        except (OSError, UnicodeDecodeError):
+            return None, None
+    return None, _find_spec_origin(module)
+
+
+def _template_module_shas(
+    experiment_dir: Path, template_rel: Any, source_roots: Sequence[Path]
+) -> dict[str, str]:
+    """Map the template's imported modules → their ``module_sha`` (the template-identical
+    INHERITED proof leg, ruling 3).
+
+    Parses the template and resolves each import under *source_roots* through the ONE
+    resolver, hashing each resolved file. A module the source resolves to the SAME sha
+    is template-identical (it came from the template unchanged) and needs no per-module
+    attention. Fail-open: a missing / unparseable template or an unreadable module yields
+    ``{}`` / skips the entry (the leg simply never fires) — the gate's LOUD refusal of a
+    broken template happens on the SECTION path, never here.
+    """
+    if not isinstance(template_rel, str) or not template_rel:
+        return {}
+    try:
+        from hpc_agent.ops.notebook.linked_sources import imported_modules
+
+        text = (experiment_dir / template_rel).read_text(encoding="utf-8")
+        tree = ast.parse(text)
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return {}
+    out: dict[str, str] = {}
+    for module in imported_modules(tree):
+        if module in out:
+            continue
+        local_sha, _origin = _resolve_net_module(experiment_dir, module, source_roots)
+        if local_sha is not None:
+            out[module] = local_sha
+    return out
+
+
+def _classify_net_module(
+    experiment_dir: Path,
+    module: str,
+    *,
+    recorded_sha: str | None,
+    source_roots: Sequence[Path],
+    template_shas: Mapping[str, str],
+) -> tuple[str, str | None, str | None]:
+    """Classify ONE carried module's CURRENT tier → ``(tier, current_sha, origin)``.
+
+    The gate-time tier decision (ruling 3 + the EXTERNAL / UNRESOLVED semantics):
+
+    * a local file under a ``source_root`` (``current_sha`` = its fresh hash):
+        - unchanged (``current_sha == recorded_sha``) → :data:`NET_INHERITED` (the
+          recorded proof still holds);
+        - else a FRESH proof leg — :func:`module_sha_signed` ``(current_sha)``
+          (ledger-attested) OR ``template_shas[module] == current_sha``
+          (template-identical) → :data:`NET_INHERITED`;
+        - else :data:`NET_NEW_DRIFTED` (moved with no re-attestation — attention owed).
+    * no local file but ``find_spec`` resolves → :data:`NET_EXTERNAL` (env-bound;
+      ``origin`` feeds the ``env_hash``). Metadata-only — a module that raises on import
+      still classifies EXTERNAL (never exec).
+    * neither → :data:`NET_UNRESOLVED`.
+
+    The resolution itself routes through the ONE :func:`_resolve_net_module`.
+    """
+    local_sha, origin = _resolve_net_module(experiment_dir, module, source_roots)
+    if local_sha is not None:
+        if local_sha == recorded_sha:
+            return NET_INHERITED, local_sha, None
+        if module_sha_signed(experiment_dir, local_sha):
+            return NET_INHERITED, local_sha, None
+        if template_shas.get(module) == local_sha:
+            return NET_INHERITED, local_sha, None
+        return NET_NEW_DRIFTED, local_sha, None
+    if origin is not None:
+        return NET_EXTERNAL, None, origin
+    return NET_UNRESOLVED, None, None
+
+
+def _carried_audit_net(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The ``resolved["audit_net"]`` a module-sign-off record carries, or ``None``.
+
+    ``None`` = a LEGACY net-less record — GRANDFATHERED (validated under the old rule,
+    never retro-refused). A present-but-malformed net (a non-dict ``modules``) also reads
+    ``None``: only a WELL-FORMED net triggers the recompute, so a hand-forged net shape
+    can never manufacture a refusal — the gate only ever refuses a well-formed net whose
+    recomputed closure drifted.
+    """
+    resolved = record.get("resolved")
+    net = resolved.get(AUDIT_NET_FIELD) if isinstance(resolved, dict) else None
+    if not isinstance(net, dict):
+        return None
+    if not isinstance(net.get("modules"), dict):
+        return None
+    return net
+
+
+def _evaluate_audit_net(
+    experiment_dir: Path, block: Mapping[str, Any], audit_id: Any
+) -> tuple[list[tuple[str, str]], list[dict[str, Any]]]:
+    """Recompute every net-carrying module-sign-off record's closure.
+
+    Returns ``(refusals, disclosures)``. ``refusals`` — ``[(module, status)]`` for every
+    carried module whose CURRENT tier is :data:`NET_NEW_DRIFTED` / :data:`NET_UNRESOLVED`
+    (ruling 2 — deduped by module across records). ``disclosures`` — one dict per carried
+    EXTERNAL module: ``{module, tier, recorded_env_hash, current_env_hash, env_status}``
+    (the env_hash binding; ``env_status`` is ``"match"`` or ``"drifted"``, never a
+    refusal). Net-LESS records are skipped entirely (grandfathered). Pure local reads:
+    reads the journal + recomputes each carried module via the ONE classifier.
+    """
+    source_roots = [
+        experiment_dir / r for r in (block.get("source_roots") or []) if isinstance(r, str) and r
+    ]
+    template_shas = _template_module_shas(experiment_dir, block.get("template"), source_roots)
+    refusals: list[tuple[str, str]] = []
+    disclosures: list[dict[str, Any]] = []
+    refused: set[str] = set()
+    for record in read_decisions(experiment_dir, "notebook", str(audit_id)):
+        if record.get("block") != MODULE_SIGN_OFF_BLOCK:
+            continue
+        net = _carried_audit_net(record)
+        if net is None:
+            continue  # GRANDFATHERED — a net-less record validates under the old rule
+        recorded_env_hash = net.get("env_hash")
+        recorded_env_hash = recorded_env_hash if isinstance(recorded_env_hash, str) else None
+        current_origins: dict[str, str | None] = {}
+        for module, entry in net["modules"].items():
+            recorded_sha = entry.get("module_sha") if isinstance(entry, dict) else None
+            recorded_sha = recorded_sha if isinstance(recorded_sha, str) else None
+            tier, _sha, origin = _classify_net_module(
+                experiment_dir,
+                module,
+                recorded_sha=recorded_sha,
+                source_roots=source_roots,
+                template_shas=template_shas,
+            )
+            if tier == NET_EXTERNAL:
+                current_origins[module] = origin
+            if tier in _NET_REFUSE_TIERS and module not in refused:
+                refused.add(module)
+                refusals.append((module, f"audit-net {tier}"))
+        if current_origins:
+            current_env_hash = _compute_env_hash(current_origins)
+            for module in sorted(current_origins):
+                disclosures.append(
+                    {
+                        "module": module,
+                        "tier": NET_EXTERNAL,
+                        "recorded_env_hash": recorded_env_hash,
+                        "current_env_hash": current_env_hash,
+                        "env_status": "match"
+                        if recorded_env_hash == current_env_hash
+                        else "drifted",
+                    }
+                )
+    return refusals, disclosures
+
+
+def audit_net_disclosures(experiment_dir: Path) -> list[dict[str, Any]]:
+    """The opted-in audit's EXTERNAL env_hash-bound disclosures (6a), or ``[]``.
+
+    The disclosure companion to :func:`assert_source_audited`'s net refusal (the
+    ``audit_currency`` disclosure-seam posture): recomputes every net-carrying
+    module-sign-off record's closure and returns one entry per carried EXTERNAL module —
+    ``{module, tier, recorded_env_hash, current_env_hash, env_status}`` — the environment
+    binding an EXTERNAL classification rests on (an origin moved → ``env_status="drifted"``).
+    EXTERNAL is disclosure-only, NEVER a refusal (ruling 2). Not opted in → ``[]`` (the D7
+    silence). Pure local reads.
+    """
+    block = _read_audited_source(experiment_dir)
+    if block is None:
+        return []
+    _, disclosures = _evaluate_audit_net(experiment_dir, block, block.get("audit_id"))
+    return disclosures
+
+
+def _resolve_closure_machinery(
+    experiment_dir: Path, source_relpath: str, source_roots: Sequence[Path]
+) -> list[tuple[str, str | None, str | None]]:
+    """Resolve the source's transitive import closure via machinery (the 6a A-seam).
+
+    LAZY-imports ``resolve_audit_net`` / ``AuditNetEntry`` / ``AuditNetTier`` from
+    ``ops/notebook/linked_sources.py`` (the transitive-closure resolver; lands at merge)
+    and maps each :class:`AuditNetEntry` to ``(module, local_sha|None, external_origin|None)``.
+    Machinery's per-entry ``AuditNetTier`` is honoured for the EXTERNAL decision (an
+    ``AuditNetTier.EXTERNAL`` entry is installed — its ``find_spec`` origin is captured
+    without a source_root probe); every other entry is re-resolved through the shared
+    :func:`_resolve_net_module` so the local sha / origin the record carries is the gate's
+    OWN resolution (one definition — machinery's tier is advisory input, never a forked
+    verdict). Reached only at sign-off time (the build seam), never on the not-opted-in
+    gate path.
+    """
+    # LAZY A-seam: the transitive-closure resolver + its entry / tier types land at
+    # merge (builder A). Reached through an ``Any``-typed handle so this file stays
+    # mypy-clean until they do, while still coding against the pinned names verbatim —
+    # a rename there fails here at the boundary, not silently in the record.
+    from hpc_agent.ops.notebook import linked_sources as _linked_sources  # noqa: PLC0415
+
+    _machinery: Any = _linked_sources
+    resolve_audit_net = _machinery.resolve_audit_net
+    AuditNetEntry = _machinery.AuditNetEntry
+    AuditNetTier = _machinery.AuditNetTier
+
+    entries = resolve_audit_net(
+        source_relpath, experiment_dir=experiment_dir, root_dirs=list(source_roots)
+    )
+    out: list[tuple[str, str | None, str | None]] = []
+    for entry in entries:
+        if not isinstance(entry, AuditNetEntry):  # defensive: machinery's contract
+            continue
+        module = str(getattr(entry, "module", "") or "")
+        if not module:
+            continue
+        if getattr(entry, "tier", None) is AuditNetTier.EXTERNAL:
+            out.append((module, None, _find_spec_origin(module)))
+            continue
+        local_sha, origin = _resolve_net_module(experiment_dir, module, source_roots)
+        out.append((module, local_sha, origin))
+    return out
+
+
+def build_audit_net(
+    experiment_dir: Path,
+    source_relpath: str,
+    source_roots: Sequence[str],
+    *,
+    _resolver: Callable[..., list[tuple[str, str | None, str | None]]] | None = None,
+) -> dict[str, Any]:
+    """Build the durable audit net a ``notebook-module-sign-off`` record CARRIES (6a).
+
+    The sign-off-time builder the skill / machinery invokes to populate
+    ``resolved["audit_net"]`` BEFORE the human signs: resolve the source's transitive
+    import closure and classify each module — a local file under a ``source_root`` →
+    :data:`NET_INHERITED` at its current sha (the baseline the sign-off attests); a
+    ``find_spec``-able installed module → :data:`NET_EXTERNAL`; neither →
+    :data:`NET_UNRESOLVED`. Returns ``{"env_hash": <sha>, "modules": {module: {tier,
+    module_sha}}}`` — the exact shape :func:`_carried_audit_net` reads and the gate
+    recomputes. ``env_hash`` binds the EXTERNAL set (the local ``find_spec`` origins);
+    the gate recomputes it and discloses a drift.
+
+    The closure walk routes through machinery's ``resolve_audit_net`` (the default
+    *resolver*, :func:`_resolve_closure_machinery`); *tier* decisions reuse the SAME
+    :func:`_resolve_net_module` the gate uses (one definition). ``_resolver`` is the test
+    seam — a callable ``(experiment_dir, source_relpath, source_roots) -> [(module,
+    local_sha|None, external_origin|None)]``; tests inject a double so the A seam is never
+    imported under CI. Pure local reads; ``find_spec`` metadata-only.
+    """
+    roots = [experiment_dir / r for r in source_roots if isinstance(r, str) and r]
+    resolver = _resolver if _resolver is not None else _resolve_closure_machinery
+    modules: dict[str, Any] = {}
+    external_origins: dict[str, str | None] = {}
+    for module, local_sha, origin in resolver(experiment_dir, source_relpath, roots):
+        if module in modules:
+            continue
+        if local_sha is not None:
+            modules[module] = {"tier": NET_INHERITED, "module_sha": local_sha}
+        elif origin is not None:
+            modules[module] = {"tier": NET_EXTERNAL, "module_sha": None}
+            external_origins[module] = origin
+        else:
+            modules[module] = {"tier": NET_UNRESOLVED, "module_sha": None}
+    return {"env_hash": _compute_env_hash(external_origins), "modules": modules}

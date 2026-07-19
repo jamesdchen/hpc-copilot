@@ -31,7 +31,13 @@ from hpc_agent.ops.decision.journal import append_decision as ops_append_decisio
 from hpc_agent.ops.decision.journal.module_signoff import _assert_module_signoff_authorship
 from hpc_agent.ops.decision.journal.signoff import _assert_signoff_authorship
 from hpc_agent.ops.notebook.status_op import notebook_status
-from hpc_agent.ops.notebook_gate import assert_source_audited
+from hpc_agent.ops.notebook_gate import (
+    AUDIT_NET_FIELD,
+    NET_INHERITED,
+    _classify_net_module,
+    _template_module_shas,
+    assert_source_audited,
+)
 from hpc_agent.state import notebook_audit as nb
 from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
 from hpc_agent.state.decision_journal import append_decision
@@ -405,3 +411,123 @@ def test_moved_code_disclosed_but_never_clears(tmp_path: Path) -> None:
     item = result.module_attention[0]
     assert item.moved_from_section == "helper"
     assert item.moved_overlap is not None and item.moved_overlap[0] >= 3
+
+
+# ── 6a backfill: the audit net rides the module sign-off; the INHERITED proof
+# leg (ruling 3) is template-identical OR ledger-attested (module_sha_signed) ──
+
+
+def _sign_section_no_links(exp: Path, slug: str, source_text: str) -> None:
+    """Sign a section WITHOUT linked_sources — so the section path passes cleanly and
+    the 6a audit-net path (reached only when every section is signed-current) is the
+    gate leg under test, not the per-section linked-source drift check."""
+    append_decision(
+        exp,
+        scope_kind="notebook",
+        scope_id=_AUDIT,
+        block=nb.SIGN_OFF_BLOCK,
+        response=f"sign {slug}",
+        resolved={
+            "audit_id": _AUDIT,
+            "section": slug,
+            "section_sha": _sha(source_text, slug),
+            "view_sha": "view-" + _sha(source_text, slug)[:8],
+        },
+        ts="2026-05-01T00:00:00Z",
+    )
+
+
+def _sign_module_net(exp: Path, *, module: str, module_sha: str, modules: dict) -> None:
+    """Append a net-carrying ``notebook-module-sign-off`` record (RAW — bypasses the
+    append-time module gate, the graduation-gate fixture posture). ``modules`` is the
+    carried audit net's ``{module: {tier, module_sha}}`` map (6a)."""
+    append_decision(
+        exp,
+        scope_kind="notebook",
+        scope_id=_AUDIT,
+        block=nb.MODULE_SIGN_OFF_BLOCK,
+        response=f"sign module {module}",
+        resolved={
+            "audit_id": _AUDIT,
+            "module": module,
+            "module_sha": module_sha,
+            AUDIT_NET_FIELD: {"env_hash": "", "modules": modules},
+        },
+        ts="2026-05-01T00:00:00Z",
+    )
+
+
+def test_net_carried_on_the_module_signoff_recomputes_and_refuses(tmp_path: Path) -> None:
+    """The audit net rides the module-sign-off record; the graduation gate RECOMPUTES the
+    carried closure and refuses when a module's sha drifts with no re-sign (NEW_DRIFTED)."""
+    _setup(tmp_path)
+    sha1 = sha256_normalized(_ENGINE_V1)
+    _sign_section_no_links(tmp_path, "fit", _SOURCE)
+    _sign_section_no_links(tmp_path, "score", _SOURCE)
+    _sign_module_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha1,
+        modules={"engine": {"tier": NET_INHERITED, "module_sha": sha1}},
+    )
+    assert_source_audited(tmp_path)  # baseline: engine matches the carried net
+
+    (tmp_path / "src" / "engine.py").write_text(_ENGINE_V2, encoding="utf-8")
+    with pytest.raises(errors.SourceUnaudited) as exc:
+        assert_source_audited(tmp_path)
+    assert "engine" in str(exc.value)  # the drifted closure module is named
+
+
+def test_net_inherited_ledger_attested_leg_clears_drift(tmp_path: Path) -> None:
+    """INHERITED proof leg (ruling 3, ledger-attested): a carried module whose sha moved
+    is still INHERITED when its NEW sha carries a human module sign-off
+    (``module_sha_signed``) — ONE re-sign of the new sha clears the net drift, exactly
+    the wave-3 "one re-sign clears all dependents" flow lifted onto the audit net."""
+    _setup(tmp_path)
+    sha1 = sha256_normalized(_ENGINE_V1)
+    _sign_section_no_links(tmp_path, "fit", _SOURCE)
+    _sign_section_no_links(tmp_path, "score", _SOURCE)
+    _sign_module_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha1,
+        modules={"engine": {"tier": NET_INHERITED, "module_sha": sha1}},
+    )
+    (tmp_path / "src" / "engine.py").write_text(_ENGINE_V2, encoding="utf-8")
+    with pytest.raises(errors.SourceUnaudited):
+        assert_source_audited(tmp_path)  # drifted, unsigned → refuses
+
+    # Backfill the attestation ledger: ONE module re-sign of the NEW sha (V2).
+    sha2 = sha256_normalized(_ENGINE_V2)
+    nb.record_module_signoff(
+        tmp_path, audit_id=_AUDIT, module=_ENGINE_REL, module_sha=sha2, recompute=sha2
+    )
+    assert_source_audited(tmp_path)  # the ledger-attested leg clears the drifted module
+
+
+def test_net_inherited_template_identical_leg(tmp_path: Path) -> None:
+    """INHERITED proof leg (ruling 3, template-identical): a module the TEMPLATE itself
+    imports is baseline — it reads INHERITED at its current sha even when the carried
+    net recorded a STALE sha (the template's closure already vouches for it)."""
+    (tmp_path / "src").mkdir(exist_ok=True)
+    util = "def u():\n    return 1\n"
+    (tmp_path / "src" / "util.py").write_text(util, encoding="utf-8")
+    (tmp_path / "template.py").write_text(
+        "# %%\n# hpc-audit-section: s\nfrom util import u\n", encoding="utf-8"
+    )
+    roots = [tmp_path / "src"]
+    template_shas = _template_module_shas(tmp_path, "template.py", roots)
+    util_sha = sha256_normalized(util)
+    assert template_shas.get("util") == util_sha  # the template binds util at its current sha
+
+    # The carried net recorded a STALE sha, but the template-identical leg holds at the
+    # current sha → INHERITED (no attention owed), never NEW_DRIFTED.
+    tier, sha, _origin = _classify_net_module(
+        tmp_path,
+        "util",
+        recorded_sha="stale" + "0" * 59,
+        source_roots=roots,
+        template_shas=template_shas,
+    )
+    assert tier == NET_INHERITED
+    assert sha == util_sha

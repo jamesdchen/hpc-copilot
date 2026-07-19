@@ -1128,3 +1128,60 @@ silently — the compose-and-record tests are what pin the poka-yoke.
   transitive-closure audit net) is PENDING, being implemented separately.** It
   builds ON this confirmed scope (its INHERITED tier counts a ledger-attested
   sha) and journals its own record when it lands; this entry journals 6b only.
+
+## Ruling record (2026-07-19): notebook-audit 6a — the transitive-closure audit net ("track-total, attend-drift") LANDED
+
+- **notebook-audit 6a (the four-tier transitive-import-closure "audit net") is
+  LANDED, building ON the 6b-confirmed reuse-ledger scope above** (its INHERITED
+  tier counts a ledger-attested sha). The forward-reference in the 6b record
+  ("Companion ruling 6a … is PENDING") is discharged by this entry. Cite this as
+  **notebook-audit 6a** — never bare "6a", which collides with the
+  onboard-by-reproduction ruling 6a. The rulings implemented:
+  1. **The sign-off record CARRIES the net.** A `notebook-module-sign-off` decision
+     record carries the audit net resolved at SIGN-OFF time under
+     `resolved["audit_net"] = {env_hash, modules: {module: {tier, module_sha}}}`
+     (`ops/notebook_gate.py::build_audit_net` mints the shape; the skill / machinery
+     populate it via machinery's `resolve_audit_net` / `AuditNetTier` / `AuditNetEntry`
+     in `ops/notebook/linked_sources.py`). The graduation gate
+     (`ops/notebook_gate.py::assert_source_audited`) RECOMPUTES each carried module's
+     current tier at gate time and REFUSES on drift — the SAME recompute-and-refuse
+     pattern as the T8 `view_sha` gate (`ops/decision/journal/signoff.py`): a hash
+     carried on the record is re-derived from disk, and a mismatch refuses.
+  2. **Closure drift is a gate input.** A carried module whose current tier is
+     `new_drifted` (a local file under a `source_root` whose sha moved with no fresh
+     proof leg) or `unresolved` (resolves to nothing — deleted / never installed)
+     REFUSES with `errors.SourceUnaudited` NAMING every drifted module. `external`
+     entries (a module that resolves via `importlib.util.find_spec` to the installed
+     environment, not a local file) are DISCLOSED as `env_hash`-bound
+     (`audit_net_disclosures`), NEVER refused — the record carries the local
+     `env_hash` the EXTERNAL classification rested on (a deterministic sha over the
+     external modules' `find_spec` origins), and a moved origin discloses
+     `env_status="drifted"` without blocking. The EXTERNAL classification uses
+     `find_spec` ONLY — metadata, never exec — so a module that raises on import still
+     classifies external (pinned by a module-that-raises fixture).
+  3. **INHERITED = template-identical OR ledger-attested.** A carried local module
+     reads `inherited` (no attention) when its current sha is UNCHANGED from the
+     record, OR carries a fresh proof leg: ledger-attested
+     (`state/notebook_audit.py::module_sha_signed` — a human module sign-off of the
+     new sha, the 6b-confirmed cross-audit ledger) OR template-identical (the module
+     is part of the template's own import closure at that sha). Either leg clears a
+     drifted module — one module re-sign of the new sha restores the closure, exactly
+     the wave-3 "one re-sign clears all dependents" flow lifted onto the net.
+- **Legacy net-less sign-off records are GRANDFATHERED.** A `notebook-module-sign-off`
+  record written before 6a (no `audit_net`) validates under the OLD rule (the
+  per-section linked-source drift check that runs above the net path); the net path
+  skips it entirely and NEVER retro-refuses. A present-but-malformed `audit_net` (no
+  `modules` dict) also reads as net-less — only a WELL-FORMED net can trigger a
+  refusal, so a hand-forged shape never manufactures a block. The gate still fires
+  ONLY inside the opted-in `audited_source` surface (the D7 fail-safe is unchanged);
+  with no net-carrying records the submit path is byte-identical to pre-6a.
+- Enforcement: `ops/notebook_gate.py` (the recompute-and-refuse gate,
+  `audit_net_disclosures`, `build_audit_net`); tests
+  `tests/ops/notebook/test_audit_net_gate.py` (net carried, recompute-refuse on a
+  flipped sha, NEW_DRIFTED/UNRESOLVED name the modules, EXTERNAL env_hash disclosure,
+  grandfathering, find_spec-only classification) plus the wave-3 INHERITED proof-leg
+  backfill in `tests/ops/notebook/test_wave3_modules.py`. The closure-walk machinery
+  (`resolve_audit_net` / `AuditNetTier` / `AuditNetEntry`) lands via the machinery
+  builder at merge; the gate's tier classifier is machinery-independent (the shared
+  `resolve_module_file` + `find_spec` + `module_sha_signed`), so the gate is fully
+  green ahead of that seam.

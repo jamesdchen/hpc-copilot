@@ -5,6 +5,16 @@ to the CANONICAL record (the owning doc's drift log / section — canon lives
 THERE; this page is navigation, not restatement; if a line here disagrees
 with the pointed record, the record wins).
 
+## 2026-07-19
+- **notebook-audit 6a — the transitive-closure audit net ("track-total,
+  attend-drift") LANDED (user):** a `notebook-module-sign-off` record CARRIES the
+  net (`resolved["audit_net"] = {env_hash, modules: {module: {tier, module_sha}}}`);
+  the graduation gate RECOMPUTES it and refuses on NEW_DRIFTED/UNRESOLVED (naming the
+  modules), DISCLOSES EXTERNAL as env_hash-bound (never refuses), and GRANDFATHERS
+  net-less records. INHERITED = template-identical OR ledger-attested — builds ON the
+  6b-confirmed reuse-ledger scope → `notebook-audit.md` ruling record. (Cite as
+  "notebook-audit 6a" — never bare "6a", which is onboard-by-reproduction's ruling.)
+
 ## 2026-07-12
 - **#362 async-refill Phase-1 BUILD ordered (user):** land the opt-in
   continuous-async campaign refill on the block-drive architecture, with

@@ -509,6 +509,11 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("field_ownership.py", "ops", "submit"),
         ("monitor_flow.py", "ops", "aggregate"),
         ("monitor_flow.py", "ops", "monitor"),
+        # notebook-audit 6a: the graduation gate composes the notebook subject's ONE
+        # module resolver (resolve_module_file / imported_modules) + the transitive
+        # audit-net closure machinery — functions, not primitives, so it earns an
+        # inventory entry rather than a composes= (the extract_recipe.py precedent).
+        ("notebook_gate.py", "ops", "notebook"),
         ("notebook_view.py", "ops", "notebook"),
         ("overnight.py", "meta", "campaign"),
         ("overnight.py", "ops", "recover"),
