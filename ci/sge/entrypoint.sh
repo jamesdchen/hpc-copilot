@@ -59,6 +59,13 @@ fi
 # --hostname than the debconf-preseeded 'sgeci'.
 if [ -d "$CELL_COMMON" ]; then
     printf '%s\n' "$HN" > "$CELL_COMMON/act_qmaster"
+    # The daemons setuid to sgeadmin (the install-time admin user) regardless
+    # of who launches them. With the build-time postinst disabled the cell
+    # tree is still root-owned, and qmaster must WRITE act_qmaster and create
+    # accounting under common/ at startup — a root-owned cell is a fatal
+    # EACCES loop (gh run 29701129895: "can't open .../act_qmaster for
+    # writing qmaster hostname: Permission denied", qmaster never binds 6444).
+    chown -R sgeadmin:sgeadmin "$SGE_ROOT/$SGE_CELL"
 else
     log "WARNING: $CELL_COMMON missing — the gridengine postinst did not lay down the cell"
 fi
