@@ -420,7 +420,12 @@ def resolve_audit_net(
     ``from pkg import name`` offers BOTH ``pkg`` and ``pkg.name`` as candidates,
     and when ``pkg.name`` resolves under a root, ``pkg`` is merely its namespace
     prefix (the same permissive posture ``resolve_linked_sources`` keeps) — so it
-    is filtered out of the UNRESOLVED set rather than flagged.
+    is filtered out of the UNRESOLVED set rather than flagged. Symmetrically, a
+    dotted name that is a SYMBOL inside a resolved parent module
+    (``from engine import train`` offers ``engine.train``, which is no module
+    file of its own) is covered by the parent's entry and skipped, never
+    UNRESOLVED — unless the parent does NOT define the symbol, in which case
+    the import fails at runtime and the name honestly stays UNRESOLVED.
     """
     experiment_dir = Path(experiment_dir)
     entries: dict[tuple[str, str], AuditNetEntry] = {}
@@ -432,6 +437,19 @@ def resolve_audit_net(
     while queue:
         module, via = queue.popleft()
         resolved = resolve_module_file(module, root_dirs)
+        if resolved is None and "." in module:
+            # A dotted name may be a SYMBOL inside a resolved parent module, not
+            # a module file of its own (``from engine import train`` →
+            # ``engine.train``). When the parent resolves and DEFINES the
+            # symbol, the parent's own entry covers the import — skip it
+            # (never UNRESOLVED). A symbol the parent does not define is an
+            # import that fails at runtime, so it honestly stays UNRESOLVED.
+            parent, _, symbol = module.rpartition(".")
+            parent_file = resolve_module_file(parent, root_dirs)
+            if parent_file is not None:
+                parent_tree = _parse_tolerant(parent_file.read_text(encoding="utf-8"))
+                if parent_tree is not None and _locate_symbol(parent_tree, symbol) is not None:
+                    continue
         key = ("path", str(resolved.resolve())) if resolved is not None else ("name", module)
         if key in entries:
             continue  # already characterized (cycle / diamond) — first discovery wins.

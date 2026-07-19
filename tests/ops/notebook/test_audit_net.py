@@ -71,6 +71,28 @@ def test_bfs_self_import_terminates(tmp_path: Path) -> None:
     assert cap_hit is False
 
 
+def test_symbol_in_resolved_parent_is_covered_not_unresolved(tmp_path: Path) -> None:
+    # `from engine import train` offers BOTH `engine` and `engine.train`; the
+    # dotted name is a SYMBOL inside the resolved parent, not a module file of
+    # its own — the parent's entry covers it, so the net carries engine ONCE
+    # and NO UNRESOLVED engine.train (run 2026-07-19: the wave3 fixtures broke
+    # on a spurious engine.train UNRESOLVED charge in module attention).
+    (tmp_path / "engine.py").write_text("def train(x):\n    return x\n", encoding="utf-8")
+    entries, cap_hit = resolve_audit_net(["engine", "engine.train"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine"]
+    assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+    assert cap_hit is False
+
+
+def test_symbol_missing_from_parent_stays_unresolved(tmp_path: Path) -> None:
+    # The dual: a dotted name the resolved parent does NOT define is an import
+    # that fails at runtime — honestly UNRESOLVED, never papered over.
+    (tmp_path / "engine.py").write_text("def train(x):\n    return x\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine.no_such_symbol"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine.no_such_symbol"]
+    assert entries[0].tier is AuditNetTier.UNRESOLVED
+
+
 # ── tier classification per branch ───────────────────────────────────────────
 
 
