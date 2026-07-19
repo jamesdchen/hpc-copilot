@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.remote import RSYNC_TIMEOUT_SEC, _env_int, _truncate
-from hpc_agent.infra.ssh_circuit import guarded_call
+from hpc_agent.infra.ssh_circuit import guarded_call, liveness_probe
 from hpc_agent.infra.ssh_options import (
     connect_failure_retry_delays,
     is_retry_safe,
@@ -693,6 +693,7 @@ def _pull_transfer_with_retry(
                     timeout=timeout,
                     stdin_payload=stdin_payload,
                 ),
+                probe_fn=liveness_probe(ssh_target),
             )
         except FileNotFoundError as exc:
             # ENOENT spawning ssh/tar — deterministic, never retry-safe.
@@ -804,29 +805,36 @@ def _disclose_pull_batch(*, index: int, total: int, n_files: int, batch_bytes: i
 def _batch_remote_cmd(remote_path: str, codec_flag: str | None) -> str:
     """The remote command that tars the stdin-fed member list to stdout.
 
-    The member list rides ssh STDIN (``tar c -T -``), NOT the command string, so
-    the composed ``ssh ... <remote_cmd>`` argv stays O(1) in the delta size — the
-    native-Windows ~8191-char command-line limit (run-15) can never be hit no
-    matter how many files the delta names. ``-C <remote_path>`` roots the
-    ``./<rel>`` members :func:`_batch_names_payload` writes to that stdin, and the
-    archive streams to stdout (``-f -``): stdin carries the names IN, stdout the
-    archive OUT, so the two ``-`` streams never collide. One ssh connection — one
-    login node — as before, and no remote temp file to leak.
+    The member list rides ssh STDIN (``tar c --null -T -``), NOT the command
+    string, so the composed ``ssh ... <remote_cmd>`` argv stays O(1) in the
+    delta size — the native-Windows ~8191-char command-line limit (run-15) can
+    never be hit no matter how many files the delta names. ``--null`` makes
+    ``-T`` read NUL-delimited names, so the NUL-terminated member list
+    :func:`_batch_names_payload` writes cannot be split by a newline-bearing
+    filename (the same GNU-tar surface ``_fallback_remote_cmd``'s
+    ``find -print0 | tar --null -T`` already assumes on these clusters).
+    ``-C <remote_path>`` roots the ``./<rel>`` members to that stdin, and the
+    archive streams to stdout (``-f -``): stdin carries the names IN, stdout
+    the archive OUT, so the two ``-`` streams never collide. One ssh
+    connection — one login node — as before, and no remote temp file to leak.
     """
     q_rp = shlex.quote(remote_path)
     codec = f" {codec_flag}" if codec_flag else ""
-    return f"tar c{codec} -C {q_rp} -T - -f -"
+    return f"tar c{codec} -C {q_rp} --null -T - -f -"
 
 
 def _batch_names_payload(batch: list[str]) -> bytes:
-    """The ``./<rel>\\n`` member list fed to the remote ``tar c -T -`` over ssh stdin.
+    """The ``./<rel>\\0`` member list fed to the remote ``tar c --null -T -`` over ssh stdin.
 
-    Byte-identical to the list the prior base64-in-argv path decoded remotely
-    (each name ``./``-prefixed, newline-terminated) — only the transport (stdin
-    vs the command string) changed, so the pulled archive is byte-for-byte the
-    same set the old path produced.
+    Deliberately NOT byte-identical to the prior base64-in-argv path, which
+    newline-terminated each name: a newline-bearing relative filename was then
+    split into TWO tar members, smuggling a bogus entry into the archive (and
+    dropping the real file). NUL-terminating closes that split — NUL can never
+    appear in a path, so every member round-trips exactly, at the price of
+    requiring ``--null`` on the remote tar (already assumed by the fallback
+    path's ``find -print0 | tar c --null -T`` on the same clusters).
     """
-    return "".join(f"./{rel}\n" for rel in batch).encode("utf-8")
+    return "".join(f"./{rel}\0" for rel in batch).encode("utf-8")
 
 
 def _fallback_remote_cmd(

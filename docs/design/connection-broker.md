@@ -353,3 +353,45 @@ hand-rolled by design. What changed, mechanism by mechanism:
 Kept as policy (untouched): `infra/ssh_circuit.py` (ban-risk breaker) and the
 `ssh_slots` count. The B16 `test_transport_lifecycle_homes` contract test and
 the multiplexing-assembly check remain the banked post-run-13 follow-up.
+
+## Drift note (2026-07-18): graduated cooldown + demand probe + storm attribution
+
+Run-15 kill-drill incident: a connection storm tripped 3 consecutive timeouts
+against a MaxStartups-class host → circuit OPEN with the flat `cooldown_sec=300`
+→ a harvest arriving 60s later failed for ~5 minutes though the remote healed
+seconds after the burst stopped. The breaker's *evidence* rules were right; only
+its *wait time* was wrong. Three additive changes in `infra/ssh_circuit.py` (no
+weakening of evidence standards — verdicts unchanged):
+
+- **B1 graduated cooldown.** The flat 300s first-open (and the old exponential
+  doubling to `MAX_COOLDOWN_SEC`) are replaced by a per-`reopen_cycles` schedule
+  — cycle 1 → `CYCLE1_COOLDOWN_SEC` (15s), cycle 2 → `CYCLE2_COOLDOWN_SEC` (60s),
+  cycle 3+ → `CYCLE3_PLUS_COOLDOWN_SEC` (300s), via `cooldown_for_cycle`. A
+  transient blip is retried fast; only a host that stays down escalates.
+  `BASE_COOLDOWN_SEC=300` is retained as the `open_deadline` fallback and the
+  byte-compat default so a pre-schedule state file (flat 300, no new fields)
+  reads unchanged; `MAX_COOLDOWN_SEC` now only anchors `INCIDENT_WINDOW_SEC`.
+- **B1 demand-driven probe.** `check_circuit` (and `guarded_call`) take an
+  optional cheap `ssh true`-class `probe_fn`. A caller that claims the existing
+  single-flight `probe_claimed_at` slot on a half-open-eligible circuit runs the
+  probe inline through the same recording seam: success closes the circuit and
+  the caller proceeds; a failed probe re-opens at the next cycle's cooldown and
+  fails the caller fast — no gambling an expensive real command as the probe.
+  Concurrent callers still fail fast (single-flight); pre-min-wait callers
+  unchanged. `probe_fn=None` is byte-identical to the historical behavior.
+- **B3 storm attribution (DISCLOSURE only).** A bounded per-host ring of recent
+  connection-establishment (failure) timestamps lets the OPEN transition detect
+  a self-inflicted burst (`STORM_ESTABLISHMENT_THRESHOLD`=6 in the trailing
+  `STORM_WINDOW_SEC`=30s) and stamp `suspected_cause="self-storm"` — surfaced in
+  the refusal message and holding the short cycle-1 lane while the correlation
+  persists (a self-storm heals the instant local hammering stops). No
+  correlation ⇒ normal escalation. `record_connection_success` carries the ring
+  (and the run-13 `reopen_cycles`) forward so a deceptive close between bursts
+  never erases the signal. The stamp changes the cooldown LANE, never a verdict.
+
+State-file fields are additive (`suspected_cause`, `recent_establishments`; old
+files read with the None/`[]`/300 defaults) — the doc is hand-written, not
+wire-modeled, so no schema regen. Pinned by the extended `tests/infra/
+test_ssh_circuit.py` + `test_ssh_circuit_coverage.py` (graduated schedule across
+cycles, legacy-file byte-compat, demand-probe single-flight/close/reopen/
+pre-min-wait, storm stamp + short-lane + disclosure + decay).

@@ -27,7 +27,9 @@ from hpc_agent.infra import ssh_circuit
 from hpc_agent.infra.ssh_circuit import (
     BASE_COOLDOWN_SEC,
     CIRCUIT_THRESHOLD,
-    MAX_COOLDOWN_SEC,
+    CYCLE1_COOLDOWN_SEC,
+    CYCLE2_COOLDOWN_SEC,
+    CYCLE3_PLUS_COOLDOWN_SEC,
     PROBE_CLAIM_TTL_SEC,
     check_circuit,
     circuit_state_path,
@@ -93,13 +95,13 @@ class TestOpenThresholdBoundary:
 
     def test_exactly_threshold_opens(self):
         """Kills ``failures > CIRCUIT_THRESHOLD`` (off-by-one late-open): the
-        THRESHOLD-th failure opens, at BASE cooldown, counter == THRESHOLD."""
+        THRESHOLD-th failure opens, at the cycle-1 cooldown, counter == THRESHOLD."""
         clock = FakeClock()
         _fail_n(clock, CIRCUIT_THRESHOLD)
         doc = _state()
         assert doc["state"] == "open"
         assert doc["consecutive_failures"] == CIRCUIT_THRESHOLD
-        assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC
+        assert doc["cooldown_sec"] == CYCLE1_COOLDOWN_SEC  # graduated: fresh open → cycle 1
         assert doc["opened_at"] == pytest.approx(clock.now)
         with pytest.raises(SshCircuitOpen):
             check_circuit(TARGET, clock=clock)
@@ -184,61 +186,61 @@ class TestOpenDeadlineBoundary:
 class TestHalfOpenResolution:
     def test_probe_success_closes_and_resets_cooldown_to_base(self):
         """A successful probe fully resets: state closed, counter 0, cooldown
-        back to BASE (kills a mutation that leaves the doubled cooldown or the
-        open state behind)."""
+        back to the BASE placeholder (kills a mutation that leaves the escalated
+        cooldown or the open state behind)."""
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
-        # Re-open once so cooldown is doubled, proving the reset restores BASE.
-        clock.advance(BASE_COOLDOWN_SEC + 1)
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1 (15s)
+        # Re-open once so cooldown escalates to cycle 2, proving the reset restores BASE.
+        clock.advance(CYCLE1_COOLDOWN_SEC + 1)
         check_circuit(TARGET, clock=clock)
         record_connection_failure(TARGET, detail="still down", clock=clock)
-        assert _state()["cooldown_sec"] == BASE_COOLDOWN_SEC * 2
-        clock.advance(BASE_COOLDOWN_SEC * 2 + 1)
+        assert _state()["cooldown_sec"] == CYCLE2_COOLDOWN_SEC
+        clock.advance(CYCLE2_COOLDOWN_SEC + 1)
         check_circuit(TARGET, clock=clock)  # claim the probe
         record_connection_success(TARGET)
         doc = _state()
         assert doc["state"] == "closed"
         assert doc["consecutive_failures"] == 0
-        assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC
+        assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC  # closed-doc placeholder
         assert doc["probe_claimed_at"] is None
 
-    def test_probe_failure_doubles_cooldown_and_clears_the_slot(self):
-        """Kills ``* 2`` -> ``* 1`` (no backoff) and a dropped slot-clear."""
+    def test_probe_failure_escalates_to_next_cycle_and_clears_the_slot(self):
+        """Kills a dropped escalation (cycle stays at 1) and a dropped slot-clear."""
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
-        clock.advance(BASE_COOLDOWN_SEC + 1)
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1 (15s)
+        clock.advance(CYCLE1_COOLDOWN_SEC + 1)
         check_circuit(TARGET, clock=clock)  # claim the probe
         assert _state()["probe_claimed_at"] is not None
         record_connection_failure(TARGET, detail="still down", clock=clock)
         doc = _state()
         assert doc["state"] == "open"
-        assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC * 2
+        assert doc["cooldown_sec"] == CYCLE2_COOLDOWN_SEC  # cycle 2 (60s)
         assert doc["probe_claimed_at"] is None  # slot cleared so a NEW probe can run
         assert doc["opened_at"] == pytest.approx(clock.now)  # re-opened at now
 
-    def test_cooldown_doubling_is_capped_at_max(self):
-        """Kills ``min(cooldown*2, MAX)`` -> unbounded doubling: repeated probe
-        failures ceiling at MAX_COOLDOWN_SEC and never exceed it."""
+    def test_cooldown_schedule_caps_at_cycle3(self):
+        """Kills an unbounded escalation: repeated probe failures ceiling at
+        CYCLE3_PLUS_COOLDOWN_SEC (cycle 3+) and never exceed it."""
         clock = FakeClock()
         _fail_n(clock, CIRCUIT_THRESHOLD)
-        for _ in range(8):  # far more doublings than needed to saturate the cap
+        for _ in range(8):  # far more re-opens than needed to saturate the schedule
             cd = _state()["cooldown_sec"]
             clock.advance(cd + 1)
             check_circuit(TARGET, clock=clock)
             record_connection_failure(TARGET, detail="down", clock=clock)
-            assert _state()["cooldown_sec"] <= MAX_COOLDOWN_SEC
-        assert _state()["cooldown_sec"] == MAX_COOLDOWN_SEC
+            assert _state()["cooldown_sec"] <= CYCLE3_PLUS_COOLDOWN_SEC
+        assert _state()["cooldown_sec"] == CYCLE3_PLUS_COOLDOWN_SEC
 
     def test_straggler_failure_with_no_claimed_slot_is_evidence_only(self):
         """Kills a mutation that drops the ``probe_claimed_at is not None`` guard
         on the re-open path: a concurrent in-flight failure while open (no probe
-        claimed) must NOT double the cooldown, or a burst multiplies it spuriously."""
+        claimed) must NOT escalate the cooldown, or a burst inflates it spuriously."""
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1 (15s)
         assert _state()["probe_claimed_at"] is None
         record_connection_failure(TARGET, detail="straggler", clock=clock)
         doc = _state()
-        assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC  # NOT doubled
+        assert doc["cooldown_sec"] == CYCLE1_COOLDOWN_SEC  # unchanged, not escalated
 
 
 # ===========================================================================

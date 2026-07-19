@@ -93,7 +93,7 @@ def test_none_manifest_routes_to_full_copy_never_a_prune(tmp_path) -> None:
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         # The severed-read outcome, injected at the caller boundary.
         patch(_REMOTE_MANIFEST, return_value=(None, set())),
-        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn, **_kw: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", return_value=proc(0)) as tar,
         patch("hpc_agent.infra.transport._prune_manifest_known_extras") as prune,
     ):
@@ -159,7 +159,7 @@ def test_died_mid_batch_lands_prior_durably_and_leaves_remote_untouched(
 
     common = [
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn, **_kw: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
         patch("hpc_agent.infra.transport._prune_manifest_known_extras"),
         # Option 2 removed the mid-ship _write_push_manifest dial; keep it patched
@@ -241,7 +241,7 @@ def test_sentinel_absence_after_landed_batch_is_not_a_failure(tmp_path, monkeypa
 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn, **_kw: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
         patch("hpc_agent.infra.transport._prune_manifest_known_extras") as prune,
         patch(_REMOTE_MANIFEST, side_effect=lambda **_kw: (_remote_from(fake_remote), set())),
@@ -433,7 +433,7 @@ def test_last_batch_seal_ack_absent_durable_then_reseals_without_retransfer(
 
     common = [
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn, **_kw: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
         # The empty remote (push 1) / present remote (push 2) has no extras, so the
         # prune runs to its seal step; capture the standalone seal directly.

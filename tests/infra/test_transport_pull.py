@@ -139,25 +139,49 @@ def test_find_predicate_empty_when_no_filter():
 
 
 def test_batch_remote_cmd_is_argv_o1_and_reads_names_from_stdin():
-    # run-15: the member list rides ssh STDIN (``tar c -T -``), NOT the command
-    # string — so the command is a fixed template independent of the file count.
+    # run-15: the member list rides ssh STDIN (``tar c --null -T -``), NOT the
+    # command string — so the command is a fixed template independent of the
+    # file count.
     cmd = _pull._batch_remote_cmd("/r/results", "-z")
-    assert cmd == "tar c -z -C /r/results -T - -f -"
+    assert cmd == "tar c -z -C /r/results --null -T - -f -"
     assert "base64" not in cmd and "mktemp" not in cmd  # no argv-embedded blob
-    assert "-T -" in cmd  # reads the member list from stdin
+    assert "--null -T -" in cmd  # reads the NUL-delimited member list from stdin
     # The command length is O(1) in the delta size (only remote_path varies).
     assert len(_pull._batch_remote_cmd("/r/results", "-z")) < _pull._PULL_REMOTE_CMD_ARGV_CAP
 
 
-def test_batch_names_payload_is_dot_prefixed_newline_terminated():
-    # The payload fed to the remote ``tar c -T -`` over stdin — byte-identical to
-    # what the old base64-in-argv path decoded remotely.
+def test_batch_remote_cmd_reads_nul_delimited_members():
+    # NUL-safety (docket #3): ``--null`` must scope the ``-T -`` list read so a
+    # newline-bearing filename can never be split into two members. Same
+    # GNU-tar surface the fallback's ``find -print0 | tar c --null -T`` uses.
+    for codec in (None, "-z"):
+        cmd = _pull._batch_remote_cmd("/r", codec)
+        assert "--null -T -" in cmd
+        assert cmd.index("--null") < cmd.index("-T -")
+
+
+def test_batch_names_payload_is_dot_prefixed_nul_terminated():
+    # The payload fed to the remote ``tar c --null -T -`` over stdin — each
+    # member ``./``-prefixed and NUL-terminated, with NO bare ``\n`` separators
+    # (the newline-joined form split a newline-bearing name into two members).
     payload = _pull._batch_names_payload(["x/one.txt", "two.txt"])
-    assert payload == b"./x/one.txt\n./two.txt\n"
+    assert payload == b"./x/one.txt\0./two.txt\0"
+    assert b"\n" not in payload
+
+
+def test_batch_names_payload_newline_bearing_name_round_trips_as_one_member():
+    # NUL-safety regression: a relative filename containing a newline must
+    # survive as EXACTLY ONE tar member — the old newline-joined payload split
+    # it into a bogus member plus a truncated one (a smuggled/dropped file).
+    rels = ["task_0/metrics.json", "task_1/odd\nname.csv", "task_2/qlike.json"]
+    members = _pull._batch_names_payload(rels).split(b"\0")
+    assert members[-1] == b""  # trailing NUL terminator
+    assert members[:-1] == [f"./{rel}".encode() for rel in rels]
+    assert len(members) - 1 == len(rels)  # the newline name did not split
 
 
 def test_batch_remote_cmd_no_codec_flag_when_uncompressed():
-    assert _pull._batch_remote_cmd("/r", None) == "tar c -C /r -T - -f -"
+    assert _pull._batch_remote_cmd("/r", None) == "tar c -C /r --null -T - -f -"
 
 
 def test_fallback_remote_cmd_filters_server_side_and_compresses():
@@ -377,10 +401,10 @@ def test_delta_pulls_exactly_the_changed_set(tmp_path, capsys, monkeypatch):
     # Exactly one batch; the member list rides ssh STDIN (run-15), not the argv,
     # and names ONLY the changed set.
     assert len(record) == 1
-    assert record[0] == "tar c -C /r/results -T - -f -"  # O(1) command
-    names = stdin_record[0].decode()
-    assert "./changed.txt" in names and "./new.txt" in names
-    assert "./same.txt" not in names
+    assert record[0] == "tar c -C /r/results --null -T - -f -"  # O(1) command
+    members = stdin_record[0].split(b"\0")
+    assert members[-1] == b""  # NUL-terminated (docket #3), no newline split
+    assert set(members[:-1]) == {b"./changed.txt", b"./new.txt"}  # ONLY the changed set
     assert "content-hash PULL delta" in capsys.readouterr().err
 
 
@@ -460,12 +484,12 @@ def test_delta_large_list_argv_stays_bounded_and_names_ride_stdin(tmp_path, monk
     # One batch (500 names fit the default file/byte/name caps), and its command
     # is the fixed O(1) template — comfortably under the win32-safe argv cap.
     assert len(record) == 1
-    assert record[0] == "tar c -C /scratch/r -T - -f -"
+    assert record[0] == "tar c -C /scratch/r --null -T - -f -"
     assert len(record[0]) < _pull._PULL_REMOTE_CMD_ARGV_CAP
     # Every one of the 500 names crossed — via stdin, not the command line.
     names = stdin_record[0].decode()
     for rel in paths:
-        assert f"./{rel}\n" in names
+        assert f"./{rel}\0" in names
 
 
 def test_pull_transfer_stdin_write_failure_forces_nonzero(tmp_path, monkeypatch):
@@ -602,7 +626,7 @@ def test_connect_failure_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(_pull.time, "sleep", lambda s: sleeps.append(s))
     results = [_fail(255, "ssh: connect ...: Connection refused"), _ok()]
     with (
-        patch.object(_pull, "guarded_call", side_effect=lambda target, fn: fn()),
+        patch.object(_pull, "guarded_call", side_effect=lambda target, fn, **kw: fn()),
         patch.object(_pull, "_pull_transfer", side_effect=lambda **kw: results.pop(0)),
     ):
         proc = _pull._pull_transfer_with_retry(
@@ -627,7 +651,7 @@ def test_non_connect_failure_not_retried(monkeypatch):
         return _fail(2, "tar: remote command failed")
 
     with (
-        patch.object(_pull, "guarded_call", side_effect=lambda target, fn: fn()),
+        patch.object(_pull, "guarded_call", side_effect=lambda target, fn, **kw: fn()),
         patch.object(_pull, "_pull_transfer", side_effect=one_shot),
     ):
         proc = _pull._pull_transfer_with_retry(
@@ -651,7 +675,7 @@ def test_spawn_enoent_not_retried(monkeypatch):
         raise FileNotFoundError("ssh not found")
 
     with (
-        patch.object(_pull, "guarded_call", side_effect=lambda target, fn: fn()),
+        patch.object(_pull, "guarded_call", side_effect=lambda target, fn, **kw: fn()),
         patch.object(_pull, "_pull_transfer", side_effect=boom),
     ):
         proc = _pull._pull_transfer_with_retry(

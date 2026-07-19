@@ -20,6 +20,9 @@ from hpc_agent.infra import ssh_circuit
 from hpc_agent.infra.ssh_circuit import (
     BASE_COOLDOWN_SEC,
     CIRCUIT_THRESHOLD,
+    CYCLE1_COOLDOWN_SEC,
+    CYCLE2_COOLDOWN_SEC,
+    CYCLE3_PLUS_COOLDOWN_SEC,
     MAX_COOLDOWN_SEC,
     PROBE_CLAIM_TTL_SEC,
     check_circuit,
@@ -219,32 +222,41 @@ class TestHalfOpen:
         assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC
         check_circuit(TARGET, clock=clock)  # closed: no raise
 
-    def test_probe_failure_reopens_with_doubled_cooldown(self):
+    def test_probe_failure_reopens_at_next_cycle_cooldown(self):
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
-        clock.advance(BASE_COOLDOWN_SEC + 1)
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open: cycle 1 → 15s
+        assert _state()["cooldown_sec"] == CYCLE1_COOLDOWN_SEC
+        clock.advance(CYCLE1_COOLDOWN_SEC + 1)
         check_circuit(TARGET, clock=clock)  # claim the probe
         record_connection_failure(TARGET, detail="still down", clock=clock)
         doc = _state()
         assert doc["state"] == "open"
-        assert doc["cooldown_sec"] == BASE_COOLDOWN_SEC * 2
+        assert doc["cooldown_sec"] == CYCLE2_COOLDOWN_SEC  # cycle 2 → 60s
         assert doc["probe_claimed_at"] is None
-        # Not yet past the NEW deadline: fail fast.
-        clock.advance(BASE_COOLDOWN_SEC + 1)
+        # Not yet past the NEW (cycle-2) deadline: fail fast.
+        clock.advance(CYCLE2_COOLDOWN_SEC - 1)
         with pytest.raises(SshCircuitOpen):
             check_circuit(TARGET, clock=clock)
 
-    def test_exponential_cooldown_progression_capped(self):
+    def test_graduated_cooldown_progression_caps_at_cycle3(self):
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
-        expected = BASE_COOLDOWN_SEC
-        for _ in range(6):  # 300 → 600 → 1200 → 2400 → 3600 → 3600 ...
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1
+        # 15 → 60 → 300 → 300 … (schedule replaces the old exponential doubling)
+        schedule = [
+            CYCLE1_COOLDOWN_SEC,
+            CYCLE2_COOLDOWN_SEC,
+            CYCLE3_PLUS_COOLDOWN_SEC,
+            CYCLE3_PLUS_COOLDOWN_SEC,
+            CYCLE3_PLUS_COOLDOWN_SEC,
+        ]
+        for expected in schedule:
             assert _state()["cooldown_sec"] == expected
             clock.advance(expected + 1)
             check_circuit(TARGET, clock=clock)  # half-open probe
             record_connection_failure(TARGET, detail="still down", clock=clock)
-            expected = min(expected * 2, MAX_COOLDOWN_SEC)
-        assert _state()["cooldown_sec"] == MAX_COOLDOWN_SEC
+        assert _state()["cooldown_sec"] == CYCLE3_PLUS_COOLDOWN_SEC
+        # The schedule ceiling is cycle-3, well under the legacy MAX anchor.
+        assert CYCLE3_PLUS_COOLDOWN_SEC < MAX_COOLDOWN_SEC
 
     def test_stale_probe_claim_is_reclaimable(self):
         """A claimant that died must not wedge the circuit open forever."""
@@ -255,12 +267,12 @@ class TestHalfOpen:
         clock.advance(PROBE_CLAIM_TTL_SEC + 1)
         check_circuit(TARGET, clock=clock)  # reclaimed: no raise
 
-    def test_straggler_failure_while_open_does_not_double_cooldown(self):
+    def test_straggler_failure_while_open_does_not_escalate_cooldown(self):
         """A concurrent in-flight failure (no probe claimed) is evidence only."""
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1 → 15s
         record_connection_failure(TARGET, detail="straggler", clock=clock)
-        assert _state()["cooldown_sec"] == BASE_COOLDOWN_SEC
+        assert _state()["cooldown_sec"] == CYCLE1_COOLDOWN_SEC  # unchanged, not escalated
 
 
 # ---------------------------------------------------------------------------
@@ -432,11 +444,11 @@ class TestEffectiveState:
 
     def test_open_within_cooldown_reads_open(self):
         clock = FakeClock()
-        _fail_n(clock, CIRCUIT_THRESHOLD)
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1 → 15s
         doc = _state()
         assert doc["state"] == "open"
         assert ssh_circuit.effective_state(doc, now=clock.now) == "open"
-        clock.advance(BASE_COOLDOWN_SEC - 1)
+        clock.advance(CYCLE1_COOLDOWN_SEC - 1)  # still within the cycle-1 cooldown
         assert ssh_circuit.effective_state(doc, now=clock.now) == "open"
 
     def test_expired_cooldown_reads_half_open_eligible_while_file_says_open(self):
@@ -635,7 +647,7 @@ def test_open_error_carries_structured_host_and_deadline():
     with pytest.raises(SshCircuitOpen) as ei:
         check_circuit(TARGET, clock=clock)
     assert ei.value.host == HOST
-    assert ei.value.deadline == pytest.approx(clock.now + BASE_COOLDOWN_SEC)
+    assert ei.value.deadline == pytest.approx(clock.now + CYCLE1_COOLDOWN_SEC)
     # The class-level defaults keep bare construction (older sites) valid.
     bare = SshCircuitOpen("bare")
     assert bare.host == ""
@@ -662,3 +674,290 @@ def test_cluster_scheduler_scratch_lockstep_with_host_retarget():
     ]
     for cfg in cases:
         assert ssh_circuit._cluster_scheduler_scratch(cfg) == retarget_signature(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Byte-compat: a pre-schedule (flat-300) state file must stay readable
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_state_file_reads_with_flat_300_default():
+    """A pre-schedule open state file (flat ``cooldown_sec=300``, and none of the
+    new additive fields — ``reopen_cycles`` / ``suspected_cause`` /
+    ``recent_establishments``) stays readable: its stored 300 cooldown is honored
+    (deadline = opened_at + 300), a doc missing ``cooldown_sec`` falls back to the
+    legacy :data:`BASE_COOLDOWN_SEC` default, and claiming the probe on it does
+    not crash on the absent fields."""
+    clock = FakeClock()
+    path = circuit_state_path(HOST)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = {
+        "schema_version": 1,
+        "host": HOST,
+        "state": "open",
+        "consecutive_failures": 3,
+        "cooldown_sec": 300.0,
+        "opened_at": clock.now,
+        "probe_claimed_at": None,
+        "last_failure": None,
+    }
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    # Within the stored 300s cooldown → fail fast at the legacy deadline.
+    with pytest.raises(SshCircuitOpen):
+        check_circuit(TARGET, clock=clock)
+    assert ssh_circuit.open_deadline(legacy, now=clock.now) == clock.now + 300.0
+    assert (
+        ssh_circuit.open_deadline({"state": "open", "opened_at": clock.now}, now=clock.now)
+        == clock.now + BASE_COOLDOWN_SEC
+    )
+    # Past the stored cooldown → half-open eligible; claims the probe, no crash on
+    # the missing additive fields.
+    clock.advance(301)
+    check_circuit(TARGET, clock=clock)
+    assert _state()["probe_claimed_at"] == pytest.approx(clock.now)
+
+
+# ---------------------------------------------------------------------------
+# Demand-driven half-open probe (B1): a cheap inline liveness check
+# ---------------------------------------------------------------------------
+
+
+class TestDemandProbe:
+    """A caller hitting a half-open-eligible circuit may hand check_circuit a
+    cheap ``ssh true``-class ``probe_fn`` — a passing probe closes the circuit and
+    lets the caller proceed; a failing probe re-opens at the next cycle and fails
+    the caller fast, without gambling an expensive real command as the probe."""
+
+    def _open_and_lapse(self, clock: FakeClock) -> None:
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # fresh open → cycle 1 (15s)
+        clock.advance(CYCLE1_COOLDOWN_SEC + 1)  # min-wait elapsed
+
+    def test_successful_demand_probe_closes_and_caller_proceeds(self):
+        clock = FakeClock()
+        self._open_and_lapse(clock)
+        check_circuit(TARGET, clock=clock, probe_fn=lambda: _cp(returncode=0))
+        assert _state()["state"] == "closed"  # probe closed it; no raise → proceed
+        check_circuit(TARGET, clock=clock)  # closed now: no raise
+
+    def test_failed_demand_probe_reopens_at_next_cycle_and_fails_fast(self):
+        clock = FakeClock()
+        self._open_and_lapse(clock)
+        down = _cp(stderr="ssh: connect to host x port 22: Connection timed out", returncode=255)
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock, probe_fn=lambda: down)
+        doc = _state()
+        assert doc["state"] == "open"
+        assert doc["cooldown_sec"] == CYCLE2_COOLDOWN_SEC  # escalated to cycle 2
+        assert doc["probe_claimed_at"] is None  # slot cleared for the next cycle
+
+    def test_timed_out_demand_probe_reopens_at_next_cycle(self):
+        clock = FakeClock()
+        self._open_and_lapse(clock)
+
+        def boom():
+            raise TimeoutError("ssh to host timed out after 5s")
+
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock, probe_fn=boom)
+        assert _state()["cooldown_sec"] == CYCLE2_COOLDOWN_SEC
+
+    def test_concurrent_caller_fails_fast_while_probe_claimed(self):
+        """Single-flight: with the slot already claimed, a concurrent caller fails
+        fast (in-flight message) and its probe_fn never runs — no thundering herd."""
+        clock = FakeClock()
+        self._open_and_lapse(clock)
+        check_circuit(TARGET, clock=clock)  # first claimant holds the slot
+        ran = {"n": 0}
+
+        def probe():
+            ran["n"] += 1
+            return _cp(returncode=0)
+
+        with pytest.raises(SshCircuitOpen) as ei:
+            check_circuit(TARGET, clock=clock, probe_fn=probe)
+        assert "probe" in str(ei.value)
+        assert ran["n"] == 0  # the concurrent caller never opened a connection
+
+    def test_pre_min_wait_caller_fails_fast_without_probing(self):
+        """Before the cooldown lapses the caller fails fast and the probe_fn is
+        never invoked — the demand probe is DEMAND-driven, gated on min-wait."""
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # open, cooldown 15s, NOT yet lapsed
+        ran = {"n": 0}
+
+        def probe():
+            ran["n"] += 1
+            return _cp(returncode=0)
+
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock, probe_fn=probe)
+        assert ran["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# liveness_probe: the production demand probe (docket #5) — a cheap
+# ``ssh <target> true`` through the bounded capture runner DIRECTLY
+# ---------------------------------------------------------------------------
+
+
+class TestLivenessProbe:
+    """The concrete probe factory guarded_call callers wire in. Hard boundaries
+    pinned: it invokes the bounded runner directly (NEVER re-entering
+    check_circuit / guarded_call — a nested check raises probe-in-flight off
+    the caller's own claim stamp) and takes no ssh slot."""
+
+    def test_probe_invokes_bounded_runner_directly_with_expected_argv(self, monkeypatch):
+        from hpc_agent.infra import remote
+
+        calls = []
+
+        def fake_capture(argv, *, timeout):
+            calls.append((argv, timeout))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(remote, "capture_via_select", fake_capture)
+
+        def _boom(*_a, **_k):  # the probe must never re-enter the breaker
+            raise AssertionError("liveness_probe re-entered the breaker")
+
+        monkeypatch.setattr(ssh_circuit, "check_circuit", _boom)
+        monkeypatch.setattr(ssh_circuit, "guarded_call", _boom)
+
+        cp = ssh_circuit.liveness_probe(TARGET)()
+        assert cp.returncode == 0
+        (argv, timeout), *rest = calls
+        assert not rest  # exactly one bounded dial
+        assert timeout == 15.0  # the bounded default
+        assert argv[-2:] == [TARGET, "true"]  # the cheap liveness command
+        assert "BatchMode=yes" in argv  # fails fast, never hangs on a prompt
+
+    def test_probe_timeout_surfaces_as_builtin_timeout_error(self, monkeypatch):
+        """The demand-probe contract: _run_demand_probe records a raised
+        built-in TimeoutError as a connection failure — the probe translates
+        the runner's subprocess.TimeoutExpired, never leaks it."""
+        from hpc_agent.infra import remote
+
+        def fake_capture(argv, *, timeout):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
+
+        monkeypatch.setattr(remote, "capture_via_select", fake_capture)
+        with pytest.raises(TimeoutError):
+            ssh_circuit.liveness_probe(TARGET, timeout_sec=3)()
+
+    def test_probe_failure_cp_is_classified_as_connection_failure(self, monkeypatch):
+        """A refused dial returns its CompletedProcess (rc 255 + marker) so
+        _run_demand_probe classifies it as a connection failure and re-opens —
+        the probe never raises on an ordinary non-zero exit."""
+        from hpc_agent.infra import remote
+
+        monkeypatch.setattr(
+            remote,
+            "capture_via_select",
+            lambda argv, *, timeout: subprocess.CompletedProcess(
+                argv, 255, "", "ssh: connect to host x port 22: Connection refused"
+            ),
+        )
+        cp = ssh_circuit.liveness_probe(TARGET)()
+        assert cp.returncode == 255
+        assert classify_connection_failure(cp) is not None
+
+
+class TestDemandProbeWiring:
+    """The production guarded_call callers pass a probe_fn, so a half-open
+    circuit probes cheaply instead of gambling the real (possibly expensive)
+    command as the probe (docket #5). Zero fast-path cost: the probe only runs
+    on a claimed half-open slot, which TestDemandProbe already pins."""
+
+    def test_remote_guarded_path_passes_liveness_probe_fn(self, monkeypatch):
+        from hpc_agent.infra import remote
+
+        monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")
+        captured = {}
+
+        def fake_guarded(ssh_target, fn, **kwargs):
+            captured.update(kwargs)
+            return fn()
+
+        monkeypatch.setattr(ssh_circuit, "guarded_call", fake_guarded)
+        dialed = []
+        monkeypatch.setattr(
+            remote,
+            "capture_via_select",
+            lambda argv, *, timeout: (
+                dialed.append(argv) or subprocess.CompletedProcess(argv, 0, "ok", "")
+            ),
+        )
+        remote.ssh_run("qstat", ssh_target=TARGET)
+
+        probe_fn = captured.get("probe_fn")
+        assert callable(probe_fn)  # a probe is handed in, never None
+        probe_fn()  # invoking it dials the cheap liveness argv for THIS target
+        assert dialed[-1][-2:] == [TARGET, "true"]
+
+
+# ---------------------------------------------------------------------------
+# Storm-aware attribution (B3): disclosure + short-lane selection
+# ---------------------------------------------------------------------------
+
+
+class TestSelfStormAttribution:
+    """A self-inflicted connection burst (≥ STORM_ESTABLISHMENT_THRESHOLD local
+    establishment failures in the trailing STORM_WINDOW_SEC at the OPEN
+    transition) is stamped ``suspected_cause="self-storm"``, disclosed in the
+    refusal message, and holds the short cycle-1 cooldown while it correlates.
+    Disclosure only — the evidence/verdict rules are untouched."""
+
+    def _storm_trip(self, clock: FakeClock) -> None:
+        # Seed the ring with establishment failures WITHOUT opening (successes
+        # keep the consecutive counter low and CARRY the ring forward), then a
+        # final consecutive burst that opens the circuit — the storm signature.
+        for _ in range(2):
+            _fail_n(clock, CIRCUIT_THRESHOLD - 1)  # 2 fails: counter < threshold
+            record_connection_success(TARGET)  # counter → 0, ring carried
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # final 3 → opens (ring ≥ 6)
+
+    def test_storm_stamps_cause_and_holds_short_lane_on_reopen(self):
+        clock = FakeClock()
+        self._storm_trip(clock)
+        doc = _state()
+        assert doc["state"] == "open"
+        assert doc["suspected_cause"] == ssh_circuit.SELF_STORM_CAUSE
+        assert doc["cooldown_sec"] == CYCLE1_COOLDOWN_SEC
+        # Re-open while the burst still correlates (probe fails within the window).
+        clock.advance(CYCLE1_COOLDOWN_SEC + 0.1)
+        check_circuit(TARGET, clock=clock)  # claim the probe
+        record_connection_failure(TARGET, detail="still storming", clock=clock)
+        doc = _state()
+        assert doc["reopen_cycles"] == 2  # cycle advanced …
+        assert doc["suspected_cause"] == ssh_circuit.SELF_STORM_CAUSE
+        assert doc["cooldown_sec"] == CYCLE1_COOLDOWN_SEC  # … but the SHORT lane held
+
+    def test_storm_disclosure_rides_the_refusal_message(self):
+        clock = FakeClock()
+        self._storm_trip(clock)
+        with pytest.raises(SshCircuitOpen) as ei:
+            check_circuit(TARGET, clock=clock)  # still within the cycle-1 cooldown
+        msg = str(ei.value)
+        assert "self-inflicted connection burst" in msg
+        assert "retrying sooner" in msg
+
+    def test_lone_trip_is_not_a_storm_and_escalates_normally(self):
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)  # 3 consecutive, ring = 3 < threshold
+        assert _state()["suspected_cause"] is None
+        clock.advance(CYCLE1_COOLDOWN_SEC + 1)
+        check_circuit(TARGET, clock=clock)
+        record_connection_failure(TARGET, detail="still down", clock=clock)
+        assert _state()["cooldown_sec"] == CYCLE2_COOLDOWN_SEC  # escalated, no hold
+
+    def test_storm_decays_and_escalation_resumes_once_window_lapses(self):
+        clock = FakeClock()
+        self._storm_trip(clock)
+        assert _state()["suspected_cause"] == ssh_circuit.SELF_STORM_CAUSE
+        # Age the whole burst out of the window before the re-open.
+        clock.advance(ssh_circuit.STORM_WINDOW_SEC + CYCLE1_COOLDOWN_SEC + 1)
+        check_circuit(TARGET, clock=clock)  # claim the probe
+        record_connection_failure(TARGET, detail="probe failed post-storm", clock=clock)
+        doc = _state()
+        assert doc["suspected_cause"] is None  # correlation lapsed
+        assert doc["cooldown_sec"] == CYCLE2_COOLDOWN_SEC  # normal escalation resumed

@@ -249,7 +249,7 @@ def test_every_batch_folds_its_write_and_the_last_is_the_final_seal(
             "hpc_agent.infra.transport._remote_push_manifest",
             return_value=(remote_manifest, set()),
         ),
-        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn, **_kw: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_capture_tar),
         # NOT patching _prune_manifest_known_extras: the empty remote has no extras,
         # so it runs to its seal step — which, with the last batch already carrying
@@ -396,7 +396,7 @@ def test_died_mid_push_retry_ships_only_the_remainder(tmp_path: Path, monkeypatc
 
     common = [
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn: fn()),
+        patch("hpc_agent.infra.transport.guarded_call", side_effect=lambda _t, fn, **_kw: fn()),
         patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_fake_tar),
         patch("hpc_agent.infra.transport._prune_manifest_known_extras"),
         patch("hpc_agent.infra.transport._write_push_manifest"),

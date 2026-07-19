@@ -127,7 +127,7 @@ from concurrent.futures import TimeoutError as _FuturesTimeout
 from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent.errors import SshCircuitOpen
-from hpc_agent.infra import ssh_circuit, ssh_options, ssh_slots
+from hpc_agent.infra import ssh_circuit, ssh_options, ssh_pacing, ssh_slots
 
 if TYPE_CHECKING:
     import asyncio
@@ -749,6 +749,15 @@ class _Engine:
             # SshCircuitOpen (→ EngineUnavailable); a slot-wait give-up
             # (SshSlotWaitTimeout) is local contention the one-shot path would
             # hit identically, so it propagates unwrapped.
+            #
+            # RATE limiter (run-15): pace this NEW establishment before claiming
+            # the connect slot (so a paced wait never hoards a slot). Only _open
+            # paces — the REUSE path (run() on a warm connection, above) never
+            # reaches here, so a multiplexed command over an already-open
+            # connection is exempt, as it must be (no new handshake reaches the
+            # host). Paced on the CALLING thread (never the loop) — a bounded
+            # pace-sleep on the loop would stall every connection.
+            ssh_pacing.pace_establishment(ssh_target)
             try:
                 connect_slot = ssh_slots.acquire_slot(ssh_target)
             except SshCircuitOpen as exc:

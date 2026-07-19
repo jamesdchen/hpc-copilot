@@ -184,8 +184,8 @@ def open_circuit_lines() -> list[str]:
                 f"ssh circuit for {host}: cooldown lapsed at {breaker.cooldown_until} "
                 f"({breaker.consecutive_failures} failures) — half-open eligible: the "
                 f"next SSH connection will probe (success closes the circuit, failure "
-                f"re-opens it with a doubled cooldown); run net-triage before "
-                f"diagnosing the network."
+                f"re-opens it at the next cycle's graduated cooldown); run net-triage "
+                f"before diagnosing the network."
             )
     return lines
 
@@ -315,7 +315,7 @@ def _remediation(verdict: TriageVerdict, host: str, breaker: BreakerState) -> st
             f" Note: the SSH circuit breaker for {host} has a lapsed cooldown "
             f"(half-open eligible) — nothing fails fast anymore; the next real SSH "
             f"attempt runs the single half-open probe (success closes the circuit, "
-            f"failure re-opens it with a doubled cooldown)."
+            f"failure re-opens it at the next cycle's graduated cooldown)."
         )
     return text
 

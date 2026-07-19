@@ -433,7 +433,12 @@ def _with_ssh_backoff(
     """
 
     def guarded() -> subprocess.CompletedProcess[str]:
-        return ssh_circuit.guarded_call(ssh_target, fn)
+        # Demand-driven half-open probe: on a half-open-eligible circuit the
+        # cheap liveness probe runs first and only a pass gambles the real
+        # command (qsub/status/combine all ride this ladder).
+        return ssh_circuit.guarded_call(
+            ssh_target, fn, probe_fn=ssh_circuit.liveness_probe(ssh_target)
+        )
 
     if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
         return guarded()

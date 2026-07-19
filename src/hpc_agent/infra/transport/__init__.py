@@ -52,7 +52,7 @@ from hpc_agent.infra.remote import (
     _with_ssh_backoff,
     ssh_run,
 )
-from hpc_agent.infra.ssh_circuit import guarded_call
+from hpc_agent.infra.ssh_circuit import guarded_call, liveness_probe
 from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv, ssh_env
 from hpc_agent.infra.ssh_throttle import throttle_connection
 from hpc_agent.infra.ssh_validation import validate_remote_path
@@ -581,6 +581,7 @@ def _guarded_ssh_bounded(
     return guarded_call(
         ssh_target,
         functools.partial(_ssh_bounded, ssh_target, remote_cmd, timeout=timeout, what=what),
+        probe_fn=liveness_probe(ssh_target),
     )
 
 
@@ -1241,6 +1242,7 @@ def rsync_push(
                             only_paths=batch,
                             checkpoint_payload_b64=checkpoint_b64,
                         ),
+                        probe_fn=liveness_probe(ssh_target),
                     )
                     if pushed.returncode != 0:
                         # This batch did not land (``tar x`` rc is authoritative —
@@ -1328,6 +1330,7 @@ def rsync_push(
                 timeout=effective_timeout,
                 total_bytes=payload_bytes,
             ),
+            probe_fn=liveness_probe(ssh_target),
         )
 
     exclude_flags: list[str] = []
@@ -1467,6 +1470,7 @@ def _deploy_transfer(*, ssh_target: str, remote_path: str, items: list[_DeployIt
                 delete=False,
                 timeout=SSH_TIMEOUT_SEC,
             ),
+            probe_fn=liveness_probe(ssh_target),
         )
         if result.returncode != 0:
             raise RuntimeError(
