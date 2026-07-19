@@ -36,6 +36,7 @@ from typing import Any
 import pytest
 
 from hpc_agent._wire.queries.notebook_status import (
+    AuditNetSummary,
     NotebookStatusResult,
     NotebookStatusSpec,
 )
@@ -302,10 +303,10 @@ def test_status_surfaces_unresolved_attention_and_summary(
     _experiment(tmp_path)
     seen: dict[str, Any] = {}
 
-    def _double(source: object, experiment_dir: Path, root_dirs: list[Path]) -> tuple:
-        seen["source"] = source
+    def _double(seeds: object, experiment_dir: Path, root_dirs: list[Path], **kwargs: Any) -> tuple:
+        seen["seeds"] = seeds
         seen["root_dirs"] = root_dirs
-        return _MIXED
+        return _MIXED, False
 
     monkeypatch.setattr(status_op, "_resolve_audit_net", _double)
     result = _run_status(tmp_path)
@@ -319,12 +320,15 @@ def test_status_surfaces_unresolved_attention_and_summary(
     assert [m.module for m in net_items] == ["missing.mod", "other.bad"]
     assert net_items[0].file == ""
     assert list(net_items[0].dependents) == ["source", "src.a"]
+    # The resolver rode the source's direct imports (the _SOURCE fixture);
+    # imported_modules offers BOTH `engine` and `engine.train` for the
+    # `from engine import train` form (deterministic AST-walk order).
+    assert list(seen["seeds"]) == ["engine", "engine.train"]
     # The additive summary rollup: counts by tier + cap flag.
-    summary = status_op._audit_net_summary(_MIXED)
-    assert summary == {
-        "by_tier": {"EXTERNAL": 1, "INHERITED": 1, "NEW_DRIFTED": 1, "UNRESOLVED": 2},
-        "cap_reached": False,
-    }
+    summary = status_op._audit_net_summary(_MIXED, False)
+    assert summary == AuditNetSummary(
+        inherited=1, external=1, unresolved=2, new_drifted=1, cap_hit=False
+    )
     if "audit_net_summary" in NotebookStatusResult.model_fields:
         # Post-merge: builder A's wire field carries the rollup.
         assert result.audit_net_summary == summary  # type: ignore[attr-defined]
@@ -349,7 +353,7 @@ def test_status_net_resolver_error_fails_open(
     # A resolver error yields an empty net — presentation never fails the rollup.
     _experiment(tmp_path)
 
-    def _broken(source: object, experiment_dir: Path, root_dirs: list[Path]) -> tuple:
+    def _broken(seeds: object, experiment_dir: Path, root_dirs: list[Path], **kwargs: Any) -> tuple:
         raise RuntimeError("cluster on fire")
 
     monkeypatch.setattr(status_op, "_resolve_audit_net", _broken)
@@ -362,6 +366,6 @@ def test_status_summary_cap_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         _entry(f"m{i:03d}", AuditNetTier.INHERITED, file=f"src/m{i:03d}.py")
         for i in range(AUDIT_NET_CAP)
     )
-    assert status_op._audit_net_summary(capped)["cap_reached"] is True
-    assert status_op._audit_net_summary(capped[: AUDIT_NET_CAP - 1])["cap_reached"] is False
-    assert status_op._audit_net_summary(()) == {"by_tier": {}, "cap_reached": False}
+    assert status_op._audit_net_summary(capped, True).cap_hit is True
+    assert status_op._audit_net_summary(capped[: AUDIT_NET_CAP - 1], False).cap_hit is False
+    assert status_op._audit_net_summary((), False) == AuditNetSummary()
