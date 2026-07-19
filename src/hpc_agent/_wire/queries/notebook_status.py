@@ -103,6 +103,24 @@ class NotebookModuleAttention(BaseModel):
     moved_overlap: list[int] | None = None
 
 
+class AuditNetSummary(BaseModel):
+    """Roll-up of the audit net's (6a) transitive import closure by tier.
+
+    The whole-net digest the graduation gate / status surface discloses: how many
+    closure modules landed in each :class:`AuditNetTier`, plus whether the closure
+    hit its module cap (a disclosed, never-silent truncation). OPAQUE counts — core
+    tallies, never interprets what a module means.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="notebook audit-net summary")
+
+    inherited: int = 0
+    external: int = 0
+    unresolved: int = 0
+    new_drifted: int = 0
+    cap_hit: bool = False
+
+
 class NotebookStatusResult(BaseModel):
     """Per-section audit statuses + the whole-module gate verdict.
 
@@ -131,5 +149,13 @@ class NotebookStatusResult(BaseModel):
             "ONE item per UNSIGNED linked src module (never per dependent) — sign "
             "the module to clear all its dependent sections at once. Empty when "
             "every linked module is signed or the audit links none."
+        ),
+    )
+    audit_net_summary: AuditNetSummary | None = Field(
+        default=None,
+        description=(
+            "The audit net's (6a) transitive-closure digest — counts by tier plus "
+            "a cap-hit bool — or null when the status surface did not compute it. "
+            "Additive optional; absent keeps the pre-6a shape."
         ),
     )

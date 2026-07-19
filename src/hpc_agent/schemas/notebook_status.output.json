@@ -34,9 +34,54 @@
       },
       "title": "Module Attention",
       "type": "array"
+    },
+    "audit_net_summary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditNetSummary"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The audit net's (6a) transitive-closure digest — counts by tier plus a cap-hit bool — or null when the status surface did not compute it. Additive optional; absent keeps the pre-6a shape."
     }
   },
   "$defs": {
+    "AuditNetSummary": {
+      "additionalProperties": false,
+      "description": "Roll-up of the audit net's (6a) transitive import closure by tier.\n\nThe whole-net digest the graduation gate / status surface discloses: how many\nclosure modules landed in each :class:`AuditNetTier`, plus whether the closure\nhit its module cap (a disclosed, never-silent truncation). OPAQUE counts — core\ntallies, never interprets what a module means.",
+      "properties": {
+        "inherited": {
+          "default": 0,
+          "title": "Inherited",
+          "type": "integer"
+        },
+        "external": {
+          "default": 0,
+          "title": "External",
+          "type": "integer"
+        },
+        "unresolved": {
+          "default": 0,
+          "title": "Unresolved",
+          "type": "integer"
+        },
+        "new_drifted": {
+          "default": 0,
+          "title": "New Drifted",
+          "type": "integer"
+        },
+        "cap_hit": {
+          "default": false,
+          "title": "Cap Hit",
+          "type": "boolean"
+        }
+      },
+      "title": "notebook audit-net summary",
+      "type": "object"
+    },
     "NotebookModuleAttention": {
       "additionalProperties": false,
       "description": "ONE attention charge for an UNSIGNED linked src module (wave-3 piece 3).\n\nAttention is charged per CHANGED PIECE, never per dependent: a src module an\naudited section imports under a ``source_root`` costs the human ONE look when\nits current content is unsigned — not one per dependent section. Signing the\nmodule (``notebook-module-sign-off``) clears every dependent at once. A SIGNED\nmodule produces no item.",

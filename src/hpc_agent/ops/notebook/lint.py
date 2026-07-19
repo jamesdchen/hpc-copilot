@@ -80,12 +80,18 @@ from hpc_agent._wire.actions.notebook_lint import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.notebook.linked_sources import (
+    _CLOSURE_MAX_MODULES,
+    AuditNetEntry,
+    AuditNetTier,
+    imported_modules,
     module_sha_map,
+    resolve_audit_net,
     resolve_linked_sources,
     resolve_module_file,
 )
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.interview_doc import iter_interview_docs
+from hpc_agent.state.notebook_audit import module_sha_signed
 
 _PRIMITIVE = "notebook-lint"
 
@@ -498,14 +504,118 @@ def _check_executes_live(
     return findings, unverifiable, declared, reader_surfaced
 
 
-# ── rule 3: linked_sources ───────────────────────────────────────────────────
+# ── rule 3: linked_sources + the audit net (6a) ──────────────────────────────
 #
 # The resolution machinery (``resolve_module_file`` / ``imported_modules`` /
-# ``resolve_linked_sources``) lives in ``ops.notebook.linked_sources`` — the ONE
-# definition ``notebook-draft-context`` also resolves engines through (the
-# draft-context plan's "one resolution definition" requirement). This rule calls
-# ``resolve_linked_sources`` unchanged; its behavior is byte-identical to the
-# in-file version it replaced.
+# ``resolve_linked_sources`` / ``resolve_audit_net``) lives in
+# ``ops.notebook.linked_sources`` — the ONE definition ``notebook-draft-context``
+# also resolves engines through (the draft-context plan's "one resolution
+# definition" requirement). ``notebook_lint`` still calls ``resolve_linked_sources``
+# unchanged for the ``linked_sources`` result field (wave-3 pins depend on its
+# exact set/order); the audit net (6a) EXTENDS rule 3 to the full transitive
+# closure and adds the ``audit_net_unresolved`` finding below.
+
+
+def _import_section_map(tree: ast.Module, sections: list[tuple[int, int, str]]) -> dict[str, str]:
+    """Map each directly-imported module name → the first section importing it.
+
+    Walks the import statements in LINE order (deterministic), expanding a
+    ``from M import a`` to both ``M`` and ``M.a`` (matching ``imported_modules``),
+    and attributes each name to the section spanning its line. A preamble import
+    (no covering section) maps to nothing; the FIRST import of a name wins. Used
+    to attribute an audit-net UNRESOLVED finding to the section whose import
+    (transitively) reached the unresolvable module.
+    """
+    out: dict[str, str] = {}
+    nodes = [n for n in ast.walk(tree) if isinstance(n, ast.Import | ast.ImportFrom)]
+    for node in sorted(nodes, key=lambda n: getattr(n, "lineno", 0)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        else:
+            if (node.level and node.level > 0) or not node.module:
+                continue
+            names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+        slug = _section_slug_for_line(sections, getattr(node, "lineno", 0))
+        if slug is None:
+            continue
+        for name in names:
+            out.setdefault(name, slug)
+    return out
+
+
+def _check_audit_net(
+    tree: ast.Module,
+    template_tree: ast.Module | None,
+    experiment_dir: Path,
+    source_root_dirs: list[Path],
+    sections: list[tuple[int, int, str]],
+) -> tuple[list[NotebookLintFinding], dict[str, AuditNetEntry]]:
+    """Run the audit net (6a) over the declared ``source_roots``; report UNRESOLVED.
+
+    BFS-es the transitive import closure of the source's direct imports (the ONE
+    :func:`resolve_audit_net` resolver) and reports a section-attributed
+    ``audit_net_unresolved`` finding for every module that resolves nowhere — not
+    under a source root, not stdlib, not installed in the local env (a real
+    finding, never silent). Its presence flips the section's zero-flags tier leg
+    to human_required downstream (a finding IS a flag). A closure that hits the
+    module cap emits ONE disclosed module-scoped marker (count + cap), never a
+    silent truncation. Returns ``(findings, net_by_module)`` — the map lets the
+    caller annotate each ``linked_source`` with its tier + via chain (additive).
+
+    The net runs ONLY when ``source_roots`` are declared: with no declared cone
+    there is nothing for an import to be "unresolved" AGAINST, so the net is
+    vacuous (rule 3's existing never-a-finding posture for the unresolvable). A
+    module the template imports too (same resolver + roots ⇒ same file) or whose
+    current sha is human-signed (:func:`module_sha_signed`) classifies INHERITED,
+    not drifted — the ledger predicate is wired fail-open.
+    """
+    if not source_root_dirs:
+        return [], {}
+    template_modules = set(imported_modules(template_tree)) if template_tree is not None else set()
+    entries, cap_hit = resolve_audit_net(
+        imported_modules(tree),
+        experiment_dir,
+        source_root_dirs,
+        template_modules=template_modules,
+        sha_is_signed=lambda sha: module_sha_signed(experiment_dir, sha),
+    )
+    section_of = _import_section_map(tree, sections)
+    findings: list[NotebookLintFinding] = []
+    for entry in entries:
+        if entry.tier is not AuditNetTier.UNRESOLVED:
+            continue
+        seed = entry.via[0] if entry.via else entry.module
+        section = section_of.get(seed) or section_of.get(entry.module)
+        findings.append(
+            NotebookLintFinding(
+                rule="audit_net_unresolved",
+                section=section,
+                detail=(
+                    f"audit net could not resolve import {entry.module!r} — it is "
+                    "not under the declared source_roots, not stdlib, and not "
+                    "installed in the local env (a missing dependency, never silent)"
+                ),
+                evidence={"module": entry.module, "via": list(entry.via), "kind": "unresolved"},
+            )
+        )
+    if cap_hit:
+        findings.append(
+            NotebookLintFinding(
+                rule="audit_net_unresolved",
+                section=None,
+                detail=(
+                    f"audit net closure reached its cap of {_CLOSURE_MAX_MODULES} "
+                    f"modules ({len(entries)} characterized); the transitive net may "
+                    "be incomplete — disclosed, never a silent truncation"
+                ),
+                evidence={
+                    "kind": "cap_hit",
+                    "module_count": len(entries),
+                    "cap": _CLOSURE_MAX_MODULES,
+                },
+            )
+        )
+    return findings, {entry.module: entry for entry in entries}
 
 
 # ── rule 4: template_import_shadowed ─────────────────────────────────────────
@@ -870,6 +980,11 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
     template_module = parse_percent_source(template_text)
 
     tree = _parse_ast(source_text)
+    # The audit net compares the source's import cone against the TEMPLATE's own
+    # imports (the template-identical leg of INHERITED). Tolerant parse: a
+    # mid-draft template SyntaxError contributes no imports rather than refusing
+    # (the whole-source parse above owns structural refusal).
+    template_tree = _parse_tolerant(template_text)
     section_spans = _build_section_spans(source_text)
     input_root_dirs = _root_dirs(experiment_dir, spec.input_roots)
     source_root_dirs = _root_dirs(experiment_dir, spec.source_roots)
@@ -891,7 +1006,20 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
     # rule 5: executor↔notebook module-sha drift — advisory, fail-open (yields
     # nothing when no executor is detectable). Module-scoped, never a refusal.
     findings.extend(_check_executor_module_drift(tree, experiment_dir, source_root_dirs))
+    # rule 3 (6a): the audit net — transitive closure over the declared
+    # source_roots. Emits audit_net_unresolved findings (section-attributed) plus
+    # a disclosed cap marker; the returned map annotates each linked source with
+    # its tier + via chain (additive). Vacuous when no source_roots are declared.
+    net_findings, net_by_module = _check_audit_net(
+        tree, template_tree, experiment_dir, source_root_dirs, section_spans
+    )
+    findings.extend(net_findings)
     linked = resolve_linked_sources(tree, experiment_dir, source_root_dirs)
+    for link in linked:
+        entry = net_by_module.get(link.module)
+        if entry is not None:
+            link.tier = entry.tier.value
+            link.via = list(entry.via)
 
     # Carry the caller-supplied pack echo verbatim ONLY when a matched reader
     # call surfaced a record — the provenance of the pack whose vocabulary drove

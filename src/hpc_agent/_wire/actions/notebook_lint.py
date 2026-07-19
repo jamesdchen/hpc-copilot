@@ -46,7 +46,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-#: The four lint rules a finding can come from. Kept as a Literal so a caller /
+#: The lint rules a finding can come from. Kept as a Literal so a caller /
 #: T5 can switch on ``rule`` without a magic-string typo going unnoticed.
 LintRule = Literal[
     "structural_completeness",
@@ -54,6 +54,7 @@ LintRule = Literal[
     "linked_sources",
     "template_import_shadowed",
     "executor_module_drift",
+    "audit_net_unresolved",
 ]
 
 
@@ -85,6 +86,13 @@ class LinkedSource(BaseModel):
     is under it, else absolute), and ``module_sha`` is
     :func:`hpc_agent.state.audit_source.sha256_normalized` over the file text —
     the SAME hashing primitive T9 recomputes to drift-check the link at sign-off.
+
+    The audit net (6a) ADDITIONALLY annotates each link with the tier the module
+    classifies into and the import chain that reached it — additive optional
+    fields (default empty), so a link produced without the net stays wire-identical
+    to the pre-6a shape. ``tier`` is the ``AuditNetTier`` value (``inherited`` /
+    ``external`` / ``unresolved`` / ``new_drifted``); ``via`` is the import chain
+    from the seed (``via[-1] == module``).
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-lint linked source")
@@ -92,6 +100,8 @@ class LinkedSource(BaseModel):
     module: str
     file: str
     module_sha: str
+    tier: str = ""
+    via: list[str] = Field(default_factory=list)
 
 
 class NotebookLintInput(BaseModel):

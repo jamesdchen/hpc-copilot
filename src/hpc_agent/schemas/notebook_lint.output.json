@@ -78,7 +78,7 @@
     },
     "LinkedSource": {
       "additionalProperties": false,
-      "description": "One import that resolved to a file under a caller ``source_root``.\n\nJudges import ORIGIN IDENTITY only: ``module`` is the imported dotted name,\n``file`` is the resolved file's path (relative to the experiment dir when it\nis under it, else absolute), and ``module_sha`` is\n:func:`hpc_agent.state.audit_source.sha256_normalized` over the file text —\nthe SAME hashing primitive T9 recomputes to drift-check the link at sign-off.",
+      "description": "One import that resolved to a file under a caller ``source_root``.\n\nJudges import ORIGIN IDENTITY only: ``module`` is the imported dotted name,\n``file`` is the resolved file's path (relative to the experiment dir when it\nis under it, else absolute), and ``module_sha`` is\n:func:`hpc_agent.state.audit_source.sha256_normalized` over the file text —\nthe SAME hashing primitive T9 recomputes to drift-check the link at sign-off.\n\nThe audit net (6a) ADDITIONALLY annotates each link with the tier the module\nclassifies into and the import chain that reached it — additive optional\nfields (default empty), so a link produced without the net stays wire-identical\nto the pre-6a shape. ``tier`` is the ``AuditNetTier`` value (``inherited`` /\n``external`` / ``unresolved`` / ``new_drifted``); ``via`` is the import chain\nfrom the seed (``via[-1] == module``).",
       "properties": {
         "module": {
           "title": "Module",
@@ -91,6 +91,18 @@
         "module_sha": {
           "title": "Module Sha",
           "type": "string"
+        },
+        "tier": {
+          "default": "",
+          "title": "Tier",
+          "type": "string"
+        },
+        "via": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Via",
+          "type": "array"
         }
       },
       "required": [
@@ -111,7 +123,8 @@
             "executes_live",
             "linked_sources",
             "template_import_shadowed",
-            "executor_module_drift"
+            "executor_module_drift",
+            "audit_net_unresolved"
           ],
           "title": "Rule",
           "type": "string"
