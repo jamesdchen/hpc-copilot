@@ -33,6 +33,14 @@ USAGE
     python scripts/run_lint_gauntlet.py                 # run every lint
     python scripts/run_lint_gauntlet.py --only pure_files subject_imports
     python scripts/run_lint_gauntlet.py --check-parity  # audit vs ci.yml only
+    python scripts/run_lint_gauntlet.py --with-suggested-tests  # + advisory test slice
+
+The opt-in ``--with-suggested-tests`` flag appends one final gauntlet step: it
+runs ``scripts/suggest_tests.py --run``, executing pytest on the advisory slice
+the working diff maps to (empty slice -> a loud "run the full battery" line, not
+a silent pass). Its result folds into the gauntlet's exit code. This is an
+ADVISORY fast lane only — the FULL suite stays the release / CI gate; a green
+slice never substitutes for it.
 
 The default run also performs the CI-parity audit (see :func:`check_parity`)
 and folds its result into the exit code: an orphan lint — one present in
@@ -59,9 +67,11 @@ subprocess exactly as CI does.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -312,11 +322,44 @@ def _resolve_only(requested: list[str], discovered: list[str]) -> list[str]:
     return resolved
 
 
-def run_gauntlet(stems: list[str], special: dict[str, LintSpec] = SPECIAL_CASES) -> int:
+def _run_all(stems: list[str], special: dict[str, LintSpec], serial: bool) -> list[LintResult]:
+    """Run every lint in *stems*, returning results in the SAME order as
+    *stems* regardless of completion order.
+
+    Each lint is its own cold subprocess (see :func:`run_one`), so the work is
+    subprocess-bound and thread-parallel: a ``ThreadPoolExecutor`` overlaps the
+    I/O waits without the GIL ever mattering. ``run_one`` is fully
+    self-contained (no shared mutable state), so it is safe to fan out — the
+    only ordering guarantee we owe callers is report order, which
+    :meth:`Executor.map` preserves by yielding results positionally.
+
+    ``serial`` (flag or ``HPC_GAUNTLET_SERIAL=1``) forces the plain list
+    comprehension — an escape hatch for debugging a lint under a single,
+    deterministic worker.
+    """
+    if serial or len(stems) <= 1:
+        return [run_one(stem, special) for stem in stems]
+    max_workers = min(len(stems), os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # map() yields in submission (== stems) order, so results stay
+        # index-aligned with stems no matter which lint finishes first.
+        return list(executor.map(lambda stem: run_one(stem, special), stems))
+
+
+def run_gauntlet(
+    stems: list[str],
+    special: dict[str, LintSpec] = SPECIAL_CASES,
+    *,
+    serial: bool = False,
+) -> int:
     """Run each lint in *stems*, print a PASS/FAIL table, return 0 iff all
-    passed. Runs ALL of them regardless of individual failures."""
+    passed. Runs ALL of them regardless of individual failures.
+
+    Lints run in parallel by default (each is a process-isolated subprocess);
+    the report is always emitted in *stems* order. Pass ``serial=True`` (or set
+    ``HPC_GAUNTLET_SERIAL=1``) to run them one at a time for debugging."""
     print(f"lint gauntlet: {len(stems)} lint(s)")
-    results = [run_one(stem, special) for stem in stems]
+    results = _run_all(stems, special, serial)
 
     # Failures print their output in full (bounded: only the red ones).
     for r in results:
@@ -348,6 +391,22 @@ def run_gauntlet(stems: list[str], special: dict[str, LintSpec] = SPECIAL_CASES)
     return 0
 
 
+def run_suggested_tests_step() -> int:
+    """Append the advisory suggested-test slice as a final gauntlet step.
+
+    Spawns ``scripts/suggest_tests.py --run`` as a subprocess (inheriting stdout
+    so pytest's live output reaches the caller), exactly as the gauntlet spawns
+    each lint. Returns its exit code for folding into the gauntlet's. ADVISORY
+    only: the full suite remains the release / CI gate."""
+    print("\n--- suggested-tests slice (ADVISORY; the full suite still gates CI/release) ---")
+    sys.stdout.flush()  # order our header before the child's inherited output when piped
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "suggest_tests.py"), "--run"],
+        cwd=REPO_ROOT,
+    )
+    return proc.returncode
+
+
 def _print_parity(problems: list[str]) -> None:
     if problems:
         print("\n!!! CI-PARITY PROBLEMS (scripts/ <-> ci.yml drift) !!!", file=sys.stderr)
@@ -373,7 +432,36 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="audit the discovered lint set against ci.yml and exit (run no lints).",
     )
+    parser.add_argument(
+        "--serial",
+        action="store_true",
+        help=(
+            "run lints one at a time instead of in parallel (debugging escape "
+            "hatch; also enabled by HPC_GAUNTLET_SERIAL=1)."
+        ),
+    )
+    parser.add_argument(
+        "--with-suggested-tests",
+        action="store_true",
+        help=(
+            "opt-in: after the lints, append an ADVISORY suggested-test slice "
+            "(scripts/suggest_tests.py --run) as a final step and fold its result "
+            "into the exit code. The FULL suite stays the release / CI gate — this "
+            "is a fast local signal, never a substitute for it."
+        ),
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    # Windows consoles default to cp1252: a failed lint whose captured output
+    # carries non-ASCII (e.g. U+FFFD from a decode fallback) must not crash the
+    # report printer itself — substitute rather than UnicodeEncodeError, so the
+    # failure table always reaches the caller.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            _reconfigure(errors="replace")
+
+    serial = args.serial or os.environ.get("HPC_GAUNTLET_SERIAL") == "1"
 
     discovered = discover_lints()
     ci_text = CI_WORKFLOW.read_text(encoding="utf-8") if CI_WORKFLOW.is_file() else ""
@@ -387,13 +475,17 @@ def main(argv: list[str] | None = None) -> int:
         stems = _resolve_only(args.only, discovered)
         # Targeted run: lints only, no parity audit (the caller is iterating
         # on specific lints, not gating a push).
-        return run_gauntlet(stems)
+        rc = run_gauntlet(stems, serial=serial)
+        if args.with_suggested_tests:
+            rc = rc or run_suggested_tests_step()
+        return rc
 
     # Default: every lint + the parity audit, folded into one exit code.
-    lint_rc = run_gauntlet(discovered)
+    lint_rc = run_gauntlet(discovered, serial=serial)
     problems = check_parity(discovered, ci_text)
     _print_parity(problems)
-    return 1 if (lint_rc != 0 or problems) else 0
+    suggested_rc = run_suggested_tests_step() if args.with_suggested_tests else 0
+    return 1 if (lint_rc != 0 or problems or suggested_rc != 0) else 0
 
 
 if __name__ == "__main__":

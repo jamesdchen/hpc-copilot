@@ -30,10 +30,19 @@ Three mapping passes, unioned:
 
 Usage::
 
-    python scripts/suggest_tests.py [<ref>]
+    python scripts/suggest_tests.py [<ref>]                 # PRINT the advisory slice
+    python scripts/suggest_tests.py --run [--base <ref>]    # RUN pytest on the slice
 
-``<ref>`` defaults to ``HEAD`` (working tree + staged vs the last commit). Pass a
-ref (``main``, a sha, ``origin/main``) to scope a branch's worth of change.
+``<ref>`` (positional) / ``--base`` both default to ``HEAD`` (working tree +
+staged vs the last commit); ``--base`` wins when both are given. Pass a ref
+(``main``, a sha, ``origin/main``) to scope a branch's worth of change.
+
+``--run`` executes ``pytest`` on **exactly** the suggested slice and exits with
+pytest's own return code. An *empty* suggestion set never silently passes: it
+prints a loud "no targeted tests suggested — run the full battery" line and
+exits ``0`` (so an agent's loop is unblocked but explicitly told the slice was
+empty). ``--run`` is still ADVISORY — the full suite remains the CI / ``/release``
+gate; a green slice is a fast signal, never a merge warrant.
 
 The fire path is exercised in ``tests/scripts/test_suggest_tests.py``.
 """
@@ -370,6 +379,31 @@ def render(sel: Selection, ref: str) -> str:
     return "\n".join(lines)
 
 
+NO_TARGETS_LINE = (
+    "!! no targeted tests suggested from this diff — run the full battery "
+    "(pytest) before you trust this change"
+)
+
+
+def run_suggested(sel: Selection, ref: str) -> int:
+    """Execute pytest on EXACTLY the suggested slice; return pytest's exit code.
+
+    An empty suggestion set is never a silent pass: it prints
+    :data:`NO_TARGETS_LINE` loudly and returns ``0`` (the diff mapped to nothing
+    runnable, so the caller's loop is unblocked but explicitly told to fall back
+    to the full battery). This is still ADVISORY — the full suite is the only
+    merge / release evidence.
+    """
+    args = sel.pytest_args()
+    if not args:
+        print(f"\n# {NO_TARGETS_LINE}.")
+        return 0
+    cmd = [sys.executable, "-m", "pytest", *args]
+    print("\n# running advisory slice: pytest " + " ".join(args))
+    sys.stdout.flush()  # order our line before pytest's inherited output when piped
+    return subprocess.run(cmd, cwd=REPO).returncode
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -381,13 +415,31 @@ def main(argv: list[str] | None = None) -> int:
         default="HEAD",
         help="git ref to diff the working tree against (default: HEAD).",
     )
+    parser.add_argument(
+        "--base",
+        metavar="REF",
+        default=None,
+        help="git ref to diff against (overrides the positional ref); pairs with --run.",
+    )
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help=(
+            "execute pytest on exactly the suggested slice and exit with pytest's "
+            "code; an empty slice prints a loud 'run the full battery' line and exits 0. "
+            "ADVISORY: the full suite still gates CI and /release."
+        ),
+    )
     ns = parser.parse_args(argv)
+    ref = ns.base if ns.base is not None else ns.ref
     try:
-        sel = suggest(ns.ref)
+        sel = suggest(ref)
     except subprocess.CalledProcessError as exc:
-        print(f"suggest-tests: git diff failed for ref {ns.ref!r}: {exc.stderr}", file=sys.stderr)
+        print(f"suggest-tests: git diff failed for ref {ref!r}: {exc.stderr}", file=sys.stderr)
         return 2
-    print(render(sel, ns.ref))
+    print(render(sel, ref))
+    if ns.run:
+        return run_suggested(sel, ref)
     return 0
 
 

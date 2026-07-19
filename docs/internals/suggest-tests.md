@@ -57,6 +57,35 @@ The output is a pytest-ready argument list, each target annotated with which
 pass(es) selected it, followed by the advisory disclaimer and any `UNMAPPED`
 files.
 
+## Running the slice (`--run`) and the pre-push wiring
+
+`--run` closes the loop — instead of printing a `pytest …` line for you to
+copy, it **executes** pytest on exactly the suggested slice and exits with
+pytest's own code:
+
+```
+python scripts/suggest_tests.py --run [--base <ref>]   # RUN the slice
+```
+
+`--base` is the diff ref (defaults to `HEAD`, overrides the positional `ref`).
+An **empty** suggestion set is never a silent pass: it prints a loud
+`no targeted tests suggested — run the full battery` line and exits `0`, so an
+agent's inner loop is unblocked but explicitly told the diff mapped to nothing
+runnable and the full battery is still owed.
+
+The pre-push routine, `scripts/run_lint_gauntlet.py`, exposes this as an
+**opt-in** flag:
+
+```
+python scripts/run_lint_gauntlet.py --with-suggested-tests
+```
+
+which appends `suggest_tests.py --run` as a final gauntlet step and folds its
+result into the exit code. The default gauntlet run does **not** include it —
+this is a fast local signal, not a gate. Per the advisory contract above, the
+**full suite stays the only release / CI gate**; a green slice never substitutes
+for it.
+
 ## The seeded cross-consumer map
 
 | Changed predicate | Consumers that must run |
