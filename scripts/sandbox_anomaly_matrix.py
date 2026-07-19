@@ -169,14 +169,23 @@ def compose_cancel_command(
     """The cluster-side cancel command for *scheduler*, over *job_ids*.
 
     Mirrors the cancel grammar the backend engine dispatches
-    (``infra/backends/_engine.py``'s cancel builder): SLURM cancels via
-    ``scancel <id> <id> ...`` (per-id ``<id>_[<range>]`` subscript form when a
-    task_range scopes it); SGE cancels via ``qdel <id> <id> ...`` (``qdel
-    <ids> -t <range>`` for a range). The kill drill (U4) carries the same
-    abstraction behind its ``--scheduler`` switch; the matrix composes it for
-    the in-container cancel + records it as evidence.
+    (``infra/backends/_engine.py``'s ``build_cancel_cmd``): SLURM cancels via
+    ONE ``scancel <id> <id> ...`` call — when a task_range scopes it, ONE
+    ``scancel`` with every per-id ``<id>_[<range>]`` subscripted target
+    space-joined (scancel's index grammar accepts a comma list verbatim, so
+    the range rides unmodified). SGE cancels via ``qdel <id> <id> ...`` —
+    ``qdel <ids> -t <range>`` for a range, but SGE ``-t`` accepts only a
+    SINGLE ``n[-m[:s]]`` range, so a comma-bearing range is DECOMPOSED into
+    one ``qdel <ids> -t <segment>`` per comma segment, sequenced with `` ; ``
+    (never ``&&`` — an already-gone leading task must not skip the rest). The
+    kill drill (U4) carries the same abstraction behind its ``--scheduler``
+    switch; the matrix composes it for the in-container cancel + records it
+    as evidence.
 
-    # MIRROR: infra/backends/_engine.py cancel grammar (scancel / qdel)
+    # MIRROR: infra/backends/_engine.py::build_cancel_cmd cancel grammar —
+    #   slurm single-call targets (:1051-1052), sge comma decomposition
+    #   (:1069-1070). The engine additionally shlex-quotes each id — a no-op
+    #   for the numeric journal ids the matrix cancels.
     #   pinned-by tests/scripts/test_sandbox_anomaly_matrix.py::test_compose_cancel_slurm
     """
     if scheduler not in _CANCEL_SCHEDULERS:
@@ -188,12 +197,20 @@ def compose_cancel_command(
         raise SandboxRefusal("compose_cancel_command: at least one job id is required")
     if scheduler == "slurm":
         if task_range:
-            # scancel's array-subscript form, one call per id (engine parity).
-            return " ".join(f"scancel {j}_[{task_range}]" for j in ids)
+            # scancel's array-subscript form: ONE invocation with every
+            # subscripted target (engine parity — a second scancel token would
+            # be an ARGV element of the first, not a second command).
+            targets = " ".join(f"{j}_[{task_range}]" for j in ids)
+            return f"scancel {targets}"
         return f"scancel {' '.join(ids)}"
-    # sge: qdel addresses the bare array id; -t scopes a task range (one range).
+    # sge: qdel -t accepts ONE n[-m[:s]] range only (the sge dialect lacks
+    # supports_comma_array_ranges), so a comma-bearing range decomposes into
+    # one qdel per contiguous comma segment — the whole-set form would cancel
+    # at most the leading task. A single segment collapses to one qdel call.
     if task_range:
-        return f"qdel {' '.join(ids)} -t {task_range}"
+        segments = [seg.strip() for seg in str(task_range).split(",") if seg.strip()]
+        joined_ids = " ".join(ids)
+        return " ; ".join(f"qdel {joined_ids} -t {seg}" for seg in segments)
     return f"qdel {' '.join(ids)}"
 
 

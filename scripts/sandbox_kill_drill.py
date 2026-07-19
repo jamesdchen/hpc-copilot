@@ -273,6 +273,32 @@ def count_dispatch_commands(commands: Sequence[str]) -> int:
     return sum(("sbatch" in cmd or "qsub " in cmd) for cmd in commands)
 
 
+def _channel_failure_errors() -> tuple[type[BaseException], ...]:
+    """The raise surface of the drill's ``ssh_run``-backed cluster reads.
+
+    ``hpc_agent.infra.remote.ssh_run`` NEVER raises the driver's
+    :class:`SandboxRefusal`: it raises :class:`TimeoutError` on a slow/severed
+    channel (remote.py converts ``subprocess.TimeoutExpired`` — and the
+    engine's post-dispatch non-idempotent failure — into it), raises
+    :class:`~hpc_agent.errors.SshCircuitOpen` when the per-host breaker is
+    open (consecutive connection failures fail fast, NOT retryable), and can
+    surface :class:`OSError` from the transport itself (a missing ssh binary,
+    a syscall-layer named-pipe failure); a non-zero scheduler rc is a
+    RETURNED CompletedProcess, not a raise. ``_backend_cls`` only raises
+    ``SpecInvalid`` for an unknown scheduler name — a config defect the drill
+    wants loud, never swallowed into a poll loop. So a bare
+    ``except SandboxRefusal`` around these reads is a DEAD clause: a severed
+    channel escaped ``main`` as a traceback, contradicting the drill's
+    record-and-abort doctrine (every failure is an evidence row + a bounded
+    abort). SandboxRefusal stays in the tuple (harmless here, and
+    :func:`run_cli_argv` genuinely raises it on the CLI path), but the real
+    channel modes are what this set exists to catch.
+    """
+    from hpc_agent.errors import SshCircuitOpen
+
+    return (SandboxRefusal, SshCircuitOpen, TimeoutError, OSError)
+
+
 # ── Lease-PID extraction (read the detached worker we must kill) ─────────────
 
 
@@ -655,10 +681,15 @@ def wait_for_token(
     on timeout (the array never entered the queue — recorded as evidence)."""
     deadline = time.time() + budget_sec
     snapshot = ""
+    channel_failures = _channel_failure_errors()
     while time.time() < deadline:
         try:
             snapshot = query_token_snapshot(ctx.ssh_target, ctx.backend)
-        except SandboxRefusal:
+        except channel_failures:
+            # A slow/severed channel is UNKNOWN, never a traceback escaping the
+            # drill: fold it into an empty snapshot and keep polling inside the
+            # SAME budget (retry/backoff semantics unchanged). Exhaustion
+            # returns None and the caller records the error row.
             snapshot = ""
         if array_present(ctx.backend, snapshot, token):
             return snapshot
@@ -937,7 +968,11 @@ def _recovery_legs(state: Any, ctx: Any, hit: Mapping[str, Any]) -> None:
     # Leg 2 — cluster jobmap marker pending, wave-0 id at rc==0.
     try:
         marker_stdout = read_jobmap_marker(ctx.ssh_target, remote_path, run_id)
-    except SandboxRefusal as exc:
+    except _channel_failure_errors() as exc:
+        # The ssh_run-backed read raises TimeoutError/SshCircuitOpen/OSError on
+        # a slow/severed channel (NEVER SandboxRefusal — a bare refusal clause
+        # here was dead): record the SAME failing evidence row + bounded abort,
+        # never a traceback escaping main.
         marker_stdout = ""
         state.record("recover.marker", "cluster jobmap", "jobmap marker readable", False, str(exc))
     marker_id = marker_wave0_job_id(ctx.backend, marker_stdout)
@@ -994,7 +1029,9 @@ def _recovery_legs(state: Any, ctx: Any, hit: Mapping[str, Any]) -> None:
     # Leg 5 — EXACTLY ONE array under the token, ZERO re-qsub.
     try:
         post_snapshot = query_token_snapshot(ctx.ssh_target, ctx.backend)
-    except SandboxRefusal as exc:
+    except _channel_failure_errors() as exc:
+        # Same live-failure contract as leg 2: a severed channel lands as a
+        # recorded failing evidence row, never a traceback escaping the drill.
         post_snapshot = ""
         state.record("recover.one-array", "container scheduler", "token query ok", False, str(exc))
     one_array = exactly_one_array_problems(ctx.backend, post_snapshot, token)

@@ -22,6 +22,11 @@ Covered pins (plan §4-U4):
    and a full read-through against a ``tmp_path`` journal home.
 7. Every recovery-contract leg against canned briefs / journal records.
 8. The ``main()`` guard-first refusal order (guard → knobs → cluster source).
+9. The live ssh-failure catches: ``TimeoutError``/``OSError`` out of the
+   ``ssh_run``-backed sites (the window poll + recovery legs 2/5) land as
+   evidence rows + bounded aborts — never a traceback escaping the
+   attempt/driver function — and leg 3's ``SandboxRefusal`` path
+   (``run_cli_argv`` genuinely raises it) stays live.
 """
 
 from __future__ import annotations
@@ -30,7 +35,10 @@ import importlib.util
 import json
 import socket
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -511,6 +519,148 @@ def test_journal_leg_reads_a_canned_record_from_a_tmp_home(
     # An absent record reads as {} → the leg fails loud (never a silent pass).
     assert kd.read_journal_record(exp, "no-such-run") == {}
     assert kd.submitting_state_problems({})
+
+
+# ── live ssh-failure catches (record-and-abort, never a traceback) ───────────
+#
+# ssh_run raises TimeoutError on a slow/severed channel (and SshCircuitOpen /
+# OSError on the breaker/transport paths) — NEVER the driver's SandboxRefusal.
+# The drill's three ssh_run-backed sites (the window poll + recovery legs 2/5)
+# must fold those into the SAME record-and-abort evidence path: a failing row +
+# a bounded abort, with no traceback escaping the attempt/driver function.
+
+
+def _raise(error: BaseException) -> Callable[..., Any]:
+    """A monkeypatch-ready stub raising *error* (the canned channel failure)."""
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    return _boom
+
+
+def test_channel_failure_set_covers_the_real_ssh_run_raise_surface() -> None:
+    # The old except clauses caught ONLY SandboxRefusal — dead around ssh_run.
+    from hpc_agent.errors import SshCircuitOpen
+
+    errors = kd._channel_failure_errors()
+    assert TimeoutError in errors  # a slow/severed channel (remote.py:825,866)
+    assert SshCircuitOpen in errors  # the per-host breaker failing fast
+    assert OSError in errors  # transport-layer failures (missing ssh binary, …)
+    assert kd.SandboxRefusal in errors  # kept — run_cli_argv genuinely raises it
+
+
+def test_wait_for_token_severed_channel_is_a_bounded_miss_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Site 1 (the window poll): a TimeoutError out of ssh_run folds into an
+    # empty snapshot, the loop keeps polling inside the SAME budget, and
+    # exhaustion returns None (the caller records the error row) — no raise.
+    monkeypatch.setattr(
+        kd,
+        "query_token_snapshot",
+        _raise(TimeoutError("ssh to slurmci timed out after 30s")),
+    )
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.wait_for_token(ctx, run_id=RUN_ID, token=TOKEN, budget_sec=1, interval_sec=1)
+    assert outcome is None
+
+
+def test_drive_one_attempt_severed_channel_is_an_error_outcome_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Site 1 end-to-end through the attempt driver: the severed channel must
+    # surface as a bounded ``error`` WindowOutcome (the evidence the retry loop
+    # records), never a traceback out of _drive_one_attempt.
+    monkeypatch.setattr(
+        kd,
+        "_drive_chain_to_s3_launch",
+        lambda state, ctx, *, n_samples: (RUN_ID, str(tmp_path), "/remote/exp"),
+    )
+    monkeypatch.setattr(
+        kd._driver,
+        "read_detached_lease",
+        lambda home, run_id, block: {
+            "pid": 4321,
+            "host": socket.gethostname(),
+            "create_time": 1.5,
+        },
+    )
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "submitting", "job_ids": [], "attempt": 0},
+    )
+    monkeypatch.setattr(
+        kd,
+        "query_token_snapshot",
+        _raise(TimeoutError("ssh to slurmci timed out after 30s")),
+    )
+    # Shrink the poll budget so the test does not sit out the live 180s window.
+    real_wait = kd.wait_for_token
+    monkeypatch.setattr(
+        kd,
+        "wait_for_token",
+        lambda ctx, *, run_id, token: real_wait(
+            ctx, run_id=run_id, token=token, budget_sec=1, interval_sec=1
+        ),
+    )
+    state = kd._driver.ChainState()
+    ctx = SimpleNamespace(journal_home=tmp_path, ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd._drive_one_attempt(state, ctx, n_samples=1, attempt_index=0, hit={})
+    assert outcome.kind == "error"
+    assert outcome.run_id == RUN_ID
+    assert "never entered the scheduler" in outcome.detail
+
+
+@pytest.mark.parametrize(
+    "channel_error",
+    [
+        TimeoutError("ssh to slurmci timed out after 30s"),
+        OSError("ssh: connect to host slurmci port 22: Connection refused"),
+    ],
+    ids=["timeout", "oserror"],
+)
+def test_recovery_legs_channel_failure_records_rows_and_never_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, channel_error: BaseException
+) -> None:
+    # Sites 2 (leg 2, jobmap marker read) and 3 (leg 5, token snapshot): the
+    # ssh_run raise surface must land as failing EVIDENCE ROWS (record-and-abort),
+    # never a traceback out of _recovery_legs. Leg 3's SandboxRefusal (raised by
+    # run_cli_argv for real) stays live and rides the same path — pinned here.
+    monkeypatch.setattr(kd, "read_journal_record", lambda *a, **k: {})
+    monkeypatch.setattr(kd, "read_jobmap_marker", _raise(channel_error))
+    monkeypatch.setattr(
+        kd, "run_cli_argv", _raise(SandboxRefusal("reconcile: CLI invocation failed (rc=2)"))
+    )
+    monkeypatch.setattr(kd, "query_token_snapshot", _raise(channel_error))
+    # Leg 6's CLI/detached seams are stubbed so the hermetic test stops before
+    # the watch/harvest leg (its own assertions are covered elsewhere).
+    monkeypatch.setattr(kd._driver, "_step_cli", lambda *a, **k: None)
+    monkeypatch.setattr(kd._driver, "_launch_block_detached", lambda *a, **k: None)
+
+    state = kd._driver.ChainState()
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm", env={}, wait_timeout=1)
+    hit = {
+        "run_id": RUN_ID,
+        "experiment_dir": tmp_path,
+        "remote_path": "/remote/exp",
+        "token": TOKEN,
+        "attempt": 0,
+    }
+    kd._recovery_legs(state, ctx, hit)  # must NOT raise
+
+    marker_rows = [r for r in state.rows if r["step"] == "recover.marker"]
+    assert marker_rows[0]["pass"] is False
+    assert str(channel_error) in marker_rows[0]["detail"]
+    # The LIVE leg-3 SandboxRefusal path: run_cli_argv's refusal is recorded
+    # as a failing row, never raised.
+    adopt_rows = [r for r in state.rows if r["step"] == "recover.adopt"]
+    assert adopt_rows[0]["pass"] is False
+    assert "CLI invocation failed" in adopt_rows[0]["detail"]
+    one_array_rows = [r for r in state.rows if r["step"] == "recover.one-array"]
+    assert one_array_rows[0]["pass"] is False
+    assert str(channel_error) in one_array_rows[0]["detail"]
 
 
 # ── main() guard-first refusal order ─────────────────────────────────────────

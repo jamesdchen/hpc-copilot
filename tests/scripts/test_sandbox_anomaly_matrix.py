@@ -267,14 +267,17 @@ def test_compose_cancel_slurm() -> None:
 
 
 def test_compose_cancel_slurm_task_range() -> None:
-    # scancel's array-subscript form, one call per id.
+    # scancel's array-subscript form: ONE invocation with every subscripted
+    # target space-joined (engine parity — _engine.py::build_cancel_cmd
+    # :1051-1052; a "scancel ... scancel ..." join would make the second
+    # scancel an ARGV element of the first, not a command).
     assert (
         matrix.compose_cancel_command("slurm", ["12"], task_range="4,8,13-15")
         == "scancel 12_[4,8,13-15]"
     )
     assert (
         matrix.compose_cancel_command("slurm", ["12", "34"], task_range="1-3")
-        == "scancel 12_[1-3] scancel 34_[1-3]"
+        == "scancel 12_[1-3] 34_[1-3]"
     )
 
 
@@ -284,9 +287,28 @@ def test_compose_cancel_sge() -> None:
 
 
 def test_compose_cancel_sge_task_range() -> None:
-    # SGE qdel -t takes ONE range over the addressed ids.
+    # A single n[-m[:s]] segment stays ONE qdel call, ids first then -t (engine
+    # parity — _engine.py::build_cancel_cmd :1069-1070).
     assert (
         matrix.compose_cancel_command("sge", ["12", "34"], task_range="4-8") == "qdel 12 34 -t 4-8"
+    )
+    assert matrix.compose_cancel_command("sge", ["7"], task_range="4") == "qdel 7 -t 4"
+
+
+def test_compose_cancel_sge_comma_range_decomposes_per_segment() -> None:
+    # SGE qdel -t rejects a comma LIST (the whole-set form cancels at most the
+    # leading task): the engine decomposes it into one ``qdel <ids> -t <seg>``
+    # per contiguous comma segment, joined with " ; " (never "&&"), each
+    # addressing the FULL id set, ids first then -t
+    # (_engine.py::build_cancel_cmd :1069-1070, rationale :1019-1037).
+    assert (
+        matrix.compose_cancel_command("sge", ["12", "34"], task_range="4,8,13-15")
+        == "qdel 12 34 -t 4 ; qdel 12 34 -t 8 ; qdel 12 34 -t 13-15"
+    )
+    # Segment whitespace is stripped (the engine's seg.strip()).
+    assert (
+        matrix.compose_cancel_command("sge", ["7"], task_range="4, 13-15")
+        == "qdel 7 -t 4 ; qdel 7 -t 13-15"
     )
 
 
