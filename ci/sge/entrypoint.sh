@@ -43,10 +43,20 @@ fi
 # itself for --hostname; backstop it for other runtimes.
 getent hosts "$HN" >/dev/null 2>&1 || printf '127.0.1.1\t%s\n' "$HN" >> /etc/hosts
 
+# --- runtime cell spool init ---------------------------------------------------
+# The build-time postinst init is disabled (shared/gridengineconfig=false —
+# spooldefaults.bin SIGSEGVs in the buildkit sandbox, LP #1774302 family). Init
+# here instead: idempotent, and at runtime docker wires "$HN" to a real IP, so
+# the canonicalization crash path is gone. init_cluster lays down $CELL_COMMON.
+if [ ! -e /var/spool/gridengine/spooldb/sge ]; then
+    log "initializing cluster spool (init_cluster)"
+    su -s /bin/sh -c "/usr/share/gridengine/scripts/init_cluster $SGE_ROOT $SGE_CELL /var/spool/gridengine/spooldb sgeadmin" sgeadmin || true
+fi
+
 # --- cell identity ------------------------------------------------------------
-# The image's postinst ran against the debconf-preseeded name ('sgeci'); point
-# the cell at the RUNTIME hostname unconditionally — cheap and idempotent, and
-# it keeps the container honest if it is ever run under a different --hostname.
+# Point the cell at the RUNTIME hostname unconditionally — cheap and idempotent,
+# and it keeps the container honest if it is ever run under a different
+# --hostname than the debconf-preseeded 'sgeci'.
 if [ -d "$CELL_COMMON" ]; then
     printf '%s\n' "$HN" > "$CELL_COMMON/act_qmaster"
 else

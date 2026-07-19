@@ -29,14 +29,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d
 
-# Preseed the gridengine debconf answers so the noninteractive postinst
-# configures the cell for the FIXED runtime hostname (the workflow runs the
-# container with --hostname sgeci) instead of prompting. The entrypoint still
-# re-points the cell at the live hostname unconditionally — this preseed just
-# keeps the install non-interactive and coherent.
+# Preseed the gridengine debconf answers so the install stays non-interactive.
+# shared/gridengineconfig is FALSE: with `true` the postinst runs init_cluster
+# at image-BUILD time, and its spooldefaults.bin SIGSEGVs inside the buildkit
+# sandbox (LP #1774302 family — the build hostname canonicalizes to localhost;
+# observed on the lane's first live run, gh run 29679768215). The cell spool is
+# initialized at RUNTIME by the entrypoint instead (the canonical unattended
+# pattern), where docker wires the container hostname to a real IP.
 RUN echo "gridengine-master shared/gridenginemaster string sgeci" | debconf-set-selections \
     && echo "gridengine-master shared/gridenginecell string default" | debconf-set-selections \
-    && echo "gridengine-master shared/gridengineconfig boolean true" | debconf-set-selections
+    && echo "gridengine-master shared/gridengineconfig boolean false" | debconf-set-selections
 
 # gridengine-{master,exec,client}: sge_qmaster + sge_execd + the client tools
 # (qsub/qstat/qacct/qconf/qdel). openssh-server: the login node the framework
