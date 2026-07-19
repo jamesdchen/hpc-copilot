@@ -46,21 +46,24 @@ getent hosts "$HN" >/dev/null 2>&1 || printf '127.0.1.1\t%s\n' "$HN" >> /etc/hos
 # --- runtime cell spool init ---------------------------------------------------
 # The build-time postinst init is disabled (shared/gridengineconfig=false —
 # spooldefaults.bin SIGSEGVs in the buildkit sandbox, LP #1774302 family). Init
-# here instead, at runtime, where docker wires "$HN" to a real IP. The rc and
-# stderr are SURFACED now — a silent `|| true` hid a mid-init death in run
-# 29701638068: init_cluster died right after "Initializing spool", leaving
-# common/ WITHOUT 'configuration'; qmaster then failed "global configuration
-# not defined / setup failed" and never bound 6444.
+# here instead, at runtime. The crash is the gridengine/jemalloc initial-exec
+# TLS fault: rc=139 confirmed at BOTH build and runtime (run 29703965543),
+# dying right after "Initializing spool" and leaving common/ with only
+# 'bootstrap' — qmaster then fails "global configuration not defined / setup
+# failed". Workaround: PRELOAD jemalloc so it owns malloc from process start,
+# and sh -x the wrapper so a remaining crash names its exact failing binary.
 if [ ! -e /var/spool/gridengine/spooldb/sge ]; then
-    log "initializing cluster spool (init_cluster)"
-    su -s /bin/sh -c "/usr/share/gridengine/scripts/init_cluster $SGE_ROOT $SGE_CELL /var/spool/gridengine/spooldb sgeadmin" sgeadmin 2>&1 \
-        || log "init_cluster exited nonzero rc=$? (continuing; backfill below)"
+    JEMALLOC="$(ls /usr/lib/x86_64-linux-gnu/libjemalloc.so.* 2>/dev/null | head -n 1 || true)"
+    log "initializing cluster spool (init_cluster); jemalloc: ${JEMALLOC:-none found}"
+    su -s /bin/sh -c "LD_PRELOAD='$JEMALLOC' sh -x /usr/share/gridengine/scripts/init_cluster $SGE_ROOT $SGE_CELL /var/spool/gridengine/spooldb sgeadmin" sgeadmin 2>&1 | tail -n 80 \
+        || log "init_cluster rc=${PIPESTATUS[0]} (continuing; backfill below)"
 fi
 log "cell common after init: $(ls "$CELL_COMMON" 2>/dev/null || echo MISSING)"
-log "packaged defaults dir: $(ls /usr/share/gridengine 2>/dev/null || echo MISSING)"
-# Backfill the global configuration if the spool seeding died before writing it
-# (a mid-init crash leaves common/ without 'configuration' and qmaster refuses
-# to start). The package ships a pristine default; install it as sgeadmin.
+log "spooldb after init: $(ls /var/spool/gridengine/spooldb 2>/dev/null || echo MISSING)"
+# Backfill the textual global configuration if the spool seeding died before
+# writing it. (With BDB spooling the authoritative copy lives in the spooldb
+# that spooldefaults seeds — this only papers over the text side; the preload
+# above is the real fix.) The package ships a pristine default.
 if [ ! -s "$CELL_COMMON/configuration" ]; then
     for src in /usr/share/gridengine/default-configuration /var/lib/gridengine/default-configuration; do
         if [ -f "$src" ]; then
