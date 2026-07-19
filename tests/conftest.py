@@ -44,6 +44,60 @@ from hpc_agent import register_primitives as _register_primitives_at_collection_
 _register_primitives_at_collection_time()
 
 
+# ---------------------------------------------------------------------------
+# Windows-only: relocate pytest's temp ROOT off %TEMP% onto a space-free,
+# Defender-excludable path to reclaim the file-by-file AV-scan tax.
+#
+# %TEMP% is not on the Defender exclusion list (the repo dir is), so every
+# tmp_path file pytest writes gets scanned inline — measured as 2-3x
+# full-suite wall-clock variance (see the pyproject ``[tool.pytest.ini_options]``
+# comment block). The obvious ``--basetemp C:\hpc-pytest-tmp`` is the WRONG
+# lever twice over: (1) an explicit ``--basetemp`` makes pytest ``rm_rf`` the
+# WHOLE dir at every session start (``TempPathFactory.getbasetemp``), clobbering
+# any concurrently-running slice's subdirs — it also drops the numbered-dir
+# rotation entirely; and (2) a hardcoded ``C:\`` path in ``addopts`` would break
+# the Linux CI runner. We instead set ``PYTEST_DEBUG_TEMPROOT`` — pytest's
+# supported knob for the temp *root* — which keeps the default
+# ``make_numbered_dir_with_cleanup(keep=…)`` rotation (each run gets its own
+# ``pytest-of-<user>/pytest-<N>/`` subtree; old ones rotate out; no run ever
+# wipes another's). A space-free root also sidesteps the reason ``--basetemp``
+# under THIS repo is impossible: several hook tests embed ``tmp_path`` UNQUOTED
+# in command strings (e.g. ``tests/_kernel/hooks/test_skill_return_autofetch``'s
+# ``_emit_command`` interpolates ``--experiment-dir {tmp_path}`` bare), so a
+# path containing the repo's ``CC Allowed`` space would split mid-argument.
+#
+# CI is untouched and byte-identical: the guard is a hard ``sys.platform ==
+# "win32"`` gate, and it no-ops silently if the dir can't be created or an
+# explicit override is already in play. To claim the full win the user should
+# exclude the dir from Defender (see the pyproject comment for the exact
+# ``Add-MpPreference`` line).
+_WIN_PYTEST_TEMPROOT = r"C:\hpc-pytest-tmp"
+
+
+def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
+    """Point pytest's temp root at a space-free, Defender-excludable dir on Windows.
+
+    No-op on every non-Windows platform (CI is Linux → this function returns
+    immediately, leaving the temp root at the default ``tempfile.gettempdir()``).
+    Also yields to an explicit ``PYTEST_DEBUG_TEMPROOT`` already in the env and
+    to an explicit ``--basetemp`` (which pytest honours over the env root). The
+    directory is created on first use; creation failure falls back silently to
+    the default root rather than aborting the session.
+    """
+    if sys.platform != "win32":
+        return
+    if os.environ.get("PYTEST_DEBUG_TEMPROOT") or config.option.basetemp is not None:
+        return
+    try:
+        os.makedirs(_WIN_PYTEST_TEMPROOT, exist_ok=True)
+    except OSError:
+        # Un-creatable (no C:\ write access, read-only mount, …): leave the
+        # default %TEMP% root in place. The suite still runs, just without the
+        # AV-scan speedup.
+        return
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = _WIN_PYTEST_TEMPROOT
+
+
 # Default sidecar fields reproduced verbatim from the seven existing
 # call sites. Test overrides take precedence; anything not overridden
 # matches the historical fixture.
@@ -311,3 +365,34 @@ def _default_native_ssh_engine() -> Iterator[None]:
             os.environ.pop("HPC_SSH_ENGINE", None)
         else:
             os.environ["HPC_SSH_ENGINE"] = saved
+
+
+@pytest.fixture(autouse=True)
+def _default_no_ssh_pacing() -> Iterator[None]:
+    """Disable the SSH-establishment RATE limiter for every test that doesn't opt in.
+
+    The token-bucket pacer (``hpc_agent.infra.ssh_pacing``, wired into
+    ``ssh_circuit.guarded_call`` and ``ssh_engine._Engine._open``) is on by
+    default in production, but rate-limiting is inherently about SEQUENTIAL call
+    frequency: unlike the concurrency-slot limiter (which only ever sleeps on
+    *concurrent* contention, so sequential-call tests never touch it), the pacer
+    would make the 4th+ back-to-back ``guarded_call`` in a fixed-clock test
+    really sleep. Hundreds of breaker / remote / transport / engine tests fire
+    ssh-family calls in tight loops under a frozen ``FakeClock``, so a default-on
+    pacer would inject real sub-second sleeps and (with the clock frozen) never
+    refill. Pinning ``HPC_NO_SSH_PACING=1`` here keeps the pre-pacing test
+    contract byte-identical; ``tests/infra/test_ssh_pacing.py`` opts back in with
+    ``monkeypatch.delenv`` + injected clock/sleep.
+
+    Lowest precedence, setup-time, env-only (same finalizer-order-neutrality
+    rationale as ``_default_native_ssh_engine`` above).
+    """
+    saved = os.environ.get("HPC_NO_SSH_PACING")
+    os.environ["HPC_NO_SSH_PACING"] = "1"
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("HPC_NO_SSH_PACING", None)
+        else:
+            os.environ["HPC_NO_SSH_PACING"] = saved
