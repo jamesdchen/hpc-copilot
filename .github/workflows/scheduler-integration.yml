@@ -491,7 +491,14 @@ jobs:
             user: hpcuser
             scheduler: slurm
             scratch: /home/hpcuser/scratch
-            modules: []
+            # A single-space no-op module, NOT an empty list: the driver goes
+            # through the full submit-s1 resolve, whose Activation guard
+            # refuses all-empty activation (infra/clusters.py #281). " " passes
+            # the guard, and the job preamble's "for mod in $MODULES" loop
+            # iterates ZERO words over it - module is never invoked (the
+            # container has no module system; the login-shell python3 carries
+            # hpc_agent, same contract the smoke lane pins).
+            modules: [" "]
             max_walltime_sec: 3600
             constraints:
               max_array_size: 100

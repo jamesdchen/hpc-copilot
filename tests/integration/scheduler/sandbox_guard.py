@@ -114,16 +114,42 @@ def _strip_nt_alias_spellings(raw: str) -> str:
     return s
 
 
+def _strip_trailing_dotspace(s: str) -> str:
+    """Per-component trailing dot/space strip — the Win32 CREATION-time
+    normalization ``resolve()`` does NOT apply to not-yet-existing paths.
+
+    Windows cannot create a file/dir whose name ends in a dot or space — the
+    Win32 layer strips them, so ``C:\\x\\hpc.`` and ``C:\\x\\hpc `` ARE
+    ``C:\\x\\hpc``. But ``resolve()`` normalizes that ONLY for paths that
+    exist; on a machine with no production home (CI Windows leg, run
+    29704323039: ``C:\\Users\\runneradmin\\.claude\\hpc.`` was not judged
+    within), a trailing-dot/spelling slips past BOTH legs — and the first
+    journal write would then CREATE the real production home under it. Strip
+    per component so the string leg catches the spelling regardless of
+    existence. Dot/space-ONLY components (``.``, ``..``) are preserved; POSIX
+    passthrough (trailing dots are legal filenames there).
+    """
+    if os.name != "nt":
+        return s
+    drive, rest = os.path.splitdrive(s)
+    sep = "\\" if "\\" in rest else "/"
+    parts = rest.split(sep)
+    cleaned = [part.rstrip(". ") for part in parts]
+    return drive + sep.join(new or orig for new, orig in zip(cleaned, parts, strict=True))
+
+
 def canonical_journal_path(candidate: str | Path) -> Path:
     """The alias-free, resolved form of a journal-home candidate.
 
-    expanduser → strip alias spellings → resolve → strip AGAIN (``resolve()``
-    itself may PRODUCE a ``\\\\?\\``/UNC form when it opens an aliased path).
-    For any non-aliased input this is exactly ``expanduser().resolve()`` —
-    the pre-fix guard's comparison form. POSIX: expanduser + resolve.
+    expanduser → strip alias spellings + Win32 trailing dot/space → resolve →
+    strip AGAIN (``resolve()`` itself may PRODUCE a ``\\\\?\\``/UNC form when
+    it opens an aliased path). For any non-aliased input this is exactly
+    ``expanduser().resolve()`` — the pre-fix guard's comparison form. POSIX:
+    expanduser + resolve (the dot/space strip is a no-op there).
     """
     expanded = str(Path(candidate).expanduser())
-    resolved = str(Path(_strip_nt_alias_spellings(expanded)).resolve())
+    de_aliased = _strip_trailing_dotspace(_strip_nt_alias_spellings(expanded))
+    resolved = str(Path(de_aliased).resolve())
     return Path(_strip_nt_alias_spellings(resolved))
 
 

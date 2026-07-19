@@ -1,8 +1,13 @@
 # Single-node SGE (Son of Grid Engine) + sshd container for the
 # scheduler-integration CI — the SGE twin of ci/slurm/.
 #
-# Base-image choice: ubuntu:22.04 + the DISTRO gridengine-* packages. Those
-# are Debian's Son-of-Grid-Engine build (8.1.9+dfsg, jammy universe) — the
+# Base-image choice: ubuntu:24.04 + the DISTRO gridengine-* packages. noble,
+# NOT jammy: jammy's gridengine 8.1.9+dfsg-6 spoolinit/spooldefaults.bin
+# SEGFAULTS on spool seeding — LP #1774302 family, rc=139 at BOTH build and
+# runtime (lane runs 29679768215/29701129895/29704323125: the cell was left
+# with only `bootstrap`, qmaster failed 'global configuration not defined').
+# The fix landed in Debian's -9 revision; noble ships -11+. Those are
+# Debian's Son-of-Grid-Engine build (8.1.9+dfsg, noble universe) — the
 # closest thing to a vanilla Son-of-Grid-Engine install that ships as a
 # maintained package. There is no maintained single-container SGE/UGE image
 # comparable to the Slurm ones (HPC Gridware's Open Cluster Scheduler, the
@@ -18,9 +23,13 @@
 # it into this image's python3 at runtime (mirroring the real cluster-env
 # convention where hpc_agent lives in the job/login env), so the image layer
 # cache stays stable across code changes.
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# noble's python3.12 is PEP-668 externally-managed; the workflow pip-installs
+# the freshly-built wheel into this image's python at runtime (same contract
+# as the slurm lane) — allow it without --break-system-packages on the CLI.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Never start services during the image build: the gridengine postinst would
 # otherwise launch sge_qmaster against the BUILD container's random hostname

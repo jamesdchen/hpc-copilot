@@ -174,6 +174,25 @@ def test_accidental_spelling_stays_blocked(case: str) -> None:
     assert is_within_production_home(spelling), f"{case}: {spelling!r} not judged within"
 
 
+@pytest.mark.parametrize("suffix", [".", " ", ". ", " ."])
+def test_trailing_dotspace_spelling_of_absent_home_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    """CI Windows leg, run 29704323039: no production home on the machine, so
+    ``resolve()`` leaves the Win32-stripped trailing dot/space INTACT and the
+    spelling slipped past BOTH legs — the first journal write would then have
+    CREATED the real production home under it (Win32 strips trailing dots/
+    spaces at creation). The per-component strip is existence-independent."""
+    if not ON_WINDOWS:
+        pytest.skip("Win32 creation-time normalization")
+    absent = tmp_path / "definitely" / "absent" / "hpc"
+    monkeypatch.setattr(sandbox_guard, "production_journal_home", lambda: absent)
+    spelling = str(absent) + suffix
+    assert is_within_production_home(spelling), f"{spelling!r} not judged within"
+    # No over-blocking: the PARENT of the (absent) home is a sibling of it.
+    assert not is_within_production_home(str(absent.parent)), "sibling must pass"
+
+
 # ── the ALLOWED side: no over-blocking of a legitimate sandbox ───────────────
 
 
