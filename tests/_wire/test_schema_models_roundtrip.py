@@ -31,7 +31,7 @@ import sys
 import types as _types_mod
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import Any, Literal, Union, cast, get_args, get_origin
 
 import jsonschema
 import pytest
@@ -180,10 +180,10 @@ _PATTERN_FIXTURES: dict[str, str] = {
 def _extract_min_len(metadata: list[Any]) -> int:
     for m in metadata:
         if isinstance(m, MinLen):
-            return m.min_length
+            return int(m.min_length)
         ml = getattr(m, "min_length", None)
         if ml is not None:
-            return ml
+            return int(ml)
     return 0
 
 
@@ -191,9 +191,9 @@ def _extract_min_int(metadata: list[Any]) -> int:
     lo = 0
     for m in metadata:
         if isinstance(m, Ge):
-            lo = max(lo, int(m.ge))
+            lo = max(lo, int(cast(Any, m.ge)))
         elif isinstance(m, Gt):
-            lo = max(lo, int(m.gt) + 1)
+            lo = max(lo, int(cast(Any, m.gt)) + 1)
     return lo
 
 
@@ -203,9 +203,9 @@ def _extract_max_int(metadata: list[Any], default: int) -> int:
     hi: int | None = None
     for m in metadata:
         if isinstance(m, Le):
-            hi = int(m.le) if hi is None else min(hi, int(m.le))
+            hi = int(cast(Any, m.le)) if hi is None else min(hi, int(cast(Any, m.le)))
         elif isinstance(m, Lt):
-            cap = int(m.lt) - 1
+            cap = int(cast(Any, m.lt)) - 1
             hi = cap if hi is None else min(hi, cap)
     return default if hi is None else hi
 
@@ -219,9 +219,9 @@ def _extract_min_float(metadata: list[Any]) -> float:
     lo = 0.0
     for m in metadata:
         if isinstance(m, Ge):
-            lo = max(lo, float(m.ge))
+            lo = max(lo, float(cast(Any, m.ge)))
         elif isinstance(m, Gt):
-            lo = max(lo, math.nextafter(float(m.gt), math.inf))
+            lo = max(lo, math.nextafter(float(cast(Any, m.gt)), math.inf))
     return lo
 
 
@@ -233,9 +233,9 @@ def _extract_max_float(metadata: list[Any], default: float) -> float:
     hi: float | None = None
     for m in metadata:
         if isinstance(m, Le):
-            hi = float(m.le) if hi is None else min(hi, float(m.le))
+            hi = float(cast(Any, m.le)) if hi is None else min(hi, float(cast(Any, m.le)))
         elif isinstance(m, Lt):
-            cap = math.nextafter(float(m.lt), -math.inf)
+            cap = math.nextafter(float(cast(Any, m.lt)), -math.inf)
             hi = cap if hi is None else min(hi, cap)
     return default if hi is None else hi
 
@@ -347,6 +347,10 @@ _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     # since/last_n); the per-field synthesizer skips the optional fields, so
     # supply the count selection to satisfy the cross-field rule.
     "ConformanceStatusSpec": {"last_n": 1},
+    # ProgramVerifySpec requires EXACTLY ONE program-identity source (run_ids
+    # XOR campaign_id XOR aggregate_path), all optional; supply the explicit-list
+    # mode so the all-default instance satisfies the cross-field rule.
+    "ProgramVerifySpec": {"run_ids": ["x"]},
     # _Provenance enforces ``session_sha`` when ``kind=='agent'``. The
     # generic synthesizer picks kind='agent' (first Literal value) but
     # leaves the conditionally-required session_sha unset; supply it so
@@ -413,7 +417,7 @@ def test_typeadapter_emits_self_consistent_schemas() -> None:
     from hpc_agent._wire.fixtures.stages import StagesAdapter
 
     # stages: 1-element list passes
-    one_stage = StagesAdapter.dump_python([{"name": "fit", "run": "python fit.py"}])
+    one_stage = StagesAdapter.dump_python(cast(Any, [{"name": "fit", "run": "python fit.py"}]))
     schema = json.loads((SCHEMAS_DIR / "stages.input.json").read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator(schema).validate(one_stage)
 
@@ -499,9 +503,9 @@ def _strategy_for(annotation: Any, metadata: list[Any]) -> st.SearchStrategy:
             hi = _extract_max_int(metadata, default=lo + 100)
             return st.integers(min_value=lo, max_value=hi)
         if annotation is float:
-            lo = _extract_min_float(metadata)
-            hi = _extract_max_float(metadata, default=lo + 100.0)
-            return st.floats(min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False)
+            lo_f = _extract_min_float(metadata)
+            hi_f = _extract_max_float(metadata, default=lo_f + 100.0)
+            return st.floats(min_value=lo_f, max_value=hi_f, allow_nan=False, allow_infinity=False)
         if annotation is str:
             if _has_registered_backend_validator(metadata):
                 return st.just(_A_REGISTERED_BACKEND)

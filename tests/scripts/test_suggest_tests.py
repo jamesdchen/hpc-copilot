@@ -101,11 +101,21 @@ def test_advisory_line_present(monkeypatch) -> None:
     assert "full suite" in out.lower()
 
 
-def test_main_exits_zero_and_prints_advisory(monkeypatch, capsys) -> None:
-    """The CLI entrypoint prints the advisory report and exits 0."""
+def test_main_exits_zero_and_prints_advisory(monkeypatch, capfd) -> None:
+    """The CLI entrypoint prints the advisory report and exits 0.
+
+    Uses ``capfd`` (fd-level capture), never ``capsys``: on CI (3.11 leg,
+    run 29679768428, 2026-07-19) the report provably reached fd 1 — it is
+    visible in the run's global-capture section — while the sys.stdout-level
+    buffer read empty (``capsys.readouterr().out == ''``). capfd captures at
+    the level the output demonstrably lands on. NOTE: a change to
+    ``errors.py`` legitimately selects ~535 targets (it is imported nearly
+    everywhere, so the import-graph pass fans out); the assertions are
+    size-agnostic on purpose.
+    """
     monkeypatch.setattr(st, "changed_files", lambda ref="HEAD": [Path("src/hpc_agent/errors.py")])
     rc = st.main([])
     assert rc == 0
-    out = capsys.readouterr().out
+    out = capfd.readouterr().out
     assert "advisory selection" in out
     assert "pytest " in out
