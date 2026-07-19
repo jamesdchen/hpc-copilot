@@ -21,7 +21,11 @@ it). pandas is deliberately NOT imported (absent here).
 
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
+
+import pytest
 
 from hpc_agent._wire.actions.notebook_lint import (
     LinkedSource,
@@ -34,6 +38,7 @@ from hpc_agent.ops.notebook.audit_view import AUTO_CLEARED, HUMAN_REQUIRED, buil
 from hpc_agent.ops.notebook.linked_sources import (
     _CLOSURE_MAX_MODULES,
     AuditNetTier,
+    _is_installed_module,
     resolve_audit_net,
 )
 from hpc_agent.ops.notebook.lint import notebook_lint
@@ -95,6 +100,61 @@ def test_symbol_missing_from_parent_stays_unresolved(tmp_path: Path) -> None:
     assert entries[0].tier is AuditNetTier.UNRESOLVED
 
 
+def test_symbol_in_parent_assignment_is_covered(tmp_path: Path) -> None:
+    # A module-level ASSIGNMENT binds the name at runtime exactly like a def:
+    # engine.py = `CONSTANT = 42` covers `from engine import CONSTANT` — never
+    # a spurious UNRESOLVED (defect: def/class-only coverage flipped sections
+    # to human_required on plain constants).
+    (tmp_path / "engine.py").write_text("CONSTANT = 42\n", encoding="utf-8")
+    entries, cap_hit = resolve_audit_net(["engine", "engine.CONSTANT"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine"]
+    assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+    assert cap_hit is False
+
+
+def test_symbol_in_parent_dunder_assignment_is_covered(tmp_path: Path) -> None:
+    # The same for a dunder constant: `__version__ = "1.0"` covers
+    # `from engine import __version__`.
+    (tmp_path / "engine.py").write_text('__version__ = "1.0"\n', encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine", "engine.__version__"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine"]
+    assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+
+
+def test_symbol_in_parent_reexport_from_import_is_covered(tmp_path: Path) -> None:
+    # A RE-EXPORT binds the name in the parent: engine.py = `from other import
+    # train` makes `from engine import train` importable at runtime — covered,
+    # and the net still walks through to the real origin (`other`).
+    (tmp_path / "engine.py").write_text("from other import train\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("def train(x):\n    return x\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine", "engine.train"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine", "other"]
+    assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+
+
+def test_symbol_in_parent_reexport_plain_import_is_covered(tmp_path: Path) -> None:
+    # engine.py = `import other` binds `other` at module scope, so
+    # `from engine import other` is importable at runtime — covered.
+    (tmp_path / "engine.py").write_text("import other\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("X = 1\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine", "engine.other"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine", "other"]
+    assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+
+
+def test_symbol_unbound_despite_new_binding_forms_stays_unresolved(tmp_path: Path) -> None:
+    # The honest negative over the broadened forms: names the parent binds via
+    # assignment / re-export do NOT cover a different, unbound name — an import
+    # that would fail at runtime stays UNRESOLVED.
+    (tmp_path / "engine.py").write_text(
+        "CONSTANT = 42\nfrom other import train\n", encoding="utf-8"
+    )
+    (tmp_path / "other.py").write_text("def train(x):\n    return x\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine", "engine.no_such"], tmp_path, [tmp_path])
+    by_module = {e.module: e for e in entries}
+    assert by_module["engine.no_such"].tier is AuditNetTier.UNRESOLVED
+
+
 # ── tier classification per branch ───────────────────────────────────────────
 
 
@@ -137,6 +197,101 @@ def test_namespace_prefix_is_not_unresolved(tmp_path: Path) -> None:
     assert "lib.helper" in modules
     assert "lib" not in modules
     assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+
+
+# ── exec-free, crash-free installed-module classification ────────────────────
+
+
+def _fake_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, package: str, init: str) -> Path:
+    """Install a fake ``package`` (with *init* as its ``__init__.py``) on sys.path."""
+    pkg = tmp_path / "site" / package
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text(init, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path / "site"))
+    roots = tmp_path / "roots"
+    roots.mkdir(exist_ok=True)
+    return roots
+
+
+def test_installed_pkg_submodule_external_without_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A fake installed package with a submodule classifies EXTERNAL — and its
+    # __init__.py is NEVER executed (the 6a never-exec boundary): the sentinel
+    # the __init__ would write on exec must NOT exist after the call. (Defect:
+    # find_spec on the DOTTED name imported the parent package.)
+    roots = _fake_site(
+        tmp_path,
+        monkeypatch,
+        "execpkg",
+        "from pathlib import Path\nPath(__file__).with_name('SENTINEL').write_text('x')\n",
+    )
+    (tmp_path / "site" / "execpkg" / "sub.py").write_text("X = 1\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["execpkg", "execpkg.sub"], tmp_path, [roots])
+    by_module = {e.module: e for e in entries}
+    assert by_module["execpkg"].tier is AuditNetTier.EXTERNAL
+    assert by_module["execpkg.sub"].tier is AuditNetTier.EXTERNAL
+    assert not (tmp_path / "site" / "execpkg" / "SENTINEL").exists()
+
+
+def test_installed_pkg_raising_init_classifies_unresolved_no_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # boompkg's __init__ raises RuntimeError — the dotted classification
+    # COMPLETES (no raise) and the name honestly reads UNRESOLVED: without
+    # exec (never performed) the env authority cannot prove ownership of a
+    # submodule that exists only behind the raising __init__.
+    roots = _fake_site(tmp_path, monkeypatch, "boompkg", "raise RuntimeError('boom')\n")
+    entries, _ = resolve_audit_net(["boompkg.sub"], tmp_path, [roots])
+    assert [e.module for e in entries] == ["boompkg.sub"]
+    assert entries[0].tier is AuditNetTier.UNRESOLVED
+
+
+def test_lint_survives_raising_parent_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The original crash repro end-to-end: the source does `import boompkg.sub`
+    # and the parent __init__ raises RuntimeError — notebook_lint NEVER raises;
+    # it reports the honest section-attributed UNRESOLVED finding.
+    _fake_site(tmp_path, monkeypatch, "boompkg", "raise RuntimeError('boom')\n")
+    source = "# %%\n# hpc-audit-section: load\nimport boompkg.sub\n"
+    (tmp_path / "source.py").write_text(source, encoding="utf-8")
+    (tmp_path / "template.py").write_text(source, encoding="utf-8")
+    spec = NotebookLintInput(source="source.py", template="template.py", source_roots=["."])
+    result = notebook_lint(experiment_dir=tmp_path, spec=spec)
+    unresolved = [
+        f
+        for f in result.findings
+        if f.rule == "audit_net_unresolved" and f.evidence.get("kind") == "unresolved"
+    ]
+    assert [f.evidence["module"] for f in unresolved] == ["boompkg.sub"]
+    assert unresolved[0].section == "load"
+
+
+def test_find_spec_exception_means_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A find_spec raising ANYTHING (here ValueError: a sys.modules entry whose
+    # __spec__ is None) reads as not-installed — the honest UNRESOLVED, never a
+    # crash (the broad-except ruling, the boompkg lesson generalized).
+    bogus = types.ModuleType("zz_bogus_spec")
+    bogus.__spec__ = None
+    monkeypatch.setitem(sys.modules, "zz_bogus_spec", bogus)
+    entries, _ = resolve_audit_net(["zz_bogus_spec.sub"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["zz_bogus_spec.sub"]
+    assert entries[0].tier is AuditNetTier.UNRESOLVED
+
+
+def test_installed_classification_unchanged_for_stdlib_and_sitepackages(tmp_path: Path) -> None:
+    # The pre-fix EXTERNAL posture is unchanged: stdlib (incl. a dotted stdlib
+    # name) and an installed top-level package classify EXTERNAL; a nowhere
+    # name does not. Direct pins on the helper for the top-level fast paths.
+    entries, _ = resolve_audit_net(["os.path", "pydantic", "zz_missing_xyz"], tmp_path, [tmp_path])
+    by_module = {e.module: e for e in entries}
+    assert by_module["os.path"].tier is AuditNetTier.EXTERNAL  # stdlib leg (dotted)
+    assert by_module["pydantic"].tier is AuditNetTier.EXTERNAL  # installed leg
+    assert by_module["zz_missing_xyz"].tier is AuditNetTier.UNRESOLVED
+    assert _is_installed_module("pydantic") is True
+    assert _is_installed_module("zz_missing_xyz") is False
+    assert _is_installed_module("zz_missing_xyz.sub") is False
 
 
 # ── via-chain shape ──────────────────────────────────────────────────────────

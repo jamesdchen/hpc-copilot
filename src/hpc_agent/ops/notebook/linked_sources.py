@@ -193,18 +193,52 @@ def _section_imports(tree: ast.Module) -> list[tuple[str, str | None]]:
     return out
 
 
-def _locate_symbol(tree: ast.Module, symbol: str) -> tuple[int, str | None] | None:
-    """``(lineno, signature|None)`` for a top-level ``def``/``class`` named *symbol*.
+def _bound_target_names(target: ast.expr) -> list[str]:
+    """The plain-Name bindings of an assignment *target* (tuple-destructuring too).
 
-    Signature is ``ast.unparse`` of a function's argument list; a class has none
-    (``None``). ``None`` when *symbol* is not a top-level definition in *tree*. The
-    same both-shapes location ``notebook-draft-context`` does — never executing an
-    import.
+    Only statically-known bare names: ``CONSTANT = 42``, ``__version__ = "1.0"``,
+    or the names of a trivial ``a, b = pair`` unpack. Attribute / subscript stores
+    (``obj.x = …``) bind no module-level NAME and contribute nothing.
+    """
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Tuple | ast.List):
+        return [elt.id for elt in target.elts if isinstance(elt, ast.Name)]
+    return []
+
+
+def _locate_symbol(tree: ast.Module, symbol: str) -> tuple[int, str | None] | None:
+    """``(lineno, signature|None)`` for a top-level binding named *symbol*.
+
+    A module-level name is DEFINED by more than ``def``/``class``: a module-level
+    ASSIGNMENT (``CONSTANT = 42``, ``__version__ = "1.0"``) and a RE-EXPORTING
+    import (``from other import train`` binds ``train``; ``import other`` binds
+    ``other`` — the top-level segment; ``import other as x`` binds ``x``) are
+    importable at runtime exactly like a definition, so the parent module covers
+    them (the symbol-in-parent leg of the audit net). Signature is ``ast.unparse``
+    of a function's argument list; every other binding shape has none (``None``).
+    ``None`` when *symbol* is not bound at top level in *tree* — the honest
+    negative: a name the parent does NOT bind stays UNRESOLVED. Never executes
+    an import.
     """
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef) and stmt.name == symbol:
             return stmt.lineno, ast.unparse(stmt.args)
         if isinstance(stmt, ast.ClassDef) and stmt.name == symbol:
+            return stmt.lineno, None
+        if isinstance(stmt, ast.Assign) and any(
+            symbol in _bound_target_names(target) for target in stmt.targets
+        ):
+            return stmt.lineno, None
+        if isinstance(stmt, ast.AnnAssign) and symbol in _bound_target_names(stmt.target):
+            return stmt.lineno, None
+        if isinstance(stmt, ast.Import) and any(
+            (alias.asname or alias.name.split(".")[0]) == symbol for alias in stmt.names
+        ):
+            return stmt.lineno, None
+        if isinstance(stmt, ast.ImportFrom) and any(
+            (alias.asname or alias.name) == symbol for alias in stmt.names
+        ):
             return stmt.lineno, None
     return None
 
@@ -293,7 +327,10 @@ def _parse_tolerant(text: str) -> ast.Module | None:
 # Resolution reuses the ONE ``resolve_module_file`` definition and the ONE
 # ``sha256_normalized`` hashing primitive — no re-forked probe, no second hash.
 # Environment authority is the LOCAL env (``sys.stdlib_module_names`` +
-# ``importlib.util.find_spec``): the net NEVER executes a module under test.
+# ``importlib.util.find_spec`` on the TOP-LEVEL segment only, with deeper
+# segments walked through plain ``submodule_search_locations`` directories):
+# the net NEVER executes a module under test — not even a parent package's
+# ``__init__`` (``find_spec`` on a DOTTED name would).
 
 #: Closure cap. A transitive cone can be unbounded (a hub module that imports
 #: half of site-packages); the BFS stops characterizing at this many modules and
@@ -340,15 +377,46 @@ def _is_stdlib_module(module: str) -> bool:
 def _is_installed_module(module: str) -> bool:
     """True iff *module* is importable from the local env (site-packages).
 
-    ``importlib.util.find_spec`` WITHOUT importing (the 6a never-exec boundary).
-    Any resolution error (a missing parent package, an invalid name) reads as
-    not-installed — the conservative default that keeps a genuinely local module
-    out of the EXTERNAL tier.
+    Exec-free dotted classification (the 6a never-exec boundary): ``find_spec``
+    runs ONLY on the TOP-LEVEL segment — finding a top-level spec never imports
+    the package, whereas ``find_spec("pkg.sub")`` IMPORTS ``pkg`` (execs its
+    ``__init__.py``; the execpkg repro wrote its sentinel file). Each deeper
+    segment is resolved by walking the parent package's
+    ``submodule_search_locations`` — plain directory strings, no import needed —
+    for ``<seg>.py`` or ``<seg>/__init__.py``; a missing / ``None`` search
+    location is unresolvable. Any ``find_spec`` failure is caught BROADLY: a
+    parent ``__init__`` raising anything but the narrow import trio (the boompkg
+    repro: ``__init__`` raising ``RuntimeError``) would otherwise crash the lint
+    through the net — instead the env authority simply could not prove ownership
+    and the module honestly classifies UNRESOLVED (a real finding, never a
+    raise).
     """
+    segments = module.split(".")
     try:
-        return importlib.util.find_spec(module) is not None
-    except (ImportError, ValueError, AttributeError):
+        spec = importlib.util.find_spec(segments[0])
+    except Exception:  # noqa: BLE001 — the boompkg crash: classification never raises
         return False
+    if spec is None:
+        return False
+    search_dirs = [Path(location) for location in (spec.submodule_search_locations or ())]
+    for index, segment in enumerate(segments[1:]):
+        if not search_dirs:
+            return False  # a module file (no search locations) has no submodules
+        is_last = index == len(segments) - 2
+        package_dir: Path | None = None
+        for base in search_dirs:
+            if (base / f"{segment}.py").is_file():
+                # A plain module file: resolvable HERE, but itself submodule-free.
+                return is_last
+            if (base / segment / "__init__.py").is_file():
+                package_dir = base / segment
+                break
+        if package_dir is None:
+            return False
+        if is_last:
+            return True
+        search_dirs = [package_dir]
+    return True
 
 
 def _relative_to_experiment(resolved: Path, experiment_dir: Path) -> str:

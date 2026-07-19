@@ -102,10 +102,10 @@ _MIXED = (
 )
 
 
-def _view(*, audit_net: tuple[AuditNetEntry, ...] = ()) -> object:
+def _view(*, audit_net: tuple[Any, ...] = (), audit_net_cap_hit: bool = False) -> object:
     src = parse_percent_source(_SOURCE)
     tmpl = parse_percent_source(_TEMPLATE)
-    return build_audit_view(src, tmpl, [], audit_net=audit_net)
+    return build_audit_view(src, tmpl, [], audit_net=audit_net, audit_net_cap_hit=audit_net_cap_hit)
 
 
 # ── audit_view: the net block (full render) ──────────────────────────────────
@@ -165,19 +165,34 @@ def test_net_moves_no_view_sha() -> None:
 
 
 def test_net_cap_disclosure() -> None:
-    # At the BFS cap the render discloses truncation (the MIRROR pin for
-    # audit_view.AUDIT_NET_CAP). 256 unresolved doubles → the cap line.
+    # At the BFS cap WITH the machinery's cap_hit flag carried through, the
+    # render discloses truncation (the MIRROR pin for audit_view.AUDIT_NET_CAP).
+    # The flag — never len(entries) >= cap — is the authority.
+    capped = tuple(
+        _entry(f"m{i:03d}", AuditNetTier.UNRESOLVED, file=None, sha=None)
+        for i in range(AUDIT_NET_CAP)
+    )
+    body = render_markdown(_view(audit_net=capped, audit_net_cap_hit=True))  # type: ignore[arg-type]
+    assert f"net truncated at {AUDIT_NET_CAP} modules" in body
+    digest = render_summary_markdown(_view(audit_net=capped, audit_net_cap_hit=True))  # type: ignore[arg-type]
+    assert f"audit net truncated at {AUDIT_NET_CAP} modules (BFS cap)" in digest
+    # Below the cap → no disclosure.
+    body_one = render_markdown(_view(audit_net=_MIXED))  # type: ignore[arg-type]
+    assert "truncated" not in body_one
+
+
+def test_net_cap_length_alone_claims_no_truncation() -> None:
+    # The dual: a closure COMPLETE at exactly the cap is NOT truncated — 256
+    # entries WITHOUT the machinery's cap_hit flag render NO truncation line
+    # in either mode (a bare length >= cap never claims truncation).
     capped = tuple(
         _entry(f"m{i:03d}", AuditNetTier.UNRESOLVED, file=None, sha=None)
         for i in range(AUDIT_NET_CAP)
     )
     body = render_markdown(_view(audit_net=capped))  # type: ignore[arg-type]
-    assert f"net truncated at {AUDIT_NET_CAP} modules" in body
+    assert "truncated" not in body
     digest = render_summary_markdown(_view(audit_net=capped))  # type: ignore[arg-type]
-    assert f"audit net truncated at {AUDIT_NET_CAP} modules (BFS cap)" in digest
-    # Below the cap → no disclosure.
-    body_one = render_markdown(_view(audit_net=_MIXED))  # type: ignore[arg-type]
-    assert "truncated" not in body_one
+    assert "truncated" not in digest
 
 
 # ── audit_view: the digest (counts only) ─────────────────────────────────────

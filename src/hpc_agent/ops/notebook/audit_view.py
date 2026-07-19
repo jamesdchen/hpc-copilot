@@ -278,6 +278,14 @@ class AuditView:
     #: lines from it. Default-empty so every existing view renders byte-identically
     #: (the byte-absent pin).
     audit_net: tuple[AuditNetEntry, ...] = ()
+    #: The machinery's AUTHORITATIVE BFS-cap disclosure (6a): True iff the
+    #: closure walk that produced ``audit_net`` STOPPED at the module cap
+    #: (``resolve_audit_net``'s ``cap_hit`` return, threaded through by the
+    #: caller). The renders' truncation lines gate on THIS flag — never on
+    #: ``len(audit_net) >= AUDIT_NET_CAP``: a closure COMPLETE at exactly the
+    #: cap is not truncated. Presentation-only like the net itself — never part
+    #: of ``payload`` / ``view_sha``.
+    audit_net_cap_hit: bool = False
 
 
 # ── canonical JSON / hashing ─────────────────────────────────────────────────
@@ -538,6 +546,7 @@ def build_audit_view(
     attention_order: Sequence[str] | None = None,
     audit_traces: Sequence[Mapping[str, Any]] | None = None,
     audit_net: Sequence[AuditNetEntry] | None = None,
+    audit_net_cap_hit: bool = False,
 ) -> AuditView:
     """Build the deterministic :class:`AuditView` for *source* against *template*.
 
@@ -579,6 +588,13 @@ def build_audit_view(
     PRESENTATION-ONLY — it never enters a ``payload``, so it moves no
     ``view_sha``; ``None`` / absent yields a byte-identical view (the
     byte-absent pin).
+
+    *audit_net_cap_hit* (6a) is the machinery's AUTHORITATIVE cap disclosure —
+    ``resolve_audit_net``'s ``cap_hit`` return, carried beside the entries: the
+    renders' truncation lines gate on THIS flag, never on the entry count (a
+    closure COMPLETE at exactly the cap is not truncated). Presentation-only
+    like the net itself; the default (``False``) keeps a flag-free call
+    byte-identical.
     """
     template_by_slug = {s.slug: s for s in template.sections}
     traces = audit_traces or ()
@@ -668,6 +684,7 @@ def build_audit_view(
         # 6a: the import closure rides the view presentation-only — never a
         # payload input, so it moves no view_sha; absent → byte-identical.
         audit_net=tuple(audit_net or ()),
+        audit_net_cap_hit=audit_net_cap_hit,
     )
 
 
@@ -846,9 +863,11 @@ def _render_audit_net_block(view: AuditView) -> list[str]:
     ``human_required`` — are grouped FIRST and headed by a prominent disclosure
     line; every group keeps the machinery's sorted emission order (a stable
     PARTITION, never a re-sort — the digest's byte-stability ruling). When the
-    net arrives at the BFS cap, a disclosed truncation line says the walk
-    stopped (the machinery's own summary stays authoritative). Presentation
-    only — nothing here enters a ``view_sha``.
+    caller carries the machinery's ``cap_hit`` disclosure (the BFS walk STOPPED
+    at the module cap), a disclosed truncation line says so — the flag is
+    authoritative, never ``len(entries) >= AUDIT_NET_CAP``: a closure COMPLETE
+    at exactly the cap is not truncated (the machinery's own summary stays
+    authoritative). Presentation only — nothing here enters a ``view_sha``.
     """
     entries = view.audit_net
     if not entries:
@@ -866,7 +885,7 @@ def _render_audit_net_block(view: AuditView) -> list[str]:
         lines.append("")
     for entry in [*unresolved, *rest]:
         lines.append(_render_net_entry(entry))
-    if len(entries) >= AUDIT_NET_CAP:
+    if view.audit_net_cap_hit:
         lines.append(
             f"- … net truncated at {AUDIT_NET_CAP} modules (the BFS walk stopped; "
             "notebook-status audit_net_summary is authoritative)"
@@ -881,8 +900,10 @@ def _render_audit_net_digest(view: AuditView) -> list[str]:
     The digest render's posture (metadata beside the bodies): one per-tier
     tally line (labels in sorted order — canonical, independent of entry
     order), a prominent ``audit_net_unresolved`` line when ANY entry failed to
-    resolve (the human_required finding), and the cap disclosure at the BFS
-    cap. Byte-ABSENT when the view carries no net (the pin).
+    resolve (the human_required finding), and the cap disclosure when the
+    caller carries the machinery's ``cap_hit`` flag (never inferred from the
+    entry count — a closure COMPLETE at exactly the cap is not truncated).
+    Byte-ABSENT when the view carries no net (the pin).
     """
     entries = view.audit_net
     if not entries:
@@ -898,7 +919,7 @@ def _render_audit_net_digest(view: AuditView) -> list[str]:
             f"- ⚠ audit_net_unresolved: {counts[UNRESOLVED_TIER_LABEL]} module(s) resolve "
             "to NO file under the recorded source_roots (human_required)"
         )
-    if len(entries) >= AUDIT_NET_CAP:
+    if view.audit_net_cap_hit:
         lines.append(f"- … audit net truncated at {AUDIT_NET_CAP} modules (BFS cap)")
     return lines
 
