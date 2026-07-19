@@ -151,6 +151,12 @@ traceability table (§5). Cross-link from `proving-run` runsheets: every future
 live runsheet's pre-flight gains one line — "sandbox proving run green at
 <sha>? (rung-2 gate)".
 
+**LANDED (2026-07-19):** [`docs/internals/sandbox-proving-run.md`](../internals/sandbox-proving-run.md)
+carries the ladder, doctrine, never-certify list, traceability, and the §7
+rulings normatively. No runsheet TEMPLATE file exists (the runsheets under
+`docs/plans/` are dated historical records), so the doc's §6 specifies the
+pre-flight line for future runsheets instead of editing one into place.
+
 ## 5. Traceability — today's snags vs this plan
 
 | 2026-07-18 snag | Rung-2 unit that would have caught it |
@@ -179,19 +185,41 @@ live runsheet's pre-flight gains one line — "sandbox proving run green at
   (U9, unplanned) would have caught F7's *dialect* but not hoffman2's *login
   profile* — class-2 residue exists per-site regardless. Do not oversell U9.
 
-## 7. Open questions (maintainer)
+## 7. Maintainer rulings (2026-07-19 — all three RULED)
 
-1. Should a red sandbox run BLOCK submit-path PRs once stable (promote to
-   required), or stay advisory forever like the parent lane? (Recommend:
-   promote after 2 weeks of green.)
-2. Does the rung-2 evidence JSON get journaled anywhere durable (an
-   `_aggregated/_sandbox/` ledger for trend reading), or is the CI artifact
-   enough? (Recommend: CI artifact first; ledger only if trends get read.)
-3. U9 (SGE container): build when the next SGE-specific defect lands, or
-   speculatively? (Recommend: on next defect.)
+1. **Blocking: advisory forever.** The lane's purpose is a simulation
+   environment for the dev loop — Claude Code ships faster by eating
+   contract kinks autonomously. Its teeth live in the workflow: the
+   pre-push gate for submit-path changes and every live runsheet's
+   pre-flight ("sandbox proving run green at \<sha\>?", U8). A GitHub
+   required-check optimizes for a multi-contributor drive-by threat model
+   this repo does not have, and it would add flake surface to every
+   submit-path PR.
+2. **Evidence JSON: CI artifact only.** The artifact's job is per-run
+   evidence — prove the contract held for THAT run, diagnose where it
+   didn't. Durability of *claims* is carried by the docs that cite the run
+   (the runsheet pre-flight cites sha + workflow-run id — the GitHub run
+   URL is the durable pointer), not by accumulating every run's JSON. A
+   trend ledger answers a different question; add one only if trend-reading
+   becomes a real activity, and never by CI committing to main (loop
+   hazard).
+3. **U9 (SGE container): build speculatively, with the core wave** —
+   maintainer overrode the plan's "on next defect" recommendation
+   (2026-07-19). §6's "do not oversell U9" caution stands: U9 covers the
+   SGE *dialect*, never a site's login profile.
 
 ## Drift log
 
+- 2026-07-19: U8 LANDED — `docs/internals/sandbox-proving-run.md` created
+  (ladder, doctrine, never-certify list, traceability, §7 rulings carried
+  normatively; `docs/internals/README.md` index row added). No runsheet
+  template file exists, so the pre-flight line is specified in the internals
+  doc's §6 rather than edited into a template.
+- 2026-07-19: §7 RULED — blocking = advisory forever (teeth in the
+  workflow: pre-push gate + runsheet pre-flight, not a required check);
+  evidence JSON = CI artifact only (claims cited via run ids in docs; no
+  ledger, never CI-commits-to-main); U9 = build speculatively with the
+  core wave (maintainer override of "on next defect").
 - 2026-07-18: Created. Verified against: `scheduler-integration.yml` (container
   lane + `HPC_JOURNAL_DIR` isolation), `tests/integration/scheduler/`
   (smoke drives flow atoms, bypasses block loop), `conformance/relay_fixtures.py`
