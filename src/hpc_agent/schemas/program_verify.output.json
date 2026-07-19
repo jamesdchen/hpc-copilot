@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/program_verify.output.json",
+  "title": "program-verify output data",
+  "description": "The program roll-up — a projection over recorded reproduction judgments.\n\nA not-fully-reproduced program is a ``needs_decision`` FINDING (exit-0), never\nan error: the verdict DISCLOSES, never gates. ``recipe_signature`` is the\n``extract-recipe`` seed's signature (null for an explicit list);\n``program_signature`` is this program manifest's own deterministic digest —\nthe write-once file is ``program-<program_signature[:12]>.json``.",
+  "type": "object",
+  "required": [
+    "program_schema_version",
+    "seed_kind",
+    "seed_ref",
+    "program_signature",
+    "reproduced_count",
+    "total",
+    "overall",
+    "needs_decision",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "program_schema_version": {
+      "description": "Bumped when the emitted program-verify shape changes incompatibly.",
+      "minimum": 1,
+      "title": "Program Schema Version",
+      "type": "integer"
+    },
+    "seed_kind": {
+      "description": "Which program-identity source resolved the run-set.",
+      "enum": [
+        "explicit",
+        "campaign",
+        "aggregate"
+      ],
+      "title": "Seed Kind",
+      "type": "string"
+    },
+    "seed_ref": {
+      "description": "The seed's identity / path verbatim (the run-set list for explicit).",
+      "title": "Seed Ref",
+      "type": "string"
+    },
+    "recipe_signature": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The extract-recipe seed's signature over the minimal run-set; null for an explicit list.",
+      "title": "Recipe Signature"
+    },
+    "program_signature": {
+      "description": "This program manifest's deterministic 64-hex digest — the write-once file name key.",
+      "title": "Program Signature",
+      "type": "string"
+    },
+    "resolved_run_ids": {
+      "description": "The resolved constituent run-set.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Resolved Run Ids",
+      "type": "array"
+    },
+    "constituents": {
+      "description": "Per-constituent recorded reproduction evidence.",
+      "items": {
+        "$ref": "#/$defs/ConstituentVerdict"
+      },
+      "title": "Constituents",
+      "type": "array"
+    },
+    "reproduced_count": {
+      "description": "How many constituents classified reproduced_within_tolerance (k of N).",
+      "minimum": 0,
+      "title": "Reproduced Count",
+      "type": "integer"
+    },
+    "total": {
+      "description": "The constituent count (N).",
+      "minimum": 0,
+      "title": "Total",
+      "type": "integer"
+    },
+    "overall": {
+      "description": "The program roll-up: the most severe constituent classification (mismatch_on_record > no_reproduction_on_record = evidence_stale_identity > evidence_incomparable > reproduced_within_tolerance).",
+      "enum": [
+        "reproduced_within_tolerance",
+        "mismatch_on_record",
+        "evidence_incomparable",
+        "evidence_stale_identity",
+        "no_reproduction_on_record"
+      ],
+      "title": "Overall",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True unless every constituent reproduced_within_tolerance — a FINDING the human decides on (exit-0); a stale-identity constituent forces it True.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Code-rendered one-line program summary (k/N reproduced + per-class counts + gaps).",
+      "title": "Reason",
+      "type": "string"
+    },
+    "gaps": {
+      "description": "The extract-recipe identity-walk gaps passed through (G4a table→run-set link, pack-csv opaque, operator-bypass); empty for an explicit list.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Gaps",
+      "type": "array"
+    },
+    "manifest_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Absolute path of the write-once program manifest (.hpc/provenance/program-<sig[:12]>.json).",
+      "title": "Manifest Path"
+    },
+    "manifest_delta": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Disclosed content-drift delta when a prior manifest for the same seed had a different signature; null on a clean/idempotent write.",
+      "title": "Manifest Delta"
+    },
+    "markdown": {
+      "default": "",
+      "description": "The code-rendered program report (deterministic; LLM-free render path).",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "ConstituentVerdict": {
+      "additionalProperties": false,
+      "description": "One constituent run's recorded reproduction evidence — a projection.\n\nEvery field is READ off records already on disk: the classification off the\nreproduction receipt's ``overall`` vocabulary, the reason code-rendered from\nthe driving receipt's own keys, the identity fields off the sidecar, and the\ndrift disclosures echoed verbatim from the receipt (never re-derived). The\nverb never names a metric value.",
+      "properties": {
+        "run_id": {
+          "description": "The constituent run's identity.",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "classification": {
+          "description": "The receipt-derived classification of this constituent's reproduction evidence.",
+          "enum": [
+            "reproduced_within_tolerance",
+            "mismatch_on_record",
+            "evidence_incomparable",
+            "evidence_stale_identity",
+            "no_reproduction_on_record"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Code-rendered reason, read off the driving receipt's own keys (never LLM-authored).",
+          "title": "Reason",
+          "type": "string"
+        },
+        "receipt_count": {
+          "description": "How many reproduction receipts name this constituent as the original.",
+          "minimum": 0,
+          "title": "Receipt Count",
+          "type": "integer"
+        },
+        "repro_run_ids": {
+          "description": "The reproduction run ids whose receipts named this constituent (the reproduces back-link).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Repro Run Ids",
+          "type": "array"
+        },
+        "cmd_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The constituent's param identity (sidecar cmd_sha).",
+          "title": "Cmd Sha"
+        },
+        "tasks_py_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The constituent's code identity (sidecar tasks_py_sha).",
+          "title": "Tasks Py Sha"
+        },
+        "executor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The constituent's executor identity (sidecar executor).",
+          "title": "Executor"
+        },
+        "fingerprint_samples": {
+          "description": "Count of determinism-fingerprint ledger samples for this constituent's current identity.",
+          "minimum": 0,
+          "title": "Fingerprint Samples",
+          "type": "integer"
+        },
+        "driving_receipt": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The reproduction receipt that determined the classification, embedded verbatim; null when none on record.",
+          "title": "Driving Receipt"
+        },
+        "env_identity": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The driving receipt's environment-lock disclosure, echoed read-only; null when the receipt carries none.",
+          "title": "Env Identity"
+        },
+        "hw_identity": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The driving receipt's hardware-placement disclosure, echoed read-only; null when the receipt carries none.",
+          "title": "Hw Identity"
+        },
+        "data_identity": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The driving receipt's data-identity disclosure, echoed read-only; null when the receipt carries none.",
+          "title": "Data Identity"
+        },
+        "diverged_stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The driving receipt's localized diverging stage (data-trace interlock), echoed read-only; null when none.",
+          "title": "Diverged Stage"
+        }
+      },
+      "required": [
+        "run_id",
+        "classification",
+        "reason",
+        "receipt_count",
+        "fingerprint_samples"
+      ],
+      "title": "program constituent verdict",
+      "type": "object"
+    }
+  }
+}

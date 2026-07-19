@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**178 operations total**: 147 primitive atoms + 31 workflow atoms.
+**179 operations total**: 148 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (79)
+## `query` (80)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -76,6 +76,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`plan-throughput`](../primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` | `_(none)_` | — | — |
 | [`poll-detached`](../primitives/poll-detached.md) | ✓ | _none_ | `hpc-agent poll-detached --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |
+| [`program-verify`](../primitives/program-verify.md) | ✓ | filesystem | `hpc-agent program-verify --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`read-decisions`](../primitives/read-decisions.md) | ✓ | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`recall`](../primitives/recall.md) | ✓ | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` | `_(none)_` | — | — |
 | [`recommend-partition`](../primitives/recommend-partition.md) | ✓ | _none_ | `hpc-agent recommend-partition --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

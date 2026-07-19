@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/program_verify.input.json",
+  "title": "program-verify input spec",
+  "description": "Input spec for ``program-verify`` — EITHER an explicit list OR a seed.\n\nExactly one program-identity source:\n\n* ``run_ids`` — an explicit constituent list (the caller already knows the\n  run-set behind the table).\n* ``campaign_id`` / ``aggregate_path`` — an ``extract-recipe`` seed; the\n  program identity is EMERGENT (the seed's minimal contributing run-set, with\n  canary / superseded / dead-end members mechanically excluded). When the\n  walk degrades to the G4a harvest-receipt proxy, that is disclosed in the\n  result's ``gaps`` exactly as ``extract-recipe`` discloses it.\n\n``tolerance`` is an OPTIONAL passthrough consistent with ``verify-reproduction``'s\nmodel — it is echoed for provenance only (this verb never re-compares, so the\ntolerance that judged each pair is the one recorded on that pair's receipt).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "run_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Explicit constituent run-set — the runs behind the citable table. Mutually exclusive with campaign_id / aggregate_path.",
+      "title": "Run Ids"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "extract-recipe seed: the program identity is the campaign's minimal contributing run-set. Mutually exclusive with the other two.",
+      "title": "Campaign Id"
+    },
+    "aggregate_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "extract-recipe seed: a reduced-metrics artifact whose contributing run-set is the program identity. Mutually exclusive with the other two.",
+      "title": "Aggregate Path"
+    },
+    "tolerance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReproTolerance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional tolerance passthrough (verify-reproduction's model), echoed for provenance. program-verify never re-compares metrics — the tolerance that judged each pair is the one recorded on that pair's receipt."
+    }
+  },
+  "$defs": {
+    "KeyTolerance": {
+      "additionalProperties": false,
+      "description": "Per-metric-key tolerance override.\n\nBoth bounds optional; an absent bound is simply not applied. When BOTH\nare absent the key is compared EXACTLY (``==``) — same as supplying no\ntolerance at all.",
+      "properties": {
+        "abs_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute tolerance: |orig - repro| <= abs_tol counts as a match.",
+          "title": "Abs Tol"
+        },
+        "rel_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative tolerance: |orig - repro| / max(|orig|, |repro|) <= rel_tol counts as a match.",
+          "title": "Rel Tol"
+        }
+      },
+      "title": "per-key reproduction tolerance",
+      "type": "object"
+    },
+    "ReproTolerance": {
+      "additionalProperties": false,
+      "description": "Caller-owned tolerance for the reproduction comparison.\n\nAll fields optional. When every field is absent (and ``per_key`` empty)\nthe comparison is EXACT — numeric metrics must be bit-equal. A default\nbound applies to every numeric key that has no ``per_key`` override; a\n``per_key`` entry fully replaces the default for that key.",
+      "properties": {
+        "default_abs_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute tolerance applied to every numeric key lacking a per_key override.",
+          "title": "Default Abs Tol"
+        },
+        "default_rel_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative tolerance applied to every numeric key lacking a per_key override.",
+          "title": "Default Rel Tol"
+        },
+        "per_key": {
+          "additionalProperties": {
+            "$ref": "#/$defs/KeyTolerance"
+          },
+          "description": "Per-metric-key tolerance overrides, keyed by the (flattened) metric key.",
+          "title": "Per Key",
+          "type": "object"
+        }
+      },
+      "title": "reproduction tolerance spec",
+      "type": "object"
+    }
+  }
+}

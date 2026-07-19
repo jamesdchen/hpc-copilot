@@ -1196,6 +1196,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent program-verify --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "program_verify.input.json",
+    "name": "program-verify",
+    "output_schema": "program_verify.output.json",
+    "python": "hpc_agent.ops.program_verify.program_verify",
+    "side_effects": [
+      "filesystem"
+    ],
+    "summary": "Project the RECORDED reproduction evidence for a program's run-set (explicit run_ids XOR an extract-recipe campaign / aggregate seed) and disclose the roll-up: per-constituent classification read off the reproduction receipts (reproduced_within_tolerance / mismatch_on_record / evidence_incomparable / evidence_stale_identity / no_reproduction_on_record), a k/N fold, the extract-recipe walk gaps, and a write-once signed program manifest. Read-only over recorded judgments — it never re-compares a metric. A not-fully-reproduced program is a FINDING (needs_decision), never an error.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "read_decisions.input.json",

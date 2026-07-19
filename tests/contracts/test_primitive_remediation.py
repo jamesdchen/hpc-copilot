@@ -91,6 +91,11 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "alerts-ack",
         "extract-recipe",
         "notebook-dry-run",
+        # program-verify (program-level reproduction, phase 1): a read-only query
+        # projecting recorded reproduction evidence for a program's run-set. Spec-taking
+        # ({} is invalid — exactly one of run_ids / campaign_id / aggregate_path is
+        # required), so it appears in the schema-file-parametrized remediation probes.
+        "program-verify",
         # cite-check (clean-reproduction extraction, the number → paper transcription
         # audit): a read-only query over a manuscript + a sealed seed. Spec-taking
         # ({} is invalid — a manuscript source AND a seed are required), so it appears

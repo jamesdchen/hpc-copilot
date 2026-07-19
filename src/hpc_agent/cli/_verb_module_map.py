@@ -109,6 +109,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'prepare-followup-specs': ('prepare-followup-specs', 'hpc_agent.ops.prepare_followup_specs'),
     'prepare-phase2-spec': ('prepare-phase2-spec', 'hpc_agent.ops.prepare_phase2_spec'),
     'program-init': ('program-init', 'hpc_agent.ops.pack.init_op'),
+    'program-verify': ('program-verify', 'hpc_agent.ops.program_verify'),
     'provenance-manifest': ('provenance-manifest', 'hpc_agent.ops.provenance_manifest'),
     'read-decisions': ('read-decisions', 'hpc_agent.ops.decision.journal'),
     'recall': ('recall', 'hpc_agent.ops.memory.recall'),
