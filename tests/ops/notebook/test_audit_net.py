@@ -14,7 +14,9 @@ human_required) plus a disclosed cap marker.
 Every fixture is a tmp_path module tree; the resolver only ever ``ast.parse``s a
 module under test — it NEVER imports/execs one (the 6a never-exec boundary). No
 third-party dependency: EXTERNAL is exercised via the stdlib (``os``) and an
-installed module (``numpy``); pandas is deliberately NOT imported (absent here).
+installed module (``pydantic`` — a hard runtime dep of hpc-agent, so present in
+every test env; numpy is NOT — CI runners lack it, only local quant envs have
+it). pandas is deliberately NOT imported (absent here).
 """
 
 from __future__ import annotations
@@ -102,7 +104,7 @@ def test_tier_classification_per_branch(tmp_path: Path) -> None:
     (tmp_path / "newmod.py").write_text("Z = 3\n", encoding="utf-8")
     signed_sha = sha256_normalized("Y = 2\n")
     entries, cap_hit = resolve_audit_net(
-        ["eng", "signed_mod", "newmod", "os", "numpy", "zz_missing_xyz"],
+        ["eng", "signed_mod", "newmod", "os", "pydantic", "zz_missing_xyz"],
         tmp_path,
         [tmp_path],
         template_modules={"eng"},
@@ -113,13 +115,13 @@ def test_tier_classification_per_branch(tmp_path: Path) -> None:
     assert by_module["signed_mod"].tier is AuditNetTier.INHERITED  # ledger-attested
     assert by_module["newmod"].tier is AuditNetTier.NEW_DRIFTED  # resolved, neither leg
     assert by_module["os"].tier is AuditNetTier.EXTERNAL  # stdlib
-    assert by_module["numpy"].tier is AuditNetTier.EXTERNAL  # installed site-packages
+    assert by_module["pydantic"].tier is AuditNetTier.EXTERNAL  # installed site-packages
     assert by_module["zz_missing_xyz"].tier is AuditNetTier.UNRESOLVED  # nowhere
     assert cap_hit is False
     # Resolved-under-roots modules carry a file + sha; external/unresolved do not.
     assert by_module["eng"].file is not None
     assert by_module["eng"].module_sha == sha256_normalized("X = 1\n")
-    for name in ("os", "numpy", "zz_missing_xyz"):
+    for name in ("os", "pydantic", "zz_missing_xyz"):
         assert by_module[name].file is None
         assert by_module[name].module_sha is None
 
