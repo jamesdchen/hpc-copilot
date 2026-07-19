@@ -2923,7 +2923,7 @@ def _submit_one_spec(
         else []
     )
 
-    # ── submit-once LIVE FLIP (U3, HPC_SUBMIT_ONCE, default OFF) ──────────────
+    # ── submit-once LIVE FLIP (U3, HPC_SUBMIT_ONCE, default ON; "0" opts out) ──
     # Flag ON: mint the main run's ``submitting`` record BEFORE the dispatch, so a
     # drop in the dispatch→job-id window (a kill after the scheduler accepts the
     # array but before its stdout id reaches the client) is at worst a durable

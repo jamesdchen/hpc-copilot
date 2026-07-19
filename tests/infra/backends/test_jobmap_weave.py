@@ -2,8 +2,9 @@
 
 ``RemoteHPCBackend._execute_command`` has a cached-bin DIRECT form and a
 LOGIN-SHELL form. The submit-once jobmap marker must fold into BOTH, and — the
-hard flag-off regression pin — with ``HPC_SUBMIT_ONCE`` unset the emitted command
-string must be BYTE-IDENTICAL to the pre-U3 form.
+hard flag-off regression pin — with ``HPC_SUBMIT_ONCE=0`` (the opt-out; the
+flag defaults ON) the emitted command string must be BYTE-IDENTICAL to the
+pre-U3 form.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def _plain_direct(b: _Backend, cached: str) -> str:
 
 
 def test_dispatch_core_off_is_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HPC_SUBMIT_ONCE", raising=False)
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     b = _Backend()
     cmd_str = " ".join(shlex.quote(a) for a in _QSUB)
     core = b._dispatch_core(cmd_str, _JOB_ENV)
@@ -62,7 +63,7 @@ def test_dispatch_core_off_is_byte_identical(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_login_shape_off_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HPC_SUBMIT_ONCE", raising=False)
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     b = _Backend()
     b._execute_command(list(_QSUB), _JOB_ENV, cwd=None)  # type: ignore[arg-type]
     # Login form (no cached bin): the exact historical inner, byte-for-byte.
@@ -70,7 +71,7 @@ def test_login_shape_off_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_direct_shape_off_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HPC_SUBMIT_ONCE", raising=False)
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     b = _Backend()
     b._resolved_bins["sbatch"] = "/usr/bin/sbatch"
     b._execute_command(list(_QSUB), _JOB_ENV, cwd=None)  # type: ignore[arg-type]
@@ -79,7 +80,7 @@ def test_direct_shape_off_byte_identical(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_off_ignores_run_id_presence(monkeypatch: pytest.MonkeyPatch) -> None:
     # Even with HPC_RUN_ID present, the flag OFF ⇒ no weave.
-    monkeypatch.delenv("HPC_SUBMIT_ONCE", raising=False)
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     b = _Backend()
     core = b._dispatch_core("sbatch x", {"HPC_RUN_ID": "run-x"})
     assert "jobmap" not in core and "__hpc_jid" not in core

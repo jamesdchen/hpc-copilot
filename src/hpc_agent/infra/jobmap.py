@@ -51,9 +51,10 @@ ABSENT ack — a ``cd`` that failed (dir never created ⇒ never dispatched) or 
 truncated/severed read — reads as ``present=False`` / UNKNOWN, **never** as a
 spurious "no marker" that could mis-settle a run.
 
-The mint/marker WRITES here are gated behind the opt-in :func:`submit_once_enabled`
-capability flag (Δ3, default OFF); flag off ⇒ the submit atom is byte-identical
-to today. The reader helper is always safe to call (it only reads).
+The mint/marker WRITES here are gated behind :func:`submit_once_enabled`
+(Δ3) — default ON (lands in 0.11.3); set ``HPC_SUBMIT_ONCE=0`` to opt out ⇒
+the submit atom is byte-identical to today. The reader helper is always safe
+to call (it only reads).
 """
 
 from __future__ import annotations
@@ -85,13 +86,13 @@ __all__ = [
 JOBMAP_SUBPATH = ".hpc/submit"
 JOBMAP_STATE_PENDING = "pending"
 
-# Opt-in capability flag (Δ3). House convention: ``HPC_<NAME>=1`` read via a
-# ``.strip() == "1"`` predicate (the same shape as HPC_FORCE_RERUN /
-# HPC_RESUME_FROM_CHECKPOINT — an independent convention, not a value twin).
-# Default OFF ⇒ the mint + jobmap-marker WRITES are dormant and the submit atom
-# is byte-identical to current behavior. The phase-1 recovery READERS
-# (``find_submitting_runs``, the ``prune`` guard, the render surfaces) are
-# always-on; ONLY the writes gate here.
+# Opt-OUT capability flag (Δ3; default ON since 0.11.3 — flipped on run-15
+# live-fire evidence, see ``submit_once_enabled``'s docstring). Read via a
+# ``.strip() != "0"`` predicate: ``HPC_SUBMIT_ONCE=0`` opts out ⇒ the mint +
+# jobmap-marker WRITES are dormant and the submit atom is byte-identical to
+# pre-flip behavior; any other value (including unset) is ON. The phase-1
+# recovery READERS (``find_submitting_runs``, the ``prune`` guard, the render
+# surfaces) are always-on; ONLY the writes gate here.
 SUBMIT_ONCE_FLAG = "HPC_SUBMIT_ONCE"
 
 # The wave key the canary rides (Δ5). The canary is a DISTINCT run_id
@@ -126,23 +127,27 @@ _WAVE_ID_LINE = "__HPC_JOBMAP_WAVE__"
 
 
 def submit_once_enabled() -> bool:
-    """True iff the opt-in submit-once capability flag (Δ3) is set to ``1``.
+    """True unless the submit-once capability (Δ3) is explicitly opted out with ``0``.
 
-    Gates ONLY the mint + jobmap-marker writes. Default OFF ⇒ byte-identical
-    current behavior. Read live from the environment on every call (never an
-    import-time snapshot) so a test / a proving-run operator can flip it without
-    a re-import.
+    Gates ONLY the mint + jobmap-marker writes. **Default ON** (lands in
+    0.11.3): the flag is read live from the environment on every call (never an
+    import-time snapshot) so a test / an operator can flip it without a
+    re-import; setting ``HPC_SUBMIT_ONCE=0`` opts out ⇒ byte-identical
+    pre-flip behavior. Any other value (including unset) is ON.
 
-    LIVE (U3 live flip landed): ON, the submit atom MINTS a ``submitting``
-    record before dispatch, threads the real ``attempt`` + a per-wave-distinct
-    wave key, writes the jobmap markers, and PROMOTES to ``in_flight`` after the
-    id is read; a drop leaves a ``submitting`` record reconcile-recovery adopts.
-    The ONE remaining gate is proving-run validation: this has never been
-    exercised against a real cluster, so enable it only in a controlled proving
-    run (refresh the cluster wheel first), not on a production submit, until the
-    default is flipped after that run passes.
+    Evidence for the flip: the proving-run-15 live-fire — run 15 exercised the
+    mint→promote wiring against a real scheduler (submit-once adopted at the
+    apex, no re-qsub) and the default-flip criterion in
+    ``docs/plans/proving-run-15-runsheet.md`` §5 was met (see that file's drift
+    log; commits ``7c274291`` — run-15 EXECUTED — and ``80922168`` — the B4
+    pull fix live-validated addendum).
+
+    LIVE: ON, the submit atom MINTS a ``submitting`` record before dispatch,
+    threads the real ``attempt`` + a per-wave-distinct wave key, writes the
+    jobmap markers, and PROMOTES to ``in_flight`` after the id is read; a drop
+    leaves a ``submitting`` record reconcile-recovery adopts.
     """
-    return os.environ.get(SUBMIT_ONCE_FLAG, "").strip() == "1"
+    return os.environ.get(SUBMIT_ONCE_FLAG, "").strip() != "0"
 
 
 def wave_key(wave: int) -> str:

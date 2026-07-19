@@ -54,6 +54,9 @@ def _spec() -> SubmitFlowSpec:
 def test_fire_second_canary_mirrors_sidecar_and_records(
     tmp_path: Path, monkeypatch, ship_calls: list[dict]
 ) -> None:
+    # Flag OFF (the explicit opt-out) — default-ON submit-once records the
+    # canary via mint+promote, not submit_and_record.
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     from hpc_agent.ops import submit_flow as sf
     from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
 

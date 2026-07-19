@@ -1856,8 +1856,11 @@ class TestPostQsubSidecarPreStamp:
         )
 
     def test_main_job_ids_stamped_even_when_record_never_runs(
-        self, tmp_path: Any, journal_home: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # The qsub→submit_and_record crash window exists only on the opt-out
+        # path — submit-once (default ON) closes it with the minted record.
+        monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import _submit_one_spec
         from hpc_agent.state.runs import read_run_sidecar
@@ -1882,7 +1885,12 @@ class TestPostQsubSidecarPreStamp:
         # The whole point: the id survived even though the journal write didn't.
         assert read_run_sidecar(tmp_path, "rStamp")["job_ids"] == ["13610902"]
 
-    def test_canary_job_ids_stamped_before_record(self, tmp_path: Any, journal_home: Any) -> None:
+    def test_canary_job_ids_stamped_before_record(
+        self, tmp_path: Any, journal_home: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Flag OFF (the explicit opt-out): the canary records via
+        # submit_and_record, so the crash window this test kills is reachable.
+        monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import _submit_one_spec
         from hpc_agent.state.runs import read_run_sidecar
@@ -1927,7 +1935,7 @@ class TestPostQsubSidecarPreStamp:
         assert result.job_ids == ["4242"]
 
     def test_production_flow_seeds_sidecar_so_the_stamp_actually_lands(
-        self, tmp_path: Any, journal_home: Any
+        self, tmp_path: Any, journal_home: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The pre-stamp's protection is silent if its precondition is unmet:
         ``update_run_sidecar_job_ids`` no-ops (FileNotFoundError, swallowed)
@@ -1941,6 +1949,9 @@ class TestPostQsubSidecarPreStamp:
         ``_ensure_run_sidecar`` prelude, the stamp would silently skip — exactly
         the failure it guards against — and this test would fail on the
         FileNotFoundError from ``read_run_sidecar``."""
+        # Flag OFF (the explicit opt-out) — under default-ON submit-once the
+        # record write is the mint+promote pair, not submit_and_record.
+        monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
         from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path

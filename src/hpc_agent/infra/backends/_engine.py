@@ -571,7 +571,8 @@ class ProfileBackend(HPCBackend):
         """Inject the U3-c ``run_id#attempt`` correlation flag before the script arg.
 
         DOUBLE-GATED exactly like the jobmap dispatch weave (``_dispatch_core``):
-        ``HPC_SUBMIT_ONCE`` set AND an ``HPC_RUN_ID`` in *job_env*. Flag OFF (or no
+        submit-once enabled (default ON; ``HPC_SUBMIT_ONCE=0`` opts out) AND an
+        ``HPC_RUN_ID`` in *job_env*. Flag OFF (or no
         run_id, or a family with no comment field) ⇒ the returned command is
         BYTE-IDENTICAL to the family builder's output — the same regression pin
         the marker weave carries (test_correlation_key + the golden command
@@ -1196,7 +1197,8 @@ class ProfileBackend(HPCBackend):
         (``infra.jobmap``) stays the authoritative id binding, so a family that
         cannot carry the key degrades to marker-only recovery — never a
         duplicate. The caller injects the fragment before the script arg ONLY
-        under the ``HPC_SUBMIT_ONCE`` flag with a run_id in hand, so flag-off is
+        when submit-once is enabled (default ON; ``HPC_SUBMIT_ONCE=0`` opts out)
+        with a run_id in hand, so flag-off is
         byte-identical (see :meth:`_build_command`).
         """
         from hpc_agent.infra.jobmap import CORRELATION_KEY_ENV, jobmap_token

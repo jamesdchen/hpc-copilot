@@ -283,7 +283,8 @@ class RemoteHPCBackend:
     def _dispatch_core(self, cmd_portion: str, job_env: dict[str, str]) -> str:
         """The ``cd <repo> && <cmd>`` dispatch core, optionally jobmap-woven (U3, Δ7).
 
-        Flag OFF (``HPC_SUBMIT_ONCE`` unset) or no ``HPC_RUN_ID`` in *job_env* ⇒
+        Flag OFF (``HPC_SUBMIT_ONCE=0`` — the opt-out; default ON) or no
+        ``HPC_RUN_ID`` in *job_env* ⇒
         returns the EXACT historical ``cd {remote_repo} && {cmd_portion}`` string,
         so the emitted command is byte-identical to pre-U3 (the regression pin).
 

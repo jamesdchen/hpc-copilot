@@ -17,12 +17,14 @@ import pytest
 from hpc_agent.infra import jobmap
 
 
-def test_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flag_default_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Default flipped ON in 0.11.3 (run-15 live-fire evidence): unset ⇒ enabled.
     monkeypatch.delenv(jobmap.SUBMIT_ONCE_FLAG, raising=False)
-    assert jobmap.submit_once_enabled() is False
+    assert jobmap.submit_once_enabled() is True
 
 
-def test_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flag_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only an explicit "0" disables; every other value (incl. "1") is ON.
     monkeypatch.setenv(jobmap.SUBMIT_ONCE_FLAG, "1")
     assert jobmap.submit_once_enabled() is True
     monkeypatch.setenv(jobmap.SUBMIT_ONCE_FLAG, "0")

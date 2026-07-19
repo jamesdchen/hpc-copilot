@@ -65,8 +65,9 @@ def test_build_command_off_is_byte_identical(
     # Same job_env, flag OFF vs ON: OFF carries NO correlation flag; ON splices
     # exactly the correlation fragment in before the script and nothing else
     # changes (the byte-identity regression pin — job_env is otherwise identical
-    # so --export/-v content is the same on both).
-    monkeypatch.delenv("HPC_SUBMIT_ONCE", raising=False)
+    # so --export/-v content is the same on both). OFF is the explicit opt-out
+    # ("0") — the flag defaults ON.
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     off = b._build_command("1-4", "job", dict(_RUN_ENV))
     assert flag not in off
     monkeypatch.setenv("HPC_SUBMIT_ONCE", "1")

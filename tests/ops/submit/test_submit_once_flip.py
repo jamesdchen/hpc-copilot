@@ -1,6 +1,7 @@
 """The submit-once LIVE FLIP — mint-before-dispatch + promote wired into the real
 submit sequence (``submit_flow._submit_one_spec`` / ``_fire_canary``), behind
-``HPC_SUBMIT_ONCE`` (default OFF).
+``HPC_SUBMIT_ONCE`` (default ON since 0.11.3; ``=0`` opts out — the flag-off
+tests below set the opt-out explicitly).
 
 Red-then-green against the pre-flip tree (where the flag ON changed NOTHING in
 ``submit_flow`` — no mint, no promote, no env threading):
@@ -137,8 +138,9 @@ def _run_one_spec(exp: Path, spec, backend):
 
 
 def test_flag_off_records_via_submit_and_record_no_submitting_no_env(
-    _home: Path, _capped_cluster: None
+    _home: Path, _capped_cluster: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     exp = _home
     spec = _spec("run-off", total_tasks=50)
     sf._ensure_run_sidecar(exp, spec)
@@ -256,9 +258,12 @@ def test_flag_on_multiwave_threads_distinct_wave_keys_and_attempt(
     assert rec.job_ids == ["501", "502", "503"]
 
 
-def test_flag_off_multiwave_threads_no_wave_key(_home: Path, _capped_cluster: None) -> None:
+def test_flag_off_multiwave_threads_no_wave_key(
+    _home: Path, _capped_cluster: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Byte-identity: with the flag OFF the multi-wave dispatch env carries no
     ``HPC_SUBMIT_WAVE_KEY`` at all (submit_plan leaves batch_env untouched)."""
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "0")
     exp = _home
     spec = _spec("run-mw-off", total_tasks=250)
     sf._ensure_run_sidecar(exp, spec)
