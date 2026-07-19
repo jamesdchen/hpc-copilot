@@ -23,9 +23,12 @@ that actually treats a SIGNED module as current.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from hpc_agent.ops.notebook.audit_view import UNRESOLVED_TIER_LABEL, net_tier_label
 from hpc_agent.ops.notebook.linked_sources import LinkedEngine, resolve_section_engines
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.audit_source import ParsedModule, normalize_source, sha256_normalized
@@ -44,7 +47,13 @@ class ModuleAttentionItem:
     """ONE attention charge for an UNSIGNED linked module (never per dependent).
 
     * ``module`` — a representative import display name (``M`` / ``M.f``).
-    * ``file`` — the module's experiment-relative POSIX path.
+    * ``file`` — the module's experiment-relative POSIX path; ``""`` for an
+      UNRESOLVED audit-net entry (6a) — an import the BFS walk resolved to NO
+      file under the recorded ``source_roots``. Such an item is a real finding
+      (``audit_net_unresolved``, the audit is ``human_required``): it cannot be
+      cleared by a module sign-off (there is nothing to sign) — the human fixes
+      the import or the roots. Its ``dependents`` are the net entry's ``via``
+      chain (the import path that reached it), not section slugs.
     * ``module_sha12`` — the first 12 chars of the module's current normalized sha.
     * ``dependents`` — the section slugs importing this module (why it matters).
     * ``last_signed_sha12`` — the sha12 of the module's most-recent HUMAN sign-off
@@ -96,12 +105,43 @@ def _moved_match(
     return best_slug, (best_matched, total)
 
 
+def _unresolved_net_items(audit_net: Sequence[Any]) -> list[ModuleAttentionItem]:
+    """ONE attention item per UNRESOLVED audit-net entry (6a), net order kept.
+
+    An UNRESOLVED entry — an import the BFS walk resolved to NO file under the
+    recorded ``source_roots`` — is a real finding (``audit_net_unresolved``, the
+    audit is ``human_required``) and charges attention exactly once, like an
+    unsigned module. It maps onto :class:`ModuleAttentionItem` with ``file=""``
+    (nothing to sign — the human fixes the import or the roots), the ``via``
+    chain as its ``dependents`` (the import path that reached it), and no
+    moved-code disclosure (there is no body to match). Entries keep the
+    machinery's sorted emission order (deterministic; never re-sorted).
+    """
+    items: list[ModuleAttentionItem] = []
+    for entry in audit_net:
+        if net_tier_label(getattr(entry, "tier", None)) != UNRESOLVED_TIER_LABEL:
+            continue
+        sha = getattr(entry, "module_sha", None)
+        via = tuple(str(m) for m in (getattr(entry, "via", ()) or ()))
+        file = getattr(entry, "file", None)
+        items.append(
+            ModuleAttentionItem(
+                module=str(getattr(entry, "module", "")),
+                file=file if isinstance(file, str) and file else "",
+                module_sha12=sha[:12] if isinstance(sha, str) and sha else "",
+                dependents=via,
+            )
+        )
+    return items
+
+
 def build_module_attention(
     experiment_dir: Path,
     *,
     source: ParsedModule,
     source_roots: list[str],
     signed_section_bodies: dict[str, str],
+    audit_net: Sequence[Any] | None = None,
 ) -> list[ModuleAttentionItem]:
     """The UNSIGNED linked modules of an audited *source*, ONE item each.
 
@@ -111,57 +151,72 @@ def build_module_attention(
     (:func:`~hpc_agent.state.notebook_audit.module_sha_signed`) — emits one
     :class:`ModuleAttentionItem` naming its dependents, the last-signed sha to diff
     against, and (piece 5) any HUMAN-signed section body it matches. A SIGNED module
-    produces nothing — its dependents cost no attention. No roots → no items (the
-    fail-open default).
+    produces nothing — its dependents cost no attention. No roots → no module items
+    (the fail-open default).
+
+    *audit_net* (notebook-audit 6a) is the audit's transitive import closure as
+    opaque ``resolve_audit_net`` entries. Its UNRESOLVED entries participate in
+    the attention ordering (:func:`_unresolved_net_items`): they are APPENDED
+    after the unsigned-module items, in the machinery's sorted order — so the
+    surface stays ordered after the sign-off-needed sections the status rollup
+    lists first and before any informational disclosure. Caller-resolved: the
+    net arrives pre-walked; no roots are needed for its items (the module path
+    above keeps its no-roots fail-open). ``None`` / absent → byte-identical to
+    the pre-6a item list.
 
     *signed_section_bodies* is ``{slug: section_source}`` for the audit's
     HUMAN-signed sections (``signed_current`` / ``reused``) — the corpus the
-    moved-code disclosure matches against. Deterministic: items are ordered by
-    module file path.
+    moved-code disclosure matches against. Deterministic: module items are
+    ordered by module file path, then the net's UNRESOLVED items in net order.
     """
     root_dirs = [(Path(r) if Path(r).is_absolute() else experiment_dir / r) for r in source_roots]
-    if not root_dirs:
-        return []
-
-    # file → (representative engine, dependent slugs). Resolve per section so a
-    # module imported by several sections collects ALL its dependents (one item).
-    by_file: dict[str, LinkedEngine] = {}
-    dependents: dict[str, set[str]] = {}
-    for section in source.sections:
-        for eng in resolve_section_engines(section.source, experiment_dir, root_dirs):
-            by_file.setdefault(eng.file, eng)
-            dependents.setdefault(eng.file, set()).add(section.slug)
 
     items: list[ModuleAttentionItem] = []
-    for file in sorted(by_file):
-        eng = by_file[file]
-        path = Path(file)
-        if not path.is_absolute():
-            path = experiment_dir / path
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue  # unreadable now — nothing to charge attention on
-        current_sha = sha256_normalized(text)
-        if notebook_audit.module_sha_signed(experiment_dir, current_sha):
-            continue  # signed at its current sha → no attention owed (the exemption)
-        # Module IDENTITY is the FILE relpath — a module sign-off records
-        # ``resolved['module']`` as the readable relpath its gate recomputes the sha
-        # from (never the import DISPLAY name), so the last-signed lookup keys on it.
-        last = notebook_audit.last_module_signoff(experiment_dir, file)
-        last_sha12 = (
-            last.content_sha[:12] if last is not None and last.content_sha != current_sha else None
-        )
-        moved_slug, overlap = _moved_match(_normalized_line_set(text), signed_section_bodies)
-        items.append(
-            ModuleAttentionItem(
-                module=eng.module,
-                file=file,
-                module_sha12=current_sha[:12],
-                dependents=tuple(sorted(dependents.get(file, set()))),
-                last_signed_sha12=last_sha12,
-                moved_from_section=moved_slug,
-                moved_overlap=overlap,
+    if root_dirs:
+        # file → (representative engine, dependent slugs). Resolve per section so a
+        # module imported by several sections collects ALL its dependents (one item).
+        by_file: dict[str, LinkedEngine] = {}
+        dependents: dict[str, set[str]] = {}
+        for section in source.sections:
+            for eng in resolve_section_engines(section.source, experiment_dir, root_dirs):
+                by_file.setdefault(eng.file, eng)
+                dependents.setdefault(eng.file, set()).add(section.slug)
+
+        for file in sorted(by_file):
+            eng = by_file[file]
+            path = Path(file)
+            if not path.is_absolute():
+                path = experiment_dir / path
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue  # unreadable now — nothing to charge attention on
+            current_sha = sha256_normalized(text)
+            if notebook_audit.module_sha_signed(experiment_dir, current_sha):
+                continue  # signed at current sha → no attention owed (the exemption)
+            # Module IDENTITY is the FILE relpath — a module sign-off records
+            # ``resolved['module']`` as the readable relpath its gate recomputes
+            # the sha from (never the import DISPLAY name), so the lookup keys on it.
+            last = notebook_audit.last_module_signoff(experiment_dir, file)
+            last_sha12 = (
+                last.content_sha[:12]
+                if last is not None and last.content_sha != current_sha
+                else None
             )
-        )
+            moved_slug, overlap = _moved_match(_normalized_line_set(text), signed_section_bodies)
+            items.append(
+                ModuleAttentionItem(
+                    module=eng.module,
+                    file=file,
+                    module_sha12=current_sha[:12],
+                    dependents=tuple(sorted(dependents.get(file, set()))),
+                    last_signed_sha12=last_sha12,
+                    moved_from_section=moved_slug,
+                    moved_overlap=overlap,
+                )
+            )
+    # 6a: UNRESOLVED net entries ride AFTER the unsigned-module items (the
+    # sign-off-needed charges), keeping the machinery's sorted emission order.
+    if audit_net:
+        items.extend(_unresolved_net_items(audit_net))
     return items

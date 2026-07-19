@@ -102,7 +102,12 @@ def _render_bytes(*, audit_id: str, view: SectionView) -> str:
     return "\n".join([*header, *body]).rstrip() + "\n"
 
 
-def _enrich_view(experiment_dir: Path, audit_id: str, view: SectionView) -> SectionView:
+def _enrich_view(
+    experiment_dir: Path,
+    audit_id: str,
+    view: SectionView,
+    source_relpath: str | None = None,
+) -> SectionView:
     """Return *view* enriched with the src digest (slice 1) + prior sign-off (slice 3).
 
     The ONE seat that holds both the experiment dir and the audit id, so it is where
@@ -111,11 +116,21 @@ def _enrich_view(experiment_dir: Path, audit_id: str, view: SectionView) -> Sect
     standalone or broken audit renders exactly as it did before this feature (the
     byte-absent pin). Neither block enters ``view_sha`` — the content address is
     unchanged, only the human-readable body gains lines.
+
+    *source_relpath* (notebook-audit 6a) is the caller-declared audited-source
+    ``.py`` relpath — the seat that lets a STANDALONE audit (no interview.json
+    ``audited_source`` block) take the recorded-config path too: its roots are
+    the journaled ``notebook-audit-config`` record
+    (:func:`~hpc_agent.ops.notebook.canonical.read_recorded_config`'s second
+    seat), and the source path the caller names here. ``None`` (every pre-6a
+    call site) keeps the interview-block seat only — byte-identical behavior.
     """
     engines: tuple[LinkedEngine, ...] = ()
     prior: PriorSignoff | None = None
     try:
-        engines = _resolve_linked_engines(experiment_dir, audit_id, view)
+        engines = _resolve_linked_engines(
+            experiment_dir, audit_id, view, source_relpath=source_relpath
+        )
     except Exception:  # noqa: BLE001 — enrichment is advisory; never fail a render
         engines = ()
     try:
@@ -128,16 +143,32 @@ def _enrich_view(experiment_dir: Path, audit_id: str, view: SectionView) -> Sect
 
 
 def _resolve_linked_engines(
-    experiment_dir: Path, audit_id: str, view: SectionView
+    experiment_dir: Path,
+    audit_id: str,
+    view: SectionView,
+    *,
+    source_relpath: str | None = None,
 ) -> tuple[LinkedEngine, ...]:
     """The section's imports resolved to engine digests under the audit's ``source_roots``.
 
-    Reads the source ``.py`` relpath + roots from the RECORDED audit config
-    (interview.json's ``audited_source`` — the opt-in seat that carries the source
-    path), parses the source, finds THIS section by slug, and routes its imports
-    through the ONE resolver (``linked_sources.resolve_section_engines``). Returns
-    ``()`` when the audit is not opted-in (a standalone audit's config carries roots
-    but no source path) or the section is absent — the fail-open default.
+    Roots come from the RECORDED audit config via the ONE canonical reader
+    (:func:`~hpc_agent.ops.notebook.canonical.read_recorded_config`) — which
+    covers BOTH seats: interview.json's ``audited_source`` block WINS when
+    present (the opt-in path owns the config), else the journaled
+    ``notebook-audit-config`` record a STANDALONE audit wrote via
+    ``notebook-record-config``. The source ``.py`` relpath comes from the
+    explicit *source_relpath* when the caller names one (what it actually
+    rendered — the standalone audit's only source-path seat), else the
+    interview block's ``source``. Parses the source, finds THIS section by slug,
+    and routes its imports through the ONE resolver
+    (``linked_sources.resolve_section_engines``). Returns ``()`` when neither
+    seat names a source path, or the section is absent, or no roots are
+    recorded — the fail-open default.
+
+    Pre-6a this gated EVERYTHING on the interview block, so a standalone audit
+    (roots in the journal, no interview block) never reached the recorded-config
+    path and rendered no src digest at all — the gap the *source_relpath* seat
+    closes.
     """
     from hpc_agent.ops.notebook.canonical import (
         read_interview_audited_source,
@@ -146,9 +177,21 @@ def _resolve_linked_engines(
     from hpc_agent.ops.notebook.linked_sources import resolve_section_engines
     from hpc_agent.state.audit_source import parse_percent_source
 
-    block = read_interview_audited_source(experiment_dir, audit_id)
-    source_rel = block.get("source") if isinstance(block, dict) else None
+    # Roots from the ONE canonical reader — interview seat wins, else the
+    # standalone audit's journaled config (the recorded-config path a
+    # standalone audit must also take).
+    cfg = read_recorded_config(experiment_dir, audit_id)
+    root_dirs = [
+        (Path(r) if Path(r).is_absolute() else experiment_dir / r) for r in cfg.source_roots
+    ]
+    if not root_dirs:
+        return ()
+    source_rel: str | None = source_relpath
     if not isinstance(source_rel, str) or not source_rel:
+        block = read_interview_audited_source(experiment_dir, audit_id)
+        block_source = block.get("source") if isinstance(block, dict) else None
+        source_rel = block_source if isinstance(block_source, str) and block_source else None
+    if not source_rel:
         return ()
     source_path = Path(source_rel)
     if not source_path.is_absolute():
@@ -158,12 +201,6 @@ def _resolve_linked_engines(
     parsed = parse_percent_source(source_path.read_text(encoding="utf-8"))
     section = next((s for s in parsed.sections if s.slug == view.slug), None)
     if section is None:
-        return ()
-    cfg = read_recorded_config(experiment_dir, audit_id)
-    root_dirs = [
-        (Path(r) if Path(r).is_absolute() else experiment_dir / r) for r in cfg.source_roots
-    ]
-    if not root_dirs:
         return ()
     return tuple(resolve_section_engines(section.source, experiment_dir, root_dirs))
 
@@ -200,7 +237,13 @@ def _find_prior_signoff(
     )
 
 
-def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> Path:
+def write_render(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    view: SectionView,
+    source_relpath: str | None = None,
+) -> Path:
     """Write *view*'s content-addressed render file and return its path.
 
     Creates the ``.hpc/renders/<audit_id>/`` parent lazily (the ``RepoLayout``
@@ -210,6 +253,13 @@ def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> P
     presentation-only, so ``view_sha`` (and the content address) are unchanged; a
     section with no linked sources and no prior sign-off renders byte-identically.
 
+    *source_relpath* (notebook-audit 6a) names the audited-source ``.py`` the
+    caller rendered — the seat that lets a STANDALONE audit (no interview.json
+    ``audited_source`` opt-in) take the recorded-config path too, so its
+    journaled ``notebook-audit-config`` roots enrich the src digest. ``None``
+    (every pre-6a call site) keeps the interview-block seat only — the byte-absent
+    pin is untouched.
+
     The write is idempotent by construction: the bytes are deterministic and the
     path is content-addressed — and a file already carrying the identical bytes
     is left UNTOUCHED, never rewritten. The skip is load-bearing, not an
@@ -218,7 +268,7 @@ def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> P
     finding 10), so a re-view of an unchanged section (same source, same journals)
     must not move it.
     """
-    view = _enrich_view(experiment_dir, audit_id, view)
+    view = _enrich_view(experiment_dir, audit_id, view, source_relpath=source_relpath)
     path = render_path(experiment_dir, audit_id=audit_id, section=view.slug, view_sha=view.view_sha)
     content = _render_bytes(audit_id=audit_id, view=view)
     try:

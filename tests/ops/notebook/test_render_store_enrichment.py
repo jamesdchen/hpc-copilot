@@ -148,6 +148,63 @@ def test_src_digest_absent_for_standalone_audit(tmp_path: Path) -> None:
     assert "### linked sources" not in path.read_text(encoding="utf-8")
 
 
+def test_standalone_audit_src_digest_via_recorded_config(tmp_path: Path) -> None:
+    # 6a gap-fix pin: a STANDALONE audit (no interview opt-in) whose config was
+    # journaled via ``notebook-record-config`` takes the recorded-config path
+    # too — its journaled source_roots + the caller-named source_relpath enrich
+    # the src digest exactly like an opted-in audit.
+    from hpc_agent.state import notebook_audit as nb
+
+    _experiment(tmp_path, opt_in=False)
+    nb.record_audit_config(tmp_path, audit_id=_AUDIT, input_roots=[], source_roots=["src"])
+    sv = _section_view()
+    path = write_render(tmp_path, audit_id=_AUDIT, view=sv, source_relpath="source.py")
+    body = path.read_text(encoding="utf-8")
+    assert "### linked sources" in body
+    assert "engine.train @ src/engine.py:1" in body
+
+
+def test_standalone_audit_no_relpath_stays_absent(tmp_path: Path) -> None:
+    # Even with a journaled config, a standalone audit whose caller names NO
+    # source_relpath has no source-path seat → the digest stays byte-absent
+    # (the fail-open boundary the explicit seat does not cross).
+    from hpc_agent.state import notebook_audit as nb
+
+    _experiment(tmp_path, opt_in=False)
+    nb.record_audit_config(tmp_path, audit_id=_AUDIT, input_roots=[], source_roots=["src"])
+    sv = _section_view()
+    path = write_render(tmp_path, audit_id=_AUDIT, view=sv)
+    assert "### linked sources" not in path.read_text(encoding="utf-8")
+
+
+def test_explicit_relpath_wins_over_interview_block(tmp_path: Path) -> None:
+    # The caller-declared source_relpath is what was actually rendered — it
+    # wins over the interview block's ``source`` for enrichment (advisory
+    # presentation, fail-open; the recorded roots still come from the config).
+    _experiment(tmp_path)
+    (tmp_path / "src" / "alteng.py").write_text("Q = 1\n", encoding="utf-8")
+    alt = "# %%\n# hpc-audit-section: model\nimport alteng\n"
+    (tmp_path / "alt.py").write_text(alt, encoding="utf-8")
+    (tmp_path / "interview.json").write_text(
+        json.dumps(
+            {
+                "audited_source": {
+                    "source": "alt.py",
+                    "template": "template.py",
+                    "audit_id": _AUDIT,
+                    "source_roots": ["src"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    sv = _section_view()
+    path = write_render(tmp_path, audit_id=_AUDIT, view=sv, source_relpath="source.py")
+    body = path.read_text(encoding="utf-8")
+    assert "engine.train @ src/engine.py:1" in body
+    assert "alteng" not in body
+
+
 # ── slice 3: the prior sign-off advisory ─────────────────────────────────────
 
 

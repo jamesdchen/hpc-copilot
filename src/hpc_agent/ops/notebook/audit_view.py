@@ -57,6 +57,24 @@ moves it.
 ``ops/relay_render.py`` posture): pure, deterministic formatting of the same
 fields — NO LLM-freeform prose enters the audit path (D6).
 
+The **audit net** (notebook-audit 6a): the whole-source render also carries the
+transitive import closure of the audited module — ONE ``## audit net`` block,
+module-level (never per-section). The entries arrive OPAQUELY on
+:attr:`AuditView.audit_net` (the ``resolve_audit_net`` BFS emission from
+``ops/notebook/linked_sources.py``: sorted, capped, each entry a ``module`` /
+``file`` / ``module_sha`` / ``tier`` / ``via`` atom) exactly as lint findings
+arrive — the builder resolves nothing itself. The block is presentation-only:
+it is NOT part of any ``view_sha`` payload, and default-ABSENT — an
+``audit_net``-free view renders byte-identically to a pre-6a view (the
+byte-absent pin). Tier badges render the machinery's own tier (an
+``AuditNetTier`` member projects to its NAME, never re-interpreted); UNRESOLVED
+entries — a real finding, ``audit_net_unresolved``, the audit is
+``human_required`` — are grouped FIRST within the block, each group keeping the
+machinery's sorted emission (a stable partition, never a re-sort, so the digest
+stays byte-stable). EXTERNAL entries render as env_hash-bound (the GATE
+discloses the env_hash; the render only names the binding). The DIGEST render
+carries COUNTS only (per-tier tally + cap disclosure), never the entry lines.
+
 Pure (``ast`` / ``difflib`` / ``json`` + the shared canonical-sha): no
 ``@primitive`` (the verb wrapper is a later wave), no I/O, no ``_wire`` import,
 no dependency on ``ops/notebook/lint.py`` (its findings arrive as an opaque
@@ -72,6 +90,7 @@ import difflib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent.execution.mapreduce.data_trace_contract import (
@@ -83,7 +102,10 @@ from hpc_agent.state.data_trace import records_sha
 from hpc_agent.state.determinism import canonical_sha
 
 if TYPE_CHECKING:
-    from hpc_agent.ops.notebook.linked_sources import LinkedEngine
+    from hpc_agent.ops.notebook.linked_sources import (  # type: ignore[attr-defined]
+        AuditNetEntry,  # notebook-audit 6a — builder A's lane; lands at merge
+        LinkedEngine,
+    )
 
 __all__ = [
     "INHERITED",
@@ -91,11 +113,14 @@ __all__ = [
     "MODIFIED",
     "AUTO_CLEARED",
     "HUMAN_REQUIRED",
+    "AUDIT_NET_CAP",
+    "UNRESOLVED_TIER_LABEL",
     "Assertion",
     "PriorSignoff",
     "SectionView",
     "AuditView",
     "build_audit_view",
+    "net_tier_label",
     "render_markdown",
     "render_summary_markdown",
 ]
@@ -121,6 +146,34 @@ SUBJECT_KIND = "notebook-section"
 #: Keys a lint finding may carry to name its section, checked in this order. A
 #: finding with none of these is module-scoped (attributed to no section).
 _FINDING_SLUG_KEYS = ("slug", "section", "section_slug")
+
+#: The audit-net BFS entry cap the render DISCLOSES at — when the net arrives
+#: holding this many entries, the machinery stopped walking, so the render
+#: discloses the truncation (the counts the digest cites are the net's own).
+#: This mirrors the cap ``resolve_audit_net`` emits under (notebook-audit 6a).
+# MIRROR: hpc_agent.ops.notebook.linked_sources::resolve_audit_net BFS cap pinned-by tests/ops/notebook/test_audit_net_presentation.py::test_net_cap_disclosure  # noqa: E501
+AUDIT_NET_CAP = 256
+
+#: The tier label the audit net's UNRESOLVED finding renders under — the NAME
+#: of builder A's ``AuditNetTier.UNRESOLVED`` member (:func:`net_tier_label`
+#: projects an enum member to its name). One definition the net block, the
+#: digest counts, and the module-attention participation all key on.
+UNRESOLVED_TIER_LABEL = "UNRESOLVED"
+
+
+def net_tier_label(tier: object) -> str:
+    """The display label for one audit-net entry's tier (pure, deterministic).
+
+    An ``AuditNetTier`` enum member (builder A's machinery) projects to its
+    member NAME (``INHERITED`` / ``EXTERNAL`` / ``UNRESOLVED`` /
+    ``NEW_DRIFTED``); anything else (a bare string in a caller-shaped entry)
+    renders as ``str(tier)``. The render never re-interprets a tier — the
+    label IS the machinery's own name, so the badge and the machinery's
+    ``audit_net_summary`` counts agree by construction.
+    """
+    if isinstance(tier, Enum):
+        return str(tier.name)
+    return str(tier)
 
 
 @dataclass(frozen=True)
@@ -216,6 +269,15 @@ class AuditView:
     #: never applied to the source. Defaulted for back-compat with any positional
     #: constructor; :func:`build_audit_view` always populates it.
     dropped_template_drafts: tuple[tuple[str, str], ...] = ()
+    #: PRESENTATION-ONLY audit-net enrichment (notebook-audit 6a) — NOT part of
+    #: ``payload`` and so NEVER part of ``view_sha`` (identical to the per-section
+    #: ``linked_engines`` posture). The transitive import closure of the audited
+    #: module as opaque ``resolve_audit_net`` entries, in the machinery's sorted
+    #: emission order; the whole-source renders (:func:`render_markdown` /
+    #: :func:`render_summary_markdown`) project the ``## audit net`` block / digest
+    #: lines from it. Default-empty so every existing view renders byte-identically
+    #: (the byte-absent pin).
+    audit_net: tuple[AuditNetEntry, ...] = ()
 
 
 # ── canonical JSON / hashing ─────────────────────────────────────────────────
@@ -475,6 +537,7 @@ def build_audit_view(
     receipt: Mapping[str, Any] | None = None,
     attention_order: Sequence[str] | None = None,
     audit_traces: Sequence[Mapping[str, Any]] | None = None,
+    audit_net: Sequence[AuditNetEntry] | None = None,
 ) -> AuditView:
     """Build the deterministic :class:`AuditView` for *source* against *template*.
 
@@ -507,6 +570,15 @@ def build_audit_view(
     not presentation) and is ABSENT when there is nothing to show — byte-identical
     to a trace-free view. A STALE section (its latest records not stamped with the
     current ``section_sha``, or unstamped) is elided with a disclosed marker.
+
+    *audit_net* (notebook-audit 6a) is the transitive import closure of the
+    audited module — the ``resolve_audit_net`` BFS emission (opaque entries in
+    the machinery's deterministic sorted order), consumed exactly like
+    *lint_findings*: the builder resolves nothing, it carries the entries onto
+    :attr:`AuditView.audit_net` for the whole-source renders to project. It is
+    PRESENTATION-ONLY — it never enters a ``payload``, so it moves no
+    ``view_sha``; ``None`` / absent yields a byte-identical view (the
+    byte-absent pin).
     """
     template_by_slug = {s.slug: s for s in template.sections}
     traces = audit_traces or ()
@@ -593,6 +665,9 @@ def build_audit_view(
         view_sha=canonical_sha(module_payload),
         payload=module_payload,
         dropped_template_drafts=dropped_drafts,
+        # 6a: the import closure rides the view presentation-only — never a
+        # payload input, so it moves no view_sha; absent → byte-identical.
+        audit_net=tuple(audit_net or ()),
     )
 
 
@@ -731,6 +806,103 @@ def _render_trace_summary(sv: SectionView) -> list[str]:
     return lines
 
 
+def _render_net_entry(entry: Any) -> str:
+    """One ``- [TIER] …`` line for an audit-net entry (pure, deterministic).
+
+    Reads the entry OPAQUELY (``module`` / ``file`` / ``module_sha`` / ``tier``
+    / ``via`` — the machinery's pinned atoms, never re-interpreted). The badge
+    is the tier's own label (:func:`net_tier_label`); an EXTERNAL entry renders
+    as env_hash-bound (the GATE discloses the env_hash — the render only names
+    the binding); the ``via`` chain renders compactly (``a -> b -> c``). An
+    entry with no resolved file says so in-line (an UNRESOLVED entry's finding
+    IS the missing file).
+    """
+    label = net_tier_label(getattr(entry, "tier", None))
+    module = str(getattr(entry, "module", ""))
+    file = getattr(entry, "file", None)
+    sha = getattr(entry, "module_sha", None)
+    via = tuple(getattr(entry, "via", ()) or ())
+    details: list[str] = []
+    if label == "EXTERNAL":
+        details.append("env_hash-bound")
+    if isinstance(sha, str) and sha:
+        details.append(f"module_sha {sha[:12]}")
+    if via:
+        details.append("via " + " -> ".join(str(m) for m in via))
+    detail = f" ({', '.join(details)})" if details else ""
+    if isinstance(file, str) and file:
+        return f"- [{label}] {file}{detail}"
+    if label == UNRESOLVED_TIER_LABEL:
+        return f"- [{label}] {module} — no file under source_roots{detail}"
+    return f"- [{label}] {module}{detail}"
+
+
+def _render_audit_net_block(view: AuditView) -> list[str]:
+    """The whole-source ``## audit net`` block (6a), or nothing (byte-absent).
+
+    Rendered ONLY when the view carries audit-net entries; byte-ABSENT
+    otherwise (the pin: a net-free view renders exactly as it did pre-6a).
+    UNRESOLVED entries — the ``audit_net_unresolved`` finding, the audit is
+    ``human_required`` — are grouped FIRST and headed by a prominent disclosure
+    line; every group keeps the machinery's sorted emission order (a stable
+    PARTITION, never a re-sort — the digest's byte-stability ruling). When the
+    net arrives at the BFS cap, a disclosed truncation line says the walk
+    stopped (the machinery's own summary stays authoritative). Presentation
+    only — nothing here enters a ``view_sha``.
+    """
+    entries = view.audit_net
+    if not entries:
+        return []
+    unresolved = [
+        e for e in entries if net_tier_label(getattr(e, "tier", None)) == UNRESOLVED_TIER_LABEL
+    ]
+    rest = [e for e in entries if net_tier_label(getattr(e, "tier", None)) != UNRESOLVED_TIER_LABEL]
+    lines = ["## audit net", ""]
+    if unresolved:
+        lines.append(
+            f"- ⚠ audit_net_unresolved: {len(unresolved)} module(s) resolve to NO file "
+            "under the recorded source_roots — the audit is human_required"
+        )
+        lines.append("")
+    for entry in [*unresolved, *rest]:
+        lines.append(_render_net_entry(entry))
+    if len(entries) >= AUDIT_NET_CAP:
+        lines.append(
+            f"- … net truncated at {AUDIT_NET_CAP} modules (the BFS walk stopped; "
+            "notebook-status audit_net_summary is authoritative)"
+        )
+    lines.append("")
+    return lines
+
+
+def _render_audit_net_digest(view: AuditView) -> list[str]:
+    """The audit-net DIGEST lines (6a) — COUNTS only, never the entry bodies.
+
+    The digest render's posture (metadata beside the bodies): one per-tier
+    tally line (labels in sorted order — canonical, independent of entry
+    order), a prominent ``audit_net_unresolved`` line when ANY entry failed to
+    resolve (the human_required finding), and the cap disclosure at the BFS
+    cap. Byte-ABSENT when the view carries no net (the pin).
+    """
+    entries = view.audit_net
+    if not entries:
+        return []
+    counts: dict[str, int] = {}
+    for entry in entries:
+        label = net_tier_label(getattr(entry, "tier", None))
+        counts[label] = counts.get(label, 0) + 1
+    tally = ", ".join(f"{label} {counts[label]}" for label in sorted(counts))
+    lines = [f"- audit net: {len(entries)} module(s) — {tally}"]
+    if counts.get(UNRESOLVED_TIER_LABEL):
+        lines.append(
+            f"- ⚠ audit_net_unresolved: {counts[UNRESOLVED_TIER_LABEL]} module(s) resolve "
+            "to NO file under the recorded source_roots (human_required)"
+        )
+    if len(entries) >= AUDIT_NET_CAP:
+        lines.append(f"- … audit net truncated at {AUDIT_NET_CAP} modules (BFS cap)")
+    return lines
+
+
 def render_markdown(view: AuditView) -> str:
     """Render *view* as deterministic, code-authored markdown (D6 posture).
 
@@ -749,7 +921,11 @@ def render_markdown(view: AuditView) -> str:
         lines.append(
             f"- dropped template sections (present in template, absent in source): {dropped}"
         )
+    # The 6a audit-net block rides between the header and the sections — the
+    # UNRESOLVED finding is prominent, above the fold. Byte-ABSENT when the
+    # view carries no net (the block's own trailing blank is the separator).
     lines.append("")
+    lines.extend(_render_audit_net_block(view))
 
     if not view.sections:
         lines.append("(no sections)")
@@ -792,6 +968,9 @@ def render_summary_markdown(view: AuditView, render_paths: Mapping[str, str] | N
         lines.append(
             f"- dropped template sections (present in template, absent in source): {dropped}"
         )
+    # 6a: the audit-net DIGEST lines (per-tier counts, the UNRESOLVED finding)
+    # ride with the header metadata — metadata only, never the entry bodies.
+    lines.extend(_render_audit_net_digest(view))
     lines.append("")
     if not view.sections:
         lines.append("(no sections)")

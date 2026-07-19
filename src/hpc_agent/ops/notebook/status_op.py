@@ -38,6 +38,7 @@ short-circuit.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -48,6 +49,7 @@ from hpc_agent._wire.queries.notebook_status import (
     NotebookStatusSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.ops.notebook.audit_view import AUDIT_NET_CAP, net_tier_label
 from hpc_agent.ops.notebook.canonical import read_recorded_config
 from hpc_agent.ops.notebook.module_attention import build_module_attention
 from hpc_agent.state.audit_source import parse_percent_source
@@ -62,7 +64,57 @@ from hpc_agent.state.notebook_audit import (
     record_relay_due,
 )
 
+try:  # notebook-audit 6a: builder A owns the audit-net machinery; None until it merges.
+    from hpc_agent.ops.notebook.linked_sources import (  # type: ignore[attr-defined]
+        resolve_audit_net as _resolve_audit_net,
+    )
+except ImportError:  # pragma: no cover — exercised by the builder-A merge integration
+    _resolve_audit_net = None  # type: ignore[assignment]
+
 __all__ = ["notebook_status"]
+
+
+def _audit_net_summary(entries: tuple[Any, ...]) -> dict[str, Any]:
+    """The additive ``audit_net_summary`` rollup (6a): counts by tier + cap flag.
+
+    Pure reduction over the opaque net entries: one count per tier LABEL
+    (:func:`~hpc_agent.ops.notebook.audit_view.net_tier_label` — the machinery's
+    own tier names, never re-interpreted) plus ``cap_reached`` — whether the net
+    arrived at the BFS cap (the walk stopped; the machinery's disclosure). The
+    UNRESOLVED count is the ``audit_net_unresolved`` finding's magnitude; the
+    gate flips ``human_required`` on it, this surface only COUNTS.
+    """
+    by_tier: dict[str, int] = {}
+    for entry in entries:
+        label = net_tier_label(getattr(entry, "tier", None))
+        by_tier[label] = by_tier.get(label, 0) + 1
+    return {
+        "by_tier": {label: by_tier[label] for label in sorted(by_tier)},
+        "cap_reached": len(entries) >= AUDIT_NET_CAP,
+    }
+
+
+def _resolve_net(experiment_dir: Path, source: Any, source_roots: list[str]) -> tuple[Any, ...]:
+    """The audit's transitive import closure (6a), fail-open to an empty net.
+
+    Routes through builder A's ONE resolver (``resolve_audit_net`` — the
+    deterministic BFS over the audited module's imports under the RECORDED
+    ``source_roots``, sorted emission, capped at
+    :data:`~hpc_agent.ops.notebook.audit_view.AUDIT_NET_CAP`). Fully fail-open:
+    no machinery (the pre-merge seam), no roots, or any resolver error yields an
+    EMPTY net — the status rollup degrades to its pre-6a shape, never fails on
+    presentation. The call adapts the :func:`resolve_section_engines` signature
+    to the whole-module walk: ``(parsed source, experiment_dir, root_dirs)``.
+    """
+    if _resolve_audit_net is None or not source_roots:
+        return ()
+    root_dirs = [
+        (Path(r) if Path(r).is_absolute() else Path(experiment_dir) / r) for r in source_roots
+    ]
+    try:
+        return tuple(_resolve_audit_net(source, experiment_dir, root_dirs))
+    except Exception:  # noqa: BLE001 — the net is presentation; never fail the rollup
+        return ()
 
 
 def _read_percent_module(experiment_dir: Path, relpath: str, label: str) -> str:
@@ -206,6 +258,13 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
         if audit_section(records, s.slug, s.section_sha).status in (SIGNED_CURRENT, REUSED)
     }
     cfg = read_recorded_config(experiment_dir, spec.audit_id)
+
+    # WAVE 6a — the audit NET. Resolve the transitive import closure under the
+    # RECORDED source_roots (fail-open: no machinery / no roots / any error →
+    # empty net → the pre-6a shape). Its UNRESOLVED entries participate in the
+    # module-attention ordering (appended after the unsigned-module charges);
+    # the whole net reduces to the additive ``audit_net_summary`` rollup.
+    audit_net = _resolve_net(experiment_dir, source, cfg.source_roots)
     module_attention = [
         NotebookModuleAttention(
             module=item.module,
@@ -221,12 +280,21 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
             source=source,
             source_roots=cfg.source_roots,
             signed_section_bodies=signed_section_bodies,
+            audit_net=audit_net,
         )
     ]
 
-    return NotebookStatusResult(
-        audit_id=spec.audit_id,
-        sections=sections,
-        passed=module_audit.passed,
-        module_attention=module_attention,
-    )
+    audit_net_summary = _audit_net_summary(audit_net)
+    result_kwargs: dict[str, Any] = {
+        "audit_id": spec.audit_id,
+        "sections": sections,
+        "passed": module_audit.passed,
+        "module_attention": module_attention,
+    }
+    # Cross-lane seam (notebook-audit 6a): builder A adds ``audit_net_summary``
+    # to the wire result when the machinery lands; pre-merge the model rejects
+    # the unknown field (extra=forbid), so it is attached ONLY once the field
+    # exists. Post-merge this guard always takes the attach branch.
+    if "audit_net_summary" in NotebookStatusResult.model_fields:
+        result_kwargs["audit_net_summary"] = audit_net_summary
+    return NotebookStatusResult(**result_kwargs)
