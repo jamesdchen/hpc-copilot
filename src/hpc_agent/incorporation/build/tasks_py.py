@@ -94,6 +94,54 @@ _RESERVED_AXIS_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Exact per-task kwarg names the cluster-side dispatcher seeds into its
+# result_dir format context: ``ctx = {"task_id": ..., "run_id": ..., **kwargs}``
+# (``execution/mapreduce/dispatch.py::_format_result_dir``). Task kwargs WIN
+# over those reserved keys on collision (documented there: "the user's
+# tasks.py controls the namespace"), so a swept param literally named
+# ``run_id`` / ``task_id`` renders ``{run_id}`` / ``{task_id}`` as the
+# per-task KWARG value cluster-side, while aggregate-time code
+# (``ops/aggregate_flow.py::_render_known_placeholders``) can only know the
+# REAL run identity — the harvest scope then diverges from where the
+# dispatcher actually wrote and the pull loudly refuses. These names are
+# refused at tasks-build / validate time (here and the interview's
+# materialize/validate seams) so that divergence can never be constructed.
+#
+# Deliberately SEPARATE from ``hpc_agent.state.run_sha.RESERVED_TASK_KEYS``:
+# that set is stripped before cmd_sha hashing, so adding a key there would
+# silently change parameter identity (the dedup key) for existing runs. This
+# set never touches the sha path — it is a construction-time refusal only.
+DISPATCHER_FORMAT_RESERVED_KEYS: frozenset[str] = frozenset({"run_id", "task_id"})
+
+
+def validate_swept_param_name(name: str) -> None:
+    """Refuse a swept per-task kwarg named like a dispatcher format key.
+
+    Raises :class:`errors.SpecInvalid` naming the offending param when
+    *name* is in :data:`DISPATCHER_FORMAT_RESERVED_KEYS`. Called at
+    tasks-build / validate time — the ``build-tasks-py`` scaffold (via
+    :func:`_validate_axis_name`) and the interview's generator-materialize
+    / hand-written-validate seams — so the dispatch-vs-aggregate result-dir
+    divergence can never be constructed. Exact-match only: the dispatcher's
+    format context keys are the literal lowercase ``run_id`` / ``task_id``;
+    case variants do not collide (and are handled, if at all, by the
+    env-shadow check in :func:`_validate_axis_name`).
+    """
+    if name in DISPATCHER_FORMAT_RESERVED_KEYS:
+        raise errors.SpecInvalid(
+            f"swept param {name!r} collides with a dispatcher-reserved format "
+            "key. The cluster dispatcher builds its result_dir format context "
+            "as {'task_id': ..., 'run_id': ..., **kwargs} and task kwargs WIN "
+            f"on collision, so a swept {name!r} would render {{{name}}} as "
+            "this param's per-task value cluster-side while aggregate-time "
+            "code (_render_known_placeholders) substitutes the REAL run "
+            "identity — the harvest scope would diverge from where the "
+            "dispatcher actually wrote and the pull would refuse. Rename "
+            f"the param (a per-experiment prefix like 'exp_{name}' is the "
+            "canonical fix)."
+        )
+
+
 # Prefix patterns: any axis name whose uppercase starts with one of
 # these is reserved. Catches the long tail of scheduler-injected vars
 # (SLURM_JOB_ID, SGE_TASK_ID, ...) and the framework's own kwarg
@@ -113,6 +161,11 @@ def _validate_axis_name(name: str) -> None:
     ``.hpc/tasks.py`` is written, rather than as a silent runtime
     divergence after the executor reads (e.g.) the wrong ``$HOME``.
     """
+    # Dispatcher-format keys first — the most specific refusal. (``task_id``
+    # would also trip the env-shadow check below via ``TASK_ID``; the
+    # format-collision reason is the precise one and must win. ``run_id``
+    # trips ONLY this check — bare ``RUN_ID`` is not an env-shadow name.)
+    validate_swept_param_name(name)
     if not name.isidentifier() or keyword.iskeyword(name):
         raise errors.SpecInvalid(
             f"axis name {name!r} is not a usable Python identifier. The "

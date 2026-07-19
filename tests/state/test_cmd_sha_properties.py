@@ -156,3 +156,33 @@ def test_compute_cmd_sha_does_not_mutate_resolve_dict() -> None:
     task = {"lr": 0.1, "trial_token": 5}
     compute_cmd_sha(_FakeTasksModule([task]))
     assert task == {"lr": 0.1, "trial_token": 5}
+
+
+# ---------------------------------------------------------------------------
+# The dispatcher-reserved-name refusal (run_id / task_id) is OUTSIDE the
+# identity path. The scaffold / interview refuse those names at tasks-build /
+# validate time (see ``incorporation.build.tasks_py.DISPATCHER_FORMAT_RESERVED_KEYS``),
+# but ``RESERVED_TASK_KEYS`` — the set stripped before hashing — must NOT
+# grow: adding a key there would silently change cmd_sha (the dedup identity)
+# for existing runs. Pin both the set and a literal digest so any drift in
+# the identity semantics fails here, not in a stale-dedup surprise.
+# ---------------------------------------------------------------------------
+
+
+def test_reserved_task_keys_is_only_trial_token() -> None:
+    """``RESERVED_TASK_KEYS`` participates in cmd_sha computation; it must
+    stay exactly ``{"trial_token"}`` — the run_id / task_id refusal lives at
+    tasks-build / validate time, never in the hash."""
+    from hpc_agent.state.run_sha import RESERVED_TASK_KEYS
+
+    assert sorted(RESERVED_TASK_KEYS) == ["trial_token"]
+
+
+def test_cmd_sha_literal_pinned_with_dispatcher_named_kwargs() -> None:
+    """Byte-exact identity pin: a task set whose kwargs include keys NAMED
+    ``run_id`` / ``task_id`` hashes to this exact digest (they are ordinary
+    params as far as the sha is concerned — the refusal happens upstream, at
+    scaffold / interview time). If the identity path ever starts stripping
+    or rejecting these keys, this digest changes and the pin fails."""
+    m = _FakeTasksModule([{"lr": 0.1, "run_id": "x", "task_id": 3}])
+    assert compute_cmd_sha(m) == "f9ea498a4f9f064b5b85a04b7076c04186aa5f206f81db8f8e837eaf25c10519"

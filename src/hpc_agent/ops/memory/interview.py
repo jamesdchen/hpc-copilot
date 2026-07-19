@@ -413,6 +413,24 @@ def record_interview(
             f"interview agent's stated count disagrees with the produced tasks.py"
         )
 
+    # Dispatcher-reserved kwarg refusal — the validate-mode leg (hand-written
+    # tasks.py; generator mode was already refused pre-write by
+    # ``_validate_generator_param_names``). A swept ``run_id`` / ``task_id``
+    # overrides the dispatcher's result_dir format keys cluster-side while
+    # aggregate-time code substitutes the real identity, so the harvest would
+    # look where nothing was written. Every task is checked (a reserved key
+    # could appear in only one). This loop materializes kwargs exactly as
+    # ``compute_cmd_sha`` does below but is deliberately SEPARATE from it:
+    # the sha path is untouched identity semantics; this is a
+    # construction-time refusal.
+    from hpc_agent.incorporation.build.tasks_py import validate_swept_param_name
+
+    for i in range(total_tasks):
+        kwargs = tasks_mod.resolve(i)
+        if isinstance(kwargs, dict):
+            for key in kwargs:
+                validate_swept_param_name(str(key))
+
     # Swept-flag cross-check (register_run only): every key resolve(i) sweeps must
     # name a real run() parameter, else the cluster canary is the first to notice
     # (run #8). Deferred to here because it needs BOTH the discovered run signature
@@ -865,6 +883,46 @@ def _chunked_series_tasks(params: Mapping[str, Any]) -> list[dict[str, Any]]:
     return tasks
 
 
+def _validate_generator_param_names(
+    generator: Mapping[str, Any], inject: Mapping[str, Any]
+) -> None:
+    """Refuse a recipe that would materialize a dispatcher-reserved kwarg name.
+
+    The cluster dispatcher seeds its result_dir format context with the real
+    ``run_id`` / ``task_id`` and task kwargs WIN on collision, so a swept
+    param with either name renders the placeholder as the per-task kwarg
+    value while aggregate-time code substitutes the real identity — the
+    harvest scope diverges from where the dispatcher wrote. Checked against
+    every name the recipe can emit (axis names, enumerated item keys, the
+    numeric sweep param, the ``items_x_seeds`` item keys, ``chunked_series``
+    extra-axis names, and the caller-authored ``inject`` / fixed-param keys)
+    BEFORE tasks.py is written. Code-owned emitted keys (``seed``,
+    ``chunk_start`` / ``chunk_end`` / ``halo``, frozen-config ``*_sha``
+    injects) are not caller-named and cannot collide. See
+    :func:`hpc_agent.incorporation.build.tasks_py.validate_swept_param_name`.
+    """
+    from hpc_agent.incorporation.build.tasks_py import validate_swept_param_name
+
+    kind = generator["kind"]
+    params = generator["params"]
+    names: set[str] = {str(k) for k in inject}
+    if kind == "enumerated":
+        for item in params["items"]:
+            names.update(str(k) for k in item)
+    elif kind == "cartesian_product":
+        names.update(str(k) for k in params["axes"])
+    elif kind == "items_x_seeds":
+        for item in params["items"]:
+            names.update(str(k) for k in item)
+    elif kind in ("numeric_logspace", "numeric_linspace"):
+        names.add(str(params["param"]))
+    elif kind == "chunked_series":
+        names.update(str(k) for k in (params.get("extra_axes") or {}))
+    # unknown kinds are refused by _expected_count / the materializer itself.
+    for name in sorted(names):
+        validate_swept_param_name(name)
+
+
 def _materialize_tasks_py(
     generator: Mapping[str, Any],
     path,
@@ -884,6 +942,10 @@ def _materialize_tasks_py(
     kind = generator["kind"]
     params = generator["params"]
     inject = dict(inject_kwargs or {})
+    # Refuse dispatcher-reserved kwarg names (run_id / task_id) before the
+    # file is written — the divergence they cause surfaces only at aggregate
+    # time, long after the run's results landed in the wrong scope.
+    _validate_generator_param_names(generator, inject)
     inject_prefix = f"_INJECT = {inject!r}\n" if inject else ""
     # When inject is non-empty, every resolve() return gets merged with
     # _INJECT. Inject takes first place (``{**_INJECT, **task}``) so an

@@ -472,6 +472,96 @@ def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
     assert first == second
 
 
+# ─── dispatcher-reserved kwarg refusal (run_id / task_id) ─────────────────
+#
+# The cluster dispatcher seeds its result_dir format context with the real
+# run_id / task_id and task kwargs WIN on collision
+# (``dispatch.py::_format_result_dir``), so a swept param with either name
+# renders the placeholder as the per-task kwarg value while aggregate-time
+# code substitutes the real identity — the harvest scope diverges from where
+# the dispatcher wrote. Refused at tasks-build / validate time here.
+
+
+def test_generator_enumerated_run_id_param_rejected(tmp_path: Path) -> None:
+    """An enumerated item sweeping ``run_id`` is refused with the param named,
+    before tasks.py is written."""
+    intent = _minimal_intent(
+        2,
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [{"run_id": "a"}, {"run_id": "b"}]},
+        },
+    )
+    with pytest.raises(errors.SpecInvalid, match=r"'run_id'.*dispatcher-reserved format"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert not (tmp_path / ".hpc" / "tasks.py").exists()
+    assert not (tmp_path / "interview.json").exists()
+
+
+def test_generator_cartesian_task_id_axis_rejected(tmp_path: Path) -> None:
+    """A cartesian axis named ``task_id`` is refused with the param named."""
+    intent = _minimal_intent(
+        2,
+        task_generator={
+            "kind": "cartesian_product",
+            "params": {"axes": {"task_id": [1, 2]}},
+        },
+    )
+    with pytest.raises(errors.SpecInvalid, match=r"'task_id'.*dispatcher-reserved format"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert not (tmp_path / ".hpc" / "tasks.py").exists()
+
+
+def test_generator_fixed_param_run_id_rejected(tmp_path: Path) -> None:
+    """The ``inject`` leg: a fixed (non-axis) param named ``run_id`` lands in
+    every task's kwargs, so it collides exactly like a swept axis."""
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "monte_carlo_pi",
+            "argv": ["python3", "mc.py", "--run_id", "{run_id}"],
+            "signature": {"run_id": "str"},
+            "fixed_params": {"run_id": "constant"},
+        },
+        task_generator={"kind": "enumerated", "params": {"items": [{"a": 1}]}},
+    )
+    with pytest.raises(errors.SpecInvalid, match=r"'run_id'.*dispatcher-reserved format"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert not (tmp_path / ".hpc" / "tasks.py").exists()
+
+
+def test_validate_mode_hand_written_run_id_sweep_rejected(tmp_path: Path) -> None:
+    """Validate mode (hand-written tasks.py): the post-load check refuses a
+    swept ``run_id`` that bypassed every generator seam."""
+    _write_tasks(
+        tmp_path,
+        "_TASKS = [{'run_id': 'a', 'lr': 0.1}, {'run_id': 'b', 'lr': 0.2}]\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n",
+    )
+    intent = _minimal_intent(2)
+    with pytest.raises(errors.SpecInvalid, match=r"'run_id'.*dispatcher-reserved format"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert not (tmp_path / "interview.json").exists()
+
+
+def test_validate_mode_normal_sweep_passes_unchanged(tmp_path: Path) -> None:
+    """Control: a hand-written sweep with ordinary param names (including
+    near-miss names that merely CONTAIN a reserved key) is accepted."""
+    _write_tasks(
+        tmp_path,
+        "_TASKS = [{'exp_run_id': 'a', 'task_id_num': 1}, "
+        "{'exp_run_id': 'b', 'task_id_num': 2}]\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n",
+    )
+    intent = _minimal_intent(2)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["total_tasks"] == 2
+    assert (tmp_path / "interview.json").is_file()
+
+
 # ─── chunked_series: bucket x chunk series tiling (run #11) ──────────────────
 
 # (series_length, chunks, halo, start) — a grid mixing exact division and
@@ -2097,7 +2187,8 @@ def _generator_intent(**overrides) -> dict:
 
 def _composed_defaults(campaign_dir) -> list:
     doc = json.loads((campaign_dir / "interview.json").read_text(encoding="utf-8"))
-    return doc.get("_materialized", {}).get("composed_defaults", [])
+    result: list = doc.get("_materialized", {}).get("composed_defaults", [])
+    return result
 
 
 def test_composes_audit_template_default_when_pack_bound_no_template(tmp_path: Path) -> None:
