@@ -8,8 +8,14 @@ submit," which loses every minute of accumulated age priority
 This primitive exposes ``scontrol update`` as a first-class operation:
 
 1. Read the run's sidecar; pull job_ids + ssh_target.
-2. For each job_id, run ``scontrol update jobid=<id> Features=<expr>``
-   over SSH.
+2. Batch EVERY job's ``scontrol update jobid=<id> Features=<expr>`` into
+   ONE login-shell round-trip: one ``scontrol update … ; echo
+   "<ack> <id> $?"`` segment per id, ``;``-joined, run inside a single
+   ``bash -lc`` (the old path paid a full cold SSH round-trip PER job id —
+   an N-job run serialised N ``scontrol update`` calls). Per-id outcomes
+   are recovered by parsing the per-segment ack echoes: an ack rc of 0 is
+   the ONLY success signal; a non-zero rc OR a missing ack (UNKNOWN — the
+   channel was truncated / killed mid-batch) is a failure, never assumed ok.
 3. Update the sidecar's recorded features so subsequent observers see
    the new set.
 
@@ -47,6 +53,23 @@ _FEATURE_JOIN = "|"
 # scontrol command.
 _FEATURE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Per-segment ack marker for the batched update (see ``_parse_upd_acks``). Each
+# ``scontrol update`` segment in the fused login-shell command echoes
+# ``<prefix> <job_id> <rc>`` carrying that command's OWN exit status, so per-id
+# outcomes survive the collapse from N SSH calls into ONE. Mirrors the
+# scheduler sentinel-ack idiom (_engine._SCHED_ACK_PREFIX): PRESENCE of the ack
+# is the affirmative proof the segment ran; its ABSENCE is UNKNOWN, never "ok".
+# MIRROR: hpc_agent/infra/backends/_engine.py::_SCHED_ACK_PREFIX (the sentinel-ack idiom) pinned-by tests/ops/monitor/test_update_run_constraints.py::test_sentinel_ack_idiom_lockstep_with_scheduler_ack  # noqa: E501
+_UPD_ACK_PREFIX = "__HPC_UPD__"
+
+# Batch-level sentinel-ack prefix for the WHOLE fused login-shell command, via
+# the canonical :func:`wrap_with_ack` / :func:`split_ack` helpers: the trailing
+# echo's PRESENCE proves the batch shell ran to completion. Its ABSENCE — a
+# severed channel (NAT idle-drop, expired remote deadline) delivering rc 0 with
+# truncated stdout — fails the WHOLE batch closed: every id reads UNKNOWN,
+# never a settled per-id outcome off a partial read (run-12 finding 24).
+_BATCH_ACK_PREFIX = "__HPC_UPD_BATCH__="
+
 
 def _validate_feature(feat: str) -> str:
     if not _FEATURE_RE.fullmatch(feat):
@@ -54,6 +77,28 @@ def _validate_feature(feat: str) -> str:
             f"feature name {feat!r} contains characters outside [A-Za-z0-9._-]"
         )
     return feat
+
+
+def _parse_upd_acks(stdout: str) -> dict[str, int]:
+    """Parse ``<prefix> <job_id> <rc>`` ack lines into ``{job_id: rc}``.
+
+    Each batched ``scontrol update`` segment echoes exactly one ack carrying the
+    per-command exit status. An id with NO ack line is simply absent from the
+    map — the caller reads that as UNKNOWN (never success): the remote shell
+    never reached that segment's echo (a truncated channel, or the batch killed
+    mid-flight). A malformed / non-integer rc token is likewise skipped, so a
+    corrupt line can never be mistaken for a successful rc 0.
+    """
+    acks: dict[str, int] = {}
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 3 or parts[0] != _UPD_ACK_PREFIX:
+            continue
+        try:
+            acks[parts[1]] = int(parts[2])
+        except ValueError:
+            continue
+    return acks
 
 
 @primitive(
@@ -107,6 +152,7 @@ def update_run_constraints(
         raise errors.SpecInvalid("Pass at least one of `set_features` or `add_features`")
 
     from hpc_agent.infra.remote import ssh_run
+    from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
     from hpc_agent.state.journal import load_run
     from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
 
@@ -144,22 +190,70 @@ def update_run_constraints(
 
     feature_expr = _FEATURE_JOIN.join(new_features)
 
-    updated: list[str] = []
+    # Validate EVERY job id BEFORE composing the fused command — a job id is
+    # command-substituted into the remote shell string, so an id failing the
+    # injection guard is dropped to ``failed`` and must NEVER reach the composed
+    # command (the same defence the per-feature guard gives above).
+    valid_ids: list[str] = []
     failed: list[str] = []
     for jid in job_ids:
-        if not _FEATURE_RE.fullmatch(jid):  # job-id is also command-substituted
-            failed.append(jid)
-            continue
-        cmd = f"scontrol update jobid={jid} Features={shlex.quote(feature_expr)}"
-        try:
-            cp = ssh_run(cmd, ssh_target=ssh_target)
-        except (errors.SshUnreachable, TimeoutError, OSError):
-            failed.append(jid)
-            continue
-        if cp.returncode == 0:
-            updated.append(jid)
+        if _FEATURE_RE.fullmatch(str(jid)):
+            valid_ids.append(jid)
         else:
             failed.append(jid)
+
+    updated: list[str] = []
+    if valid_ids:
+        # Batch the per-job ``scontrol update`` calls into ONE login-shell
+        # round-trip (the latency fix). Old path: one cold SSH ``scontrol
+        # update`` PER job id, serialised. New: one ``scontrol update … ; echo
+        # "<ack> <id> $?"`` segment per id, ``;``-joined — NOT ``&&``, so an
+        # early failure never skips a later id's update (the SGE range-cancel
+        # path precedents the same ``;`` rule) — all inside a single
+        # ``bash -lc`` so ``scontrol`` resolves off the cluster's login PATH
+        # (many clusters expose the scheduler binaries only via the profile
+        # chain — see infra/backends/_remote_base._execute_command). A batch of
+        # one is byte-identically the same shape, so the single-job path is
+        # unchanged in behaviour. ``shlex.quote`` fires twice — once on the
+        # ``|``-bearing Features expr, once on the whole ``inner`` — so no
+        # feature/job token can break out of the login-shell string.
+        quoted_expr = shlex.quote(feature_expr)
+        segments = [
+            f"scontrol update jobid={jid} Features={quoted_expr} ; "
+            f'echo "{_UPD_ACK_PREFIX} {jid} $?"'
+            for jid in valid_ids
+        ]
+        inner = " ; ".join(segments)
+        remote_cmd = f"bash -lc {shlex.quote(inner)}"
+        try:
+            # wrap_with_ack suffixes the batch with a trailing sentinel echo;
+            # its ABSENCE is positive proof the batch shell never ran to
+            # completion (a severed channel returns rc 0 + truncated stdout).
+            cp = ssh_run(wrap_with_ack(remote_cmd, _BATCH_ACK_PREFIX), ssh_target=ssh_target)
+        except (errors.SshUnreachable, TimeoutError, OSError):
+            # The transport died before ANY ack could return: every id is
+            # UNKNOWN, so none may be reported updated — a failed batch must
+            # never read as full success.
+            failed.extend(valid_ids)
+        else:
+            clean, batch_rc = split_ack(cp.stdout or "", _BATCH_ACK_PREFIX)
+            if batch_rc is None:
+                # No batch ack: the login shell never provably ran to
+                # completion, so a truncated read cannot be distinguished from
+                # a partial batch — fail the WHOLE batch closed (every id
+                # UNKNOWN, never assumed updated). The update is idempotent on
+                # the target feature set, so a re-run converges.
+                failed.extend(valid_ids)
+            else:
+                acks = _parse_upd_acks(clean)
+                for jid in valid_ids:
+                    if acks.get(str(jid)) == 0:
+                        updated.append(jid)
+                    else:
+                        # Non-zero rc (scontrol failed) OR a missing ack (UNKNOWN —
+                        # the remote shell never reached that segment's echo): both
+                        # are failures, never assumed ok.
+                        failed.append(jid)
 
     # Persist the new feature set on the sidecar (best-effort; the
     # cluster-side update succeeded for `updated` jobs regardless of
