@@ -91,13 +91,28 @@ class PullResult:
 #
 # A batch closes when adding the next file would exceed the file-count, the
 # byte, OR the NAME-length cap. The name cap is pull-specific: a delta batch
-# ships its exact member list to the remote as a base64 blob INSIDE the ssh
-# command string, and a login shell caps a single command string at ~128 KiB
-# (Linux MAX_ARG_STRLEN); base64 expands 4/3, so cap the raw names well under
-# that. Env-overridable for ops + tests.
+# streams its exact member list to the remote ``tar c -T -`` over ssh STDIN (see
+# :func:`_batch_remote_cmd` / :func:`_batch_names_payload`), so the cap bounds
+# the per-batch stdin payload we hold in memory and the resumability granularity
+# — NOT the command line. The member list rode a base64 blob INSIDE the ssh
+# command string until run-15: that made the argv O(delta size), which on native
+# Windows (rsync absent — the live pull path) blew the ~8191-char command-line
+# limit ("The command line is too long") for any run whose per-task results were
+# not combined before harvest. Moving the list to stdin keeps the argv O(1) — the
+# same fix the push side took in run-#12 finding 17 (a LOCAL ``tar c -T <file>``
+# for its local source; the pull's source is remote, so the list rides stdin).
+# Env-overridable for ops + tests.
 _PULL_BATCH_MAX_FILES: Final[int] = 2000
 _PULL_BATCH_MAX_BYTES: Final[int] = 256 * 1024 * 1024  # 256 MiB
-_PULL_BATCH_MAX_NAME_BYTES: Final[int] = 64 * 1024  # base64 -> ~85 KiB command
+_PULL_BATCH_MAX_NAME_BYTES: Final[int] = 64 * 1024  # per-batch stdin payload bound
+
+#: Conservative cap on the pull's remote-command STRING length. The member list
+#: no longer rides the command (it streams over ssh stdin — see
+#: :func:`_batch_remote_cmd`), so the composed ``ssh ... <remote_cmd>`` argv is
+#: O(1) in the delta size; this bound guards a future regression that would
+#: re-introduce per-file argv growth. 8000 < the native-Windows ~8191-char
+#: command-line limit (run-15) with headroom for the ssh option preamble.
+_PULL_REMOTE_CMD_ARGV_CAP: Final[int] = 8000
 
 
 def _pull_batch_caps() -> tuple[int, int, int]:
@@ -494,6 +509,7 @@ def _pull_transfer(
     codec_flag: str | None,
     total_bytes: int,
     timeout: float | None,
+    stdin_payload: bytes | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one remote ``tar c`` (via *remote_cmd*) and extract it into *local_path*.
 
@@ -503,6 +519,15 @@ def _pull_transfer(
     progress heartbeat so a multi-minute VPN pull is observable. Returns a
     :class:`subprocess.CompletedProcess`; raises ``TimeoutError`` on timeout and
     propagates a ``FileNotFoundError`` spawn error to the caller.
+
+    When *stdin_payload* is given (the delta path's ``tar c -T -`` member list),
+    it is fed to the remote command over ssh STDIN by a dedicated writer thread
+    running CONCURRENTLY with the stdout archive pump — so a payload larger than
+    the OS pipe buffer can never deadlock (the remote drains its stdin as it
+    archives; we drain its stdout the whole time). This keeps the member list OFF
+    the command line, so the argv stays O(1) regardless of the delta size (run-15
+    native-Windows command-line-limit fix). A stdin-write failure that would
+    otherwise leave a TRUNCATED archive reading as success forces a non-zero rc.
     """
     tar_x_cmd = ["tar", "x"]
     if codec_flag:
@@ -518,8 +543,30 @@ def _pull_transfer(
             ssh_cmd,
             stdout=subprocess.PIPE,
             stderr=ssh_stderr_file,
-            stdin=subprocess.DEVNULL,
+            stdin=(subprocess.PIPE if stdin_payload is not None else subprocess.DEVNULL),
         )
+
+        # Feed the member list to the remote ``tar c -T -`` over ssh stdin in its
+        # OWN thread, concurrent with the stdout pump below, so a large payload
+        # can't deadlock against a stdout pipe the remote hasn't drained yet.
+        stdin_error: list[BaseException] = []
+        stdin_thread: threading.Thread | None = None
+        if stdin_payload is not None:
+
+            def _feed() -> None:
+                try:
+                    assert ssh_proc.stdin is not None
+                    ssh_proc.stdin.write(stdin_payload)
+                    ssh_proc.stdin.close()
+                except BaseException as exc:  # noqa: BLE001 — surfaced via stdin_error
+                    stdin_error.append(exc)
+                    with contextlib.suppress(Exception):
+                        if ssh_proc.stdin is not None:
+                            ssh_proc.stdin.close()
+
+            stdin_thread = threading.Thread(target=_feed, daemon=True)
+            stdin_thread.start()
+
         pump_r, pump_w = os.pipe()
         pump_error: list[BaseException] = []
 
@@ -574,6 +621,13 @@ def _pull_transfer(
             ) from exc
         finally:
             _close_pump_r()
+            # Unblock a stdin writer still mid-write (remote died / was killed):
+            # closing ssh's stdin gives it EPIPE so it can't hang the join.
+            if stdin_thread is not None:
+                with contextlib.suppress(Exception):
+                    if ssh_proc.stdin is not None:
+                        ssh_proc.stdin.close()
+                stdin_thread.join(timeout=5)
             ssh_stderr_file.close()
 
         ssh_stderr = ssh_stderr_bytes.decode(errors="replace")
@@ -582,12 +636,15 @@ def _pull_transfer(
         )
         # ssh (the SOURCE) failing truncates the archive; its non-zero wins. If
         # ssh exited 0 but the local tar failed, that rc wins. A pump-side break
-        # (ssh died mid-stream) must never read as success on a truncated pull.
+        # (ssh died mid-stream) OR a stdin-write break (the member list did not
+        # fully reach the remote ``tar c -T -``, so a SHORT archive would land)
+        # must never read as success on a truncated pull.
         rc = ssh_proc.returncode if ssh_proc.returncode != 0 else tar_x.returncode
-        if pump_error and rc == 0:
+        transfer_errors = [*pump_error, *stdin_error]
+        if transfer_errors and rc == 0:
             rc = 1
             combined_stderr = "\n".join(
-                filter(None, [combined_stderr, f"transfer pump error: {pump_error[0]!r}"])
+                filter(None, [combined_stderr, f"transfer pump error: {transfer_errors[0]!r}"])
             )
         if rc != 0:
             disclose_child_failure(what="tar|ssh pull", returncode=rc, stderr=combined_stderr)
@@ -609,6 +666,7 @@ def _pull_transfer_with_retry(
     codec_flag: str | None,
     total_bytes: int,
     timeout: float | None,
+    stdin_payload: bytes | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """:func:`_pull_transfer` under the tight connect-failure retry (rank 25).
 
@@ -633,6 +691,7 @@ def _pull_transfer_with_retry(
                     codec_flag=codec_flag,
                     total_bytes=total_bytes,
                     timeout=timeout,
+                    stdin_payload=stdin_payload,
                 ),
             )
         except FileNotFoundError as exc:
@@ -742,23 +801,32 @@ def _disclose_pull_batch(*, index: int, total: int, n_files: int, batch_bytes: i
         )
 
 
-def _batch_remote_cmd(remote_path: str, batch: list[str], codec_flag: str | None) -> str:
-    """The remote command that tars EXACTLY *batch*'s files to stdout.
+def _batch_remote_cmd(remote_path: str, codec_flag: str | None) -> str:
+    """The remote command that tars the stdin-fed member list to stdout.
 
-    The member list rides as a base64 blob in the command string (bounded by the
-    pull batch's name cap), decoded into a remote temp file that ``tar c -T``
-    consumes — one ssh connection, so it is one login node even on a round-robin
-    cluster (a two-call names-then-tar split could land the temp file on a
-    different node). The temp file is removed regardless of the tar exit.
+    The member list rides ssh STDIN (``tar c -T -``), NOT the command string, so
+    the composed ``ssh ... <remote_cmd>`` argv stays O(1) in the delta size — the
+    native-Windows ~8191-char command-line limit (run-15) can never be hit no
+    matter how many files the delta names. ``-C <remote_path>`` roots the
+    ``./<rel>`` members :func:`_batch_names_payload` writes to that stdin, and the
+    archive streams to stdout (``-f -``): stdin carries the names IN, stdout the
+    archive OUT, so the two ``-`` streams never collide. One ssh connection — one
+    login node — as before, and no remote temp file to leak.
     """
-    names = "".join(f"./{rel}\n" for rel in batch)
-    b64 = base64.b64encode(names.encode("utf-8")).decode("ascii")
     q_rp = shlex.quote(remote_path)
     codec = f" {codec_flag}" if codec_flag else ""
-    return (
-        f'cd {q_rp} && T="$(mktemp)" && printf %s {shlex.quote(b64)} | base64 -d > "$T" && '
-        f'tar c{codec} -C {q_rp} -T "$T" -f - ; rc=$?; rm -f "$T"; exit $rc'
-    )
+    return f"tar c{codec} -C {q_rp} -T - -f -"
+
+
+def _batch_names_payload(batch: list[str]) -> bytes:
+    """The ``./<rel>\\n`` member list fed to the remote ``tar c -T -`` over ssh stdin.
+
+    Byte-identical to the list the prior base64-in-argv path decoded remotely
+    (each name ``./``-prefixed, newline-terminated) — only the transport (stdin
+    vs the command string) changed, so the pulled archive is byte-for-byte the
+    same set the old path produced.
+    """
+    return "".join(f"./{rel}\n" for rel in batch).encode("utf-8")
 
 
 def _fallback_remote_cmd(
@@ -922,7 +990,7 @@ def tar_ssh_pull(
         _disclose_pull_batch(
             index=i, total=len(batches), n_files=len(batch), batch_bytes=batch_bytes
         )
-        remote_cmd = _batch_remote_cmd(remote_path, batch, codec_flag)
+        remote_cmd = _batch_remote_cmd(remote_path, codec_flag)
         proc = _pull_transfer_with_retry(
             ssh_target=ssh_target,
             remote_cmd=remote_cmd,
@@ -930,6 +998,7 @@ def tar_ssh_pull(
             codec_flag=codec_flag,
             total_bytes=batch_bytes,
             timeout=effective_timeout,
+            stdin_payload=_batch_names_payload(batch),
         )
         if proc.returncode != 0:
             # This batch did not land; earlier batches DID (each landed directly

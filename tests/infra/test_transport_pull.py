@@ -138,30 +138,26 @@ def test_find_predicate_empty_when_no_filter():
     assert _pull._find_filter_predicate(None, None) == ""
 
 
-def test_batch_remote_cmd_ships_names_via_base64_and_tempfile():
-    cmd = _pull._batch_remote_cmd("/r/results", ["a.json", "sub/b.json"], "-z")
-    assert cmd.startswith("cd /r/results && ")
-    assert 'T="$(mktemp)"' in cmd
-    assert "base64 -d" in cmd
-    assert "tar c -z -C /r/results -T" in cmd
-    assert 'rm -f "$T"' in cmd  # temp removed regardless of tar exit
-    # The names are NOT in cleartext (they ride as base64).
-    assert "a.json" not in cmd
+def test_batch_remote_cmd_is_argv_o1_and_reads_names_from_stdin():
+    # run-15: the member list rides ssh STDIN (``tar c -T -``), NOT the command
+    # string — so the command is a fixed template independent of the file count.
+    cmd = _pull._batch_remote_cmd("/r/results", "-z")
+    assert cmd == "tar c -z -C /r/results -T - -f -"
+    assert "base64" not in cmd and "mktemp" not in cmd  # no argv-embedded blob
+    assert "-T -" in cmd  # reads the member list from stdin
+    # The command length is O(1) in the delta size (only remote_path varies).
+    assert len(_pull._batch_remote_cmd("/r/results", "-z")) < _pull._PULL_REMOTE_CMD_ARGV_CAP
 
 
-def test_batch_remote_cmd_decodes_to_expected_names(tmp_path):
-    # Decode the base64 blob out of the command and confirm the member list.
-    import base64
-    import re
+def test_batch_names_payload_is_dot_prefixed_newline_terminated():
+    # The payload fed to the remote ``tar c -T -`` over stdin — byte-identical to
+    # what the old base64-in-argv path decoded remotely.
+    payload = _pull._batch_names_payload(["x/one.txt", "two.txt"])
+    assert payload == b"./x/one.txt\n./two.txt\n"
 
-    cmd = _pull._batch_remote_cmd("/r", ["x/one.txt", "two.txt"], None)
-    m = re.search(r"printf %s (\S+) \|", cmd)
-    assert m
-    blob = m.group(1).strip("'")
-    decoded = base64.b64decode(blob).decode()
-    assert decoded == "./x/one.txt\n./two.txt\n"
-    # No codec flag when compression is disabled.
-    assert "tar c -C /r -T" in cmd
+
+def test_batch_remote_cmd_no_codec_flag_when_uncompressed():
+    assert _pull._batch_remote_cmd("/r", None) == "tar c -C /r -T - -f -"
 
 
 def test_fallback_remote_cmd_filters_server_side_and_compresses():
@@ -335,21 +331,28 @@ def test_local_present_manifest_severed_read_not_cached(tmp_path, monkeypatch):
 # --- delta orchestration (ssh transfer mocked) --------------------------------
 
 
-def _patch_transfer(record: list, results=None):
+def _patch_transfer(record: list, results=None, stdin_record: list | None = None):
     """Patch the engine's ssh transfer to record remote_cmds and return results.
 
     *results* is a list of CompletedProcess returned in order (default: all ok).
+    When *stdin_record* is given, each call's ``stdin_payload`` bytes are appended
+    to it (the delta member list now rides ssh stdin, not the command string).
     """
     seq = list(results or [])
 
-    def fake(*, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout):
+    def fake(
+        *, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout, stdin_payload=None
+    ):
         record.append(remote_cmd)
+        if stdin_record is not None:
+            stdin_record.append(stdin_payload)
         return seq.pop(0) if seq else _ok()
 
     return patch.object(_pull, "_pull_transfer_with_retry", side_effect=fake)
 
 
-def test_delta_pulls_exactly_the_changed_set(tmp_path, capsys):
+def test_delta_pulls_exactly_the_changed_set(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HPC_TAR_STREAM_COMPRESSION", "none")  # pin the O(1) cmd shape
     # Remote has 3 files; one already-identical locally, one differs, one new.
     (tmp_path / "same.txt").write_text("s")
     remote = _manifest({"same.txt": "aaa", "changed.txt": "bbb", "new.txt": "ccc"})
@@ -357,6 +360,7 @@ def test_delta_pulls_exactly_the_changed_set(tmp_path, capsys):
     (tmp_path / "changed.txt").write_text("old")
 
     record: list[str] = []
+    stdin_record: list[bytes | None] = []
     with (
         patch.object(_pull, "_remote_pull_manifest", return_value=remote),
         patch.object(
@@ -364,19 +368,17 @@ def test_delta_pulls_exactly_the_changed_set(tmp_path, capsys):
             "_local_present_manifest",
             return_value=_manifest({"same.txt": "aaa", "changed.txt": "OLD"}),
         ),
-        _patch_transfer(record),
+        _patch_transfer(record, stdin_record=stdin_record),
     ):
         result = _pull.tar_ssh_pull(ssh_target="u@h", remote_path="/r/results", local_path=tmp_path)
     assert result.ok
     assert result.files_pulled == 2  # changed.txt + new.txt
     assert result.skipped_unchanged == 1  # same.txt
-    # Exactly one batch, and its remote cmd names ONLY the changed set (base64).
+    # Exactly one batch; the member list rides ssh STDIN (run-15), not the argv,
+    # and names ONLY the changed set.
     assert len(record) == 1
-    import base64
-    import re
-
-    blob = re.search(r"printf %s (\S+) \|", record[0]).group(1).strip("'")
-    names = base64.b64decode(blob).decode()
+    assert record[0] == "tar c -C /r/results -T - -f -"  # O(1) command
+    names = stdin_record[0].decode()
     assert "./changed.txt" in names and "./new.txt" in names
     assert "./same.txt" not in names
     assert "content-hash PULL delta" in capsys.readouterr().err
@@ -429,6 +431,85 @@ def test_resumable_partial_pull_reports_landed_progress(tmp_path, monkeypatch):
     assert len(record) == 2  # stopped after the failing batch
 
 
+# --- run-15: win32 command-line-length immunity -------------------------------
+
+
+def test_delta_large_list_argv_stays_bounded_and_names_ride_stdin(tmp_path, monkeypatch):
+    """run-15 fix: a delta whose member list, joined into argv, would blow the
+    native-Windows ~8191-char command-line limit ("The command line is too
+    long") must pull correctly — the list rides ssh STDIN, so the composed
+    remote command stays O(1) no matter the file count."""
+    monkeypatch.setenv("HPC_TAR_STREAM_COMPRESSION", "none")  # pin the O(1) cmd shape
+    # 500 synthetic per-task summary paths — the joined argv (base64 of the names)
+    # would be well past 8191 chars on the OLD base64-in-command path.
+    paths = {f"pi-drill/task_{i:03d}/results/metrics.json": f"h{i}" for i in range(500)}
+    joined_argv_len = sum(len(p) for p in paths) * 2  # rough base64-in-argv proxy
+    assert joined_argv_len > 8191  # the condition that broke the old path
+
+    remote = _manifest(paths)
+    record: list[str] = []
+    stdin_record: list[bytes | None] = []
+    with (
+        patch.object(_pull, "_remote_pull_manifest", return_value=remote),
+        patch.object(_pull, "_local_present_manifest", return_value=_manifest({})),
+        _patch_transfer(record, stdin_record=stdin_record),
+    ):
+        result = _pull.tar_ssh_pull(ssh_target="u@h", remote_path="/scratch/r", local_path=tmp_path)
+    assert result.ok
+    assert result.files_pulled == 500
+    # One batch (500 names fit the default file/byte/name caps), and its command
+    # is the fixed O(1) template — comfortably under the win32-safe argv cap.
+    assert len(record) == 1
+    assert record[0] == "tar c -C /scratch/r -T - -f -"
+    assert len(record[0]) < _pull._PULL_REMOTE_CMD_ARGV_CAP
+    # Every one of the 500 names crossed — via stdin, not the command line.
+    names = stdin_record[0].decode()
+    for rel in paths:
+        assert f"./{rel}\n" in names
+
+
+def test_pull_transfer_stdin_write_failure_forces_nonzero(tmp_path, monkeypatch):
+    """A member-list write that fails (broken stdin -> a SHORT archive would land)
+    must never read as success: rc is forced non-zero even if ssh/tar exit 0."""
+    import io
+    import os
+
+    def _rec_bounded(cmd, *_a, **kw):
+        stdin = kw.get("stdin")
+        if isinstance(stdin, int):
+            while os.read(stdin, 65536):
+                pass
+        return _ok()
+
+    class _BoomStdin:
+        def write(self, _b):
+            raise BrokenPipeError("remote tar died before reading the member list")
+
+        def close(self):
+            pass
+
+    with (
+        patch("hpc_agent.infra.transport._pull.run_capture_bounded", side_effect=_rec_bounded),
+        patch("hpc_agent.infra.transport._pull.subprocess.Popen") as popen_mock,
+    ):
+        ssh_proc = popen_mock.return_value
+        ssh_proc.stdout = io.BytesIO(b"")
+        ssh_proc.stdin = _BoomStdin()
+        ssh_proc.returncode = 0  # ssh/tar "succeeded" — but the list never landed
+        ssh_proc.wait.return_value = 0
+        proc = _pull._pull_transfer(
+            ssh_target="u@h",
+            remote_cmd="tar c -C /r -T - -f -",
+            local_path=tmp_path,
+            codec_flag=None,
+            total_bytes=0,
+            timeout=60,
+            stdin_payload=b"./a\n./b\n",
+        )
+    assert proc.returncode != 0  # truncated pull is honestly a failure
+    assert "transfer pump error" in proc.stderr
+
+
 # --- manifest-less fallback ---------------------------------------------------
 
 
@@ -474,7 +555,9 @@ def test_compression_flag_flows_into_remote_and_local_tar(tmp_path, monkeypatch)
     remote = _manifest({"a.txt": "h1"})
     captured = {}
 
-    def fake(*, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout):
+    def fake(
+        *, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout, stdin_payload=None
+    ):
         captured["remote_cmd"] = remote_cmd
         captured["codec_flag"] = codec_flag
         return _ok()
@@ -494,7 +577,9 @@ def test_compression_opt_out(tmp_path, monkeypatch):
     remote = _manifest({"a.txt": "h1"})
     captured = {}
 
-    def fake(*, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout):
+    def fake(
+        *, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout, stdin_payload=None
+    ):
         captured["codec_flag"] = codec_flag
         captured["remote_cmd"] = remote_cmd
         return _ok()
@@ -667,7 +752,7 @@ _PREAMBLE_MARKERS = (
 
 
 def test_transfer_plane_remote_cmds_carry_no_preamble():
-    batch = _pull._batch_remote_cmd("/r/results", ["a.json", "sub/b.json"], "-z")
+    batch = _pull._batch_remote_cmd("/r/results", "-z")
     fallback = _pull._fallback_remote_cmd("/r/results", ["metrics.json"], None, "-z")
     for cmd in (batch, fallback):
         for marker in _PREAMBLE_MARKERS:
@@ -716,13 +801,25 @@ _needs_posix_shell = pytest.mark.skipif(
 )
 
 
-def _run_remote_to_local(remote_cmd: str, dest: Path, codec_flag: str | None) -> None:
+def _run_remote_to_local(
+    remote_cmd: str, dest: Path, codec_flag: str | None, stdin_payload: bytes | None = None
+) -> None:
     """Execute *remote_cmd* via ``sh`` (the archive to stdout) and extract it
     locally with ``tar x`` into *dest* — end-to-end proof the command strings
-    round-trip real bytes."""
+    round-trip real bytes. *stdin_payload* (the ``tar c -T -`` member list) is
+    fed to the remote command's stdin exactly as ssh forwards the local process's
+    stdin to the remote shell."""
     dest.mkdir(parents=True, exist_ok=True)
-    ssh = subprocess.Popen(["sh", "-c", remote_cmd], stdout=subprocess.PIPE)
+    ssh = subprocess.Popen(
+        ["sh", "-c", remote_cmd],
+        stdout=subprocess.PIPE,
+        stdin=(subprocess.PIPE if stdin_payload is not None else subprocess.DEVNULL),
+    )
     assert ssh.stdout is not None
+    if stdin_payload is not None:
+        assert ssh.stdin is not None
+        ssh.stdin.write(stdin_payload)
+        ssh.stdin.close()
     tar_x = ["tar", "x"]
     if codec_flag:
         tar_x.append(codec_flag)
@@ -740,12 +837,39 @@ def test_integration_batch_cmd_pulls_exact_members(tmp_path):
         f = remote / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(f"content-{rel}")
-    cmd = _pull._batch_remote_cmd(str(remote), ["a.json", "sub/b.json"], "-z")
+    cmd = _pull._batch_remote_cmd(str(remote), "-z")
+    payload = _pull._batch_names_payload(["a.json", "sub/b.json"])
     dest = tmp_path / "local"
-    _run_remote_to_local(cmd, dest, "-z")
+    _run_remote_to_local(cmd, dest, "-z", stdin_payload=payload)
     assert (dest / "a.json").read_text() == "content-a.json"
     assert (dest / "sub" / "b.json").read_text() == "content-sub/b.json"
     assert not (dest / "skip.csv").exists()  # not in the batch
+
+
+@_needs_posix_shell
+def test_integration_batch_cmd_pulls_many_members_over_stdin(tmp_path):
+    """run-15 byte-identity at scale: a 500-member list whose base64-in-argv form
+    would overflow the win32 command line pulls byte-for-byte correctly when the
+    list rides ``tar c -T -`` over stdin. The archive extracted here is identical
+    to what the old base64-blob path produced for the same members."""
+    remote = tmp_path / "remote"
+    rels = [f"task_{i:03d}/metrics.json" for i in range(500)]
+    for i, rel in enumerate(rels):
+        f = remote / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"metric-{i}")
+    (remote / "task_000" / "big.csv").write_text("x" * 1000)  # not in the list
+
+    payload = _pull._batch_names_payload(rels)
+    assert len(payload) > 8191  # the list alone overflows the win32 command line
+    cmd = _pull._batch_remote_cmd(str(remote), None)
+    assert len(cmd) < _pull._PULL_REMOTE_CMD_ARGV_CAP  # ... yet the command is tiny
+
+    dest = tmp_path / "local"
+    _run_remote_to_local(cmd, dest, None, stdin_payload=payload)
+    for i, rel in enumerate(rels):
+        assert (dest / rel).read_text() == f"metric-{i}"
+    assert not (dest / "task_000" / "big.csv").exists()  # only listed members crossed
 
 
 @_needs_posix_shell
@@ -770,8 +894,10 @@ def test_integration_full_engine_pulls_nested_path_shaped_summary(tmp_path, monk
             ["sh", "-c", remote_cmd], capture_output=True, text=True, timeout=timeout
         )
 
-    def fake_transfer(*, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout):
-        _run_remote_to_local(remote_cmd, Path(local_path), codec_flag)
+    def fake_transfer(
+        *, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout, stdin_payload=None
+    ):
+        _run_remote_to_local(remote_cmd, Path(local_path), codec_flag, stdin_payload=stdin_payload)
         return _ok()
 
     monkeypatch.setattr(_pull, "_ssh_capture", fake_capture)
@@ -850,8 +976,10 @@ def test_integration_full_engine_end_to_end(tmp_path, monkeypatch):
             ["sh", "-c", remote_cmd], capture_output=True, text=True, timeout=timeout
         )
 
-    def fake_transfer(*, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout):
-        _run_remote_to_local(remote_cmd, Path(local_path), codec_flag)
+    def fake_transfer(
+        *, ssh_target, remote_cmd, local_path, codec_flag, total_bytes, timeout, stdin_payload=None
+    ):
+        _run_remote_to_local(remote_cmd, Path(local_path), codec_flag, stdin_payload=stdin_payload)
         return _ok()
 
     monkeypatch.setattr(_pull, "_ssh_capture", fake_capture)
@@ -893,7 +1021,7 @@ def test_pull_remote_commands_are_preamble_free() -> None:
     ``timeout -k`` ssh_run wrapper. The pull never routes through
     ``remote_activation_for_sidecar`` or ``build_remote_command``."""
     forbidden = ("module load", "conda activate", "source ", "HPC_AGENT_OP=", "timeout -k")
-    batch_cmd = _pull._batch_remote_cmd("/r", ["m0/metrics.json", "m1/metrics.json"], "z")
+    batch_cmd = _pull._batch_remote_cmd("/r", "z")
     fallback_cmd = _pull._fallback_remote_cmd("/r", ["metrics.json"], [], "z")
     manifest_cmd_probe: list[str] = []
 
