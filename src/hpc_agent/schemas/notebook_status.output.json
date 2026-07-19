@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_status.output.json",
   "title": "notebook-status output data",
-  "description": "Per-section audit statuses + the whole-module gate verdict.\n\n``passed`` is the graduation-gate predicate: every required section is\ncurrent (``signed_current`` or ``auto_cleared``). It is the rollup T9\nconsumes; a false ``passed`` names the drifted/unsigned sections in\n``sections``.",
+  "description": "Per-section audit statuses + the whole-module gate verdict.\n\n``passed`` is the graduation-gate predicate: every required section is\ncurrent (``signed_current`` / ``auto_cleared`` / ``reused``). It is the rollup\nT9 consumes; a false ``passed`` names the drifted/unsigned sections in\n``sections``.",
   "type": "object",
   "required": [
     "audit_id",
@@ -23,12 +23,91 @@
       "type": "array"
     },
     "passed": {
-      "description": "True iff every required section is current (signed_current or auto_cleared) — the graduation gate's pass predicate.",
+      "description": "True iff every required section is current (signed_current, auto_cleared, or reused) — the graduation gate's pass predicate.",
       "title": "Passed",
       "type": "boolean"
+    },
+    "module_attention": {
+      "description": "ONE item per UNSIGNED linked src module (never per dependent) — sign the module to clear all its dependent sections at once. Empty when every linked module is signed or the audit links none.",
+      "items": {
+        "$ref": "#/$defs/NotebookModuleAttention"
+      },
+      "title": "Module Attention",
+      "type": "array"
     }
   },
   "$defs": {
+    "NotebookModuleAttention": {
+      "additionalProperties": false,
+      "description": "ONE attention charge for an UNSIGNED linked src module (wave-3 piece 3).\n\nAttention is charged per CHANGED PIECE, never per dependent: a src module an\naudited section imports under a ``source_root`` costs the human ONE look when\nits current content is unsigned — not one per dependent section. Signing the\nmodule (``notebook-module-sign-off``) clears every dependent at once. A SIGNED\nmodule produces no item.",
+      "properties": {
+        "module": {
+          "title": "Module",
+          "type": "string"
+        },
+        "file": {
+          "title": "File",
+          "type": "string"
+        },
+        "module_sha12": {
+          "title": "Module Sha12",
+          "type": "string"
+        },
+        "dependents": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependents",
+          "type": "array"
+        },
+        "last_signed_sha12": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Signed Sha12"
+        },
+        "moved_from_section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Moved From Section"
+        },
+        "moved_overlap": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Moved Overlap"
+        }
+      },
+      "required": [
+        "module",
+        "file",
+        "module_sha12"
+      ],
+      "title": "notebook module attention item",
+      "type": "object"
+    },
     "NotebookSectionStatus": {
       "additionalProperties": false,
       "description": "The reduced audit state of one required section.",

@@ -146,12 +146,16 @@ class PriorSignoff:
     section's status/tier/clearing. ``date`` is the sign-off record's calendar day
     (``YYYY-MM-DD``); ``audit_id`` is the other audit under this experiment's
     ``.hpc/notebooks/`` whose journal recorded it; ``count`` is how many distinct
-    prior audits signed this exact content (``1`` unless several).
+    prior audits signed this exact content (``1`` unless several). ``actor`` is
+    the recorded ``attestor_id`` naming WHICH human signed (multi-human MH3), or
+    ``None`` when the sign-off was unattributed (zero/one declared actor) — the
+    render then stays byte-identical to the pre-actor line.
     """
 
     date: str
     audit_id: str
     count: int = 1
+    actor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -676,12 +680,25 @@ def _render_prior_signoff(sv: SectionView) -> list[str]:
     if prior is None:
         return []
     more = f" (+{prior.count - 1} other audit(s))" if prior.count > 1 else ""
-    return [
+    # Name the actor who signed the ORIGINAL render when the sign-off record
+    # carries one (the MH3 ``attestor_id`` stamped server-side at append). An
+    # unattributed sign-off (zero/one declared actor) renders byte-identically
+    # to the pre-actor line — the byte-absent pin's posture.
+    by = f" by {prior.actor}" if prior.actor else ""
+    lines = [
         "### prior sign-off",
         "",
-        f"- identical content signed {prior.date} under audit {prior.audit_id}{more}",
-        "",
+        f"- identical content signed {prior.date}{by} under audit {prior.audit_id}{more}",
     ]
+    # WAVE-3 PIECE 4 — the recurrence nudge (emergent-reuse signal). Reuse must be
+    # EMERGENT (observed by content-sha recurrence), never declared up front: a
+    # section whose exact content has been human-signed across ≥2 prior audits is a
+    # natural src-extraction candidate. Advisory ONLY — it clears nothing and enters
+    # no view_sha; it just names the pattern the recurrence reveals.
+    if prior.count >= 2:
+        lines.append(f"- recurred in {prior.count} audits — candidate for src extraction")
+    lines.append("")
+    return lines
 
 
 def _render_trace_summary(sv: SectionView) -> list[str]:

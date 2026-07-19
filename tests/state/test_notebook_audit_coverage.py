@@ -83,23 +83,24 @@ def _sign_off(tmp_path: Path, slug: str, section_sha: str, view_sha: str = "view
 # explicit membership assertion (the test_journal_coverage _RESUBMITTABLE_* idiom).
 
 
-def test_passing_statuses_is_exactly_the_two_current_states() -> None:
-    """PASSING = {signed_current, auto_cleared} — the two 'current at this hash'
-    states. SIGNED_STALE and UNSIGNED must NOT be members: a stale sign-off or an
+def test_passing_statuses_is_exactly_the_three_current_states() -> None:
+    """PASSING = {signed_current, auto_cleared, reused} — the three 'current at this
+    hash' states (wave-3 added REUSED: an exact recurrence of a prior human
+    sign-off). SIGNED_STALE and UNSIGNED must NOT be members: a stale sign-off or an
     unsigned section may never pass graduation. Kills a widened-set mutant."""
-    expected = {nb.SIGNED_CURRENT, nb.AUTO_CLEARED}
+    expected = {nb.SIGNED_CURRENT, nb.AUTO_CLEARED, nb.REUSED}
     assert expected == set(nb.PASSING_STATUSES)
     assert nb.SIGNED_STALE not in nb.PASSING_STATUSES
     assert nb.UNSIGNED not in nb.PASSING_STATUSES
 
 
 def test_section_statuses_is_the_full_vocabulary_superset_of_passing() -> None:
-    """The four-status vocabulary is complete, and PASSING is a strict subset —
-    exactly two of the four statuses clear the gate."""
-    expected = {nb.SIGNED_CURRENT, nb.AUTO_CLEARED, nb.SIGNED_STALE, nb.UNSIGNED}
+    """The five-status vocabulary is complete, and PASSING is a strict subset —
+    exactly three of the five statuses clear the gate (wave-3 added REUSED)."""
+    expected = {nb.SIGNED_CURRENT, nb.AUTO_CLEARED, nb.REUSED, nb.SIGNED_STALE, nb.UNSIGNED}
     assert expected == set(nb.SECTION_STATUSES)
     assert nb.PASSING_STATUSES < nb.SECTION_STATUSES
-    assert len(nb.PASSING_STATUSES) == 2
+    assert len(nb.PASSING_STATUSES) == 3
 
 
 # ── the block→attestor map (only sign-off / auto-clear green a section) ───────

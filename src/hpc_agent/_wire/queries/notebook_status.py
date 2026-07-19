@@ -74,12 +74,41 @@ class NotebookSectionStatus(BaseModel):
     attestor: str | None = None
 
 
+class NotebookModuleAttention(BaseModel):
+    """ONE attention charge for an UNSIGNED linked src module (wave-3 piece 3).
+
+    Attention is charged per CHANGED PIECE, never per dependent: a src module an
+    audited section imports under a ``source_root`` costs the human ONE look when
+    its current content is unsigned — not one per dependent section. Signing the
+    module (``notebook-module-sign-off``) clears every dependent at once. A SIGNED
+    module produces no item.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="notebook module attention item")
+
+    module: str
+    # The module's experiment-relative POSIX path (its identity for a sign-off).
+    file: str
+    # The module's current normalized sha (first 12 chars) — what a sign-off binds.
+    module_sha12: str
+    # The section slugs that import this module (why the attention matters).
+    dependents: list[str] = Field(default_factory=list)
+    # The sha12 of a PRIOR human module sign-off at a DIFFERENT sha (the
+    # "diff vs last-signed" anchor), or null when never signed before.
+    last_signed_sha12: str | None = None
+    # Moved-code disclosure (piece 5, ADVISORY only — never clears): a HUMAN-signed
+    # section whose body this module closely matches, or null.
+    moved_from_section: str | None = None
+    # (matching, total) normalized-line counts backing moved_from_section, or null.
+    moved_overlap: list[int] | None = None
+
+
 class NotebookStatusResult(BaseModel):
     """Per-section audit statuses + the whole-module gate verdict.
 
     ``passed`` is the graduation-gate predicate: every required section is
-    current (``signed_current`` or ``auto_cleared``). It is the rollup T9
-    consumes; a false ``passed`` names the drifted/unsigned sections in
+    current (``signed_current`` / ``auto_cleared`` / ``reused``). It is the rollup
+    T9 consumes; a false ``passed`` names the drifted/unsigned sections in
     ``sections``.
     """
 
@@ -92,7 +121,15 @@ class NotebookStatusResult(BaseModel):
     )
     passed: bool = Field(
         description=(
-            "True iff every required section is current (signed_current or "
-            "auto_cleared) — the graduation gate's pass predicate."
+            "True iff every required section is current (signed_current, "
+            "auto_cleared, or reused) — the graduation gate's pass predicate."
+        ),
+    )
+    module_attention: list[NotebookModuleAttention] = Field(
+        default_factory=list,
+        description=(
+            "ONE item per UNSIGNED linked src module (never per dependent) — sign "
+            "the module to clear all its dependent sections at once. Empty when "
+            "every linked module is signed or the audit links none."
         ),
     )

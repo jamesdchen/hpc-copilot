@@ -42,16 +42,23 @@ from pathlib import Path
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.queries.notebook_status import (
+    NotebookModuleAttention,
     NotebookSectionStatus,
     NotebookStatusResult,
     NotebookStatusSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.ops.notebook.canonical import read_recorded_config
+from hpc_agent.ops.notebook.module_attention import build_module_attention
 from hpc_agent.state.audit_source import parse_percent_source
+from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.notebook_audit import (
+    REUSED,
+    SIGNED_CURRENT,
     SIGNED_STALE,
     ModuleAudit,
     audit_module,
+    audit_section,
     record_relay_due,
 )
 
@@ -184,8 +191,42 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
         )
         for a in module_audit.sections
     ]
+
+    # WAVE-3 PIECE 3 — the module-attention surface. Resolve the audit's linked src
+    # modules under its RECORDED source_roots and charge attention ONCE per UNSIGNED
+    # module (never per dependent). The moved-code disclosure (piece 5) matches each
+    # unsigned module body against this audit's HUMAN-signed section bodies —
+    # ADVISORY only, it clears nothing. The corpus is EVERY human-signed source
+    # section (not just required ones): a module is often extracted FROM a helper
+    # section the template never declared. Fail-open: no roots → no items.
+    records = read_decisions(experiment_dir, "notebook", spec.audit_id)
+    signed_section_bodies = {
+        s.slug: s.source
+        for s in source.sections
+        if audit_section(records, s.slug, s.section_sha).status in (SIGNED_CURRENT, REUSED)
+    }
+    cfg = read_recorded_config(experiment_dir, spec.audit_id)
+    module_attention = [
+        NotebookModuleAttention(
+            module=item.module,
+            file=item.file,
+            module_sha12=item.module_sha12,
+            dependents=list(item.dependents),
+            last_signed_sha12=item.last_signed_sha12,
+            moved_from_section=item.moved_from_section,
+            moved_overlap=list(item.moved_overlap) if item.moved_overlap is not None else None,
+        )
+        for item in build_module_attention(
+            experiment_dir,
+            source=source,
+            source_roots=cfg.source_roots,
+            signed_section_bodies=signed_section_bodies,
+        )
+    ]
+
     return NotebookStatusResult(
         audit_id=spec.audit_id,
         sections=sections,
         passed=module_audit.passed,
+        module_attention=module_attention,
     )

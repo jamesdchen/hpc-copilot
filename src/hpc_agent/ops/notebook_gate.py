@@ -39,8 +39,11 @@ from hpc_agent.state.interview_doc import iter_interview_docs
 from hpc_agent.state.notebook_audit import (
     AUTO_CLEAR_BLOCK,
     PASSING_STATUSES,
+    REUSED,
     SIGN_OFF_BLOCK,
     audit_module,
+    module_sha_signed,
+    read_signoff_ledger,
 )
 
 if TYPE_CHECKING:
@@ -147,6 +150,16 @@ def _linked_source_drift(experiment_dir: Path, record: dict[str, Any] | None) ->
     A missing file or a sha mismatch means the section's cleared dependency
     changed after sign-off — trust is revoked (the section reads unsigned). A
     record with no ``linked_sources`` (the common case) never drifts.
+
+    WAVE-3 PIECE 3 — the SIGNED-MODULE exemption. A linked module whose CURRENT
+    sha differs from the section's recorded ``module_sha`` normally revokes the
+    dependent, but if that current sha carries a HUMAN MODULE sign-off (this audit
+    OR any other in the experiment repo, :func:`module_sha_signed`) the module was
+    deliberately re-reviewed and is treated as CURRENT — no revocation. This is the
+    "one module re-sign clears all dependents" flow: the drift no longer forces a
+    per-section re-sign, it forces ONE module re-sign that restores every dependent.
+    A drifted module with NO module sign-off of its new sha still revokes (the
+    KILL-INVARIANT for modules: an unsigned change costs attention).
     """
     if record is None:
         return None
@@ -166,7 +179,10 @@ def _linked_source_drift(experiment_dir: Path, record: dict[str, Any] | None) ->
             actual = sha256_normalized(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             return f"{rel} missing"
-        if actual != expected:
+        if actual != expected and not module_sha_signed(experiment_dir, actual):
+            # Changed AND its new sha is unsigned — the dependency drifted with no
+            # module re-sign to vouch for it. A module sign-off of the CURRENT sha
+            # would exempt it (the signed-module flow above).
             return f"{rel} changed"
     return None
 
@@ -307,6 +323,23 @@ def assert_source_audited(experiment_dir: Path) -> None:
         if sect.status not in PASSING_STATUSES:
             failures.append((sect.slug, sect.status))
             continue
+        # WAVE-3 PIECE 2 — a REUSED section rests on the claim that its exact
+        # content was HUMAN-signed under a DIFFERENT audit. VERIFY that claim at the
+        # gate: re-scan the ledger for a prior human sign-off of this exact sha
+        # (excluding this audit). A reuse whose backing sign-off does not exist (a
+        # hand-forged ``reuse_of`` naming content no human ever signed) is REFUSED —
+        # the reuse clearance is only as good as the sign-off it points at.
+        if sect.status == REUSED:
+            backing = read_signoff_ledger(
+                experiment_dir,
+                content_sha=sect.signed_section_sha or "",
+                exclude_audit_id=str(audit_id),
+            )
+            if not backing:
+                failures.append(
+                    (sect.slug, "unsigned (reuse_of names a sha no prior human sign-off attests)")
+                )
+                continue
         drift = _linked_source_drift(
             experiment_dir, _winning_record(records, sect.slug, sect.signed_section_sha)
         )

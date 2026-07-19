@@ -66,6 +66,21 @@
         "view_sha": {
           "title": "View Sha",
           "type": "string"
+        },
+        "reuse_of": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reuse Of"
         }
       },
       "required": [

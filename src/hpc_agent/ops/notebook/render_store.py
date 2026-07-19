@@ -45,11 +45,6 @@ if TYPE_CHECKING:
     from hpc_agent.ops.notebook.audit_view import PriorSignoff, SectionView
     from hpc_agent.ops.notebook.linked_sources import LinkedEngine
 
-#: How many ``.hpc/notebooks/*.decisions.jsonl`` journals the prior-sign-off scan
-#: reads before giving up (slice 3: the scan is BOUNDED + fail-open — a huge
-#: notebooks dir must never turn a render write into an unbounded walk).
-_PRIOR_SIGNOFF_MAX_JOURNALS = 256
-
 __all__ = [
     "HEADER_KEYS",
     "RenderDigest",
@@ -178,44 +173,31 @@ def _find_prior_signoff(
 ) -> PriorSignoff | None:
     """A DIFFERENT audit's HUMAN sign-off of this section's exact current content, or ``None``.
 
-    Scans every ``.hpc/notebooks/<other>.decisions.jsonl`` (bounded by
-    :data:`_PRIOR_SIGNOFF_MAX_JOURNALS`, fail-open) for a ``notebook-sign-off``
-    record whose ``resolved.section_sha`` equals THIS section's sha and whose audit
-    id differs from *audit_id*. Returns the EARLIEST such sign-off (with a count of
-    distinct prior audits) as a :class:`~hpc_agent.ops.notebook.audit_view.PriorSignoff`
-    — advisory display only, never a status/clearing input.
+    Routes through the ONE ledger reader
+    (:func:`~hpc_agent.state.notebook_audit.read_signoff_ledger`, wave-3 piece 1) —
+    a bounded, fail-open scan of every ``.hpc/notebooks/*.decisions.jsonl`` for a
+    ``notebook-sign-off`` whose ``section_sha`` equals THIS section's sha under a
+    DIFFERENT audit. Returns the EARLIEST such sign-off with a count of DISTINCT
+    prior audits (the recurrence signal piece 4 nudges on) as a
+    :class:`~hpc_agent.ops.notebook.audit_view.PriorSignoff` — advisory display
+    only, never a status/clearing input.
     """
     from hpc_agent.ops.notebook.audit_view import PriorSignoff
-    from hpc_agent.state.decision_journal import read_decisions
-    from hpc_agent.state.notebook_audit import SIGN_OFF_BLOCK
+    from hpc_agent.state.notebook_audit import read_signoff_ledger
 
-    notebooks = RepoLayout(experiment_dir).hpc / "notebooks"
-    if not notebooks.is_dir():
+    entries = read_signoff_ledger(
+        experiment_dir, content_sha=view.section_sha, exclude_audit_id=audit_id
+    )
+    if not entries:
         return None
-    hits: list[tuple[str, str]] = []  # (ts, other_audit_id)
-    seen: set[str] = set()
-    for i, journal in enumerate(sorted(notebooks.glob("*.decisions.jsonl"))):
-        if i >= _PRIOR_SIGNOFF_MAX_JOURNALS:
-            break
-        other = journal.name[: -len(".decisions.jsonl")]
-        if other == audit_id or "/" in other or "\\" in other:
-            continue
-        for record in read_decisions(experiment_dir, "notebook", other):
-            if record.get("block") != SIGN_OFF_BLOCK:
-                continue
-            resolved = record.get("resolved")
-            if not isinstance(resolved, dict) or resolved.get("section_sha") != view.section_sha:
-                continue
-            ts = record.get("ts")
-            if isinstance(ts, str) and ts and other not in seen:
-                seen.add(other)
-                hits.append((ts, other))
-            break
-    if not hits:
-        return None
-    hits.sort()
-    ts, other = hits[0]
-    return PriorSignoff(date=ts[:10], audit_id=other, count=len(hits))
+    distinct_audits = {e.audit_id for e in entries}
+    earliest = entries[0]  # the ledger returns entries ascending by ts
+    return PriorSignoff(
+        date=earliest.ts[:10],
+        audit_id=earliest.audit_id,
+        count=len(distinct_audits),
+        actor=earliest.actor,
+    )
 
 
 def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> Path:

@@ -205,33 +205,71 @@ def notebook_auto_clear(
     cleared: list[NotebookAutoClearedSection] = []
     skipped: list[NotebookAutoClearSkipped] = []
     for sv in view.sections:
-        if sv.tier != VIEW_AUTO_CLEARED:
-            # human_required — a modified / lint-flagged / ungreen-assertion
-            # section the code may never clear (only a human sign-off can).
-            skipped.append(NotebookAutoClearSkipped(section=sv.slug, reason=sv.tier))
-            continue
         audit = notebook_audit.audit_section(records, sv.slug, sv.section_sha)
         if audit.status in notebook_audit.PASSING_STATUSES:
-            # Already current at this hash (auto_cleared OR a human sign-off) —
-            # nothing to append. Never downgrade a human sign-off to a code one.
+            # Already current at this hash (auto_cleared / reused / a human
+            # sign-off) — nothing to append. Never downgrade a human sign-off to a
+            # code one; a re-run is an idempotent no-op.
             skipped.append(NotebookAutoClearSkipped(section=sv.slug, reason=_ALREADY_CURRENT))
             continue
-        # Bind + append. recompute wired to the freshly-parsed sha (the parse IS
-        # the recompute — the value is server-computed, never caller-supplied).
-        notebook_audit.record_auto_clear(
-            experiment_dir,
-            audit_id=spec.audit_id,
-            section=sv.slug,
-            section_sha=sv.section_sha,
-            recompute=sv.section_sha,
-            view_sha=sv.view_sha,
-        )
-        cleared.append(
-            NotebookAutoClearedSection(
+        if sv.tier == VIEW_AUTO_CLEARED:
+            # Bind + append. recompute wired to the freshly-parsed sha (the parse IS
+            # the recompute — the value is server-computed, never caller-supplied).
+            notebook_audit.record_auto_clear(
+                experiment_dir,
+                audit_id=spec.audit_id,
                 section=sv.slug,
                 section_sha=sv.section_sha,
+                recompute=sv.section_sha,
                 view_sha=sv.view_sha,
             )
+            cleared.append(
+                NotebookAutoClearedSection(
+                    section=sv.slug,
+                    section_sha=sv.section_sha,
+                    view_sha=sv.view_sha,
+                )
+            )
+            continue
+        # WAVE-3 PIECE 2 — the REUSE auto-clear. A human_required section (modified /
+        # added / lint-flagged / ungreen-assertion — never template-inherited) whose
+        # EXACT section content was already HUMAN-signed under a DIFFERENT audit in
+        # this experiment repo is FREE: the exact bytes were already reviewed. The
+        # ledger match is on the EXACT section_sha (:func:`read_signoff_ledger`), so
+        # one byte of change moves the sha and no reuse fires — the KILL-INVARIANT
+        # (changed content NEVER reuses). Journal a code auto-clear stamped
+        # ``reuse_of`` (naming the earliest prior sign-off); it drift-revokes exactly
+        # like any auto-clear and surfaces as the distinct ``reused`` status.
+        prior = notebook_audit.read_signoff_ledger(
+            experiment_dir, content_sha=sv.section_sha, exclude_audit_id=spec.audit_id
         )
+        if prior:
+            earliest = prior[0]
+            reuse_of = {
+                "audit_id": earliest.audit_id,
+                "ts": earliest.ts,
+                "section_sha": sv.section_sha,
+            }
+            notebook_audit.record_auto_clear(
+                experiment_dir,
+                audit_id=spec.audit_id,
+                section=sv.slug,
+                section_sha=sv.section_sha,
+                recompute=sv.section_sha,
+                view_sha=sv.view_sha,
+                reuse_of=reuse_of,
+            )
+            cleared.append(
+                NotebookAutoClearedSection(
+                    section=sv.slug,
+                    section_sha=sv.section_sha,
+                    view_sha=sv.view_sha,
+                    reuse_of=reuse_of,
+                )
+            )
+            continue
+        # human_required and no prior sign-off of this exact content — the code may
+        # never clear it (only a human sign-off can).
+        skipped.append(NotebookAutoClearSkipped(section=sv.slug, reason=sv.tier))
 
     return NotebookAutoClearResult(audit_id=spec.audit_id, cleared=cleared, skipped=skipped)

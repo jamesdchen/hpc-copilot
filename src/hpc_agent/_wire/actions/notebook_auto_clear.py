@@ -107,6 +107,11 @@ class NotebookAutoClearedSection(BaseModel):
     section_sha: str
     # The projection sha (what the tiering saw) recorded on the attestation.
     view_sha: str
+    # Present when this clearance is a REUSE of a prior HUMAN sign-off of this exact
+    # content under a DIFFERENT audit (wave-3 piece 2): {audit_id, ts, section_sha}
+    # of the sign-off the reuse rests on. Absent for an ordinary template-inherited
+    # auto-clear. Its presence surfaces as the `reused` status in notebook-status.
+    reuse_of: dict[str, str] | None = None
 
 
 class NotebookAutoClearSkipped(BaseModel):

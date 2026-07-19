@@ -106,15 +106,25 @@ __all__ = [
     "AUDIT_CONFIG_RESPONSE",
     "SIGNED_CURRENT",
     "AUTO_CLEARED",
+    "REUSED",
     "SIGNED_STALE",
     "UNSIGNED",
     "SECTION_STATUSES",
     "PASSING_STATUSES",
+    "REUSE_OF_FIELD",
+    "MODULE_SIGN_OFF_BLOCK",
+    "MODULE_SUBJECT_KIND",
+    "LedgerSignoff",
     "SectionAudit",
     "ModuleAudit",
     "audit_section",
     "audit_module",
+    "read_signoff_ledger",
     "record_auto_clear",
+    "record_module_signoff",
+    "read_module_signoff_ledger",
+    "module_sha_signed",
+    "last_module_signoff",
     "record_render_receipt",
     "read_render_receipts",
     "record_draft",
@@ -218,19 +228,56 @@ AUDIT_CONFIG_RESPONSE = "config_recorded"
 #: locks / greenlights / receipts sharing the same journal machinery.
 SUBJECT_KIND = "notebook-section"
 
-# --- the per-section status vocabulary (T6) ---------------------------------
+#: The MODULE sign-off block (wave-3 piece 3, "src modules as signable attention
+#: units"). A HUMAN attestation over a LINKED SOURCE MODULE (the file an audited
+#: section imports under a ``source_root``), distinct from the section sign-off so
+#: a reader never confuses signing a WHOLE MODULE with signing one section.
+#: ``resolved={audit_id, module, module_sha, view_sha?}``; the gate
+#: (``ops/decision/journal/module_signoff.py``) recomputes ``module_sha`` from the
+#: file on disk and binds through the ONE kernel — a module hash can no more be
+#: asserted into existence than a section hash. A module sign-off of the module's
+#: CURRENT sha makes every dependent section's linked-source drift check pass (one
+#: re-sign clears all dependents), and it lives in the SAME cross-audit ledger as
+#: section sign-offs, so a module signed once is signed for every audit in the
+#: experiment repo.
+MODULE_SIGN_OFF_BLOCK = "notebook-module-sign-off"
+
+#: The opaque attestation ``subject_kind`` a module sign-off rides — DISTINCT from
+#: :data:`SUBJECT_KIND` so a module attestation never enters the per-section
+#: reduction and can never green a SECTION. The kernel never interprets it.
+MODULE_SUBJECT_KIND = "notebook-module"
+
+#: The ``resolved`` key a REUSE auto-clear carries (wave-3 piece 2). Present only
+#: on a code auto-clear whose section content EXACTLY recurs a prior HUMAN
+#: sign-off from a DIFFERENT audit: ``reuse_of={audit_id, ts, section_sha}`` names
+#: the prior sign-off the reuse rests on. Its presence is what distinguishes the
+#: :data:`REUSED` status from an ordinary :data:`AUTO_CLEARED` in the reduction; a
+#: record without it is an ordinary machine clearance.
+REUSE_OF_FIELD = "reuse_of"
+
+# --- the per-section status vocabulary (T6; wave-3 adds REUSED) --------------
 SIGNED_CURRENT = "signed_current"
 AUTO_CLEARED = "auto_cleared"
+#: A CODE auto-clear whose section content EXACTLY matches a prior HUMAN sign-off
+#: under a DIFFERENT audit (wave-3 piece 2 — "exact recurrence of signed content
+#: is free"). Visibly distinct from :data:`AUTO_CLEARED` (a template-inherited
+#: machine clearance) so the human sees WHY a non-template section is free: its
+#: exact bytes were already reviewed. A passing status. The KILL-INVARIANT: it
+#: rests on an EXACT sha match, so one byte of change moves the sha and it reverts
+#: to full attention, and it drift-revokes exactly like any auto-clear (the sha
+#: moves → the reducer reads it stale → ``unsigned``).
+REUSED = "reused"
 SIGNED_STALE = "signed_stale"
 UNSIGNED = "unsigned"
 
 #: Every status a section reduction can yield.
-SECTION_STATUSES = frozenset({SIGNED_CURRENT, AUTO_CLEARED, SIGNED_STALE, UNSIGNED})
+SECTION_STATUSES = frozenset({SIGNED_CURRENT, AUTO_CLEARED, REUSED, SIGNED_STALE, UNSIGNED})
 
-#: The statuses that PASS the graduation gate — both are "current at this hash"
-#: (human-signed or machine-cleared). The rollup's :attr:`ModuleAudit.passed`
-#: requires every required section to be one of these.
-PASSING_STATUSES = frozenset({SIGNED_CURRENT, AUTO_CLEARED})
+#: The statuses that PASS the graduation gate — all are "current at this hash"
+#: (human-signed, machine-cleared, or reused from a prior human sign-off). The
+#: rollup's :attr:`ModuleAudit.passed` requires every required section to be one
+#: of these.
+PASSING_STATUSES = frozenset({SIGNED_CURRENT, AUTO_CLEARED, REUSED})
 
 # block → the attestor that block class carries. A record whose block is not a
 # notebook attestation block is not projected at all (skipped).
@@ -303,6 +350,13 @@ def _project(record: dict[str, Any]) -> dict[str, Any] | None:
     view_sha = resolved.get("view_sha")
     if view_sha:
         projected["view_sha"] = view_sha
+    # Wave-3 piece 2: a REUSE auto-clear carries ``reuse_of`` — surface it through
+    # the kernel's OPAQUE ``evidence`` (the kernel never interprets it), so the
+    # reduction can label the winning record :data:`REUSED` vs :data:`AUTO_CLEARED`
+    # without the kernel learning the notebook record shape.
+    reuse_of = resolved.get(REUSE_OF_FIELD)
+    if isinstance(reuse_of, dict):
+        projected["evidence"] = {REUSE_OF_FIELD: reuse_of}
     return projected
 
 
@@ -380,7 +434,17 @@ def audit_section(
     # Route the drift decision through the ONE kernel (never re-inlined here).
     verdict = attestation.reduce(projected, current_sha=current_section_sha, subject_id=slug)
     if verdict == attestation.CURRENT:
-        status = SIGNED_CURRENT if newest.attestor == "human" else AUTO_CLEARED
+        if newest.attestor == "human":
+            status = SIGNED_CURRENT
+        elif isinstance(newest.evidence, dict) and newest.evidence.get(REUSE_OF_FIELD):
+            # Wave-3 piece 2: a CODE clearance carrying ``reuse_of`` is a REUSE of a
+            # prior human sign-off of this exact content — a distinct passing status
+            # so the human sees the content is free BECAUSE its bytes were already
+            # reviewed, not because a template inherited it. Still drift-revoked
+            # exactly like any auto-clear (the sha moved → the reducer read stale).
+            status = REUSED
+        else:
+            status = AUTO_CLEARED
     elif verdict == attestation.STALE:
         # A stale HUMAN sign-off earns the informational signed_stale; a stale
         # CODE auto-clear has no human to inform and falls through to unsigned
@@ -433,6 +497,7 @@ def record_auto_clear(
     section_sha: str,
     recompute: Callable[[], str] | str,
     view_sha: str | None = None,
+    reuse_of: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Journal a CODE auto-clear attestation for *section*, un-fakeably.
 
@@ -449,6 +514,15 @@ def record_auto_clear(
     ``response="auto_cleared"`` (the honest mechanical string — never a human-ack
     token), ``resolved={audit_id, section, section_sha, view_sha?, attestor:"code"}``.
 
+    *reuse_of* (wave-3 piece 2) marks this clearance as a REUSE of a prior HUMAN
+    sign-off of this exact content under a DIFFERENT audit: ``{audit_id, ts,
+    section_sha}`` naming the sign-off the reuse rests on. When present it is
+    stamped under :data:`REUSE_OF_FIELD` in ``resolved`` (and only then), so an
+    ordinary machine clearance stays byte-identical. The reuse changes only the
+    reduced STATUS (:data:`REUSED` vs :data:`AUTO_CLEARED`); the record is still a
+    code attestation bound to *section_sha*, so it drift-revokes identically — one
+    byte of change moves the sha and the reducer reads it stale.
+
     Returns the appended record. Raises :class:`errors.SpecInvalid` (via ``bind``)
     on a sha that does not match the recompute, or (via ``append_decision``) on a
     bad ``audit_id`` scope.
@@ -461,6 +535,8 @@ def record_auto_clear(
     }
     if view_sha:
         resolved["view_sha"] = view_sha
+    if reuse_of is not None:
+        resolved[REUSE_OF_FIELD] = dict(reuse_of)
     # Un-fakeable lock: the asserted section_sha must match a fresh recompute
     # (routes through the ONE kernel; never re-inlined). Validates shape too.
     projected = _project({"block": AUTO_CLEAR_BLOCK, "resolved": resolved}) or {}
@@ -473,6 +549,251 @@ def record_auto_clear(
         response=AUTO_CLEAR_RESPONSE,
         resolved=resolved,
     )
+
+
+# --- the content-sha sign-off ledger (wave-3 piece 1) ------------------------
+# A READ-ONLY reader that spans EVERY ``.hpc/notebooks/<audit_id>.decisions.jsonl``
+# journal under the experiment — the journals ARE the ledger (no new store). It
+# answers "which prior HUMAN sign-offs (any audit) attested this exact content
+# sha?", the substrate the reuse auto-clear (piece 2) and the module-signable
+# unit (piece 3) both rest on. Bounded, fail-open, never mutating.
+
+#: How many notebook journals the ledger scan reads before giving up (fail-open —
+#: a huge notebooks dir must never turn a read into an unbounded walk). Mirrors the
+#: render-store prior-sign-off scan's bound.
+_LEDGER_MAX_JOURNALS = 256
+
+
+@dataclass(frozen=True)
+class LedgerSignoff:
+    """One prior HUMAN sign-off found in the experiment's notebook-journal ledger.
+
+    * ``content_sha`` — the sha the human attested (a ``section_sha`` for a section
+      sign-off, a ``module_sha`` for a module sign-off).
+    * ``audit_id`` — the audit under this experiment whose journal recorded it.
+    * ``ts`` — the sign-off record's ISO-8601 timestamp.
+    * ``actor`` — the recorded ``attestor_id`` (WHICH human, multi-human), or
+      ``None`` when the sign-off was unattributed (zero/one declared actor).
+    """
+
+    content_sha: str
+    audit_id: str
+    ts: str
+    actor: str | None = None
+
+
+def read_signoff_ledger(
+    experiment_dir: Path,
+    *,
+    content_sha: str,
+    exclude_audit_id: str | None = None,
+    block: str = SIGN_OFF_BLOCK,
+    sha_field: str = "section_sha",
+) -> list[LedgerSignoff]:
+    """Every HUMAN sign-off across the experiment whose recorded sha == *content_sha*.
+
+    Scans every ``.hpc/notebooks/*.decisions.jsonl`` journal (bounded by
+    :data:`_LEDGER_MAX_JOURNALS`, fail-open), keeping each *block* record whose
+    ``resolved[sha_field]`` equals *content_sha* and whose audit id differs from
+    *exclude_audit_id* (when given). The journals ARE the ledger — no new store,
+    pure read. Returns the matches SORTED ascending by ``ts`` (earliest first), so
+    the first entry is the earliest prior sign-off and ``len(...)`` counts the
+    distinct matching records.
+
+    Defaults read SECTION sign-offs (``notebook-sign-off`` / ``section_sha``); pass
+    ``block=MODULE_SIGN_OFF_BLOCK, sha_field="module_sha"`` to read the MODULE
+    ledger (piece 3). Any I/O or parse error on one journal is swallowed — a
+    corrupt journal never strands the rest and never raises (the fail-open posture
+    every advisory/trust-widening read here keeps).
+    """
+    from hpc_agent._kernel.contract.layout import RepoLayout
+
+    notebooks = RepoLayout(experiment_dir).hpc / "notebooks"
+    if not notebooks.is_dir():
+        return []
+    out: list[LedgerSignoff] = []
+    try:
+        journals = sorted(notebooks.glob("*.decisions.jsonl"))
+    except OSError:
+        return []
+    for i, journal in enumerate(journals):
+        if i >= _LEDGER_MAX_JOURNALS:
+            break
+        other = journal.name[: -len(".decisions.jsonl")]
+        if not other or "/" in other or "\\" in other:
+            continue
+        if exclude_audit_id is not None and other == exclude_audit_id:
+            continue
+        try:
+            records = read_decisions(experiment_dir, "notebook", other)
+        except Exception:  # noqa: BLE001 — one corrupt journal never strands the ledger
+            continue
+        for record in records:
+            if record.get("block") != block:
+                continue
+            resolved = record.get("resolved")
+            if not isinstance(resolved, dict) or resolved.get(sha_field) != content_sha:
+                continue
+            ts = record.get("ts")
+            if not (isinstance(ts, str) and ts):
+                continue
+            actor = record.get("attestor_id")
+            out.append(
+                LedgerSignoff(
+                    content_sha=content_sha,
+                    audit_id=other,
+                    ts=ts,
+                    actor=actor if isinstance(actor, str) and actor else None,
+                )
+            )
+    out.sort(key=lambda e: e.ts)
+    return out
+
+
+# --- module sign-offs (wave-3 piece 3: src modules as signable attention units)
+# A HUMAN attestation over a whole LINKED SOURCE MODULE, riding the same notebook
+# journal under :data:`MODULE_SIGN_OFF_BLOCK`. Read SEPARATELY from the section
+# reduction (:data:`_BLOCK_ATTESTOR` omits the block), so a module sign-off can
+# never green a SECTION directly — it makes the linked-source DRIFT check in the
+# graduation gate treat the signed module as current, clearing every dependent
+# section with ONE re-sign instead of per-dependent noise.
+
+
+def record_module_signoff(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    module: str,
+    module_sha: str,
+    recompute: Callable[[], str] | str,
+    view_sha: str | None = None,
+) -> dict[str, Any]:
+    """Journal a HUMAN module sign-off, bound to *module_sha*, un-fakeably.
+
+    A module sign-off attests "a human reviewed the WHOLE source module *module*
+    at this ``module_sha``" — the signable attention unit that lets one re-sign
+    clear every dependent section (piece 3). It binds through the ONE attestation
+    kernel (:func:`~hpc_agent.state.attestation.bind`) against *module_sha*, so a
+    module hash can no more be asserted into existence than a section hash (D5 lock
+    2); the append-time authorship bar lives in the ``append-decision`` gate
+    (``ops/decision/journal/module_signoff.py``), exactly as the section sign-off's
+    does — this writer is the state-side record shape + the recompute lock.
+
+    The record: ``block="notebook-module-sign-off"``, ``response`` echoing the
+    module (the human names what they signed),
+    ``resolved={audit_id, module, module_sha, view_sha?}``.
+
+    Returns the appended record. Raises :class:`errors.SpecInvalid` (via ``bind``)
+    on a sha that does not match the recompute, or (via ``append_decision``) on a
+    bad ``audit_id`` scope.
+    """
+    resolved: dict[str, Any] = {
+        "audit_id": audit_id,
+        "module": module,
+        "module_sha": module_sha,
+    }
+    if view_sha:
+        resolved["view_sha"] = view_sha
+    attestation.bind(
+        {
+            "attestor": "human",
+            "subject_kind": MODULE_SUBJECT_KIND,
+            "subject_id": module,
+            "content_sha": module_sha,
+        },
+        recompute=recompute,
+    )
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=MODULE_SIGN_OFF_BLOCK,
+        response=f"sign module {module}",
+        resolved=resolved,
+    )
+
+
+def read_module_signoff_ledger(
+    experiment_dir: Path, *, module_sha: str, exclude_audit_id: str | None = None
+) -> list[LedgerSignoff]:
+    """Every HUMAN module sign-off across the experiment attesting *module_sha*.
+
+    The MODULE-ledger sibling of :func:`read_signoff_ledger` — same bounded,
+    fail-open scan, keyed on ``module_sha`` under :data:`MODULE_SIGN_OFF_BLOCK`.
+    """
+    return read_signoff_ledger(
+        experiment_dir,
+        content_sha=module_sha,
+        exclude_audit_id=exclude_audit_id,
+        block=MODULE_SIGN_OFF_BLOCK,
+        sha_field="module_sha",
+    )
+
+
+def module_sha_signed(experiment_dir: Path, module_sha: str) -> bool:
+    """Whether ANY human module sign-off (any audit) attests *module_sha*.
+
+    The predicate the graduation gate's linked-source drift check consults: a
+    module whose CURRENT sha is signed by a human — under this audit OR any other
+    in the experiment repo — is treated as current, so a module CHANGE plus ONE
+    module re-sign restores every dependent section. Cross-audit by construction
+    (module identity is the file, not an audit), matching "same experiment repo,
+    any audit". Fail-open: any read error yields ``False`` (a module reads unsigned,
+    the conservative default — never a spurious pass).
+    """
+    return bool(read_module_signoff_ledger(experiment_dir, module_sha=module_sha))
+
+
+def last_module_signoff(experiment_dir: Path, module: str) -> LedgerSignoff | None:
+    """The NEWEST human module sign-off of the module PATH *module*, or ``None``.
+
+    Keyed on the module IDENTITY (``resolved['module']``), not a sha — so it finds
+    the last time this module was signed AT ANY sha, across every audit. Used only
+    for the module-attention "diff vs last-signed" advisory (piece 3): when a
+    module is currently UNSIGNED but was signed before at a DIFFERENT sha, the human
+    is told which prior version to diff against. Bounded + fail-open, mirroring
+    :func:`read_signoff_ledger`; the returned entry's ``content_sha`` is the
+    ``module_sha`` that prior sign-off attested.
+    """
+    from hpc_agent._kernel.contract.layout import RepoLayout
+
+    notebooks = RepoLayout(experiment_dir).hpc / "notebooks"
+    if not notebooks.is_dir():
+        return None
+    try:
+        journals = sorted(notebooks.glob("*.decisions.jsonl"))
+    except OSError:
+        return None
+    newest: LedgerSignoff | None = None
+    for i, journal in enumerate(journals):
+        if i >= _LEDGER_MAX_JOURNALS:
+            break
+        other = journal.name[: -len(".decisions.jsonl")]
+        if not other or "/" in other or "\\" in other:
+            continue
+        try:
+            records = read_decisions(experiment_dir, "notebook", other)
+        except Exception:  # noqa: BLE001 — one corrupt journal never strands the read
+            continue
+        for record in records:
+            if record.get("block") != MODULE_SIGN_OFF_BLOCK:
+                continue
+            resolved = record.get("resolved")
+            if not isinstance(resolved, dict) or resolved.get("module") != module:
+                continue
+            sha = resolved.get("module_sha")
+            ts = record.get("ts")
+            if not (isinstance(sha, str) and sha and isinstance(ts, str) and ts):
+                continue
+            if newest is None or ts > newest.ts:
+                actor = record.get("attestor_id")
+                newest = LedgerSignoff(
+                    content_sha=sha,
+                    audit_id=other,
+                    ts=ts,
+                    actor=actor if isinstance(actor, str) and actor else None,
+                )
+    return newest
 
 
 # --- render receipts (T10) --------------------------------------------------
