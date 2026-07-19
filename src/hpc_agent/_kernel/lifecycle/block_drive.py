@@ -250,6 +250,11 @@ def plan_block_action(
       is committed yet → a valid PARKED stop (exit 0, do nothing).
     * ``"advance"`` — approved spec unchanged (§4) → run the resume cursor's
       code-determined ``next_verb``.
+    * ``"advance"`` (override, docket #7) — a decision park (marker
+      ``next_verb=None``) answered by a greenlight carrying no spec content →
+      run the chain-forward block (``block_chain.chain_successor`` of the parked
+      verb); the bare ``y`` is an override, not an approval of the parked
+      block's inputs, so it must not diff into a rerun.
     * ``"rerun"`` — a changed field owned by the current block (§4) → re-run the
       current block, carrying the edited inputs so it recomputes derived fields.
     * ``"advance_carrying"`` — all changed fields owned strictly downstream (§4) →
@@ -328,6 +333,39 @@ def plan_block_action(
             "action": "skip",
             "reason": "pending decision is missing its resume cursor position; cannot route",
         }
+
+    # OVERRIDE advance (docket #7, defect B): at a DECISION park the marker records
+    # ``next_verb=None`` (``SUCCESSORS`` is ``None`` at aggregate-check's
+    # ``integrity_review`` / ``not_ready`` and every other human-branch stage). A
+    # greenlight carrying NO spec content (empty once the ``next_block`` routing
+    # token is set aside — the bare-``y`` override shape, pre- or post-fix-A) is
+    # not an approval of the inputs the parked block ran under: diffing it against
+    # the cursor's ``input_spec`` reads every input field as "changed" and
+    # mis-routes to a RERUN of the parked block under an empty spec (the live
+    # "block aggregate-check failed or returned no result (exit 1)" swallow). The
+    # ``y`` is an override approving the chain-forward block — route it as an
+    # ADVANCE there, the same ``chain_successor`` mapping
+    # ``committed_greenlight_for_boundary`` applies to recognize the greenlight.
+    # The resume then runs the successor under the park-materialized, sha-verified
+    # spec (R3), or — when no spec was materialized — re-parks as awaiting
+    # (``run_tick``), never an exit-1 failure.
+    if next_verb is None and not any(k not in _META_KEYS for k in committed_resolved):
+        override = block_chain.chain_successor(current_verb)
+        if override is not None:
+            return {
+                "action": "advance",
+                "verb": override,
+                "workflow": wf,
+                "current_verb": current_verb,
+                "next_verb": override,
+                "carry_fields": {},
+                "changed_fields": [],
+                "reason": (
+                    f"bare override greenlight at a {current_verb} decision park "
+                    f"(no code-determined successor) — advance to the chain-forward "
+                    f"block {override}"
+                ),
+            }
 
     # Committed → route by IDENTITY + OWNERSHIP (§4), never by the nudge text.
     changed = _changed_fields(
@@ -1080,6 +1118,42 @@ def run_tick(
                     reason=r3_refusal,
                 ),
                 1,
+            )
+        # OVERRIDE-advance with NOTHING to execute (docket #7, defect B cont.): the
+        # bare-``y`` override at a decision park (marker ``next_verb=None``) carries
+        # no spec content, and a None-successor park never materialized a successor
+        # spec (R3 has nothing to consume) — so there is NO spec to run the
+        # chain-forward block under. Launching it under ``{}`` would bounce its own
+        # ``--spec`` validator and swallow the advance as "block <verb> failed or
+        # returned no result (exit 1)" — the papercut's second half. Keep the
+        # marker PARKED (it is cleared only below, so the committed approval is
+        # never consumed), report awaiting with the remedy named, and exit 0.
+        cursor = pending.get("resume_cursor") or {}
+        marker_next = cursor.get("next_verb") if isinstance(cursor, dict) else None
+        if (
+            r3_spec is None
+            and marker_next is None
+            and not any(k not in _META_KEYS for k in (committed_resolved or {}))
+        ):
+            brief = pending.get("brief")
+            return (
+                BlockDriveResult(
+                    action="awaiting_decision",
+                    run_id=run_id,
+                    workflow=plan.get("workflow") or workflow,
+                    current_verb=plan.get("current_verb"),
+                    next_verb=plan.get("verb"),
+                    brief=brief if isinstance(brief, dict) else None,
+                    reason=(
+                        f"override greenlight for {plan.get('verb')} is committed, but "
+                        "no materialized successor spec exists to run it under (a "
+                        "decision park composes none) and the approval carried no spec "
+                        "— nothing to execute. Invoke the successor directly under the "
+                        "spec disclosed in the parked brief, or re-approve with that "
+                        "spec as the resolved; the marker stays parked."
+                    ),
+                ),
+                0,
             )
 
     on_first_failure: Callable[[], None] | None = None

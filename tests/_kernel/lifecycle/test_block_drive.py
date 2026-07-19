@@ -247,6 +247,90 @@ def test_advance_with_no_successor_is_terminal() -> None:
     assert plan["action"] == "terminal"
 
 
+# ── plan_block_action: RESUME — the bare-y OVERRIDE at a decision park (#7) ────
+#
+# Docket #7 defect B (the live run-15 papercut): a decision park records
+# ``next_verb=None`` (``SUCCESSORS`` is ``None`` at aggregate-check's
+# ``integrity_review`` / ``not_ready``). A greenlight carrying no spec content is
+# an OVERRIDE approving the chain-forward block — it must route as an ADVANCE to
+# ``chain_successor(current_verb)``, never diff into a rerun of the parked block
+# under an empty spec (the exit-1 swallow).
+
+
+def test_override_greenlight_empty_resolved_advances_to_chain_successor() -> None:
+    """The pre-fix-A journal shape (EMPTY resolved): advance, not rerun."""
+    plan = plan_block_action(
+        workflow="aggregate",
+        pending_decision=_pending(
+            workflow="aggregate",
+            current_verb="aggregate-check",
+            next_verb=None,
+            input_spec={"run_id": "r1"},
+        ),
+        committed_resolved={},
+        last_run_inputs={"run_id": "r1"},
+    )
+    assert plan["action"] == "advance"
+    assert plan["verb"] == "aggregate-run"
+    assert plan["carry_fields"] == {}
+
+
+def test_override_greenlight_meta_only_resolved_advances_to_chain_successor() -> None:
+    """The post-fix-A journal shape (``{'next_block': 'aggregate-run'}``): the
+    routing token is not spec content, so this routes identically."""
+    plan = plan_block_action(
+        workflow="aggregate",
+        pending_decision=_pending(
+            workflow="aggregate",
+            current_verb="aggregate-check",
+            next_verb=None,
+            input_spec={"run_id": "r1"},
+        ),
+        committed_resolved={"next_block": "aggregate-run"},
+        last_run_inputs={"run_id": "r1"},
+    )
+    assert plan["action"] == "advance"
+    assert plan["verb"] == "aggregate-run"
+
+
+def test_override_never_invents_a_successor_for_a_chain_final_verb() -> None:
+    """A chain-final decision park has no chain-forward block — the override
+    mapping must not guess; the pre-existing §4 routing governs (an empty
+    approval against a non-empty input_spec diffs into a conservative rerun)."""
+    plan = plan_block_action(
+        workflow="aggregate",
+        pending_decision=_pending(
+            workflow="aggregate",
+            current_verb="aggregate-run",  # chain-final: SUCCESSORS all None
+            next_verb=None,
+            input_spec={"aggregate": {"run_id": "r1"}},
+        ),
+        committed_resolved={},
+        last_run_inputs={"aggregate": {"run_id": "r1"}},
+    )
+    assert plan["action"] == "rerun"
+    assert plan["verb"] == "aggregate-run"
+
+
+def test_nudge_with_spec_content_at_decision_park_still_reruns() -> None:
+    """A resolved carrying REAL spec content is a nudge, not a bare override —
+    the §4 ownership routing still governs (an unowned edit → conservative
+    rerun of the parked block)."""
+    plan = plan_block_action(
+        workflow="aggregate",
+        pending_decision=_pending(
+            workflow="aggregate",
+            current_verb="aggregate-check",
+            next_verb=None,
+            input_spec={"run_id": "r1"},
+        ),
+        committed_resolved={"run_id": "r1", "min_rows": 5},
+        last_run_inputs={"run_id": "r1"},
+    )
+    assert plan["action"] == "rerun"
+    assert plan["verb"] == "aggregate-check"
+
+
 def test_resume_missing_cursor_position_skips() -> None:
     pending = {"workflow": "submit", "resume_cursor": {}}  # no current_verb
     plan = plan_block_action(
@@ -640,6 +724,245 @@ def test_run_tick_block_failure_surfaces_nonzero(faked: dict[str, Any], monkeypa
     result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
     assert code == 7
     assert result.action == "skip"
+
+
+# ── run_tick: the bare-y OVERRIDE at a decision park (docket #7, tick level) ───
+
+
+def test_run_tick_override_advance_runs_successor_under_materialized_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docket #7 defect B (advance half): with a materialized, sha-stamped
+    successor spec in the marker, the bare-y override at a decision park RUNS
+    the chain-forward block under that spec (R3 consumption) — instead of
+    rerunning the parked block under an empty spec."""
+    from hpc_agent.infra import block_chain as bc
+    from hpc_agent.infra.io import atomic_write_json
+
+    materialized = {"aggregate": {"run_id": "r1"}}
+    spec_path = tmp_path / ".hpc" / "specs" / "next" / "r1.aggregate-run.json"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(spec_path, materialized)
+
+    pending = _pending(
+        workflow="aggregate",
+        current_verb="aggregate-check",
+        next_verb=None,
+        input_spec={"run_id": "r1"},
+    )
+    pending["resume_cursor"]["next_spec_sha"] = bc.successor_spec_sha(materialized)
+    committed = {"next_block": "aggregate-run"}  # the bare override approval
+    monkeypatch.setattr(bd, "read_pending_decision", lambda run_id, **_k: dict(pending))
+    monkeypatch.setattr(bd, "_latest_committed_resolved", lambda *_a, **_k: dict(committed))
+    monkeypatch.setattr(
+        bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: dict(committed)
+    )
+    cleared: list[str] = []
+    monkeypatch.setattr(bd, "clear_pending_decision", lambda run_id, **_k: cleared.append(run_id))
+    monkeypatch.setattr(bd, "mark_pending_decision", lambda *_a, **_k: None)
+    import hpc_agent._kernel.lifecycle.drive as drive_mod
+
+    monkeypatch.setattr(drive_mod, "_stamp_driver_tick", lambda *_a, **_k: None)
+
+    ran: list[dict[str, Any]] = []
+
+    def _fake_run(verb: str, spec: dict[str, Any], experiment_dir: Path) -> tuple[dict, int]:
+        ran.append({"verb": verb, "spec": spec})
+        return {
+            "block": "run",
+            "stage_reached": "harvested",
+            "needs_decision": False,
+            "next_block": None,
+        }, 0
+
+    monkeypatch.setattr(bd, "_run_block_verb", _fake_run)
+
+    result, code = run_tick(tmp_path, run_id="r1", workflow="aggregate")
+    assert code == 0, result.reason
+    # The driver ADVANCED into aggregate-run (no rerun of aggregate-check) and
+    # ran it under the sha-verified materialized spec VERBATIM.
+    assert [r["verb"] for r in ran] == ["aggregate-run"]
+    assert ran[0]["spec"] == materialized
+    assert result.action == "terminal"
+    assert cleared == ["r1"]  # the approval was consumed
+
+
+def test_run_tick_override_advance_without_materialized_spec_stays_parked_awaiting(
+    faked: dict[str, Any],
+) -> None:
+    """Docket #7 defect B (no-spec half): with NO materialized successor spec
+    the override advance must NOT launch the chain-forward block under an empty
+    spec (the live "block aggregate-check failed (exit 1)" swallow) — the tick
+    keeps the marker parked, reports awaiting, exits 0, and runs nothing."""
+    faked["pending"] = _pending(
+        workflow="aggregate",
+        current_verb="aggregate-check",
+        next_verb=None,
+        input_spec={"run_id": "r1"},
+    )
+    faked["committed"] = {"next_block": "aggregate-run"}  # bare override approval
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb == "aggregate-run"
+    assert "no materialized successor spec" in result.reason
+    assert faked["ran"] == []  # the successor NEVER ran under an empty spec
+    assert faked["cleared"] == []  # the approval was NOT consumed
+    assert faked["parked"] == []  # the existing marker was left in place
+
+
+def test_run_tick_empty_resolved_override_also_stays_parked_awaiting(
+    faked: dict[str, Any],
+) -> None:
+    """The PRE-fix-A journal shape (an EMPTY committed resolved — the live
+    run-15 record) routes the same way: override advance, no spec → awaiting,
+    exit 0, nothing run."""
+    faked["pending"] = _pending(
+        workflow="aggregate",
+        current_verb="aggregate-check",
+        next_verb=None,
+        input_spec={"run_id": "r1"},
+    )
+    faked["committed"] = {}
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert faked["ran"] == []
+    assert faked["cleared"] == []
+
+
+# ── the FUSED bare-y override at a decision park (docket #7, real journal) ─────
+#
+# The live run-15 papercut end-to-end: ``block-drive --approve`` with an EMPTY
+# resolved at an ``aggregate-check`` decision park (integrity_review). Fix A
+# (journal side): ``_default_next_block`` composes ``resolved.next_block`` from
+# the cursor's OWN ``current_verb`` through ``chain_successor`` — independent of
+# what block string the agent journaled — so the downstream greenlight gate
+# never reads "names None". Defect B (driver side): the tick reports
+# parked-at-next (awaiting, exit 0), never the exit-1 swallow.
+
+
+def _park_aggregate_check_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_id: str
+) -> None:
+    """Real journal + REAL pending marker at an aggregate-check decision park."""
+    from hpc_agent.state.journal import mark_pending_decision, upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=run_id,
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="u@h",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=["100"],
+            total_tasks=4,
+            submitted_at="2026-07-03T00:00:00+00:00",
+            experiment_dir=str(tmp_path),
+            status="complete",  # the run is terminal; only integrity issues park
+        ),
+    )
+    mark_pending_decision(
+        run_id,
+        block="aggregate-check",
+        workflow="aggregate",
+        brief={"proposal": "2 waves missing — proceed with a partial aggregate?"},
+        resume_cursor={
+            "workflow": "aggregate",
+            "run_id": run_id,
+            "next_verb": None,  # the DECISION park marker (integrity_review)
+            "current_verb": "aggregate-check",
+            "input_spec": {"run_id": run_id},
+        },
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=tmp_path,
+    )
+
+
+def test_fused_empty_resolved_at_decision_park_composes_next_block_and_stays_parked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run-15 shape VERBATIM: the fused approve journals the TARGET block
+    (``aggregate-run``) with an EMPTY resolved. Fix A composes
+    ``next_block: aggregate-run`` onto the record (the gate downstream never
+    reads "names None"); defect B keeps the tick awaiting (exit 0) with the
+    marker parked and NOTHING run under an empty spec."""
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.journal import read_pending_decision
+
+    _park_aggregate_check_decision(tmp_path, monkeypatch, "r1")
+
+    def _must_not_run(*_a: object, **_k: object) -> tuple[dict, int]:
+        raise AssertionError("the chain-forward block must not launch under an empty spec")
+
+    monkeypatch.setattr(bd, "_run_block_verb", _must_not_run)
+
+    result, code = run_tick(
+        tmp_path,
+        run_id="r1",
+        workflow="aggregate",
+        approve={
+            "scope_kind": "run",
+            "scope_id": "r1",
+            "block": "aggregate-run",  # the live record journaled the TARGET
+            "response": "y",
+            "resolved": {},  # the pre-fix-A EMPTY resolved
+        },
+    )
+
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb == "aggregate-run"
+    assert "no materialized successor spec" in (result.reason or "")
+    # Fix A: the committed record carries the composed next_block — derived from
+    # the cursor's current_verb (aggregate-check), NOT from the journaled block
+    # string (aggregate-run's own chain successor is None, which is what left
+    # the live record EMPTY).
+    records = read_decisions(tmp_path, "run", "r1")
+    assert len(records) == 1
+    assert records[0]["resolved"]["next_block"] == "aggregate-run"
+    # The approval was NOT consumed: the marker stays parked for the successor
+    # to be invoked under the disclosed spec.
+    assert read_pending_decision("r1", experiment_dir=tmp_path)
+
+
+def test_fused_empty_resolved_journaling_the_parked_block_composes_identically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The derivation is independent of the journaled block string: journaling
+    the PARKED block (``aggregate-check``) composes the same next_block and the
+    same parked-at-next tick — one mapping, either journal shape."""
+    from hpc_agent.state.decision_journal import read_decisions
+
+    _park_aggregate_check_decision(tmp_path, monkeypatch, "r1")
+    monkeypatch.setattr(
+        bd,
+        "_run_block_verb",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not run")),
+    )
+
+    result, code = run_tick(
+        tmp_path,
+        run_id="r1",
+        workflow="aggregate",
+        approve={
+            "scope_kind": "run",
+            "scope_id": "r1",
+            "block": "aggregate-check",
+            "response": "y",
+            "resolved": {},
+        },
+    )
+
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb == "aggregate-run"
+    records = read_decisions(tmp_path, "run", "r1")
+    assert records[0]["resolved"]["next_block"] == "aggregate-run"
 
 
 # ── run_tick: the acting spec is filtered against the TARGET block's model ─────

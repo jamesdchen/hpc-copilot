@@ -469,7 +469,9 @@ def _contiguous_int_run(obj: Any) -> tuple[int, int] | None:
     return int(obj[0]), int(obj[-1])
 
 
-def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
+def _collect_value_numbers(
+    obj: Any, out: dict[str, float], range_eligible: set[str] | None = None
+) -> None:
     """Gather every number token a required-caller field VALUE asserts.
 
     Scalars contribute their value; strings contribute their embedded number
@@ -478,6 +480,16 @@ def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
     vocabulary, not claims). Bools are skipped. A consecutive-int list
     (:func:`_contiguous_int_run`) asserts only its endpoints and length — the
     range form a human actually states.
+
+    *range_eligible*, when passed, collects the norms whose off-by-one
+    derivation (:func:`_derivation_rule`) is legitimate — the RANGE-SHAPED
+    claims: string-embedded tokens (a range literal like ``"0-49"``) and a
+    contiguous run's endpoints + length. A standalone scalar is never
+    range-eligible: it asserts exactly itself, so its adjacency to a stated
+    number is a coincidence, not a range endpoint (run-15 — the off-by-one
+    leg matched a standalone ``n_samples=10000004`` against the adjacent
+    stated ``10000003`` from the prior drill, accepting a value the human
+    never uttered).
     """
     if isinstance(obj, bool):
         return
@@ -493,20 +505,25 @@ def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
                 out.setdefault(norm, float(norm))
             except ValueError:
                 continue
+            if range_eligible is not None:
+                range_eligible.add(norm)
         return
     if isinstance(obj, dict):
         for v in obj.values():
-            _collect_value_numbers(v, out)
+            _collect_value_numbers(v, out, range_eligible)
         return
     if isinstance(obj, (list, tuple)):
         run = _contiguous_int_run(obj)
         if run is not None:
             lo, hi = run
             for member in (lo, hi, len(obj)):
-                _collect_value_numbers(member, out)
+                norm = str(member)
+                out.setdefault(norm, float(member))
+                if range_eligible is not None:
+                    range_eligible.add(norm)
             return
         for v in obj:
-            _collect_value_numbers(v, out)
+            _collect_value_numbers(v, out, range_eligible)
 
 
 # Discriminator keys whose VALUE is a schema-union arm name, not a caller
@@ -557,19 +574,62 @@ def _collect_value_string_tokens(obj: Any, out: set[str]) -> None:
             _collect_value_string_tokens(item, out)
 
 
-def _human_derivable(val: float, norm: str, strings: set[str], floats: set[float]) -> bool:
+def _derivation_rule(
+    val: float,
+    norm: str,
+    strings: set[str],
+    floats: set[float],
+    *,
+    off_by_one_eligible: bool = True,
+) -> str | None:
+    """Which rule makes a value number human-derivable, or ``None`` when none does.
+
+    The rule-naming form of the derivability check — ONE definition with
+    :func:`_human_derivable` (a thin boolean projection over this), so the gate's
+    accept-side provenance disclosure (docket #1 part 2) and the gate itself can
+    never drift on what counts as derivable. The rules, in priority order:
+
+    * ``"verbatim"`` — stated verbatim (normalized-string or float equality);
+    * ``"zero"`` — zero (a 0-based range start is derived, never asserted);
+    * ``"off_by_one"`` — an integral off-by-one of a stated count
+      (``seeds (0-19)`` derives from "20 seeds": 19 == 20 - 1 — the
+      range-endpoint form of a stated count). Range-shaped claims only
+      (*off_by_one_eligible*): a standalone scalar asserts exactly itself,
+      so its adjacency to a stated number is a coincidence, never a
+      derivation — run-15 accepted a standalone ``n_samples=10000004``
+      against the prior drill's stated ``10000003`` through this leg
+      (``docs/plans/proving-run-15-runsheet.md``, gate finding 2).
+    """
+    if norm in strings or val in floats:
+        return "verbatim"
+    if val == 0:
+        return "zero"
+    if off_by_one_eligible and val == int(val) and ((val + 1) in floats or (val - 1) in floats):
+        return "off_by_one"
+    return None
+
+
+def _human_derivable(
+    val: float,
+    norm: str,
+    strings: set[str],
+    floats: set[float],
+    *,
+    off_by_one_eligible: bool = True,
+) -> bool:
     """True when a value number is derivable from the human number pool.
 
     Derivable means: stated verbatim (normalized-string or float equality),
     zero (a 0-based range start is derived, never asserted), or an integral
     off-by-one of a stated count (``seeds (0-19)`` derives from "20 seeds":
-    19 == 20 - 1 — the range-endpoint form of a stated count).
+    19 == 20 - 1 — the range-endpoint form of a stated count; range-shaped
+    claims only, see :func:`_derivation_rule`). The rule names live in
+    :func:`_derivation_rule`; this is its boolean projection.
     """
-    if norm in strings or val in floats:
-        return True
-    if val == 0:
-        return True
-    return val == int(val) and ((val + 1) in floats or (val - 1) in floats)
+    return (
+        _derivation_rule(val, norm, strings, floats, off_by_one_eligible=off_by_one_eligible)
+        is not None
+    )
 
 
 def _names_slug(response: str, slug: str) -> bool:

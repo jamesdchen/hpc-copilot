@@ -120,6 +120,10 @@ from .conclusion import (
 from .human_authorship import (
     _assert_human_authorship,
 )
+from .module_signoff import (
+    _MODULE_SIGNOFF_BLOCK,
+    _assert_module_signoff_authorship,
+)
 from .overnight_consent import (
     _assert_overnight_consent_authorship,
     _bound_consent_records,
@@ -213,9 +217,10 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     resolved = _compose_overnight_consent(experiment_dir, spec, resolved)
     _assert_no_code_derived_fields(resolved)
     _assert_brief_provenance(experiment_dir, spec, resolved)
-    _assert_human_authorship(experiment_dir, spec, resolved)
+    authorship_disclosure = _assert_human_authorship(experiment_dir, spec, resolved)
     _assert_unlock_authorship(experiment_dir, spec, resolved)
     _assert_signoff_authorship(experiment_dir, spec, resolved)
+    _assert_module_signoff_authorship(experiment_dir, spec, resolved)
     _assert_registration_authorship(experiment_dir, spec, resolved)
     _assert_reproduction_verdict_authorship(experiment_dir, spec, resolved)
     _assert_conclusion_authorship(experiment_dir, spec, resolved)
@@ -230,6 +235,15 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _actor_ids, _actor_policy = _read_interview_actors(experiment_dir)
     attestor_id = _session_actor(experiment_dir, _actor_ids) if len(_actor_ids) > 1 else None
     _assert_actor_policy(_actor_ids, _actor_policy, spec.block, attestor_id)
+    provenance = spec.provenance
+    if authorship_disclosure is not None:
+        # Accept-side disclosure (docket #1 part 2): WHICH rule fired + the matched
+        # tokens, journaled under a code-owned provenance key so "why did the gate
+        # accept this value" is answerable from the record itself. ADDITIVE only —
+        # caller provenance keys are preserved; the ``human_authorship`` key is
+        # code-owned (a caller-asserted one is overwritten, never trusted). Gate
+        # semantics are unchanged.
+        provenance = {**spec.provenance, "human_authorship": authorship_disclosure}
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -239,7 +253,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
         evidence_digest=spec.evidence_digest,
         proposal=spec.proposal,
         resolved=resolved,
-        provenance=spec.provenance,
+        provenance=provenance,
         attestor_id=attestor_id,
         request_id=_request_id_from_spec(spec),
     )
@@ -279,12 +293,26 @@ def _default_next_block(experiment_dir: Path, spec: AppendDecisionInput) -> dict
     round-trip (two ``s1`` greenlight records 32s apart, the first missing
     ``next_block``).
 
-    Two derivations, in order (v2 — proving-run-3 re-fire):
+    Two derivations, in order (v2 — proving-run-3 re-fire), plus the
+    override-boundary mapping (v3 — docket #7):
 
     1. **Parked pending decision** — when ``block_drive`` drove the chain, its
        ``_park`` stored ``resume_cursor["next_verb"]`` in the run's
        ``pending_decision``. (Requires a RunRecord + the block-drive mode.)
-    2. **Static chain table** — the skills' preferred mode invokes the block's
+    2. **Override boundary** — when the parked cursor exists but its
+       ``next_verb`` is ``None`` (a DECISION park: ``aggregate-check``'s
+       ``integrity_review`` / ``not_ready`` and every other human-branch stage
+       record ``SUCCESSORS[...] = None``), the human's ``y`` is an OVERRIDE
+       greenlighting the chain-forward block. Map the driver's OWN vocabulary
+       (the cursor's ``current_verb``) through
+       ``block_chain.chain_successor`` — the SAME mapping
+       ``committed_greenlight_for_boundary`` applies to recognize the
+       greenlight — so the composed ``next_block`` is independent of what
+       block string the agent journaled. (The live run-15 record journaled
+       the TARGET, ``aggregate-run``, whose own chain successor is None —
+       derivation 3 then left ``resolved`` EMPTY and the aggregate-run gate
+       later read "names None".)
+    3. **Static chain table** — the skills' preferred mode invokes the block's
        MCP tool directly: no driver, no park, and at S1→S2 no RunRecord even
        exists, so v1's derivation never fired and the papercut re-appeared in
        run #3. Fall back to ``infra/block_chain.ORDER`` — the record's own
@@ -311,6 +339,13 @@ def _default_next_block(experiment_dir: Path, spec: AppendDecisionInput) -> dict
     successor = cursor.get("next_verb") if isinstance(cursor, dict) else None
     if isinstance(successor, str) and successor:
         return {**resolved, "next_block": successor}
+    current_verb = cursor.get("current_verb") if isinstance(cursor, dict) else None
+    if isinstance(current_verb, str) and current_verb:
+        from hpc_agent.infra import block_chain
+
+        mapped = block_chain.chain_successor(current_verb)
+        if mapped:
+            return {**resolved, "next_block": mapped}
     successor = _chain_successor(spec.block)
     if successor:
         return {**resolved, "next_block": successor}
@@ -390,6 +425,7 @@ __all__ = [
     "_HA_NUM_RE",
     "_HA_WORD_RE",
     "_HEX_RUN_RE",
+    "_MODULE_SIGNOFF_BLOCK",
     "_REGISTRATION_REQUIRED_KEYS",
     "_SCHEMA_ENUM_KEYS",
     "_SCOPE_UNLOCK_BLOCK",
@@ -407,6 +443,7 @@ __all__ = [
     "_assert_conformance_baseline_membership",
     "_assert_conformance_verdict_authorship",
     "_assert_human_authorship",
+    "_assert_module_signoff_authorship",
     "_assert_no_code_derived_fields",
     "_assert_overnight_consent_authorship",
     "_assert_registration_authorship",

@@ -14,8 +14,8 @@ from ._shared import (
     _actor_scoped_human_texts,
     _collect_value_numbers,
     _collect_value_string_tokens,
+    _derivation_rule,
     _ha_word_tokens,
-    _human_derivable,
     _human_number_pool,
     _is_bare_ack,
     _read_decisions,
@@ -26,7 +26,7 @@ from ._shared import (
 
 def _assert_human_authorship(
     experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
-) -> None:
+) -> dict[str, Any] | None:
     """Human-authorship gate: refuse committing a REQUIRED_CALLER field whose
     value has no human-attributed utterance on record.
 
@@ -70,9 +70,14 @@ def _assert_human_authorship(
       magnitude-suffixed like ``1M``, zero, or a range endpoint of a stated
       count). A consecutive-int list asserts only its endpoints and length
       (:func:`_contiguous_int_run` — "20 seeds" derives ``seeds=[0..19]``;
-      proving run #5's finding was the gate demanding the enumeration). Its
-      non-numeric CATEGORICAL string claims must ALSO overlap the human word
-      pool (:func:`_collect_value_string_tokens`, finding 25) — schema
+      proving run #5's finding was the gate demanding the enumeration). The
+      off-by-one leg is scoped to RANGE-SHAPED claims (a run's
+      endpoint/length, a string range literal): a standalone scalar asserts
+      exactly itself, so its adjacency to a stated number never derives
+      (run-15 gate finding 2 — ``n_samples=10000004`` rode the prior drill's
+      stated ``10000003`` through that leg). Its non-numeric CATEGORICAL
+      string claims must ALSO overlap the human word pool
+      (:func:`_collect_value_string_tokens`, finding 25) — schema
       vocabulary (dict keys, the ``kind`` discriminator value) exempt — so a
       fabricated ``dataset`` axis cannot ride a passing number check. A value
       with no number OR string claims falls back to the free-text rule.
@@ -98,11 +103,23 @@ def _assert_human_authorship(
     every pre-hook install, so back-compat wins there.
 
     Raises :class:`errors.SpecInvalid` naming the field(s), the underivable
-    token(s), the evidence source consulted, and the remedy (the human
-    states the sweep in a prompt / their reply).
+    token(s), the evidence source consulted, the repo namespace the evidence
+    was sought in (so an operator session in the wrong cwd can see why their
+    utterance was not found), and the remedy (the human states the sweep in a
+    prompt / their reply).
+
+    Returns the ACCEPT-SIDE disclosure (docket #1 part 2 — "which rule fired"
+    must be answerable from the journal, not just the refuse side): ``None``
+    when the gate did not evaluate a first-commit field, else a mapping with
+    the ``evidence_source`` tier (``harness_captured`` / ``journal_response``)
+    and, per gated field, the matched tokens with the derivation rule that
+    accepted each (:func:`_derivation_rule` — ``verbatim`` / ``zero`` /
+    ``off_by_one``) or the free-text rule that committed it. The caller
+    journals it under a code-owned provenance key; gate SEMANTICS are
+    unchanged (this is additive disclosure, never a tightening).
     """
     if not isinstance(resolved, dict) or not resolved:
-        return
+        return None
 
     # Import (never redefine) the required-caller partition — one source of
     # truth with the no-fabricate Ambiguity lock (field_partition docstring).
@@ -118,7 +135,7 @@ def _assert_human_authorship(
         if f in resolved and resolved[f] not in (None, "", {}, [])
     ]
     if not candidates:
-        return
+        return None
 
     prior = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
 
@@ -131,20 +148,25 @@ def _assert_human_authorship(
     harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
     harness_captured = harness_texts is not None
 
-    if not harness_captured and prior and not any("response" in rec for rec in prior):
-        # Fail-open (journal-response mode only): an old-schema journal with
-        # no response text at all — there is no human record to derive from
-        # OR to contradict. With an utterance log the stronger source exists,
-        # so this escape hatch never applies.
-        return
-
     first_commits = [
         f
         for f in candidates
         if not any(isinstance(rec.get("resolved"), dict) and f in rec["resolved"] for rec in prior)
     ]
     if not first_commits:
-        return
+        return None
+
+    if not harness_captured and prior and not any("response" in rec for rec in prior):
+        # Fail-open (journal-response mode only): an old-schema journal with
+        # no response text at all — there is no human record to derive from
+        # OR to contradict. With an utterance log the stronger source exists,
+        # so this escape hatch never applies. Disclosed as such: a silent
+        # fail-open is exactly the unanswerable commit docket #1 part 2 names.
+        return {
+            "evidence_source": "journal_response",
+            "fail_open": "old_schema_journal_no_response_text",
+            "fields": {},
+        }
 
     if harness_texts is not None:
         # The lock: only text the HARNESS recorded counts as human. The
@@ -167,12 +189,14 @@ def _assert_human_authorship(
     for text in human_texts:
         human_words |= _ha_word_tokens(text)
 
+    disclosure_fields: dict[str, Any] = {}
     problems: list[str] = []
     for field in first_commits:
         value = resolved[field]
         if field not in _FREE_TEXT_CALLER_FIELDS:
             value_numbers: dict[str, float] = {}
-            _collect_value_numbers(value, value_numbers)
+            range_eligible: set[str] = set()
+            _collect_value_numbers(value, value_numbers, range_eligible)
             # Finding 25: the number check alone let a fabricated CATEGORICAL
             # param (a dataset name the human never uttered) pass whenever the
             # numbers derived. Hold the value's non-numeric claim tokens to the
@@ -181,11 +205,23 @@ def _assert_human_authorship(
             value_strings: set[str] = set()
             _collect_value_string_tokens(value, value_strings)
             if value_numbers or value_strings:
-                missing = sorted(
-                    norm
+                number_rules = {
+                    norm: _derivation_rule(
+                        val,
+                        norm,
+                        human_num_strings,
+                        human_num_floats,
+                        # Run-15 (gate finding 2): the off-by-one leg matched a
+                        # standalone ``n_samples=10000004`` against the adjacent
+                        # stated ``10000003`` — a coincidence adjacency, not a
+                        # range endpoint. Only range-shaped claims (a contiguous
+                        # run's endpoint/length, a string range literal) may
+                        # derive by adjacency; a bare scalar asserts itself.
+                        off_by_one_eligible=norm in range_eligible,
+                    )
                     for norm, val in value_numbers.items()
-                    if not _human_derivable(val, norm, human_num_strings, human_num_floats)
-                )
+                }
+                missing = sorted(norm for norm, rule in number_rules.items() if rule is None)
                 missing += sorted(value_strings - human_words)
                 if missing:
                     problems.append(
@@ -194,13 +230,33 @@ def _assert_human_authorship(
                         f"ask the human for the sweep (or {remedy}); value "
                         f"token(s) {missing} derive from no {source_desc}"
                     )
+                else:
+                    # Accept-side disclosure: which derivation rule accepted each
+                    # token (the matched set is the whole claim set — anything
+                    # missing refused above).
+                    disclosure_fields[field] = {
+                        "numbers": {
+                            norm: rule
+                            for norm, rule in sorted(number_rules.items())
+                            if rule is not None
+                        },
+                        "strings": sorted(value_strings & human_words),
+                    }
                 continue
             # No number OR string claims — fall through to the free-text rule below.
         if response_commits:
-            continue  # journal-response mode: a substantive human reply commits it
+            # journal-response mode: a substantive human reply commits it
+            disclosure_fields[field] = {"rule": "response_commit"}
+            continue
         overlap_text = value if isinstance(value, str) else json.dumps(value, default=str)
-        if _ha_word_tokens(overlap_text) & human_words:
-            continue  # the human's own words state it (per the evidence source)
+        overlap = _ha_word_tokens(overlap_text) & human_words
+        if overlap:
+            # the human's own words state it (per the evidence source)
+            disclosure_fields[field] = {
+                "rule": "word_overlap",
+                "matched_words": sorted(overlap),
+            }
+            continue
         problems.append(
             f"{field} is human-authored: {spec.response!r} cannot commit a "
             "value that appears only in the agent's proposal — ask the human to "
@@ -209,4 +265,18 @@ def _assert_human_authorship(
         )
 
     if problems:
-        _refuse_missing_authorship("human-authorship gate (conduct rule 9): " + "; ".join(problems))
+        # Name the repo namespace the gate consulted (docket #2): an operator
+        # session in the wrong cwd otherwise cannot tell WHY their utterance was
+        # not found — the refusal named the tokens but not the namespace.
+        from hpc_agent.state.run_record import repo_hash as _repo_hash
+
+        _refuse_missing_authorship(
+            "human-authorship gate (conduct rule 9): "
+            + "; ".join(problems)
+            + f" — evidence was sought in repo namespace {_repo_hash(experiment_dir)} "
+            f"(experiment_dir {experiment_dir})"
+        )
+    return {
+        "evidence_source": "harness_captured" if harness_captured else "journal_response",
+        "fields": disclosure_fields,
+    }
