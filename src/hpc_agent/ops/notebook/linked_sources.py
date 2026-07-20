@@ -231,7 +231,15 @@ def _locate_symbol(tree: ast.Module, symbol: str) -> tuple[int, str | None] | No
             symbol in _bound_target_names(target) for target in stmt.targets
         ):
             return stmt.lineno, None
-        if isinstance(stmt, ast.AnnAssign) and symbol in _bound_target_names(stmt.target):
+        # AnnAssign binds the name ONLY when it carries a value: bare
+        # ``y: int`` is an annotation, not a binding — ``from engine import y``
+        # raises ImportError at runtime, so claiming coverage would mask a
+        # genuinely broken import (verifier finding, 2026-07-19).
+        if (
+            isinstance(stmt, ast.AnnAssign)
+            and stmt.value is not None
+            and symbol in _bound_target_names(stmt.target)
+        ):
             return stmt.lineno, None
         if isinstance(stmt, ast.Import) and any(
             (alias.asname or alias.name.split(".")[0]) == symbol for alias in stmt.names

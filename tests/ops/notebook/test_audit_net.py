@@ -142,6 +142,25 @@ def test_symbol_in_parent_reexport_plain_import_is_covered(tmp_path: Path) -> No
     assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
 
 
+def test_symbol_in_parent_annassign_with_value_is_covered(tmp_path: Path) -> None:
+    # An annotated assignment WITH a value binds at runtime exactly like a
+    # plain assignment: `LIMIT: int = 10` covers `from engine import LIMIT`.
+    (tmp_path / "engine.py").write_text("LIMIT: int = 10\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine", "engine.LIMIT"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine"]
+    assert all(e.tier is not AuditNetTier.UNRESOLVED for e in entries)
+
+
+def test_symbol_in_parent_bare_annotation_stays_unresolved(tmp_path: Path) -> None:
+    # The unsafe-direction dual (verifier finding, 2026-07-19): a BARE
+    # annotation `y: int` binds NOTHING at runtime — `from engine import y`
+    # raises ImportError — so it must stay UNRESOLVED, never masked as covered.
+    (tmp_path / "engine.py").write_text("y: int\n", encoding="utf-8")
+    entries, _ = resolve_audit_net(["engine.y"], tmp_path, [tmp_path])
+    assert [e.module for e in entries] == ["engine.y"]
+    assert entries[0].tier is AuditNetTier.UNRESOLVED
+
+
 def test_symbol_unbound_despite_new_binding_forms_stays_unresolved(tmp_path: Path) -> None:
     # The honest negative over the broadened forms: names the parent binds via
     # assignment / re-export do NOT cover a different, unbound name — an import
