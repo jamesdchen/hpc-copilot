@@ -10,6 +10,8 @@ process IS the connection, so any non-zero exit is transport evidence.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from hpc_agent.infra import ssh_options
@@ -100,6 +102,15 @@ def test_unknown_leg_kind_refused():
             "Connection refused",
             leg="carrier-pigeon",  # type: ignore[arg-type]
         )
+
+
+def test_leg_has_no_silent_default():
+    # Mutation-2 closure (verifier F): the leg must be DECLARED at every call
+    # site. If a default sneaks back in, an undeclared leg gets a GUESSED
+    # classification — exactly the hole the leg-aware gate closes — and the
+    # rest of this suite would stay green.
+    for fn in (ssh_options.is_connect_failure, ssh_options.is_retry_safe):
+        assert inspect.signature(fn).parameters["leg"].default is inspect.Parameter.empty
 
 
 def test_retry_safe_false_on_spawn_error():
