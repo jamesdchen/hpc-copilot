@@ -793,15 +793,25 @@ def build_unseen_probe_shell(*, remote_path: str, run_id: str) -> str:
 
 def probe_dispatch_evidence(ssh_target: str, remote_path: str, run_id: str) -> str:
     """The cluster witness: run :func:`build_unseen_probe_shell` over the
-    framework's ``ssh_run`` transport, returning raw stdout. Raises the
-    ``_channel_failure_errors()`` surface on a severed channel (the caller
-    folds it into UNKNOWN, never a settled absence)."""
+    framework's ``ssh_run`` transport, returning raw stdout.
+
+    Raises the ``_channel_failure_errors()`` surface on a severed channel (the
+    caller folds it into UNKNOWN, never a settled absence). A NONZERO rc folds
+    the same way: the probe shell ends ``; true``, so rc!=0 means the probe
+    never ran to completion (a dead transport, e.g. ssh's 255) and its partial
+    stdout must not arbitrate the witnesses.
+    """
     from hpc_agent.infra.remote import ssh_run
 
     proc = ssh_run(
         build_unseen_probe_shell(remote_path=remote_path, run_id=run_id),
         ssh_target=ssh_target,
     )
+    if proc.returncode != 0:
+        raise OSError(
+            f"dispatch probe rc={proc.returncode} (the probe shell ends '; true' — "
+            "a nonzero rc is a severed/incomplete probe, never evidence)"
+        )
     return proc.stdout or ""
 
 
@@ -823,18 +833,28 @@ def classify_unseen_probe(scheduler: str, probe_stdout: str) -> UnseenProbe:
     that FIRED with neither a parseable wave-0 id nor any task results ⇒
     genuinely NEVER_DISPATCHED. Anything else (an id at rc==0, or results on
     disk) ⇒ DISPATCHED — the poll missed an array that was really there.
+
+    The results line is the settle gate: the probe shell unconditionally emits
+    exactly ONE ``__HPC_PROBE_RESULTS__`` line as its LAST act, so an ack-fired
+    read with no results line was truncated mid-stream (after the ack, before
+    the results leg) — UNKNOWN, never a NEVER_DISPATCHED settled from a
+    severed read.
     """
     from hpc_agent.infra.jobmap import parse_jobmap_read
 
     if not parse_jobmap_read(probe_stdout).present:
         return UnseenProbe(kind=PROBE_UNKNOWN)
     results_tasks: int | None = None
+    results_seen = False
     for raw in (probe_stdout or "").splitlines():
         line = raw.strip()
         if line.startswith(_PROBE_RESULTS_LINE):
+            results_seen = True
             tail = line[len(_PROBE_RESULTS_LINE) :].strip()
             if tail.isdigit():
                 results_tasks = int(tail)
+    if not results_seen:
+        return UnseenProbe(kind=PROBE_UNKNOWN)
     job_id = marker_wave0_job_id(scheduler, probe_stdout)
     if job_id is None and not results_tasks:
         return UnseenProbe(kind=PROBE_NEVER_DISPATCHED, results_tasks=results_tasks)

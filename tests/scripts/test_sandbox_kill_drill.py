@@ -32,8 +32,10 @@ Covered pins (plan §4-U4):
 11. The dispatched-unseen witnesses (run 29709733724): a lapsed poll arbitrates
     via the journal's promoted job_ids (local) then the ONE-ssh cluster probe
     (jobmap marker + results) — a fast-completing array is SEEN or reported
-    dispatched-unseen, NEVER misread as "never entered the scheduler"; only an
-    ack-fired empty probe settles to "never dispatched".
+    dispatched-unseen, NEVER misread as "never entered the scheduler". Only an
+    ack-fired probe that ALSO completed (exactly one results line, rc==0) and
+    found nothing settles to "never dispatched"; post-ack truncation and a
+    nonzero probe rc stay UNKNOWN.
 12. The RUNNER_TEMP evidence-dir contract: on Actions the default workdir is
     ``$RUNNER_TEMP/sandbox-evidence/kill-drill/`` (the upload step's path);
     off Actions the mkdtemp fallback; an explicit ``--workdir`` wins.
@@ -826,6 +828,64 @@ def test_classify_unseen_probe_severed_read_is_unknown_never_absence() -> None:
     assert kd.classify_unseen_probe("slurm", "").kind == kd.PROBE_UNKNOWN
     garbage = f"12345|{TOKEN}\n{kd._PROBE_RESULTS_LINE} 8\n"  # rows but NO ack
     assert kd.classify_unseen_probe("slurm", garbage).kind == kd.PROBE_UNKNOWN
+
+
+def test_classify_unseen_probe_post_ack_truncation_is_unknown_never_settled() -> None:
+    # The settle gate BEYOND the ack: the probe shell unconditionally emits
+    # exactly ONE results line as its last act, so an ack-fired read with NO
+    # results line was truncated mid-stream (after the ack, before the results
+    # leg) — UNKNOWN, never a NEVER_DISPATCHED settled from a severed read.
+    truncated = _marker_stdout(wave_line=None)  # ack + marker JSON, NO results line
+    assert kd.classify_unseen_probe("slurm", truncated).kind == kd.PROBE_UNKNOWN
+    # Same hole with a wave line present: still truncated, still UNKNOWN.
+    truncated_wave = _marker_stdout(
+        wave_line="__HPC_JOBMAP_WAVE__ wave-0 0 Submitted batch job 12345"
+    )
+    assert kd.classify_unseen_probe("slurm", truncated_wave).kind == kd.PROBE_UNKNOWN
+
+
+def test_probe_dispatch_evidence_refuses_a_nonzero_rc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The probe shell ends ``; true`` — rc!=0 means the probe never ran to
+    # completion (a dead transport, e.g. ssh's 255); even stdout that WOULD
+    # settle must not arbitrate the witnesses.
+    import hpc_agent.infra.remote as remote
+
+    settling = _probe_stdout(wave_line=None, results="absent")  # would settle NEVER_DISPATCHED
+    monkeypatch.setattr(
+        remote, "ssh_run", lambda *a, **k: SimpleNamespace(stdout=settling, returncode=255)
+    )
+    with pytest.raises(OSError, match="rc=255"):
+        kd.probe_dispatch_evidence("hpcuser@slurmci", "/remote/exp", RUN_ID)
+
+
+def test_classify_unseen_nonzero_probe_rc_is_unknown_not_a_settle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # End-to-end: a nonzero-rc probe folds into the UNKNOWN error outcome even
+    # when its partial stdout carries a settling shape.
+    import hpc_agent.infra.remote as remote
+
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "submitting", "job_ids": [], "attempt": 0},
+    )
+    monkeypatch.setattr(
+        remote,
+        "ssh_run",
+        lambda *a, **k: SimpleNamespace(
+            stdout=_probe_stdout(wave_line=None, results="absent"), returncode=255
+        ),
+    )
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.classify_unseen(
+        ctx, experiment_dir=tmp_path, remote_path="/remote/exp", run_id=RUN_ID, token=TOKEN
+    )
+    assert outcome.kind == "error"
+    assert "UNKNOWN" in outcome.detail
+    assert "never dispatched" not in outcome.detail
 
 
 def test_classify_unseen_local_journal_witness_never_touches_ssh(

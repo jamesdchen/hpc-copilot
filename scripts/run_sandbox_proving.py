@@ -174,7 +174,10 @@ RESULT_DIR_TEMPLATE = "results/{run_id}/task_{task_id}"
 # parked inside the kill drill's old fixed 2s poll gap — the deterministic
 # 3/3 "never entered the scheduler" misread. 4M samples puts one fixture task
 # at ~6.4s on the container (the 5–10s band): far above the drill's new
-# sub-second jittered poll, far below the 900s walltime ask.
+# sub-second jittered poll, far below the 900s walltime ask. The rate is
+# scoped to the slurmci measurement — slower/faster hosts shift the band, so
+# other targets should override n_samples (--sweep / --base-n-samples) rather
+# than treat 4M as universal.
 FIXTURE_SAMPLES_PER_SEC = 625_000  # ≈ 1 / 1.6µs on the slurmci container (measured)
 DEFAULT_FIXTURE_N_SAMPLES = 4_000_000  # → ~5–10s per fixture task on the container
 
