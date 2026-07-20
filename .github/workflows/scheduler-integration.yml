@@ -583,7 +583,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # Ruling 2026-07-19 #2: the evidence JSON is a CI ARTIFACT (per-run
-          # evidence), never a committed ledger.
+          # evidence), never a committed ledger. The kill drill's
+          # sandbox-evidence/kill-drill/ subdir rides this recursive
+          # collection — no separate path entry needed.
           name: sandbox-proving-evidence
           path: ${{ runner.temp }}/sandbox-evidence/
           if-no-files-found: warn
@@ -600,6 +602,11 @@ jobs:
           echo "===== slurmd log ====="; docker exec slurmci tail -n 100 /var/log/slurm/slurmd.log || true
           echo "===== remote scratch tree ====="; docker exec slurmci bash -lc 'find /home/hpcuser/scratch -maxdepth 4 -print 2>/dev/null | head -n 200' || true
           echo "===== sandbox evidence (markdown) ====="; cat "$RUNNER_TEMP/sandbox-evidence/evidence.md" 2>/dev/null || true
+          # The kill drill (lane B contract) writes its evidence to
+          # $RUNNER_TEMP/sandbox-evidence/kill-drill/ — inside the recursive
+          # artifact collection above, so no upload change; just echo it here.
+          echo "===== kill-drill evidence ====="; find "$RUNNER_TEMP/sandbox-evidence/kill-drill" -maxdepth 2 -type f -print 2>/dev/null || true
+          for f in "$RUNNER_TEMP"/sandbox-evidence/kill-drill/*.md "$RUNNER_TEMP"/sandbox-evidence/kill-drill/*.json; do [ -f "$f" ] && { echo "--- $f"; tail -n 80 "$f"; }; done || true
           echo "===== sandbox workdir ====="; find "$RUNNER_TEMP/sandbox-work" -maxdepth 3 -print 2>/dev/null | head -n 100 || true
 
       - name: Tear down the container

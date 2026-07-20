@@ -66,12 +66,16 @@ RUN echo "gridengine-master shared/gridenginemaster string sgeci" | debconf-set-
 # libjemalloc2: preloaded around the two daemon starts in the entrypoint
 # (insurance against the LP #1774302 TLS SIGSEGV family hitting sge_qmaster /
 # sge_execd themselves); it otherwise arrives only transitively, and the
-# preload must not depend on a transitive accident.
+# preload must not depend on a transitive accident. strace: the entrypoint's
+# qmaster-gate timeout retries the daemon start under it, so a silent
+# post-fork death (rc=0 parent, empty start log — the signal-death signature
+# of run 29709733724) names its own signal in `docker logs sgeci`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gridengine-master \
         gridengine-exec \
         gridengine-client \
         libjemalloc2 \
+        strace \
         openssh-server \
         rsync \
         tar \
@@ -130,9 +134,14 @@ RUN install -d -m 0755 /opt/sge/bin/lx-amd64 \
 # --- Cell bootstrap templates (the slurm.conf twin) --------------------------
 # SGE has no single config file the way Slurm has slurm.conf: the cell is
 # assembled by qconf at runtime. These are the template inputs the entrypoint
-# applies (host group / queue / parallel environment / exec host). No comments
-# inside the templates themselves — qconf's file parser is not guaranteed to
-# skip them.
+# applies (host group / queue / parallel environment / exec host / complex
+# table). The centry complex table is the lane's OWN monolithic file: Debian
+# ships the upstream table split as a DIRECTORY of 51 per-complex files
+# (gridengine-common's /usr/share/gridengine/util/resources/centry/), so the
+# monolithic path never exists in the image — and the complexes are required
+# twice over (the framework submits -l h_rt/-l h_data; all.q's INFINITY limits
+# are validated against the table). No comments inside the templates
+# themselves — qconf's file parser is not guaranteed to skip them.
 COPY ci/sge/qconf /etc/sge-bootstrap
 # Strip any CRLF a Windows-side checkout may have introduced (a `\r` in a qconf
 # value poisons the bootstrap) — same defensive move as the entrypoint below.

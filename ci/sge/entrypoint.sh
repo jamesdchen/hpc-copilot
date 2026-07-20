@@ -149,27 +149,118 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-if [ "$qmaster_up" != 1 ]; then
-    log "ERROR: qmaster never answered qconf within 60s — its fate follows"
-    ps -ef | grep -i '[s]ge_' || true
-    if [ -s "$QMASTER_START_LOG" ]; then
-        log "qmaster start log:"
-        sed 's/^/[qmaster] /' "$QMASTER_START_LOG" | tail -n 40
-    fi
-    if [ -f "$QMASTER_SPOOL/messages" ]; then
-        log "qmaster messages tail:"
-        tail -n 40 "$QMASTER_SPOOL/messages" | sed 's/^/[qmaster:messages] /'
+# --- qmaster fate dump (self-reporting forensics) -------------------------------
+# Run 29709733724 taught: an rc=0 LAUNCH proves nothing — sge_qmaster daemonizes,
+# the parent exits 0, and the child can die before opening <qmaster_spool>/messages
+# (that run: rc=0, 60s of qconf silence, nothing on 6444, no messages file, and a
+# qmaster.start.log that EXISTED but was EMPTY, so the old [ -s ]-gated cat printed
+# nothing and the death cause never made the logs). When the child dies by SIGNAL —
+# the noble SIGSEGV family that already killed spooldefaults.bin, per the
+# classic-spooling block above — it leaves zero output. A config/permission error
+# instead PRINTS to stderr (run 29701129895: "can't open act_qmaster ..."), so the
+# empty-vs-nonempty state of the start log is the primary discriminator and the
+# dump narrates it explicitly. The strace retry at the end exists so the next
+# silent death names its own signal from `docker logs sgeci` alone.
+dump_one_spool_file() {
+    # $1 = an existing path. Narrate BOTH cases — an empty log is evidence, not
+    # the absence of evidence.
+    f="$1"
+    if [ -s "$f" ]; then
+        log "== $f ($(stat -c %s "$f" 2>/dev/null || echo '?') bytes) — tail:"
+        tail -n 40 "$f" 2>&1 | sed "s|^|[$(basename "$f")] |" || true
     else
-        log "qmaster wrote no messages file (died before opening it)"
+        log "== $f EXISTS but is EMPTY (0 bytes)"
     fi
-    log "cell common: $(ls "$CELL_COMMON" 2>/dev/null || echo MISSING)"
-    log "qmaster spool: $(ls "$QMASTER_SPOOL" 2>/dev/null || echo MISSING)"
-    # Fall through on purpose: the qconf mutations below will fail (|| true
-    # keeps the posture), sshd still starts so the failure stays diagnosable,
-    # and the workflow's readiness probe fails the lane.
-else
-    log "qmaster answering qconf"
+}
+
+dump_qmaster_fate() {
+    log "ERROR: qmaster never answered qconf within 60s — its fate follows"
+
+    log "--- processes (ps auxww) ---"
+    ps auxww 2>&1 | sed 's/^/[ps] /' || true
+
+    log "--- /proc drill for gridengine daemons (cwd/exe/cmdline) ---"
+    procs="$(pgrep -x sge_qmaster 2>/dev/null || true; pgrep -x sge_execd 2>/dev/null || true)"
+    if [ -n "$procs" ]; then
+        for p in $procs; do
+            log "pid $p: cwd=$(readlink "/proc/$p/cwd" 2>/dev/null || echo '?') exe=$(readlink "/proc/$p/exe" 2>/dev/null || echo '?')"
+            tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | sed 's/^/[cmdline] /' || true
+        done
+    else
+        log "no sge_qmaster/sge_execd process exists — qmaster is DEAD, not stuck"
+    fi
+
+    log "--- every messages/start-log file under $SPOOL ---"
+    find "$SPOOL" -maxdepth 3 \( -name 'messages*' -o -name '*.start.log' \) 2>/dev/null \
+        | sort | while read -r f; do dump_one_spool_file "$f"; done || true
+    if [ ! -e "$QMASTER_SPOOL/messages" ]; then
+        log "== $QMASTER_SPOOL/messages MISSING — qmaster died before opening its own log"
+    fi
+    if [ -e "$QMASTER_START_LOG" ] && [ ! -s "$QMASTER_START_LOG" ]; then
+        log "VERDICT: launch rc=0 + EMPTY start log + no messages file = SIGNAL-DEATH"
+        log "signature (SIGSEGV family) — a config/permission error would have printed"
+        log "to stderr and appeared above (cf. run 29701129895)."
+    fi
+
+    log "--- cell common (long listing + identity files) ---"
+    ls -la "$CELL_COMMON" 2>&1 | sed 's/^/[ls] /' || true
+    log "act_qmaster: $(cat "$CELL_COMMON/act_qmaster" 2>/dev/null || echo MISSING) (runtime hostname: $HN)"
+    sed 's/^/[bootstrap] /' "$CELL_COMMON/bootstrap" 2>/dev/null || true
+
+    log "--- qmaster spool (long listing) ---"
+    ls -la "$QMASTER_SPOOL" 2>&1 | sed 's/^/[ls] /' || true
+
+    log "--- dmesg tail (a daemon SIGSEGV names itself here when the container permits) ---"
+    dmesg 2>&1 | tail -n 20 | sed 's/^/[dmesg] /' || true
+
+    # strace retry: re-run the start under strace so a repeat death names its own
+    # signal and final syscalls. timeout(1) bounds it — if qmaster LIVES under
+    # strace (a timing-sensitive death), timeout detaches strace at 20s and the
+    # daemon keeps running, so the retry doubles as best-effort recovery. Run
+    # from the sgeadmin-writable spool with cores enabled so a repeat SIGSEGV
+    # also leaves a core where the scan below can find it.
+    STRACE_LOG="$QMASTER_SPOOL/qmaster.strace.log"
+    if command -v strace >/dev/null 2>&1; then
+        log "--- retrying qmaster under strace (bounded 20s; log: $STRACE_LOG) ---"
+        ( cd "$QMASTER_SPOOL" && ulimit -c unlimited && \
+          LD_PRELOAD="$JEMALLOC" timeout 20 strace -f -o "$STRACE_LOG" \
+              /usr/lib/gridengine/sge_qmaster >"$QMASTER_SPOOL/qmaster.strace.start.log" 2>&1 ) || true
+        if qconf -sh >/dev/null 2>&1; then
+            qmaster_up=1
+            log "qmaster ANSWERED under strace — the first death was timing-sensitive; continuing with the traced daemon"
+        fi
+        if [ -s "$STRACE_LOG" ]; then
+            log "strace signal/exit lines:"
+            grep -aE '\+\+\+ (killed by|exited)|SIG(SEGV|ABRT|BUS|ILL|FPE)' "$STRACE_LOG" \
+                | tail -n 15 | sed 's/^/[strace] /' || true
+            log "strace tail:"
+            tail -n 25 "$STRACE_LOG" | sed 's/^/[strace] /' || true
+        else
+            log "strace log empty/missing — strace itself failed? (start capture follows)"
+            [ -s "$QMASTER_SPOOL/qmaster.strace.start.log" ] \
+                && tail -n 20 "$QMASTER_SPOOL/qmaster.strace.start.log" | sed 's/^/[strace-start] /' || true
+        fi
+    else
+        log "strace not installed — cannot retry under tracing (image regression: strace is a declared package)"
+    fi
+
+    log "--- core scan ---"
+    cores="$(ls "$QMASTER_SPOOL"/core* /core* 2>/dev/null || true)"
+    if [ -n "$cores" ]; then
+        for c in $cores; do log "CORE: $c ($(stat -c %s "$c" 2>/dev/null || echo '?') bytes)"; done
+    else
+        log "no core files found ($QMASTER_SPOOL/core* or /core*)"
+    fi
+}
+
+if [ "$qmaster_up" != 1 ]; then
+    dump_qmaster_fate
+    # Fall through on purpose EITHER WAY: if the strace retry revived qmaster the
+    # bootstrap below proceeds against it; otherwise the qconf mutations fail
+    # under the || true posture, sshd still starts so the failure stays
+    # diagnosable, and the workflow's readiness probe fails the lane.
 fi
+[ "$qmaster_up" = 1 ] && log "qmaster answering qconf"
 
 # --- cell bootstrap (idempotent) ----------------------------------------------
 # admin + submit host entries for the runtime hostname.
@@ -193,21 +284,29 @@ fi
 
 # Default complexes — spooldefaults' other load-bearing role, done through the
 # RUNNING qmaster (the file format is the same qconf one). The complexes are
-# REQUIRED: the framework submits -l h_rt= / -l h_data=
+# REQUIRED twice over: the framework submits -l h_rt= / -l h_data=
 # (infra/backends/_engine.py), which qmaster rejects when the complex is
-# unknown. `qconf -Mc` overwrites the whole complex configuration from the
-# file (qconf(1)), so it is idempotent across container restarts.
-if [ -f /usr/share/gridengine/util/resources/centry ]; then
-    qconf -Mc /usr/share/gridengine/util/resources/centry >/tmp/centry.log 2>&1
+# unknown, AND the all.q template below carries s_rt/h_rt/h_data/... INFINITY
+# limits, which qconf validates against the complex table. Debian ships the
+# upstream centry SPLIT as a DIRECTORY of 51 per-complex files
+# (/usr/share/gridengine/util/resources/centry/ — gridengine-common), so the
+# monolithic upstream FILE path never exists and the old [ -f ... ] probe could
+# never fire (run 29709733724: "centry missing"). The lane ships its own
+# monolithic table instead — ci/sge/qconf/centry, the standard 51-entry
+# upstream set, copied to /etc/sge-bootstrap by the Dockerfile. `qconf -Mc`
+# overwrites the whole complex configuration from the file (qconf(1)), so it
+# is idempotent across container restarts.
+if [ -f /etc/sge-bootstrap/centry ]; then
+    qconf -Mc /etc/sge-bootstrap/centry >/tmp/centry.log 2>&1
     crc=$?
     if [ "$crc" -eq 0 ]; then
-        log "seeded default complexes (qconf -Mc)"
+        log "seeded default complexes (qconf -Mc /etc/sge-bootstrap/centry)"
     else
-        log "WARNING: complex seed failed (rc=$crc) — -l h_rt/h_data submits will break:"
+        log "WARNING: complex seed failed (rc=$crc) — -l h_rt/h_data submits and the all.q template will break:"
         sed 's/^/    /' /tmp/centry.log | tail -n 15
     fi
 else
-    log "WARNING: /usr/share/gridengine/util/resources/centry missing — -l h_rt/h_data submits will break"
+    log "WARNING: /etc/sge-bootstrap/centry missing — -l h_rt/h_data submits and the all.q template will break"
 fi
 # Default usersets — parity with init_cluster. Not load-bearing for the smoke
 # (nothing references ACLs), so a failure here is silent-by-design.
