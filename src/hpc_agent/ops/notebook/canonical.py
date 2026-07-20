@@ -218,6 +218,16 @@ def build_canonical_view(
     )
     receipt = {slug: entry for slug, entry in journaled.items() if entry["fresh"]}
 
+    # Preview-wiring (R1/R2): the journaled SAMPLED preview receipts — the DISTINCT,
+    # WEAKER evidence basis the view DISCLOSES (presentation-only: never a tier /
+    # trust input, never in view_sha — R3). Passed UNFILTERED (unlike the full
+    # receipts above) so a preview the section outlived is still disclosed
+    # honestly (``fresh: False``); basis-greening enforces freshness itself via
+    # the sha-check in ``_assertions_green``.
+    preview_receipt = notebook_audit.read_preview_receipts(
+        experiment_dir, audit_id, current_shas=current_shas
+    )
+
     # The section join (A16 B3-LEAN): the audit-scope runner-observed trace is
     # part of what the sign-off view shows and its view_sha binds. Read here so
     # the gate, the view verb, and the render plugin all recompute the SAME
@@ -230,6 +240,7 @@ def build_canonical_view(
         template,
         findings,
         receipt=receipt,
+        preview_receipt=preview_receipt,
         attention_order=cfg.attention_order,
         audit_traces=audit_traces,
     )

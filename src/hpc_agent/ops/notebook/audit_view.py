@@ -100,6 +100,7 @@ from hpc_agent.execution.mapreduce.data_trace_contract import (
 from hpc_agent.state.audit_source import ParsedModule, normalize_source
 from hpc_agent.state.data_trace import records_sha
 from hpc_agent.state.determinism import canonical_sha
+from hpc_agent.state.notebook_audit import EXECUTION_SCOPE_FULL, EXECUTION_SCOPE_SAMPLED
 
 if TYPE_CHECKING:
     from hpc_agent.ops.notebook.linked_sources import (  # type: ignore[attr-defined]
@@ -240,6 +241,25 @@ class SectionView:
     #: ``prior_signoff`` = a different audit's human sign-off of identical content.
     linked_engines: tuple[LinkedEngine, ...] = ()
     prior_signoff: PriorSignoff | None = None
+    #: PREVIEW-WIRING (R1, user-ruled 2026-07-20): the DISTINCT NAMED BASIS the
+    #: assertions-green leg was evidenced at — ``None`` (statically green, or no
+    #: evidence), :data:`~hpc_agent.state.notebook_audit.EXECUTION_SCOPE_FULL`
+    #: (a full render receipt), or ``EXECUTION_SCOPE_SAMPLED`` (a bounded
+    #: ``notebook-dry-run`` preview — a WEAKER basis: a human iterating gets the
+    #: fast sampled signal, but the full-evidence consumers — auto-clear and the
+    #: sign-off readiness reduction — accept ONLY ``"full"``). PRESENTATION-ONLY
+    #: — NOT part of ``payload`` and so NEVER part of ``view_sha`` (R3: a fresh
+    #: preview must never move view_sha, else re-preview would revoke pending
+    #: sign-offs — a trust regression).
+    assertions_basis: str | None = None
+    #: The opaque SAMPLED preview receipt entry the disclosure block renders
+    #: (:func:`~hpc_agent.state.notebook_audit.read_preview_receipts` shape:
+    #: ``{output_sha, error, section_sha, fresh, ts, basis}``). PRESENTATION-ONLY
+    #: (R2/R3) — first-class disclosure adjacent to the assertions content, never
+    #: a tier / trust input, never in ``payload`` / ``view_sha``. ``None`` (the
+    #: default) renders the honest "no preview recorded" line — never skipped
+    #: silently.
+    preview_receipt: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -427,6 +447,99 @@ def _tier(classification: str, flags_count: int, assertions_green: bool) -> str:
     return HUMAN_REQUIRED
 
 
+def _assertions_basis(
+    assertions: tuple[Assertion, ...],
+    slug: str,
+    receipt: Mapping[str, Any] | None,
+    preview_receipt: Mapping[str, Any] | None,
+    current_section_sha: str,
+    full_green: bool,
+) -> str | None:
+    """The DISTINCT NAMED BASIS (R1) the assertions-green leg was evidenced at.
+
+    The tier's assertions leg is computed from FULL evidence only (*full_green*
+    — :func:`_assertions_green` over the full *receipt*). This records WHICH
+    evidence class made the leg hold, as a first-class field the disclosure
+    renders:
+
+    * zero assertions → ``None`` (statically green — no execution basis to name);
+    * ``full_green`` → :data:`EXECUTION_SCOPE_FULL` (a full render receipt, or
+      the zero-assertion static case routed through the leg — the clearing basis);
+    * else a SAMPLED preview receipt (:func:`_assertions_green` over
+      *preview_receipt*) greens it → :data:`EXECUTION_SCOPE_SAMPLED` — the WEAKER
+      basis R1 sanctions for a human iterating (a fast bounded-sample signal),
+      never a clearing basis: full-evidence consumers accept only ``"full"``;
+    * else ``None`` (unverified / errored / stale — the conservative T5 posture).
+
+    PRESENTATION-ONLY (R3): the return rides :attr:`SectionView.assertions_basis`,
+    never the ``payload`` / ``view_sha`` — and it changes NO tier (the tier reads
+    *full_green* only), so a sampled basis leaves the section ``human_required``.
+    """
+    if not assertions:
+        return None
+    if full_green:
+        return EXECUTION_SCOPE_FULL
+    if preview_receipt is not None and _assertions_green(
+        assertions, slug, preview_receipt, current_section_sha
+    ):
+        return EXECUTION_SCOPE_SAMPLED
+    return None
+
+
+def _render_preview_disclosure(sv: SectionView) -> list[str]:
+    """The ``### preview (sampled dry-run)`` disclosure block (R2/R3, 2026-07-20).
+
+    FIRST-CLASS disclosure inside the per-section render, adjacent to the
+    ``### assertions`` content (R2) — and ALWAYS present: a section with no
+    preview carries the honest "(no preview recorded ...)" line, never a silent
+    skip. PRESENTATION-ONLY (R3): the block rides ``_render_section``'s output,
+    never :attr:`SectionView.payload` / ``view_sha`` — a fresh preview must
+    never change the hash a pending sign-off binds. Deterministic bytes: every
+    fact comes from the journaled receipt (its own ``ts``, never a wall-clock
+    read). RECEIPT-LEVEL facts only — no per-assertion pass/fail (the
+    STATIC-AUDIT invariant: the trusted render carries STATIC assertions, never
+    an execution's per-assertion verdicts); no line starts with the ``- L``
+    assertion-row prefix, and the block sits between ``### assertions`` and
+    ``### lint flags`` — parser-safe for every render-store digest consumer.
+    """
+    lines = ["### preview (sampled dry-run)", ""]
+    preview = sv.preview_receipt
+    if preview is None:
+        lines.append("(no preview recorded — this section has no sampled-run evidence)")
+        lines.append("")
+        return lines
+    basis = sv.assertions_basis
+    if basis == EXECUTION_SCOPE_SAMPLED:
+        lines.append(
+            "- assertions basis: sampled — a bounded notebook-dry-run preview greened "
+            "the assertions leg; auto-clear and sign-off readiness still require a "
+            "FULL render receipt (sampled is a weaker, distinctly-labeled basis)"
+        )
+    elif basis == EXECUTION_SCOPE_FULL:
+        lines.append(
+            "- assertions basis: full — a FULL render receipt greened the assertions "
+            "leg; the sampled preview below is advisory provenance only"
+        )
+    elif sv.assertions:
+        lines.append(
+            "- assertions basis: none — the sampled preview did NOT green the "
+            "assertions leg (errored or stale — see error / fresh below)"
+        )
+    else:
+        lines.append(
+            "- assertions basis: none — no assertions declared (the leg is statically green)"
+        )
+    lines.append(f"- output_sha: {preview.get('output_sha')}")
+    lines.append(f"- error: {preview.get('error')}")
+    lines.append(f"- recorded_at: {preview.get('ts')}")
+    if preview.get("fresh"):
+        lines.append("- fresh: True (bound to the current section sha)")
+    else:
+        lines.append("- fresh: False (STALE — the section moved since this preview)")
+    lines.append("")
+    return lines
+
+
 # ── the section join — per-section runtime-evidence summary (Amendment 16) ────
 #
 # B3-LEAN: each human_required section's trusted render carries a per-section
@@ -543,6 +656,7 @@ def build_audit_view(
     lint_findings: Sequence[Mapping[str, Any]],
     *,
     receipt: Mapping[str, Any] | None = None,
+    preview_receipt: Mapping[str, Any] | None = None,
     attention_order: Sequence[str] | None = None,
     audit_traces: Sequence[Mapping[str, Any]] | None = None,
     audit_net: Sequence[AuditNetEntry] | None = None,
@@ -559,6 +673,18 @@ def build_audit_view(
     :func:`_assertions_green` (a journaled entry carrying ``section_sha`` greens
     only while fresh; an inline entry greens on ``error is False`` alone). Pure —
     same inputs yield the same view and shas on every platform.
+
+    *preview_receipt* (preview-wiring, user-ruled 2026-07-20 R1/R2) is the opaque
+    SAMPLED preview-receipt mapping (``{slug: {output_sha, error, section_sha,
+    fresh, ts, basis}}`` — the :func:`~hpc_agent.state.notebook_audit.read_preview_receipts`
+    shape). It greens NO tier leg — the tier reads *receipt* (full evidence)
+    ONLY — but the view records the DISTINCT NAMED BASIS a sampled preview
+    greened the assertions leg at (:attr:`SectionView.assertions_basis`) and
+    renders it as a first-class ``### preview (sampled dry-run)`` disclosure
+    block adjacent to the assertions content. It is PRESENTATION-ONLY (R3): it
+    never enters a ``payload``, so it moves NO ``view_sha`` — a fresh preview
+    never revokes a pending sign-off. ``None`` / absent renders the honest
+    "(no preview recorded ...)" line — the block is never silently skipped.
 
     *attention_order* (T12) is a caller-supplied slug ordering applied to the
     presented sections (and thus the markdown). The DEFAULT (``None``) is source
@@ -610,6 +736,15 @@ def build_audit_view(
         green = _assertions_green(assertions, sect.slug, receipt, sect.section_sha)
         tier = _tier(classification, len(flags), green)
 
+        # Preview-wiring (R1): the DISTINCT NAMED BASIS the assertions-green leg
+        # was evidenced at — PRESENTATION-ONLY (the tier above reads full evidence
+        # ONLY; neither field enters ``payload``, so no ``view_sha`` moves — R3).
+        basis = _assertions_basis(
+            assertions, sect.slug, receipt, preview_receipt, sect.section_sha, green
+        )
+        preview_entry = preview_receipt.get(sect.slug) if preview_receipt is not None else None
+        preview_entry = preview_entry if isinstance(preview_entry, Mapping) else None
+
         # Section join (A16 B3-LEAN): runtime evidence rides ONLY the sections
         # that route human attention, and enters the hashed payload (signed
         # evidence). Absent when there is nothing to show → byte-identical.
@@ -644,6 +779,9 @@ def build_audit_view(
                 view_sha=canonical_sha(payload),
                 payload=payload,
                 trace_summary=summary,
+                # Preview-wiring (R1/R2) — presentation-only, never in payload.
+                assertions_basis=basis,
+                preview_receipt=preview_entry,
             )
         )
 
@@ -720,6 +858,11 @@ def _render_section(sv: SectionView) -> list[str]:
     else:
         lines.append("(none declared)")
     lines.append("")
+
+    # Preview-wiring (R2): the FIRST-CLASS preview disclosure, adjacent to the
+    # assertions content — always present (an honest line when no preview was
+    # recorded). Presentation-only (R3) — never part of the hashed payload.
+    lines.extend(_render_preview_disclosure(sv))
 
     lines.append("### lint flags")
     lines.append("")

@@ -73,6 +73,7 @@ from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.data_trace import read_trace
 from hpc_agent.state.notebook_audit import (
     RENDER_RELAY_DUE_RECORD_KIND,
+    read_preview_receipts,
     record_scope_relay_due,
 )
 
@@ -270,11 +271,21 @@ def notebook_audit_view(
         template = parse_percent_source(
             _read_source_file(experiment_dir, spec.template, kind="template")
         )
+        # Preview-wiring (R1/R2): the journaled SAMPLED preview receipts disclose
+        # on the override path too (tolerant read — an absent journal yields no
+        # entries and the disclosure renders the honest absent line). Presentation
+        # only — never a caller-trusted receipt input, never in view_sha (R3).
+        preview_receipt = read_preview_receipts(
+            experiment_dir,
+            spec.audit_id,
+            current_shas={sect.slug: sect.section_sha for sect in source.sections},
+        )
         view = build_audit_view(
             source,
             template,
             spec.lint_findings,
             receipt=spec.receipt,
+            preview_receipt=preview_receipt,
             attention_order=effective.attention_order,
             # The section join reads the SAME on-disk audit trace in the preview
             # path so the runtime-evidence summary is not silently dropped when a

@@ -127,6 +127,7 @@ __all__ = [
     "last_module_signoff",
     "record_render_receipt",
     "read_render_receipts",
+    "read_preview_receipts",
     "record_draft",
     "read_draft_author",
     "record_audit_config",
@@ -972,6 +973,94 @@ def read_render_receipts(
             "error": evidence.get("error"),
             "section_sha": newest.content_sha,
             "fresh": fresh,
+        }
+    return out
+
+
+def read_preview_receipts(
+    experiment_dir: Path,
+    audit_id: str,
+    *,
+    current_shas: Mapping[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Read the newest-valid SAMPLED preview receipt per section (the R1 seam).
+
+    The DISTINCT sibling of :func:`read_render_receipts` with the INVERTED scope
+    filter (user-ruled 2026-07-20, R1): it reads back exactly the
+    :data:`EXECUTION_SCOPE_SAMPLED` receipts the full-evidence chokepoint filters
+    OUT — first-class DISCLOSURE provenance the audit view renders beside the
+    assertions (a human iterating gets a fast bounded-sample signal, paying the
+    full render only at final sign-off). Returns ``{slug: {output_sha, error,
+    section_sha, fresh, ts, basis}}``:
+
+    * ``ts`` — the receipt record's OWN journal timestamp (the disclosure's age
+      fact — carried verbatim, never recomputed against a wall clock, so any
+      render of it stays byte-deterministic);
+    * ``basis`` — always :data:`EXECUTION_SCOPE_SAMPLED` (the DISTINCT NAMED BASIS
+      the view records: sampled is a WEAKER evidence class, never conflated with
+      full — the full-evidence consumers read ONLY :func:`read_render_receipts`).
+
+    ``fresh`` is ``True`` iff the receipt's bound section sha still equals
+    *current_shas[slug]* — a stale preview is still disclosed (honest
+    provenance: "your preview was of older code") but greens nothing: the
+    freshness verdict routes through the SAME kernel machinery the full seam
+    uses (:func:`~hpc_agent.state.attestation.reduce`), never a re-inlined
+    sha-compare; newest-valid selection mirrors :func:`_newest_valid` (append
+    order → last valid match wins) while retaining the record's ts, which the
+    kernel's :class:`~hpc_agent.state.attestation.Attestation` does not carry.
+    Malformed records are skipped, never fatal. FULL receipts (and every
+    pre-dry-run record) are invisible here — exactly the class the full seam
+    owns. This seam greens NO tier leg and enters NO ``view_sha``: it is a read
+    for presentation, never a trust input (R3).
+    """
+    from hpc_agent import errors
+
+    records = read_decisions(experiment_dir, "notebook", audit_id)
+    projected: list[dict[str, Any]] = []
+    stamps: list[str] = []  # journal ts per projected receipt (append order)
+    for record in records:
+        receipt = _project_receipt(record)
+        if receipt is None:
+            continue
+        # The INVERSE of the full seam's filter: keep ONLY the sampled class.
+        evidence = receipt.get("evidence")
+        scope = evidence.get("execution_scope") if isinstance(evidence, dict) else None
+        if scope != EXECUTION_SCOPE_SAMPLED:
+            continue
+        projected.append(receipt)
+        ts = record.get("ts")
+        stamps.append(str(ts) if isinstance(ts, str) else "")
+
+    out: dict[str, dict[str, Any]] = {}
+    slugs = {p["subject_id"] for p in projected if isinstance(p.get("subject_id"), str)}
+    for slug in slugs:
+        newest_idx: int | None = None
+        newest: Attestation | None = None
+        for idx, receipt in enumerate(projected):
+            try:
+                att = attestation.validate(receipt)
+            except errors.SpecInvalid:
+                continue
+            if att.subject_id != slug:
+                continue
+            newest_idx, newest = idx, att
+        if newest_idx is None or newest is None:
+            continue
+        current = current_shas.get(slug)
+        # Route the freshness (current/stale) verdict through the ONE kernel.
+        fresh = (
+            current is not None
+            and attestation.reduce(projected, current_sha=current, subject_id=slug)
+            == attestation.CURRENT
+        )
+        evidence = newest.evidence if isinstance(newest.evidence, dict) else {}
+        out[slug] = {
+            "output_sha": evidence.get("output_sha"),
+            "error": evidence.get("error"),
+            "section_sha": newest.content_sha,
+            "fresh": fresh,
+            "ts": stamps[newest_idx],
+            "basis": EXECUTION_SCOPE_SAMPLED,
         }
     return out
 
