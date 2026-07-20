@@ -1,9 +1,13 @@
 # Dev-mode authorship — cross-repo utterance-log trust, opt-in per repo
 
-Status: **RULING SETTLED (2026-07-19, user) — design banked, legs (b)–(d)
-not yet built.** Leg (a) — the strict per-repo default with the
-namespace-naming refusal and the accept-side provenance stamp — landed in
-`efb980d6`. Prereq reading: `state/utterances.py` module docstring (the
+Status: **RULING SETTLED (2026-07-19, user); LEGS (b)–(d) BUILT
+(2026-07-20, `lane/devmode-authorship`).** Leg (a) — the strict per-repo
+default with the namespace-naming refusal and the accept-side provenance
+stamp — landed in `efb980d6`; the grant/revoke journal (b), the shared
+cross-repo evidence reader + per-log provenance (c), and the
+revocation / dangling-drift handling (d) landed on
+`lane/devmode-authorship` with every enforcement pin below tooth-tested
+(see the drift log's build record). Prereq reading: `state/utterances.py` module docstring (the
 trust-anchor store + no-scaffold discipline),
 `ops/decision/journal/human_authorship.py` (the gate),
 `ops/decision/journal/_shared.py` (`_derivation_rule` + the range-gated
@@ -353,3 +357,26 @@ live in `tests/ops/decision/test_dev_mode_authorship.py` unless noted.
   code-owned key). Legs (b)–(d) are designed here and unbuilt; the
   enforcement map names the pins to write. When they land, journal the
   build record here and flip the status header.
+- **2026-07-20 — legs (b)–(d) built (`lane/devmode-authorship`).** New
+  `journal/authorship_home.py` gate (the 13th in the append chain)
+  enforces the journaled grant/revoke record: the block convention both
+  directions, the structural legs (home path resolves, hash recomputes,
+  home namespace exists), and the bootstrap naming leg in the HOME log —
+  every refusal a plain `SpecInvalid`, NEVER the E2 marker (a re-elicited
+  utterance would land in the wrong namespace). `_shared.py` gains
+  `_resolve_authorship_home` (newest-wins, the scope-lock state machine
+  verbatim) and the ONE shared cross-repo reader
+  `_authorship_evidence_texts` (own read → grant state → hash
+  revalidation on EVERY read → actor-scoped home read → union pool with
+  per-log membership; dangling / revoked grants degrade to own-only
+  DISCLOSED, never an exception, never a silent fallback).
+  `human_authorship.py` routes its utterance reads through that shared
+  reader and stamps `evidence_logs` + per-field `source_log` — additive
+  disclosure only; gate SEMANTICS are unchanged, so the opt-out path is
+  byte-identical (pinned by `test_no_grant_home_only_tokens_refused`; the
+  full 303-test pre-existing suite passes unmodified). The B4
+  route-through contract gains the two documented reader exemptions and
+  the routing pin `test_value_gate_routes_through_shared_home_reader`.
+  All 12 named enforcement pins tooth-tested (RED under mechanism revert,
+  GREEN + byte-exact restore after); regen `--check` NO DRIFT (no
+  wire / primitive surface touched). Status header flipped.
