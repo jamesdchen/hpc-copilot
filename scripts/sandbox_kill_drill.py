@@ -81,6 +81,8 @@ import argparse
 import importlib.util
 import json
 import os
+import random
+import shlex
 import socket
 import subprocess
 import sys
@@ -100,9 +102,30 @@ _DRIVER_PATH = REPO_ROOT / "scripts" / "run_sandbox_proving.py"
 # retries, bounded, exactly like the live runsheet.
 MAX_KILL_ATTEMPTS = 3
 DEFAULT_N_SAMPLES_BUMP = 1  # per-attempt n_samples bump → a fresh run_id each try
-WINDOW_POLL_INTERVAL_SEC = 2
+# sacct is DISABLED on the container, so a completed array vanishes from squeue
+# instantly: the array's squeue-visibility window IS its task walltime. The
+# 2026-07-19 CI failure (scheduler-integration run 29709733724) pinned both
+# halves of the deterministic 3/3 miss: ~160ms fixture tasks → a 0.9–1.4s
+# squeue window, AND a fixed 2s poll whose phase locked against the pipeline's
+# ~10.6s spawn→submit cadence so the window parked in the same inter-poll gap
+# every attempt. The fix pairs a LONGER window (5–10s fixture tasks via the
+# driver's n_samples→walltime mapping, DEFAULT_FIXTURE_N_SAMPLES) with a
+# SUB-SECOND JITTERED poll: the loop sleeps AFTER each query, so the effective
+# period is (sleep + ssh RTT) — a fixed sleep keeps the period constant and
+# phase-lockable even with the RTT folded in, so each sleep draws a fresh
+# uniform jitter and the poll phase random-walks off any fixed cadence.
+WINDOW_POLL_INTERVAL_SEC = 0.5  # mean poll sleep (seconds)
+WINDOW_POLL_JITTER_FRAC = 0.2  # ±20% uniform jitter per sleep — breaks phase-lock
 WINDOW_POLL_BUDGET_SEC = 180  # wait for the array to enter the scheduler queue
 KILL_SETTLE_SEC = 2  # let the worker's death land before reading the journal
+
+# Attempt outcome kinds beyond hit/missed/error: the poll NEVER saw the array,
+# yet a dispatch witness (the journal's promoted job_ids, or the cluster-side
+# jobmap wave-0 id + results) proves it entered, ran, and exited INSIDE a poll
+# gap — sacct-disabled means a completed array's squeue lifetime can be shorter
+# than one poll period. DISTINCT from a genuine never-dispatched (no marker,
+# no id, no results — a real dispatch failure), which stays an ``error``.
+DISPATCHED_UNSEEN = "dispatched-unseen"
 
 # The recovery-contract verdict reason that PROVES adoption (no re-qsub). Mirrors
 # ``reconcile._adopt_and_promote``'s stamp — the brief-side adoption signal.
@@ -668,17 +691,39 @@ def kill_worker_pid(pid: int, *, create_time: float | None = None) -> str:
         return f"kill of pid {pid} failed: {exc}"
 
 
+def jittered_poll_interval(
+    base_sec: float = WINDOW_POLL_INTERVAL_SEC,
+    *,
+    jitter_frac: float = WINDOW_POLL_JITTER_FRAC,
+    rand: Callable[[], float] = random.random,
+) -> float:
+    """One poll sleep drawn uniformly from ``base ± base*jitter_frac``.
+
+    The poll loop sleeps AFTER each query, so the effective period is (sleep +
+    ssh RTT): a fixed sleep keeps that period constant and phase-lockable
+    against the pipeline's ~10.6s spawn→submit cadence (the 2026-07-19 3/3
+    miss parked every attempt's sub-second squeue window in the same
+    inter-poll gap). A fresh uniform draw per sleep makes successive periods
+    differ, so the poll phase random-walks off any fixed cadence. *rand* is
+    injectable so tests can pin the draw (0.0 → the floor, 1.0 → the ceiling).
+    """
+    span = base_sec * jitter_frac
+    return base_sec + (rand() * 2.0 - 1.0) * span
+
+
 def wait_for_token(
     ctx: Any,
     *,
     run_id: str,
     token: str,
     budget_sec: int = WINDOW_POLL_BUDGET_SEC,
-    interval_sec: int = WINDOW_POLL_INTERVAL_SEC,
+    interval_sec: float = WINDOW_POLL_INTERVAL_SEC,
 ) -> str | None:
     """Poll the container scheduler until an array tagged *token* appears (the
     window opening) or the budget lapses. Returns the winning snapshot, or None
-    on timeout (the array never entered the queue — recorded as evidence)."""
+    on timeout — which is NOT proof the array never entered (sacct-disabled ⇒
+    a fast array can complete inside one poll gap): the caller arbitrates via
+    the dispatch witnesses (:func:`classify_unseen`)."""
     deadline = time.time() + budget_sec
     snapshot = ""
     channel_failures = _channel_failure_errors()
@@ -693,8 +738,190 @@ def wait_for_token(
             snapshot = ""
         if array_present(ctx.backend, snapshot, token):
             return snapshot
-        time.sleep(interval_sec)
+        time.sleep(jittered_poll_interval(interval_sec))
     return snapshot if array_present(ctx.backend, snapshot, token) else None
+
+
+# ── The dispatched-unseen witnesses (poll silence is NOT dispatch absence) ────
+#
+# When wait_for_token lapses, the OLD error path reported "never entered the
+# scheduler" — reading poll silence as dispatch absence, which violated the
+# drill's own sentinel-ack doctrine (run 29709733724: all three arrays entered
+# AND completed; the poll just never landed inside their ≤1.4s squeue
+# lifetimes). The honest arbitration uses TWO witnesses, cheapest first:
+#
+# 1. LOCAL — the journal record's ``job_ids``: a promote proves the dispatch
+#    happened (the id reached the client), no ssh needed;
+# 2. CLUSTER — ONE ssh read of the jobmap marker + the run's results dir: the
+#    marker is written server-side BEFORE the client sees the id, so it
+#    survives even a dead worker.
+#
+# Only a cluster read whose ack FIRED with no marker, no wave-0 id, and no
+# results settles to "never dispatched".
+
+_PROBE_RESULTS_LINE = "__HPC_PROBE_RESULTS__"
+
+# UnseenProbe.kind vocabulary.
+PROBE_DISPATCHED = "dispatched"  # a witness proves the array entered the scheduler
+PROBE_NEVER_DISPATCHED = "never_dispatched"  # ack fired; marker + results genuinely absent
+PROBE_UNKNOWN = "unknown"  # severed/unreadable probe — settles NOTHING
+
+
+def build_unseen_probe_shell(*, remote_path: str, run_id: str) -> str:
+    """ONE ack-gated ssh round-trip reading BOTH cluster-side dispatch
+    witnesses: the jobmap marker + wave id-files (the SAME ``build_read_shell``
+    read reconcile performs) plus the run's ``results/<run_id>/`` task count.
+
+    The jobmap ack discipline is inherited verbatim: no ``__HPC_JOBMAP_ACK__``
+    ⇒ the read is UNKNOWN (severed channel / truncated), never a settled
+    "absent". The results leg rides after the jobmap read's trailing
+    ``; true`` so a missing results dir never masks the marker half, and emits
+    ``__HPC_PROBE_RESULTS__ <n>`` (0+ ⇒ the array demonstrably RAN) or
+    ``absent``.
+    """
+    from hpc_agent.infra.jobmap import build_read_shell
+
+    results_dir = f"{remote_path.rstrip('/')}/results/{run_id}"
+    return (
+        build_read_shell(remote_path=remote_path, run_id=run_id)
+        + f"; if [ -d {shlex.quote(results_dir)} ]; then "
+        f"printf '%s %s\\n' {shlex.quote(_PROBE_RESULTS_LINE)} "
+        f'"$(ls -1 {shlex.quote(results_dir)} 2>/dev/null | wc -l)"; '
+        f"else printf '%s %s\\n' {shlex.quote(_PROBE_RESULTS_LINE)} absent; fi; true"
+    )
+
+
+def probe_dispatch_evidence(ssh_target: str, remote_path: str, run_id: str) -> str:
+    """The cluster witness: run :func:`build_unseen_probe_shell` over the
+    framework's ``ssh_run`` transport, returning raw stdout. Raises the
+    ``_channel_failure_errors()`` surface on a severed channel (the caller
+    folds it into UNKNOWN, never a settled absence)."""
+    from hpc_agent.infra.remote import ssh_run
+
+    proc = ssh_run(
+        build_unseen_probe_shell(remote_path=remote_path, run_id=run_id),
+        ssh_target=ssh_target,
+    )
+    return proc.stdout or ""
+
+
+@dataclass(frozen=True)
+class UnseenProbe:
+    """The cluster witness's answer to "the poll never saw the array — was it
+    ever dispatched?" ``job_id`` is the wave-0 id parsed off the marker (None
+    when the id-file is absent/rc!=0/unparseable); ``results_tasks`` is the
+    per-task result-dir count (None when the results dir is absent)."""
+
+    kind: str
+    job_id: str | None = None
+    results_tasks: int | None = None
+
+
+def classify_unseen_probe(scheduler: str, probe_stdout: str) -> UnseenProbe:
+    """Classify :func:`build_unseen_probe_shell` stdout under the sentinel-ack
+    doctrine. No jobmap ack ⇒ UNKNOWN (a severed read settles NOTHING). An ack
+    that FIRED with neither a parseable wave-0 id nor any task results ⇒
+    genuinely NEVER_DISPATCHED. Anything else (an id at rc==0, or results on
+    disk) ⇒ DISPATCHED — the poll missed an array that was really there.
+    """
+    from hpc_agent.infra.jobmap import parse_jobmap_read
+
+    if not parse_jobmap_read(probe_stdout).present:
+        return UnseenProbe(kind=PROBE_UNKNOWN)
+    results_tasks: int | None = None
+    for raw in (probe_stdout or "").splitlines():
+        line = raw.strip()
+        if line.startswith(_PROBE_RESULTS_LINE):
+            tail = line[len(_PROBE_RESULTS_LINE) :].strip()
+            if tail.isdigit():
+                results_tasks = int(tail)
+    job_id = marker_wave0_job_id(scheduler, probe_stdout)
+    if job_id is None and not results_tasks:
+        return UnseenProbe(kind=PROBE_NEVER_DISPATCHED, results_tasks=results_tasks)
+    return UnseenProbe(kind=PROBE_DISPATCHED, job_id=job_id, results_tasks=results_tasks)
+
+
+def classify_unseen(
+    ctx: Any,
+    *,
+    experiment_dir: Path,
+    remote_path: str,
+    run_id: str,
+    token: str,
+) -> WindowOutcome:
+    """Arbitrate a lapsed poll budget: was the array ever dispatched?
+
+    Witness 1 is LOCAL (the journal record's job_ids — a promote proves the
+    dispatch reached the client); witness 2 is the ONE-ssh cluster probe
+    (marker + results). The outcome is DISPATCHED_UNSEEN whenever a witness
+    proves the dispatch, an honest ``error`` naming the genuine
+    never-dispatched only when the cluster ack fired on an empty marker +
+    empty results, and an UNKNOWN ``error`` when the probe itself was
+    unreadable — the old "never entered the scheduler" misread is gone.
+    """
+    record = read_journal_record(experiment_dir, run_id)
+    raw_ids = record.get("job_ids") or []
+    job_ids = [str(j) for j in raw_ids]
+    if job_ids:
+        return WindowOutcome(
+            kind=DISPATCHED_UNSEEN,
+            detail=(
+                f"array tagged {token!r} dispatched (the journal record carries "
+                f"job_ids={job_ids!r}) but never seen in the poll window — it "
+                "entered and left squeue between polls (sacct disabled ⇒ a "
+                "completed array vanishes instantly)"
+            ),
+            run_id=run_id,
+        )
+    try:
+        probe_stdout = probe_dispatch_evidence(ctx.ssh_target, remote_path, run_id)
+    except _channel_failure_errors() as exc:
+        return WindowOutcome(
+            kind="error",
+            detail=(
+                f"array tagged {token!r} unseen within the poll budget and the "
+                f"cluster-side dispatch probe was unreadable ({exc}) — UNKNOWN "
+                "whether it ever entered; the dispatch question stays UNSETTLED"
+            ),
+            run_id=run_id,
+        )
+    probe = classify_unseen_probe(ctx.backend, probe_stdout)
+    if probe.kind == PROBE_DISPATCHED:
+        completion = (
+            f"completed ({probe.results_tasks} task results on disk)"
+            if probe.results_tasks
+            else "completion unproven (no task results yet)"
+        )
+        id_note = f"jobmap wave-0 id={probe.job_id}" if probe.job_id else "no parseable wave-0 id"
+        return WindowOutcome(
+            kind=DISPATCHED_UNSEEN,
+            detail=(
+                f"array tagged {token!r} dispatched + {completion} but never "
+                f"seen in the poll window ({id_note}) — it entered, ran, and "
+                "exited inside a poll gap (sacct disabled ⇒ a completed array "
+                "vanishes from squeue instantly)"
+            ),
+            run_id=run_id,
+        )
+    if probe.kind == PROBE_UNKNOWN:
+        return WindowOutcome(
+            kind="error",
+            detail=(
+                f"array tagged {token!r} unseen within the poll budget and the "
+                "dispatch probe returned no ack — UNKNOWN whether it ever "
+                "entered; the dispatch question stays UNSETTLED"
+            ),
+            run_id=run_id,
+        )
+    return WindowOutcome(
+        kind="error",
+        detail=(
+            f"array tagged {token!r} never dispatched: the cluster-side probe "
+            "fired its ack but found no jobmap marker, no wave-0 id, and no "
+            f"results under {remote_path} — a genuine dispatch failure"
+        ),
+        run_id=run_id,
+    )
 
 
 # ── The kill dance for ONE attempt (fixture → S3 launch → kill → classify) ───
@@ -904,10 +1131,16 @@ def _drive_one_attempt(
     token = jobmap_token(run_id, int(attempt_no))
     snapshot = wait_for_token(ctx, run_id=run_id, token=token)
     if snapshot is None:
-        return WindowOutcome(
-            kind="error",
-            detail=f"array tagged {token!r} never entered the scheduler within the poll budget",
+        # The poll never saw the array — which is NOT proof it never entered
+        # (sacct disabled ⇒ a fast array completes inside one poll gap; run
+        # 29709733724 misreported exactly that as "never entered"). Arbitrate
+        # via the dispatch witnesses, cheapest first.
+        return classify_unseen(
+            ctx,
+            experiment_dir=experiment_dir,
+            remote_path=remote_path,
             run_id=run_id,
+            token=token,
         )
 
     # (c) kill the LOCAL detached dispatch process inside the submit-window.
@@ -1135,6 +1368,22 @@ def run_kill_drill(ctx: Any, *, base_n_samples: int, max_attempts: int = MAX_KIL
 # ── CLI entry (guard-first refusal order mirrors the U3 driver) ──────────────
 
 
+def default_drill_workdir(env: Mapping[str, str]) -> Path:
+    """The drill's default workdir (specs + evidence root).
+
+    The evidence-upload contract with the CI lane: on GitHub Actions
+    (``RUNNER_TEMP`` set) the default is ``$RUNNER_TEMP/sandbox-evidence/
+    kill-drill/`` — exactly the path the workflow's upload-artifact step
+    points at (previously the drill dropped evidence into an unuploaded
+    mkdtemp, so a failing drill left no artifact). Off Actions, keep the
+    mkdtemp behavior. An explicit ``--workdir`` always wins over this default.
+    """
+    runner_temp = (env.get("RUNNER_TEMP") or "").strip()
+    if runner_temp:
+        return Path(runner_temp) / "sandbox-evidence" / "kill-drill"
+    return Path(tempfile.mkdtemp(prefix="hpc-killdrill-"))
+
+
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="sandbox_kill_drill.py",
@@ -1177,8 +1426,13 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--base-n-samples",
         type=int,
-        default=120_000,
-        help="n_samples for the first attempt; each retry bumps it (fresh run_id).",
+        default=_driver.DEFAULT_FIXTURE_N_SAMPLES,
+        help=(
+            "n_samples for the first attempt; each retry bumps it (fresh "
+            "run_id). Default: the driver's fixture-walltime band (~5–10s per "
+            "task on the container) so the array's squeue-visibility window "
+            "clears the sub-second jittered poll."
+        ),
     )
     parser.add_argument(
         "--max-attempts",
@@ -1237,7 +1491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("sandbox-kill-drill: --max-attempts must be >= 1", file=sys.stderr)
         return 2
 
-    workdir = (args.workdir or Path(tempfile.mkdtemp(prefix="hpc-killdrill-"))).resolve()
+    workdir = (args.workdir or default_drill_workdir(os.environ)).resolve()
     scratch = workdir / "specs"
     scratch.mkdir(parents=True, exist_ok=True)
     out_path = args.out or (workdir / "evidence.json")

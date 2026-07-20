@@ -165,6 +165,19 @@ DEFAULT_RUN_NAME = "sandbox-pi"
 DEFAULT_WALLTIME_SEC = 900
 RESULT_DIR_TEMPLATE = "results/{run_id}/task_{task_id}"
 
+# ── The n_samples → task-walltime mapping (the fixture generator's one knob) ──
+# The U1 fixture's pi executor costs ~1.6µs/sample on the slurmci container
+# (measured 2026-07-19 from scheduler-integration run 29709733724 forensics:
+# ~120k samples ≈ 160ms per task). sacct is DISABLED there, so a completed
+# array vanishes from squeue instantly and the array's squeue-visibility
+# window IS its task walltime: ~120k-sample tasks gave a 0.9–1.4s window that
+# parked inside the kill drill's old fixed 2s poll gap — the deterministic
+# 3/3 "never entered the scheduler" misread. 4M samples puts one fixture task
+# at ~6.4s on the container (the 5–10s band): far above the drill's new
+# sub-second jittered poll, far below the 900s walltime ask.
+FIXTURE_SAMPLES_PER_SEC = 625_000  # ≈ 1 / 1.6µs on the slurmci container (measured)
+DEFAULT_FIXTURE_N_SAMPLES = 4_000_000  # → ~5–10s per fixture task on the container
+
 # The array-script path deploy_runtime ships, per backend family (mirrors
 # tests/integration/scheduler/test_scheduler_smoke.py's _FAMILIES).
 _SCRIPT_BY_BACKEND = {
@@ -2061,8 +2074,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
     else:
         # A fresh n_samples per run so successive runs mint fresh run_ids
-        # (the determinism lesson from the 2026-07-18 drill).
-        sweep = {"n_samples": 100_000 + (os.getpid() % 50_000)}
+        # (the determinism lesson from the 2026-07-18 drill). The base rides
+        # the fixture-walltime band (~5–10s/task, see FIXTURE_SAMPLES_PER_SEC)
+        # so the main array's squeue-visibility window clears the kill drill's
+        # sub-second poll — sacct is disabled, so a completed array vanishes
+        # from squeue instantly.
+        sweep = {"n_samples": DEFAULT_FIXTURE_N_SAMPLES + (os.getpid() % 50_000)}
     try:
         fixture_kwargs_from_sweep(sweep)  # validate before any cluster work
     except SandboxRefusal as exc:

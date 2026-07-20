@@ -690,3 +690,47 @@ def test_main_refuses_missing_clusters_config(
     assert rc == 1  # the chain records the setup refusal as evidence, exit 1
     evidence = list(tmp_path.glob("hpc-sandbox-*"))  # no workdir flag → tmpdir; nothing to find
     assert evidence == []  # (evidence lives in the fresh tmpdir, not tmp_path)
+
+
+# ── the fixture n_samples → task-walltime mapping (the 2026-07-19 window fix) ──
+#
+# sacct is DISABLED on the container, so a completed array vanishes from
+# squeue instantly and the array's squeue-visibility window IS its task
+# walltime. The old 100k-sample default ran ~160ms tasks (a 0.9–1.4s window
+# that parked inside the kill drill's old 2s poll gap — the deterministic 3/3
+# miss of run 29709733724). The default sweep must keep fixture tasks in the
+# 5–10s band.
+
+
+def test_fixture_n_samples_default_hits_the_5_to_10s_band() -> None:
+    seconds = driver.DEFAULT_FIXTURE_N_SAMPLES / driver.FIXTURE_SAMPLES_PER_SEC
+    assert 5.0 <= seconds <= 10.0
+    # …and the mapping constant is the measured container rate (≈1.6µs/sample).
+    assert driver.FIXTURE_SAMPLES_PER_SEC >= 100_000  # sanity: not ns/sample
+
+
+def test_main_default_sweep_uses_the_fixture_band(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The default sweep (no --sweep flag) must ride DEFAULT_FIXTURE_N_SAMPLES
+    # plus the pid-offset freshness bump — pinned end-to-end through main()'s
+    # evidence meta (the setup refusal path writes evidence before exiting 1).
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    out = tmp_path / "evidence.json"
+    rc = driver.main(
+        [
+            "--clusters-config",
+            str(tmp_path / "absent.yaml"),
+            "--workdir",
+            str(tmp_path / "work"),
+            "--out",
+            str(out),
+            "--markdown",
+            str(tmp_path / "evidence.md"),
+        ]
+    )
+    assert rc == 1
+    evidence = json.loads(out.read_text(encoding="utf-8"))
+    n_samples = evidence["meta"]["sweep"]["n_samples"]
+    assert n_samples >= driver.DEFAULT_FIXTURE_N_SAMPLES
+    assert n_samples < driver.DEFAULT_FIXTURE_N_SAMPLES + 50_000

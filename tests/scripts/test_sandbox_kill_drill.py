@@ -27,12 +27,23 @@ Covered pins (plan §4-U4):
    evidence rows + bounded aborts — never a traceback escaping the
    attempt/driver function — and leg 3's ``SandboxRefusal`` path
    (``run_cli_argv`` genuinely raises it) stays live.
+10. The sub-second JITTERED poll (the 2026-07-19 phase-lock fix): ≤0.5s mean,
+    every sleep routed through the jitter, the 180s budget unchanged.
+11. The dispatched-unseen witnesses (run 29709733724): a lapsed poll arbitrates
+    via the journal's promoted job_ids (local) then the ONE-ssh cluster probe
+    (jobmap marker + results) — a fast-completing array is SEEN or reported
+    dispatched-unseen, NEVER misread as "never entered the scheduler"; only an
+    ack-fired empty probe settles to "never dispatched".
+12. The RUNNER_TEMP evidence-dir contract: on Actions the default workdir is
+    ``$RUNNER_TEMP/sandbox-evidence/kill-drill/`` (the upload step's path);
+    off Actions the mkdtemp fallback; an explicit ``--workdir`` wins.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import socket
 import sys
 from collections.abc import Callable
@@ -571,7 +582,9 @@ def test_drive_one_attempt_severed_channel_is_an_error_outcome_not_a_traceback(
 ) -> None:
     # Site 1 end-to-end through the attempt driver: the severed channel must
     # surface as a bounded ``error`` WindowOutcome (the evidence the retry loop
-    # records), never a traceback out of _drive_one_attempt.
+    # records), never a traceback out of _drive_one_attempt. With BOTH the poll
+    # and the cluster probe severed, the verdict is UNKNOWN — the drill must
+    # NOT resurrect the old "never entered the scheduler" misread.
     monkeypatch.setattr(
         kd,
         "_drive_chain_to_s3_launch",
@@ -596,6 +609,12 @@ def test_drive_one_attempt_severed_channel_is_an_error_outcome_not_a_traceback(
         "query_token_snapshot",
         _raise(TimeoutError("ssh to slurmci timed out after 30s")),
     )
+    # The cluster witness is severed too — the probe raises the same way.
+    monkeypatch.setattr(
+        kd,
+        "probe_dispatch_evidence",
+        _raise(TimeoutError("ssh to slurmci timed out after 30s")),
+    )
     # Shrink the poll budget so the test does not sit out the live 180s window.
     real_wait = kd.wait_for_token
     monkeypatch.setattr(
@@ -610,7 +629,8 @@ def test_drive_one_attempt_severed_channel_is_an_error_outcome_not_a_traceback(
     outcome = kd._drive_one_attempt(state, ctx, n_samples=1, attempt_index=0, hit={})
     assert outcome.kind == "error"
     assert outcome.run_id == RUN_ID
-    assert "never entered the scheduler" in outcome.detail
+    assert "UNKNOWN" in outcome.detail
+    assert "never entered the scheduler" not in outcome.detail
 
 
 @pytest.mark.parametrize(
@@ -663,6 +683,328 @@ def test_recovery_legs_channel_failure_records_rows_and_never_raises(
     assert str(channel_error) in one_array_rows[0]["detail"]
 
 
+# ── the sub-second jittered poll (the 2026-07-19 phase-lock fix) ─────────────
+
+
+def test_poll_constants_are_sub_second_jittered_with_the_180s_budget() -> None:
+    # The two halves of the run-29709733724 fix: a ≤0.5s MEAN poll with a
+    # non-zero jitter (a fixed 2s cadence phase-locked against the ~10.6s
+    # spawn→submit beat), and the budget unchanged.
+    assert kd.WINDOW_POLL_INTERVAL_SEC <= 0.5
+    assert 0 < kd.WINDOW_POLL_JITTER_FRAC < 0.5
+    assert kd.WINDOW_POLL_BUDGET_SEC == 180
+
+
+def test_jittered_poll_interval_mean_and_bounds() -> None:
+    # Symmetric uniform jitter around the 0.5s base: every draw lands in
+    # [0.4, 0.6] and the mean stays at ≤0.5s (±sampling noise, ~15σ slack).
+    draws = [kd.jittered_poll_interval() for _ in range(2000)]
+    assert all(0.4 <= d <= 0.6 for d in draws)
+    mean = sum(draws) / len(draws)
+    assert abs(mean - 0.5) < 0.02
+    assert mean <= 0.52
+    # Pinned draws: rand=0.0 → the floor, rand=1.0 → the ceiling.
+    assert kd.jittered_poll_interval(rand=lambda: 0.0) == pytest.approx(0.4)
+    assert kd.jittered_poll_interval(rand=lambda: 1.0) == pytest.approx(0.6)
+    # Successive draws differ — the phase random-walks off any fixed cadence.
+    assert len(set(draws)) > 100
+
+
+def test_wait_for_token_sleeps_via_the_jittered_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The loop must route EVERY sleep through the jitter (a bare
+    # ``time.sleep(interval)`` would re-open the phase-lock).
+    bases: list[float] = []
+
+    def fake_jitter(base: float = 0.5) -> float:
+        bases.append(base)
+        return 0.01
+
+    monkeypatch.setattr(kd, "jittered_poll_interval", fake_jitter)
+    monkeypatch.setattr(
+        kd, "query_token_snapshot", lambda *a, **k: _slurm_snap("77777|unrelated#0")
+    )
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.wait_for_token(ctx, run_id=RUN_ID, token=TOKEN, budget_sec=1, interval_sec=0.5)
+    assert outcome is None
+    assert len(bases) >= 3
+    assert all(b == 0.5 for b in bases)
+
+
+def test_wait_for_token_returns_the_winning_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A fast array IS reported when the poll lands inside its squeue lifetime.
+    snaps = iter(["", "", _slurm_snap(f"12345_0|{TOKEN}", f"12345_1|{TOKEN}")])
+    monkeypatch.setattr(
+        kd,
+        "query_token_snapshot",
+        lambda *a, **k: next(snaps, _slurm_snap(f"12345_0|{TOKEN}")),
+    )
+    monkeypatch.setattr(kd, "jittered_poll_interval", lambda base=0.5: 0.0)
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.wait_for_token(ctx, run_id=RUN_ID, token=TOKEN, budget_sec=5, interval_sec=0.5)
+    assert outcome is not None and "12345" in outcome
+
+
+# ── the dispatched-unseen witnesses (poll silence is NOT dispatch absence) ────
+
+
+def _probe_stdout(
+    *, wave_line: str | None, results: str, token: str = TOKEN, state: str = "pending"
+) -> str:
+    """Synthetic probe stdout: the jobmap read half + the results-count line."""
+    return _marker_stdout(wave_line=wave_line, token=token, state=state) + (
+        f"{kd._PROBE_RESULTS_LINE} {results}\n"
+    )
+
+
+def test_build_unseen_probe_shell_reads_marker_and_results_in_one_command() -> None:
+    shell = kd.build_unseen_probe_shell(remote_path="/remote/exp", run_id=RUN_ID)
+    # The jobmap half is the SAME ack-gated read reconcile performs…
+    assert "__HPC_JOBMAP_ACK__" in shell
+    assert f"{RUN_ID}.jobmap.*.id" in shell
+    # …plus the results-dir witness, quoted, with the settled-absent branch.
+    assert f"results/{RUN_ID}" in shell
+    assert kd._PROBE_RESULTS_LINE in shell
+    assert "absent" in shell
+
+
+def test_classify_unseen_probe_dispatched_and_completed() -> None:
+    # The run-29709733724 case: marker pending, wave-0 id at rc==0, results on
+    # disk — the array entered, ran, and completed inside the poll gap.
+    probe = kd.classify_unseen_probe(
+        "slurm",
+        _probe_stdout(
+            wave_line="__HPC_JOBMAP_WAVE__ wave-0 0 Submitted batch job 12345", results="8"
+        ),
+    )
+    assert probe.kind == kd.PROBE_DISPATCHED
+    assert probe.job_id == "12345"
+    assert probe.results_tasks == 8
+
+
+def test_classify_unseen_probe_dispatched_completion_unproven() -> None:
+    # A wave-0 id with no results yet: dispatched is proven, completion is not.
+    probe = kd.classify_unseen_probe(
+        "slurm",
+        _probe_stdout(
+            wave_line="__HPC_JOBMAP_WAVE__ wave-0 0 Submitted batch job 12345",
+            results="absent",
+        ),
+    )
+    assert probe.kind == kd.PROBE_DISPATCHED
+    assert probe.job_id == "12345"
+    assert probe.results_tasks is None
+
+
+def test_classify_unseen_probe_never_dispatched_requires_the_ack() -> None:
+    # Ack FIRED (the read is good) + no marker id-file + no results → the ONE
+    # genuinely settle-able "never dispatched".
+    probe = kd.classify_unseen_probe("slurm", _probe_stdout(wave_line=None, results="absent"))
+    assert probe.kind == kd.PROBE_NEVER_DISPATCHED
+    assert probe.job_id is None
+    # An explicit zero count is absence too (results dir exists but is empty).
+    probe_zero = kd.classify_unseen_probe("slurm", _probe_stdout(wave_line=None, results="0"))
+    assert probe_zero.kind == kd.PROBE_NEVER_DISPATCHED
+
+
+def test_classify_unseen_probe_failed_dispatch_never_entered() -> None:
+    # rc!=0 on the wave-0 id-file is a confirmed FAILED dispatch (the Δ4 gate)
+    # — with no results, the array genuinely never entered.
+    probe = kd.classify_unseen_probe(
+        "slurm",
+        _probe_stdout(wave_line="__HPC_JOBMAP_WAVE__ wave-0 7 garbage-no-id", results="absent"),
+    )
+    assert probe.kind == kd.PROBE_NEVER_DISPATCHED
+
+
+def test_classify_unseen_probe_severed_read_is_unknown_never_absence() -> None:
+    # No ack → UNKNOWN: the sentinel-ack doctrine forbids settling a severed
+    # read as "no marker" (the old error path's lie).
+    assert kd.classify_unseen_probe("slurm", "").kind == kd.PROBE_UNKNOWN
+    garbage = f"12345|{TOKEN}\n{kd._PROBE_RESULTS_LINE} 8\n"  # rows but NO ack
+    assert kd.classify_unseen_probe("slurm", garbage).kind == kd.PROBE_UNKNOWN
+
+
+def test_classify_unseen_local_journal_witness_never_touches_ssh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Witness 1: a promoted journal record proves dispatch LOCALLY — the
+    # cluster probe must not even run.
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "in_flight", "job_ids": ["12345"], "attempt": 0},
+    )
+    monkeypatch.setattr(kd, "probe_dispatch_evidence", _raise(AssertionError("ssh must not run")))
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.classify_unseen(
+        ctx, experiment_dir=tmp_path, remote_path="/remote/exp", run_id=RUN_ID, token=TOKEN
+    )
+    assert outcome.kind == kd.DISPATCHED_UNSEEN
+    assert "12345" in outcome.detail
+    assert "never entered the scheduler" not in outcome.detail
+
+
+def test_classify_unseen_cluster_witness_dispatched_completed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Witness 2: empty journal (worker died pre-promote), but the cluster-side
+    # marker + results prove the dispatch — the actual 3/3 CI case.
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "submitting", "job_ids": [], "attempt": 0},
+    )
+    monkeypatch.setattr(
+        kd,
+        "probe_dispatch_evidence",
+        lambda *a, **k: _probe_stdout(
+            wave_line="__HPC_JOBMAP_WAVE__ wave-0 0 Submitted batch job 12345", results="8"
+        ),
+    )
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.classify_unseen(
+        ctx, experiment_dir=tmp_path, remote_path="/remote/exp", run_id=RUN_ID, token=TOKEN
+    )
+    assert outcome.kind == kd.DISPATCHED_UNSEEN
+    assert "dispatched + completed" in outcome.detail
+    assert "12345" in outcome.detail
+    assert "never entered the scheduler" not in outcome.detail
+
+
+def test_classify_unseen_genuinely_absent_is_never_dispatched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "submitting", "job_ids": [], "attempt": 0},
+    )
+    monkeypatch.setattr(
+        kd,
+        "probe_dispatch_evidence",
+        lambda *a, **k: _probe_stdout(wave_line=None, results="absent"),
+    )
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.classify_unseen(
+        ctx, experiment_dir=tmp_path, remote_path="/remote/exp", run_id=RUN_ID, token=TOKEN
+    )
+    assert outcome.kind == "error"
+    assert "never dispatched" in outcome.detail
+    assert "never entered the scheduler" not in outcome.detail
+
+
+def test_classify_unseen_severed_probe_is_unknown_not_absence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "submitting", "job_ids": [], "attempt": 0},
+    )
+    monkeypatch.setattr(kd, "probe_dispatch_evidence", _raise(TimeoutError("ssh timed out")))
+    ctx = SimpleNamespace(ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd.classify_unseen(
+        ctx, experiment_dir=tmp_path, remote_path="/remote/exp", run_id=RUN_ID, token=TOKEN
+    )
+    assert outcome.kind == "error"
+    assert "UNKNOWN" in outcome.detail
+    assert "never entered the scheduler" not in outcome.detail
+    assert "never dispatched" not in outcome.detail
+
+
+def test_drive_one_attempt_fast_array_is_dispatched_unseen_never_misread(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The full attempt path for the 3/3 CI case: the poll budget lapses (the
+    # fake array's squeue lifetime sat inside the poll gap) and the cluster
+    # witness proves dispatch + completion — the outcome MUST be the distinct
+    # dispatched-unseen verdict, never "never entered".
+    monkeypatch.setattr(
+        kd,
+        "_drive_chain_to_s3_launch",
+        lambda state, ctx, *, n_samples: (RUN_ID, str(tmp_path), "/remote/exp"),
+    )
+    monkeypatch.setattr(
+        kd._driver,
+        "read_detached_lease",
+        lambda home, run_id, block: {
+            "pid": 4321,
+            "host": socket.gethostname(),
+            "create_time": 1.5,
+        },
+    )
+    monkeypatch.setattr(
+        kd,
+        "read_journal_record",
+        lambda *a, **k: {"status": "submitting", "job_ids": [], "attempt": 0},
+    )
+    monkeypatch.setattr(kd, "wait_for_token", lambda ctx, *, run_id, token: None)
+    monkeypatch.setattr(
+        kd,
+        "probe_dispatch_evidence",
+        lambda *a, **k: _probe_stdout(
+            wave_line="__HPC_JOBMAP_WAVE__ wave-0 0 Submitted batch job 12345", results="8"
+        ),
+    )
+    state = kd._driver.ChainState()
+    ctx = SimpleNamespace(journal_home=tmp_path, ssh_target="hpcuser@slurmci", backend="slurm")
+    outcome = kd._drive_one_attempt(state, ctx, n_samples=1, attempt_index=0, hit={})
+    assert outcome.kind == kd.DISPATCHED_UNSEEN
+    assert outcome.run_id == RUN_ID
+    assert "never entered the scheduler" not in outcome.detail
+
+
+# ── the RUNNER_TEMP evidence-dir contract (the CI upload path) ────────────────
+
+
+def test_default_drill_workdir_honors_runner_temp(tmp_path: Path) -> None:
+    got = kd.default_drill_workdir({"RUNNER_TEMP": str(tmp_path / "rt")})
+    assert got == tmp_path / "rt" / "sandbox-evidence" / "kill-drill"
+
+
+def test_default_drill_workdir_ignores_blank_runner_temp(tmp_path: Path) -> None:
+    got = kd.default_drill_workdir({"RUNNER_TEMP": "  "})
+    try:
+        assert got.name.startswith("hpc-killdrill-")
+        assert got.is_dir()
+    finally:
+        shutil.rmtree(got, ignore_errors=True)
+
+
+def test_main_runner_temp_lands_evidence_under_sandbox_evidence_kill_drill(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The workflow's upload step points at exactly
+    # $RUNNER_TEMP/sandbox-evidence/kill-drill/ — a drill run with no explicit
+    # --workdir must put its evidence there on Actions.
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "rt"))
+    rc = kd.main(["--clusters-config", str(tmp_path / "absent.yaml")])
+    assert rc == 1  # the setup refusal is recorded as evidence
+    # main() resolves the workdir; mirror that before comparing (Windows temp
+    # dirs can carry alias spellings).
+    evidence_dir = (tmp_path / "rt" / "sandbox-evidence" / "kill-drill").resolve()
+    evidence = json.loads((evidence_dir / "evidence.json").read_text(encoding="utf-8"))
+    assert evidence["verdict"] == "fail"
+    assert (evidence_dir / "evidence.md").is_file()
+
+
+def test_main_explicit_workdir_beats_runner_temp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "rt"))
+    work = tmp_path / "explicit-work"
+    rc = kd.main(["--clusters-config", str(tmp_path / "absent.yaml"), "--workdir", str(work)])
+    assert rc == 1
+    assert (work / "evidence.json").is_file()
+    assert not (tmp_path / "rt" / "sandbox-evidence" / "kill-drill").exists()
+
+
 # ── main() guard-first refusal order ─────────────────────────────────────────
 
 
@@ -692,6 +1034,9 @@ def test_main_refuses_without_cluster_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    # Hermeticity: on a GitHub runner RUNNER_TEMP is set and would retarget the
+    # default workdir — pin it off so this test never writes outside tmp_path.
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
     assert kd.main([]) == 2
     assert "--clusters-config" in capsys.readouterr().err
 
@@ -700,5 +1045,6 @@ def test_main_refuses_missing_clusters_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)  # hermeticity (see above)
     # The chain records the setup refusal as evidence → exit 1 (not a guard 2).
     assert kd.main(["--clusters-config", str(tmp_path / "absent.yaml")]) == 1
