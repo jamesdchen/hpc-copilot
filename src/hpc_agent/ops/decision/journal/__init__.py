@@ -11,12 +11,17 @@ audit log, so a replayed append records a second line rather than
 deduping — there is no natural idempotency key (``ts`` is auto-stamped and
 differs per call). ``read-decisions`` is a pure query.
 
-Four trust-seam gates run before an append is persisted: the code-derived
+Five trust-seam gates run before an append is persisted: the code-derived
 field gate (:func:`_assert_no_code_derived_fields`, run #6 F1), the rule-9
 brief-provenance gate (:func:`_assert_brief_provenance`), the
-human-authorship gate (:func:`_assert_human_authorship`, proving run #4) and
-the scope-unlock authorship gate (:func:`_assert_unlock_authorship`) — a scope
-unlock RELAXES a caller restriction, so a bare ``y`` cannot enact it.
+human-authorship gate (:func:`_assert_human_authorship`, proving run #4),
+the authorship-home grant gate (:func:`_assert_authorship_home_grant`, the
+dev-mode cross-repo opt-in — ``docs/design/dev-mode-authorship.md`` leg b:
+a grant widening the evidence pool must be bootstrapped from a human naming
+utterance in the HOME log, never a silent config flag or an agent-relayed
+response) and the scope-unlock authorship gate
+(:func:`_assert_unlock_authorship`) — a scope unlock RELAXES a caller
+restriction, so a bare ``y`` cannot enact it.
 The authorship gate's evidence source is TIERED: when the harness-side
 ``UserPromptSubmit`` capture hook
 (:mod:`hpc_agent._kernel.hooks.utterance_capture`) has logged utterances for
@@ -39,7 +44,7 @@ fuses the commit into the advancing ``block-drive`` tick. There is no second
 This module is the thin dispatching FACADE of the ``journal`` package: it hosts
 the two agent-facing primitives (``append-decision`` / ``read-decisions``) and
 re-exports every symbol the pre-split ``journal.py`` module exposed, so the
-import path ``hpc_agent.ops.decision.journal`` is unchanged. The twelve
+import path ``hpc_agent.ops.decision.journal`` is unchanged. The thirteen
 authorship gates live in the sibling submodules; the shared substrate lives in
 ``_shared``."""
 
@@ -66,6 +71,9 @@ from hpc_agent.state.decision_journal import read_decisions as _read_decisions
 
 from ._shared import (
     _AUTHORSHIP_EVIDENCE_MISSING,
+    _AUTHORSHIP_HOME_ACTIONS,
+    _AUTHORSHIP_HOME_BLOCK,
+    _AUTHORSHIP_HOME_SCOPE,
     _BARE_ACK_RESPONSES,
     _FREE_TEXT_CALLER_FIELDS,
     _HA_MULTIPLIERS,
@@ -75,6 +83,7 @@ from ._shared import (
     _SCHEMA_ENUM_KEYS,
     _actor_scoped_human_texts,
     _assert_actor_policy,
+    _authorship_evidence_texts,
     _collect_value_numbers,
     _collect_value_string_tokens,
     _conclusion_dossier_resolver,
@@ -87,14 +96,19 @@ from ._shared import (
     _human_number_pool,
     _is_bare_ack,
     _names_citation_sha_prefix,
+    _names_repo_hash,
     _names_slug,
     _names_target_sha_prefix,
     _newest_lock_ts,
     _read_interview_actors,
     _refuse_missing_authorship,
     _registration_authored_text,
+    _resolve_authorship_home,
     _session_actor,
     _target_record_ts,
+)
+from .authorship_home import (
+    _assert_authorship_home_grant,
 )
 from .brief_provenance import (
     _assert_brief_provenance,
@@ -218,6 +232,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_no_code_derived_fields(resolved)
     _assert_brief_provenance(experiment_dir, spec, resolved)
     authorship_disclosure = _assert_human_authorship(experiment_dir, spec, resolved)
+    _assert_authorship_home_grant(experiment_dir, spec, resolved)
     _assert_unlock_authorship(experiment_dir, spec, resolved)
     _assert_signoff_authorship(experiment_dir, spec, resolved)
     _assert_module_signoff_authorship(experiment_dir, spec, resolved)
@@ -419,6 +434,9 @@ def read_decisions(*, experiment_dir: Path, spec: ReadDecisionsInput) -> ReadDec
 
 __all__ = [
     "_AUTHORSHIP_EVIDENCE_MISSING",
+    "_AUTHORSHIP_HOME_ACTIONS",
+    "_AUTHORSHIP_HOME_BLOCK",
+    "_AUTHORSHIP_HOME_SCOPE",
     "_BARE_ACK_RESPONSES",
     "_FREE_TEXT_CALLER_FIELDS",
     "_HA_MULTIPLIERS",
@@ -433,6 +451,7 @@ __all__ = [
     "_SIGNOFF_IDENT_RE",
     "_actor_scoped_human_texts",
     "_assert_actor_policy",
+    "_assert_authorship_home_grant",
     "_assert_brief_provenance",
     "_assert_challenge_authorship",
     "_assert_challenge_filing_full",
@@ -455,6 +474,7 @@ __all__ = [
     "_assert_signoff_render_current",
     "_assert_signoff_reviewer_not_author",
     "_assert_unlock_authorship",
+    "_authorship_evidence_texts",
     "_bound_consent_records",
     "_chain_successor",
     "_challenge_filing_attestor",
@@ -477,6 +497,7 @@ __all__ = [
     "_match_ledger_sha_prefix",
     "_names_any_sha_prefix",
     "_names_citation_sha_prefix",
+    "_names_repo_hash",
     "_names_sha_prefix",
     "_names_slug",
     "_names_target_sha_prefix",
@@ -488,6 +509,7 @@ __all__ = [
     "_recompute_challenge_view_sha",
     "_refuse_missing_authorship",
     "_registration_authored_text",
+    "_resolve_authorship_home",
     "_resolve_signoff_audit_config",
     "_section_specific_tokens",
     "_session_actor",

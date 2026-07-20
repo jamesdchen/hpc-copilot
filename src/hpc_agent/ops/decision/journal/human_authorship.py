@@ -11,7 +11,7 @@ from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 
 from ._shared import (
     _FREE_TEXT_CALLER_FIELDS,
-    _actor_scoped_human_texts,
+    _authorship_evidence_texts,
     _collect_value_numbers,
     _collect_value_string_tokens,
     _derivation_rule,
@@ -22,6 +22,41 @@ from ._shared import (
     _read_interview_actors,
     _refuse_missing_authorship,
 )
+
+
+def _source_log(
+    number_rules: dict[str, str],
+    value_numbers: dict[str, float],
+    matched_strings: Any,
+    log_num_pools: dict[str, tuple[set[str], set[float]]],
+    log_word_pools: dict[str, set[str]],
+) -> str:
+    """The per-field ``source_log`` stamp (dev-mode leg c): WHICH log(s)
+    contributed at least one matched claim token for this field.
+
+    ``verbatim`` tokens credit the log(s) stating them; ``off_by_one`` credits
+    the log(s) stating the anchor count; ``zero``-rule tokens derive from no
+    log and contribute no source. An empty contributing set stamps ``"own"`` —
+    the own namespace is always consulted and the home log is never credited
+    gratis. ``"own+home"`` when both logs contributed.
+    """
+    logs: set[str] = set()
+    for norm, rule in number_rules.items():
+        if rule == "zero":
+            continue
+        val = value_numbers[norm]
+        for log, (strings, floats) in log_num_pools.items():
+            if (rule == "verbatim" and (norm in strings or val in floats)) or (
+                rule == "off_by_one" and ((val + 1) in floats or (val - 1) in floats)
+            ):
+                logs.add(log)
+    for token in matched_strings:
+        for log, words in log_word_pools.items():
+            if token in words:
+                logs.add(log)
+    if "home" not in logs:
+        return "own"
+    return "home" if "own" not in logs else "own+home"
 
 
 def _assert_human_authorship(
@@ -57,11 +92,18 @@ def _assert_human_authorship(
       out-of-band. Journal ``response`` fields — agent-authored — carry no
       authorship weight in this mode: a substantive ``response`` cannot
       commit a free-text field, and response numbers cannot support a
-      structured one. This is the lock the v1 gate staged.
+      structured one. This is the lock the v1 gate staged. Dev-mode
+      (``docs/design/dev-mode-authorship.md`` legs b–d): under a journaled,
+      human-authored ``authorship-home`` GRANT the pool widens to the UNION
+      of the own namespace and the named home repo's log — same derivation
+      rules, same actor scoping; the home log widens the human's STATEMENTS,
+      never the derivation grammar.
     * **No utterance log** (hook not installed / older sessions —
       back-compat fail-open): this record's ``response`` plus every prior
       record's ``response`` in the scope's journal (a prior nudge that
-      stated the sweep authorizes a later bare ``y``).
+      stated the sweep authorizes a later bare ``y``). The friction tier is
+      unchanged and own-repo only: an agent-authored journal ``response``
+      can never pull in another repo's log.
 
     Per-field rules, against the chosen human texts:
 
@@ -111,12 +153,17 @@ def _assert_human_authorship(
     Returns the ACCEPT-SIDE disclosure (docket #1 part 2 — "which rule fired"
     must be answerable from the journal, not just the refuse side): ``None``
     when the gate did not evaluate a first-commit field, else a mapping with
-    the ``evidence_source`` tier (``harness_captured`` / ``journal_response``)
-    and, per gated field, the matched tokens with the derivation rule that
-    accepted each (:func:`_derivation_rule` — ``verbatim`` / ``zero`` /
-    ``off_by_one``) or the free-text rule that committed it. The caller
-    journals it under a code-owned provenance key; gate SEMANTICS are
-    unchanged (this is additive disclosure, never a tightening).
+    the ``evidence_source`` tier (``harness_captured`` / ``journal_response``),
+    the ``evidence_logs`` list (every namespace CONSULTED — own always, the
+    granted home when one exists; dev-mode leg c) and, per gated field, the
+    matched tokens with the derivation rule that accepted each
+    (:func:`_derivation_rule` — ``verbatim`` / ``zero`` / ``off_by_one``) or
+    the free-text rule that committed it, plus the per-field ``source_log``
+    (``own`` / ``home`` / ``own+home`` — WHICH log(s) contributed a matched
+    claim token). A dangling grant is disclosed (``dangling_home``) on accepts
+    that still pass, never silently. The caller journals it under a code-owned
+    provenance key; gate SEMANTICS are unchanged (this is additive disclosure,
+    never a tightening).
     """
     if not isinstance(resolved, dict) or not resolved:
         return None
@@ -139,14 +186,20 @@ def _assert_human_authorship(
 
     prior = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
 
+    from hpc_agent.state.run_record import repo_hash as _repo_hash
+
     # Tiered evidence source: prefer the harness-captured utterance log (the
     # lock) over agent-authored journal responses (the friction fallback). Under
     # >1 declared actors the pool is the SESSION ACTOR'S log only (MH4 — actor A's
     # agent cannot commit a value only actor B ever typed); an unattributed
     # >1-actor session falls to the friction tier (never the anonymous union).
+    # Dev-mode (legs b–d): the shared reader owns the own-namespace read AND the
+    # cross-repo widening under a journaled authorship-home grant; ``None`` →
+    # the friction tier, byte-identical to pre-ruling (cross-repo reading never
+    # applies there).
     _actor_ids, _ = _read_interview_actors(experiment_dir)
-    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
-    harness_captured = harness_texts is not None
+    evidence = _authorship_evidence_texts(experiment_dir, _actor_ids)
+    harness_captured = evidence is not None
 
     first_commits = [
         f
@@ -164,20 +217,32 @@ def _assert_human_authorship(
         # fail-open is exactly the unanswerable commit docket #1 part 2 names.
         return {
             "evidence_source": "journal_response",
+            "evidence_logs": [_repo_hash(experiment_dir)],
             "fail_open": "old_schema_journal_no_response_text",
             "fields": {},
         }
 
-    if harness_texts is not None:
+    if evidence is not None:
         # The lock: only text the HARNESS recorded counts as human. The
         # spec's ``response`` (and prior responses) are agent-relayed and
         # carry no authorship weight — exactly the laundering channel the
-        # v1 gate could not close.
-        human_texts = harness_texts
+        # v1 gate could not close. The pool is the UNION of the own namespace
+        # and a validly-granted home namespace (leg b); per-log membership is
+        # kept for the source_log stamp (leg c).
+        own_texts = list(evidence["own"] or [])
+        home_texts = list(evidence["home"])
+        human_texts = own_texts + home_texts
         response_commits = False
-        source_desc = "logged human utterance for this repo (harness-captured)"
+        if home_texts:
+            source_desc = (
+                "logged human utterance for this repo or its granted home repo (harness-captured)"
+            )
+        else:
+            source_desc = "logged human utterance for this repo (harness-captured)"
         remedy = "the human states it in a prompt (captured to the utterance log)"
     else:
+        own_texts = []
+        home_texts = []
         human_texts = [str(spec.response or "")]
         human_texts.extend(str(rec.get("response") or "") for rec in prior)
         response_commits = not _is_bare_ack(str(spec.response or ""))
@@ -188,6 +253,23 @@ def _assert_human_authorship(
     human_words: set[str] = set()
     for text in human_texts:
         human_words |= _ha_word_tokens(text)
+
+    # Leg (c): per-log membership of the union pool, so each accepted field
+    # stamps WHICH log(s) contributed a matched claim token. The friction tier
+    # never consults the home log (own-repo only by design) — its pool is the
+    # own repo's journal responses, stamped "own".
+    if evidence is not None:
+        log_num_pools = {
+            "own": _human_number_pool(own_texts),
+            "home": _human_number_pool(home_texts),
+        }
+        log_word_pools = {
+            "own": {w for t in own_texts for w in _ha_word_tokens(t)},
+            "home": {w for t in home_texts for w in _ha_word_tokens(t)},
+        }
+    else:
+        log_num_pools = {"own": (human_num_strings, human_num_floats), "home": (set(), set())}
+        log_word_pools = {"own": set(human_words), "home": set()}
 
     disclosure_fields: dict[str, Any] = {}
     problems: list[str] = []
@@ -233,20 +315,29 @@ def _assert_human_authorship(
                 else:
                     # Accept-side disclosure: which derivation rule accepted each
                     # token (the matched set is the whole claim set — anything
-                    # missing refused above).
+                    # missing refused above), and WHICH log(s) contributed (leg c).
+                    matched_strings = value_strings & human_words
+                    accepted_rules = {
+                        norm: rule
+                        for norm, rule in sorted(number_rules.items())
+                        if rule is not None
+                    }
                     disclosure_fields[field] = {
-                        "numbers": {
-                            norm: rule
-                            for norm, rule in sorted(number_rules.items())
-                            if rule is not None
-                        },
-                        "strings": sorted(value_strings & human_words),
+                        "numbers": accepted_rules,
+                        "strings": sorted(matched_strings),
+                        "source_log": _source_log(
+                            accepted_rules,
+                            value_numbers,
+                            matched_strings,
+                            log_num_pools,
+                            log_word_pools,
+                        ),
                     }
                 continue
             # No number OR string claims — fall through to the free-text rule below.
         if response_commits:
             # journal-response mode: a substantive human reply commits it
-            disclosure_fields[field] = {"rule": "response_commit"}
+            disclosure_fields[field] = {"rule": "response_commit", "source_log": "own"}
             continue
         overlap_text = value if isinstance(value, str) else json.dumps(value, default=str)
         overlap = _ha_word_tokens(overlap_text) & human_words
@@ -255,6 +346,7 @@ def _assert_human_authorship(
             disclosure_fields[field] = {
                 "rule": "word_overlap",
                 "matched_words": sorted(overlap),
+                "source_log": _source_log({}, {}, overlap, log_num_pools, log_word_pools),
             }
             continue
         problems.append(
@@ -268,15 +360,48 @@ def _assert_human_authorship(
         # Name the repo namespace the gate consulted (docket #2): an operator
         # session in the wrong cwd otherwise cannot tell WHY their utterance was
         # not found — the refusal named the tokens but not the namespace.
-        from hpc_agent.state.run_record import repo_hash as _repo_hash
-
-        _refuse_missing_authorship(
-            "human-authorship gate (conduct rule 9): "
-            + "; ".join(problems)
-            + f" — evidence was sought in repo namespace {_repo_hash(experiment_dir)} "
-            f"(experiment_dir {experiment_dir})"
+        # Dev-mode: the consultation (granted home), or the reason it did NOT
+        # happen (dangling grant / mid-session revocation), is disclosed the
+        # same way — never a silent own-only fallback.
+        own_hash = _repo_hash(experiment_dir)
+        tail = (
+            f" — evidence was sought in repo namespace {own_hash} (experiment_dir {experiment_dir})"
         )
-    return {
+        if evidence is not None:
+            consulted = evidence["evidence_logs"]
+            if len(consulted) > 1:
+                tail += f" and granted home namespace {consulted[1]}"
+            elif evidence["dangling_home"]:
+                tail = (
+                    f" — home-log trust for home namespace {evidence['dangling_home']} "
+                    f"is dangling ({evidence['dangling_reason']}); evidence was sought "
+                    f"in repo namespace {own_hash} (experiment_dir {experiment_dir}) only"
+                )
+            elif evidence["revoked"]:
+                tail = (
+                    f" — home-log trust revoked at {evidence['revoked']['ts']} "
+                    f"(home namespace {evidence['revoked']['home_repo_hash']}); evidence "
+                    f"was sought in repo namespace {own_hash} "
+                    f"(experiment_dir {experiment_dir}) only"
+                )
+        _refuse_missing_authorship(
+            "human-authorship gate (conduct rule 9): " + "; ".join(problems) + tail
+        )
+    disclosure: dict[str, Any] = {
         "evidence_source": "harness_captured" if harness_captured else "journal_response",
+        # Leg (c): every namespace CONSULTED (own always; home when a valid
+        # grant exists) — "which logs were searched" is answerable from the
+        # journal alone.
+        "evidence_logs": (
+            list(evidence["evidence_logs"])
+            if evidence is not None
+            else [_repo_hash(experiment_dir)]
+        ),
         "fields": disclosure_fields,
     }
+    if evidence is not None and evidence["dangling_home"]:
+        # A dangling grant is disclosed on accepts that still pass, too (never
+        # a silent own-only fallback).
+        disclosure["dangling_home"] = evidence["dangling_home"]
+        disclosure["dangling_reason"] = evidence["dangling_reason"]
+    return disclosure

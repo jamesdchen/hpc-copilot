@@ -752,3 +752,153 @@ def _names_target_sha_prefix(text: str, sha: str) -> bool:
         if lowered.startswith(run):
             return True
     return False
+
+
+# ── dev-mode authorship-home (docs/design/dev-mode-authorship.md, legs b–d) ──
+#
+# The cross-repo opt-in: a journaled, human-authored decision record in the
+# SECOND repo declares "trust the utterance log of named home repo H" — never a
+# silent config flag (invisible consent / self-minted trust, the two rejected
+# alternatives). One scope id, one home at a time (v1); a second grant
+# supersedes the first by newest-wins.
+
+# The code-reserved scope id (validated by the shared ``validate_tag`` class on
+# the wire), the code-owned block the grant/revoke record rides (the
+# ``_SCOPE_LOCK_BLOCK`` precedent: a code-owned state machine riding a scope
+# journal), and the actions the record's ``resolved.action`` may carry.
+_AUTHORSHIP_HOME_SCOPE = "authorship-home"
+_AUTHORSHIP_HOME_BLOCK = "authorship-home"
+_AUTHORSHIP_HOME_ACTIONS = frozenset({"grant", "revoke"})
+
+
+def _names_repo_hash(text: str, hash12: str) -> bool:
+    """True iff *text* names the 12-hex *hash12* as a WHOLE hex token.
+
+    The dev-mode grant bootstrap's naming leg: the hash must appear as a
+    maximal hex run equal to itself — embedded in a longer hex string it names
+    something else, and a trailing sentence period must not defeat it (the
+    :func:`_names_slug` slug-class boundary would). Case-insensitive: the
+    vocabulary-impossibility argument (a 12-hex digest exists nowhere in a
+    human's prior vocabulary, so naming it proves engagement with the home's
+    presented identity) is case-blind.
+    """
+    if not hash12:
+        return False
+    pattern = re.compile(
+        r"(?<![0-9a-fA-F])" + re.escape(hash12) + r"(?![0-9a-fA-F])", re.IGNORECASE
+    )
+    return bool(pattern.search(text or ""))
+
+
+def _resolve_authorship_home(experiment_dir: Path) -> dict[str, Any] | None:
+    """The NEWEST authorship-home grant/revoke record, or ``None``.
+
+    State resolution is the scope-lock state machine verbatim
+    (:mod:`hpc_agent.state.scopes` precedent): scan the ``authorship-home``
+    scope journal newest→oldest; the FIRST record on the code-owned
+    :data:`_AUTHORSHIP_HOME_BLOCK` whose ``resolved.action`` is ``grant`` /
+    ``revoke`` decides current trust. Revocation never erases the grant history
+    (append-only), and previously-accepted records are never retro-invalidated
+    (leg d — grandfathered, the notebook-audit sign-off posture). The returned
+    mapping carries ``action`` / ``home_experiment_dir`` / ``home_repo_hash`` /
+    ``ts`` verbatim.
+    """
+    for rec in reversed(_read_decisions(experiment_dir, "scope", _AUTHORSHIP_HOME_SCOPE)):
+        if rec.get("block") != _AUTHORSHIP_HOME_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict):
+            continue
+        if resolved.get("action") in _AUTHORSHIP_HOME_ACTIONS:
+            return {
+                "action": resolved["action"],
+                "home_experiment_dir": resolved.get("home_experiment_dir"),
+                "home_repo_hash": resolved.get("home_repo_hash"),
+                "ts": rec.get("ts"),
+            }
+    return None
+
+
+def _authorship_evidence_texts(experiment_dir: Path, actor_ids: list[str]) -> dict[str, Any] | None:
+    """The harness-captured evidence pool for the value-derivation gate, with the
+    dev-mode cross-repo widening (docs/design/dev-mode-authorship.md legs b–d).
+
+    Owns the WHOLE cross-repo read so the gate's own-namespace path stays
+    byte-identical:
+
+    1. **Own namespace first** — :func:`_actor_scoped_human_texts`, unchanged
+       (including the MH4 rule: under >1 declared actors, the session actor's
+       suffixed log only; an unattributed session falls to the journal-response
+       friction tier and cross-repo reading does not apply at all).
+    2. **Grant state** — the newest authorship-home record decides
+       (:func:`_resolve_authorship_home`); ``revoke`` (or no record) → own-only.
+    3. **Revalidation on every read** — the recorded ``home_repo_hash`` must
+       recompute from ``home_experiment_dir`` AND the home namespace must
+       exist, else the grant is DANGLING: own-only, disclosed (never
+       trusted-blind, never an exception — the store's fail-open doctrine).
+    4. **Home read, same scoping** — the home namespace's utterances,
+       NON-CREATING, with the SAME actor scoping as the own read: MH4 composes
+       across namespaces — actor A's agent cannot commit a value only actor B
+       ever typed, whichever namespace B typed it in.
+
+    Returns ``None`` — the journal-response friction tier, byte-identical to
+    pre-ruling — when no utterance log exists anywhere relevant, or the session
+    is an unattributed >1-actor one. Else a mapping:
+
+    * ``own`` — the own-namespace texts (``None`` when the own log is absent —
+      the fresh-second-repo window the grant exists to cover honestly);
+    * ``home`` — the home-namespace texts (``[]`` when no valid grant);
+    * ``evidence_logs`` — every namespace CONSULTED (own always; home when a
+      valid grant exists);
+    * ``dangling_home`` / ``dangling_reason`` — set when a grant exists but
+      fails revalidation (own-only, disclosed);
+    * ``revoked`` — ``{"ts", "home_repo_hash"}`` when the newest record is a
+      revoke (the refusal discloses the state change).
+
+    NO CACHING: the state is re-read on every gated append (the
+    ``read_signoff_ledger`` posture), so revocation is effective on the very
+    next append with no invalidation surface.
+    """
+    from hpc_agent.state.run_record import journal_root_if_exists, repo_hash
+
+    # MH4: an unattributed >1-actor session falls to the friction tier — and
+    # cross-repo reading does not apply at all.
+    if len(actor_ids) > 1 and _session_actor(experiment_dir, actor_ids) is None:
+        return None
+    own = _actor_scoped_human_texts(experiment_dir, actor_ids)
+    evidence: dict[str, Any] = {
+        "own": own,
+        "home": [],
+        "evidence_logs": [repo_hash(experiment_dir)],
+        "dangling_home": None,
+        "dangling_reason": None,
+        "revoked": None,
+    }
+    record = _resolve_authorship_home(experiment_dir)
+    if record is not None and record["action"] == "revoke":
+        evidence["revoked"] = {
+            "ts": record["ts"],
+            "home_repo_hash": record["home_repo_hash"],
+        }
+    elif record is not None:
+        home_raw = record["home_experiment_dir"]
+        home_hash = record["home_repo_hash"]
+        home_path = Path(home_raw) if isinstance(home_raw, str) and home_raw else None
+        if home_path is None or not isinstance(home_hash, str) or repo_hash(home_path) != home_hash:
+            evidence["dangling_home"] = home_hash
+            evidence["dangling_reason"] = (
+                "the recorded home_repo_hash does not recompute from "
+                "home_experiment_dir (home moved/renamed?)"
+            )
+        elif not journal_root_if_exists(home_path).is_dir():
+            evidence["dangling_home"] = home_hash
+            evidence["dangling_reason"] = "the home namespace does not exist"
+        else:
+            home = _actor_scoped_human_texts(home_path, actor_ids)
+            evidence["home"] = home or []
+            evidence["evidence_logs"].append(home_hash)
+    if own is None and not evidence["home"]:
+        # No utterance log anywhere relevant → the gate behaves exactly as
+        # pre-ruling (the friction tier is unchanged and own-repo only).
+        return None
+    return evidence
