@@ -677,6 +677,11 @@ def _pull_transfer_with_retry(
     non-connect remote-command failure are NOT retried (:func:`is_retry_safe`);
     the remote-command failure is instead resumable at the delta layer (the next
     call re-derives what landed). The whole thing rides the per-host breaker.
+
+    This is a ``remote-command`` leg — the remote ``tar c``/``find`` rides the
+    ssh session, so the classifier believes the connect markers only at ssh's
+    reserved client exit 255; marker-shaped text at any other rc is REMOTE
+    content over a healthy channel (see :func:`is_connect_failure`).
     """
     delays = connect_failure_retry_delays()
     attempt = 0
@@ -702,7 +707,10 @@ def _pull_transfer_with_retry(
             )
         if proc.returncode == 0 or attempt >= len(delays):
             return proc
-        if not is_retry_safe(proc.returncode, proc.stderr):
+        # remote-command leg: the riding tar/find owns rc + stderr, so only
+        # ssh's reserved client exit 255 is transport evidence (the leg-aware
+        # gate in is_connect_failure).
+        if not is_retry_safe(proc.returncode, proc.stderr, leg="remote-command"):
             return proc
         print(
             f"[transport] pull connect failure on {ssh_target} "

@@ -667,6 +667,41 @@ def test_non_connect_failure_not_retried(monkeypatch):
     assert sleeps == []
 
 
+def test_remote_marker_text_at_non_255_not_retried(monkeypatch):
+    """Leg-aware gate at the pull call site (a remote-command leg).
+
+    The pull's remote ``tar c`` RIDES the ssh session, so rc=1 with
+    marker-shaped stderr is remote content over a healthy channel
+    (2026-07-19: a dead qmaster wrote commlib ``Connection refused`` into every
+    leg's REMOTE stderr) — NOT a connect failure: one attempt, no redial.
+    (The rc=255 twin is ``test_connect_failure_retries_then_succeeds`` above:
+    the same leg still takes the tight redial at ssh's reserved client exit.)
+    """
+    sleeps: list[float] = []
+    monkeypatch.setattr(_pull.time, "sleep", lambda s: sleeps.append(s))
+    calls = {"n": 0}
+
+    def one_shot(**kw):
+        calls["n"] += 1
+        return _fail(1, "error: commlib error: got select error (Connection refused)")
+
+    with (
+        patch.object(_pull, "guarded_call", side_effect=lambda target, fn, **kw: fn()),
+        patch.object(_pull, "_pull_transfer", side_effect=one_shot),
+    ):
+        proc = _pull._pull_transfer_with_retry(
+            ssh_target="u@h",
+            remote_cmd="x",
+            local_path=Path("."),
+            codec_flag=None,
+            total_bytes=0,
+            timeout=1,
+        )
+    assert proc.returncode == 1
+    assert calls["n"] == 1  # remote content at rc!=255 is not transport evidence
+    assert sleeps == []
+
+
 def test_spawn_enoent_not_retried(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(_pull.time, "sleep", lambda s: sleeps.append(s))

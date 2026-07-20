@@ -48,7 +48,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 __all__ = [
     "_local_openssh_supports_gcm",
@@ -956,7 +956,11 @@ def tar_stream_flag() -> str | None:
 _CONNECT_FAILURE_RETRY_DELAYS_SEC: Final[tuple[float, ...]] = (2.0,)
 
 #: stderr substrings that identify a TCP/connect-phase failure (as opposed to an
-#: authenticated command that failed): matched case-insensitively.
+#: authenticated command that failed): matched case-insensitively — and, on
+#: ``remote-command`` legs, ONLY consulted for ``returncode == 255`` (the ssh
+#: client's own failure code): at any other non-zero exit the remote command
+#: ran and marker-shaped text in its stderr is REMOTE content, never transport
+#: evidence (see :func:`is_connect_failure`).
 _CONNECT_FAILURE_MARKERS: Final[tuple[str, ...]] = (
     "connection refused",
     "connection timed out",
@@ -979,6 +983,18 @@ _CONNECT_FAILURE_MARKERS: Final[tuple[str, ...]] = (
 _RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = 12
 
 
+#: The two kinds of ssh leg the retry classifier distinguishes
+#: (:func:`is_connect_failure`). Only the CALLER knows which kind it ran — from
+#: outside the process, a bare probe's stderr and a riding command's stderr are
+#: indistinguishable. ``pure-connect``: the ssh process IS the connection (a
+#: bare ``ssh host true``-class probe), so any non-zero exit is transport
+#: evidence. ``remote-command``: a remote process rides the session (the
+#: tar|ssh pull's remote ``tar c``/``find``), so its exit status and stderr
+#: are remote-controlled content and only ssh's reserved client exit (255) is
+#: transport evidence.
+ConnectLegKind = Literal["pure-connect", "remote-command"]
+
+
 def connect_failure_retry_delays() -> tuple[float, ...]:
     """The connect-failure retry schedule — one entry per RETRY (not attempts).
 
@@ -989,21 +1005,46 @@ def connect_failure_retry_delays() -> tuple[float, ...]:
     return _CONNECT_FAILURE_RETRY_DELAYS_SEC
 
 
-def is_connect_failure(returncode: int, stderr: str | None) -> bool:
-    """True when a non-zero ssh/scp result looks like a TCP/connect-phase failure.
+def is_connect_failure(returncode: int, stderr: str | None, *, leg: ConnectLegKind) -> bool:
+    """True when a non-zero ssh result looks like a TCP/connect-phase failure.
 
     A connect failure is transient (the host may come back) and is the ONLY
     class the tight connect-retry schedule re-tries. An authenticated command
     that exited non-zero (a remote ``tar``/``find`` error) is NOT a connect
-    failure and is surfaced immediately.
+    failure and is surfaced immediately. What counts as connect-phase
+    evidence depends on the *leg* kind, which only the caller can know: on a
+    ``pure-connect`` leg the ssh process IS the connection (a bare
+    ``ssh host true``-class probe), so any non-zero exit is transport
+    evidence and the marker match applies at any rc; on a ``remote-command``
+    leg a remote process rides the session (the tar|ssh pull's remote
+    ``tar c``/``find``), so the exit code decides WHO is speaking before
+    stderr is believed — OpenSSH reserves 255 for the ssh CLIENT's own
+    failure (connect / banner / kex) and otherwise propagates the REMOTE
+    command's exit status, so a non-255 non-zero exit means the command RAN,
+    the transport demonstrably worked, and marker-shaped text in its stderr
+    (a dead qmaster's commlib ``Connection refused``, the 2026-07-19
+    scheduler-integration incident) is remote content, never dial evidence —
+    the marker match is gated on ``returncode == 255`` there. A remote
+    command that itself exits 255 is the accepted residual — ssh collapses it
+    onto the client's own code — and the marker match is the remaining guard.
     """
+    if leg not in ("pure-connect", "remote-command"):
+        raise ValueError(f"unknown connect leg kind: {leg!r}")
     if returncode == 0:
+        return False
+    if leg == "remote-command" and returncode != 255:
         return False
     blob = (stderr or "").lower()
     return any(marker in blob for marker in _CONNECT_FAILURE_MARKERS)
 
 
-def is_retry_safe(returncode: int, stderr: str | None, *, spawn_error: bool = False) -> bool:
+def is_retry_safe(
+    returncode: int,
+    stderr: str | None,
+    *,
+    leg: ConnectLegKind,
+    spawn_error: bool = False,
+) -> bool:
     """Whether a failed transport leg is safe to retry (rank 25 classification).
 
     ``retry_safe=False`` for the deterministic-won't-heal classes:
@@ -1013,13 +1054,16 @@ def is_retry_safe(returncode: int, stderr: str | None, *, spawn_error: bool = Fa
     * rsync exit ``12`` (:data:`_RSYNC_PROTOCOL_ERROR_EXIT`) — a protocol/stream
       error, not a re-dialable connect failure.
 
-    Otherwise a connect-phase failure (:func:`is_connect_failure`) is retry-safe;
-    any other non-zero is a remote-command failure the caller surfaces (the
-    transport's resumable delta handles a genuinely partial transfer on the next
-    call, so this classifier only gates the tight in-call connect retry).
+    Otherwise a connect-phase failure (:func:`is_connect_failure` under the
+    caller-declared *leg* kind — ``remote-command`` legs believe the markers
+    only at ssh's reserved client exit 255, since a riding command's rc and
+    stderr are remote-controlled content) is retry-safe; any other non-zero
+    is a remote-command failure the caller surfaces (the transport's
+    resumable delta handles a genuinely partial transfer on the next call,
+    so this classifier only gates the tight in-call connect retry).
     """
     if spawn_error:
         return False
     if returncode == _RSYNC_PROTOCOL_ERROR_EXIT:
         return False
-    return is_connect_failure(returncode, stderr)
+    return is_connect_failure(returncode, stderr, leg=leg)
