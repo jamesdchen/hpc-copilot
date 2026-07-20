@@ -48,8 +48,19 @@ def _plugin_src() -> Path:
 
 
 def _child_env(*, extra_paths: tuple[Path, ...] = ()) -> dict[str, str]:
-    """The child ``PYTHONPATH`` = ``src`` (+ any extra roots) prepended to the parent."""
+    """The child ``PYTHONPATH`` = ``src`` (+ any extra roots) prepended to the parent.
+
+    The stop-hook append activation markers are SCRUBBED: set in some dev shells
+    (the ``test_wave_c_adapters.py`` env-var note), they flip the reference Stop
+    seam from the REJECTOR (block-once with a reason — the shape the relay kit
+    certifies) into the COMPLETER, mis-shaping every contradiction triple. The
+    completer has its own scoped-activation kit
+    (``test_capability_stop_hook_append.py``); the self-run certifies the
+    default posture. Same scrub as ``test_capability_decision_rendezvous.py``.
+    """
     env = dict(os.environ)
+    env.pop("HPC_STOP_HOOK_APPEND", None)
+    env.pop("HPC_STOP_HOOK_APPEND_ON_BLOCK", None)
     roots = [str(_repo_root() / "src"), *(str(p) for p in extra_paths)]
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = os.pathsep.join([*roots, existing]) if existing else os.pathsep.join(roots)
