@@ -23,7 +23,7 @@ from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.announce import read_announcements
-from hpc_agent.ops.monitor.classify import settle
+from hpc_agent.ops.monitor.classify import all_tasks_complete, settle
 from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal, harvest_receipt_exists
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import (
@@ -1036,8 +1036,11 @@ def _reconcile_one(
       A. Fresh status report -> ``last_status``.
       B. List ``_combiner/wave_*.json`` -> canonical ``combined_waves``
          (cluster wins; journal overwritten on drift).
-      C. Cross-check ``job_ids`` against the scheduler; if zero are alive,
-         route the verdict by the reporter's per-task evidence — ``complete``
+      C. Cross-check ``job_ids`` against the scheduler; when zero are alive —
+         OR when the reporter's STRICT ``all_tasks_complete`` summary holds
+         even while the scheduler still shows the job (the alive-independent
+         completion evidence the announce fast path already settles on) —
+         route the verdict by the reporter's per-task evidence: ``complete``
          (all tasks complete), ``failed`` (positive ``failed >= 1`` evidence,
          #351), or ``abandoned`` (no evidence on disk at all), never a blind
          flip to ``"abandoned"``.
@@ -1152,6 +1155,14 @@ def _reconcile_one(
     # the ssh branch below); threaded into the persisted ``last_status`` after
     # the probe builds ``summary`` so it survives the probe's own write.
     announce_progress: dict[str, int] | None = None
+    # Crash-only Phase-1 announce-READ failure disclosure: set when the
+    # best-effort announce read RAISED (ssh blip / severed channel), then
+    # stamped into ``summary`` after the probes as ``announce_probe: "failed"``
+    # (plus a ``warnings`` entry at the raise site) so the skipped
+    # alive-independent fast path is never silent — a swallowed hiccup here
+    # invisibly removed the ONLY liveness-independent settle path and stranded
+    # a finished run ``in_flight`` for 2h31m in the kill-drill forensics.
+    announce_read_failed = False
     if not backend_requires_ssh(scheduler):
         # Pure-API path (#337 Increment 4): no login node, no shared
         # ``_combiner/`` dir. Liveness comes from the backend's ``alive_job_ids``
@@ -1218,8 +1229,17 @@ def _reconcile_one(
                     run_id=run_id,
                     task_count=record.total_tasks,
                 )
-            except Exception:  # noqa: BLE001 — fast path is best-effort; fall through to probes
+            except Exception as exc:  # noqa: BLE001 — fast path is best-effort; fall through to probes
                 _announce = None
+                # Best-effort, but NEVER silent: the skipped alive-independent
+                # fast path is stamped into ``last_status`` after the probes
+                # (``announce_probe: "failed"``) and rides the SAME probe-failure
+                # ``warnings`` channel as the alive-check/reporter failures
+                # below. Without the stamp, a transient ssh/announce-read hiccup
+                # invisibly removed the ONLY liveness-independent settle path —
+                # the drill-forensics 2h31m in_flight gap.
+                announce_read_failed = True
+                warnings.append(f"announce read: {exc}")
             if _announce is not None and _announce["announced"] > 0:
                 terminal = _settle_from_announcements(
                     experiment_dir,
@@ -1360,6 +1380,13 @@ def _reconcile_one(
     # and the main ``update_run_status`` below all carry it out to the envelope.
     if announce_progress is not None:
         summary["task_announcements"] = announce_progress
+    if announce_read_failed:
+        # The announce fast path was SKIPPED because its read failed (the
+        # ``warnings`` entry above carries the error) — stamp the machine-
+        # readable marker so the envelope distinguishes "no announcements"
+        # from "could not read them": the skipped arm is the ONLY
+        # liveness-independent settle path, so its loss must never be silent.
+        summary["announce_probe"] = "failed"
 
     if warnings:
         summary["warnings"] = warnings
@@ -1432,36 +1459,67 @@ def _reconcile_one(
     }
     updated = update_run_status(experiment_dir, run_id, **fields)
 
-    # Verdict routing when no recorded job is alive on the scheduler.
+    # Verdict routing. TWO entry conditions share this arm:
     #
-    # "abandoned" must require EVIDENCE OF NON-COMPLETION *WITHOUT* evidence of
-    # what happened — it is not the default for "no alive jobs". THREE distinct
-    # cases share the "nothing alive" observation, and absence must not collapse
-    # failure into it (#351 sub-bug #4):
+    #   A. NOTHING alive on the scheduler (the historical gate — "abandoned"
+    #      must require EVIDENCE OF NON-COMPLETION *WITHOUT* evidence of what
+    #      happened; it is not the default for "no alive jobs"). THREE distinct
+    #      cases share the "nothing alive" observation, and absence must not
+    #      collapse failure into it (#351 sub-bug #4):
     #
-    #   * All tasks complete + records purged. SGE/Slurm drop a finished
-    #     job's records post-completion; the reporter's per-task counts still
-    #     prove every result is on disk. This run is COMPLETE, not abandoned
-    #     (the demo-bug class: a FINISHED run read as abandoned because its
-    #     job records were purged). Classified by ``settle``'s strict
-    #     all-complete arm, alongside the existing ``alive_check_failed`` guard.
-    #   * Ran and FAILED + records purged. The reporter shows ``failed >= 1``:
-    #     a task reached the cluster, ran, and exited non-zero with a readable
-    #     ``exit_code``/traceback on disk. That is POSITIVE failure evidence, the
-    #     symmetric counterpart to the all-complete arm — categorically NOT a
-    #     vanished scratch. Pre-#351 this routed through ``abandoned`` ("scratch
-    #     purged, no recovery; re-submit") because the binary verdict keyed only
-    #     on completeness, hiding the fixable error. Now ``settle``'s
-    #     ``run_failed`` arm routes it to ``failed`` and the FAILED branch below
-    #     carries the classified error out via ``last_status``.
-    #   * Incomplete-but-not-failed + records gone. Tasks merely missing/unknown
-    #     (NO positive ``failed`` count) AND nothing alive AND both probes ran
-    #     cleanly → genuine abandon: no evidence on disk at all.
+    #      * All tasks complete + records purged. SGE/Slurm drop a finished
+    #        job's records post-completion; the reporter's per-task counts still
+    #        prove every result is on disk. This run is COMPLETE, not abandoned
+    #        (the demo-bug class: a FINISHED run read as abandoned because its
+    #        job records were purged). Classified by ``settle``'s strict
+    #        all-complete arm, alongside the existing ``alive_check_failed`` guard.
+    #      * Ran and FAILED + records purged. The reporter shows ``failed >= 1``:
+    #        a task reached the cluster, ran, and exited non-zero with a readable
+    #        ``exit_code``/traceback on disk. That is POSITIVE failure evidence, the
+    #        symmetric counterpart to the all-complete arm — categorically NOT a
+    #        vanished scratch. Pre-#351 this routed through ``abandoned`` ("scratch
+    #        purged, no recovery; re-submit") because the binary verdict keyed only
+    #        on completeness, hiding the fixable error. Now ``settle``'s
+    #        ``run_failed`` arm routes it to ``failed`` and the FAILED branch below
+    #        carries the classified error out via ``last_status``.
+    #      * Incomplete-but-not-failed + records gone. Tasks merely missing/unknown
+    #        (NO positive ``failed`` count) AND nothing alive AND both probes ran
+    #        cleanly → genuine abandon: no evidence on disk at all.
     #
-    # Both probes must have run cleanly first: either failing routes through
-    # ``unable_to_verify`` (set above) — confirmed-dead-on-scheduler +
-    # reporter-dead-so-results-unknown is not a provable verdict either way.
-    if record.job_ids and not alive and not alive_check_failed and not reporter_failed:
+    #   B. Scheduler STILL shows the job, but the reporter's STRICT
+    #      ``all_tasks_complete(summary, total)`` holds (drill-forensics latency
+    #      fix: a finished run sat ``in_flight`` 2h31m behind Slurm
+    #      COMPLETING/squeue lag until a later reconcile found the records
+    #      purged). Strict all-complete is POSITIVE per-task disk evidence —
+    #      every task's result proven present, zero running/pending/failed/
+    #      unknown — so scheduler liveness was never the authority on THIS
+    #      verdict: the announce fast path above
+    #      (``_settle_from_announcements``) is already alive-INDEPENDENT on the
+    #      same per-task-evidence logic, and the two arms now agree. ``settle``
+    #      necessarily yields ``complete`` under this entry. The early-settle
+    #      class stays closed BY CONSTRUCTION: a retry/requeue shows
+    #      running/pending > 0, and even a stale ``failed`` bucket is
+    #      disqualifying under the strict predicate (the intentional
+    #      lenient-vs-strict divergence) — only the fully-proven shape crosses.
+    #      ONLY the complete verdict crosses the liveness line: a positive
+    #      ``failed`` count while the scheduler still shows the job is NOT
+    #      settled (a failed task may requeue — the failure arm keeps its
+    #      nothing-alive precondition). The override is DISCLOSED:
+    #      ``last_status.scheduler_alive_at_settle`` records that strict disk
+    #      evidence outvoted the scheduler's still-live record.
+    #
+    # Both probes must have run cleanly under EITHER entry: an alive-check or
+    # reporter failure routes through ``unable_to_verify`` (set above) —
+    # confirmed-dead-on-scheduler + reporter-dead-so-results-unknown is not a
+    # provable verdict either way, and an ``{"error": ...}`` summary fails the
+    # strict predicate by construction.
+    strict_all_complete = all_tasks_complete(summary, record.total_tasks)
+    if (
+        record.job_ids
+        and not alive_check_failed
+        and not reporter_failed
+        and (not alive or strict_all_complete)
+    ):
         # One verdict from the shared settle-path classifier (strict completion,
         # failure outranks absence); the side-effects stay local to each arm. The
         # decision's ``reason`` is recorded in ``last_status.verdict_reason`` so
@@ -1470,6 +1528,13 @@ def _reconcile_one(
         # to re-derive it from the raw counts.
         decision = settle(summary, record.total_tasks)
         recorded = {**summary, "verdict_reason": decision.reason}
+        if alive:
+            # Entry B (strict all-complete over a still-live scheduler record):
+            # ``settle`` yields ``complete`` here by construction. Stamp that
+            # scheduler liveness was overridden by positive per-task disk
+            # evidence — the latency fix is disclosed, never a silent behavior
+            # change. (``alive`` empty means entry A, the historical gate.)
+            recorded["scheduler_alive_at_settle"] = True
         if decision.verdict == LifecycleState.FAILED:
             # Positive failure evidence — surface the classified error in
             # ``last_status.failure_features`` so ``_reconcile_envelope`` carries

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.ops.monitor import reconcile as recon
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
@@ -188,3 +189,34 @@ def test_zero_markers_is_old_path(tmp_path, monkeypatch):
 
     assert reporter == ["status"]  # reporter walk ran (old path)
     assert "task_announcements" not in (result.last_status or {})
+
+
+def test_announce_read_failure_is_stamped_never_silent(tmp_path, monkeypatch):
+    """The announce-read swallow (``except Exception: _announce = None``) used
+    to skip the alive-independent fast path with NO trace — a transient ssh
+    hiccup invisibly removed the only settle path that ignores scheduler
+    liveness (the 2h31m stranded-in_flight drill). The failure is now
+    disclosed exactly like the alive-check/reporter probe failures in the
+    same function: a ``warnings`` entry PLUS the machine-readable
+    ``announce_probe: "failed"`` stamp in ``last_status``.
+    """
+    reporter = _reporter_tripwire(monkeypatch)
+    monkeypatch.setattr(recon, "_ssh_alive_job_ids", lambda **_kw: {"100", "200"})
+
+    def _boom(**_kw):
+        raise errors.RemoteCommandFailed("announce read failed (rc=255): connection reset")
+
+    monkeypatch.setattr(recon, "read_announcements", _boom)
+    upsert_run(tmp_path, _record("blip_r8", total_tasks=4))
+
+    result = recon.reconcile(tmp_path, "blip_r8", scheduler="sge")
+
+    # The legacy probe path still ran byte-identically (the fast path is
+    # best-effort) — still alive → in_flight.
+    assert reporter == ["status"]
+    assert result.status == "in_flight"
+    last = result.last_status or {}
+    # … but the skipped fast path is no longer silent.
+    assert last["announce_probe"] == "failed"
+    warnings = last.get("warnings") or []
+    assert any("announce read" in w for w in warnings)
