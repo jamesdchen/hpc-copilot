@@ -173,6 +173,33 @@ _SCRIPT_BY_BACKEND = {
     "pbs": ".hpc/templates/cpu_array.sh",
 }
 
+# The ci_clusters.yaml --local writes for the container it stands up. The
+# container deliberately has NO module/conda system: the wheel is
+# pip-installed into the system python3 and the SSH login shell's python IS
+# the intended interpreter (the same contract the smoke lane pins). That is
+# DECLARED via login_shell_activation so the #281 Activation guard
+# (infra/clusters.py) admits the all-empty activation as an explicit stanza
+# fact — resolve_activation strips whitespace, so the old `modules: [" "]`
+# cosmetic still read as empty and was refused (the 2026-07-19 CI failure).
+_LOCAL_CLUSTERS_YAML = """\
+slurmci:
+  host: slurmci
+  user: hpcuser
+  scheduler: slurm
+  scratch: /home/hpcuser/scratch
+  # No module/conda system in the container — the login shell's python3
+  # carries hpc_agent. Declared, not hacked: the Activation guard reads this
+  # stanza key and admits the all-empty activation ONLY because it is stated.
+  modules: []
+  login_shell_activation: true
+  max_walltime_sec: 3600
+  constraints:
+    max_array_size: 100
+    max_walltime: "1:00:00"
+    max_concurrent_jobs: 4
+    est_spin_up: "10s"
+"""
+
 _CLI_TIMEOUT_SEC = 600
 _ENV_POLL_INTERVAL = "5"  # HPC_STATUS_POLL_INTERVAL_SEC (CI lane parity)
 
@@ -1215,21 +1242,7 @@ def ensure_local_cluster(workdir: Path, *, keep_container: bool) -> tuple[Path, 
     shim_env = _write_ssh_shims(workdir / "shims", ssh_config)
 
     clusters_yaml = workdir / "ci_clusters.yaml"
-    clusters_yaml.write_text(
-        "slurmci:\n"
-        "  host: slurmci\n"
-        "  user: hpcuser\n"
-        "  scheduler: slurm\n"
-        "  scratch: /home/hpcuser/scratch\n"
-        "  modules: []\n"
-        "  max_walltime_sec: 3600\n"
-        "  constraints:\n"
-        "    max_array_size: 100\n"
-        '    max_walltime: "1:00:00"\n'
-        "    max_concurrent_jobs: 4\n"
-        '    est_spin_up: "10s"\n',
-        encoding="utf-8",
-    )
+    clusters_yaml.write_text(_LOCAL_CLUSTERS_YAML, encoding="utf-8")
     return clusters_yaml, shim_env
 
 

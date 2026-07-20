@@ -499,14 +499,20 @@ jobs:
             user: hpcuser
             scheduler: slurm
             scratch: /home/hpcuser/scratch
-            # A single-space no-op module, NOT an empty list: the driver goes
-            # through the full submit-s1 resolve, whose Activation guard
-            # refuses all-empty activation (infra/clusters.py #281). " " passes
-            # the guard, and the job preamble's "for mod in $MODULES" loop
-            # iterates ZERO words over it - module is never invoked (the
-            # container has no module system; the login-shell python3 carries
-            # hpc_agent, same contract the smoke lane pins).
-            modules: [" "]
+            # The container deliberately has NO module/conda system: the wheel
+            # is pip-installed into the system python3 and the SSH login
+            # shell's python IS the intended interpreter (the same contract
+            # the smoke lane pins). The driver goes through the full submit-s1
+            # resolve, whose Activation guard (infra/clusters.py #281) refuses
+            # an all-empty activation — and resolve_activation STRIPS
+            # whitespace, so the old `modules: [" "]` cosmetic still read as
+            # empty and was refused (run 29708199144). The sanctioned form is
+            # the explicit stanza declaration below: the guard admits the
+            # all-empty activation ONLY because the no-op is stated as a fact
+            # about this cluster. The job preamble needs no help — empty
+            # $MODULES/$CONDA_* already skips every setup step.
+            modules: []
+            login_shell_activation: true
             max_walltime_sec: 3600
             constraints:
               max_array_size: 100

@@ -124,6 +124,22 @@ class ClusterConfig(BaseModel):
         default_factory=list,
         description="Conda env names to ``conda activate`` (in order) inside the preamble.",
     )
+    login_shell_activation: bool = Field(
+        default=False,
+        description=(
+            "Declare that this cluster needs NO env-activation step at all: "
+            "the SSH login shell's own python IS the intended interpreter "
+            "(a container / VM image with hpc-agent pip-installed into the "
+            "system python and deliberately no module or conda system — the "
+            "dockerized CI scheduler lanes are the canonical case). The #281 "
+            "``Activation`` guard accepts an all-empty "
+            "modules/conda_source/conda_env activation ONLY when this is "
+            "declared in the stanza; a genuinely-empty activation on a real "
+            "cluster is still refused. The job preamble needs no change: "
+            "empty ``$MODULES``/``$CONDA_*`` already skips every setup step, "
+            "which is exactly the declared behavior."
+        ),
+    )
     env_python: str | None = Field(
         default=None,
         description=(
@@ -653,16 +669,33 @@ class Activation:
     Construct via :func:`resolve_activation`, which back-fills ``conda_source``
     from ``clusters.yaml`` when a ``conda_env`` is selected but the source was
     dropped — the data the agent kept losing (#281).
+
+    The declared no-op (``login_shell``): a cluster whose stanza sets
+    ``login_shell_activation: true`` asserts that NO env-setup step is needed —
+    the SSH login shell's own python is the intended interpreter (the
+    dockerized CI scheduler container: no module system, hpc-agent
+    pip-installed into the system python3). For such a cluster the all-empty
+    refusal below is skipped *by declaration*, never by accident: the stanza
+    states the no-op as a fact about the cluster, so the guard's purpose (a
+    real cluster must never SILENTLY run login-shell python) is still served —
+    the declaration is the operator saying so explicitly, on infrastructure
+    config they own, not a whitespace hack smuggled through a module list
+    (the ``modules: [" "]`` trick the 2026-07-19 sandbox lane tried, which
+    :func:`resolve_activation`'s whitespace strip rightly reduced to empty).
+    The flag is inert when any real activation field is non-empty.
     """
 
     modules: str = ""
     conda_source: str = ""
     conda_env: str = ""
+    login_shell: bool = False
 
     def __post_init__(self) -> None:
         # The illegal states are rejected at construction, so no downstream
-        # call site has to re-assert the invariant by hand.
-        if not (self.modules or self.conda_source or self.conda_env):
+        # call site has to re-assert the invariant by hand. ``login_shell``
+        # admits the all-empty state ONLY as a stanza-declared no-op (see the
+        # class docstring); everything else about the refusal is unchanged.
+        if not (self.modules or self.conda_source or self.conda_env) and not self.login_shell:
             raise errors.SpecInvalid(
                 "submission has no env-activation declared: modules, conda_source, "
                 "and conda_env are all empty. The cluster-side preamble would skip "
@@ -670,7 +703,11 @@ class Activation:
                 "happens to inherit, which usually fails. Populate at least one of "
                 "these in clusters.yaml (commonly `conda_source` + `conda_envs`, "
                 "or `modules`) and re-run `hpc-agent setup --cluster <name>` to "
-                "regenerate the resolved spec."
+                "regenerate the resolved spec. If the login shell's python IS the "
+                "intended interpreter (a container/VM image with hpc-agent "
+                "pip-installed into the system python and no module/conda "
+                "system), declare `login_shell_activation: true` in the "
+                "cluster's clusters.yaml stanza."
             )
         # A conda_env needs conda actually on PATH. A conda_source proves it; a
         # module list proves it ONLY when a module names a conda distribution
@@ -725,6 +762,15 @@ def resolve_activation(
     coherent spec instead of a crashing one. Only when the cluster ALSO has no
     source (and no module puts conda on PATH) does the :class:`Activation`
     invariant fire and refuse at the boundary, before any rsync or qsub.
+
+    ``cluster_cfg['login_shell_activation']`` is the ONE sanctioned escape
+    from the all-empty refusal, and it is config-only by design: the no-op is
+    a fact the operator declares about their cluster (a container/VM whose
+    login-shell python is the intended interpreter), so it is read from the
+    stanza here and exposed as NO caller kwarg — an agent-authored spec field
+    could silence the guard the guard exists to keep loud. Whitespace-only
+    values are stripped below and count as empty: the declaration, never a
+    ``modules: [" "]`` cosmetic, is what admits the no-op.
     """
     cfg = cluster_cfg or {}
     resolved_modules = (modules or "").strip()
@@ -736,6 +782,7 @@ def resolve_activation(
         modules=resolved_modules,
         conda_source=resolved_conda_source,
         conda_env=resolved_conda_env,
+        login_shell=bool(cfg.get("login_shell_activation")),
     )
 
 

@@ -24,6 +24,7 @@ from hpc_agent.infra.clusters import (
     get_max_walltime_sec,
     get_walltime_arbitrage,
     remote_activation_for_sidecar,
+    resolve_activation,
     resolve_ssh_target,
 )
 
@@ -483,3 +484,83 @@ class TestColdStartWalltimeModestDefault:
     def test_explicit_default_still_wins(self) -> None:
         cfg = {"max_walltime_sec": 86400, "default_walltime_sec": 10800}
         assert get_default_walltime_sec(cfg) == 10800
+
+
+class TestLoginShellActivation:
+    """The declared no-op: ``login_shell_activation: true`` in a clusters.yaml
+    stanza is the ONE sanctioned escape from the #281 ``Activation`` all-empty
+    refusal (the 2026-07-19 sandbox-lane CI failure — run 29708199144 — where
+    the cosmetic ``modules: [" "]`` hack was stripped to empty and refused).
+
+    The guard's purpose is that a REAL cluster never *silently* runs
+    login-shell python; the declaration states the no-op as an explicit fact
+    about the cluster (a container/VM whose login-shell python IS the intended
+    interpreter), so the refusal must still fire for everything undeclared.
+    """
+
+    def test_declared_noop_admitted_and_job_env_stays_empty(self) -> None:
+        # The container contract: all three activation fields resolve empty,
+        # the construction is admitted by the stanza declaration alone, and
+        # the job_env stays byte-identical to the smoke lane's hand-authored
+        # one (empty vars → the preamble skips every setup step).
+        activation = resolve_activation(cluster_cfg={"login_shell_activation": True})
+        assert activation.login_shell is True
+        assert activation.as_job_env() == {"MODULES": "", "CONDA_SOURCE": "", "CONDA_ENV": ""}
+
+    def test_undeclared_all_empty_still_refused(self) -> None:
+        with pytest.raises(errors.SpecInvalid, match="no env-activation declared"):
+            resolve_activation(cluster_cfg={})
+
+    def test_refusal_message_names_the_declaration(self) -> None:
+        # The escape hatch is discoverable from the refusal itself.
+        with pytest.raises(errors.SpecInvalid, match="login_shell_activation"):
+            resolve_activation(cluster_cfg={})
+
+    def test_whitespace_only_modules_count_as_empty(self) -> None:
+        # resolve_activation strips: the CI lane's `modules: [" "]` cosmetic
+        # (space-joined to " " by build_submit_spec's back-fill) is NOT an
+        # activation and must keep refusing when nothing is declared.
+        with pytest.raises(errors.SpecInvalid, match="no env-activation declared"):
+            resolve_activation(cluster_cfg={}, modules=" ")
+
+    def test_whitespace_only_modules_admitted_only_by_declaration(self) -> None:
+        # With the declaration present the whitespace resolves to the SAME
+        # all-empty no-op — it is the stanza fact, never the whitespace, that
+        # satisfies the guard.
+        activation = resolve_activation(cluster_cfg={"login_shell_activation": True}, modules=" ")
+        assert activation.modules == ""
+        assert activation.login_shell is True
+
+    def test_declaration_inert_when_real_activation_present(self) -> None:
+        # A stanza carrying BOTH the declaration and real modules resolves the
+        # modules unchanged (the flag changes nothing about a non-empty
+        # activation — no behavior change for real clusters).
+        activation = resolve_activation(
+            cluster_cfg={"login_shell_activation": True}, modules="gcc/11"
+        )
+        assert activation.modules == "gcc/11"
+        assert activation.as_job_env()["MODULES"] == "gcc/11"
+
+    def test_declaration_does_not_weaken_conda_coherence(self) -> None:
+        # The finding-24 branch is untouched: conda_env with no conda_source
+        # and no conda-naming module still refuses even when the stanza
+        # declares the login-shell no-op (that declaration speaks to the
+        # all-empty refusal only — a conda_env is a NON-empty activation
+        # asking for conda the container does not have).
+        with pytest.raises(errors.SpecInvalid, match="requires conda on PATH"):
+            resolve_activation(cluster_cfg={"login_shell_activation": True}, conda_env="envA")
+
+    def test_cluster_config_types_the_key(self) -> None:
+        # First-class, not an extra='ignore' passthrough: declared fields get
+        # validated, and the derived manifest / near-miss allowlist see it.
+        cfg = ClusterConfig.model_validate(
+            {"scheduler": "slurm", "host": "h", "user": "u", "login_shell_activation": True}
+        )
+        assert cfg.login_shell_activation is True
+        assert ClusterConfig.model_validate({"scheduler": "slurm"}).login_shell_activation is False
+
+    def test_cluster_config_rejects_a_non_bool_value(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="login_shell_activation"):
+            ClusterConfig.model_validate({"scheduler": "slurm", "login_shell_activation": ["yes"]})

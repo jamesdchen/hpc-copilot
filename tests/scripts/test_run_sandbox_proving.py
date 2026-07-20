@@ -445,6 +445,30 @@ def test_stanza_accessors_require_keys() -> None:
         driver.stanza_remote_path({}, Path("/exp/x"))
 
 
+def test_local_clusters_yaml_declares_the_login_shell_noop(tmp_path: Path) -> None:
+    """The stanza ``--local`` writes must pass the #281 Activation guard the
+    submit-s1 resolve leg runs — the 2026-07-19 CI failure (run 29708199144)
+    was a cosmetic ``modules: [" "]`` that resolve_activation stripped to
+    empty and refused. The sanctioned form is the explicit
+    ``login_shell_activation`` declaration; pin that the written stanza
+    carries it AND that the guard admits the stanza as composed."""
+    from hpc_agent.infra.clusters import resolve_activation
+
+    path = tmp_path / "ci_clusters.yaml"
+    path.write_text(driver._LOCAL_CLUSTERS_YAML, encoding="utf-8")
+    config = driver.load_cluster_config(path)
+    name, stanza = driver.select_cluster(config, None)
+    assert name == "slurmci"
+    assert stanza.get("modules") == []
+    assert stanza.get("login_shell_activation") is True
+    # The exact composition build_submit_spec performs: no caller fields, the
+    # stanza is the only source. The guard must admit it as the DECLARED
+    # no-op (and the job_env stays empty — the preamble skips all setup).
+    activation = resolve_activation(cluster_cfg=stanza)
+    assert activation.login_shell is True
+    assert activation.as_job_env() == {"MODULES": "", "CONDA_SOURCE": "", "CONDA_ENV": ""}
+
+
 # ── recorded-resolution reflection + spec builders ───────────────────────────
 
 
