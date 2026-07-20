@@ -24,14 +24,19 @@ depends on context, not just on the counts:
   ``failed`` bucket (a task that failed then succeeded on retry). "Nothing
   conclusive yet" returns ``(None, None)`` — keep polling.
 * :func:`classify_settled` runs **after** reconcile has proven the scheduler
-  holds nothing alive for this run and both probes ran cleanly — with ONE
-  disclosed caller-side exception: reconcile's strict-all-complete arm (entry
-  B in ``reconcile._reconcile_one``) invokes it on disk-proven strict
-  completion even while the scheduler still shows jobs alive, disclosed at
-  runtime via ``scheduler_alive_at_settle``. There is no "keep polling" arm;
-  absence of any positive signal is a terminal ``abandoned``. Completion is
-  *strict* (every bucket but ``complete`` is zero) and failure outranks
-  absence.
+  holds nothing alive for this run and both probes ran cleanly — with TWO
+  disclosed caller-side exceptions, asymmetric BY KIND (both settle from
+  positive per-task disk evidence; their liveness relationship differs):
+  reconcile's strict-all-complete arm (entry B in
+  ``reconcile._reconcile_one``) QUERIES the scheduler and OVERRIDES a
+  still-alive record, disclosed at runtime via ``scheduler_alive_at_settle``;
+  the announce fast path (``reconcile._settle_from_announcements``) NEVER
+  queries liveness (it runs before the probes), disclosed at runtime via
+  ``verdict_source: task_announcements`` — it carries NO
+  ``scheduler_alive_at_settle`` stamp because it never took the reading that
+  stamp would claim. There is no "keep polling" arm; absence of any positive
+  signal is a terminal ``abandoned``. Completion is *strict* (every bucket
+  but ``complete`` is zero) and failure outranks absence.
 
 The lenient-vs-strict completion divergence between the two is **intentional**
 and is pinned by ``tests/ops/monitor/test_classify.py``; collapsing the two
@@ -241,12 +246,19 @@ def settle(summary: dict[str, Any], total_tasks: int) -> SettleDecision:
     alive for.
 
     Precondition (enforced by the caller): no recorded job is alive AND both
-    the alive-check and the reporter probe ran cleanly — except reconcile's
-    strict-all-complete arm (entry B in ``reconcile._reconcile_one``), which
-    invokes on disk-proven strict completion even while the scheduler still
-    shows jobs alive (disclosed at runtime via ``scheduler_alive_at_settle``;
-    the strict-completeness precedence below is what makes that safe). Under
-    that precondition the verdict is one of three terminal states, in strict
+    the alive-check and the reporter probe ran cleanly — with two disclosed
+    caller-side exceptions, each safe under the precedence below because it
+    settles from POSITIVE per-task disk evidence: reconcile's strict-all-
+    complete arm (entry B in ``reconcile._reconcile_one``) invokes on
+    disk-proven strict completion even while the scheduler still shows jobs
+    alive (QUERIED-and-overridden; disclosed at runtime via
+    ``scheduler_alive_at_settle``), and the announce fast path
+    (``reconcile._settle_from_announcements``) invokes on a full per-task
+    announcement WITHOUT any liveness read (NEVER-queried; disclosed at
+    runtime via ``verdict_source: task_announcements``, and deliberately
+    carrying no ``scheduler_alive_at_settle`` stamp — a reading it never
+    took). Under that precondition the verdict is one of three terminal
+    states, in strict
     precedence of POSITIVE evidence first, absence last:
 
     1. all tasks complete (strict) -> ``complete``  (``all_tasks_complete``)

@@ -102,6 +102,31 @@ def test_full_complete_settles_without_reporter(tmp_path, monkeypatch):
     assert harvests == ["complete"]
 
 
+def test_announce_settle_discloses_source_not_liveness_override(tmp_path, monkeypatch):
+    # #19 asymmetry pin (verifier-E nit): the two liveness-independent settle
+    # arms disclose through DIFFERENT channels because their liveness
+    # relationship differs in KIND. Entry B (reconcile's strict-all-complete
+    # reporter arm) QUERIES the scheduler and OVERRIDES a still-alive record —
+    # it stamps ``scheduler_alive_at_settle: True`` (pinned in
+    # test_reconcile_settle_liveness.py). The announce fast path NEVER queries
+    # liveness (it runs before the probes — that is the point), so it must NOT
+    # carry that key: a ``True`` there would claim a reading this arm never
+    # took. Its disclosure is ``verdict_source: task_announcements`` instead.
+    # A naive "consistency" fix stamping the announce arm True goes RED here.
+    reporter = _reporter_tripwire(monkeypatch)
+    _count_harvests(monkeypatch)
+    upsert_run(tmp_path, _record("asym_r1", total_tasks=4))
+    _stub_announcements(monkeypatch, {"announced": 4, "complete": 4, "failed": 0, "missing": 0})
+
+    result = recon.reconcile(tmp_path, "asym_r1", scheduler="sge")
+
+    assert result.status == "complete"
+    last = result.last_status or {}
+    assert last["verdict_source"] == "task_announcements"
+    assert "scheduler_alive_at_settle" not in last
+    assert reporter == []
+
+
 def test_full_failed_routes_to_failure_settle(tmp_path, monkeypatch):
     reporter = _reporter_tripwire(monkeypatch)
     harvests = _count_harvests(monkeypatch)

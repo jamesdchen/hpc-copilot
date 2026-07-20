@@ -407,6 +407,15 @@ def _settle_from_announcements(
     replace the reporter walk for the LIFECYCLE verdict ONLY; the aggregate
     integrity gate still verifies every output independently.
 
+    Disclosure asymmetry with the reporter-backed arm (#19): this arm settles
+    WITHOUT ever querying scheduler liveness (it runs BEFORE the probes — that
+    is the fast path's whole point), so it discloses via ``verdict_source:
+    task_announcements`` and deliberately carries NO ``scheduler_alive_at_settle``
+    stamp — entry B's ``True`` claims a scheduler reading this arm never took.
+    The two liveness-independent arms disclose by KIND: never-queried (here) vs
+    queried-and-overridden (entry B); the asymmetry is pinned by
+    ``test_announce_settle_discloses_source_not_liveness_override``.
+
     Returns the reconciled record on a terminal settle; returns ``None`` for a
     PARTIAL announcement (caller keeps probing) or a zero-task run — a partial
     announcement must NEVER settle terminal.
@@ -1534,6 +1543,9 @@ def _reconcile_one(
             # scheduler liveness was overridden by positive per-task disk
             # evidence — the latency fix is disclosed, never a silent behavior
             # change. (``alive`` empty means entry A, the historical gate.)
+            # The announce fast path discloses its OWN liveness-independence
+            # via ``verdict_source`` and NEVER via this key — it settles before
+            # the probes and never took the reading this stamp claims (#19).
             recorded["scheduler_alive_at_settle"] = True
         if decision.verdict == LifecycleState.FAILED:
             # Positive failure evidence — surface the classified error in
