@@ -2,12 +2,17 @@
 # scheduler-integration CI — the SGE twin of ci/slurm/.
 #
 # Base-image choice: ubuntu:24.04 + the DISTRO gridengine-* packages. noble,
-# NOT jammy: jammy's gridengine 8.1.9+dfsg-6 spoolinit/spooldefaults.bin
-# SEGFAULTS on spool seeding — LP #1774302 family, rc=139 at BOTH build and
-# runtime (lane runs 29679768215/29701129895/29704323125: the cell was left
-# with only `bootstrap`, qmaster failed 'global configuration not defined').
-# The fix landed in Debian's -9 revision; noble ships -11+. Those are
-# Debian's Son-of-Grid-Engine build (8.1.9+dfsg, noble universe) — the
+# NOT jammy. The LP #1774302 SIGSEGV family follows the gridengine 8.1.9
+# spool tooling on BOTH: spooldefaults.bin dies rc=139 even with the jemalloc
+# preload the LP workaround prescribes (lane runs 29679768215/29701129895/
+# 29704323125/29708199144 — the last ON noble with LD_PRELOAD proven in the
+# crashing process's env, so "the fix landed in Debian's -9 revision" does
+# not cover this binary). The lane therefore bypasses the BDB spool tooling
+# ENTIRELY: the entrypoint rewrites the cell bootstrap for CLASSIC (flat-
+# file) spooling, which needs no spoolinit/spooldefaults at all — the global
+# configuration is seeded as the flat file $SGE_CELL/common/configuration and
+# every other object is created through qconf on the running qmaster. Those
+# are Debian's Son-of-Grid-Engine build (8.1.9+dfsg, noble universe) — the
 # closest thing to a vanilla Son-of-Grid-Engine install that ships as a
 # maintained package. There is no maintained single-container SGE/UGE image
 # comparable to the Slurm ones (HPC Gridware's Open Cluster Scheduler, the
@@ -15,9 +20,10 @@
 # single image), so — exactly as the slurm lane did with slurm-wlm — the
 # scheduler is stood up from distro packages, no custom build. What this lane
 # tests is the SGE DIALECT (qsub -t n-m, qstat -u, qacct, -pe shared, the
-# login-shell PATH chain), which is identical across SoGE/UGE/OCS. Per §6 of
-# docs/plans/sandbox-proving-run-2026-07-18.md it can NEVER cover a specific
-# site's login profile (hoffman2's exact PATH shape) — do not oversell it.
+# login-shell PATH chain), which is identical across SoGE/UGE/OCS and is
+# spooling-method-agnostic. Per §6 of docs/plans/sandbox-proving-run-2026-07-18.md
+# it can NEVER cover a specific site's login profile (hoffman2's exact PATH
+# shape) — do not oversell it.
 #
 # The freshly-built hpc-agent wheel is NOT baked in — the workflow pip-installs
 # it into this image's python3 at runtime (mirroring the real cluster-env
@@ -42,9 +48,11 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 # shared/gridengineconfig is FALSE: with `true` the postinst runs init_cluster
 # at image-BUILD time, and its spooldefaults.bin SIGSEGVs inside the buildkit
 # sandbox (LP #1774302 family — the build hostname canonicalizes to localhost;
-# observed on the lane's first live run, gh run 29679768215). The cell spool is
-# initialized at RUNTIME by the entrypoint instead (the canonical unattended
-# pattern), where docker wires the container hostname to a real IP.
+# observed on the lane's first live run, gh run 29679768215). The cell is
+# initialized at RUNTIME by the entrypoint instead — and, because the same
+# spooldefaults crash reproduces at runtime on noble even with the jemalloc
+# preload (gh run 29708199144), the entrypoint seeds a CLASSIC-spooling cell
+# by hand (flat files + qconf), never touching the BDB spool tools.
 RUN echo "gridengine-master shared/gridenginemaster string sgeci" | debconf-set-selections \
     && echo "gridengine-master shared/gridenginecell string default" | debconf-set-selections \
     && echo "gridengine-master shared/gridengineconfig boolean false" | debconf-set-selections
@@ -55,10 +63,15 @@ RUN echo "gridengine-master shared/gridenginemaster string sgeci" | debconf-set-
 # reporter + the wheel install. python-is-python3: the status reporter's
 # remote command runs bare ``python`` when no conda/module activation supplies
 # one (cluster_status._ENV_PYTHON) — same rationale as ci/slurm/Dockerfile.
+# libjemalloc2: preloaded around the two daemon starts in the entrypoint
+# (insurance against the LP #1774302 TLS SIGSEGV family hitting sge_qmaster /
+# sge_execd themselves); it otherwise arrives only transitively, and the
+# preload must not depend on a transitive accident.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gridengine-master \
         gridengine-exec \
         gridengine-client \
+        libjemalloc2 \
         openssh-server \
         rsync \
         tar \
