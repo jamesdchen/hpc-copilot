@@ -9,17 +9,22 @@ collectively hammering the host. This module is that stop.
 
 Mechanism (classic circuit breaker, persisted per host):
 
-* Every ssh-family attempt reports its outcome. **Consecutive
-  connection-level failures** (connect timeout, banner-exchange timeout,
-  connection refused/reset — see :data:`_CONNECTION_FAILURE_MARKERS`, plus
-  the wrapper-level :class:`TimeoutError`) increment a per-host counter;
-  any attempt that reaches the remote side (success, auth failure, remote
-  command non-zero) proves the connection path works and resets it. The
-  discriminator is the ssh client's OWN failure signal: OpenSSH exits 255
-  when the client itself fails (connect/banner/kex) and otherwise
-  propagates the REMOTE command's exit status — so a non-255 non-zero exit
-  means the command RAN and its stderr is remote content, never transport
-  evidence, no matter how marker-shaped it is (:func:`classify_connection_failure`).
+* Every ssh-family attempt reports its outcome, TRI-STATE
+  (:func:`classify_connection_outcome`). **Consecutive connection-level
+  failures** (connect timeout, banner-exchange timeout, connection
+  refused/reset — see :data:`_CONNECTION_FAILURE_MARKERS`, plus the
+  wrapper-level :class:`TimeoutError`) increment a per-host counter; an
+  attempt that provably reaches the remote side (success, auth failure —
+  rc==0 or rc==255 without a marker) proves the connection path works and
+  resets it; and a non-255 non-zero exit — a direct leg's REMOTE command
+  status, or a wrapper leg's (rsync, scp) LOCAL wrapper status against an
+  unreachable host — is NOT transport evidence either way and records
+  NEITHER (no failure count, no success reset). The discriminator is the
+  ssh client's OWN failure signal: OpenSSH exits 255 when the client itself
+  fails (connect/banner/kex) and otherwise propagates the REMOTE command's
+  exit status — so at a non-255 non-zero exit marker-shaped stderr is remote
+  (or wrapper) content, never transport evidence
+  (:func:`classify_connection_failure`).
 * At :data:`CIRCUIT_THRESHOLD` consecutive failures the circuit **opens**:
   every subsequent attempt to that host fails FAST with
   :class:`hpc_agent.errors.SshCircuitOpen` (``ssh_circuit_open`` /
@@ -80,6 +85,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent.errors import SshCircuitOpen
@@ -95,6 +101,7 @@ __all__ = [
     "CYCLE1_COOLDOWN_SEC",
     "CYCLE2_COOLDOWN_SEC",
     "CYCLE3_PLUS_COOLDOWN_SEC",
+    "ConnectionOutcome",
     "DEGRADATION_CYCLE_THRESHOLD",
     "INCIDENT_WINDOW_SEC",
     "MAX_COOLDOWN_SEC",
@@ -105,6 +112,7 @@ __all__ = [
     "check_circuit",
     "circuit_state_path",
     "classify_connection_failure",
+    "classify_connection_outcome",
     "cooldown_for_cycle",
     "degradation_advice",
     "degradation_advice_for_host",
@@ -635,12 +643,15 @@ def _open_error(
 def classify_connection_failure(cp: subprocess.CompletedProcess[str]) -> str | None:
     """The matched connection-level marker for *cp*, or ``None``.
 
-    ``None`` means "the connection reached the host" — a success, an auth
-    failure, or a remote command's non-zero exit. Only a returned marker
-    counts toward the breaker. (A raised :class:`TimeoutError` never gets
-    here; :func:`guarded_call` counts it directly — at this seam a wrapper
-    timeout is indistinguishable from a banner-exchange hang, and the
-    incident's all-night retries were exactly those timeouts.)
+    ``None`` means "no connection-level marker" — a success, an auth failure,
+    a remote command's non-zero exit, OR a wrapper leg's local status; it is
+    NOT itself a "reached the host" verdict — :func:`classify_connection_outcome`
+    splits ``None`` into SUCCESS (reset the breaker) and INCONCLUSIVE (record
+    nothing). Only a returned marker counts toward the breaker. (A raised
+    :class:`TimeoutError` never gets here; :func:`guarded_call` counts it
+    directly — at this seam a wrapper timeout is indistinguishable from a
+    banner-exchange hang, and the incident's all-night retries were exactly
+    those timeouts.)
 
     The exit code decides WHO is speaking before stderr is believed: OpenSSH
     reserves 255 for the ssh CLIENT's own failure (connect / banner / kex)
@@ -651,8 +662,10 @@ def classify_connection_failure(cp: subprocess.CompletedProcess[str]) -> str | N
     incident: a dead qmaster made every qsub leg exit 1 with ``error:
     commlib error: got select error (Connection refused)`` in REMOTE stderr
     over a HEALTHY ssh channel; the un-gated marker match counted all three
-    as connection-level and opened the circuit). A remote command that
-    itself exits 255 is the accepted residual — ssh collapses it onto the
+    as connection-level and opened the circuit), and on a WRAPPER leg (rsync,
+    scp) a non-255 status may equally be the LOCAL wrapper's own exit against
+    an unreachable host — not transport evidence either way. A remote command
+    that itself exits 255 is the accepted residual — ssh collapses it onto the
     client's own code — and the marker match below is the remaining guard.
     """
     if cp.returncode == 0:
@@ -664,6 +677,58 @@ def classify_connection_failure(cp: subprocess.CompletedProcess[str]) -> str | N
         if marker in blob:
             return marker
     return None
+
+
+class ConnectionOutcome(Enum):
+    """The tri-state breaker verdict for one ssh-family attempt.
+
+    The exit status is the only channel remote content cannot forge, so the
+    count / reset / ignore decision keys on it (see
+    :func:`classify_connection_outcome`):
+
+    * :attr:`FAILURE` — rc==255 (OpenSSH's reserved client-failure code) with
+      a connection marker: the ssh CLIENT itself failed to connect. Count a
+      connection failure (:func:`record_connection_failure`).
+    * :attr:`SUCCESS` — rc==0, or rc==255 with NO marker (the accepted
+      residual — an auth failure or a remote command that itself exited 255):
+      the connection provably reached the host. Reset the breaker
+      (:func:`record_connection_success`).
+    * :attr:`INCONCLUSIVE` — any other non-zero exit (rc≠255): a direct ssh
+      leg's REMOTE command status, OR a wrapper leg's (rsync rc=12, scp rc=1)
+      LOCAL wrapper status — not transport evidence either way, since against
+      a dead host the wrapper's status may be purely local. Record NEITHER:
+      no failure count AND no success reset (no ``consecutive_failures``
+      reset, no establishment-ring touch).
+    """
+
+    FAILURE = "failure"
+    SUCCESS = "success"
+    INCONCLUSIVE = "inconclusive"
+
+
+def classify_connection_outcome(
+    cp: subprocess.CompletedProcess[str],
+) -> ConnectionOutcome:
+    """Which breaker recorder *cp* drives — the single count/reset/ignore seat.
+
+    Every caller that used to read :func:`classify_connection_failure`'s
+    ``None`` as "connection succeeded" routes through this instead
+    (:func:`guarded_call`, the demand probe :func:`_run_demand_probe`), so no
+    caller can treat "not a connection failure" as "connection succeeded":
+    a non-255 non-zero exit is :attr:`ConnectionOutcome.INCONCLUSIVE` and
+    records nothing (see :class:`ConnectionOutcome` for why a wrapper leg's
+    status is not transport evidence). rc==255 + marker is
+    :attr:`~ConnectionOutcome.FAILURE`; rc==0 (or the rc==255-no-marker
+    residual) is :attr:`~ConnectionOutcome.SUCCESS`. Agrees with
+    :func:`classify_connection_failure` by construction (it delegates).
+    """
+    if cp.returncode == 0:
+        return ConnectionOutcome.SUCCESS
+    if cp.returncode != 255:
+        return ConnectionOutcome.INCONCLUSIVE
+    if classify_connection_failure(cp) is not None:
+        return ConnectionOutcome.FAILURE
+    return ConnectionOutcome.SUCCESS
 
 
 def check_circuit(
@@ -747,24 +812,38 @@ def _run_demand_probe(
     command's failure would. On failure this raises :class:`SshCircuitOpen`
     built from the freshly re-opened doc (accurate next-cycle deadline); on
     success it returns and the caller proceeds against a now-closed circuit.
+    An INCONCLUSIVE probe (rc≠255 non-zero — not transport evidence either
+    way) records NEITHER and raises :class:`SshCircuitOpen` against the
+    still-open circuit: an unproven host must not let the caller through.
     """
     try:
         cp = probe_fn()
     except TimeoutError as exc:
         record_connection_failure(ssh_target, detail=str(exc), clock=clock)
         raise _reopened_error(host, clock=clock) from exc
-    marker = classify_connection_failure(cp)
-    if marker is not None:
+    outcome = classify_connection_outcome(cp)
+    if outcome is ConnectionOutcome.FAILURE:
+        marker = classify_connection_failure(cp) or "connection failure"
         stderr_snip = (cp.stderr or "").strip()[:200]
         record_connection_failure(ssh_target, detail=f"{marker}: {stderr_snip}", clock=clock)
         raise _reopened_error(host, clock=clock)
-    record_connection_success(ssh_target)
+    if outcome is ConnectionOutcome.SUCCESS:
+        record_connection_success(ssh_target)
+        return
+    # INCONCLUSIVE (rc≠255 non-zero): the probe proved NOTHING — not transport
+    # evidence either way (a wrapper-style status may be purely local against
+    # a dead host). Record neither success (the circuit must not close on an
+    # unproven host) nor failure (no connection-level evidence to escalate);
+    # the claimed slot lapses at PROBE_CLAIM_TTL_SEC and the caller fails fast.
+    raise _reopened_error(host, clock=clock)
 
 
 def _reopened_error(host: str, *, clock: Callable[[], float]) -> SshCircuitOpen:
-    """The fail-fast envelope for a host whose demand-probe just re-opened it —
-    re-read from disk so the deadline reflects the new cycle's cooldown. Fail-open
-    (unreadable doc) to a bare :class:`SshCircuitOpen`."""
+    """The fail-fast envelope for a host whose demand-probe did NOT prove it
+    reachable — a failed probe re-opened the circuit at the next cycle's
+    cooldown, an inconclusive one (rc≠255 non-zero) left it open as-is; either
+    way the caller fails fast. Re-read from disk so the deadline reflects the
+    current doc. Fail-open (unreadable doc) to a bare :class:`SshCircuitOpen`."""
     doc = _read_doc(circuit_state_path(host))
     if doc is None:
         return SshCircuitOpen(f"ssh circuit for host '{host}' re-opened after a failed probe")
@@ -805,9 +884,11 @@ def liveness_probe(
     fast on a missing key rather than hanging on a prompt; the whole attempt is
     hard-bounded by *timeout_sec*, with ``subprocess.TimeoutExpired`` translated
     to the built-in :class:`TimeoutError` :func:`_run_demand_probe` records as a
-    connection failure. An auth failure / remote non-zero exit counts as
-    "reached the host" (probe success) under :func:`classify_connection_failure`
-    — the same evidence standard every real attempt is held to.
+    connection failure. An auth failure counts as "reached the host" (probe
+    success); a non-255 non-zero exit is INCONCLUSIVE — it records nothing
+    (neither closes nor re-opens) and the caller fails fast on the still-open
+    circuit — the same tri-state evidence standard
+    (:func:`classify_connection_outcome`) every real attempt is held to.
     """
 
     def _probe() -> subprocess.CompletedProcess[str]:
@@ -999,9 +1080,13 @@ def guarded_call(
     runs first, so an open circuit fails fast without pacing or queueing for a
     slot; the pace runs BEFORE the slot is claimed so a paced wait never hoards
     a concurrency slot (waiters also re-check the breaker each poll). Finally it
-    records the outcome: a raised :class:`TimeoutError` or a connection-marked
-    ``CompletedProcess`` counts as a connection failure; anything that reached
-    the host resets the counter. A slot-wait give-up
+    records the outcome TRI-STATE (:func:`classify_connection_outcome`): a
+    raised :class:`TimeoutError` or a connection-marked ``CompletedProcess``
+    (rc==255 + marker) counts as a connection failure; an attempt that provably
+    reached the host (rc==0, or the rc==255-no-marker residual) resets the
+    counter; any OTHER non-zero exit (rc≠255 — a direct leg's remote-command
+    status, or a wrapper leg's LOCAL status against an unreachable host) is not
+    transport evidence either way and records NEITHER. A slot-wait give-up
     (:class:`hpc_agent.errors.SshSlotWaitTimeout`) is local contention,
     not host evidence — it never counts toward the breaker.
 
@@ -1020,10 +1105,15 @@ def guarded_call(
         except TimeoutError as exc:
             record_connection_failure(ssh_target, detail=str(exc), clock=clock)
             raise
-        marker = classify_connection_failure(cp)
-        if marker is not None:
+        outcome = classify_connection_outcome(cp)
+        if outcome is ConnectionOutcome.FAILURE:
+            marker = classify_connection_failure(cp) or "connection failure"
             stderr_snip = (cp.stderr or "").strip()[:200]
             record_connection_failure(ssh_target, detail=f"{marker}: {stderr_snip}", clock=clock)
-        else:
+        elif outcome is ConnectionOutcome.SUCCESS:
             record_connection_success(ssh_target)
+        # INCONCLUSIVE (rc≠255 non-zero): not transport evidence either way —
+        # a direct leg's remote-command status or a wrapper leg's (rsync, scp)
+        # LOCAL status against an unreachable host. Record NEITHER: no failure
+        # count, no success reset, no establishment-ring touch.
     return cp

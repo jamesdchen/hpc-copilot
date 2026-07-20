@@ -25,9 +25,11 @@ from hpc_agent.infra.ssh_circuit import (
     CYCLE3_PLUS_COOLDOWN_SEC,
     MAX_COOLDOWN_SEC,
     PROBE_CLAIM_TTL_SEC,
+    ConnectionOutcome,
     check_circuit,
     circuit_state_path,
     classify_connection_failure,
+    classify_connection_outcome,
     guarded_call,
     record_connection_failure,
     record_connection_success,
@@ -212,6 +214,86 @@ class TestClassify:
         for marker in ssh_circuit._CONNECTION_FAILURE_MARKERS:
             cp = _cp(stderr=f"remote app said: {marker}", returncode=returncode)
             assert classify_connection_failure(cp) is None, (marker, returncode)
+
+
+# ---------------------------------------------------------------------------
+# Tri-state outcome (NIT 1): count / reset / IGNORE
+# ---------------------------------------------------------------------------
+
+
+class TestTriStateOutcome:
+    """classify_connection_outcome: rc==255+marker → FAILURE; rc==0 (or the
+    rc==255-no-marker residual) → SUCCESS; rc≠255 non-zero → INCONCLUSIVE —
+    not transport evidence either way (a direct leg's remote-command status
+    OR a wrapper leg's LOCAL wrapper status against a dead host)."""
+
+    @pytest.mark.parametrize("returncode", [1, 2, 12, 127])
+    def test_non_255_nonzero_is_inconclusive_even_with_marker_stderr(self, returncode):
+        cp = _cp(stderr="ssh: connect to host x port 22: Connection refused", returncode=returncode)
+        assert classify_connection_outcome(cp) is ConnectionOutcome.INCONCLUSIVE
+
+    def test_rc_255_with_marker_is_failure(self):
+        cp = _cp(stderr="ssh: connect to host x port 22: Connection refused", returncode=255)
+        assert classify_connection_outcome(cp) is ConnectionOutcome.FAILURE
+
+    @pytest.mark.parametrize(
+        ("stderr", "returncode"),
+        [("", 0), ("Permission denied (publickey).", 255), ("segmentation fault", 255)],
+    )
+    def test_reached_the_host_is_success(self, stderr, returncode):
+        assert (
+            classify_connection_outcome(_cp(stderr=stderr, returncode=returncode))
+            is ConnectionOutcome.SUCCESS
+        )
+
+
+class TestTriStateAccounting:
+    """The tri-state at the breaker-accounting seam (the record_* functions):
+    an rc≠255 non-zero attempt leaves the breaker UNCHANGED — no failure
+    counted AND no success recorded (the false "reached the host" claim a
+    wrapper leg against a dead host used to make by driving the classifier's
+    None into record_connection_success)."""
+
+    @pytest.mark.parametrize("returncode", [1, 12])
+    def test_rc_non_255_nonzero_neither_counts_nor_resets(self, returncode):
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD - 1)  # genuine failures put the counter at N-1
+        seeded_ring = len(_state()["recent_establishments"])
+        # rc=1 (remote command failure) / rc=12 (rsync-style wrapper status),
+        # even with marker-shaped stderr, record nothing.
+        guarded_call(
+            TARGET,
+            lambda rc=returncode: _cp(stderr="Connection refused", returncode=rc),
+            clock=clock,
+        )
+        doc = _state()
+        assert doc["consecutive_failures"] == CIRCUIT_THRESHOLD - 1  # NOT reset
+        assert len(doc["recent_establishments"]) == seeded_ring  # no ring append
+        check_circuit(TARGET, clock=clock)  # still closed
+
+    def test_ignored_legs_do_not_reset_so_genuine_failures_still_accumulate(self):
+        """The end-to-end payoff: wrapper legs sandwiched between genuine
+        failures do NOT reset the count, so the circuit still opens at
+        threshold (before the tri-state the rc≠255 legs drove
+        record_connection_success and wiped the counter)."""
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD - 1)
+        guarded_call(TARGET, lambda: _cp(stderr="Connection refused", returncode=12), clock=clock)
+        _fail_n(clock, 1)  # the Nth genuine failure — the ignored leg did not reset
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock)
+
+    def test_rc_0_and_rc_255_no_marker_still_reset(self):
+        """Lane-A path (b) byte-identical: rc==0 and the rc==255-no-marker
+        residual (auth failure) still record success and reset the counter."""
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD - 1)
+        auth = _cp(stderr="Permission denied (publickey).", returncode=255)
+        guarded_call(TARGET, lambda: auth, clock=clock)
+        assert _state()["consecutive_failures"] == 0
+        _fail_n(clock, CIRCUIT_THRESHOLD - 1)
+        guarded_call(TARGET, lambda: _cp(returncode=0), clock=clock)
+        assert _state()["consecutive_failures"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -813,6 +895,24 @@ class TestDemandProbe:
         with pytest.raises(SshCircuitOpen):
             check_circuit(TARGET, clock=clock, probe_fn=boom)
         assert _state()["cooldown_sec"] == CYCLE2_COOLDOWN_SEC
+
+    def test_inconclusive_demand_probe_records_nothing_and_fails_fast(self):
+        """An rc≠255 non-zero probe (a wrapper-style status) proved NOTHING:
+        it neither closes the circuit (no success record — the old None-path
+        false "reached the host" claim) nor escalates (no failure count, no
+        cycle bump, cooldown unchanged); the caller fails fast and the
+        claimed slot lapses at PROBE_CLAIM_TTL_SEC."""
+        clock = FakeClock()
+        self._open_and_lapse(clock)
+        before = _state()
+        wrapper_rc = _cp(stderr="rsync: connection unexpectedly closed", returncode=12)
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock, probe_fn=lambda: wrapper_rc)
+        doc = _state()
+        assert doc["state"] == "open"  # NOT closed on an unproven host
+        assert doc["consecutive_failures"] == before["consecutive_failures"]  # no count
+        assert doc["reopen_cycles"] == before["reopen_cycles"]  # no escalation
+        assert doc["cooldown_sec"] == CYCLE1_COOLDOWN_SEC  # cycle-1 lane unchanged
 
     def test_concurrent_caller_fails_fast_while_probe_claimed(self):
         """Single-flight: with the slot already claimed, a concurrent caller fails
