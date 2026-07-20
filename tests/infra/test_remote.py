@@ -653,6 +653,16 @@ class TestRunCombinerCheckedTimeout:
 # ---------------------------------------------------------------------------
 
 
+#: The 2026-07-19 scheduler-integration incident shape: a remote qsub that
+#: EXECUTED (ssh transport healthy) and failed because the qmaster was dead —
+#: REMOTE stderr carrying a marker-shaped line ("Connection refused") that is
+#: application content, never transport evidence.
+COMMLIB_QMASTER_DOWN_STDERR = (
+    "error: commlib error: got select error (Connection refused)\n"
+    'Unable to run job: unable to send message to qmaster using port 6444 on host "sgeci"'
+)
+
+
 class TestSshBackoff:
     @pytest.fixture(autouse=True)
     def _enable_backoff(self, monkeypatch):
@@ -711,7 +721,20 @@ class TestSshBackoff:
         assert mock_run.call_count == 5
         assert result.returncode == 255
 
-    def test_rsync_push_retries_on_protocol_marker(self):
+    def test_rsync_push_does_not_throttle_retry_a_remote_exit_status(self):
+        """rc != 255 is the remote command's own status — never throttle-retried.
+
+        rsync collapses its ssh child's transport failure onto its own
+        protocol-error exit (12), so even the genuine "sshd throttled the
+        rsync startup" shape arrives here as rc=12. Under the rc==255 gate
+        (:func:`remote._is_throttle_failure`, parity with the breaker's
+        e79d2e88 classifier) a non-255 exit means the command ran and
+        marker-shaped stderr is content, not transport evidence: the failure
+        surfaces immediately — ONE attempt, the failing cp returned.
+        (Previously this retried the throttle schedule; the
+        rsync-over-throttled-sshd startup case is the gate's named casualty,
+        documented in the commit message.)
+        """
         throttle_cp = _cp(
             stderr=(
                 "ssh_exchange_identification: Connection closed by remote host\n"
@@ -719,12 +742,24 @@ class TestSshBackoff:
             ),
             returncode=12,
         )
-        ok_cp = _cp(returncode=0)
         with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
-            mock_run.side_effect = [throttle_cp, ok_cp]
+            mock_run.return_value = throttle_cp
             result = transport.rsync_push(ssh_target="u@c", remote_path="/p", local_path="/tmp/x")
-        assert result.returncode == 0
-        assert mock_run.call_count == 2
+        assert result.returncode == 12
+        assert mock_run.call_count == 1
+
+    def test_ssh_run_does_not_throttle_retry_a_remote_executed_failure(self):
+        """The 2026-07-19 incident through the ladder: a remote qsub that RAN
+        and exited 1 with the dead qmaster's commlib "Connection refused" in
+        REMOTE stderr must surface immediately — ONE attempt, the failing cp
+        returned — not throttle-retried 2s/4s/8s/16s (before the rc==255
+        gate this drove the full schedule)."""
+        commlib_cp = _cp(stderr=COMMLIB_QMASTER_DOWN_STDERR, returncode=1)
+        with patch("hpc_agent.infra.remote.capture_via_select") as mock_run:
+            mock_run.return_value = commlib_cp
+            result = remote.ssh_run("qsub job.sh", ssh_target="u@c")
+        assert result.returncode == 1
+        assert mock_run.call_count == 1
 
     def test_timeout_error_trips_circuit_mid_ladder(self):
         """Wrapper timeouts count as connection failures: rung 4 fails fast."""
@@ -789,6 +824,57 @@ class TestSshBackoff:
             with remote.non_idempotent_remote(), pytest.raises(TimeoutError):
                 remote.ssh_run("qstat", ssh_target="u@c", idempotent=True)
         assert mock_run.call_count == 5  # retried despite the ambient non-idempotent scope
+
+
+class TestIsThrottleFailure:
+    """Classifier-level pins for :func:`remote._is_throttle_failure`'s rc==255
+    gate — the retry-ladder twin of the breaker's e79d2e88 fix: OpenSSH
+    reserves 255 for the ssh CLIENT's own failure and otherwise propagates
+    the remote command's exit status, so a marker match is transport
+    evidence ONLY at 255."""
+
+    def test_success_is_not_throttle(self):
+        assert remote._is_throttle_failure(_cp(returncode=0)) is False
+
+    def test_remote_executed_connection_refused_is_not_throttle(self):
+        """The incident shape at the classifier: rc=1 + the dead qmaster's
+        commlib "Connection refused" in REMOTE stderr is NOT throttle — the
+        command RAN, so the transport is proven regardless of what its
+        stderr says."""
+        cp = _cp(stderr=COMMLIB_QMASTER_DOWN_STDERR, returncode=1)
+        assert remote._is_throttle_failure(cp) is False
+
+    def test_client_255_with_throttle_marker_is_throttle(self):
+        """Existing behavior preserved: the ssh client's own failure (255)
+        with an sshd-throttle marker still classifies as throttle."""
+        cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
+        assert remote._is_throttle_failure(cp) is True
+
+    def test_auth_failure_255_is_not_throttle(self):
+        """Deliberate omission, parity with the breaker doctrine: an auth
+        reject (rc=255, "Permission denied") proves the host ACCEPTED the
+        connection — not throttle, never retried."""
+        cp = _cp(stderr="Permission denied (publickey).", returncode=255)
+        assert remote._is_throttle_failure(cp) is False
+
+    @pytest.mark.parametrize("returncode", [1, 2, 12, 126, 127])
+    def test_no_marker_matches_at_a_remote_exit_status(self, returncode):
+        """Every marker in the set is remote content at a remote exit status —
+        kills a gate that special-cases one marker or one exit code instead
+        of keying on the client's own 255. rc=12 is the rsync protocol-error
+        shape (rsync collapses its ssh child's failure onto it)."""
+        for marker in remote._SSH_THROTTLE_MARKERS:
+            cp = _cp(stderr=f"remote app said: {marker}", returncode=returncode)
+            assert remote._is_throttle_failure(cp) is False, (marker, returncode)
+
+    def test_remote_exit_255_is_the_accepted_residual(self):
+        """ssh collapses a REMOTE command's own ``exit 255`` onto the client's
+        transport-failure code — indistinguishable at this seam. The marker
+        match is the only remaining guard there: marker-shaped text still
+        classifies as throttle (accepted, documented). Pins the boundary so
+        a "helpful" tightening/loosening fails loudly."""
+        cp = _cp(stderr=COMMLIB_QMASTER_DOWN_STDERR, returncode=255)
+        assert remote._is_throttle_failure(cp) is True
 
 
 class TestEngineSeamIdempotence:

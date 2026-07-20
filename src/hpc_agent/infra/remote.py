@@ -297,7 +297,15 @@ def _truncate(text: str, limit: int = 120) -> str:
 # refused the connection (MaxStartups, fail2ban, PAM session limits) — i.e.
 # transient, retryable errors. A plain wrong-host or auth failure is NOT
 # retried. Match case-insensitively to be robust to different OpenSSH /
-# distro spellings.
+# distro spellings — and ONLY consulted for ``returncode == 255`` (the ssh
+# client's own failure code): at any other non-zero exit the remote command
+# ran and marker-shaped text in its stderr is REMOTE content, never
+# transport evidence (see :func:`_is_throttle_failure`). Consequence for the
+# rsync entry: rsync collapses its ssh child's transport failure onto its
+# own protocol-error exit (12), so an rsync startup failure over a throttled
+# sshd is no longer throttle-retried here — the transport helpers'
+# ``_with_ssh_backoff`` wraps surface it immediately (named casualty of the
+# gate; an rsync-aware discriminator is a possible follow-up).
 _SSH_THROTTLE_MARKERS: tuple[str, ...] = (
     # Suffix-trimmed so we match both "Connection closed by remote host"
     # and "Connection closed" (sshd may log either).
@@ -357,7 +365,9 @@ def _ssh_backoff_policy(*, retry_on_timeout: bool = True) -> RetryPolicy:
     :data:`REMOTE_DEADLINE_MARGIN_SEC` — surfaces immediately instead of
     re-executing and duplicating the array. Throttle failures still retry either
     way: an sshd rate-limit rejects the connection BEFORE the command dispatches,
-    so re-trying it can never double-run.
+    so re-trying it can never double-run — a property the rc==255 gate in
+    :func:`_is_throttle_failure` now ENFORCES (a throttle-marked cp is by
+    construction the ssh client's own failure, never a remote-executed one).
     """
     base = _BACKOFF_DELAYS_SEC[0] if _BACKOFF_DELAYS_SEC else 0.0
     retry_on: tuple[type[BaseException], ...] = (
@@ -374,11 +384,30 @@ def _ssh_backoff_policy(*, retry_on_timeout: bool = True) -> RetryPolicy:
 def _is_throttle_failure(cp: subprocess.CompletedProcess[str]) -> bool:
     """True if *cp* looks like an ssh rate-limit failure worth retrying.
 
-    We consider non-zero returncode + a known sshd-throttle marker in
-    stderr to be transient. A bare timeout (which raises before reaching
-    here) is also transient and handled by the caller's except clause.
+    The exit code decides WHO is speaking before stderr is believed: OpenSSH
+    reserves 255 for the ssh CLIENT's own failure (connect / banner / kex)
+    and otherwise propagates the REMOTE command's exit status. A non-255
+    non-zero exit therefore means the remote command RAN — the transport
+    demonstrably worked — and marker-shaped text in its stderr is remote
+    content, never throttle evidence, so it is returned to the caller
+    immediately rather than driving ssh-throttle retries (2026-07-19
+    scheduler-integration incident: a dead qmaster made every qsub leg exit
+    1 with ``error: commlib error: got select error (Connection refused)``
+    in REMOTE stderr over a HEALTHY ssh channel; the un-gated marker match
+    throttle-retried the remote failure 2s/4s/8s/16s instead of surfacing
+    it). This is the same gate as the breaker's
+    :func:`hpc_agent.infra.ssh_circuit.classify_connection_failure` (commit
+    e79d2e88) so the retry ladder and the breaker agree on what a transport
+    failure IS. A remote command that itself exits 255 is the accepted
+    residual — ssh collapses it onto the client's own code — and the marker
+    match below is the remaining guard there.
+
+    A bare timeout (which raises before reaching here) is also transient and
+    handled by the caller's except clause.
     """
     if cp.returncode == 0:
+        return False
+    if cp.returncode != 255:
         return False
     blob = ((cp.stderr or "") + "\n" + (cp.stdout or "")).lower()
     return any(marker in blob for marker in _SSH_THROTTLE_MARKERS)
@@ -397,8 +426,12 @@ def _with_ssh_backoff(
     and returns its CompletedProcess. We retry on:
 
     * :class:`TimeoutError` raised by the underlying wrapper, AND
-    * non-zero returncode whose stderr matches a known sshd-throttle
-      marker (see :data:`_SSH_THROTTLE_MARKERS`).
+    * the ssh client's OWN failure (returncode 255) whose stderr matches a
+      known sshd-throttle marker (see :data:`_SSH_THROTTLE_MARKERS`). A
+      non-255 non-zero exit is the REMOTE command's own status — the command
+      ran, so the transport is proven — and is returned immediately no
+      matter how marker-shaped its stderr is
+      (:func:`_is_throttle_failure`).
 
     Permanent failures (auth refused, host unreachable, command not
     found) return immediately with the failing CompletedProcess.
