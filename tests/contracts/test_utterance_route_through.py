@@ -13,6 +13,14 @@ deliberate, documented decision.
 Enforced as an AST scan over the module source: any function that calls an
 UNFILTERED pool reader must be on the exemption allowlist below (with a reason)
 — a filtered gate calls ``_fresh_*`` instead and never trips the scan.
+
+Dev-mode extension (``docs/design/dev-mode-authorship.md``): the cross-repo
+widening has ONE shared reader, ``_authorship_evidence_texts`` — it owns the
+own-namespace read AND the granted-home read, and the value-derivation gate
+must route through it (never a raw pool reader, which would silently drop the
+grant / dangling / revoke state machine). ``test_value_gate_routes_through_
+shared_home_reader`` pins that routing; the two dev-mode readers ride the
+exemption allowlist below with documented reasons.
 """
 
 from __future__ import annotations
@@ -92,6 +100,26 @@ _EXEMPT: dict[str, str] = {
         "permanently satisfies a NAMING leg) cannot apply. Same temporal-binding-by-"
         "vocabulary-impossibility class as the sha-prefix FILING gates."
     ),
+    "_authorship_evidence_texts": (
+        "THE shared dev-mode cross-repo reader (docs/design/dev-mode-authorship.md "
+        "legs b–d): its own-namespace leg routes through the exempt base reader "
+        "``_actor_scoped_human_texts`` and its home-namespace leg reads the GRANTED "
+        "home log under the same actor scoping — the value-derivation gate calls "
+        "this function and never a raw reader (pinned by "
+        "test_value_gate_routes_through_shared_home_reader). Same field-derivation "
+        "semantics exemption as ``_assert_human_authorship`` — the kickoff prompt "
+        "stating the goal IS the intended standing evidence — extended to the "
+        "granted home's statements; the grant/revoke/dangling state machine is the "
+        "deliberate, documented decision."
+    ),
+    "_assert_authorship_home_grant": (
+        "dev-mode grant BOOTSTRAP naming leg: reads the HOME namespace's log (via "
+        "the exempt base reader ``_actor_scoped_human_texts``) for a non-bare "
+        "utterance naming the 12-hex ``home_repo_hash`` as a whole token — the "
+        "vocabulary-impossibility class (a 12-hex digest cannot pre-exist the "
+        "home's presented identity), the same temporal-binding-by-vocabulary-"
+        "impossibility class as the sha-prefix FILING gates; B4 ALIGNED."
+    ),
 }
 
 
@@ -132,6 +160,39 @@ def test_every_unbounded_consumer_is_filtered_or_exempt() -> None:
 def test_every_exemption_reason_is_nonempty() -> None:
     empty = sorted(name for name, reason in _EXEMPT.items() if not reason.strip())
     assert not empty, f"B4 exemption(s) missing a documented reason: {empty}"
+
+
+def test_value_gate_routes_through_shared_home_reader() -> None:
+    """Dev-mode route-through: the value-derivation gate's utterance reads —
+    the own namespace AND the cross-repo widening — go through ONE shared
+    reader (:func:`_authorship_evidence_texts`), never a raw pool reader.
+
+    Reverting the gate to a direct ``_actor_scoped_human_texts`` call would
+    silently drop the grant / dangling / revoke state machine (and with it
+    every leg b–d enforcement pin), so the routing itself is pinned: the gate
+    MUST call the shared reader and MUST NOT call any unfiltered reader
+    directly.
+    """
+    pkg_dir = pathlib.Path(journal.__file__).parent
+    source = (pkg_dir / "human_authorship.py").read_text(encoding="utf-8")
+    gate = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "_assert_human_authorship"
+    )
+    calls = _function_calls(gate)
+    assert "_authorship_evidence_texts" in calls, (
+        "_assert_human_authorship must route its utterance reads through the "
+        "shared dev-mode reader _authorship_evidence_texts (own namespace + "
+        "granted home) — a direct pool read drops the grant/revoke/dangling "
+        "state machine (docs/design/dev-mode-authorship.md)"
+    )
+    assert not calls & _UNFILTERED_READERS, (
+        f"_assert_human_authorship calls raw pool reader(s) "
+        f"{sorted(calls & _UNFILTERED_READERS)!r} directly — every utterance "
+        "read in the value-derivation gate routes through the shared reader "
+        "_authorship_evidence_texts (docs/design/dev-mode-authorship.md)"
+    )
 
 
 def test_route_through_guard_fires_on_synthetic_consumer() -> None:
