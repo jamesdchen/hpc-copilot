@@ -355,6 +355,36 @@ class TestClassifyBoundary:
         assert classify_connection_failure(auth) is None
         assert classify_connection_failure(cmd) is None
 
+    def test_non_255_nonzero_exit_never_matches_regardless_of_stderr(self):
+        """Kills a dropped ``cp.returncode != 255 -> None`` gate (the 2026-07-19
+        false-trip): any non-255 non-zero exit is the REMOTE command's own
+        status — it ran, the transport worked — so even verbatim marker text
+        in its stderr is remote content and must return ``None``."""
+        commlib = _cp(
+            stderr="error: commlib error: got select error (Connection refused)",
+            returncode=1,
+        )
+        assert classify_connection_failure(commlib) is None
+        reset = _cp(stderr="Connection reset by peer", returncode=2)
+        assert classify_connection_failure(reset) is None
+        # ... in EITHER stream (the classifier scans both).
+        stdout_side = _cp(stdout="No route to host", returncode=1)
+        assert classify_connection_failure(stdout_side) is None
+
+    def test_remote_exit_255_is_the_accepted_residual(self):
+        """ssh collapses a REMOTE command's own ``exit 255`` onto the client's
+        transport-failure code — indistinguishable at this seam. The marker
+        match is the only remaining guard there: transport-shaped text still
+        counts (accepted, documented), ordinary app text does not. Pins the
+        boundary so a "helpful" tightening/loosening fails loudly."""
+        remote_255_marker = _cp(
+            stderr="error: commlib error: got select error (Connection refused)",
+            returncode=255,
+        )
+        assert classify_connection_failure(remote_255_marker) is not None
+        remote_255_plain = _cp(stderr="segmentation fault (core dumped)", returncode=255)
+        assert classify_connection_failure(remote_255_plain) is None
+
 
 # ===========================================================================
 # guarded_call: gate order, slot release on EVERY path, slot-timeout isolation

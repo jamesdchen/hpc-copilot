@@ -36,6 +36,15 @@ from hpc_agent.infra.ssh_circuit import (
 HOST = "login.cluster.edu"
 TARGET = f"user@{HOST}"
 
+#: The 2026-07-19 scheduler-integration incident shape: a remote qsub that
+#: EXECUTED (ssh transport healthy) and failed because the qmaster was dead
+#: container-side — REMOTE stderr carrying a marker-shaped line ("Connection
+#: refused") that is application content, never transport evidence.
+COMMLIB_QMASTER_DOWN_STDERR = (
+    "error: commlib error: got select error (Connection refused)\n"
+    'Unable to run job: unable to send message to qmaster using port 6444 on host "sgeci"'
+)
+
 
 class FakeClock:
     """Injectable wall clock: no real time passes in any test.
@@ -107,6 +116,30 @@ class TestTrip:
             guarded_call(TARGET, lambda: cmd_cp, clock=clock)
         check_circuit(TARGET, clock=clock)
 
+    def test_remote_command_nonzero_with_commlib_stderr_never_trips(self):
+        """The 2026-07-19 incident, end-to-end through the breaker seam: three
+        remote qsub rc=1 failures carrying the dead qmaster's commlib
+        "Connection refused" in REMOTE stderr must leave the breaker CLOSED —
+        the command RAN, so the transport is proven regardless of what its
+        stderr says (before the rc==255 gate this opened the circuit)."""
+        clock = FakeClock()
+        commlib_cp = _cp(stderr=COMMLIB_QMASTER_DOWN_STDERR, returncode=1)
+        for _ in range(CIRCUIT_THRESHOLD + 2):
+            guarded_call(TARGET, lambda: commlib_cp, clock=clock)
+        check_circuit(TARGET, clock=clock)  # never opened
+        assert not circuit_state_path(HOST).exists()  # zero failures recorded
+
+    def test_genuine_transport_failure_255_trips(self):
+        """Behavior preserved: the ssh CLIENT's own failure (exit 255 with a
+        transport marker) still counts — CIRCUIT_THRESHOLD consecutive open
+        the circuit and the next attempt fails fast."""
+        clock = FakeClock()
+        down_cp = _cp(stderr="ssh: connect to host x port 22: Connection refused", returncode=255)
+        for _ in range(CIRCUIT_THRESHOLD):
+            guarded_call(TARGET, lambda: down_cp, clock=clock)
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock)
+
     def test_guarded_call_counts_timeouts_and_trips(self):
         clock = FakeClock()
 
@@ -159,6 +192,26 @@ class TestClassify:
     )
     def test_non_connection_outcomes_do_not_match(self, stderr, returncode):
         assert classify_connection_failure(_cp(stderr=stderr, returncode=returncode)) is None
+
+    def test_remote_executed_failure_with_marker_stderr_does_not_match(self):
+        """The 2026-07-19 incident at the classifier: a remote command that
+        RAN and exited non-zero (rc=1) with the dead qmaster's commlib
+        "Connection refused" in REMOTE stderr is NOT connection-level —
+        OpenSSH reserves 255 for the client's own failure; any other non-zero
+        status is the remote command's own exit."""
+        assert (
+            classify_connection_failure(_cp(stderr=COMMLIB_QMASTER_DOWN_STDERR, returncode=1))
+            is None
+        )
+
+    @pytest.mark.parametrize("returncode", [1, 2, 126, 127])
+    def test_no_marker_matches_at_a_remote_exit_status(self, returncode):
+        """Every marker in the set is remote content at a remote exit status —
+        kills a gate that special-cases one marker or one exit code instead of
+        keying on the client's own 255."""
+        for marker in ssh_circuit._CONNECTION_FAILURE_MARKERS:
+            cp = _cp(stderr=f"remote app said: {marker}", returncode=returncode)
+            assert classify_connection_failure(cp) is None, (marker, returncode)
 
 
 # ---------------------------------------------------------------------------

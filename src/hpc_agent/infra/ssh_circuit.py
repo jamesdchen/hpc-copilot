@@ -14,7 +14,12 @@ Mechanism (classic circuit breaker, persisted per host):
   connection refused/reset — see :data:`_CONNECTION_FAILURE_MARKERS`, plus
   the wrapper-level :class:`TimeoutError`) increment a per-host counter;
   any attempt that reaches the remote side (success, auth failure, remote
-  command non-zero) proves the connection path works and resets it.
+  command non-zero) proves the connection path works and resets it. The
+  discriminator is the ssh client's OWN failure signal: OpenSSH exits 255
+  when the client itself fails (connect/banner/kex) and otherwise
+  propagates the REMOTE command's exit status — so a non-255 non-zero exit
+  means the command RAN and its stderr is remote content, never transport
+  evidence, no matter how marker-shaped it is (:func:`classify_connection_failure`).
 * At :data:`CIRCUIT_THRESHOLD` consecutive failures the circuit **opens**:
   every subsequent attempt to that host fails FAST with
   :class:`hpc_agent.errors.SshCircuitOpen` (``ssh_circuit_open`` /
@@ -204,7 +209,10 @@ _PREAMBLE_STAGE_MARKERS: tuple[tuple[str, str], ...] = (
 # ("Permission denied") and remote-command non-zero exits deliberately do NOT
 # appear here: they prove the host accepted a connection, which is the
 # opposite of ban-risk evidence. Matched case-insensitively against
-# stderr+stdout, mirroring remote._SSH_THROTTLE_MARKERS' matching style.
+# stderr+stdout, mirroring remote._SSH_THROTTLE_MARKERS' matching style —
+# and ONLY consulted for ``returncode == 255`` (the ssh client's own failure
+# code): at any other non-zero exit the remote command ran and marker-shaped
+# text in its stderr is REMOTE content (see classify_connection_failure).
 _CONNECTION_FAILURE_MARKERS: tuple[str, ...] = (
     "connection refused",
     "connection reset by peer",
@@ -633,8 +641,23 @@ def classify_connection_failure(cp: subprocess.CompletedProcess[str]) -> str | N
     here; :func:`guarded_call` counts it directly — at this seam a wrapper
     timeout is indistinguishable from a banner-exchange hang, and the
     incident's all-night retries were exactly those timeouts.)
+
+    The exit code decides WHO is speaking before stderr is believed: OpenSSH
+    reserves 255 for the ssh CLIENT's own failure (connect / banner / kex)
+    and otherwise propagates the REMOTE command's exit status. A non-255
+    non-zero exit therefore means the remote command RAN — the transport
+    demonstrably worked — and any marker-shaped text in its stderr is remote
+    content, never transport evidence (2026-07-19 scheduler-integration
+    incident: a dead qmaster made every qsub leg exit 1 with ``error:
+    commlib error: got select error (Connection refused)`` in REMOTE stderr
+    over a HEALTHY ssh channel; the un-gated marker match counted all three
+    as connection-level and opened the circuit). A remote command that
+    itself exits 255 is the accepted residual — ssh collapses it onto the
+    client's own code — and the marker match below is the remaining guard.
     """
     if cp.returncode == 0:
+        return None
+    if cp.returncode != 255:
         return None
     blob = ((cp.stderr or "") + "\n" + (cp.stdout or "")).lower()
     for marker in _CONNECTION_FAILURE_MARKERS:
