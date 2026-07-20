@@ -196,7 +196,7 @@ dump_qmaster_fate() {
     if [ ! -e "$QMASTER_SPOOL/messages" ]; then
         log "== $QMASTER_SPOOL/messages MISSING — qmaster died before opening its own log"
     fi
-    if [ -e "$QMASTER_START_LOG" ] && [ ! -s "$QMASTER_START_LOG" ]; then
+    if [ -e "$QMASTER_START_LOG" ] && [ ! -s "$QMASTER_START_LOG" ] && [ ! -e "$QMASTER_SPOOL/messages" ]; then
         log "VERDICT: launch rc=0 + EMPTY start log + no messages file = SIGNAL-DEATH"
         log "signature (SIGSEGV family) — a config/permission error would have printed"
         log "to stderr and appeared above (cf. run 29701129895)."
@@ -220,15 +220,28 @@ dump_qmaster_fate() {
     # from the sgeadmin-writable spool with cores enabled so a repeat SIGSEGV
     # also leaves a core where the scan below can find it.
     STRACE_LOG="$QMASTER_SPOOL/qmaster.strace.log"
-    if command -v strace >/dev/null 2>&1; then
+    # Double-start guard: a qmaster that EXISTS but never answered the gate
+    # (hung, deaf, slow) must NOT get a second start raced against it — two
+    # daemons on one classic spool corrupt it. Fresh pgrep, not the cached
+    # drill list: state may have changed during the dump (TOCTOU).
+    if pgrep -x sge_qmaster >/dev/null 2>&1; then
+        log "sge_qmaster EXISTS but never answered the gate — NOT retrying under strace"
+        log "(a second start would race the live spool; its state is in the /proc drill above)"
+    elif command -v strace >/dev/null 2>&1; then
         log "--- retrying qmaster under strace (bounded 20s; log: $STRACE_LOG) ---"
         ( cd "$QMASTER_SPOOL" && ulimit -c unlimited && \
           LD_PRELOAD="$JEMALLOC" timeout 20 strace -f -o "$STRACE_LOG" \
               /usr/lib/gridengine/sge_qmaster >"$QMASTER_SPOOL/qmaster.strace.start.log" 2>&1 ) || true
-        if qconf -sh >/dev/null 2>&1; then
-            qmaster_up=1
-            log "qmaster ANSWERED under strace — the first death was timing-sensitive; continuing with the traced daemon"
-        fi
+        # Re-poll briefly: a just-started daemon may need another beat to bind
+        # 6444 — a single immediate probe would mis-declare it dead.
+        for k in 1 2 3; do
+            if qconf -sh >/dev/null 2>&1; then
+                qmaster_up=1
+                log "qmaster ANSWERED under strace (re-poll $k) — the first death was timing-sensitive; continuing with the traced daemon"
+                break
+            fi
+            sleep 2
+        done
         if [ -s "$STRACE_LOG" ]; then
             log "strace signal/exit lines:"
             grep -aE '\+\+\+ (killed by|exited)|SIG(SEGV|ABRT|BUS|ILL|FPE)' "$STRACE_LOG" \
