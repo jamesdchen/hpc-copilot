@@ -126,7 +126,59 @@ class TestFlow:
         assert out["needs_attention"] is False
         assert "all clear" in out["summary"]
 
-    def test_ps_failure_raises_ssh_unreachable(self, monkeypatch):
+    def test_ps_failure_raises_remote_command_failed(self, monkeypatch):
+        # rc 127 is the REMOTE `ps` failing (e.g. binary missing / fork-quota
+        # pressure) over a WORKING transport — the remote-command domain, not
+        # unreachable.
         fake = _FakeSsh("", ps_rc=127)
+        with pytest.raises(errors.RemoteCommandFailed):
+            _run(monkeypatch, fake)
+
+
+class _RaisingSsh:
+    """ssh_run stand-in that raises a scripted exception (the except-conversion leg)."""
+
+    def __init__(self, exc: BaseException):
+        self.exc = exc
+
+    def __call__(self, cmd, *, ssh_target, op=None, **kw):
+        raise self.exc
+
+
+class TestExitStatusGate:
+    """The rc==255 transport gate (OpenSSH's reserved CLIENT exit) — the only
+    non-zero the probe leg may call ``SshUnreachable``."""
+
+    def test_ps_rc255_raises_ssh_unreachable(self, monkeypatch):
+        # rc 255 = the ssh CLIENT's own failure (connect/banner/kex) — transport.
+        fake = _FakeSsh("", ps_rc=255)
+        with pytest.raises(errors.SshUnreachable):
+            _run(monkeypatch, fake)
+
+    @pytest.mark.parametrize("rc", [1, 2, 126, 127, 254])
+    def test_ps_non255_nonzero_raises_remote_command_failed(self, monkeypatch, rc):
+        # Every non-255 non-zero is the REMOTE command's status: the transport
+        # demonstrably worked, so SshUnreachable would be a misdiagnosis.
+        fake = _FakeSsh("", ps_rc=rc)
+        with pytest.raises(errors.RemoteCommandFailed):
+            _run(monkeypatch, fake)
+
+    def test_raised_remote_command_failed_propagates_unconverted(self, monkeypatch):
+        # The except-conversion leg: a RemoteCommandFailed out of ssh_run is the
+        # remote-command domain and must NOT be laundered into SshUnreachable.
+        fake = _RaisingSsh(errors.RemoteCommandFailed("remote boom"))
+        with pytest.raises(errors.RemoteCommandFailed):
+            _run(monkeypatch, fake)
+
+    def test_circuit_open_still_converts_to_unreachable(self, monkeypatch):
+        # Typed transport exception (the breaker refusing the attempt): the
+        # remote `ps` never ran — client-side, converts as before.
+        fake = _RaisingSsh(errors.SshCircuitOpen("circuit open"))
+        with pytest.raises(errors.SshUnreachable):
+            _run(monkeypatch, fake)
+
+    def test_oserror_still_converts_to_unreachable(self, monkeypatch):
+        # Local spawn failure (ssh binary missing): client-side, converts.
+        fake = _RaisingSsh(OSError("spawn failed"))
         with pytest.raises(errors.SshUnreachable):
             _run(monkeypatch, fake)

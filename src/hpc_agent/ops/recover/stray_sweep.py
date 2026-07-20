@@ -98,7 +98,7 @@ def _reap_cmd(pids: list[int]) -> str:
     side_effects=[
         SideEffect("ssh", "<login-node> (ps -u $USER; kill only marked strays when reap=true)"),
     ],
-    error_codes=[errors.SpecInvalid, errors.SshUnreachable],
+    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.RemoteCommandFailed],
     # Detection re-runs freely; a reap is idempotent by PID (a dead PID's kill
     # is a harmless no-op), so re-running never double-acts on a live process.
     idempotent=True,
@@ -157,18 +157,42 @@ def stray_sweep(*, spec: StraySweepSpec) -> dict[str, Any]:
     (fork-quota pressure), the marked count, the strays, the reaped PIDs, and a
     ``needs_attention`` flag (total over ``warn_threshold`` OR any stray).
 
-    Raises :class:`errors.SshUnreachable` when the ps probe itself cannot run.
+    Raises :class:`errors.SshUnreachable` when the probe leg fails client-side
+    (ssh's reserved exit 255, an open circuit, a local spawn error), and
+    :class:`errors.RemoteCommandFailed` when the REMOTE ``ps`` itself exits
+    non-zero — the transport demonstrably worked, so the failure is the remote
+    command's (e.g. fork-quota pressure starving the probe), never "unreachable".
     """
     from hpc_agent.infra.remote import ssh_run
 
     try:
         probe = ssh_run(_PS_CMD, ssh_target=spec.ssh_target, op="stray-sweep")
-    except (errors.RemoteCommandFailed, errors.SshCircuitOpen, OSError) as exc:
+    except (errors.SshCircuitOpen, OSError) as exc:
+        # Client-side failure classes only: the breaker refused the attempt, or
+        # the local ssh spawn failed — the remote `ps` never ran. A raised
+        # RemoteCommandFailed is the remote-command domain and propagates
+        # unconverted (it is not transport evidence).
         raise errors.SshUnreachable(
             f"stray-sweep could not run `ps` on {spec.ssh_target!r}: {exc}"
         ) from exc
-    if probe.returncode != 0:
+    if probe.returncode == 255:
+        # OpenSSH reserves 255 for the ssh CLIENT's own failure (connect /
+        # banner / kex) — transport. Same gate as the breaker's
+        # classify_connection_failure and _is_throttle_failure.
         raise errors.SshUnreachable(
+            f"stray-sweep `ps` on {spec.ssh_target!r} exited 255 (ssh client failure): "
+            f"{(probe.stderr or '').strip()[:200]}"
+        )
+    if probe.returncode != 0:
+        # Any other non-zero exit is the REMOTE `ps` command's own status — the
+        # transport demonstrably worked (fork-quota pressure can fail `ps`
+        # itself, the exact condition this verb exists to detect). Do NOT
+        # rc-normalize _PS_CMD with `; true`: a failing ps would then yield
+        # rc=0 with empty output, which parses as "0 processes, all clear" —
+        # silently masking the fork-pressure signal (wrong degradation
+        # direction). The typed raise keeps the failure loud and correctly
+        # domained.
+        raise errors.RemoteCommandFailed(
             f"stray-sweep `ps` on {spec.ssh_target!r} exited {probe.returncode}: "
             f"{(probe.stderr or '').strip()[:200]}"
         )

@@ -12,6 +12,9 @@ error_codes:
 - code: ssh_unreachable
   category: network
   retry_safe: true
+- code: remote_command_failed
+  category: cluster
+  retry_safe: false
 backed_by:
   cli: hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec
     <max_age_sec>] [--warn-threshold <warn_threshold>]
