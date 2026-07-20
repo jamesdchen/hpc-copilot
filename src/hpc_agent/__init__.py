@@ -308,10 +308,35 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     for _entry in (_hpc_dir, _exp_root):
         if _entry not in _sys.path:
             _sys.path.insert(0, _entry)
+    # The path insertion above is only half the shadowing story: a top-level
+    # module/package ALREADY CACHED in ``sys.modules`` wins over the freshly
+    # inserted entries (``from src.knobs import KNOB`` short-circuits on a
+    # cached ``src`` and never consults sys.path). Any process that imported
+    # an unrelated same-named module earlier — e.g. a test session that
+    # resolved the repo's own ``src/`` as a namespace package — then breaks
+    # the user's import with a spurious ModuleNotFoundError (CI flake,
+    # 2026-07-19). Pop every cached entry whose top segment exists under an
+    # inserted root so the import re-resolves from the experiment dir, and
+    # restore the popped entries afterward (host cache left untouched).
+    import os as _os
+
+    _shadowed: dict[str, ModuleType] = {}
+    for _entry in (_hpc_dir, _exp_root):
+        if not _os.path.isdir(_entry):
+            continue
+        for _child in _os.listdir(_entry):
+            _stem = _child[:-3] if _child.endswith(".py") else _child
+            if not _stem.isidentifier():
+                continue
+            for _key in [m for m in _sys.modules if m == _stem or m.startswith(_stem + ".")]:
+                if _key not in _shadowed:
+                    _shadowed[_key] = _sys.modules.pop(_key)
     try:
         spec.loader.exec_module(module)
     finally:
         _sys.path[:] = _saved_sys_path
+        for _key, _mod in _shadowed.items():
+            _sys.modules[_key] = _mod
     if not hasattr(module, "total") or not hasattr(module, "resolve"):
         raise AttributeError(
             f"{path} must define both total() and resolve(task_id) — "

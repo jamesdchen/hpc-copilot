@@ -125,6 +125,48 @@ def test_sys_path_restored_after_failed_load(tmp_path: Path) -> None:
     assert sys.path == before
 
 
+def test_cached_same_named_module_does_not_shadow_experiment_root(
+    tmp_path: Path,
+) -> None:
+    """CI-flake regression (2026-07-19, 3.11 leg): if the host process already
+    cached a top-level ``src`` package resolving ELSEWHERE (e.g. a test
+    session that imported the repo's own ``src/`` as a namespace package),
+    ``from src.knobs import KNOB`` in tasks.py short-circuits on the cached
+    ``src`` and raises ``No module named 'src.knobs'`` even though the
+    experiment root is on ``sys.path``. The load must evict the shadowing
+    cache entries for the duration of ``exec_module`` — and restore them
+    afterward so the host's module cache is left untouched."""
+    import importlib.util
+
+    # Bogus pre-existing ``src`` package whose __path__ has no knobs.py —
+    # the exact polluted-cache state the CI 3.11 leg flaked on.
+    bogus_src = tmp_path / "elsewhere" / "src"
+    bogus_src.mkdir(parents=True)
+    spec = importlib.util.spec_from_file_location(
+        "src", bogus_src / "__init__.py", submodule_search_locations=[str(bogus_src)]
+    )
+    assert spec is not None
+    cached = importlib.util.module_from_spec(spec)
+    sys.modules["src"] = cached
+    try:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "__init__.py").write_text("", encoding="utf-8")
+        (src / "knobs.py").write_text("KNOB = 7\n", encoding="utf-8")
+        tasks_py = _layout(tmp_path)
+        tasks_py.write_text(_SRC_PKG_TASKS_PY, encoding="utf-8")
+
+        module = hpc_agent.load_tasks_module(tasks_py)
+
+        assert module.total() == 7
+        # Host cache restored: the bogus entry is back, the experiment's
+        # freshly-imported entries did not leak over it.
+        assert sys.modules["src"] is cached
+    finally:
+        sys.modules.pop("src", None)
+        sys.modules.pop("src.knobs", None)
+
+
 def test_no_duplicate_sys_path_entry_when_already_present(tmp_path: Path) -> None:
     """If the experiment root is already on ``sys.path`` (e.g. the caller's
     cwd), the load doesn't double-insert it, and the path is still restored
