@@ -1171,17 +1171,31 @@ silently — the compose-and-record tests are what pin the poka-yoke.
   record written before 6a (no `audit_net`) validates under the OLD rule (the
   per-section linked-source drift check that runs above the net path); the net path
   skips it entirely and NEVER retro-refuses. A present-but-malformed `audit_net` (no
-  `modules` dict) also reads as net-less — only a WELL-FORMED net can trigger a
-  refusal, so a hand-forged shape never manufactures a block. The gate still fires
-  ONLY inside the opted-in `audited_source` surface (the D7 fail-safe is unchanged);
-  with no net-carrying records the submit path is byte-identical to pre-6a.
+  `modules` dict, or ANY malformed `modules` entry — a non-Mapping value, a tier
+  outside the four-tier vocabulary, or a sha-bearing tier with no non-empty
+  `module_sha`) also reads as net-less, ALL-OR-NOTHING — only a WELL-FORMED net can
+  trigger a refusal, so a hand-forged shape never manufactures a block. The gate
+  still fires ONLY inside the opted-in `audited_source` surface (the D7 fail-safe is
+  unchanged); with no net-carrying records the submit path is byte-identical to
+  pre-6a.
+- **Deviation note (recorded 2026-07-19): preamble imports attend at MODULE scope,
+  never a section leg.** `ops/notebook/lint.py::_import_section_map` attributes an
+  import to the section spanning its line; a PREAMBLE import (before the first
+  `# hpc-audit-section:` marker) spans no section, so an `audit_net_unresolved`
+  finding reached only from a preamble import carries `section=None` and flips NO
+  section's zero-flags tier leg. The authoritative attention path for those
+  findings is the `notebook-status` surface: its module-attention items and the
+  `audit_net_summary` rollup resolve the net over the WHOLE source, preamble
+  included.
 - Enforcement: `ops/notebook_gate.py` (the recompute-and-refuse gate,
   `audit_net_disclosures`, `build_audit_net`); tests
   `tests/ops/notebook/test_audit_net_gate.py` (net carried, recompute-refuse on a
   flipped sha, NEW_DRIFTED/UNRESOLVED name the modules, EXTERNAL env_hash disclosure,
-  grandfathering, find_spec-only classification) plus the wave-3 INHERITED proof-leg
-  backfill in `tests/ops/notebook/test_wave3_modules.py`. The closure-walk machinery
-  (`resolve_audit_net` / `AuditNetTier` / `AuditNetEntry`) lands via the machinery
-  builder at merge; the gate's tier classifier is machinery-independent (the shared
-  `resolve_module_file` + `find_spec` + `module_sha_signed`), so the gate is fully
-  green ahead of that seam.
+  grandfathering — including the malformed-entry all-or-nothing posture —
+  find_spec-only classification with an exec-free dotted walk, and the PRODUCTION
+  net-builder path minting a net the gate's recompute actually refuses on) plus the
+  wave-3 INHERITED proof-leg backfill in `tests/ops/notebook/test_wave3_modules.py`.
+  The closure-walk machinery (`resolve_audit_net` / `AuditNetTier` / `AuditNetEntry`)
+  lives in `ops/notebook/linked_sources.py`; the gate's tier classifier reuses the
+  shared `resolve_module_file` + an exec-free `find_spec` walk +
+  `module_sha_signed`.

@@ -38,6 +38,7 @@ __all__ = [
     "AuditNetTier",
     "AuditNetEntry",
     "resolve_audit_net",
+    "find_spec_origin_exec_free",
     "_CLOSURE_MAX_MODULES",
 ]
 
@@ -417,6 +418,65 @@ def _is_installed_module(module: str) -> bool:
             return True
         search_dirs = [package_dir]
     return True
+
+
+def find_spec_origin_exec_free(module: str) -> str | None:
+    """The ``find_spec`` ORIGIN for *module*, or ``None`` when it does not resolve.
+
+    The ONE exec-free dotted-name origin lookup (the 6a never-exec boundary has
+    ONE home; the graduation gate routes through this). ``importlib.util.find_spec``
+    on a DOTTED name imports (execs) the parent package's ``__init__.py`` — which
+    both violates never-exec and can raise ANYTHING (a carried audit-net module
+    naming ``boompkg.sub`` whose installed ``boompkg/__init__`` raises
+    ``RuntimeError`` crashed the gate with that exception, an internal error at
+    the submit boundary). So ``find_spec`` is called ONLY on the TOP-LEVEL
+    segment (metadata-only — it never execs), and deeper segments are resolved by
+    WALKING the parent's ``submodule_search_locations`` for ``<seg>.py`` /
+    ``<seg>/__init__.py`` (pure filesystem probes — a sentinel-writing
+    ``__init__`` never runs).
+
+    A segment with no file under any location, or a parent with NO search
+    locations (a plain module, not a package), answers for the dotted name only
+    when the TOP-LEVEL segment is stdlib (:func:`_is_stdlib_module`) — the env
+    claims the whole alias (``os.path``, ``collections.OrderedDict``), the same
+    permissive posture :func:`_is_installed_module` keeps. ANY resolution failure
+    — a bad name, a path-finder error, a missing segment — reads ``None``: an
+    unclassifiable module is a classification RESULT (the gate's UNRESOLVED
+    tier), never an exception escaping the caller.
+    """
+    segments = module.split(".")
+    try:
+        spec = importlib.util.find_spec(segments[0])
+    except Exception:  # a path finder / malformed name can raise anything — never the caller
+        return None
+    if spec is None or spec.origin is None:
+        return None
+    origin: str = spec.origin
+    locations = spec.submodule_search_locations
+    stdlib = _is_stdlib_module(module)
+    for segment in segments[1:]:
+        if locations is None:
+            # The parent is a plain module: a deeper name is an ATTRIBUTE, not a
+            # submodule — resolvable only when the env claims the dotted name
+            # outright (a stdlib top-level, e.g. os.path).
+            return origin if stdlib else None
+        found: str | None = None
+        next_locations: list[str] | None = None
+        for location in locations:
+            file_candidate = Path(location) / f"{segment}.py"
+            if file_candidate.is_file():
+                found, next_locations = str(file_candidate), None
+                break
+            package_init = Path(location) / segment / "__init__.py"
+            if package_init.is_file():
+                found, next_locations = str(package_init), [str(Path(location) / segment)]
+                break
+        if found is None:
+            # Not a submodule — an attribute of the parent. The env claims it
+            # only for a stdlib top-level; anything else honestly does not resolve.
+            return origin if stdlib else None
+        origin, locations = found, next_locations
+    return origin
 
 
 def _relative_to_experiment(resolved: Path, experiment_dir: Path) -> str:

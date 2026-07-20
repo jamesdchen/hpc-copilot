@@ -44,3 +44,14 @@ def test_no_consumer_reinlines_the_init_py_probe() -> None:
         assert '__init__.py"' not in inspect.getsource(module), (
             f"{module.__name__} re-inlines the module-file resolution probe"
         )
+
+
+def test_gate_routes_dotted_find_spec_through_the_one_exec_free_walk() -> None:
+    """The gate's dotted-name origin lookup routes through the ONE exec-free
+    definition (``linked_sources.find_spec_origin_exec_free``) — a dotted
+    ``find_spec`` execs the parent's ``__init__.py``, so the never-exec walk of
+    ``submodule_search_locations`` has ONE home, never a re-inlined copy in the
+    gate."""
+    from hpc_agent.ops import notebook_gate
+
+    assert "find_spec_origin_exec_free" in inspect.getsource(notebook_gate._find_spec_origin)

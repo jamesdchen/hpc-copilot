@@ -51,6 +51,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -69,7 +70,7 @@ from hpc_agent.state.notebook_audit import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from hpc_agent.state.audit_source import ParsedModule
@@ -441,19 +442,21 @@ AUDIT_NET_FIELD = "audit_net"
 def _find_spec_origin(module: str) -> str | None:
     """The ``find_spec`` ORIGIN for *module*, or ``None`` when it does not resolve.
 
-    METADATA-ONLY — ``importlib.util.find_spec`` locates a module WITHOUT importing
-    (executing) it, so a module whose body raises on import still resolves here (the
-    EXTERNAL-classification seam; ruling: the env-bound classification uses
-    ``find_spec`` only, never exec). A bad name (``ValueError``) or an unresolvable
-    parent package (``ImportError``) reads ``None`` — the module is not installed.
+    Routes through the ONE exec-free definition,
+    :func:`hpc_agent.ops.notebook.linked_sources.find_spec_origin_exec_free`
+    (LAZY import — the gate's linked-sources posture): ``find_spec`` ONLY on the
+    top-level segment (a DOTTED ``find_spec`` imports/execs the parent's
+    ``__init__.py``, which the 6a never-exec boundary forbids — and a parent
+    whose ``__init__`` raises, e.g. a carried net naming ``boompkg.sub`` with a
+    ``RuntimeError``-raising ``boompkg/__init__``, would otherwise crash the
+    gate with that exception at the submit boundary), deeper segments by a pure
+    filesystem walk of ``submodule_search_locations``. ANY resolution failure
+    reads ``None`` — an unclassifiable module is a classification RESULT (the
+    gate's UNRESOLVED tier), never an exception escaping the gate.
     """
-    import importlib.util
+    from hpc_agent.ops.notebook.linked_sources import find_spec_origin_exec_free
 
-    try:
-        spec = importlib.util.find_spec(module)
-    except (ImportError, ValueError):
-        return None
-    return spec.origin if spec is not None else None
+    return find_spec_origin_exec_free(module)
 
 
 def _compute_env_hash(external_origins: Mapping[str, str | None]) -> str:
@@ -571,21 +574,65 @@ def _classify_net_module(
     return NET_UNRESOLVED, None, None
 
 
+#: The well-formed tier vocabulary a carried modules ENTRY may name — the four
+#: durable tiers (:func:`build_audit_net` mints ``inherited`` / ``external`` /
+#: ``unresolved``; ``new_drifted`` is a gate-computed tier a record may still carry).
+_NET_TIER_VOCABULARY = frozenset({NET_INHERITED, NET_EXTERNAL, NET_NEW_DRIFTED, NET_UNRESOLVED})
+
+#: The tiers whose attestation IS a recorded local-file sha. A missing / non-str /
+#: empty sha on one of these would recompute as NEW_DRIFTED at gate time (the
+#: recorded ``None`` never equals the current sha) — a refusal forged out of a
+#: malformed entry, so the entry is not well-formed without it.
+_SHA_BEARING_TIERS = frozenset({NET_INHERITED, NET_NEW_DRIFTED})
+
+
+def _well_formed_net_entry(entry: Any) -> bool:
+    """True iff *entry* is a well-formed carried ``modules`` value (6a).
+
+    The exact shape :func:`build_audit_net` mints: a ``Mapping`` whose ``tier``
+    is a string from :data:`_NET_TIER_VOCABULARY` and whose ``module_sha`` is a
+    non-empty string for the sha-bearing tiers (:data:`_SHA_BEARING_TIERS` — the
+    recorded sha IS the attestation) and ``None`` for the env-bound /
+    unresolvable tiers (``external`` / ``unresolved``, which carry no local
+    file). Anything else is MALFORMED.
+    """
+    if not isinstance(entry, Mapping):
+        return False
+    tier = entry.get("tier")
+    if not isinstance(tier, str) or tier not in _NET_TIER_VOCABULARY:
+        return False
+    module_sha = entry.get("module_sha")
+    if tier in _SHA_BEARING_TIERS:
+        return isinstance(module_sha, str) and bool(module_sha)
+    return module_sha is None
+
+
 def _carried_audit_net(record: Mapping[str, Any]) -> dict[str, Any] | None:
     """The ``resolved["audit_net"]`` a module-sign-off record carries, or ``None``.
 
     ``None`` = a LEGACY net-less record — GRANDFATHERED (validated under the old rule,
-    never retro-refused). A present-but-malformed net (a non-dict ``modules``) also reads
-    ``None``: only a WELL-FORMED net triggers the recompute, so a hand-forged net shape
-    can never manufacture a refusal — the gate only ever refuses a well-formed net whose
-    recomputed closure drifted.
+    never retro-refused). A present-but-malformed net ALSO reads ``None``,
+    ALL-OR-NOTHING: a non-dict ``modules`` map, a non-string module name, or ANY
+    malformed entry (:func:`_well_formed_net_entry`) discards the WHOLE net as
+    net-less — there is no per-entry salvage. Only a WELL-FORMED net triggers the
+    recompute, so a hand-forged net shape can never manufacture a refusal (a
+    malformed entry like ``{"engine": "junk"}`` would otherwise record a ``None``
+    sha and reclassify the module NEW_DRIFTED at gate time — a refusal minted out
+    of junk); the gate only ever refuses a well-formed net whose recomputed
+    closure drifted. Fail-OPEN on malformed, fail-CLOSED only on well-formed drift.
     """
     resolved = record.get("resolved")
     net = resolved.get(AUDIT_NET_FIELD) if isinstance(resolved, dict) else None
     if not isinstance(net, dict):
         return None
-    if not isinstance(net.get("modules"), dict):
+    modules = net.get("modules")
+    if not isinstance(modules, dict):
         return None
+    for module, entry in modules.items():
+        if not isinstance(module, str) or not module:
+            return None
+        if not _well_formed_net_entry(entry):
+            return None
     return net
 
 
@@ -673,16 +720,41 @@ def _resolve_closure_machinery(
 ) -> list[tuple[str, str | None, str | None]]:
     """Resolve the source's transitive import closure via machinery (the 6a A-seam).
 
-    LAZY-imports ``resolve_audit_net`` / ``AuditNetEntry`` / ``AuditNetTier`` from
-    ``ops/notebook/linked_sources.py`` (the transitive-closure resolver; lands at merge)
-    and maps each :class:`AuditNetEntry` to ``(module, local_sha|None, external_origin|None)``.
-    Machinery's per-entry ``AuditNetTier`` is honoured for the EXTERNAL decision (an
-    ``AuditNetTier.EXTERNAL`` entry is installed — its ``find_spec`` origin is captured
-    without a source_root probe); every other entry is re-resolved through the shared
-    :func:`_resolve_net_module` so the local sha / origin the record carries is the gate's
-    OWN resolution (one definition — machinery's tier is advisory input, never a forked
-    verdict). Reached only at sign-off time (the build seam), never on the not-opted-in
-    gate path.
+    The PRODUCTION resolver behind :func:`build_audit_net` (the no-``_resolver``
+    path). LAZY-imports ``resolve_audit_net`` / ``AuditNetEntry`` /
+    ``AuditNetTier`` / ``imported_modules`` from
+    ``ops/notebook/linked_sources.py``, then:
+
+    1. parses the audited source (``experiment_dir`` + *source_relpath*) with
+       ``ast`` and seeds the closure with its DIRECT imports
+       (``imported_modules`` over the parsed tree) — the seed is an
+       ``Iterable[str]`` of dotted module names, so passing the raw relpath
+       string would iterate it as CHARACTERS (the ``"."`` reaching
+       ``resolve_module_file`` crashed the builder; an unreadable/unparseable
+       source is instead a LOUD :class:`errors.SpecInvalid` naming the relpath,
+       never a silent empty net);
+    2. calls ``resolve_audit_net`` with its REAL signature — the same call
+       ``ops/notebook/lint.py::_check_audit_net`` makes, including the
+       ``sha_is_signed`` leg bound to :func:`module_sha_signed` and
+       ``template_modules`` from the opted-in template's own direct imports
+       WHEN AVAILABLE (a missing/unparseable template or a not-opted-in repo
+       simply never fires that leg — fail-open, exactly as lint's
+       ``template_tree=None`` posture);
+    3. UNPACKS the returned ``(entries, cap_hit)`` tuple (iterating the tuple
+       itself would yield ``(list, bool)`` and the entry guard below would drop
+       BOTH — silently minting an empty net whose gate recompute has nothing to
+       refuse on). A capped closure (``cap_hit``) is disclosed on the lint
+       surface (``_check_audit_net``'s cap marker); the carried net records the
+       entries machinery characterized.
+
+    Each :class:`AuditNetEntry` maps to ``(module, local_sha|None,
+    external_origin|None)``: an ``AuditNetTier.EXTERNAL`` entry is installed —
+    its ``find_spec`` origin is captured without a source_root probe; every
+    other entry is re-resolved through the shared :func:`_resolve_net_module`
+    so the local sha / origin the record carries is the gate's OWN resolution
+    (one definition — machinery's tier is advisory input, never a forked
+    verdict). Reached only at sign-off time (the build seam), never on the
+    not-opted-in gate path.
     """
     # LAZY A-seam: the transitive-closure resolver + its entry / tier types land at
     # merge (builder A). Reached through an ``Any``-typed handle so this file stays
@@ -694,9 +766,37 @@ def _resolve_closure_machinery(
     resolve_audit_net = _machinery.resolve_audit_net
     AuditNetEntry = _machinery.AuditNetEntry
     AuditNetTier = _machinery.AuditNetTier
+    imported_modules = _machinery.imported_modules
 
-    entries = resolve_audit_net(
-        source_relpath, experiment_dir=experiment_dir, root_dirs=list(source_roots)
+    try:
+        tree = ast.parse((experiment_dir / source_relpath).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError) as exc:
+        raise errors.SpecInvalid(
+            f"audit-net build: the audited source {source_relpath!r} is unreadable or "
+            f"unparseable ({exc}). The net attests the source being signed — a missing "
+            "or broken source is loud, never a silent empty net."
+        ) from exc
+
+    # The template-identical INHERITED leg, when the opted-in block names a
+    # parseable template (mirrors lint's template_tree posture; fail-open — an
+    # unavailable template only means the leg never fires).
+    template_modules: set[str] = set()
+    block = _read_audited_source(experiment_dir)
+    template_rel = block.get("template") if block is not None else None
+    if isinstance(template_rel, str) and template_rel:
+        try:
+            template_tree = ast.parse((experiment_dir / template_rel).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            template_tree = None
+        if template_tree is not None:
+            template_modules = set(imported_modules(template_tree))
+
+    entries, _cap_hit = resolve_audit_net(
+        imported_modules(tree),
+        experiment_dir,
+        list(source_roots),
+        template_modules=template_modules,
+        sha_is_signed=lambda sha: module_sha_signed(experiment_dir, sha),
     )
     out: list[tuple[str, str | None, str | None]] = []
     for entry in entries:
@@ -733,11 +833,14 @@ def build_audit_net(
     the gate recomputes it and discloses a drift.
 
     The closure walk routes through machinery's ``resolve_audit_net`` (the default
-    *resolver*, :func:`_resolve_closure_machinery`); *tier* decisions reuse the SAME
-    :func:`_resolve_net_module` the gate uses (one definition). ``_resolver`` is the test
-    seam — a callable ``(experiment_dir, source_relpath, source_roots) -> [(module,
-    local_sha|None, external_origin|None)]``; tests inject a double so the A seam is never
-    imported under CI. Pure local reads; ``find_spec`` metadata-only.
+    *resolver*, :func:`_resolve_closure_machinery` — it parses the source at
+    *source_relpath*, seeds the closure with the source's direct imports, and
+    unpacks machinery's ``(entries, cap_hit)`` tuple); *tier* decisions reuse the
+    SAME :func:`_resolve_net_module` the gate uses (one definition). ``_resolver``
+    is the test seam — a callable ``(experiment_dir, source_relpath, source_roots)
+    -> [(module, local_sha|None, external_origin|None)]``; tests inject a double so
+    the A seam is never imported under CI. Pure local reads; ``find_spec``
+    metadata-only and exec-free.
     """
     roots = [experiment_dir / r for r in source_roots if isinstance(r, str) and r]
     resolver = _resolver if _resolver is not None else _resolve_closure_machinery

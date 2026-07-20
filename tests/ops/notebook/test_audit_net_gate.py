@@ -13,11 +13,19 @@ Pins the 6a rulings ("track-total, attend-drift") over the graduation gate
   the local ``env_hash`` the classification rested on), NEVER refused;
 * legacy NET-LESS sign-off records are GRANDFATHERED — validated under the old rule,
   never retro-refused by the net path;
+* a MALFORMED net (a non-dict ``modules`` map, a non-Mapping entry, an entry whose
+  ``tier`` is outside the four-tier vocabulary, or a sha-bearing tier with no
+  non-empty ``module_sha``) reads as net-less ALL-OR-NOTHING — fail-open on
+  malformed, fail-closed only on well-formed drift;
 * the env-bound EXTERNAL classification uses ``importlib.util.find_spec`` ONLY — a
-  module that raises on import still classifies EXTERNAL (metadata, never exec).
+  module that raises on import still classifies EXTERNAL (metadata, never exec),
+  and a DOTTED lookup never execs a parent package's ``__init__`` either.
 
 TOY vocabulary only. Net-carrying records are appended RAW (bypassing the append-time
 module-sign-off gate) exactly as every other graduation-gate fixture appends records.
+The ``build_audit_net`` PRODUCTION path (no ``_resolver`` injection) is pinned against
+real machinery — the whole point of 6a is that the gate's recompute can actually fire
+on a net the default builder minted.
 """
 
 from __future__ import annotations
@@ -48,6 +56,7 @@ from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
 from hpc_agent.state.decision_journal import append_decision, read_decisions
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
 _AUDIT = "net-audit"
@@ -433,3 +442,256 @@ def test_find_spec_origin_resolves_without_importing(
     assert "raises_mod" not in sys.modules
     # A name that resolves nowhere reads None, never raises.
     assert _find_spec_origin("definitely_not_installed_xyz_123") is None
+
+
+# ── the PRODUCTION net builder (no _resolver injection) actually fires ─────────
+
+
+def test_build_audit_net_production_path_resolves_the_real_closure(tmp_path: Path) -> None:
+    """The DEFAULT path (no ``_resolver`` double — real machinery, real files) mints a
+    NON-EMPTY net naming the imported engine at its real ``module_sha``. Pins the two
+    production-path defects: the seed is the source's parsed imports (never the relpath
+    string iterated as characters) and machinery's ``(entries, cap_hit)`` tuple is
+    unpacked (never iterated raw, which would mint an empty net)."""
+    _write_opted_in(tmp_path)
+    net = build_audit_net(tmp_path, "source.py", ["src"])  # NO _resolver — production path
+    engine_sha = sha256_normalized(_ENGINE_V1)
+    assert net["modules"] == {"engine": {"tier": NET_INHERITED, "module_sha": engine_sha}}
+    assert isinstance(net["env_hash"], str) and net["env_hash"]
+
+
+def test_production_net_end_to_end_refuses_on_drift(tmp_path: Path) -> None:
+    """The whole point of 6a, proven on the PRODUCTION builder: mint the net with
+    ``build_audit_net`` (no injection), carry it on the sign-off record, then flip the
+    engine — the gate's recompute of THAT record refuses, NAMING the drifted module."""
+    _write_opted_in(tmp_path, engine=_ENGINE_V1)
+    _sign_sections(tmp_path)
+    sha1 = sha256_normalized(_ENGINE_V1)
+    net = build_audit_net(tmp_path, "source.py", ["src"])  # production-minted net
+    _sign_module_with_net(tmp_path, module=_ENGINE_REL, module_sha=sha1, net=net)
+    assert_source_audited(tmp_path)  # baseline: the production net is current → passes
+
+    (tmp_path / "src" / "engine.py").write_text(_ENGINE_V2, encoding="utf-8")
+    with pytest.raises(errors.SourceUnaudited) as ei:
+        assert_source_audited(tmp_path)
+    assert "engine" in str(ei.value)
+    assert NET_NEW_DRIFTED in str(ei.value)
+
+
+def test_resolve_closure_machinery_unpacks_the_entries_tuple(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolver double over the REAL machinery module pins the call contract: seeds
+    are dotted MODULE NAMES (never the relpath string), the real signature's
+    ``template_modules`` / ``sha_is_signed`` legs are wired, and the returned
+    ``(entries, cap_hit)`` tuple is UNPACKED — the map must not come back empty."""
+    from hpc_agent.ops.notebook import linked_sources
+    from hpc_agent.ops.notebook.linked_sources import AuditNetEntry, AuditNetTier
+
+    _write_opted_in(tmp_path)
+    engine_sha = sha256_normalized(_ENGINE_V1)
+    captured: dict[str, Any] = {}
+
+    def _double(
+        seeds: Iterable[str], exp_dir: object, root_dirs: object, **kwargs: object
+    ) -> tuple[list[Any], bool]:
+        captured["seeds"] = list(seeds)
+        captured["kwargs"] = kwargs
+        return (
+            [
+                AuditNetEntry(
+                    module="engine",
+                    file="src/engine.py",
+                    module_sha=engine_sha,
+                    tier=AuditNetTier.NEW_DRIFTED,
+                    via=("engine",),
+                )
+            ],
+            False,
+        )
+
+    monkeypatch.setattr(linked_sources, "resolve_audit_net", _double)
+    net = build_audit_net(tmp_path, "source.py", ["src"])  # default path → the double
+
+    # Seeds are the source's parsed imports — NOT the "source.py" relpath as characters.
+    assert "engine" in captured["seeds"]
+    assert all(isinstance(s, str) and not s.endswith(".py") for s in captured["seeds"])
+    # The real signature's legs are wired (lint's _check_audit_net posture).
+    assert captured["kwargs"]["template_modules"] == set()  # the toy template imports nothing
+    assert callable(captured["kwargs"]["sha_is_signed"])
+    # The tuple was unpacked: the one entry landed in the map at its real sha.
+    assert net["modules"] == {"engine": {"tier": NET_INHERITED, "module_sha": engine_sha}}
+
+
+# ── a parent package whose __init__ raises is a classification, never a crash ──
+
+
+def _install_boompkg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sentinels: str) -> None:
+    """Install a toy ``boompkg`` (raising ``__init__`` + a real ``sub.py``) on sys.path."""
+    pkgroot = tmp_path / "boomsite"
+    (pkgroot / "boompkg").mkdir(parents=True)
+    (pkgroot / "boompkg" / "__init__.py").write_text(sentinels, encoding="utf-8")
+    (pkgroot / "boompkg" / "sub.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(pkgroot))
+    importlib.invalidate_caches()
+    sys.modules.pop("boompkg", None)
+    sys.modules.pop("boompkg.sub", None)
+
+
+def test_gate_classifies_past_a_parent_package_whose_init_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A carried dotted module whose PARENT package's ``__init__`` raises RuntimeError
+    does NOT crash the gate: the exec-free walk resolves ``boompkg/sub.py`` → EXTERNAL
+    → ``assert_source_audited`` completes normally (no refusal, no RuntimeError)."""
+    _install_boompkg(
+        tmp_path,
+        monkeypatch,
+        'raise RuntimeError("boompkg __init__ must never be executed by the gate")\n',
+    )
+    _write_opted_in(tmp_path)
+    _sign_sections(tmp_path)
+    _sign_module_with_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha256_normalized(_ENGINE_V1),
+        net=_net({"boompkg.sub": {"tier": NET_EXTERNAL, "module_sha": None}}),
+    )
+    assert_source_audited(tmp_path)  # completes — EXTERNAL, disclosed not refused
+    assert "boompkg" not in sys.modules  # the parent was never imported/executed
+
+
+def test_parent_package_init_is_never_executed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hermetic never-exec proof: a SENTINEL-writing ``__init__`` (it would write a
+    file, then raise) never runs during the gate — no sentinel file, no sys.modules
+    entry — while ``boompkg.sub`` still classifies EXTERNAL via the filesystem walk."""
+    sentinel = tmp_path / "init_executed_sentinel.txt"
+    _install_boompkg(
+        tmp_path,
+        monkeypatch,
+        "import pathlib as _p\n"
+        f"_p.Path({sentinel.as_posix()!r}).write_text('executed', encoding='utf-8')\n"
+        'raise RuntimeError("boompkg __init__ must never be executed by the gate")\n',
+    )
+    _write_opted_in(tmp_path)
+    _sign_sections(tmp_path)
+    _sign_module_with_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha256_normalized(_ENGINE_V1),
+        net=_net({"boompkg.sub": {"tier": NET_EXTERNAL, "module_sha": None}}),
+    )
+    assert_source_audited(tmp_path)
+    assert not sentinel.exists()  # __init__.py never executed
+    assert "boompkg" not in sys.modules
+
+
+def test_unresolvable_dotted_module_is_a_classification_never_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A carried dotted name with NO file under the raising parent's locations is an
+    UNRESOLVED classification RESULT — a SourceUnaudited refusal NAMING the module,
+    never the parent's RuntimeError escaping the submit boundary."""
+    _install_boompkg(
+        tmp_path,
+        monkeypatch,
+        'raise RuntimeError("boompkg __init__ must never be executed by the gate")\n',
+    )
+    _write_opted_in(tmp_path)
+    _sign_sections(tmp_path)
+    _sign_module_with_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha256_normalized(_ENGINE_V1),
+        net=_net({"boompkg.missing": {"tier": NET_INHERITED, "module_sha": "0" * 64}}),
+    )
+    with pytest.raises(errors.SourceUnaudited) as ei:  # NOT RuntimeError
+        assert_source_audited(tmp_path)
+    assert "boompkg.missing" in str(ei.value)
+    assert NET_UNRESOLVED in str(ei.value)
+    assert "boompkg" not in sys.modules
+
+
+# ── malformed modules ENTRIES read net-less (all-or-nothing), never a refusal ──
+
+
+def test_malformed_modules_entry_is_grandfathered_not_a_refusal(tmp_path: Path) -> None:
+    """``{"engine": "junk"}`` — a non-Mapping entry — reads the WHOLE net as net-less:
+    no recorded sha is mined out of junk (the old code read ``None`` and recomputed
+    NEW_DRIFTED — a refusal minted out of a malformed entry). Grandfathered instead,
+    even after the engine drifts."""
+    _write_opted_in(tmp_path, engine=_ENGINE_V1)
+    _sign_sections(tmp_path)
+    _sign_module_with_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha256_normalized(_ENGINE_V1),
+        net=_net({"engine": "junk"}),  # malformed entry
+    )
+    assert_source_audited(tmp_path)  # no refusal out of junk
+    # Even a REAL drift under the malformed net never fires — the net is net-less.
+    (tmp_path / "src" / "engine.py").write_text(_ENGINE_V2, encoding="utf-8")
+    assert_source_audited(tmp_path)
+
+
+def test_mixed_wellformed_and_malformed_entries_discard_the_whole_net(tmp_path: Path) -> None:
+    """ALL-OR-NOTHING: one malformed entry discards the WHOLE net (no per-entry
+    salvage) — a well-formed ``engine`` entry beside a junk ``ghost`` entry reads
+    net-less, so even drifting the well-formed entry's module cannot refuse."""
+    _write_opted_in(tmp_path, engine=_ENGINE_V1)
+    _sign_sections(tmp_path)
+    sha1 = sha256_normalized(_ENGINE_V1)
+    _sign_module_with_net(
+        tmp_path,
+        module=_ENGINE_REL,
+        module_sha=sha1,
+        net=_net(
+            {
+                "engine": {"tier": NET_INHERITED, "module_sha": sha1},  # well-formed
+                "ghost": "junk",  # malformed — discards the WHOLE net
+            }
+        ),
+    )
+    (tmp_path / "src" / "engine.py").write_text(_ENGINE_V2, encoding="utf-8")
+    assert_source_audited(tmp_path)  # net-less → grandfathered, no refusal
+
+
+@pytest.mark.parametrize(
+    "modules",
+    [
+        {"engine": "junk"},  # non-Mapping entry
+        {"engine": {"tier": NET_INHERITED}},  # sha-bearing tier, sha absent
+        {"engine": {"tier": NET_INHERITED, "module_sha": None}},  # sha None
+        {"engine": {"tier": NET_INHERITED, "module_sha": ""}},  # sha empty
+        {"engine": {"tier": "bogus", "module_sha": "a" * 64}},  # tier outside vocabulary
+        {"engine": {"tier": 3, "module_sha": "a" * 64}},  # non-str tier
+        {"engine": {"module_sha": "a" * 64}},  # tier absent
+        {"engine": {"tier": NET_EXTERNAL, "module_sha": "a" * 64}},  # sha on a sha-less tier
+        {3: {"tier": NET_INHERITED, "module_sha": "a" * 64}},  # non-str module name
+    ],
+)
+def test_carried_audit_net_rejects_malformed_entries(modules: dict[str, Any]) -> None:
+    """EVERY malformed modules entry (and a non-string module name) reads the whole
+    net as net-less — ``_carried_audit_net`` returns ``None``, the grandfather path."""
+    record = {"resolved": {AUDIT_NET_FIELD: {"env_hash": "x", "modules": modules}}}
+    assert _carried_audit_net(record) is None
+
+
+@pytest.mark.parametrize(
+    "modules",
+    [
+        {"engine": {"tier": NET_INHERITED, "module_sha": "a" * 64}},
+        {"engine": {"tier": NET_NEW_DRIFTED, "module_sha": "a" * 64}},
+        {"extmod": {"tier": NET_EXTERNAL, "module_sha": None}},
+        {"ghost": {"tier": NET_UNRESOLVED, "module_sha": None}},
+        {},  # an empty modules map is a well-formed (vacuous) net
+    ],
+)
+def test_carried_audit_net_accepts_wellformed_entries(modules: dict[str, Any]) -> None:
+    """The shapes ``build_audit_net`` mints (plus a carried ``new_drifted``) ARE the
+    well-formed vocabulary — they round-trip and stay recompute-eligible."""
+    net = {"env_hash": "x", "modules": modules}
+    record = {"resolved": {AUDIT_NET_FIELD: net}}
+    assert _carried_audit_net(record) == net
