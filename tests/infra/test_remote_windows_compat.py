@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hpc_agent.infra import ssh_options
+from hpc_agent.infra import remote, ssh_options
 
 
 @pytest.fixture(autouse=True)
@@ -558,7 +558,9 @@ class TestNamedPipeRuntimeFallback:
     """
 
     def test_no_marker_returns_proc_unchanged(self):
-        proc = subprocess.CompletedProcess(["ssh", "host"], 0, stdout="ok", stderr="")
+        proc: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 0, stdout="ok", stderr=""
+        )
         calls: list[None] = []
 
         def rebuild() -> subprocess.CompletedProcess[str]:
@@ -571,8 +573,11 @@ class TestNamedPipeRuntimeFallback:
         assert not ssh_options._named_pipe_runtime_broken()
 
     def test_marker_triggers_one_retry_and_marks_broken(self):
+        # rc=127: the empirically-observed client-failure rc of the Win32
+        # mux-bind failure (native OpenSSH 9.5p2, 2026-07-20 — see
+        # ssh_options._NAMED_PIPE_CLIENT_FAILURE_RCS).
         bad = subprocess.CompletedProcess(
-            ["ssh", "host"], 1, stdout="", stderr="getsockname failed: Not a socket\n"
+            ["ssh", "host"], 127, stdout="", stderr="getsockname failed: Not a socket\n"
         )
         good = subprocess.CompletedProcess(["ssh", "host"], 0, stdout="ok", stderr="")
         outcomes = iter([bad, good])
@@ -591,9 +596,11 @@ class TestNamedPipeRuntimeFallback:
         # If a prior code path already marked the verdict broken, the wrapper
         # short-circuits the retry — exactly one attempt regardless of the
         # marker. Avoids infinite retry on a host that consistently fails.
+        # (rc=127 — a gated rc — so the pin still discriminates: remove the
+        # already-broken short-circuit and this goes RED at 2 calls.)
         ssh_options.mark_named_pipe_broken()
-        bad = subprocess.CompletedProcess(
-            ["ssh", "host"], 1, stdout="", stderr="getsockname failed: Not a socket\n"
+        bad: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 127, stdout="", stderr="getsockname failed: Not a socket\n"
         )
         calls: list[None] = []
 
@@ -609,7 +616,7 @@ class TestNamedPipeRuntimeFallback:
         # A non-zero exit with a different stderr is NOT our marker — return
         # as-is, don't mark the verdict, don't retry. (Some other code path
         # owns that failure mode.)
-        proc = subprocess.CompletedProcess(
+        proc: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
             ["ssh", "host"], 1, stdout="", stderr="Permission denied (publickey)."
         )
         calls: list[None] = []
@@ -622,6 +629,157 @@ class TestNamedPipeRuntimeFallback:
         assert result is proc
         assert len(calls) == 1
         assert not ssh_options._named_pipe_runtime_broken()
+
+    def test_remote_rc_with_marker_neither_marks_nor_retries(self):
+        # THE GATE (fleet conflation-sweep residual #1): a non-zero rc
+        # OUTSIDE the client-failure set means the REMOTE command exited
+        # (ssh propagates its status) — the marker in stderr is then
+        # remote-controlled content (a log line, or forged). No
+        # mark_named_pipe_broken(), no re-run: the failure propagates so a
+        # possibly partially-executed command is never re-executed. rc=1 is
+        # exactly the shape the pre-gate helper retried on (mutation tooth:
+        # the ungated matcher goes RED here).
+        proc: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 1, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return proc
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is proc
+        assert len(calls) == 1  # NO re-run
+        assert not ssh_options._named_pipe_runtime_broken()  # NO mark
+
+    def test_success_rc_with_marker_is_returned_unchanged(self):
+        # rc=0 with the marker in stderr: the command SUCCEEDED and its
+        # (remote) output merely contains the string (e.g. a log echo) —
+        # neither a break nor a re-run.
+        proc: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 0, stdout="ok", stderr="getsockname failed: Not a socket\n"
+        )
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return proc
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is proc
+        assert len(calls) == 1
+        assert not ssh_options._named_pipe_runtime_broken()
+
+    def test_rc255_marker_triggers_one_retry(self):
+        # 255 = OpenSSH's classic client-side failure rc — kept in the gate
+        # so a Win32 build whose mux-bind failure takes that exit still
+        # recovers (the 2026-06-04 incident's rc was never recorded).
+        bad: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 255, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        good: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 0, stdout="ok", stderr=""
+        )
+        outcomes = iter([bad, good])
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return next(outcomes)
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is good
+        assert len(calls) == 2  # exactly one retry
+        assert ssh_options._named_pipe_runtime_broken()
+
+    def test_non_idempotent_marker_marks_broken_but_never_reruns(self):
+        # The qsub/sbatch guard (F54/F55 doctrine): a declared non-idempotent
+        # command records the broken verdict (future legs demote to
+        # ControlMaster=no on their first attempt) but is NEVER re-executed —
+        # the gated rc+marker pair is only strong evidence the command never
+        # dispatched (a remote command exiting 127 with the marker in its own
+        # stderr is indistinguishable at this layer), and a duplicate submit
+        # is unrecoverable while a surfaced failure is not.
+        bad: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 127, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return bad
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild, idempotent=False)
+        assert result is bad  # the failure propagates
+        assert len(calls) == 1  # NO re-run
+        assert ssh_options._named_pipe_runtime_broken()  # verdict recorded
+
+    def test_non_idempotent_rc255_marker_never_reruns(self):
+        # Same guard at the doctrine rc (255): a remote command exiting 255
+        # with the marker in its stderr must not be double-fired either.
+        bad: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh", "host"], 255, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return bad
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild, idempotent=False)
+        assert result is bad
+        assert len(calls) == 1
+        assert ssh_options._named_pipe_runtime_broken()
+
+    def test_ssh_run_non_idempotent_scope_never_reruns(self, monkeypatch):
+        # End-to-end at the ssh_run seam: under non_idempotent_remote() (the
+        # scheduler-submit leg, backends/_remote_base._execute_command) a
+        # gated 127+marker failure records the verdict but the command is
+        # executed exactly ONCE — the named-pipe recovery can never
+        # double-fire a qsub.
+        monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")  # isolate the helper
+        bad: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh"], 127, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        calls: list[list[str]] = []
+
+        def _fake_capture(argv, *, timeout):  # matches remote.capture_via_select
+            calls.append(argv)
+            return bad
+
+        monkeypatch.setattr(remote, "capture_via_select", _fake_capture)
+
+        with remote.non_idempotent_remote():
+            proc = remote.ssh_run("qsub job.sh", ssh_target="u@h")
+        assert proc is bad  # the failure surfaces, honestly
+        assert len(calls) == 1  # NO re-execution of the submit
+        assert ssh_options._named_pipe_runtime_broken()  # verdict recorded
+
+    def test_ssh_run_idempotent_marker_failure_retries_and_recovers(self, monkeypatch):
+        # Idempotent control for the scope test above: the same gated
+        # 127+marker failure outside non_idempotent_remote() retries once
+        # and recovers (the pre-gate behaviour, preserved on the gated rc).
+        monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")
+        bad: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh"], 127, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        good: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+            ["ssh"], 0, stdout="ok", stderr=""
+        )
+        outcomes = iter([bad, good])
+        calls: list[list[str]] = []
+
+        def _fake_capture(argv, *, timeout):
+            calls.append(argv)
+            return next(outcomes)
+
+        monkeypatch.setattr(remote, "capture_via_select", _fake_capture)
+
+        proc = remote.ssh_run("qstat", ssh_target="u@h")
+        assert proc is good
+        assert len(calls) == 2  # failed once, retried, succeeded
+        assert ssh_options._named_pipe_runtime_broken()
 
     def test_mark_broken_demotes_multiplex_opts_to_legacy(self, monkeypatch):
         # Once the runtime verdict flips to False, _ssh_multiplex_opts switches

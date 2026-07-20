@@ -319,8 +319,31 @@ def reset_named_pipe_runtime_verdict() -> None:
     _NAMED_PIPE_RUNTIME_VERDICT = None
 
 
+#: ssh exit statuses on which the named-pipe ``getsockname`` break+retry is
+#: allowed to fire. Any OTHER non-zero rc means the REMOTE command exited
+#: (ssh propagates the remote command's exit status), so its stderr is
+#: remote-controlled content — it can carry the marker string legitimately
+#: (a log line the remote command prints) or adversarially — and re-running
+#: would re-execute a possibly partially-executed command.
+#:
+#: 127 is the empirically-observed rc of the Win32-OpenSSH mux-bind failure
+#: itself (native OpenSSH 9.5p2, 2026-07-20: with ``ControlMaster=auto`` and
+#: a named-pipe OR Unix-socket ControlPath, ``ssh.exe`` prints ``getsockname
+#: failed: Not a socket`` then ``Read from remote host <host>: Unknown
+#: error`` and exits 127 — including for a DNS-impossible host, which proves
+#: the failure precedes ANY network contact, so the remote command never
+#: ran and one re-run is safe). 255 is OpenSSH's classic client-side
+#: failure rc, kept so a Win32 build whose bind failure takes that exit
+#: still recovers — the 2026-06-04 incident's rc was never recorded. On
+#: POSIX the marker never arises (it is a win32compat-shim string), so this
+#: set only ever gates Windows invocations.
+_NAMED_PIPE_CLIENT_FAILURE_RCS: Final[frozenset[int]] = frozenset({127, 255})
+
+
 def run_with_named_pipe_retry(
     rebuild_and_run: Callable[[], subprocess.CompletedProcess[str]],
+    *,
+    idempotent: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Run *rebuild_and_run*; on the named-pipe ``getsockname`` failure, retry once.
 
@@ -328,23 +351,49 @@ def run_with_named_pipe_retry(
     :class:`subprocess.CompletedProcess` stderr — the syscall-layer named-pipe
     ControlMaster bind failure the version probe in
     :func:`_windows_openssh_named_pipe_supported` cannot catch (observed on a
-    Windows OpenSSH 8.x+ build, 2026-06-04). On detection,
-    :func:`mark_named_pipe_broken` is called (short-circuits future named-pipe
-    attempts in :func:`_ssh_multiplex_opts`), then *rebuild_and_run* is invoked
-    again — it MUST rebuild any argv or env derived from the now-updated
-    multiplex opts (i.e. call ``ssh_argv("ssh")`` / ``ssh_env()`` *inside* the
+    Windows OpenSSH 8.x+ build, 2026-06-04). The marker only counts when it
+    arrives with a CLIENT-failure exit status
+    (:data:`_NAMED_PIPE_CLIENT_FAILURE_RCS`): ssh propagates the remote
+    command's exit status, so any other non-zero rc means the remote command
+    itself failed and the marker is remote-controlled content — no break, no
+    retry, the failure propagates as-is (re-running would re-execute a
+    possibly partially-executed command — the double-execution hazard).
+    On a gated detection, :func:`mark_named_pipe_broken` is called
+    (short-circuits future named-pipe attempts in
+    :func:`_ssh_multiplex_opts`), then *rebuild_and_run* is invoked again —
+    it MUST rebuild any argv or env derived from the now-updated multiplex
+    opts (i.e. call ``ssh_argv("ssh")`` / ``ssh_env()`` *inside* the
     closure, not before).
 
-    Returns the proc as-is when no marker is present, when the verdict is
-    already broken (this process has already done its one retry, or another
-    code path marked it), or when the retry itself also fails. Exactly one
+    *idempotent* marks whether re-executing the command is safe. ``False``
+    (the scheduler-submit leg reaches this via
+    :func:`hpc_agent.infra.remote.ssh_run` under ``non_idempotent_remote()``)
+    still records the broken verdict — future legs demote to
+    ``ControlMaster=no`` on their FIRST attempt instead of racing the same
+    broken mux state — but NEVER re-runs: the gated rc+marker pair is only
+    strong evidence the command never dispatched (a remote command exiting
+    127/255 with the marker in its own stderr is indistinguishable at this
+    layer), and a re-run of a ``qsub``/``sbatch`` the scheduler may already
+    have accepted would duplicate the array. The caller surfaces the
+    failure instead (F54/F55 doctrine).
+
+    Returns the proc as-is when no marker is present, when the rc is not a
+    client-failure rc, when the verdict is already broken (this process has
+    already done its one retry, or another code path marked it), when
+    *idempotent* is False, or when the retry itself also fails. Exactly one
     retry per process — the verdict is sticky.
     """
     proc = rebuild_and_run()
     if _named_pipe_runtime_broken():
         return proc
-    if proc.returncode != 0 and proc.stderr and "getsockname failed: Not a socket" in proc.stderr:
+    if (
+        proc.returncode in _NAMED_PIPE_CLIENT_FAILURE_RCS
+        and proc.stderr
+        and "getsockname failed: Not a socket" in proc.stderr
+    ):
         mark_named_pipe_broken()
+        if not idempotent:
+            return proc
         return rebuild_and_run()
     return proc
 

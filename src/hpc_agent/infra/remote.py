@@ -905,8 +905,11 @@ def ssh_run(
         # mode (Windows OpenSSH version probe can't catch it; 2026-06-04). The
         # retry rebuilds argv inside _attempt to pick up the legacy override
         # after mark_named_pipe_broken(). No-op for streaming mode (proc.stderr
-        # is None when capture_output=False).
-        return run_with_named_pipe_retry(_attempt)
+        # is None when capture_output=False). A NON-idempotent command (the
+        # qsub/sbatch submit leg under non_idempotent_remote()) still gets the
+        # verdict mark but never the re-run — re-executing a submit the
+        # scheduler may already have accepted would duplicate the array.
+        return run_with_named_pipe_retry(_attempt, idempotent=effective_idempotent)
 
     return _with_ssh_backoff(
         _run,
