@@ -24,10 +24,14 @@ depends on context, not just on the counts:
   ``failed`` bucket (a task that failed then succeeded on retry). "Nothing
   conclusive yet" returns ``(None, None)`` — keep polling.
 * :func:`classify_settled` runs **after** reconcile has proven the scheduler
-  holds nothing alive for this run and both probes ran cleanly. There is no
-  "keep polling" arm; absence of any positive signal is a terminal
-  ``abandoned``. Completion is *strict* (every bucket but ``complete`` is
-  zero) and failure outranks absence.
+  holds nothing alive for this run and both probes ran cleanly — with ONE
+  disclosed caller-side exception: reconcile's strict-all-complete arm (entry
+  B in ``reconcile._reconcile_one``) invokes it on disk-proven strict
+  completion even while the scheduler still shows jobs alive, disclosed at
+  runtime via ``scheduler_alive_at_settle``. There is no "keep polling" arm;
+  absence of any positive signal is a terminal ``abandoned``. Completion is
+  *strict* (every bucket but ``complete`` is zero) and failure outranks
+  absence.
 
 The lenient-vs-strict completion divergence between the two is **intentional**
 and is pinned by ``tests/ops/monitor/test_classify.py``; collapsing the two
@@ -237,9 +241,13 @@ def settle(summary: dict[str, Any], total_tasks: int) -> SettleDecision:
     alive for.
 
     Precondition (enforced by the caller): no recorded job is alive AND both
-    the alive-check and the reporter probe ran cleanly. Under that precondition
-    the verdict is one of three terminal states, in strict precedence of
-    POSITIVE evidence first, absence last:
+    the alive-check and the reporter probe ran cleanly — except reconcile's
+    strict-all-complete arm (entry B in ``reconcile._reconcile_one``), which
+    invokes on disk-proven strict completion even while the scheduler still
+    shows jobs alive (disclosed at runtime via ``scheduler_alive_at_settle``;
+    the strict-completeness precedence below is what makes that safe). Under
+    that precondition the verdict is one of three terminal states, in strict
+    precedence of POSITIVE evidence first, absence last:
 
     1. all tasks complete (strict) -> ``complete``  (``all_tasks_complete``)
     2. any task ran and failed     -> ``failed``    (``positive_failure_evidence``)
