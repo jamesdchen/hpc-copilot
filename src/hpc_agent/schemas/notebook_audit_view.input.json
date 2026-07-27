@@ -118,7 +118,7 @@
     },
     "full": {
       "default": false,
-      "description": "Payload selector (run-#12 finding 12, B1). Default (false) returns the DIGEST `markdown` — the per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), the render-file pointers, and the next-actions footer — with NO diff/assertion/flag body bytes. Under popup-primary the bodies live in the content-addressed render files (`render_path`) and the sign-off popup, so the agent needs the digest + pointers only. Pass `full: true` to get the whole-body `markdown` render (~11k tokens) for a harness that still MODEL-RELAYS the audit. The per-section view_shas and `render_path`s are identical either way — `full` selects only how much of the render the RESPONSE carries, never what the human signs.",
+      "description": "Payload selector (run-#12 finding 12, B1). Default (false) returns the DIGEST `markdown` — the per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), the render-file pointers, and the next-actions footer — with NO diff/assertion/flag body bytes; the bodies live in the content-addressed render files (`render_path`), so the loop's routine passes need the digest + pointers only. Pass `full: true` for the INLINE read-and-sign `markdown` — the review surface the agent relays VERBATIM in chat: the code diff with its highlighting intact, commented-out exposition runs collapsed to disclosed elision lines (the full exposition stays in the on-disk render for out-of-chat auditing). The per-section view_shas and `render_path`s are identical either way — `full` selects only how much of the render the RESPONSE carries, never what the human signs.",
       "title": "Full",
       "type": "boolean"
     }

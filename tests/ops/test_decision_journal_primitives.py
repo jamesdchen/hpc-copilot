@@ -1131,10 +1131,10 @@ def test_signoff_human_required_generic_praise_refused(tmp_path: Path) -> None:
 
 
 def test_signoff_logged_utterance_lands_when_response_is_mechanical(tmp_path: Path) -> None:
-    """The tiered evidence leg (run-#12 finding 9): with the capture hook / popup
-    log present, a logged human utterance that names the slug and engages the
+    """The tiered evidence leg (run-#12 finding 9): with the capture-hook log
+    present, a logged human utterance that names the slug and engages the
     diff lands the sign-off — the agent-relayed response is only the record.
-    This is the leg that lets the E4 elicitation retry succeed. Render written
+    This is the leg the type-in-chat rendezvous lands on. Render written
     FIRST: only an utterance that post-dates the render counts (finding 10)."""
     _write_notebook_fixture(tmp_path)
     _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
@@ -1198,7 +1198,7 @@ def test_signoff_stale_utterance_refused_temporal_binding(tmp_path: Path) -> Non
     _write_notebook_fixture(tmp_path)
     _log_utterance(
         tmp_path,
-        "resume the run: model-fit uses regularization=0.5, converged asserted — popup expected",
+        "resume the run: model-fit uses regularization=0.5, converged asserted — sign-off follows",
     )
     render = _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
     future = _time.time() + 300
@@ -1690,10 +1690,11 @@ def test_signoff_preview_view_sha_refused(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E2 (docs/design/mcp-elicitation.md D4/E2): the authorship-refusal marker.
-# The authorship/sign-off BAR raise sites attach
+# The authorship-refusal marker (E2 heritage). The authorship/sign-off BAR
+# raise sites attach
 # ``failure_features.authorship_evidence == "missing"`` — a machine-readable
-# discriminator the MCP elicitation hook keys on WITHOUT parsing prose. It must
+# discriminator any harness can key on WITHOUT parsing prose to tell "a fresh
+# typed human utterance resolves this" from a structural refusal. It must
 # survive the real CLI envelope path (``cli/_helpers._err_from_hpc`` → JSON on
 # stdout, exactly what ``cli/dispatch.main`` runs on an HpcError) AND survive the
 # synthesis trap: ``_err_from_hpc`` synthesizes a DEFAULT ``failure_features`` for
@@ -1814,8 +1815,9 @@ def test_generic_spec_invalid_has_features_without_authorship_key(tmp_path: Path
 
 def test_structural_signoff_refusal_not_marked_authorship(tmp_path: Path) -> None:
     """A STRUCTURAL sign-off refusal (a stale/asserted section_sha — the recompute
-    lock, not missing authorship) must NOT carry the marker: re-eliciting a human
-    utterance cannot fix a hash mismatch, so the MCP retry-once must not fire."""
+    lock, not missing authorship) must NOT carry the marker: a freshly typed
+    human utterance cannot fix a hash mismatch, so a consumer prompting the
+    human off the marker would drive a guaranteed-failing round-trip."""
     _write_notebook_fixture(tmp_path)
     env = _err_envelope(
         lambda: _signoff(

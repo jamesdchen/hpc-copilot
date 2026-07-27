@@ -2,8 +2,8 @@
 
 Covers the detection paths (settings.json with / without each hook entry; the
 utterance-log namespace present / absent), fail-open on an unreadable settings
-file, the ``"unknown"`` trusted-display non-answer, the elicitation server/client
-evidence split, and the empty-spec / bogus-key wire contract.
+file, the ``"unknown"`` trusted-display non-answer, and the empty-spec /
+bogus-key wire contract.
 """
 
 from __future__ import annotations
@@ -184,17 +184,13 @@ def test_empty_namespace_reads_absent_and_creates_no_directory(
     assert not namespace.exists()
 
 
-def test_elicitation_flag_reported(claude_dir: Path, tmp_path: Path) -> None:
-    # The server bit is identity with the imported flag (which flips as the pump
-    # lands — assert identity, never a literal). The client bit is "per-session":
-    # a separate-process probe cannot witness a live session's negotiation.
-    from hpc_agent._kernel.extension.mcp_server import ELICITATION_SERVER_IMPLEMENTED
-
+def test_no_elicitation_evidence_keys(claude_dir: Path, tmp_path: Path) -> None:
+    """The retired MCP-elicitation channel reports NO evidence keys — a stale
+    ``elicitation_*`` bit would advertise a channel that no longer exists."""
     _write_settings(claude_dir, {})
     result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
     evidence = result.capabilities["utterance_log"].evidence
-    assert evidence["elicitation_server"] is ELICITATION_SERVER_IMPLEMENTED
-    assert evidence["elicitation_client"] == "per-session"
+    assert not any(key.startswith("elicitation") for key in evidence)
 
 
 def test_tier_consequences_present_for_every_capability(claude_dir: Path, tmp_path: Path) -> None:

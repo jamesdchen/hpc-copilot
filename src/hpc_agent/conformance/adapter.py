@@ -198,7 +198,7 @@ class HarnessAdapter(Protocol):
     """The seam a conforming harness implements so the kit can drive it.
 
     The kit calls ONLY these methods; a harness maps each onto its own
-    capability provider (hooks, a response gateway, an MCP elicitation channel,
+    capability provider (hooks, a response gateway, a structured-question form,
     a notebook render, ...). ``answer_question`` is OPTIONAL — the kit skips the
     clicked-vs-typed provenance assertions when it is absent.
     """
@@ -299,8 +299,8 @@ class HarnessAdapter(Protocol):
 
     # --- optional; kit skips the matching assertions when absent ---
     def answer_question(self, experiment_dir: Path, offered_labels: list[str], answer: str) -> None:
-        """Drive YOUR structured-question channel (the AskUserQuestion /
-        MCP-elicitation analog) with *answer* against *offered_labels* —
+        """Drive YOUR structured-question channel (the AskUserQuestion analog)
+        with *answer* against *offered_labels* —
         exercises the clicked-vs-typed provenance line (``_is_clicked``)."""
 
     def detect_capabilities(self, experiment_dir: Path) -> frozenset[str]:

@@ -31,7 +31,7 @@ from hpc_agent._wire.actions.notebook_auto_clear import (
     NotebookAutoClearSpec,
 )
 from hpc_agent.ops.notebook.auto_clear_op import notebook_auto_clear
-from hpc_agent.ops.notebook.render_store import read_render_digest, write_render
+from hpc_agent.ops.notebook.render_store import write_render
 from hpc_agent.ops.notebook_gate import assert_source_audited
 from hpc_agent.state import notebook_audit as nb
 from hpc_agent.state.audit_source import parse_percent_source
@@ -236,8 +236,7 @@ def test_recurrence_nudge_fires_at_two_prior_audits(tmp_path: Path) -> None:
     path = write_render(tmp_path, audit_id=_NEW, view=sv)
     body = path.read_text(encoding="utf-8")
     assert "recurred in 2 audits — candidate for src extraction" in body
-    digest = read_render_digest(path)
-    assert digest is not None and digest.prior_signoff is not None
+    assert "### prior sign-off" in body
 
 
 def test_recurrence_nudge_absent_at_one_prior_audit(tmp_path: Path) -> None:
@@ -266,10 +265,8 @@ def test_reused_render_line_names_the_signing_actor(tmp_path: Path) -> None:
     sv = next(s for s in view.sections if s.slug == "model")
     path = write_render(tmp_path, audit_id=_NEW, view=sv)
     body = path.read_text(encoding="utf-8")
-    line = "identical content signed 2026-05-01 by opal under audit widget-a1"
+    line = "- identical content signed 2026-05-01 by opal under audit widget-a1"
     assert line in body
-    digest = read_render_digest(path)
-    assert digest is not None and digest.prior_signoff == line
 
 
 def test_reused_render_line_omits_actor_when_unattributed(tmp_path: Path) -> None:

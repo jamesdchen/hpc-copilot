@@ -48,7 +48,7 @@
       "type": "string"
     },
     "markdown": {
-      "description": "The code-rendered markdown projection for VERBATIM relay. By DEFAULT (spec `full: false`) this is the DIGEST — per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), render-file pointers, and the next-actions footer, with NO diff/assertion/flag body bytes (run-#12 finding 12, B1: the bodies live in the render files + sign-off popup under popup-primary). Pass spec `full: true` for the whole-body render. Same view + same `full` → byte-identical markdown.",
+      "description": "The code-rendered markdown projection for VERBATIM relay. By DEFAULT (spec `full: false`) this is the DIGEST — per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), render-file pointers, and the next-actions footer, with NO diff/assertion/flag body bytes (run-#12 finding 12, B1: the bodies live in the render files). Pass spec `full: true` for the inline read-and-sign render (code diff intact; commented-out exposition elided with disclosure — the on-disk render keeps the full text). Same view + same `full` → byte-identical markdown.",
       "title": "Markdown",
       "type": "string"
     }

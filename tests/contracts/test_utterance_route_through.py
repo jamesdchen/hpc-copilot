@@ -100,6 +100,16 @@ _EXEMPT: dict[str, str] = {
         "permanently satisfies a NAMING leg) cannot apply. Same temporal-binding-by-"
         "vocabulary-impossibility class as the sha-prefix FILING gates."
     ),
+    "_assert_overnight_consent_authorship": (
+        "the token-exact CHAT consent tier (2026-07-27 re-ruling, elicitation "
+        "retirement): the leg that reads the chat pool requires the typed consent "
+        "to name the spec's cmd_sha by an 8+ hex prefix — a token derivable only "
+        "from the refusal's code-rendered coverage brief, so a creation utterance "
+        "cannot pre-satisfy it (the sha-prefix FILING-gate class; no ts anchor "
+        "needed). The cmd_sha-less case falls through to the STRUCTURAL "
+        "missing-cmd_sha caps refusal, mirroring the bound tier's both-absent "
+        "fall-through."
+    ),
     "_authorship_evidence_texts": (
         "THE shared dev-mode cross-repo reader (docs/design/dev-mode-authorship.md "
         "legs b–d): its own-namespace leg routes through the exempt base reader "

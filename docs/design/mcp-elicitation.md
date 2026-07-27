@@ -1,9 +1,16 @@
 ---
-status: shipped
+status: superseded
 ---
 # MCP elicitation — the bidirectional protocol upgrade (design + implementation plan)
 
-**Status: IMPLEMENTED (2026-07-08; E1–E7 landed, drift log at foot).** This plan settles how
+**Status: RETIRED (2026-07-27; user-ruled removal — see the drift log's final
+entry). Implemented 2026-07-08 (E1–E7), removed wholesale 2026-07-27: relying
+on a third-party client's rendering of an elicitation form was the wrong basis
+for the read-and-sign surface. The direct chat view (the inline `full: true`
+audit-view relay, exposition elided with disclosure) + the typed chat sign-off
+captured by the `UserPromptSubmit` hook is THE channel now
+(`docs/internals/harness-contract.md`, "MCP elicitation … RETIRED"). This
+document is kept as the design history.** This plan settled how
 `src/hpc_agent/_kernel/extension/mcp_server.py` gains the server-initiated
 `elicitation/create` exchange that `docs/internals/harness-contract.md`
 ("MCP elicitation as a second capability-1 channel") already specifies
@@ -730,3 +737,35 @@ guards that pin the byte-for-byte fallback).
   down MCP elicitation's actual capabilities from the spec/documentation
   (content types, size limits, multi-part semantics, display receipts,
   client rendering) — research pass ordered 2026-07-10.
+
+- **RETIRED (2026-07-27, user ruling — the whole channel removed).** In
+  retrospect relying on a third-party implementation of MCP elicitation was the
+  wrong basis for the sign-off surface: form rendering is entirely CLIENT
+  DISCRETION (the facts doc's item 2 — no markdown/sizing guarantee), and the
+  live Claude Code harness rendered the elicitation dialog too small to carry
+  an audit, so the popup could not present the content it existed to present.
+  The user ruled for the DIRECT CHAT VIEW instead: the inline `full: true`
+  audit-view relay is the read-and-sign surface (diff highlighting intact,
+  commented-out exposition collapsed by code to disclosed elision lines — the
+  full exposition stays in the on-disk render for out-of-chat auditing), and
+  the sign-off is typed in chat, captured by the `UserPromptSubmit` hook.
+  Removed in code: `mcp_elicitation.py`; the bidirectional pump (reader
+  thread, queue, `_request_from_client`, pending slot) — `serve` is again a
+  synchronous request → response loop; the `append-decision` firing site
+  (`_elicitation_applies` / `_elicit_then_retry`); the per-session capability
+  store + dark flag; `ELICITATION_SERVER_IMPLEMENTED` and the
+  `elicitation_server` / `elicitation_client` evidence keys;
+  `render_store.read_render_digest` / `RenderDigest` (the popup was their only
+  consumer); the conformance kit's E7 legs; the four elicitation test files +
+  `tests/_mcp_harness.py`. The `authorship_evidence` refusal marker SURVIVES
+  (harness-agnostic refusal-cause metadata, never popup plumbing), as do the
+  §2 write-API provenance rules (they bind any out-of-band channel). The
+  overnight-consent gate (bound-capture-only, whose sole writer was the popup)
+  was re-ruled the same day: a token-exact chat tier (boundary + heal classes
+  + `cmd_sha` 8+ hex prefix off the refusal's code-rendered coverage brief)
+  restores grantability; the bound tier remains for a second harness's binding
+  surface. `HARNESS_CONTRACT_VERSION` 1.2.0 → 1.3.0 (MINOR: the channel was
+  optional and non-load-bearing; no conforming harness is invalidated). The
+  D1 revisit trigger is MOOT — with no server-initiated feature at all, the
+  SDK-adoption question dissolves. The chunked-popup deliberation
+  (`unified-render.md`) is superseded with the channel.

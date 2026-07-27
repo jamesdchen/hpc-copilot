@@ -331,6 +331,23 @@ def test_serve_loop_reports_parse_error() -> None:
     assert json.loads(stdout.getvalue())["error"]["code"] == -32700
 
 
+def test_serve_loop_drops_unexpected_response_silently() -> None:
+    """A RESPONSE-shaped message is dropped, never answered — this server sends
+    no outbound requests, and JSON-RPC 2.0 forbids replying to a response, so a
+    nonconforming client's stray response must not draw -32600/-32601 noise."""
+    stdout = io.StringIO()
+    stdin = io.StringIO(
+        json.dumps({"jsonrpc": "2.0", "id": "stray-1", "result": {}})
+        + "\n"
+        + json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})
+        + "\n"
+    )
+    _server().serve(stdin, stdout)
+    lines = [line for line in stdout.getvalue().splitlines() if line.strip()]
+    assert len(lines) == 1  # only the ping got a response
+    assert json.loads(lines[0])["id"] == 2
+
+
 def test_invalid_catalog_rejected() -> None:
     with pytest.raises(ValueError, match="catalog"):
         M.McpServer(registry=get_registry(), catalog="weird")

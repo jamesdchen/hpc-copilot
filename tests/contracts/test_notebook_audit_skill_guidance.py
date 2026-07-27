@@ -122,22 +122,25 @@ def test_graduation_gate_is_the_entry_ticket() -> None:
     assert "passed" in text, "done == the notebook-status `passed` predicate"
 
 
-def test_popup_is_the_primary_signoff_surface_not_chat_parking() -> None:
-    """Run-12 finding 9 / user ruling 2026-07-09/10 (E-render): over MCP the
-    sign-off popup is THE default read-and-sign surface — the skill must say
-    to proceed directly to ``append-decision`` (whose elicit-then-retry wrap
-    opens the popup) and must NOT re-encode the superseded pre-popup
-    chat-first flow (the drift class fixed in ``101cd111``: the skill parked
-    waiting for chat text where a popup could fire)."""
+def test_chat_signoff_is_the_signoff_surface_not_the_popup() -> None:
+    """User ruling 2026-07-27 (elicitation retirement, superseding the
+    2026-07-09/10 popup-primary ruling): the typed CHAT sign-off against the
+    inline render relay is THE sign-off surface. The skill must say so, must
+    describe the refusal → type-in-chat → re-attempt rendezvous, and must NOT
+    re-encode the retired popup flow (a stale popup instruction would send the
+    human to a surface that no longer opens)."""
     text = _text()
-    assert re.search(r"popup[^.\n]*PRIMARY|PRIMARY[^.\n]*popup", text), (
-        "the popup must be named the PRIMARY sign-off surface (E-render ruling)"
+    assert re.search(r"CHAT sign-off is THE sign-off surface", text), (
+        "the typed chat sign-off must be named THE sign-off surface (2026-07-27 ruling)"
     )
-    assert re.search(r"do NOT park|never park", text, re.I), (
-        "the skill must forbid parking for chat text where the popup can fire"
+    assert "popup" not in text.lower(), (
+        "the retired sign-off popup must not be referenced — it no longer opens"
     )
-    assert re.search(r"[Cc]hat-first is the FALLBACK", text), (
-        "chat-first must be stated as the fallback (no elicitation channel), not the default"
+    assert re.search(r"re-attempt the append", text), (
+        "the refusal → type-in-chat → re-attempt rendezvous must be described"
+    )
+    assert re.search(r"full:\s*true", text), (
+        "the inline full-render relay (the review surface) must be named"
     )
 
 

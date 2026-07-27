@@ -125,15 +125,16 @@ def _shield_stdin_for_span() -> Iterator[None]:
     """Swap the REAL ``sys.stdin`` out for an empty buffer during an in-process span.
 
     The block-drive tick itself may be running IN-PROCESS inside the MCP server
-    (``mcp_server._in_process_cli_runner``), whose reader thread is blocked in
-    ``readline()`` on the real ``sys.stdin`` (the JSON-RPC transport). A verb that
-    reads stdin in-process — or any code that reconfigures it — must never touch
-    that stream: a reconfigure-under-read returns a false EOF on Windows and kills
-    the reader thread (regression 17243a17). Swap in an empty ``StringIO`` for the
-    span's duration so an in-process verb sees EOF instead of eating the transport's
-    bytes; restore on exit. The same shielding the MCP in-proc runner seam applies,
-    reproduced locally (the runner is package-private to ``_kernel/extension`` and
-    cannot be imported across the package boundary).
+    (``mcp_server._in_process_cli_runner``), whose real ``sys.stdin`` is the
+    JSON-RPC transport the serve loop reads between calls. A verb that reads
+    stdin in-process — or any code that reconfigures it — must never touch that
+    stream (a reconfigure racing an in-flight read returned a false EOF on
+    Windows back when a reader thread held it — regression 17243a17 — and even
+    single-threaded, an in-process read would eat the transport's bytes). Swap
+    in an empty ``StringIO`` for the span's duration so an in-process verb sees
+    EOF instead; restore on exit. The same shielding the MCP in-proc runner seam
+    applies, reproduced locally (the runner is package-private to
+    ``_kernel/extension`` and cannot be imported across the package boundary).
     """
     import sys
 

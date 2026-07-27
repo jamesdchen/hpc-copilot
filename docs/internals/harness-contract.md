@@ -23,7 +23,7 @@ pretending the guarantee still holds.
 
 ## Contract version
 
-Contract version: 1.2.0
+Contract version: 1.3.0
 
 This is the SemVer of the contract this page specifies. It has ONE home in
 code — `HARNESS_CONTRACT_VERSION` in `ops/harness_capabilities.py` — and this
@@ -40,7 +40,12 @@ new capability, a new assertion, or a new conforming implementation SHAPE (as
 capability 2's ACT gained the response-gateway alongside the Stop hook) may
 land as a MINOR bump, but only if both reference adapters stay conforming — a
 previously-conforming harness failing a minor is the definition of a breaking
-change and forces a MAJOR. Capability REMOVAL never happens. The sha
+change and forces a MAJOR. Capability REMOVAL never happens. (1.3.0 applied
+that test to the retirement of the OPTIONAL MCP-elicitation second channel of
+capability 1: the capability itself is untouched, the channel was
+non-load-bearing by construction, and no conforming harness is invalidated —
+so the retirement is a MINOR, not a removal-class MAJOR; see the retired
+section below.) The sha
 canonicalization (below) is the canonical MAJOR trigger: changing it
 drift-revokes every stored attestation, so it can only ever ship as v2 with a
 `canon_version` field on new records, never silently.
@@ -380,8 +385,7 @@ named seam:
   (`_UTTERANCE_CAPTURE_NEEDLE`, `_ANSWER_CAPTURE_NEEDLE`) through the ONE canonical
   entry-matcher `agent_assets._find_hook_entry_index` — never a re-derived scan —
   plus the repo's utterance-log presence (`state/utterances.py::utterances_path`,
-  non-creating) and the MCP elicitation server flag (below; the client-side bit
-  is negotiated per session at `initialize`, never probe-asserted).
+  non-creating).
 - **Capability 2 (relay enforcement)** — detected from the relay-audit Stop hook's
   needle (`_RELAY_AUDIT_NEEDLE`).
 - **Capability 3 (backgrounding)** — always present (the detached-worker machinery
@@ -443,70 +447,60 @@ the three stay aligned: **declared == detected == behaved** — the reported
 capability set matches what the seams observe, and what the seams observe matches
 how the gates actually behave. A drift between any two is the bug the kit catches.
 
-## MCP elicitation as a second capability-1 channel (implemented 2026-07-08)
+## MCP elicitation as a second capability-1 channel — RETIRED (2026-07-27)
 
-The 2025-06-18 MCP revision adds server-initiated **elicitation**: the server sends
-an `elicitation/create` request, the client renders a form, the human types a
-response, and the client returns it. This is a natural SECOND conforming channel
-for capability 1 — the typed response travels client -> server with the model never
-touching it (out-of-band satisfied), exactly like the `UserPromptSubmit` hook.
+A second capability-1 channel rode the 2025-06-18 MCP revision's
+server-initiated **elicitation** from 2026-07-08 to 2026-07-27: the server sent
+an `elicitation/create` request on an authorship refusal, the client rendered a
+form, the human typed the sign-off there, and the server appended it and
+retried. It is **retired by user ruling (2026-07-27)**: how an elicitation form
+renders is entirely CLIENT DISCRETION — the MCP spec guarantees no markdown, no
+sizing, no scrolling (see `docs/design/mcp-elicitation-facts.md`), and the live
+Claude Code harness rendered the form too small to carry an audit — so a
+third-party client's rendering was the wrong thing to build the read-and-sign
+surface on. The read-and-sign surface is now the DIRECT CHAT VIEW: the
+code-rendered projection (the audit render, the refusal's coverage brief)
+relayed inline, and the human's sign-off typed in chat, captured by capability
+1's `UserPromptSubmit` hook — the one channel. The channel was
+NON-LOAD-BEARING by design, so its retirement invalidates no conforming
+harness and changes no obligation (the 1.3.0 MINOR bump records this).
+`docs/design/mcp-elicitation.md` (status: superseded) is the full design
+history, including the removal.
 
-**The specified binding** (a second harness that implements elicitation MUST honor
-it, byte-for-byte with §2):
+**What survives the retirement, unchanged and still normative** — these rules
+were never elicitation-specific; they bind ANY out-of-band channel a second
+harness provides for capability 1:
 
-- The server-side handler, on receiving an elicitation response, applies the
-  reference provenance filter (`state/utterances.py::is_harness_injected`, typed-
-  only) and then `append_utterance`s — the same write API §2 pins.
-- **The clicked-option hazard.** An elicitation form may offer server-authored
-  OPTIONS. A CLICK on an offered option is NOT typed text — it is the elicitation
-  analogue of the `answer_capture._is_clicked` case — so only FREE-TEXT fields of
-  the response qualify for the log. A response composed entirely of clicked options
-  is dropped; a typed field lands. This mirrors `answer_capture`'s `_typed_texts`
-  posture exactly.
-- **CRITICAL provenance rule.** The elicitation PROMPT shown to the human MUST be
-  CODE-RENDERED (the `relay_render` posture), NEVER LLM-authored text passed
-  through a spec. If the model could author the prompt, it would bait the human's
-  reply into the trust anchor — the same laundering channel the authorship gate
-  exists to close. A conforming elicitation prompt is built by code, from the
-  journal, like every other trusted projection.
+- The channel's handler applies the reference provenance filter
+  (`state/utterances.py::is_harness_injected`, typed-only) and then
+  `append_utterance`s — the same write API §2 pins.
+- **The clicked-option hazard.** A structured form may offer harness-authored
+  OPTIONS. A CLICK on an offered option is NOT typed text (the
+  `answer_capture._is_clicked` case), so only FREE-TEXT fields qualify for the
+  log; a response composed entirely of clicked options is dropped. This mirrors
+  `answer_capture`'s `_typed_texts` posture exactly.
+- **CRITICAL provenance rule.** Any display shown to the human as the basis of
+  a sign-off MUST be CODE-RENDERED (the `relay_render` posture), NEVER
+  LLM-authored text passed through a spec. If the model could author the
+  display it would bait the human's reply into the trust anchor — the
+  laundering channel the authorship gate exists to close.
+- No sign-off VERB exists (lock 1): appending an utterance stays the harness's
+  exclusive out-of-band act, whichever channel captured it; the authorship BAR
+  is a gate property, never a channel property.
 
-**How it is implemented here** (`docs/design/mcp-elicitation.md` is the plan of
-record; the pump stays hand-rolled — no MCP SDK dependency). The
-`_kernel/extension/mcp_server.py` pump is bidirectional: one daemon stdin-reader
-thread feeds a message queue (the portable Windows-safe deadline shape), and
-`McpServer._request_from_client` is the blocking-with-timeout wait a tool handler
-uses — servicing interleaved client requests inline so a waiting elicitation
-never head-of-line-blocks the session. The one firing site wraps
-`append-decision`: on an authorship refusal carrying the machine-readable
-`failure_features.authorship_evidence` marker
-(`ops/decision/journal.py::_refuse_missing_authorship`), the server sends
-`elicitation/create` with a CODE-RENDERED prompt
-(`mcp_server._render_elicitation_prompt` — built from code-selected identifiers
-only, never the model's free text and never the refusal message), filters the
-response (`mcp_server._accepted_utterance`: free-text-only,
-`is_harness_injected` refused), `append_utterance`s harness-side, and re-runs
-the identical invocation exactly once (`McpServer._elicit_then_retry`). The
-model receives `{elicitation: "captured", sha256}` — the fingerprint, never the
-text. The send-side `requestedSchema` is string-fields-only by construction, so
-the clicked-option hazard is closed before the receive-side filter ever runs.
-The server capability is recorded by the honest flag
-`mcp_server.ELICITATION_SERVER_IMPLEMENTED = True` — what a separate-process
-probe can verify — read by `harness-capabilities` as `elicitation_server`.
-
-**Client support reality-check — per-session negotiation.** Client support is
-never assumed: it is DETECTED at `initialize` from the client's declared
-`capabilities.elicitation` (stored per-session as
-`McpServer._client_elicitation`). `harness-capabilities` reports
-`elicitation_client: "per-session"` — unknown from a separate-process probe, by
-design (say unknown, not yes). When a session's client does not declare the
-capability, the elicitation channel **degrades to the hook path** silently and
-honestly: capability 1's `UserPromptSubmit` utterance-capture remains the
-working channel, and the gate behaves identically. Decline, cancel, timeout
-(300 s), and malformed responses all take the same degrade path — the original
-refusal envelope returns unchanged. No sign-off VERB is introduced (lock 1):
-appending an utterance stays the harness's exclusive out-of-band act, whichever
-channel captured it; the authorship BAR is unchanged — elicitation is a
-channel, never a waiver.
+**What was removed in code** (pinned by
+`tests/contracts/test_harness_contract.py::test_mcp_server_ships_no_elicitation_machinery`):
+the bidirectional pump (the stdin-reader thread + outbound-request wait), the
+`append-decision` elicit-then-retry firing site, the per-session
+`capabilities.elicitation` store, and the `ELICITATION_SERVER_IMPLEMENTED`
+probe flag with its `elicitation_server` / `elicitation_client` evidence keys
+in `harness-capabilities`. `mcp-serve` is again a strict synchronous
+request → response server. The overnight standing-consent gate, whose only
+grant surface was the popup's bound capture, gained a token-exact CHAT tier in
+the same change (`ops/decision/journal/overnight_consent.py`: name the
+boundary, every declared heal class, and the `cmd_sha` by an 8+ hex prefix
+derivable only from the refusal's code-rendered coverage brief); its bound
+tier remains for a second harness's binding surface.
 
 ## Capability 2, split: INSPECT vs ACT
 
@@ -696,10 +690,10 @@ are reported `"unknown"` by `harness-capabilities` — honest non-answers, never
 `False` (a caller distinguishes "declared absent" from "never probed"). This
 section records, per capability, what a SECOND harness would need to PROVE
 conformance and what seam is MISSING, per the T3 charter. Guardrail G3 is
-restated and unchanged: the elicitation path stays NON-LOAD-BEARING — nothing here
-makes a client-render capability a trust precondition; the MCP elicitation channel
-degrades to the hook path silently and introduces no sign-off verb, and the
-authorship BAR is untouched.
+restated and unchanged (and vindicated by the channel's 2026-07-27 retirement):
+no client-render capability is ever a trust precondition — the retired MCP
+elicitation channel was non-load-bearing and introduced no sign-off verb, and
+the authorship BAR is untouched.
 
 ### Capability 4 — trusted display
 

@@ -401,6 +401,55 @@ def test_render_markdown_shows_assertions_and_flags() -> None:
     assert "executes-live" in md
 
 
+# ── the inline elide-exposition projection (elicitation-retirement follow-on) ─
+
+# A source whose ``model`` section adds a run of commented-out exposition (the
+# py:percent markdown-cell idiom) AND a code change — the inline projection must
+# keep the code diff line and collapse the comment run with a disclosed count.
+SOURCE_WITH_EXPOSITION = """\
+# %%
+# hpc-audit-section: setup
+import numpy as np
+x = 1
+
+# %%
+# hpc-audit-section: model
+# We refit the widget model with a longer lookback because the
+# spring data showed drift in the tail.
+# The change below moves the window from 30 to 90 days.
+def train():
+    return 90
+"""
+
+
+def test_render_markdown_elides_commented_exposition_inline_only() -> None:
+    src, tmpl = _mods(SOURCE_WITH_EXPOSITION)
+    view = build_audit_view(src, tmpl, [])
+    full = render_markdown(view)
+    inline = render_markdown(view, elide_exposition=True)
+    # The on-disk/full projection carries the exposition verbatim.
+    assert "spring data showed drift" in full
+    assert "elided" not in full
+    # The inline projection drops the comment run (the 3 added exposition lines
+    # plus the adjacent `# %%` / section-marker context comments — one run of
+    # 5), DISCLOSES the elision with its count, and keeps the code diff line.
+    assert "spring data showed drift" not in inline
+    assert "(5 commented exposition line(s) elided — full text in the on-disk render)" in inline
+    assert "+    return 90" in inline
+
+
+def test_render_markdown_elision_never_touches_diff_structure() -> None:
+    src, tmpl = _mods(SOURCE_WITH_EXPOSITION)
+    view = build_audit_view(src, tmpl, [])
+    inline = render_markdown(view, elide_exposition=True)
+    full = render_markdown(view)
+    # Hunk headers and file labels survive the elision (diff structure is
+    # never exposition), and identifiers/shas are identical either way.
+    for line in full.splitlines():
+        if line.startswith(("@@", "+++", "---")) or line.startswith("- view_sha:"):
+            assert line in inline
+
+
 # ── the next-actions footer (run-#10 hyper-palatable sign-off amendment) ─────
 
 

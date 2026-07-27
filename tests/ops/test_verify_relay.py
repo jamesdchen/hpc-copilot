@@ -1336,7 +1336,7 @@ def _nb_write_multi(tmp_path: Path) -> dict[str, str]:
 def _nb_digest(shas: dict[str, str], *, module_sha: str) -> str:
     """The audit-view digest shape: header module shas, then one line per section."""
     lines = [
-        "# Notebook audit view (metadata; bodies live in the render files + popup)",
+        "# Notebook audit view (metadata; bodies live in the render files)",
         "",
         f"- view_sha: {'a' * 64}",
         f"- source module_sha: {module_sha}",

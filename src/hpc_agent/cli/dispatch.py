@@ -414,9 +414,9 @@ def _dispatch_main(argv: list[str] | None = None) -> int:
     # Force UTF-8 on the std streams up front. stdin is included for one-shot
     # CLI use (piped spec text must decode as UTF-8, run-#12 finding 13) —
     # but this loop must NEVER run against mcp-serve's real stdin: that is
-    # the JSON-RPC transport with a reader thread blocked in ``readline()``,
-    # and a reconfigure-under-read returns a false EOF on Windows, killing
-    # the server after the in-flight call (regression 17243a17). Over MCP the
+    # the JSON-RPC transport the serve loop reads between calls (and a
+    # reconfigure racing an in-flight read returned a false EOF on Windows
+    # back when a reader thread held it — regression 17243a17). Over MCP the
     # in-process runner swaps stdin out (``_shield_real_stdin``) and the
     # session-level UTF-8 reconfigure happens once in ``cmd_mcp_serve``.
     for _stream in (sys.stdin, sys.stdout, sys.stderr):

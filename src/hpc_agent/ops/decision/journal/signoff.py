@@ -63,17 +63,18 @@ def _signoff_fresh_human_texts(
     whole seconds — utterance ``ts`` is seconds-resolution). This kills the
     standing-sign-off class: a kickoff / resume prompt that happened to name
     the slug and a diff identifier minutes before the render existed is not
-    attestation, and letting it pass is what kept the sign-off popup from
-    ever firing (the gate passed instead of refusing).
+    attestation, and letting it pass is what kept the gate from ever
+    refusing (a pass where a refusal should have prompted the human).
 
     ``None`` — no log at all, or an unattributed >1-actor session — falls to
     the friction tier exactly like the unscoped read. An EMPTY list is
     different: the log exists but nothing fresh names this sign-off, so the
-    gate refuses with the authorship marker (the popup's cue). An absent /
-    unstatable render SKIPS the filter (returns the unfiltered pool): the
-    missing-render refusal belongs to the UNMARKED trusted-display lock,
-    where re-eliciting an utterance cannot fix it. A record with no
-    parseable ``ts`` is excluded — conservative; the popup remedies.
+    gate refuses with the authorship marker (the prompt-the-human cue). An
+    absent / unstatable render SKIPS the filter (returns the unfiltered pool):
+    the missing-render refusal belongs to the UNMARKED trusted-display lock,
+    where a freshly typed utterance cannot fix it. A record with no
+    parseable ``ts`` is excluded — conservative; a fresh typed sign-off
+    remedies.
 
     The temporal filter itself is the ONE shared :func:`_fresh_human_texts`
     helper (the B4 fix-wave generalized this finding-10 pattern); this function
@@ -385,11 +386,10 @@ def _assert_signoff_authorship(
     the #26 precedent). EVIDENCE IS TIERED like the unlock gate (run-#12
     finding 9, closing the run-#11 composed-response laundering hole): with a
     harness utterance log present the naming/engagement legs run over LOGGED
-    HUMAN UTTERANCES — chat (capture hook) or the sign-off popup (the E4
-    elicitation handler appends to the same log, which is what lets the MCP
-    retry-once land) — and the agent-relayed ``response`` carries no authorship
-    weight; absent a log the non-bare ``response`` is the friction tier
-    (byte-identical v1). Log-tier candidates are TEMPORALLY BOUND (finding 10):
+    HUMAN UTTERANCES — text the harness capture hooks recorded out-of-band
+    from the human's own chat prompts — and the agent-relayed ``response``
+    carries no authorship weight; absent a log the non-bare ``response`` is
+    the friction tier (byte-identical v1). Log-tier candidates are TEMPORALLY BOUND (finding 10):
     only utterances logged after the signed view's render was written count —
     a prior prompt that happened to name the slug is not attestation
     (:func:`_signoff_fresh_human_texts`). The tier is RECOMPUTED here over the CANONICAL view
@@ -487,12 +487,11 @@ def _assert_signoff_authorship(
 
     # Base authorship floor — TIERED exactly like the unlock gate (the shared
     # lock tier, extended to T8): with a harness utterance log present the legs
-    # run over LOGGED HUMAN UTTERANCES — text a human verifiably typed, in chat
-    # (the UserPromptSubmit capture hook) or in the sign-off POPUP (the E4
-    # elicitation handler appends to the SAME log, which is what lets the
-    # retry-once land on the human's words) — and the agent-relayed ``response``
-    # carries no authorship weight (the run-#11 laundering finding: a composed
-    # response passes the token checks mechanically but attests nothing).
+    # run over LOGGED HUMAN UTTERANCES — text a human verifiably typed in chat
+    # (the UserPromptSubmit capture hook writes it out-of-band) — and the
+    # agent-relayed ``response`` carries no authorship weight (the run-#11
+    # laundering finding: a composed response passes the token checks
+    # mechanically but attests nothing).
     # Absent a log (older harness / no capture hook), the non-bare ``response``
     # is the human's typed sign-off — the v1 friction tier, byte-identical.
     # MH4: >1 declared actors scope the read to the session actor's log only;
@@ -531,7 +530,7 @@ def _assert_signoff_authorship(
                 "notebook sign-off gate: signing off a section is a HUMAN act — no "
                 f"logged human utterance NAMES the section slug {section!r} "
                 "(token-exact, the #26 precedent). The human types the sign-off in "
-                "their own words (in chat, or in the sign-off popup when it opens); "
+                "their own words in chat (the capture hook logs it); "
                 "an agent-relayed response carries no authorship weight here."
             )
 

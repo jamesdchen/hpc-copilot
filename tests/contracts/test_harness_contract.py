@@ -218,37 +218,29 @@ def test_doc_pins_capability_negotiation() -> None:
     )
 
 
-def test_doc_pins_mcp_elicitation_implemented() -> None:
-    """MCP elicitation is a SECOND capability-1 channel, IMPLEMENTED by reference
-    (2026-07-08): the doc cites the real pump/handler symbols, the clicked-option
-    hazard applies (only free-text lands), the prompt MUST be code-rendered
-    (never LLM-authored), the honest server flag records it, client support is
-    per-session negotiation, and absent capability degrades to the hook path."""
+def test_doc_pins_mcp_elicitation_retired() -> None:
+    """The MCP-elicitation second capability-1 channel is RETIRED (2026-07-27,
+    user ruling: a third-party client's rendering of an elicitation form cannot
+    be controlled, so the popup was the wrong read-and-sign surface — the doc
+    records the retirement and names the chat/hook path as THE channel). The
+    write-API provenance rules survive the retirement — they bind ANY
+    out-of-band channel a second harness provides."""
     text = _doc_text()
     lower = text.lower()
-    assert "elicitation" in lower, "the elicitation channel must be named"
-    assert "specified, not implemented" not in lower, (
-        "the specified-not-implemented posture retired when the pump landed"
-    )
-    assert "specified but not implemented" not in lower, (
-        "the specified-not-implemented posture retired when the pump landed"
-    )
+    assert "elicitation" in lower, "the retirement record must still name the channel"
+    assert "retired" in lower, "the retirement must be recorded, not silently deleted"
     assert "clicked-option hazard" in lower or "clicked option" in lower, (
-        "the clicked-option hazard (only free-text qualifies) must be pinned"
+        "the clicked-option hazard (only free-text qualifies) must survive — it "
+        "binds any out-of-band channel, not just the retired one"
     )
     assert "code-rendered" in lower, (
-        "the code-rendered (never LLM-authored) prompt provenance rule must be pinned"
+        "the code-rendered (never LLM-authored) display provenance rule must survive"
     )
-    assert "ELICITATION_SERVER_IMPLEMENTED" in text, (
-        "the honest server capability flag must be named"
+    # The retirement record must tie itself to the code-side absence pin, so
+    # doc and code cannot silently diverge on what was removed.
+    assert "test_mcp_server_ships_no_elicitation_machinery" in text, (
+        "the retirement record must cite the code-side absence pin"
     )
-    assert "_request_from_client" in text, (
-        "the implemented-by-reference citation of the wait primitive must be present"
-    )
-    assert "_render_elicitation_prompt" in text, "the code-rendered prompt symbol must be cited"
-    assert "_elicit_then_retry" in text, "the retry-once firing symbol must be cited"
-    assert "per-session" in lower, "the per-session client-negotiation posture must be pinned"
-    assert "degrades to the hook path" in lower, "the degrade-to-hook-path fallback must be pinned"
 
 
 def test_doc_pins_capability_2_inspect_act_split() -> None:
@@ -268,27 +260,25 @@ def test_doc_pins_capability_2_inspect_act_split() -> None:
     )
 
 
-def test_mcp_server_elicitation_flag_is_true_and_backed() -> None:
-    """The elicitation channel is implemented: the server capability flag the
-    harness-capabilities verb reads is True, and — the honesty condition for the
-    flip — the bidirectional machinery it asserts actually exists on the server
-    class (the wait primitive, the code-rendered prompt, the retry-once firing
-    site). The flag may never outrun the code."""
+def test_mcp_server_ships_no_elicitation_machinery() -> None:
+    """The elicitation channel is retired IN CODE, not just in prose: the flag,
+    the bidirectional wait primitive, and the firing site are gone from the
+    server. A stale survivor would advertise a channel that no longer exists
+    (the honesty condition, inverted: code may never outrun the doc's
+    retirement record)."""
     from hpc_agent._kernel.extension import mcp_server
 
-    assert mcp_server.ELICITATION_SERVER_IMPLEMENTED is True, (
-        "ELICITATION_SERVER_IMPLEMENTED flipped True with the bidirectional pump; "
-        "it must stay honest — False again only if the pump is removed"
+    assert not hasattr(mcp_server, "ELICITATION_SERVER_IMPLEMENTED"), (
+        "the retired capability flag must not survive"
     )
-    assert "ELICITATION_SERVER_IMPLEMENTED" in mcp_server.__all__
-    assert hasattr(mcp_server.McpServer, "_request_from_client"), (
-        "the flag asserts a wait primitive that must exist"
+    assert not hasattr(mcp_server.McpServer, "_request_from_client"), (
+        "the retired bidirectional wait primitive must not survive"
     )
-    assert hasattr(mcp_server.McpServer, "_elicit_then_retry"), (
-        "the flag asserts a firing site that must exist"
+    assert not hasattr(mcp_server.McpServer, "_elicit_then_retry"), (
+        "the retired firing site must not survive"
     )
-    assert callable(mcp_server._render_elicitation_prompt), (
-        "the flag asserts a code-rendered prompt builder that must exist"
+    assert not hasattr(mcp_server, "_render_elicitation_prompt"), (
+        "the retired prompt builder must not survive"
     )
 
 

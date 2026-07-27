@@ -17,6 +17,43 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Removed — the MCP elicitation channel; the inline chat relay is the read-and-sign surface (2026-07-27)
+
+- **MCP elicitation removed wholesale (user-ruled).** In retrospect, relying on
+  a third-party client's implementation of MCP elicitation was the wrong basis
+  for the sign-off surface: form rendering is entirely client discretion (no
+  markdown/sizing guarantee — `docs/design/mcp-elicitation-facts.md`), and the
+  live harness rendered the dialog too small to carry an audit. Removed:
+  `_kernel/extension/mcp_elicitation.py`; the bidirectional pump (`mcp-serve`
+  is again a strict synchronous request → response server — reader thread,
+  outbound-request wait, pending slot all gone); the `append-decision`
+  elicit-then-retry firing site; the per-session `capabilities.elicitation`
+  store + dark flag; `ELICITATION_SERVER_IMPLEMENTED` and the
+  `elicitation_server` / `elicitation_client` evidence keys of
+  `harness-capabilities`; `render_store.read_render_digest` / `RenderDigest`
+  (popup-only consumers); the conformance kit's E7 legs; the elicitation test
+  suites + `tests/_mcp_harness.py`. `HARNESS_CONTRACT_VERSION` 1.2.0 → 1.3.0
+  (MINOR: the channel was optional and non-load-bearing; no conforming harness
+  is invalidated — `docs/internals/harness-contract.md` "MCP elicitation …
+  RETIRED"). The `failure_features.authorship_evidence` refusal marker
+  survives (harness-agnostic refusal-cause metadata).
+- **The inline chat relay is the read-and-sign surface.**
+  `notebook-audit-view` with `full: true` now emits the inline review
+  projection: the code diff rides with its highlighting intact while
+  commented-out exposition runs collapse to disclosed elision lines
+  (`… (N commented exposition line(s) elided — full text in the on-disk
+  render)`); the content-addressed render file keeps the FULL exposition for
+  out-of-chat auditing. The human reads the relay (or the render file) and
+  types the sign-off in chat — the `UserPromptSubmit` capture hook is the one
+  capability-1 channel, and the T8 gate's evidence tiers are unchanged.
+- **Overnight standing consent gained a token-exact chat tier.** The gate's
+  bound-capture-only posture (USER RULING 3) presumed the popup as the binding
+  surface; with it retired, a typed chat consent now grants when it names the
+  boundary token-exactly, every declared heal class, and the spec's `cmd_sha`
+  by an 8+ hex prefix — a token derivable only from the refusal's
+  code-rendered coverage brief, which is now rendered inline in the refusal.
+  The bound tier remains for a conforming second harness's binding surface.
+
 First implementation wave of the fork's guiding design
 ([`docs/design/human-amplification-blocks.md`](docs/design/human-amplification-blocks.md)):
 workflows decompose into **blocks** that chain deterministically in code and

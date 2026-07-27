@@ -116,8 +116,13 @@ def _to_result(
 
     ``full`` selects the ``markdown`` payload (run-#12 finding 12, B1): the DEFAULT
     (``full=False``) is the DIGEST — per-section metadata + render-file pointers,
-    NO diff/assertion/flag body bytes; ``full=True`` is the whole-body render for a
-    harness that still model-relays. The per-section wire projection NEVER carries
+    NO diff/assertion/flag body bytes; ``full=True`` is the INLINE read-and-sign
+    render (the chat relay is the review surface since the sign-off popup
+    retired) — the whole body with commented-out exposition runs collapsed to
+    disclosed elision lines (``render_markdown(elide_exposition=True)``), so the
+    diff highlighting carries the code without the prose fluff; the on-disk
+    render file keeps the FULL exposition for out-of-chat auditing. The
+    per-section wire projection NEVER carries
     the unified diff (it lived twice — in the markdown AND a structured array); the
     diff stays derivable from the render file and the ``full`` markdown.
 
@@ -172,8 +177,13 @@ def _to_result(
             )
         )
     # B1: DEFAULT emits the digest (metadata + render-file pointers, no body
-    # bytes); `full` emits the whole-body render for a still-model-relaying harness.
-    markdown = render_markdown(view) if full else render_summary_markdown(view, render_paths)
+    # bytes); `full` emits the inline read-and-sign render — exposition elided
+    # with disclosure, code diff intact; the render FILES keep the full body.
+    markdown = (
+        render_markdown(view, elide_exposition=True)
+        if full
+        else render_summary_markdown(view, render_paths)
+    )
     return NotebookAuditViewResult(
         sections=sections,
         dropped_template_slugs=list(view.dropped_template_slugs),
@@ -218,7 +228,9 @@ def _to_result(
             "The result includes `markdown` — the code-rendered projection the "
             "skill relays VERBATIM. By DEFAULT `markdown` is the DIGEST (per-section "
             "metadata + render-file pointers, NO diff/assertion/flag body bytes — "
-            "run-#12 finding 12); pass `full: true` for the whole-body render. "
+            "run-#12 finding 12); pass `full: true` for the inline read-and-sign "
+            "render (code diff intact, commented-out exposition elided with "
+            "disclosure; the on-disk render keeps the full text). "
             "Recomputed from the .py on every call. Per section it also WRITES the "
             "content-addressed TRUSTED-DISPLAY render file (.hpc/renders/<audit_id>/"
             "<slug>.<view_sha12>.md) and returns its render_path — the artifact the "

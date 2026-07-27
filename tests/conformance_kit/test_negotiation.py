@@ -1,16 +1,14 @@
 """K6 negotiation — mirror unit test (green against a reference adapter).
 
-Two halves, mirroring the shipped ``test_negotiation.py``:
+Mirrors the shipped ``test_negotiation.py``: the ADAPTER legs
+(``declared == detected == behaved`` per seam) driven against
+a reference adapter that DECLARES all three capabilities and DETECTS them by
+behavior — proving the shipped negotiation assertions pass for a conforming
+harness, plus a mismatched adapter (detects a capability it does not declare)
+that the kit correctly FAILS (guard-can-fire).
 
-* the ADAPTER legs (``declared == detected == behaved`` per seam) driven against
-  a reference adapter that DECLARES all three capabilities and DETECTS them by
-  behavior — proving the shipped negotiation assertions pass for a conforming
-  harness, plus a mismatched adapter (detects a capability it does not declare)
-  that the kit correctly FAILS (guard-can-fire);
-* the ELICITATION legs (E7) re-run for real against the in-repo duplex rig
-  (``tests/_mcp_harness.py``), which is importable here (unlike from the wheel),
-  so the client-declared / server-detected / fires-when-true chain is exercised
-  end-to-end in core CI.
+(The former E7 elicitation legs retired with the MCP elicitation channel,
+2026-07-27 — there is no per-session negotiation left to mirror.)
 """
 
 from __future__ import annotations
@@ -137,22 +135,3 @@ def test_kit_fails_detected_but_not_declared(
     repo = _claim(tmp_path, monkeypatch)
     with pytest.raises(AssertionError, match="detected but undeclared"):
         kit.test_detected_seam_caps_are_declared(_OverclaimingAdapter(), repo)
-
-
-# ─── the elicitation legs (E7), re-run for real in-repo ──────────────────────
-
-
-def test_elicitation_fires_when_client_supports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    kit.test_elicitation_declared_detected_behaved_when_client_supports(tmp_path, monkeypatch)
-
-
-def test_elicitation_absent_when_client_silent() -> None:
-    kit.test_elicitation_absent_when_client_silent()
-
-
-def test_harness_capabilities_report_is_honest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    kit.test_harness_capabilities_reports_elicitation_honestly(tmp_path, monkeypatch)

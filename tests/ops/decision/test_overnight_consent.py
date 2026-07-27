@@ -4,10 +4,12 @@ Fires each leg of the ``overnight-consent`` authorship gate
 (``ops/decision/journal.py::_assert_overnight_consent_authorship``) and the
 consumption / morning-brief seams (``ops/overnight.py``):
 
-* the consent is valid ONLY when captured at a binding surface (bound-capture,
-  USER RULING 3, 2026-07-12) — a standing free-text chat utterance never
-  satisfies it, a bound record for a different boundary/class/expiry is refused,
-  and a bound record for the firing boundary passes;
+* the consent authorship tiers (re-ruled 2026-07-27 with the MCP elicitation
+  popup's retirement): a BOUND record from a binding surface passes; a
+  TOKEN-EXACT chat utterance naming the boundary, every declared heal class,
+  and the ``cmd_sha`` by an 8+ hex prefix passes; a word-overlap utterance that
+  names none of them never does, and a bound record for a different
+  boundary/class/expiry is refused;
 * hard caps ride the record — missing ``expires_at`` / an already-past expiry /
   no resource cap / a missing ``cmd_sha`` binding each refuse;
 * the WAKE must be armed — an ``overnight-consent`` whose scope has no live
@@ -72,15 +74,16 @@ def _seed_bound(
     expires_at: str | None = None,
     text: str = "let it run overnight to the widget canary, cap 50 dollars",
 ) -> None:
-    """Seed a BOUND overnight-consent utterance (what the elicitation popup writes).
+    """Seed a BOUND overnight-consent utterance (a binding capture surface's write).
 
-    Bound-capture ONLY (USER RULING 3): the gate accepts a consent only when a
-    view-aware surface captured the typed reply BOUND to the coverage. This mints
-    that record the way ``mcp_server._overnight_consent_binding`` would.
+    The bound tier: the gate accepts a consent when a view-aware surface (a
+    conforming second harness — core ships none since the elicitation popup
+    retired) captured the typed reply BOUND to the coverage. The ``channel``
+    value is opaque to the gate; it matches scope/block/subject only.
     """
     utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
     bound = {
-        "channel": "elicitation",
+        "channel": "second-harness",
         "scope_kind": scope_kind,
         "scope_id": scope_id,
         "block": overnight.OVERNIGHT_CONSENT_BLOCK,
@@ -138,15 +141,20 @@ def test_consent_records_when_bound_and_wake_armed(experiment_dir: Path) -> None
     assert records[-1]["resolved"]["cmd_sha"] == _CMD_SHA
 
 
-# ── bound authorship (USER RULING 3, 2026-07-12 — bound-capture ONLY) ─────────
+# ── consent authorship: bound tier + token-exact chat tier (2026-07-27) ───────
 
 
-def test_no_bound_record_refused(experiment_dir: Path) -> None:
-    # No binding surface captured a consent → refuse, naming the grant path.
+def test_no_bound_record_refused_with_coverage_brief(experiment_dir: Path) -> None:
+    # No binding surface captured a consent and nothing in chat names the
+    # coverage → refuse, rendering the coverage INLINE (the code-rendered brief
+    # the human reads in chat) and naming the type-it-in-chat grant path.
     _arm_wake(_RUN_ID)
     with pytest.raises(errors.SpecInvalid, match="bound consent record") as exc:
         _append(experiment_dir)
-    assert "popup fires" in str(exc.value)
+    message = str(exc.value)
+    assert "To GRANT: type the consent yourself" in message
+    assert _RUN_ID in message  # the boundary is rendered inline
+    assert _CMD_SHA in message  # the spec identity the sha-prefix leg derives from
 
 
 def test_bare_ack_refused(experiment_dir: Path) -> None:
@@ -155,15 +163,63 @@ def test_bare_ack_refused(experiment_dir: Path) -> None:
         _append(experiment_dir, response="y")
 
 
-def test_standing_free_text_utterance_never_satisfies(experiment_dir: Path) -> None:
-    # The DELETED forensic tier: a standing free-text chat utterance whose words
-    # overlap the consent text (any age) can NEVER satisfy the gate now — it
-    # carries no binding.
+def test_word_overlap_utterance_never_satisfies(experiment_dir: Path) -> None:
+    # The deleted forensic word-overlap tier stays deleted: a chat utterance
+    # whose words overlap the consent text but name neither the boundary nor
+    # the cmd_sha prefix can NEVER satisfy the gate.
     _arm_wake(_RUN_ID)
     utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
     append_utterance(experiment_dir, "let it run overnight to the widget canary, cap 50 dollars")
     with pytest.raises(errors.SpecInvalid, match="bound consent record"):
         _append(experiment_dir)
+
+
+def test_token_exact_chat_consent_accepted(experiment_dir: Path) -> None:
+    # The chat tier (2026-07-27): a typed utterance naming the boundary
+    # token-exactly AND the cmd_sha by an 8+ hex prefix (derivable only from the
+    # rendered coverage brief) grants the consent — no binding surface needed.
+    _arm_wake(_RUN_ID)
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    append_utterance(
+        experiment_dir,
+        f"I consent to {_RUN_ID} advancing overnight under spec {_CMD_SHA[:8]}, caps accepted",
+    )
+    result = _append(experiment_dir)
+    assert result.count == 1
+
+
+def test_chat_consent_without_sha_prefix_refused(experiment_dir: Path) -> None:
+    # Naming the boundary alone is not enough when the consent binds a cmd_sha:
+    # the sha prefix is the vocabulary-impossibility leg.
+    _arm_wake(_RUN_ID)
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    append_utterance(experiment_dir, f"I consent to {_RUN_ID} advancing overnight, caps accepted")
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir)
+
+
+def test_chat_consent_must_name_declared_heal_classes(experiment_dir: Path) -> None:
+    # Declared heal classes must each be named token-exactly in the typed consent.
+    _arm_wake(_RUN_ID)
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    append_utterance(
+        experiment_dir,
+        f"I consent to {_RUN_ID} advancing overnight under spec {_CMD_SHA[:8]}",
+    )
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir, resolved=_resolved(heal_classes=["env_pin"]))
+
+
+def test_chat_consent_naming_heal_classes_accepted(experiment_dir: Path) -> None:
+    _arm_wake(_RUN_ID)
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    append_utterance(
+        experiment_dir,
+        f"I consent to {_RUN_ID} advancing overnight under spec {_CMD_SHA[:8]}, "
+        "env_pin repairs authorized",
+    )
+    result = _append(experiment_dir, resolved=_resolved(heal_classes=["env_pin"]))
+    assert result.count == 1
 
 
 def test_bound_record_for_different_boundary_refused(experiment_dir: Path) -> None:
