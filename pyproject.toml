@@ -166,6 +166,9 @@ hpc_agent = [
     "py.typed",
     "slash_commands/commands/*.md",
     "slash_commands/skills/*/SKILL.md",
+    # Branch-gated skill guidance (context-footprint F3): read only when the
+    # SKILL body's trigger line names the branch.
+    "slash_commands/skills/*/references/*.md",
     "slash_commands/agents/*.md",
 ]
 

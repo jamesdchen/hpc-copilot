@@ -258,20 +258,20 @@
     },
     "TemplateSection": {
       "additionalProperties": false,
-      "description": "One template section echoed verbatim: its slug + raw cell prose.",
+      "description": "One template section's IDENTITY row: slug + normalized-source sha12.\n\nF4 (``docs/plans/context-footprint-2026-07-27.md``): the raw cell prose\nused to ride here verbatim AND in ``markdown`` — the same bytes twice in\nevery response. The body now rides ONLY in the ``markdown`` render (the\nrelay surface); this row keeps the identity a consumer can verify against\nit (``source_sha12`` is the audit's normalized section sha, truncated —\nthe same hash ``notebook-lint`` / the audit view report).",
       "properties": {
         "slug": {
           "title": "Slug",
           "type": "string"
         },
-        "source": {
-          "title": "Source",
+        "source_sha12": {
+          "title": "Source Sha12",
           "type": "string"
         }
       },
       "required": [
         "slug",
-        "source"
+        "source_sha12"
       ],
       "title": "draft-context template section",
       "type": "object"

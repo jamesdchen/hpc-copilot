@@ -58,6 +58,10 @@ MAX_PER_RULE: dict[str, int] = {
     # primitive call explicitly or formalise the choice as an enumerated
     # ambiguity.
     "step-without-action-ending": 11,
+    # 0 from birth (context-footprint F3): a dangling `references/<file>.md`
+    # mention or an orphan file under a skill's references/ dir is a
+    # structural fact — never a legitimate exemption.
+    "branch-reference-integrity": 0,
 }
 
 
@@ -152,9 +156,17 @@ Done.
 ### 4. Trailing narration
 
 Then write `Returning result to hpc-submit: { ok: true }` to chat.
+
+### 5. Dangling branch reference
+
+When the flux capacitor overheats: read references/does-not-exist.md and follow it.
 """,
         encoding="utf-8",
     )
+    # An orphan reference file (named by no SKILL line) fires the inverse leg.
+    refs = tmp_path / "references"
+    refs.mkdir()
+    (refs / "orphan.md").write_text("# unreachable guidance\n", encoding="utf-8")
     result = lint_skills.lint_skill_file(synthetic)
     expected_fires = {
         "prose-decide",
@@ -162,6 +174,7 @@ Then write `Returning result to hpc-submit: { ok: true }` to chat.
         "return-without-tool-call-guard",
         "trailing-narration-example",
         "step-without-action-ending",
+        "branch-reference-integrity",
     }
     missing = expected_fires - set(result)
     assert not missing, (
@@ -169,3 +182,7 @@ Then write `Returning result to hpc-submit: { ok: true }` to chat.
         "Either the rule's regex is broken or the synthetic input no "
         "longer covers it."
     )
+    # Both legs of the integrity rule fired: the dangling mention AND the orphan.
+    integrity = [snippet for _line, snippet in result["branch-reference-integrity"]]
+    assert any("dangling" in s for s in integrity)
+    assert any("orphan" in s for s in integrity)

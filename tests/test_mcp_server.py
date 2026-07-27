@@ -331,6 +331,67 @@ def test_serve_loop_reports_parse_error() -> None:
     assert json.loads(stdout.getvalue())["error"]["code"] == -32700
 
 
+def test_tools_list_spec_schema_is_structure_only_with_docs_pointer() -> None:
+    """F1 (context-footprint plan): the embedded spec schema in tools/list keeps
+    its STRUCTURE (types/required/enum/property names) but carries no nested
+    per-field description prose; the one top-level description is the disclosed
+    pointer at the full contract (describe / the CLI)."""
+
+    def _nested_descriptions(schema, depth=0):
+        found = []
+        if isinstance(schema, dict):
+            for key, value in schema.items():
+                if key == "description" and depth > 0:
+                    found.append(value)
+                found.extend(_nested_descriptions(value, depth + 1))
+        elif isinstance(schema, list):
+            for item in schema:
+                found.extend(_nested_descriptions(item, depth + 1))
+        return found
+
+    tools = {t["name"]: t for t in _server().list_tools()}
+    spec_tools = [t for t in tools.values() if "spec" in t["inputSchema"]["properties"]]
+    assert spec_tools, "at least one spec-bearing tool must be listed"
+    for tool in spec_tools:
+        spec_schema = tool["inputSchema"]["properties"]["spec"]
+        assert _nested_descriptions(spec_schema) == [], (
+            f"{tool['name']}: nested description prose must be elided from tools/list"
+        )
+        assert spec_schema.get("description", "").startswith("JSON spec object"), (
+            f"{tool['name']}: the trimmed spec schema must disclose the docs pointer"
+        )
+        # Structure survives: a spec schema still names its properties.
+        assert "properties" in spec_schema or spec_schema.get("type") == "object"
+
+
+def test_packaged_schema_on_disk_keeps_full_descriptions() -> None:
+    """Anti-overreach pin for the F1 trim: the trim is a serve-time projection —
+    the packaged schema files (what `describe` and the CLI serve) still carry
+    the per-field documentation prose."""
+    schema = M._load_input_schema("decision_journal_append")
+    if schema is None:  # packaged name drift — fall back to any spec schema
+        schema = M._load_input_schema("notebook_audit_view")
+    assert schema is not None
+
+    def _has_nested_description(obj) -> bool:
+        if isinstance(obj, dict):
+            return any(
+                (key == "description" and isinstance(value, str)) or _has_nested_description(value)
+                for key, value in obj.items()
+            )
+        if isinstance(obj, list):
+            return any(_has_nested_description(item) for item in obj)
+        return False
+
+    assert _has_nested_description(schema.get("properties", {})), (
+        "the packaged schema must keep its per-field documentation"
+    )
+    # And the trim helper never mutates its input.
+    before = json.dumps(schema, sort_keys=True)
+    M._strip_schema_descriptions(schema)
+    assert json.dumps(schema, sort_keys=True) == before
+
+
 def test_serve_loop_drops_unexpected_response_silently() -> None:
     """A RESPONSE-shaped message is dropped, never answered — this server sends
     no outbound requests, and JSON-RPC 2.0 forbids replying to a response, so a

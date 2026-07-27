@@ -17,6 +17,39 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Changed — context-footprint reduction, five levers (2026-07-27)
+
+Per `docs/plans/context-footprint-2026-07-27.md` (user-ordered; the governing
+rule: defer only what a BRANCH needs — the mainline stays inline, every
+deferral disclosed with a pointer):
+
+- **MCP `tools/list` schemas are structure-only.** The embedded spec schemas
+  keep types/`required`/`enum`/property names but drop the nested per-field
+  documentation prose; the spec property's description points at `describe` /
+  `hpc-agent describe <verb>`, which still serve the full contract (the
+  packaged schema files are untouched — the trim is a serve-time projection).
+- **Oversized structural refusals offload their detail.** When a refusal's
+  message+remediation exceeds 2000 bytes, the full text lands in a
+  content-addressed `.hpc/briefs/refusal-<sha12>.txt` and the envelope
+  carries a line-boundary truncation + the path. Authorship-marked
+  (read-and-sign) refusals always stay inline whole; no existing `.hpc` ⇒ no
+  offload (no-scaffold); any write error fails open to the full inline text.
+- **Branch-gated skill guidance moved to `references/` files** read only when
+  the branch is taken: hpc-submit's `revise-resolved` / `retarget-run`
+  recovery arms, hpc-notebook-audit's interview-handoff on-ramp. A new
+  error-severity `branch-reference-integrity` lint rule refuses dangling or
+  orphan reference files.
+- **`read-decisions` gained `digest: true`** — per-record identity/ordering
+  metadata (ts, block, attestor, response sha12 + length, resolved key names)
+  with the bodies omitted; the default response is byte-identical to before
+  (the additive key is absent, not null). The submit/status preflight scans
+  now use it.
+- **Wire: `notebook-draft-context` no longer double-carries the template
+  prose.** `template_sections[]` rows now carry `slug` + `source_sha12` (the
+  audit's normalized sha) instead of the verbatim cell `source`; the prose
+  rides once, in the `markdown` render the skill relays. The content-keyed
+  cache self-heals (an old-shape payload fails validation and recomputes).
+
 ### Removed — the MCP elicitation channel; the inline chat relay is the read-and-sign surface (2026-07-27)
 
 - **MCP elicitation removed wholesale (user-ruled).** In retrospect, relying on

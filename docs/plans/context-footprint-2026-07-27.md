@@ -214,3 +214,38 @@ value refused by pydantic.
 ## Drift log
 
 (open)
+
+**2026-07-27 — Waves 1–3 implemented (same day; F4 audit table below).**
+F1: `mcp_server._strip_schema_descriptions` + `_SPEC_DOCS_POINTER`, applied to
+the `spec` sub-schema in `_tool_input_schema`; packaged schemas untouched
+(pinned by `tests/test_mcp_server.py::test_tools_list_spec_schema_is_structure_only_with_docs_pointer`
++ `::test_packaged_schema_on_disk_keeps_full_descriptions`). F2:
+`cli/_helpers._offload_oversized_refusal` wired into `_err`, experiment dir
+threaded from the three `_dispatch` error sites; battery in
+`tests/cli/test_refusal_offload.py`. F3: `references/` dirs shipped
+(pyproject package-data), splits landed for hpc-submit
+(`nudge-revision.md`, `retarget-anomaly.md`) and hpc-notebook-audit
+(`interview-handoff.md`); the `branch-reference-integrity` lint rule
+(error-severity, fire-path-tested) guards dangling/orphan references. F5:
+`ReadDecisionsInput.digest` + `DecisionRecordDigest`; the default response is
+byte-identical (the `records_digest` key is dropped when absent by the
+model serializer — pinned); the hpc-submit / hpc-status chain-coherence scans
+now pass `digest: true`.
+
+**F4 audit table (the per-field verdicts; re-runnable — the criterion is
+"does a non-test consumer read the structured side, and does the render carry
+the same bytes"):** every markdown/render-bearing Result class is consumed
+in-src only by its own producing op (verified by class-name grep), so the
+verdicts turn on duplication size and out-of-tree utility.
+
+| Result | Verdict |
+|---|---|
+| `NotebookDraftContextResult.template_sections[].source` | **DROPPED** (this wave): the whole template's cell prose rode verbatim in the rows AND the markdown. Rows now carry `source_sha12` (the audit's normalized sha) — identity, verifiable against the render. Renderer takes the bodies separately; the content-keyed cache self-heals (validation-guarded load recomputes an old-shape payload). |
+| `NotebookDryRunResult.sections[]` traceback bodies | **RECORDED FOLLOW-ON**: the per-section traceback tails ride in the rows and the markdown. Same surgery as draft-context (rows keep outcome + counts, bodies stay in markdown). Not done this wave — the rows also carry assert verdicts consumers may want typed; needs its own pass. |
+| `RunStoryResult.events` | **KEPT**: the D3 closed-key event set is the machine-readable story product (identity+ordering+counting atoms); the markdown is its projection. Dropping it would make the render the only projection of a computed (non-persisted) result. |
+| `AttentionQueueResult.items` | **KEPT**: compact per-item metadata (ids, states), not body bytes; the render is a digest of it, not a duplicate. |
+| `EvidenceBriefResult` conclusions/envelopes/activity | **KEPT**: structured evidence rows are the citable product (sha-bearing); render is a projection. |
+| `TraceRenderResult` / `TraceDiffResult` structured fields | **KEPT**: waterfall/lineage/divergence atoms are typed data the render summarizes; not verbatim duplication. |
+| `CiteCheckResult.findings`, `ExtractRecipeResult` rows, `ProgramVerifyResult` rows | **KEPT**: sha-bearing verification rows (the citable half); renders are projections. |
+| `WorkerLogDigestResult.tail` | **RECORDED FOLLOW-ON**: the tail lines ride in `tail` AND inside `render`; small in practice (bounded tail), so low value — fold into the dry-run pass if taken. |
+| `DirDigestResult`, `ChallengeStatusResult`, `ConformanceStatusResult` | **KEPT**: counts/states/histograms — metadata beside the render, no body duplication. |

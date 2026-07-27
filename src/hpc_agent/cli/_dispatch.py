@@ -432,7 +432,7 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     try:
         kwargs = _build_kwargs(name, shape, ns, meta.func)
     except errors.HpcError as exc:
-        return _err_from_hpc(exc)
+        return _err_from_hpc(exc, experiment_dir=getattr(ns, "experiment_dir", None))
 
     if shape.dry_run_arg and getattr(ns, "dry_run", False) and shape.dry_run_passthrough_keys:
         return _emit_dry_run(name, shape, kwargs)
@@ -440,7 +440,7 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     try:
         result = meta.func(**kwargs)
     except errors.HpcError as exc:
-        return _err_from_hpc(exc)
+        return _err_from_hpc(exc, experiment_dir=getattr(ns, "experiment_dir", None))
 
     # A diagnostic primitive that RETURNS its verdict (rather than raising) still
     # needs the CLI to exit non-zero + emit an ok:false envelope when the verdict
@@ -449,7 +449,7 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     if shape.result_error is not None:
         error = shape.result_error(result)
         if error is not None:
-            return _err_from_hpc(error)
+            return _err_from_hpc(error, experiment_dir=getattr(ns, "experiment_dir", None))
 
     data = shape.result_post(result) if shape.result_post is not None else _coerce_result(result)
     _ok(data, name=name)

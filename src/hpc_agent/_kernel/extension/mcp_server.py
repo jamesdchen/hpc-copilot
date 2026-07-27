@@ -691,6 +691,38 @@ def _load_input_schema(basename: str | None) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
+def _strip_schema_descriptions(schema: Any) -> Any:
+    """A deep copy of *schema* with every nested ``description`` string removed.
+
+    The F1 context-footprint trim (``docs/plans/context-footprint-2026-07-27.md``):
+    the packaged spec schemas carry documentation prose in their ``description``
+    fields at every level, and embedding it verbatim in ``tools/list`` makes the
+    catalog a fixed per-session context cost. Calling a tool needs the STRUCTURE
+    (types, ``required``, ``enum``, property names — all preserved untouched);
+    reading the docs is the branch, served in full by ``describe`` / the CLI.
+    Pure — the cached packaged schema object is never mutated.
+    """
+    if isinstance(schema, dict):
+        return {
+            key: _strip_schema_descriptions(value)
+            for key, value in schema.items()
+            if key != "description"
+        }
+    if isinstance(schema, list):
+        return [_strip_schema_descriptions(item) for item in schema]
+    return schema
+
+
+#: The one-line pointer the trimmed ``spec`` property carries in place of the
+#: per-field documentation prose (disclosure, never a silent drop): the full
+#: contract stays behind ``describe`` (a tool in the full/tiered catalogs) and
+#: the CLI everywhere.
+_SPEC_DOCS_POINTER = (
+    "JSON spec object (field docs elided here — full per-field documentation: "
+    "the `describe` tool, or `hpc-agent describe <verb>`)."
+)
+
+
 def _arg_property(arg: Any) -> dict[str, Any]:
     """JSON-Schema property for one :class:`hpc_agent.cli._dispatch.CliArg`."""
     if arg.action in ("store_true", "store_false"):
@@ -722,6 +754,11 @@ def _tool_input_schema(name: str, shape: CliShape) -> dict[str, Any]:
         }
     if shape.spec_arg:
         spec_schema = _load_input_schema(shape.schema_ref.input if shape.schema_ref else None)
+        if spec_schema is not None:
+            # F1 trim: structure stays, per-field prose goes; the top-level
+            # description becomes the disclosed pointer at the full contract.
+            spec_schema = _strip_schema_descriptions(spec_schema)
+            spec_schema["description"] = _SPEC_DOCS_POINTER
         props["spec"] = spec_schema or {"type": "object", "description": "JSON spec object."}
         if shape.spec_required:
             required.append("spec")
