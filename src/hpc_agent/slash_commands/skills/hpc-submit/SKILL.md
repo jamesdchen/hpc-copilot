@@ -1,7 +1,7 @@
 ---
 name: hpc-submit
 description: "Start the submit workflow with the code-driven chain (`block-drive`, first block `submit-s1`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. The blocks ARE the execution (code does SSH, staging, canary, submit, watch, harvest) and code drives the sequencing; this skill never resolves a decision point and never interprets raw results."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 execution: inline
 category: agent-autonomous
 ---
@@ -121,3 +121,11 @@ Fire `submit-speculate` when presenting the S1 brief (step 2 above — the defau
 - **The skill never resolves a decision and never interprets raw results.** Code (the blocks) digests evidence and drafts the brief; the human decides; you relay both directions. This extends the #355 doctrine ("results are never computed by an LLM") from computing to *concluding*: at S4 the code hands over an empty `proposed_interpretations` slot and a results table — the human chooses the interpretation.
 - **`apply-safe-defaults` is dead as a silent actor.** Each S1 ambiguity's old safe-default survives only as a pre-filled `recommendation` inside the brief that the human greenlights or nudges — nothing is auto-applied into the resolved plan.
 - **Every `y`/nudge is journaled**, including each nudge round (append-only, one record per exchange) — so the trail shows the sequence of nudges that shaped the run, not just the endpoint.
+
+## Delegation (hpc-recon)
+
+Read-only recon may run in the `hpc-recon` subagent — a context firewall BESIDE the execution path, never inside it. Rationale, and the whole boundary, in [`docs/design/agent-delegation.md`](../../../../docs/design/agent-delegation.md).
+
+- delegable: the parallel-prep back-half preflight — the `doctor` stalled-driver scan and the `read-decisions` digest chain-coherence check — returned as counts, states, and shas.
+- delegable: detached-run liveness recon via `poll-detached`, advisory input to the session's own next tick.
+- locked: `append-decision` (fused `--approve` or standalone), the `y`/nudge rendezvous, every sign-off and standing consent, and every VERBATIM relay — a render-bearing verb comes back as `render_path` + shas and the session reads and relays the render itself (that doctrine, §2).

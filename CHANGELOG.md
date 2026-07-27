@@ -17,6 +17,40 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — agent reincorporation at the recon-only level (2026-07-27)
+
+Per `docs/plans/agent-delegation-2026-07-27.md` (user-ordered: "reincorporate
+agents on some level, just not the same level that we were doing before"). The
+retired level put an agent INSIDE the execution path; this one puts it only
+BESIDE — a subagent is a **context firewall for read-only reconnaissance**, and
+the verbose transcript (tool schemas, envelopes, render bytes) lives and dies
+in the subagent while the main session gets a compact advisory brief:
+
+- **`hpc-recon`, a read-only core-shipped agent** —
+  `slash_commands/agents/hpc-recon.md`, the first agent core ships since the §6
+  worker removal. `tools: Bash, Read, Grep, Glob` (no `Write`/`Edit` by
+  charter); the body confines `Bash` to `hpc-agent` query/validate verbs and
+  forbids paraphrasing a relay-VERBATIM render — render-bearing verbs come back
+  as `render_path` + shas + counts. The existing `agent_assets`
+  `agents/` walk installs it with zero machinery change.
+- **Per-skill `## Delegation (hpc-recon)` sections + `Task`** on the five
+  workflow skills (`hpc-submit`, `hpc-status`, `hpc-aggregate`, `hpc-campaign`,
+  `hpc-notebook-audit`): one `- delegable:` bullet per handoff naming its verbs,
+  one `- locked:` bullet restating the boundary (`append-decision`, the
+  `y`/nudge rendezvous, sign-off and standing consent, every verbatim relay).
+- **`docs/design/agent-delegation.md`** carries the doctrine and names the
+  retired level as the recorded anti-pattern: **delegation never enters the
+  trust chain** — a subagent's report is model-carried text, worth exactly
+  nothing to the gates, which read journals, stores, and the utterance log. No
+  gate changed, and none needed to; the `hpc-worker` spawn transport stays
+  retired and is not coming back at any level.
+- **`tests/contracts/test_agent_delegation_guidance.py`** mechanizes it: every
+  verb a `- delegable:` bullet names must be `verb=query`/`verb=validate` in the
+  LIVE primitive registry (resolved, never a hand list — a primitive decorated
+  tomorrow is locked today), every section carries its `- locked:` restatement
+  and `Task`, `hpc-recon.md` grants no write tool and keeps the never-paraphrase
+  rule, and a synthetic skill offering `append-decision` is refused.
+
 ### Changed — context-footprint reduction, five levers (2026-07-27)
 
 Per `docs/plans/context-footprint-2026-07-27.md` (user-ordered; the governing

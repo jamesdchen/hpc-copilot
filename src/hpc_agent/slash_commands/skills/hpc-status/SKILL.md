@@ -1,7 +1,7 @@
 ---
 name: hpc-status
 description: "Start the status workflow with the code-driven chain (`block-drive`, first block `status-snapshot`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. Snapshot is a cheap journal-first digest of what is running where and what changed since the human last looked; a live run advances to `status-watch`, a detached blocking poll to terminal or anomaly. The skill never resolves a decision and never interprets raw results."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 execution: inline
 category: agent-autonomous
 ---
@@ -118,3 +118,11 @@ A brief's `monitor_arm` is the code-decided watch cadence (`decide-monitor-arm`)
 - **The skill never resolves a decision and never interprets raw results.** Code digests the status into the brief and drafts the recommendation DATA; the human decides.
 - **Auto-resubmit is never the default.** A failed run surfaces as an anomaly whose recommendation is classify-then-resubmit — the human greenlights it; silent auto-resubmit (re-running the same bug) is not a code path.
 - **Every `y`/nudge is journaled** (append-only, one record per exchange).
+
+## Delegation (hpc-recon)
+
+Read-only recon may run in the `hpc-recon` subagent — a context firewall BESIDE the execution path, never inside it. Rationale, and the whole boundary, in [`docs/design/agent-delegation.md`](../../../../docs/design/agent-delegation.md).
+
+- delegable: the parallel-prep back-half preflight — the `doctor` stalled-driver scan and the `read-decisions` digest chain-coherence check — returned as counts, states, and shas.
+- delegable: detached-run liveness recon via `poll-detached`, advisory input to the session's own next tick; the attention render stays with the session (next bullet).
+- locked: `append-decision`, the `y`/nudge rendezvous, every sign-off and standing consent, and every VERBATIM relay — the attention-queue and worker-terminal renders come back as `render_path` + shas and the session reads and relays them itself (that doctrine, §2).

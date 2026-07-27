@@ -1,7 +1,7 @@
 ---
 name: hpc-notebook-audit
 description: "Drive the notebook-audit prelude: the LLM drafts/revises a percent-format .py source, then the audit loop runs notebook-lint → notebook-auto-clear → notebook-audit-view (relayed VERBATIM) → typed human sign-off via append-decision → notebook-status, until the module passes and the submit pipeline will accept the source. The skill drafts during the prelude but NEVER edits the source during the audit; it never resolves a decision and never interprets the audit view beyond the code-rendered projection."
-allowed-tools: Bash Read Write Edit
+allowed-tools: Bash Read Write Edit Task
 execution: inline
 category: agent-autonomous
 ---
@@ -126,3 +126,11 @@ retro-refuses it. An audit with no net-carrying records is byte-identical to pre
 - **No sign-off verb exists by design** (the no-unlock-verb doctrine): a section is signed through `append-decision` or not at all. Do not hunt for a `notebook-sign-off` verb; there is none.
 - **Every sign-off is journaled** (append-only, one record per exchange) at `.hpc/notebooks/<audit_id>.decisions.jsonl`.
 - **Assertion-bearing sections auto-clear only on a journaled receipt.** `notebook-auto-clear` treats a section that declares `assert`s as green ONLY when an execution receipt for its current hash exists (an unrun assertion is not a passed one). So a section the first auto-clear pass skipped for ungreen assertions needs a receipt: run `notebook-record-receipt` (feeding the `{slug: {output_sha, error}}` your execution produced), then re-run `notebook-auto-clear` and the section clears on the fresh, sha-bound receipt. The optional `hpc-agent-notebook-render` plugin does both in one step — `notebook-render --execute --record_receipts` renders the source, runs it in the current env, and journals a receipt per section — and its `notebook-ingest-signoffs` verb makes a human typing into a rendered sign-off cell a full-strength sign-off with no Claude Code in the loop (the second-conforming-harness role; `docs/design/notebook-audit.md`).
+
+## Delegation (hpc-recon)
+
+Read-only recon may run in the `hpc-recon` subagent — a context firewall BESIDE the audit loop, never inside it. Rationale, and the whole boundary, in [`docs/design/agent-delegation.md`](../../../../docs/design/agent-delegation.md).
+
+- delegable: `notebook-draft-context` digestion — the template slugs, resolved engine signatures, call sites, and root inventory read down to pointers, counts, and `module_sha`s for the drafting step.
+- delegable: `notebook-lint` recon — `findings`, `unverifiable_paths`, and `linked_sources` returned as counts plus their slugs, never masked and never re-phrased.
+- locked: `append-decision`, the `y`/nudge rendezvous, every section and module sign-off and any standing consent, and every VERBATIM relay — the audit view, dry-run, and draft-context renders come back as `render_path` + `view_sha`/`section_sha` and the session reads and relays them itself (that doctrine, §2).

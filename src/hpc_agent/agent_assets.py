@@ -8,8 +8,9 @@ Code's user-global config directory.
 The core asset trees ship as package data inside the
 ``hpc_agent.slash_commands`` subpackage — ``slash_commands/commands/*.md``,
 ``slash_commands/skills/<name>/SKILL.md``, and
-``slash_commands/agents/<name>.md`` (named subagent definitions; core
-ships none since the §6 worker removal — the tree remains for plugins).
+``slash_commands/agents/<name>.md`` (named subagent definitions; core ships
+``hpc-recon`` — the read-only recon re-entry after the §6 worker removal, see
+:func:`_install_tree` — and the tree also carries plugin-shipped agents).
 Optional plugins may ship their own ``commands/`` + ``skills/`` +
 ``agents/`` trees via the ``slash_command_assets`` hook on the
 ``hpc_agent.plugins`` seam; those are installed *after* the core
@@ -1040,9 +1041,12 @@ def _install_tree(
 
     # Named subagent definitions — a flat ``agents/*.md`` tree (same shape
     # as ``commands/``). Claude Code discovers these under
-    # ``~/.claude/agents/``. Core ships none since the §6 worker removal
-    # (the haiku-pinned ``hpc-worker`` went with the spawn transport); the
-    # walk remains so plugins can ship their own agent definitions.
+    # ``~/.claude/agents/``. Core shipped none between the §6 worker removal
+    # (the haiku-pinned ``hpc-worker`` went with the spawn transport) and
+    # ``hpc-recon``, the deliberate re-entry at the RECON-ONLY level: an agent
+    # BESIDE the execution path as a read-only context firewall, never inside
+    # it (``docs/design/agent-delegation.md``). The walk is unchanged — it
+    # installs the core definition and any a plugin ships.
     agents_src = root / "agents"
     if agents_src.is_dir():
         agents_dst = target / "agents"

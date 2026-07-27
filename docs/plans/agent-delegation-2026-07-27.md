@@ -100,4 +100,18 @@ orchestrating session, which owns the commit.
 
 ## Drift log
 
-(open)
+**2026-07-27 — swarm landing + one adjudication (`status-snapshot` OUT of the
+delegable set).** All four implementers landed. Two flagged the same internal
+inconsistency: D1's example list named `status-snapshot` delegable, but it is
+`verb=workflow` in the live registry AND carries an SSH `SideEffect`
+(`reconcile=True` path) — a block that can open a connection is inside the
+execution path, exactly what rule 2 locks; and its numbers are relay-bound
+("never a figure you remember"), so a delegated snapshot would be re-queried
+by the main session anyway. Adjudicated for D4's live-registry rule:
+`status-snapshot` removed from every delegable surface (the four skills'
+bullets, the doctrine's rule-1 list, `hpc-recon.md`'s description) and
+replaced by `poll-detached` (verb=query, local, no SSH). Two recorded
+implementer deviations accepted: the doctrine says "model-pinned" instead of
+the plan's "haiku-pinned" (no model names in files), and `agent_assets.py`'s
+module docstring updated alongside the walk comment (the same now-false fact
+in two places).

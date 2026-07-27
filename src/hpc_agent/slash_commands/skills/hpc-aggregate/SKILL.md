@@ -1,7 +1,7 @@
 ---
 name: hpc-aggregate
 description: "Start the aggregate workflow with the code-driven chain (`block-drive`, first block `aggregate-check`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. Check surfaces readiness + integrity issues (never auto-masked); a clean run advances to `aggregate-run`, the deterministic combine+reduce whose reducer — never the LLM — computes every aggregate number. The skill never resolves a decision and never interprets raw results."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 execution: inline
 category: agent-autonomous
 ---
@@ -79,3 +79,11 @@ A `not_ready` / `integrity_review` check carries `needs_decision: true` — a no
 - **Triage connection failures, never guess them.** On an SSH timeout, `ssh_unreachable`, or `ssh_circuit_open`, run `hpc-agent net-triage` — the bounded, breaker-aware connectivity differential — before concluding a network cause; never diagnose with improvised ssh probes.
 - **Idempotent.** Re-aggregating the same `(run_id, profile, stage)` produces byte-identical output.
 - **Every `y`/nudge is journaled** (append-only, one record per exchange).
+
+## Delegation (hpc-recon)
+
+Read-only recon may run in the `hpc-recon` subagent — a context firewall BESIDE the execution path, never inside it. Rationale, and the whole boundary, in [`docs/design/agent-delegation.md`](../../../../docs/design/agent-delegation.md).
+
+- delegable: the back-half preflight — the `doctor` stalled-driver scan and the `read-decisions` digest chain-coherence check — returned as counts, states, and shas.
+- delegable: detached-run liveness recon via `poll-detached` ahead of the readiness gate, advisory input to the session's own next tick.
+- locked: `append-decision`, the `y`/nudge rendezvous, every sign-off and standing consent, and every VERBATIM relay — the results table and the reducer's numbers come back as `render_path` + shas and the session reads and relays them itself (that doctrine, §2); no subagent ever computes an aggregate.

@@ -1,7 +1,7 @@
 ---
 name: hpc-campaign
 description: "Start the campaign workflow with the code-driven chain (`block-drive`, first block `campaign-greenlight`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. A campaign spec is greenlit ONCE at start; execution then runs fully asynchronously (reconcile ticks self-chain in code) with no per-iteration human boundary — only anomaly briefs and the completion brief. The skill never resolves a decision and never interprets raw results."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 execution: inline
 category: agent-autonomous
 ---
@@ -94,3 +94,11 @@ See [campaign-lifecycle.md](../../../../docs/internals/campaign-lifecycle.md) an
 - **The skill never resolves a decision and never interprets raw results.** Code digests the campaign's durable state (manifest, sidecars, budget join, stop reason) into each brief; the human decides the greenlight, any anomaly, and the final interpretation.
 - **Greenlit once, then asynchronous.** There is no per-iteration human loop by design; async-refill correctness (drain-before-stop, budget headroom) is the driver's job, not a decision the skill relays.
 - **Every `y`/nudge is journaled** under the campaign scope (append-only, one record per exchange) — the greenlight decision, the anomaly acknowledgements, and the completion interpretation.
+
+## Delegation (hpc-recon)
+
+Read-only recon may run in the `hpc-recon` subagent — a context firewall BESIDE the execution path, never inside it. Rationale, and the whole boundary, in [`docs/design/agent-delegation.md`](../../../../docs/design/agent-delegation.md).
+
+- delegable: the back-half preflight — the `doctor` stalled-driver scan and the `read-decisions` digest chain-coherence check — returned as counts, states, and shas.
+- delegable: detached-run liveness recon across the campaign's in-flight runs via `poll-detached`, advisory input to the session's own next tick.
+- locked: `append-decision`, the `y`/nudge rendezvous, the once-only greenlight and any standing consent, and every VERBATIM relay — the evidence digest and completion brief come back as `render_path` + shas and the session reads and relays them itself (that doctrine, §2).
