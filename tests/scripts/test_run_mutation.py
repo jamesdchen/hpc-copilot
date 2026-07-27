@@ -243,30 +243,52 @@ def test_wait_guard_drops_children_mutmut_never_forked():
     returned by ``os.wait()``, but a stray child forked OUTSIDE the guard (a
     covering-test subprocess descendant reparented to the run process) is reaped and
     DROPPED -- never handed back for mutmut's unguarded worker-table lookup. That
-    lookup KeyError is exactly what aborted the consent-hint run on its first reap."""
+    lookup KeyError is exactly what aborted the consent-hint run on its first reap.
+
+    Runs the fork/wait dance in a FRESH subprocess, not in the shared pytest
+    worker process: the guard's drop path ends in a blocking ``real_wait()``
+    that must see NO remaining children to raise ``ChildProcessError``, and a
+    shared xdist worker can carry a live child leaked by an earlier test — in
+    which case that wait blocks until the unrelated child exits (the
+    intermittent 300 s CI timeout this hermetic shape fixes, 2026-07-27).
+    """
     import os
+    import subprocess
+    import sys
 
     if not (hasattr(os, "fork") and hasattr(os, "wait")):
         pytest.skip("POSIX-only (os.fork / os.wait)")
 
-    mod = _load_guarded_launcher()
-    real_fork, real_wait = os.fork, os.wait
-    try:
-        mod.install_wait_guard()  # captures real_fork/real_wait, patches os.fork/os.wait
-        # A genuine mutmut-style worker: forked THROUGH the patched os.fork, so the
-        # guard tracked its pid and returns it verbatim.
-        worker = os.fork()
-        if worker == 0:  # pragma: no cover - child
-            os._exit(0)
-        assert os.wait()[0] == worker  # tracked worker returned; no children remain
-
-        # A stray: forked via the ORIGINAL fork, so the guard never recorded it. The
-        # guarded os.wait() reaps it (no zombie) but drops the pid, then finds no more
-        # children -> ChildProcessError, never returning the stray to the caller.
-        stray = real_fork()
-        if stray == 0:  # pragma: no cover - child
-            os._exit(0)
-        with pytest.raises(ChildProcessError):
-            os.wait()
-    finally:
-        os.fork, os.wait = real_fork, real_wait
+    script = f"""
+import importlib.util, os
+spec = importlib.util.spec_from_file_location(
+    "_mutmut_guarded_run", {str(REPO_ROOT / "scripts" / "_mutmut_guarded_run.py")!r}
+)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+real_fork = os.fork
+mod.install_wait_guard()  # captures real_fork/real_wait, patches os.fork/os.wait
+# A genuine mutmut-style worker: forked THROUGH the patched os.fork, so the
+# guard tracked its pid and returns it verbatim.
+worker = os.fork()
+if worker == 0:
+    os._exit(0)
+assert os.wait()[0] == worker  # tracked worker returned; no children remain
+# A stray: forked via the ORIGINAL fork, so the guard never recorded it. The
+# guarded os.wait() reaps it (no zombie) but drops the pid, then finds no more
+# children -> ChildProcessError, never returning the stray to the caller.
+stray = real_fork()
+if stray == 0:
+    os._exit(0)
+try:
+    os.wait()
+except ChildProcessError:
+    print("OK")
+else:
+    raise SystemExit("guarded os.wait() returned a stray instead of dropping it")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=60
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "OK" in proc.stdout
