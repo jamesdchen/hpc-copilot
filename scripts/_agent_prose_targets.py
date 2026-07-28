@@ -31,6 +31,14 @@ from pathlib import Path
 # authored ``.md`` file today.
 SKILL_GLOB = "hpc_agent/slash_commands/skills/*/SKILL.md"
 
+# Repo-root-relative glob for MAINTAINER skills: dev-loop procedures that are
+# repo-tracked (so they cannot drift like the pre-2026-07-04 untracked
+# ~/.claude copy did) but deliberately NOT packaged — the wheel ships product
+# only (2026-07-28 separation; the ``release`` skill moved here from the
+# package tree). Same lint discipline as the shipped surface: a maintainer
+# skill is still agent-facing prose.
+MAINTAINER_SKILL_GLOB = ".claude/skills/*/SKILL.md"
+
 
 def iter_agent_prose_targets(scan_root: Path) -> list[Path]:
     """Every agent-facing prose file under *scan_root*, sorted.
@@ -39,3 +47,12 @@ def iter_agent_prose_targets(scan_root: Path) -> list[Path]:
     fixture root). Returns only existing files.
     """
     return [p for p in sorted(scan_root.glob(SKILL_GLOB)) if p.is_file()]
+
+
+def iter_maintainer_prose_targets(repo_root: Path) -> list[Path]:
+    """Every repo-level maintainer-skill prose file under *repo_root*, sorted.
+
+    *repo_root* is the repository root (the parent of ``src`` and
+    ``.claude``). Returns only existing files.
+    """
+    return [p for p in sorted(repo_root.glob(MAINTAINER_SKILL_GLOB)) if p.is_file()]

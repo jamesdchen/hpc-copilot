@@ -144,6 +144,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'submit-speculate': ('submit-speculate', 'hpc_agent.ops.submit_speculate'),
     'suggest-setup-action': ('suggest-setup-action', 'hpc_agent.cli.setup_actions'),
     'summarize-submit-plan': ('summarize-submit-plan', 'hpc_agent.ops.submit.plan_summary'),
+    'tag-session': ('tag-session', 'hpc_agent.ops.devx_tag'),
     'trace': ('trace', 'hpc_agent.ops.trace'),
     'trace-diff': ('trace-diff', 'hpc_agent.ops.trace_diff_op'),
     'trace-render': ('trace-render', 'hpc_agent.ops.trace_render_op'),

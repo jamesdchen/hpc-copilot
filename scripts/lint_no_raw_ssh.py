@@ -71,22 +71,29 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _agent_prose_targets import iter_agent_prose_targets  # noqa: E402
+from _agent_prose_targets import (  # noqa: E402
+    iter_agent_prose_targets,
+    iter_maintainer_prose_targets,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 SCAN_ROOT = REPO / "src"
 
 # Cited exemptions: scan-root-relative paths of genuine human-debug docs that
-# must show a raw ssh command. Add an entry only as a reviewed decision, with a
-# comment citing why the throttled verb does not apply.
+# must show a raw ssh command (repo-root-relative for the maintainer-skill
+# surface, whose entries start ``.claude/``). Add an entry only as a reviewed
+# decision, with a comment citing why the throttled verb does not apply.
 ALLOWLIST: frozenset[str] = frozenset(
     {
         # The /release skill is a HUMAN-run release procedure (its contract
         # halts before every outward step). Its Hoffman2 wheel install is a
         # one-off interactive scp/ssh by the human's own session — no
         # autonomous worker executes it, and no throttled verb ships wheels
-        # to a conda env. Ported from ~/.claude/skills/release 2026-07-04.
-        "hpc_agent/slash_commands/skills/release/SKILL.md",
+        # to a conda env. Ported from ~/.claude/skills/release 2026-07-04;
+        # relocated out of the wheel to the repo-level maintainer surface
+        # 2026-07-28 (dev-loop/product separation) — still repo-tracked,
+        # still under this lint.
+        ".claude/skills/release/SKILL.md",
     }
 )
 
@@ -151,15 +158,29 @@ def iter_targets(scan_root: Path) -> list[Path]:
     return iter_agent_prose_targets(scan_root)
 
 
+def _target_pairs(scan_root: Path | None) -> list[tuple[Path, Path]]:
+    """``(path, rel_root)`` per scanned file.
+
+    An explicit *scan_root* (the test-fixture path) scans only that
+    src-shaped root — the pre-existing contract. The default run scans the
+    shipped surface under ``SCAN_ROOT`` plus the repo-level maintainer-skill
+    surface, whose allowlist entries are repo-root-relative (``.claude/...``).
+    """
+    if scan_root is not None:
+        return [(p, scan_root) for p in iter_targets(scan_root)]
+    pairs = [(p, SCAN_ROOT) for p in iter_targets(SCAN_ROOT)]
+    pairs += [(p, REPO) for p in iter_maintainer_prose_targets(REPO)]
+    return pairs
+
+
 def main(scan_root: Path | None = None) -> int:
-    root = scan_root if scan_root is not None else SCAN_ROOT
     failures = 0
-    for path in iter_targets(root):
+    for path, rel_root in _target_pairs(scan_root):
         try:
             # ``as_posix`` so the ALLOWLIST (forward-slash, scan-root-relative)
             # matches on Windows too — ``str(WindowsPath)`` yields backslashes
             # that would never compare equal to a cited entry.
-            rel = path.resolve().relative_to(root.resolve()).as_posix()
+            rel = path.resolve().relative_to(rel_root.resolve()).as_posix()
         except ValueError:
             rel = path.as_posix()
         if rel in ALLOWLIST:

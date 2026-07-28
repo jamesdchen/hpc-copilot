@@ -24,7 +24,7 @@ for upload — the published wheel is rebuilt from the clean CI checkout of the 
 commit. That is what retires the three long-standing release hazards (no token to rotate,
 a creds leak is structurally impossible from a clean checkout, and no stale `build/` can
 poison the sha stamp). Decision record + the one-time human setup:
-[`docs/internals/release-pipeline.md`](../../../../docs/internals/release-pipeline.md).
+[`docs/internals/release-pipeline.md`](../../../docs/internals/release-pipeline.md).
 
 This is a **human-run** release procedure: the ssh/scp/`python -c` idioms below are
 executed by the human's interactive session, not by an autonomous worker (cited in

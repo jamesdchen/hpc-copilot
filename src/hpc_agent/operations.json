@@ -458,6 +458,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent tag-session --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "tag_session.input.json",
+    "name": "tag-session",
+    "output_schema": "tag_session.output.json",
+    "python": "hpc_agent.ops.devx_tag.tag_session",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Append one opaque devx tag record ({tags, note?, session_id?, run_id?}, ts stamped at append) to the per-experiment .hpc/devx/session_tags.jsonl ledger - the one dev-loop seam the product ships (2026-07-28 separation). Marks this session as data for the maintainer's dev loop to ingest: friction noticed, a good specimen, a tool gap. Tags and note are OPAQUE to core and inert inside the product - nothing reads them back to change behavior, no gate or journal consumes them. Pure local flock-append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "update_run_constraints.input.json",

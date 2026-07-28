@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/tag_session.output.json",
+  "title": "tag-session output data",
+  "description": "Echo of the appended record plus the ledger location.",
+  "type": "object",
+  "required": [
+    "path",
+    "record",
+    "count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "Absolute path of the session-tag ledger the record was appended to.",
+      "title": "Path",
+      "type": "string"
+    },
+    "record": {
+      "additionalProperties": true,
+      "description": "The record as written (ts stamped at append time, UTC ISO-8601) — echoed so the session can relay exactly what the ledger now holds.",
+      "title": "Record",
+      "type": "object"
+    },
+    "count": {
+      "description": "Total parseable records in the ledger after the append.",
+      "title": "Count",
+      "type": "integer"
+    }
+  }
+}

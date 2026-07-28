@@ -17,6 +17,37 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Changed — dev-loop/product separation: the wheel ships product only (2026-07-28)
+
+User-ordered: "the wheel build should not have dev loop stuff except for
+tagging sessions for devx to ingest as data." Most of the dev loop already
+lived repo-side (`scripts/`, `docs/plans/`, `.claude/workflows/` — never
+packaged); this lands the two pieces that weren't:
+
+- **The `release` skill moved out of the wheel** — from
+  `src/hpc_agent/slash_commands/skills/release/` to the repo-level
+  maintainer surface `.claude/skills/release/`. It stays repo-tracked (the
+  pre-2026-07-04 untracked-copy drift cannot return) and stays under the
+  agent-prose lints: `scripts/_agent_prose_targets.py` gains
+  `MAINTAINER_SKILL_GLOB`, both content lints scan it in default runs, and
+  their ALLOWLIST entries repoint. `lint_skill_command_sync` drops the
+  `release` allowance (no longer on the shipped surface). The installer's
+  `internal: true` skip (bug-sweep #58) stays live for plugin trees, its
+  fire path now synthetic
+  (`tests/cli/test_agent_assets_settings_permissions.py::test_install_tree_skips_an_internal_skill`).
+- **`tag-session`, the one devx seam the product keeps** — a small `mutate`
+  verb (`ops/devx_tag.py`, substrate `state/devx_tags.py`): append one
+  opaque record (`{tags, note?, session_id?, run_id?}`, ts stamped) to the
+  per-experiment `.hpc/devx/session_tags.jsonl` flock-append ledger, for
+  the maintainer's repo-side tooling to ingest. Deliberately inert inside
+  the product: nothing reads a tag back to change behavior — no gate,
+  journal, or decision path consumes it, so it can launder nothing.
+- **The boundary mechanized** —
+  `tests/contracts/test_wheel_product_boundary.py`: no internal/maintainer-
+  flagged skill in the shipped tree (checker = the installer's own
+  `_skill_is_internal`, with its own fire paths), and the relocated
+  maintainer surface provably covered by the prose lints' scan.
+
 ### Changed — delegation reworked: plan-driven relay joins the context firewall (2026-07-28)
 
 User-ordered ("the context firewall is good, but I feel like the dynamic

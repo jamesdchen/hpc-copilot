@@ -96,10 +96,12 @@ SKILL_ONLY_OK: set[str] = {
     # under observation, claim-check compare, relay the code render. No paired
     # user-typed slash in v1.
     "hpc-claim-check",
-    # Human-run release procedure (tracked here since 2026-07-04 so it lives
-    # under the repo lints; formerly an untracked ~/.claude/skills copy that
-    # drifted). No paired slash — invoked as /release via install-commands.
-    "release",
+    # The human-run ``release`` procedure is deliberately ABSENT: it moved to
+    # the repo-level maintainer surface (``.claude/skills/release/``,
+    # 2026-07-28 dev-loop/product separation) — outside the wheel and outside
+    # this shipped-surface pairing check, but still repo-tracked and still
+    # scanned by the agent-prose lints (see
+    # scripts/_agent_prose_targets.py::MAINTAINER_SKILL_GLOB).
 }
 
 # Slash-command files allowed to have no skill counterpart. Empty
