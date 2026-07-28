@@ -9,7 +9,7 @@ assertion names the mutation it kills; red-then-green before green-only; sensiti
 checks; **guard-can-fire** (a guard test must actually be able to trip the guard);
 seam/integration tests for cross-unit dataflow; **consequence-ranked** targeting
 (don't chase kill-rate uniformly — spend where a silent wrong-path is expensive).
-The **false-survivor lesson** (from `mutation-triage-2026-07-17.md`) governs the
+The **false-survivor lesson** (from `docs/history/plans/mutation-triage-2026-07-17.md`) governs the
 classification: *a survivor — or an apparently-untested module — is only a real gap
 after checking it against the FULL covering set, not a single scoped file.* Several
 modules in this map look dark by an import grep but are exercised end-to-end through a
@@ -65,7 +65,7 @@ Per-verb behavior boundaries (input/output envelope + refusal paths):
 (The **`publication_bundle`** boundary battery is landing via a concurrent
 feature agent — see git status `tests/contracts/test_publication_bundle_boundary.py`.)
 
-### 1c. The three sweep-gap pins (from `mutation-triage-2-2026-07-17.md` drift log)
+### 1c. The three sweep-gap pins (from `docs/history/plans/mutation-triage-2-2026-07-17.md` drift log)
 
 Mutation-verified red-then-green against faithful mutated copies (no src touched):
 
@@ -228,7 +228,7 @@ be produced by the repaired mutation workflow, not asserted.
 
 ### Preconditions (already landed — verify, don't rebuild)
 
-Per `mutation-triage-2-2026-07-17.md` drift log, the curated regression is **fixed**
+Per `docs/history/plans/mutation-triage-2-2026-07-17.md` drift log, the curated regression is **fixed**
 (commit `fb481044`, in `62cb0a5a`): relative `paths_to_mutate` restored, per-module
 chdir deselects, `mutmut==3.6.0` pinned, curated tripwire gating on `killed+survived>0`,
 describe-cache baseline skip. **But the fixed re-dispatch is still OWED** — the last
@@ -245,7 +245,7 @@ recorded run (`29601496071`) executed the *pre-fix* curated matrix (all 10 dark)
    lesson). New keys: `signoff`, `challenge`, `consent-commit`, `run-record`,
    `executor-guard`, `data-manifest`, `ssh-circuit`, `cli-dispatch`.
 3. **Compare genuine-survivor count per module vs the 2026-07-17 baselines:**
-   - Sweep baseline (`mutation-triage-2-2026-07-17.md`, run `29601496071`):
+   - Sweep baseline (`docs/history/plans/mutation-triage-2-2026-07-17.md`, run `29601496071`):
      `submit_flow` 37% kill-of-covered, `aggregate_flow` 21%, `transport/__init__` 43%,
      `_pull` 61%, `_combiner` 59%. Target: sweep genuine survivors triaged, not
      necessarily zero (SSH-bound survivors are scoping artifacts by construction).

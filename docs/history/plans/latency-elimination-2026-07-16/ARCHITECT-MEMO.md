@@ -140,7 +140,7 @@ Each landing unit owes its row(s) in `engineering-principles.md`'s enforcement m
 
 ## Drift log
 
-- 2026-07-16 late: units 3.2/3.3 (daemon) SUPERSEDED by docs/plans/daemon-engineering-2026-07-16/ (the R4 "fully engineer this" ruling; full design + 4-lens premortem + DW0-DW3 decomposition live there).
+- 2026-07-16 late: units 3.2/3.3 (daemon) SUPERSEDED by docs/history/plans/daemon-engineering-2026-07-16/ (the R4 "fully engineer this" ruling; full design + 4-lens premortem + DW0-DW3 decomposition live there).
 
 ## Drift log addendum — 2026-07-16 late rulings
 

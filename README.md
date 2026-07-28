@@ -285,7 +285,7 @@ The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The fram
 
 Two primitives — `interview` and `recall` — close the loop between consecutive campaigns. The interview agent (Claude Code or any external orchestrator) persists structured intent (`goal`, `task_count`, `budget`, `abort_if`, `task_generator`, `cluster_target`, `transcript`, provenance) into `<campaign_dir>/interview.json` next to the materialized `tasks.py`. The next interview calls `recall --root <experiments-dir>` to query past intents, returning recency-sorted summaries plus a 3-tier rollup (counts/histograms/quantiles, optional walltime aggregation, optional per-generator parameter envelopes). Observed ranges only — reasoning over them stays in the calling agent.
 
-See [`docs/workflows/memory-across-campaigns.md`](docs/workflows/memory-across-campaigns.md) for the full flow, including the `task_generator` typed materializer (5 shapes: `enumerated`, `cartesian_product`, `items_x_seeds`, `numeric_logspace`, `numeric_linspace`) and the `~/.hpc-agent/config.json:experiment_roots` default-root config.
+See [`docs/internals/memory-across-campaigns.md`](docs/internals/memory-across-campaigns.md) for the full flow, including the `task_generator` typed materializer (5 shapes: `enumerated`, `cartesian_product`, `items_x_seeds`, `numeric_logspace`, `numeric_linspace`) and the `~/.hpc-agent/config.json:experiment_roots` default-root config.
 
 ### Throughput Optimization
 
@@ -305,7 +305,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 | `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs. Carries an escalation playbook covering entry-point onboarding, axis classification, and axes-init dialogs. |
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |
-| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. Carries the validate-campaign findings interpretation guide. See [`docs/workflows/campaign.md`](docs/workflows/campaign.md). |
+| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. Carries the validate-campaign findings interpretation guide. See [`docs/internals/campaign.md`](docs/internals/campaign.md). |
 
 Setup is a CLI step, not a slash: run `hpc-agent setup --cluster <name>` once per machine + cluster (see Quick Start above). Each preflight check's `detail` field carries actionable remediation prose.
 

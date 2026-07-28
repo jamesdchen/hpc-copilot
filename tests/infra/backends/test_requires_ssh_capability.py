@@ -1,7 +1,7 @@
 """Tests for the ``requires_ssh`` capability + ``fetch_results`` / ``fetch_logs`` hooks.
 
 Pure-API ("crowd-compute") backend support
-(``docs/proposals/crowd-compute-backend.md``) branches the submit / preflight /
+(``docs/design/crowd-compute-backend.md``) branches the submit / preflight /
 monitor / aggregate flows on a backend's ``requires_ssh`` class attribute rather
 than re-parsing the scheduler name. These tests pin the base-class default, the
 built-in ladder's value, the ``backend_requires_ssh`` accessor (which reads the

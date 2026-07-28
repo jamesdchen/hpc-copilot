@@ -15,8 +15,12 @@ from pathlib import Path
 import scripts.check_handoff_disjointness as chk
 
 REPO = chk.REPO
-LATENCY = REPO / "docs" / "plans" / "latency-elimination-2026-07-16" / "unit-specs.json"
-DAEMON = REPO / "docs" / "plans" / "daemon-engineering-2026-07-16" / "unit-specs.json"
+# The two real packages executed and moved to docs/history/plans/ (2026-07-28
+# docs reorg). They remain the real-world fixtures for the verdict pins below
+# (check_spec_file takes an explicit path), but live discovery only walks
+# docs/plans/, so they are no longer discovered.
+LATENCY = REPO / "docs" / "history" / "plans" / "latency-elimination-2026-07-16" / "unit-specs.json"
+DAEMON = REPO / "docs" / "history" / "plans" / "daemon-engineering-2026-07-16" / "unit-specs.json"
 
 
 def _write(tmp_path: Path, specs: dict) -> Path:
@@ -203,10 +207,13 @@ def test_fully_disjoint_package_is_green(tmp_path: Path) -> None:
 def test_template_dir_is_skipped_by_discovery() -> None:
     found = chk.discover_spec_files(REPO)
     assert not any("_TEMPLATE" in p.parent.name for p in found)
-    # The two real packages ARE discovered.
+    # Discovery walks LIVE packages only (docs/plans/); the executed packages
+    # under docs/history/plans/ are out of its scope by construction.
     names = {p.parent.name for p in found}
-    assert "latency-elimination-2026-07-16" in names
-    assert "daemon-engineering-2026-07-16" in names
+    assert "latency-elimination-2026-07-16" not in names
+    assert "daemon-engineering-2026-07-16" not in names
+    # The historical fixtures the verdict pins rely on still exist on disk.
+    assert LATENCY.is_file() and DAEMON.is_file()
 
 
 # --------------------------------------------------------------------------- #

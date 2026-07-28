@@ -1,6 +1,6 @@
 """CI lint: a durable artifact must not be written with a truncating open.
 
-Generator G12 of ``docs/plans/upstream-fixes-2026-07.md``
+Generator G12 of ``docs/history/plans/upstream-fixes-2026-07.md``
 ("bare-writes-vs-one-atomic-discipline"): four independent torn-write bugs
 (#42 dossier zip, #52 pack manifest, #57 external ``settings.json`` /
 ``.claude.json``, #61 ``experiment_meta.json`` pin) all rewrote a *durable*

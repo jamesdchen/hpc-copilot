@@ -54,7 +54,7 @@ partition its task range **refuses** ("arm grouping not declared; final harvest
 only") rather than guess a grouping and risk emitting a half-drained arm's wrong
 `n`. A parent with no per-task census (pre-announce run / dispatcher not started)
 refuses; **zero** complete arms refuses with the pending arms named. See
-`docs/plans/streaming-aggregate-2026-07-16.md` §8 for the task→arm join invariant.
+`docs/history/plans/streaming-aggregate-2026-07-16.md` §8 for the task→arm join invariant.
 
 ## Input
 

@@ -1,6 +1,6 @@
 """Behaviour-pinning coverage for :mod:`hpc_agent.state.attestation`.
 
-The 2026-07-17 mutation triage-2 (``docs/plans/mutation-triage-2-2026-07-17.md``)
+The 2026-07-17 mutation triage-2 (``docs/history/plans/mutation-triage-2-2026-07-17.md``)
 found the curated matrix ran DARK — attestation produced zero mutation verdicts,
 so nothing confirmed which surviving boundary/operator/default mutants the suite
 actually kills. attestation is the recompute-lock kernel every trusted record

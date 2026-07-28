@@ -1,68 +1,30 @@
-# hpc-agent docs
+# hpc-agent docs — the map
 
-Navigation map for the docs tree.
+One root per kind of document. A new doc must fit an existing root below —
+if it doesn't, the reorg conversation comes first, not a new directory.
+
+| Root | Admission rule |
+|---|---|
+| [`architecture.md`](architecture.md) | The single top-level overview — layered-DAG map of the package (roles, dependency order). |
+| [`design/`](design/) | Why it is this way: per-feature design rationale + drift logs (one file per feature). `design/history/` holds superseded design plans kept for provenance. |
+| [`internals/`](internals/) | How it is, for maintainers: subsystem deep-dives, operator workflow guides ([`internals/workflows.md`](internals/workflows.md)), recipes, audits. Operational-truth surface — contract pins (`tests/contracts/_doc_scan.py`) verify its script/path/count references stay live. |
+| [`internals/principles/`](internals/principles/) | The engineering-principles sections indexed by [`internals/engineering-principles.md`](internals/engineering-principles.md); the index's section listing is GENERATED (`scripts/regen_all.py`). |
+| [`primitives/`](primitives/) | One file per primitive. Frontmatter + the README catalog table are REGENERATED (`scripts/regen_all.py --write`) — never hand-edit those; the body below the closing `---` is hand-written. |
+| [`generated/`](generated/) | Whole-file REGENERATED artifacts — never hand-edit; edit the source the regen reads. |
+| [`plans/`](plans/) | Live or BANKED work only: plans not yet executed, banked rulings, the live backlog, runsheets not yet run, and the `_TEMPLATE-handoff/` scaffolding. |
+| [`history/`](history/) | Executed plans and fossils: `history/plans/` holds plan docs whose work has landed, finished sweeps/triages/audits, run runsheets, and retired handoff packages. Never retro-edited. |
+| [`changelog/`](changelog/) | Released history — verbatim CHANGELOG entries older than the current minor series. |
+| [`integrations/`](integrations/) | External integrator contract ([`integrations/CONTRACT.md`](integrations/CONTRACT.md)) — the wire surface other harnesses compose against. |
+| [`reference/`](reference/) | Agent-facing wire contracts: CLI envelope, Python API, config precedence, env vars, reducer contract, scheduler states. |
 
 ## Where to start
 
-- **New here?** Read the root [`README.md`](../README.md) first; it covers the overall architecture and the human / agent quick starts.
-- **Integrating from another agent harness?** [`integrations/CONTRACT.md`](integrations/CONTRACT.md).
-- **Building a campaign loop?** [`workflows/campaign.md`](workflows/campaign.md).
-- **Want the wire contract?** [`reference/cli-spec.md`](reference/cli-spec.md).
-- **Looking up a specific primitive?** [`primitives/`](primitives/) — one file per primitive, indexed at [`primitives/README.md`](primitives/README.md).
+- **New here?** The root [`README.md`](../README.md) — architecture and the human/agent quick starts.
+- **Integrating from another harness?** [`integrations/CONTRACT.md`](integrations/CONTRACT.md).
+- **Building a campaign loop?** [`internals/campaign.md`](internals/campaign.md).
+- **Looking up a primitive?** [`primitives/README.md`](primitives/README.md).
 
-## Layout
-
-```
-docs/
-├── README.md                  (this file)
-├── architecture.md            layered-DAG overview of the package (roles, dependency order)
-├── integrations/              integrator-facing contract
-│   └── CONTRACT.md                  wire surface external harnesses compose against
-├── workflows/                 multi-primitive flows + integration patterns
-│   ├── memory-across-campaigns.md   interview → recall feedback loop
-│   ├── campaign.md                  closed-loop iteration
-│   └── migration-from-hpc-yaml.md   one-time migration recipe
-├── reference/                 wire contracts; agent-facing
-│   ├── cli-spec.md                  envelope shape, exit codes, error_codes
-│   ├── python-api-contract.md       Python API + sidecar schema
-│   ├── agent-surface.md             what the agent sees
-│   ├── boundary-contract.md         producer/consumer guarantees
-│   ├── config-precedence.md         config-resolution order
-│   └── reducer-contract.md          on-cluster output conventions
-├── design/                    per-feature design notes + drift logs (one file per feature)
-│   └── history/                     superseded design plans, kept for provenance
-├── internals/                 subsystem deep-dives
-│   ├── README.md                          index
-│   ├── adding-a-primitive.md              recipe
-│   ├── regen-debt-ledger.md               outstanding "rebake at merge" regen debt
-│   └── sync-checklist.md
-├── primitives/                hybrid: frontmatter auto-generated, body hand-written
-│   ├── README.md              indexed catalog (table is auto-regenerated)
-│   └── *.md                   one per primitive
-├── proposals/                 pre-design proposals still under discussion
-├── plans/                     multi-session work plans + whole-repo architecture reviews
-├── runbooks/                  operator runbooks (live-verification recipes)
-├── changelog/                 per-version release notes
-└── generated/                 whole-file auto-generated; do not edit by hand
-    └── operations.md          `hpc-agent capabilities` rendered as markdown
-```
-
-## What's auto-generated vs hand-written
-
-Three categories. Visible signals where they exist:
-
-| Location | Auto | Hand | Regenerator |
-|---|---|---|---|
-| `generated/*.md` | whole file | none | `scripts/build_operations_index.py` |
-| `primitives/README.md` | catalog table (between BEGIN/END markers) | prose around it | `scripts/build_primitive_index.py` |
-| `primitives/<name>.md` | YAML frontmatter (between `---` fences) | body below the closing `---` | `scripts/build_primitive_frontmatter.py` |
-| Everything else | none | full file | n/a |
-
-CI gates:
-- `python scripts/build_operations_index.py --check`
-- `python scripts/build_primitive_index.py --check`
-- `python scripts/build_primitive_frontmatter.py --check`
-
-If you edit auto-generated content (whole file or marker-bounded section), the next CI run will fail and your edits will be clobbered on regeneration. Edit the source instead — the registry decorator, the schema, or the frontmatter the regen reads.
-
-Regen across concurrent design waves runs serially, so a wave may land its code with the actual rebake deferred. Those deferrals are tracked in one place — [`internals/regen-debt-ledger.md`](internals/regen-debt-ledger.md).
+Regen gate: `python scripts/regen_all.py --check` (CI) — if you edited
+generated content by hand it will fail and your edit will be clobbered on the
+next `--write`. Deferred rebakes are tracked in
+[`internals/regen-debt-ledger.md`](internals/regen-debt-ledger.md).

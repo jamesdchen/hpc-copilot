@@ -2,7 +2,7 @@
 
 **Author:** triage session, 2026-07-17. **Status:** second triage; first run on the
 REPAIRED harness (Units A–E, committed `e86f2d92`, pushed in `62cb0a5a`).
-**Deliverable:** this memo. **Predecessor:** `docs/plans/mutation-triage-2026-07-17.md`
+**Deliverable:** this memo. **Predecessor:** `docs/history/plans/mutation-triage-2026-07-17.md`
 (run `29560911639`), whose taxonomy (TEST-GAP / EQUIVALENT-MUTANT / LOW-VALUE) and
 **false-survivor lesson** (a survivor is only a gap after checking it against the
 FULL covering set, not the scoped `tests_dir`) are applied throughout.

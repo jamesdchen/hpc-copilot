@@ -30,6 +30,8 @@ notes, recipes for adding internals, and architecture deep-dives. They are
 | [`sandbox-proving-run.md`](sandbox-proving-run.md) | The rung-2 lane between hermetic tests and live proving runs — the jurisdiction ladder, the trust doctrine (gates never bypassed; ephemeral journal namespaces only), what a sandbox run can NEVER certify, and the 2026-07-18 snag-traceability table. Normative jurisdiction for the planned sandbox-proving units. |
 | [`dossier-archival.md`](dossier-archival.md) | The `archive-dossier` verb's object-store posture — client-side integrity chain, the bucket-side Object-Lock immutability a human configures once, and the credential model. |
 | [`fallback-inventory.md`](fallback-inventory.md) | A point-in-time audit of every `src/hpc_agent/` site that degrades to an alternate path — the DISCLOSES/REFUSES/SILENT/JUSTIFIED-SILENT classification, the ranked SILENT list, and the proposed narrow disclosure lint. |
+| [`workflows.md`](workflows.md) | Index of the operator workflow guides (`campaign.md`, `memory-across-campaigns.md`, `migration-from-hpc-yaml.md`, `code-driven-orchestration.md`) — folded in from the former `docs/workflows/` in the 2026-07-28 docs reorg — and how they pair with skills and `architecture.md`. |
+| [`campaign-async-live-verify.md`](campaign-async-live-verify.md) | Operator runbook: the live-cluster verification gate (RFC §10) that flips campaign async-refill from "experimental" to "shipped" — acceptance criteria and the measurement-aid script. |
 
 ## When to add a doc here
 

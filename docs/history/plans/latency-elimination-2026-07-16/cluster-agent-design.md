@@ -328,5 +328,5 @@ row does not apply.
   is a follow-on gated on unit 2.6 (WS-PUSH) cluster-scale telemetry. Carries the
   two doctrine mandates verbatim, the digest schema, the degrade ladder, and the
   restated row-11 owed at build. Rulings context: R1(+D1)/R2/R3(+sha pin)/R5
-  APPROVED; R4 amended (daemon superseded by `docs/plans/daemon-engineering-2026-07-16/`);
+  APPROVED; R4 amended (daemon superseded by `docs/history/plans/daemon-engineering-2026-07-16/`);
   R6 defer, R7 deny/defer.

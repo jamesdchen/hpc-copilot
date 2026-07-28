@@ -117,7 +117,7 @@ works however it works — no step-by-step ceremony, no approval between
 edits. The workflow constrains the *seams* (what files, one commit, no
 push), never the process inside them. The same holds one level up: nothing
 here runs until a human greenlights a package, and the one-off ancestor
-scripts in `docs/plans/handoff-packages-2026-07-12/` are proof the system
+scripts in `docs/history/plans/handoff-packages-2026-07-12/` are proof the system
 tolerates bespoke runs — the saved workflow amortizes a shape that already
 worked three times; it does not mandate it.
 

@@ -28,5 +28,5 @@ None.
 - ``unported_kinds`` (sorted list of str) — kinds on the punch list.
 - ``n_ported`` (int) / ``n_total`` (int) — convenience counts.
 
-See ``docs/proposals/recovery-registry.md`` for the design + migration
+See ``docs/design/recovery-registry.md`` for the design + migration
 plan.

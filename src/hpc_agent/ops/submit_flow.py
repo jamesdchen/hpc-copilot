@@ -468,7 +468,7 @@ def _run_shared_prelude(
     # rsync (the runner fetches code itself, e.g. via actions/checkout). The
     # whole prelude IS the SSH/shared-FS gate, so skip it wholesale; the
     # backend's own _execute_command dispatches over its API
-    # (docs/proposals/crowd-compute-backend.md). Branching here, not at the call
+    # (docs/design/crowd-compute-backend.md). Branching here, not at the call
     # site, keeps the prelude the single owner of the pre-submit gate.
     if not requires_ssh:
         return

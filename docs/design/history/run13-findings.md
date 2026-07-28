@@ -33,7 +33,7 @@ the four unchanged sections re-hash to their previously signed shas; only
 feature-construction needs a fresh sign-off.
 
 Fix direction (RULED 2026-07-15, proper-fix-only; superseded by the
-fable-sweep handoff — docs/plans/fable-sweep-devx-2026-07-15/): the principled signal
+fable-sweep handoff — docs/history/plans/fable-sweep-devx-2026-07-15/): the principled signal
 is the derivation edge, not receipt bindings — rv's manifest `derived_from`
 names the quant skeleton sha, i.e. the derived (more specific) template is
 the program pack and should win. Candidate rule: among audit_template

@@ -533,7 +533,7 @@
       "wave": 5,
       "title": "WS-AGENT: cluster-side campaign agent DESIGN DOC + digest schema (docs only; build is a follow-on program)",
       "claims": ["restructure.cluster-campaign-agent"],
-      "files": ["docs/plans/latency-elimination-2026-07-16/cluster-agent-design.md (new)"],
+      "files": ["docs/history/plans/latency-elimination-2026-07-16/cluster-agent-design.md (new)"],
       "forbidden_files": ["src/**"],
       "design_constraints": [
         "SHIP the real hpc_agent reducer on-node (one-definition — never a stdlib reimplementation of combine); lifecycle kill at campaign-complete; install ladder degrades to today's polling; informed by WS-PUSH telemetry.",

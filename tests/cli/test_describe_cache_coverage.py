@@ -1,6 +1,6 @@
 """Behaviour-pinning coverage for :mod:`hpc_agent.state.describe_cache`.
 
-The 2026-07-17 mutation triage-2 (``docs/plans/mutation-triage-2-2026-07-17.md``)
+The 2026-07-17 mutation triage-2 (``docs/history/plans/mutation-triage-2-2026-07-17.md``)
 found describe-cache among the curated modules that ran DARK — it aborted the
 mutation baseline outright (Finding #1b), so NOTHING confirmed which surviving
 boundary/operator/constant mutants the suite kills. describe-cache is a

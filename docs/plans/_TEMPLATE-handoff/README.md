@@ -37,9 +37,9 @@ Run the checker before dispatching a wave:
 
 ## Precedents (read these — the template is distilled from them)
 
-- `docs/plans/handoff-packages-2026-07-12/` — origin of the ARCHITECT-MEMO form
+- `docs/history/plans/handoff-packages-2026-07-12/` — origin of the ARCHITECT-MEMO form
   (memo + HANDOFF.md; predates the JSON twin).
-- `docs/plans/latency-elimination-2026-07-16/` — memo + first `unit-specs.json`
+- `docs/history/plans/latency-elimination-2026-07-16/` — memo + first `unit-specs.json`
   (integer waves; adds `claims` + `enforcement_map_rows`).
-- `docs/plans/daemon-engineering-2026-07-16/` — memo + `unit-specs.json` with
+- `docs/history/plans/daemon-engineering-2026-07-16/` — memo + `unit-specs.json` with
   string waves (`DW0`…`DW3-rungN`) and `merge_risk`; the schema this template pins.

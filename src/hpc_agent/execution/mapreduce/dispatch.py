@@ -262,7 +262,7 @@ def _touch_run_terminal_marker(announce_root, run_id):
 def _ensure_announce_dir(announce_root, run_id):
     """Best-effort EAGER creation of the per-run announce dir at run START.
 
-    Rank 6 (``docs/plans/latency-audit-2026-07-15``): the client's one-readdir
+    Rank 6 (``docs/history/plans/latency-audit-2026-07-15``): the client's one-readdir
     announce census keys its ``present`` capability signal off this directory
     EXISTING. Historically the dir was born on the FIRST terminal marker, so the
     whole window between submit and the first task finishing (queue wait plus the

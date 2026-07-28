@@ -7,7 +7,7 @@ SOUND-WITH-CHANGES; the mandated changes are folded into the unit contracts
 below. Full per-unit specs (files, design calls, hazards, test plans,
 premortem attacks) live in **`sweep-results.json`** in this directory —
 each dispatch brief is authored from this memo + that unit's JSON entry.
-Precedent: `docs/plans/handoff-packages-2026-07-12/` (file-disjoint units,
+Precedent: `docs/history/plans/handoff-packages-2026-07-12/` (file-disjoint units,
 no-commit-of-generated protocol, integrator merge order).
 
 ## Frozen seams — settled HERE, before any dispatch (do not re-litigate)

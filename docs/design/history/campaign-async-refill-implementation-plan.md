@@ -50,7 +50,7 @@ ticks, disk-as-truth, harness-agnostic. Two prior in-process self-driving shapes
 crash-safety (`docs/internals/campaign-lifecycle.md`), and the repo explicitly flags
 "driver-invoking-driver" as a recursion hazard. **Building a self-re-exec daemon is the wrong
 thing.** The narrow re-arm-on-timeout helper (deferred item #4 in
-`docs/workflows/code-driven-orchestration.md`) matters only for a *no-`/loop`* detached mode —
+`docs/internals/code-driven-orchestration.md`) matters only for a *no-`/loop`* detached mode —
 it is an **optional follow-up**, out of scope here.
 
 ### 3. Live gate → mechanism + unit tests + a scripted runbook

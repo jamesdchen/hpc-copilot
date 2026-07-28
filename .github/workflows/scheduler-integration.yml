@@ -10,7 +10,7 @@
 # specific site's login profile.
 #
 # A third job, sandbox-proving (plan U7, rung 2 —
-# docs/plans/sandbox-proving-run-2026-07-18.md), reuses the SAME slurm
+# docs/history/plans/sandbox-proving-run-2026-07-18.md), reuses the SAME slurm
 # container to drive the FULL block loop (block-drive -> S1 walk+resolve ->
 # fused greenlights -> S2 stage+canary -> S3 submit+watch -> S4 harvest) via
 # scripts/run_sandbox_proving.py, after slurm-smoke has proven the cluster
@@ -393,7 +393,7 @@ jobs:
         run: docker rm -f sgeci || true
 
   # The rung-2 sandbox proving lane (plan U7 —
-  # docs/plans/sandbox-proving-run-2026-07-18.md): the SAME slurm container
+  # docs/history/plans/sandbox-proving-run-2026-07-18.md): the SAME slurm container
   # build as slurm-smoke, but instead of the flow atoms it drives the FULL
   # block loop the way a harness does (block-drive fresh-start -> S1
   # walk+resolve -> fused greenlights -> S2 stage+canary -> S3 submit+watch

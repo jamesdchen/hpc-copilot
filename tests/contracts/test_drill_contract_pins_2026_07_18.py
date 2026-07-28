@@ -1,6 +1,6 @@
 """Plan-unit U5 — the 2026-07-18 drill's class-1 snags as permanent hermetic pins.
 
-``docs/plans/sandbox-proving-run-2026-07-18.md`` §4-U5: encode the five class-1
+``docs/history/plans/sandbox-proving-run-2026-07-18.md`` §4-U5: encode the five class-1
 snags of the 2026-07-18 drill attempt (the ones an autonomous sandbox run would
 have eaten silently) as regression assertions. Every test docstring carries the
 incident date.

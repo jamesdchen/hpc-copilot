@@ -37,5 +37,5 @@ re-embedding the literal options — the single chokepoint that keeps
 - ``spec_invalid`` — kind is not in the registry. The message lists
   the available kinds so the caller can recover.
 
-See ``docs/proposals/recovery-registry.md`` for the design + migration
+See ``docs/design/recovery-registry.md`` for the design + migration
 plan.
