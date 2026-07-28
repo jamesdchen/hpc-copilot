@@ -126,15 +126,25 @@ _PUSH_MANIFEST_TMP_REL: Final[str] = _PUSH_MANIFEST_REL + ".tmp"
 #: the final seal, all AFTER the snippet) owns ``paths``/``pkg_version`` and must
 #: not clobber ``entries`` or the NEXT push's snippet loses its cache. It reads
 #: the payload (``{paths, pkg_version, manifest_schema}``, base64 in
-#: ``HPC_PM_PAYLOAD``), folds in any existing ``entries`` list, and swaps
+#: ``HPC_PM_PAYLOAD`` — or, when that env var is absent/empty, from **stdin**),
+#: folds in any existing ``entries`` list, and swaps
 #: atomically (temp + ``os.replace``) — the same crash-safety the shell ``mv``
 #: gave, so a severed connection can never leave a corrupt manifest. Kept under
 #: the deploy Python floor (stdlib ``os``/``sys``/``json``/``base64`` only).
+#:
+#: The stdin fallback is what keeps the STREAMED writers' remote command O(1)
+#: in the manifest size (:func:`_write_push_manifest` and the fold-skip
+#: checkpoint dial in ``_tar_ssh_push``): a payload embedded in the command
+#: string made the composed line O(tree paths), which blew the ~8,191-char
+#: ``cmd.exe`` ceiling live on 2026-07-27 (an ``HPC_SSH_BINARY`` batch-file
+#: shim routes every ssh spawn through ``cmd.exe`` — see
+#: :data:`_PUSH_REMOTE_CMD_ARGV_CAP`). The FOLDED per-batch checkpoint still
+#: rides the env var (its stdin is the tar stream).
 _PUSH_MANIFEST_MERGE_PY: Final[str] = (
     "import os,sys,json,base64\n"
     "d='.hpc/.push_manifest.json'\n"
     "t=d+'.tmp'\n"
-    "new=json.loads(base64.b64decode(os.environ['HPC_PM_PAYLOAD']))\n"
+    "new=json.loads(base64.b64decode(os.environ.get('HPC_PM_PAYLOAD') or sys.stdin.read()))\n"
     "try:\n"
     "    with open(d) as f:\n"
     "        cur=json.load(f)\n"
@@ -230,6 +240,50 @@ def _folded_checkpoint_cmd(remote_path: str, payload_b64: str) -> str:
     return f" && {{ ( {checkpoint} ) || true; }}"
 
 
+#: Cap on the push's composed remote-command STRING length (the pull-side twin
+#: is ``_pull._PULL_REMOTE_CMD_ARGV_CAP``). The FOLDED checkpoint payload is
+#: O(manifest paths), so on a large tree the composed ``mkdir && tar x && {
+#: checkpoint }`` line grows without bound — and the REAL floor is not
+#: CreateProcess's 32,767 chars but ``cmd.exe``'s **8,191**: an
+#: ``HPC_SSH_BINARY`` override pointing at a ``.cmd``/``.bat`` shim (a
+#: supported override shape — the resolver honors it unconditionally) makes
+#: CreateProcess route the whole line through ``cmd.exe``, which refuses with
+#: "The command line is too long" (live failure, 2026-07-27: a 571-path
+#: checkpoint payload → ~15 KB remote command → every tar|ssh push died while
+#: the 91-file batch itself was 1.1 MB). 7500 leaves headroom for the ssh
+#: option preamble + the shim's own re-quoting under that worst-case floor.
+#: When the fold would blow the cap, ``_tar_ssh_push`` SKIPS the fold
+#: (disclosed) and commits the checkpoint via ONE streamed dial
+#: (:func:`_streamed_manifest_cmd` — payload over ssh stdin, argv O(1)).
+_PUSH_REMOTE_CMD_ARGV_CAP: Final[int] = 7500
+
+
+def _streamed_manifest_cmd(remote_path: str) -> str:
+    """The O(1)-argv remote command for a STREAMED push-manifest write.
+
+    The payload (``_push_manifest_payload_b64`` bytes) rides **ssh stdin**, not
+    the command string: the merge script's env-var read comes back empty, so it
+    falls through to ``sys.stdin.read()`` (:data:`_PUSH_MANIFEST_MERGE_PY`).
+    The script itself — constant-size — is embedded via a ``python3 -c``
+    base64-exec bootstrap instead of the folded shape's ``printf | base64 -d |
+    python3`` pipe, because that pipe would occupy the interpreter's stdin,
+    which here must stay connected to sshd's channel (the payload). Ends with
+    the same ``&&``-gated :data:`_PUSH_CP_SENTINEL` echo as the folded
+    checkpoint, so callers keep ONE positive-evidence read for "checkpoint
+    committed" regardless of which shape carried it. Shared by
+    :func:`_write_push_manifest` and ``_tar_ssh_push``'s fold-skip dial, so the
+    two streamed writers emit one command shape.
+    """
+    merge_b64 = base64.b64encode(_PUSH_MANIFEST_MERGE_PY.encode("utf-8")).decode("ascii")
+    # merge_b64 is base64-alphabet only — no quote hazard inside the '...'.
+    bootstrap = f"import base64;exec(base64.b64decode('{merge_b64}'))"
+    root = shlex.quote(remote_path.rstrip("/"))
+    return (
+        f"cd {root} && mkdir -p .hpc && python3 -c {shlex.quote(bootstrap)} && "
+        f"printf %s {shlex.quote(_PUSH_CP_SENTINEL)}"
+    )
+
+
 def _write_push_manifest(
     *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
 ) -> None:
@@ -261,13 +315,12 @@ def _write_push_manifest(
     from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
     from hpc_agent.infra.transport import _guarded_ssh_bounded
 
+    # The payload rides ssh STDIN (:func:`_streamed_manifest_cmd`), never the
+    # command string: embedded, it made the composed line O(manifest paths) and
+    # blew the ~8,191-char ``cmd.exe`` ceiling under an ``HPC_SSH_BINARY``
+    # batch-shim override (live, 2026-07-27) — the exact argv-growth regression
+    # the pull side already capped (``_PULL_REMOTE_CMD_ARGV_CAP``).
     payload_b64 = _push_manifest_payload_b64(paths)
-    merge_b64 = base64.b64encode(_PUSH_MANIFEST_MERGE_PY.encode("utf-8")).decode("ascii")
-    root = shlex.quote(remote_path.rstrip("/"))
-    cmd = (
-        f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(merge_b64)} | base64 -d | "
-        f"HPC_PM_PAYLOAD={shlex.quote(payload_b64)} python3"
-    )
     # Fail-open (unchanged): a breaker-open (SshCircuitOpen) or slot-wait give-up
     # (SshSlotWaitTimeout) degrades to the SAME skip as a TimeoutError/OSError —
     # a lost checkpoint/seal only lags the NEXT push's prune ability + cache
@@ -275,9 +328,10 @@ def _write_push_manifest(
     with contextlib.suppress(TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
         _guarded_ssh_bounded(
             ssh_target,
-            cmd,
+            _streamed_manifest_cmd(remote_path),
             timeout=timeout,
             what=f"write push manifest of {remote_path}",
+            stdin_payload=payload_b64.encode("ascii"),
         )
 
 

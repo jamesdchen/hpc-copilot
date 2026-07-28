@@ -111,8 +111,15 @@ def read_announcements(
     )
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
+        # ``returncode`` rides as a first-class attribute so downstream
+        # classifiers (the canary verify's reporter_unreachable diagnosis) can
+        # split rc=255 — the SSH TRANSPORT died, saying nothing about the
+        # cluster env — from a genuine remote failure WITHOUT string-parsing
+        # (the 2026-07-27 misdiagnosis: every poll died in the local ssh spawn
+        # and the envelope blamed the cluster's conda env).
         raise errors.RemoteCommandFailed(
-            f"announce read failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+            f"announce read failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}",
+            returncode=proc.returncode,
         )
     lines = [ln.strip() for ln in proc.stdout.splitlines()]
     if _ANNOUNCE_ACK not in lines:
@@ -276,8 +283,11 @@ def read_announcements_batch(
     cmd = "; ".join(parts) + "; true"
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
+        # returncode as attribute: same rc=255 transport-vs-cluster split as
+        # the single-run reader above.
         raise errors.RemoteCommandFailed(
-            f"batch announce read failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+            f"batch announce read failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}",
+            returncode=proc.returncode,
         )
     lines = [ln.strip() for ln in proc.stdout.splitlines()]
     out: dict[str, dict[str, int]] = {}

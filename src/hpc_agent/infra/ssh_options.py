@@ -67,6 +67,7 @@ __all__ = [
     "mark_named_pipe_broken",
     "reset_named_pipe_runtime_verdict",
     "run_with_named_pipe_retry",
+    "rsync_binary",
     "ssh_argv",
     "ssh_env",
 ]
@@ -85,6 +86,32 @@ _WIN_OPENSSH_SCP = r"C:\Windows\System32\OpenSSH\scp.exe"
 _WIN_OPENSSH_SSH_ADD = r"C:\Windows\System32\OpenSSH\ssh-add.exe"
 
 
+@functools.cache
+def _warn_batch_shim_override(env_var: str, override: str) -> None:
+    """One-time stderr warning when a binary override is a ``.cmd``/``.bat`` shim.
+
+    A batch-file argv[0] makes ``CreateProcess`` route the WHOLE command line
+    through ``cmd.exe``, which (a) caps it at ~8,191 chars — far below the
+    32,767 a direct ``.exe`` spawn allows — so any long composed remote command
+    dies with the opaque "The command line is too long", and (b) cannot be
+    exec'd by rsync's ``RSYNC_RSH`` at all (MSYS rsync exec's the remote-shell
+    word directly). Both bit live on 2026-07-27: ``HPC_SSH_BINARY`` pointed at
+    a passthrough ``wssh.cmd`` and every large-tree tar|ssh push + every rsync
+    attempt failed while the ssh binary itself was healthy. The shim is still
+    honored (the override contract is unconditional); this names the ceiling
+    and the fix once per process instead of leaving the spawn layer to fail
+    opaquely. Cached per ``(env_var, override)`` — the warn-once idiom of
+    :func:`_ssh_config_forces_no_multiplex`.
+    """
+    print(
+        f"[ssh] WARN {env_var}={override} is a .cmd/.bat shim: every spawn routes "
+        "through cmd.exe (~8,191-char command-line ceiling; long remote commands "
+        "fail with 'The command line is too long', and rsync's RSYNC_RSH cannot "
+        "exec it). Point the override at the underlying .exe instead.",
+        file=sys.stderr,
+    )
+
+
 def _resolve_binary(*, env_var: str, win_default: str, name: str) -> str:
     """Resolve an ssh-family binary, preferring an explicit override then
     (on Windows) the native OpenSSH executable, else the bare PATH name.
@@ -95,13 +122,43 @@ def _resolve_binary(*, env_var: str, win_default: str, name: str) -> str:
     used when it exists. Everywhere else (and when the native binary is
     absent) the bare *name* is returned so normal PATH resolution applies
     — preserving the existing Linux/macOS behaviour exactly.
+
+    A ``.cmd``/``.bat`` override is honored but warned about once — it imposes
+    the ``cmd.exe`` command-line ceiling on every spawn and breaks rsync's
+    ``RSYNC_RSH`` (:func:`_warn_batch_shim_override`, the 2026-07-27 class).
     """
     override = os.environ.get(env_var)
     if override:
+        if override.lower().endswith((".cmd", ".bat")):
+            _warn_batch_shim_override(env_var, override)
         return override
     if sys.platform == "win32" and os.path.isfile(win_default):
         return win_default
     return name
+
+
+def rsync_binary() -> str:
+    """Path/name of the ``rsync`` binary to invoke.
+
+    Override with ``HPC_RSYNC_BINARY``. Unlike ssh/scp/ssh-add there is NO
+    native-Windows default to prefer — Windows ships no rsync, and the
+    candidate installs (MSYS2, Git-for-Windows add-ons, cwRsync) each pair
+    with their OWN runtime (mixing an MSYS2 rsync with a Git-Bash-runtime ssh
+    dies in ``dup() in/out/err failed`` — the msys-2.0.dll clash, 2026-07-27
+    field finding), so auto-probing known install locations would pick a
+    binary whose ssh pairing the framework cannot validate. The env override
+    is the explicit opt-in; without it, bare-PATH resolution is unchanged and
+    a PATH without rsync activates the scp/tar fallback exactly as before.
+    A ``.cmd``/``.bat`` override gets the same one-time shim warning as the
+    ssh-family overrides (rsync's own argv is small, but the shim still adds a
+    ``cmd.exe`` layer between the transport and the transfer).
+    """
+    override = os.environ.get("HPC_RSYNC_BINARY")
+    if override:
+        if override.lower().endswith((".cmd", ".bat")):
+            _warn_batch_shim_override("HPC_RSYNC_BINARY", override)
+        return override
+    return "rsync"
 
 
 def _ssh_binary() -> str:

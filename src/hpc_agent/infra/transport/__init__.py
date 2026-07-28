@@ -53,7 +53,12 @@ from hpc_agent.infra.remote import (
     ssh_run,
 )
 from hpc_agent.infra.ssh_circuit import guarded_call, liveness_probe
-from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv, ssh_env
+from hpc_agent.infra.ssh_options import (
+    rsync_binary,
+    run_with_named_pipe_retry,
+    ssh_argv,
+    ssh_env,
+)
 from hpc_agent.infra.ssh_throttle import throttle_connection
 from hpc_agent.infra.ssh_validation import validate_remote_path
 
@@ -103,6 +108,7 @@ from ._disclose import (
     _PROGRESS_INTERVAL_SEC,  # noqa: F401
     _PUMP_CHUNK_BYTES,  # noqa: F401
     DeployPayloadSummary,
+    _disclose_checkpoint_streamed,  # noqa: F401
     _disclose_checkpoint_uncommitted,  # noqa: F401
     _disclose_delta_mode,  # noqa: F401
     _disclose_no_rsync,  # noqa: F401
@@ -134,6 +140,7 @@ from ._prune import (
     _PUSH_CP_SENTINEL,  # noqa: F401
     _PUSH_MANIFEST_REL,  # noqa: F401
     _PUSH_MANIFEST_TMP_REL,  # noqa: F401
+    _PUSH_REMOTE_CMD_ARGV_CAP,  # noqa: F401
     _folded_checkpoint_cmd,  # noqa: F401
     _journal_deploy_prune,  # noqa: F401
     _prune_and_reseal,  # noqa: F401
@@ -141,6 +148,7 @@ from ._prune import (
     _prune_max_files,  # noqa: F401
     _push_manifest_payload_b64,  # noqa: F401
     _read_prior_push_manifest,  # noqa: F401
+    _streamed_manifest_cmd,  # noqa: F401
     _write_push_manifest,  # noqa: F401
 )
 from ._pull import (
@@ -239,12 +247,18 @@ PRECLEAN_TIMEOUT_SEC: Final[int] = _env_int("HPC_PRECLEAN_TIMEOUT_SEC", 300)
 
 
 def _have_rsync() -> bool:
-    """Return True if an ``rsync`` binary is on PATH.
+    """Return True if the resolved ``rsync`` binary is invocable.
 
-    Detection at runtime via :func:`shutil.which`. Activates the scp/tar
-    fallback when False (typically Windows hosts without WSL/MSYS rsync).
+    Detection at runtime via :func:`shutil.which` over
+    :func:`~hpc_agent.infra.ssh_options.rsync_binary` — the ``HPC_RSYNC_BINARY``
+    override (an absolute path passes ``which`` directly) or bare-PATH
+    ``rsync``. Activates the scp/tar fallback when False (typically Windows
+    hosts without WSL/MSYS rsync). The 2026-07-27 session had a working
+    ``C:\\msys64`` rsync invisible to a bare PATH probe all night — the
+    override is the sanctioned way to point at it without PATH surgery (which
+    poisoned the ssh resolution when tried live).
     """
-    return shutil.which("rsync") is not None
+    return shutil.which(rsync_binary()) is not None
 
 
 def _msys_local(p: str) -> str:
@@ -524,18 +538,32 @@ def _ssh_bounded(
     *,
     timeout: float | None,
     what: str,
+    stdin_payload: bytes | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """One bounded remote command, named-pipe-retry wrapped (the #173 shape).
 
     The small helper for the stage-then-swap legs (stage drop, post-extract
     move): each runs as its OWN short ssh call so it can never eat the
     transfer budget, and a timeout surfaces loud with *what* named.
+
+    *stdin_payload* — bytes fed to the remote command's stdin over the ssh
+    channel (the STREAMED push-manifest writers: payload over stdin keeps the
+    remote command O(1) in the manifest size instead of embedding an
+    O(tree-paths) blob in the argv, which blew the ~8,191-char ``cmd.exe``
+    ceiling under an ``HPC_SSH_BINARY`` batch-shim override, 2026-07-27). A
+    fresh spooled file per attempt: a named-pipe retry re-reads from offset 0,
+    never a half-consumed pipe. ``None`` keeps the DEVNULL isolation default.
     """
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         ssh_cmd = [*ssh_argv("ssh"), ssh_target, remote_cmd]
         try:
-            return run_capture_bounded(ssh_cmd, timeout_sec=timeout)
+            if stdin_payload is None:
+                return run_capture_bounded(ssh_cmd, timeout_sec=timeout)
+            with tempfile.TemporaryFile() as payload_file:
+                payload_file.write(stdin_payload)
+                payload_file.seek(0)
+                return run_capture_bounded(ssh_cmd, timeout_sec=timeout, stdin=payload_file)
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(f"{what} on {ssh_target} timed out after {timeout}s") from exc
 
@@ -548,6 +576,7 @@ def _guarded_ssh_bounded(
     *,
     timeout: float | None,
     what: str,
+    stdin_payload: bytes | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """:func:`_ssh_bounded` under the per-host breaker + slot (``guarded_call``).
 
@@ -580,7 +609,14 @@ def _guarded_ssh_bounded(
     """
     return guarded_call(
         ssh_target,
-        functools.partial(_ssh_bounded, ssh_target, remote_cmd, timeout=timeout, what=what),
+        functools.partial(
+            _ssh_bounded,
+            ssh_target,
+            remote_cmd,
+            timeout=timeout,
+            what=what,
+            stdin_payload=stdin_payload,
+        ),
         probe_fn=liveness_probe(ssh_target),
     )
 
@@ -687,6 +723,12 @@ def _tar_ssh_push(
         tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
     quoted_remote = shlex.quote(remote_path)
 
+    # Set when the folded checkpoint would blow ``_PUSH_REMOTE_CMD_ARGV_CAP``:
+    # the payload then rides ONE streamed dial after the transfer instead of
+    # the tar leg's remote command (argv O(1) — the 2026-07-27 cmd.exe-ceiling
+    # class; see the fold site below).
+    streamed_checkpoint_b64: str | None = None
+
     # delete=True: STAGE-THEN-SWAP (run-#10 finding F-G rewrote #173's order).
     # The old sequence pre-cleaned the live tree and THEN transferred — so a
     # transfer that timed out mid-flight left the remote gutted (data/ emptied,
@@ -729,7 +771,25 @@ def _tar_ssh_push(
             # batch (:func:`_folded_checkpoint_cmd`). Confined to this
             # ``delete=False`` extract branch — the ``delete=True`` stage-swap
             # tail (U4's surface) is never touched.
-            ssh_remote_cmd += _folded_checkpoint_cmd(remote_path, checkpoint_payload_b64)
+            #
+            # ARGV CAP (run-16 root cause, 2026-07-27): the folded payload is
+            # O(manifest paths), and the composed remote command must stay
+            # under ``_PUSH_REMOTE_CMD_ARGV_CAP`` — a ``.cmd``/``.bat``
+            # ``HPC_SSH_BINARY`` shim routes the whole line through ``cmd.exe``
+            # (~8,191-char ceiling), which killed every large-tree push while
+            # the batch itself was 1 MB. Over the cap: SKIP the fold
+            # (disclosed) and commit the checkpoint after the transfer via ONE
+            # streamed dial — payload over ssh stdin, argv O(1) (below, after
+            # ``run_with_named_pipe_retry``).
+            folded = _folded_checkpoint_cmd(remote_path, checkpoint_payload_b64)
+            if len(ssh_remote_cmd) + len(folded) <= _PUSH_REMOTE_CMD_ARGV_CAP:
+                ssh_remote_cmd += folded
+            else:
+                streamed_checkpoint_b64 = checkpoint_payload_b64
+                _disclose_checkpoint_streamed(
+                    cmd_len=len(ssh_remote_cmd) + len(folded),
+                    cap=_PUSH_REMOTE_CMD_ARGV_CAP,
+                )
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         # Rebuild ssh_cmd each attempt: a named-pipe-failure retry needs to
@@ -869,6 +929,34 @@ def _tar_ssh_push(
         if names_file_path is not None:
             with contextlib.suppress(OSError):
                 os.unlink(names_file_path)
+    if transfer.returncode == 0 and streamed_checkpoint_b64 is not None:
+        # Fold-skip follow-through: the batch landed but its checkpoint could
+        # not ride the tar leg (argv cap) — commit it now via ONE streamed dial
+        # (payload over ssh stdin, argv O(1)). Bare ``_ssh_bounded``, NOT
+        # ``_guarded_ssh_bounded``: this dial runs INSIDE the enclosing
+        # ``guarded_call`` the push already holds, so a second wrap would take
+        # a second per-host slot while holding the first (the documented N=2
+        # self-deadlock — the same named exemption the stage-swap legs ride).
+        # Fail-open: a failed/timed-out checkpoint never fails the durable
+        # batch (the caller's sentinel read simply stays absent — Invariant 2's
+        # safe re-derive). On success, surface the sentinel on the returned
+        # stdout so the caller's ONE positive-evidence read works unchanged
+        # regardless of which shape carried the checkpoint.
+        with contextlib.suppress(TimeoutError, OSError):
+            streamed = _ssh_bounded(
+                ssh_target,
+                _streamed_manifest_cmd(remote_path),
+                timeout=timeout,
+                what=f"streamed push-manifest checkpoint of {remote_path}",
+                stdin_payload=streamed_checkpoint_b64.encode("ascii"),
+            )
+            if _PUSH_CP_SENTINEL in (streamed.stdout or ""):
+                transfer = subprocess.CompletedProcess(
+                    args=transfer.args,
+                    returncode=transfer.returncode,
+                    stdout=(transfer.stdout or "") + _PUSH_CP_SENTINEL,
+                    stderr=transfer.stderr,
+                )
     if not delete or transfer.returncode != 0:
         return transfer
 
@@ -1340,7 +1428,7 @@ def rsync_push(
     src = _msys_local(str(local_path).rstrip("/\\") + "/")
     dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
 
-    flags = ["rsync", "-az"]
+    flags = [rsync_binary(), "-az"]
     if delete:
         flags.append("--delete")
 
@@ -1407,7 +1495,7 @@ def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
     def _run() -> subprocess.CompletedProcess[str]:
         try:
             return run_capture_bounded(
-                ["rsync", "-az", src, dst],
+                [rsync_binary(), "-az", src, dst],
                 timeout_sec=SSH_TIMEOUT_SEC,
                 env=rsync_env,
             )
@@ -1807,7 +1895,7 @@ def rsync_pull(
     def _run() -> subprocess.CompletedProcess[str]:
         try:
             return run_capture_bounded(
-                ["rsync", "-az", *filter_flags, src, dst],
+                [rsync_binary(), "-az", *filter_flags, src, dst],
                 timeout_sec=effective_timeout,
                 env=rsync_env,
             )

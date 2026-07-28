@@ -157,19 +157,39 @@ def _reporter_unreachable_envelope(
       ``.hpc_failed`` marker to positively confirm failure — unverifiable, so
       still a loud fail, never a pass (the never-pass-unverified posture).
 
-    The diagnosis is identical for both (wrong/absent conda env; fix before
-    submitting); *annotation* appends the arm-specific evidence (rc + consecutive
-    count for the escalation arm). Factoring it here lets both call sites share
-    the one envelope.
+    The DIAGNOSIS line is chosen off the last poll error's ``returncode``
+    attribute (never string-parsed — the house rule this module already
+    documents): rc=255 is the SSH layer itself failing — the dial (or the local
+    ssh spawn) died before any cluster-side read, so it says NOTHING about the
+    cluster env, and blaming the conda env sends the operator to the wrong side
+    of the wire (the 2026-07-27 live misdiagnosis: an ``HPC_SSH_BINARY`` batch
+    shim broke every local spawn; the envelope said "fix the cluster env").
+    Every other shape keeps the cluster-side diagnosis (wrong/absent conda env;
+    fix before submitting). *annotation* appends the arm-specific evidence (rc +
+    consecutive count for the escalation arm). Factoring it here lets both call
+    sites share the one envelope.
     """
+    if getattr(last_poll_error, "returncode", None) == 255:
+        diagnosis = (
+            "Last poll rc=255: the SSH TRANSPORT failed — the connection or the "
+            "local ssh spawn died before any cluster-side read, so this verdict "
+            "says nothing about the cluster env. Common causes: login-node/network "
+            "outage, or a local ssh misconfiguration (an HPC_SSH_BINARY override "
+            "pointing at a broken or .cmd/.bat shim binary; PATH surgery in the "
+            "calling shell). Run `hpc-agent net-triage` and check the local ssh "
+            "resolution before touching the cluster env."
+        )
+    else:
+        diagnosis = (
+            "Common cause: hpc-agent not importable in the cluster's python "
+            "(wrong/absent conda env) or a module-load failure in the job "
+            "preamble. Fix the cluster env before submitting the main array."
+        )
     details = (
         f"canary {canary_run_id!r}: every status poll failed — the "
         f"cluster-side reporter never returned (last error: {last_poll_error}). "
         "The scheduler may have run the job, but the framework cannot read its "
-        "result, so the canary CANNOT be trusted as passed. Common cause: "
-        "hpc-agent not importable in the cluster's python (wrong/absent conda "
-        "env) or a module-load failure in the job preamble. Fix the cluster env "
-        "before submitting the main array."
+        f"result, so the canary CANNOT be trusted as passed. {diagnosis}"
     )
     if annotation:
         details = f"{details} {annotation}"

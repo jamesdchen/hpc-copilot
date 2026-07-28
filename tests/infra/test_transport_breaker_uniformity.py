@@ -82,7 +82,9 @@ def test_guarded_ssh_bounded_passes_command_and_kwargs_verbatim() -> None:
     # ssh_target + remote_cmd verbatim; timeout + what verbatim — guarding adds
     # NOTHING to the dial the site would have made bare.
     assert fn.args == ("u@h", "echo hello world")
-    assert fn.keywords == {"timeout": 5, "what": "probe"}
+    # ``stdin_payload=None`` is the pass-through default (the streamed
+    # push-manifest writers set it; every other site keeps DEVNULL isolation).
+    assert fn.keywords == {"timeout": 5, "what": "probe", "stdin_payload": None}
 
 
 # ── rides-the-guarded-path pins (command byte-unchanged) ───────────────────────
@@ -133,8 +135,13 @@ def test_write_push_manifest_rides_guarded_call() -> None:
         mp.setattr(transport, "guarded_call", spy)
         _prune._write_push_manifest(ssh_target="u@h", remote_path="/r", paths=["a"], timeout=30)
     cmd = spy.only_cmd
-    assert cmd.startswith(f"cd {shlex.quote('/r')} && mkdir -p .hpc && printf %s ")
-    assert "HPC_PM_PAYLOAD=" in cmd and cmd.rstrip().endswith("python3")
+    # STREAMED shape (2026-07-28): the payload rides ssh stdin, never the
+    # command string (argv O(1) — the cmd.exe-ceiling class), so the command is
+    # the constant-size ``python3 -c`` bootstrap + the ack sentinel, and
+    # ``HPC_PM_PAYLOAD=`` must be ABSENT.
+    assert cmd.startswith(f"cd {shlex.quote('/r')} && mkdir -p .hpc && python3 -c ")
+    assert "HPC_PM_PAYLOAD=" not in cmd
+    assert cmd.rstrip().endswith(_prune._PUSH_CP_SENTINEL)
 
 
 def test_prune_and_reseal_rides_guarded_call() -> None:

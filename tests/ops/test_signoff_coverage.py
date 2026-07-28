@@ -428,6 +428,48 @@ def test_signoff_harness_log_stale_utterance_refused(tmp_path: Path) -> None:
     assert _marker_of(ei.value) == _MARKER
 
 
+def test_signoff_stale_slug_refusal_names_staleness(tmp_path: Path) -> None:
+    """When the ONLY slug-naming utterances predate the render, the refusal says
+    SO — the section changed after the human typed; re-review and retype — and
+    never the absent-utterance text that reads as a capture-channel fault
+    (2026-07-27 live: the human HAD typed the slug, the view had been re-rendered,
+    and "no logged human utterance NAMES the slug" sent them chasing a phantom
+    channel bug through two needless retypes).
+
+    kills: collapsing the stale and absent causes back into one message."""
+    _write_notebook(tmp_path, source_text=_source())
+    sv = _canonical_section(tmp_path)
+    write_render(tmp_path, audit_id=_AUDIT, view=sv)
+    _set_render_mtime(tmp_path, sv, _ANCHOR)
+    _log_utterance_at(tmp_path, "model-fit reviewed — the regularization term is sound", _BEFORE)
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _signoff(tmp_path, "y", section_sha=sv.section_sha, view_sha=sv.view_sha)
+    msg = str(ei.value)
+    assert "predate" in msg
+    assert "no logged human utterance NAMES" not in msg
+    assert _marker_of(ei.value) == _MARKER
+
+
+def test_signoff_absent_slug_refusal_names_absence(tmp_path: Path) -> None:
+    """When NOTHING in the log (fresh OR stale) names the slug, the refusal keeps
+    the absent-utterance text — the human genuinely never typed it, and the
+    stale-specific remediation would be wrong.
+
+    kills: over-firing the stale branch off utterances that never named the
+    slug at all."""
+    _write_notebook(tmp_path, source_text=_source())
+    sv = _canonical_section(tmp_path)
+    write_render(tmp_path, audit_id=_AUDIT, view=sv)
+    _set_render_mtime(tmp_path, sv, _ANCHOR)
+    _log_utterance_at(tmp_path, "looks good, please proceed with the run", _AFTER)
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _signoff(tmp_path, "y", section_sha=sv.section_sha, view_sha=sv.view_sha)
+    msg = str(ei.value)
+    assert "no logged human utterance NAMES" in msg
+    assert "predate" not in msg
+    assert _marker_of(ei.value) == _MARKER
+
+
 def test_signoff_harness_log_fresh_but_unengaged_refused(tmp_path: Path) -> None:
     """A FRESH logged utterance that names the slug but engages NO diff identifier is
     refused at the HUMAN_REQUIRED bar (the bar is enforced over the log tier, not

@@ -392,6 +392,116 @@ def test_push_pump_sever_forces_nonzero_rc(tmp_path) -> None:
 
 
 # ===========================================================================
+# Drill 7 — folded checkpoint DEMOTES to the streamed dial past the argv cap
+# ===========================================================================
+# The 2026-07-27 live failure class: the folded payload is O(manifest paths),
+# and past ``_PUSH_REMOTE_CMD_ARGV_CAP`` the composed remote command dies in
+# the SPAWN layer — cmd.exe's ~8,191-char ceiling under an ``HPC_SSH_BINARY``
+# batch-shim override ("The command line is too long" while the batch itself
+# was 1.1 MB). Over the cap the fold is skipped (disclosed) and the checkpoint
+# rides ONE streamed dial (payload over ssh stdin, argv O(1)); the sentinel is
+# surfaced on the returned stdout so the caller's positive-evidence read is
+# unchanged.
+
+
+def test_oversize_checkpoint_demotes_to_streamed_dial(tmp_path) -> None:
+    """A checkpoint payload that would blow the argv cap NEVER rides the tar
+    leg's remote command: the composed command stays under the cap, the payload
+    ships over the streamed dial's stdin, and its committed sentinel is folded
+    into the returned stdout (positive evidence preserved end-to-end).
+
+    kills: dropping the cap check (payload back in the remote command — the
+    2026-07-27 spawn-layer death); dropping the streamed follow-through (a big
+    tree never checkpoints); dropping the sentinel surfacing (the caller
+    discloses an uncommitted checkpoint that DID commit)."""
+    big_payload = _prune._push_manifest_payload_b64(
+        [f"src/module_{i}/file_{i}.py" for i in range(2000)]
+    )
+    assert len(big_payload) > _prune._PUSH_REMOTE_CMD_ARGV_CAP  # premise
+    ssh_cmds: list[list[str]] = []
+
+    def _fake_rcb(argv, *, timeout_sec=None, stdin=None, env=None):
+        ssh_cmds.append(list(argv))
+        return proc(0)
+
+    streamed: list[tuple[str, bytes | None]] = []
+
+    def _fake_ssh_bounded(target, cmd, *, timeout, what, stdin_payload=None):
+        streamed.append((cmd, stdin_payload))
+        return proc(0, stdout=_prune._PUSH_CP_SENTINEL)
+
+    with (
+        patch("hpc_agent.infra.transport.subprocess.Popen", return_value=_fake_tar_popen(0)),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_fake_rcb),
+        patch("hpc_agent.infra.transport.run_with_named_pipe_retry", side_effect=lambda fn: fn()),
+        patch(_PUSH_PUMP, return_value=None),
+        patch(_SSH_BOUNDED, side_effect=_fake_ssh_bounded),
+    ):
+        result = transport._tar_ssh_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=[],
+            delete=False,
+            timeout=5.0,
+            checkpoint_payload_b64=big_payload,
+        )
+    assert result.returncode == 0
+    # 1. The tar leg's remote command carried NO payload and stays under the cap.
+    remote_cmd = ssh_cmds[0][-1]
+    assert big_payload not in remote_cmd
+    assert len(remote_cmd) <= _prune._PUSH_REMOTE_CMD_ARGV_CAP
+    # 2. The payload rode the streamed dial's stdin (argv O(1) there too).
+    assert streamed, "the fold-skip streamed checkpoint dial never fired"
+    streamed_cmd, streamed_stdin = streamed[0]
+    assert streamed_stdin == big_payload.encode("ascii")
+    assert big_payload not in streamed_cmd
+    # 3. The committed sentinel is surfaced on the RETURNED stdout — the
+    #    caller's one positive-evidence read works unchanged.
+    assert _prune._PUSH_CP_SENTINEL in (result.stdout or "")
+
+
+def test_small_checkpoint_still_folds_inline(tmp_path) -> None:
+    """An under-cap payload keeps the LANDED Option-2 shape byte-for-byte: it
+    rides the tar leg's remote command and NO extra dial fires.
+
+    kills: an inverted/over-eager cap check that demotes every checkpoint (which
+    would re-introduce the per-batch dial Option 2 removed)."""
+    small_payload = _prune._push_manifest_payload_b64(["a.py", "b/c.py"])
+    ssh_cmds: list[list[str]] = []
+
+    def _fake_rcb(argv, *, timeout_sec=None, stdin=None, env=None):
+        ssh_cmds.append(list(argv))
+        return proc(0, stdout=_prune._PUSH_CP_SENTINEL)
+
+    streamed: list[str] = []
+
+    def _fake_ssh_bounded(target, cmd, *, timeout, what, stdin_payload=None):
+        streamed.append(cmd)
+        return proc(0)
+
+    with (
+        patch("hpc_agent.infra.transport.subprocess.Popen", return_value=_fake_tar_popen(0)),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_fake_rcb),
+        patch("hpc_agent.infra.transport.run_with_named_pipe_retry", side_effect=lambda fn: fn()),
+        patch(_PUSH_PUMP, return_value=None),
+        patch(_SSH_BOUNDED, side_effect=_fake_ssh_bounded),
+    ):
+        result = transport._tar_ssh_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=[],
+            delete=False,
+            timeout=5.0,
+            checkpoint_payload_b64=small_payload,
+        )
+    assert result.returncode == 0
+    assert small_payload in ssh_cmds[0][-1]  # folded inline, the landed shape
+    assert streamed == []  # no extra dial — Option 2's whole point
+
+
+# ===========================================================================
 # Drill 6 — last-batch SEAL fold ack absent, then re-seal (owed: Option 3)
 # ===========================================================================
 # The Option-3 load-bearing case (memo §3 Option 3): the LAST batch lands (``tar x``

@@ -489,3 +489,109 @@ def test_prune_reseal_script_deletes_seals_and_retains_survivors(tmp_path: Path)
     assert doc["manifest_schema"] == 2
     assert doc["entries"] == prior_entries  # cache preserved verbatim
     assert not (tree / ".hpc" / ".push_manifest.json.tmp").exists()  # atomic swap
+
+
+# ── the STREAMED push-manifest writers (argv O(1) — the 2026-07-27 class) ─────
+# The folded checkpoint embeds its payload in the tar leg's remote command, so
+# on a large manifest the composed line grows O(tree paths) — past
+# ``_PUSH_REMOTE_CMD_ARGV_CAP`` it dies in the spawn layer (cmd.exe's ~8,191-char
+# ceiling under an ``HPC_SSH_BINARY`` batch-shim override). The streamed shape
+# keeps the command constant-size and ships the payload over ssh stdin.
+
+
+def test_streamed_manifest_cmd_is_constant_size_under_the_cap() -> None:
+    """The streamed remote command is O(1) — its length never depends on the
+    manifest, and it sits comfortably under the argv cap while the folded shape
+    for the same manifest blows it.
+
+    kills: re-introducing any per-path content into the streamed command."""
+    from hpc_agent.infra.transport._prune import (
+        _PUSH_CP_SENTINEL,
+        _PUSH_REMOTE_CMD_ARGV_CAP,
+        _folded_checkpoint_cmd,
+        _push_manifest_payload_b64,
+        _streamed_manifest_cmd,
+    )
+
+    cmd = _streamed_manifest_cmd("/u/scratch/j/user/some-experiment-repo")
+    assert len(cmd) < _PUSH_REMOTE_CMD_ARGV_CAP
+    assert _PUSH_CP_SENTINEL in cmd  # same positive-evidence ack as the fold
+    big = _push_manifest_payload_b64([f"src/m_{i}/f_{i}.py" for i in range(5000)])
+    assert len(_folded_checkpoint_cmd("/u/scratch/j/user/x", big)) > _PUSH_REMOTE_CMD_ARGV_CAP
+    assert big not in cmd
+
+
+def test_merge_script_reads_payload_from_stdin_and_env_wins(tmp_path: Path) -> None:
+    """The ONE merge script serves both writer shapes: payload from
+    ``HPC_PM_PAYLOAD`` when folded (env wins even with stdin bytes present),
+    from stdin when streamed — and the ``entries`` cache survives both.
+
+    kills: dropping the stdin fallback (every streamed write crashes with a
+    KeyError); inverting the precedence (a folded write would consume the tar
+    stream's leftovers as its payload)."""
+    from hpc_agent.infra.transport._prune import (
+        _PUSH_MANIFEST_MERGE_PY,
+        _push_manifest_payload_b64,
+    )
+
+    tree = tmp_path / "tree"
+    (tree / ".hpc").mkdir(parents=True)
+    # 1. stdin path (no env var) — the streamed writers.
+    subprocess.run(
+        [sys.executable, "-c", _PUSH_MANIFEST_MERGE_PY],
+        cwd=str(tree),
+        input=_push_manifest_payload_b64(["a.py", "b/c.py"]),
+        text=True,
+        check=True,
+        timeout=30,
+        env={k: v for k, v in os.environ.items() if k != "HPC_PM_PAYLOAD"},
+    )
+    manifest_path = tree / ".hpc" / ".push_manifest.json"
+    assert json.loads(manifest_path.read_text())["paths"] == ["a.py", "b/c.py"]
+    # 2. seed an entries cache, then env-var path (the folded shape) — env wins
+    #    over garbage stdin, and entries survive the read-modify-write.
+    doc = json.loads(manifest_path.read_text())
+    doc["entries"] = [{"path": "a.py", "sha256": "f" * 64}]
+    manifest_path.write_text(json.dumps(doc))
+    subprocess.run(
+        [sys.executable, "-c", _PUSH_MANIFEST_MERGE_PY],
+        cwd=str(tree),
+        input="NOT-EVEN-BASE64",
+        text=True,
+        check=True,
+        timeout=30,
+        env={**os.environ, "HPC_PM_PAYLOAD": _push_manifest_payload_b64(["env_won.py"])},
+    )
+    out = json.loads(manifest_path.read_text())
+    assert out["paths"] == ["env_won.py"]
+    assert out["entries"] == [{"path": "a.py", "sha256": "f" * 64}]
+    assert not (tree / ".hpc" / ".push_manifest.json.tmp").exists()  # atomic swap
+
+
+def test_write_push_manifest_streams_payload_over_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The standalone seal/checkpoint dial ships its payload via
+    ``stdin_payload``, never inside the remote command string.
+
+    kills: reverting ``_write_push_manifest`` to the embedded-payload command
+    (O(manifest) argv — the 2026-07-27 spawn-layer death on its dial too)."""
+    from hpc_agent.infra.transport._prune import (
+        _PUSH_REMOTE_CMD_ARGV_CAP,
+        _push_manifest_payload_b64,
+        _write_push_manifest,
+    )
+
+    calls: list[tuple[str, bytes | None]] = []
+
+    def _fake_guarded(target, cmd, *, timeout, what, stdin_payload=None):
+        calls.append((cmd, stdin_payload))
+        import subprocess as sp
+
+        return sp.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("hpc_agent.infra.transport._guarded_ssh_bounded", _fake_guarded)
+    paths = [f"pkg/mod_{i}.py" for i in range(3000)]
+    _write_push_manifest(ssh_target="u@h", remote_path="/r/repo", paths=paths, timeout=5.0)
+    assert len(calls) == 1
+    cmd, stdin_payload = calls[0]
+    assert stdin_payload == _push_manifest_payload_b64(paths).encode("ascii")
+    assert len(cmd) < _PUSH_REMOTE_CMD_ARGV_CAP  # command stays O(1)

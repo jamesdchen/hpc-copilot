@@ -47,6 +47,7 @@ HEALABLE_TRANSPORT_ENV_VARS = frozenset(
         "HPC_SSH_CIRCUIT_OVERRIDE",
         "HPC_NO_SSH_MULTIPLEX",
         "HPC_SSH_BINARY",
+        "HPC_RSYNC_BINARY",
         "HPC_CLUSTERS_CONFIG",
     }
 )

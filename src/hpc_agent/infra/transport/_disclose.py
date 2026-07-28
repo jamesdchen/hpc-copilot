@@ -345,6 +345,31 @@ def _disclose_checkpoint_uncommitted(*, index: int, total: int) -> None:
         )
 
 
+def _disclose_checkpoint_streamed(*, cmd_len: int, cap: int) -> None:
+    """One ``[transport]`` line when a folded checkpoint is DEMOTED to a streamed dial.
+
+    The folded per-batch checkpoint (delta-push round-trip Option 2) embeds its
+    payload in the tar-push leg's remote command, so on a large manifest the
+    composed line grows O(tree paths) — past ``_PUSH_REMOTE_CMD_ARGV_CAP`` the
+    push would die in the spawn layer instead of shipping (the ~8,191-char
+    ``cmd.exe`` ceiling under an ``HPC_SSH_BINARY`` batch-shim override — the
+    2026-07-27 live failure, where the ERROR was opaque: "The command line is
+    too long" with a 1 MB batch). The fold is skipped and the checkpoint rides
+    ONE separate streamed dial (payload over ssh stdin) after the batch lands —
+    same durability, one extra dial, disclosed here per the no-silent-caps
+    discipline. Fail-open like the sibling disclosures.
+    """
+    with contextlib.suppress(Exception):
+        print(
+            f"[transport] content-hash DELTA: folded checkpoint demoted to a streamed "
+            f"dial — the composed remote command would be {cmd_len} chars "
+            f"(cap {cap}; large path manifest). The batch ships unchanged; its "
+            "manifest checkpoint rides one extra ssh dial with the payload over "
+            "stdin.",
+            file=sys.stderr,
+        )
+
+
 def _disclose_seal_uncommitted(*, total: int) -> None:
     """One ``[transport]`` line when the LAST batch's FOLDED FINAL SEAL did NOT ack.
 

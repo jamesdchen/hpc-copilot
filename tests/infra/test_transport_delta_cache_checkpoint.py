@@ -444,12 +444,14 @@ def test_push_manifest_write_is_crash_safe_temp_then_replace(tmp_path: Path) -> 
             ssh_target="u@h", remote_path="/r", paths=["x", "y"], timeout=5.0
         )
     cmd = seen["cmd"]
-    # The merger is base64-piped into python3 with the payload in HPC_PM_PAYLOAD;
-    # no path is a raw shell token, and the live manifest is never a direct
-    # redirect target (only the temp is, then os.replace swaps it).
-    assert "base64 -d" in cmd
-    assert "HPC_PM_PAYLOAD=" in cmd
-    assert cmd.rstrip().endswith("python3")
+    # STREAMED shape (2026-07-28): the merger rides a constant-size
+    # ``python3 -c`` base64-exec bootstrap and the payload rides ssh STDIN —
+    # never the command string (argv O(1); the cmd.exe-ceiling class). No path
+    # is a raw shell token, and the live manifest is never a direct redirect
+    # target (only the temp is, then os.replace swaps it).
+    assert "python3 -c " in cmd
+    assert "HPC_PM_PAYLOAD=" not in cmd
+    assert cmd.rstrip().endswith(transport._PUSH_CP_SENTINEL)
     assert f"> {transport._PUSH_MANIFEST_REL}" not in cmd
     # The merger source itself is crash-safe (temp + os.replace) and preserves entries.
     merger = transport._prune._PUSH_MANIFEST_MERGE_PY

@@ -33,7 +33,7 @@ from hpc_agent.infra.clusters import (
 )
 from hpc_agent.infra.runtime_preflight import runtime_uv_preflight
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
-from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binary
+from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binary, rsync_binary
 from hpc_agent.ops.preflight import probe_cache
 
 
@@ -433,7 +433,9 @@ def check_preflight(
     # Probe the same ``scp`` binary the fallback pipeline invokes
     # (``_scp_binary()`` — native OpenSSH ``scp.exe`` on Windows), not a bare
     # ``"scp"`` that could resolve to Git Bash's. ``HPC_SCP_BINARY`` pins it.
-    rsync_path = shutil.which("rsync")
+    # rsync likewise probes the RESOLVED binary (``rsync_binary()`` —
+    # ``HPC_RSYNC_BINARY`` pins an off-PATH install, e.g. ``C:\msys64``'s).
+    rsync_path = shutil.which(rsync_binary())
     scp_binary = _scp_binary()
     scp_path = shutil.which(scp_binary)
     tar_path = shutil.which("tar")

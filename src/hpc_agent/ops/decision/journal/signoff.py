@@ -526,6 +526,35 @@ def _assert_signoff_authorship(
             if not _is_bare_ack(text) and _names_slug(text, section)
         ]
         if not signoff_candidates:
+            # Two distinct refusal causes share this empty pool, and naming the
+            # wrong one sends the human debugging a phantom (2026-07-27 live:
+            # the human HAD typed the slug, the utterance predated the
+            # re-rendered view, and "no logged utterance NAMES the slug" read
+            # as a capture-channel fault — two needless retypes chasing it).
+            # Re-read the pool UNFILTERED (anchor=None — same actor scoping,
+            # no freshness cut) to tell them apart: a stale-only pool means
+            # the section changed after they typed (the run-#12 finding-10
+            # filter working as designed) and the remediation is re-review +
+            # retype, not channel archaeology.
+            _stale_named = [
+                text
+                for text in (
+                    _fresh_human_texts(experiment_dir, actor_ids=_signoff_actor_ids, anchor=None)
+                    or []
+                )
+                if not _is_bare_ack(text) and _names_slug(text, section)
+            ]
+            if _stale_named:
+                _refuse_missing_authorship(
+                    f"notebook sign-off gate: {len(_stale_named)} logged human "
+                    f"utterance(s) NAME the section slug {section!r} but predate "
+                    "the section's CURRENT render — the section changed after "
+                    "they were typed, so they attest a view that no longer "
+                    "exists (a human can only attest a view that existed when "
+                    "they typed). Review the re-rendered view and type a fresh "
+                    "sign-off in chat; the prior wording cannot be reused by "
+                    "reference."
+                )
             _refuse_missing_authorship(
                 "notebook sign-off gate: signing off a section is a HUMAN act — no "
                 f"logged human utterance NAMES the section slug {section!r} "

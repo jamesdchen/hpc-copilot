@@ -296,6 +296,40 @@ def test_reporter_unreachable_when_every_poll_fails(
     assert result["ok"] is False
     assert result["failure_kind"] == "reporter_unreachable"
     assert "reporter never returned" in result["details"]
+    # rc unknown (no returncode attribute) keeps the cluster-side diagnosis.
+    assert "Fix the cluster env" in result["details"]
+
+
+def test_reporter_unreachable_rc255_names_transport_not_cluster_env(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every poll dying at rc=255 is the SSH LAYER failing (connection, or the
+    local ssh spawn itself) — the verdict must say so and must NOT send the
+    operator to fix the cluster's conda env (the 2026-07-27 live misdiagnosis:
+    an ``HPC_SSH_BINARY`` batch shim broke every local spawn; the envelope
+    blamed the cluster env while the canary had run green). The split reads the
+    ``returncode`` ATTRIBUTE, never the message text (the house rule).
+
+    kills: dropping the rc==255 branch in ``_reporter_unreachable_envelope``
+    (which would restore the wrong-side-of-the-wire remediation)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    ticks = iter([0.0, 1.0, 1e9, 1e9, 1e9])
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(ticks))
+    with mock.patch(
+        "hpc_agent.infra.cluster_status.ssh_status_report",
+        side_effect=errors.RemoteCommandFailed(
+            "announce read failed (rc=255): The system cannot find the path specified.",
+            returncode=255,
+        ),
+    ):
+        result = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=30)
+    assert result["ok"] is False
+    assert result["failure_kind"] == "reporter_unreachable"
+    assert "SSH TRANSPORT" in result["details"]
+    assert "Fix the cluster env" not in result["details"]
+    assert "net-triage" in result["details"]
 
 
 def test_open_circuit_rides_budget_to_reporter_unreachable(
