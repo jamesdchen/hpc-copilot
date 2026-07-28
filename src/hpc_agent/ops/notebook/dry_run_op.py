@@ -209,9 +209,10 @@ def _execute_section(section: Section, ns: dict[str, Any]) -> NotebookDryRunSect
             output_sha=_sha(""),
             assertions=[],
         )
+    saved_stdout = sys.stdout
+    sys.stdout = stdout
     try:
-        with contextlib.redirect_stdout(stdout):
-            exec(code, ns)  # noqa: S102 — the sampled preview lane (in-process, one namespace)
+        exec(code, ns)  # noqa: S102 — the sampled preview lane (in-process, one namespace)
     except BaseException as exc:  # noqa: BLE001 — relay the source's own crash verbatim
         error = True
         outcome = "raised"
@@ -219,6 +220,15 @@ def _execute_section(section: Section, ns: dict[str, Any]) -> NotebookDryRunSect
         tb_tail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[
             -_TAIL_CHARS:
         ]
+    finally:
+        # Compare-and-restore, NOT ``contextlib.redirect_stdout``: this runs on
+        # the dry-run worker thread, and on the timeout path the worker is
+        # ABANDONED mid-``exec`` — it reaches this restore seconds later, after
+        # ``_run_sections`` already reset the stream (or while a later caller
+        # holds their own redirect). A blind restore re-installs a stale stream
+        # over theirs; only ever put back a stream this frame itself installed.
+        if sys.stdout is stdout:
+            sys.stdout = saved_stdout
     elapsed = round(time.monotonic() - started, 6)
     captured = stdout.getvalue()
     return NotebookDryRunSection(
@@ -248,12 +258,25 @@ def _run_sections(
     STOPS the run (later sections depend on it). On timeout the worker is abandoned
     (daemon) and the in-progress slug is returned so the caller can mark it — the
     verb always returns within the bound.
+
+    Abandonment hygiene: the worker captures section stdout by re-binding the
+    PROCESS-GLOBAL ``sys.stdout``, so an abandoned worker must never touch it
+    again — ``stop`` blocks further sections, this thread re-installs the
+    pre-span stream (safe: it sat in ``join`` for the whole span, so any change
+    is the worker's), and ``_execute_section`` only restores a stream it itself
+    installed. Residual, accepted: output the abandoned in-flight ``exec``
+    prints AFTER the reset lands on whatever stream is then global — killing
+    that too needs subprocess isolation, and the timeout lane exists precisely
+    for sections that hang rather than print.
     """
     outcomes: dict[str, NotebookDryRunSection] = {}
     holder: dict[str, str | None] = {"current": None}
+    stop = threading.Event()
 
     def _worker() -> None:
         for section in to_run:
+            if stop.is_set():
+                break  # abandoned: one live global-stream toucher is one too many
             holder["current"] = section.slug
             result = _execute_section(section, ns)
             outcomes[section.slug] = result
@@ -261,10 +284,15 @@ def _run_sections(
             if result.error:
                 break  # a raised section stops the run
 
+    prior_stdout = sys.stdout
     thread = threading.Thread(target=_worker, name="hpc-dry-run", daemon=True)
     thread.start()
     thread.join(timeout=timeout_sec)
     timed_out = thread.is_alive()
+    if timed_out:
+        stop.set()
+        if sys.stdout is not prior_stdout:
+            sys.stdout = prior_stdout
     in_progress = holder["current"] if timed_out else None
     return outcomes, in_progress, timed_out
 

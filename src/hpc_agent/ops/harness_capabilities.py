@@ -13,10 +13,7 @@ never a self-asserted manifest:
    plus which
    input channels are installed in ``~/.claude/settings.json`` (the utterance- and
    answer-capture hooks, matched by their :mod:`hpc_agent.agent_assets` module-path
-   needles), plus whether the MCP elicitation SERVER code is implemented (the
-   :data:`~hpc_agent._kernel.extension.mcp_server.ELICITATION_SERVER_IMPLEMENTED`
-   flag — the honest thing a separate-process probe can report; client support is
-   negotiated per session at ``initialize`` and is unknown from this probe).
+   needles).
 2. **Relay/verbatim enforcement.** Whether the relay-audit ``Stop`` hook is
    installed (its needle).
 3. **Backgrounding / wake.** Always present — the detached-worker machinery is
@@ -52,10 +49,10 @@ read-only probe. Pure local read: no SSH, no scheduler, no write, no state moved
 
 This file lives at the ``ops/`` *role root* (sibling to ``export_dossier.py`` /
 ``attention_op.py``, NOT inside a subject package) because it reads across
-subjects — the harness-config needles in :mod:`hpc_agent.agent_assets`, the
-utterance-log locator in :mod:`hpc_agent.state.utterances`, and the MCP server's
-elicitation flag. The subject-imports lint short-circuits for role-root files, so
-the cross-subject reads here are allowed by construction.
+subjects — the harness-config needles in :mod:`hpc_agent.agent_assets` and the
+utterance-log locator in :mod:`hpc_agent.state.utterances`. The subject-imports
+lint short-circuits for role-root files, so the cross-subject reads here are
+allowed by construction.
 """
 
 from __future__ import annotations
@@ -97,7 +94,15 @@ __all__ = [
 # negotiation seams here + kit behavioral assertions. Both reference adapters stay
 # conforming (the top-level v1 verdict is the three core capabilities), so the bump
 # is additive, never breaking (harness-contract.md "Deprecation posture").
-HARNESS_CONTRACT_VERSION = "1.2.0"
+# 1.3.0 (2026-07-27, elicitation retirement): MINOR — the OPTIONAL MCP-elicitation
+# second capability-1 channel is RETIRED (user ruling: a third-party client's
+# rendering of an elicitation form cannot be controlled, so the popup was the
+# wrong sign-off surface; the hook/chat path is THE channel). No conforming
+# harness is invalidated and no obligation changes — the §2 write-API rules
+# (provenance filter, typed-only, code-rendered display) stand for ANY
+# out-of-band channel — so this is not a breaking removal; the report merely
+# drops the two informational `elicitation_*` evidence keys.
+HARNESS_CONTRACT_VERSION = "1.3.0"
 
 _log = logging.getLogger(__name__)
 
@@ -222,7 +227,7 @@ def _needle_installed(settings: dict[str, Any], needle: str) -> bool:
             "Detect and report the harness capability set as CODE can observe it "
             "(LSP-style negotiation for the harness contract). Reports the "
             "contract capabilities — the out-of-band utterance log (installed "
-            "capture hooks + this repo's log presence + MCP elicitation flag), "
+            "capture hooks + this repo's log presence), "
             "relay/verbatim enforcement (the relay-audit Stop hook), backgrounding "
             "(core-side, always present; watchdog hook reported honestly), "
             "trusted display (unknown — no detection seam yet), the Stop-hook "
@@ -246,13 +251,12 @@ def harness_capabilities(
 ) -> HarnessCapabilitiesResult:
     """Detect the harness-contract capabilities for *experiment_dir*.
 
-    Pure observation: reads ``settings.json`` (fail-open), checks the utterance
-    log's namespace for this repo (non-creating), and consults the MCP elicitation
-    flag. Every ``present`` bit is something code verified; ``trusted_display`` is
-    ``"unknown"`` because it has no detection seam. The ``spec`` is empty
+    Pure observation: reads ``settings.json`` (fail-open) and checks the
+    utterance log's namespace for this repo (non-creating). Every ``present``
+    bit is something code verified; ``trusted_display`` is ``"unknown"``
+    because it has no detection seam. The ``spec`` is empty
     (``extra="forbid"`` still rejects a bogus key), so it is optional here.
     """
-    from hpc_agent._kernel.extension.mcp_server import ELICITATION_SERVER_IMPLEMENTED
     from hpc_agent.agent_assets import (
         _ALERT_COUNT_NEEDLE,
         _ANSWER_CAPTURE_NEEDLE,
@@ -292,12 +296,6 @@ def harness_capabilities(
         evidence={
             "utterance_capture_hook": utterance_capture,
             "answer_capture_hook": answer_capture,
-            # Elicitation splits into what code can verify vs. what it cannot: the
-            # SERVER code capability is a real, separate-process-observable bit; the
-            # CLIENT support is negotiated per session at MCP `initialize` and is
-            # unknown from this probe (say unknown, not yes — the honesty posture).
-            "elicitation_server": ELICITATION_SERVER_IMPLEMENTED,
-            "elicitation_client": "per-session",
             "log_present_for_repo": log_present,
         },
     )

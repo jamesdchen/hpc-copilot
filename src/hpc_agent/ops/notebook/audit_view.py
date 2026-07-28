@@ -829,8 +829,61 @@ def build_audit_view(
 # ── the code-rendered markdown projection ────────────────────────────────────
 
 
-def _render_section(sv: SectionView) -> list[str]:
-    """The markdown lines for one section (pure, deterministic)."""
+def _is_exposition_diff_line(line: str) -> bool:
+    """True when a unified-diff *line*'s content is a comment-only source line.
+
+    The py:percent format carries prose as comment lines (markdown cells render
+    as ``# …`` runs), so a diff line whose body — after the ``+``/``-``/context
+    marker — starts with ``#`` is commented-out EXPOSITION, not code. Diff
+    structure is never exposition: hunk headers (``@@``) and the ``+++``/``---``
+    file labels are excluded before the body test.
+    """
+    if not line or line.startswith(("+++", "---", "@@")):
+        return False
+    body = line[1:] if line[0] in "+- " else line
+    return body.lstrip().startswith("#")
+
+
+def _elide_exposition_diff(diff: Sequence[str]) -> list[str]:
+    """*diff* with each RUN of comment-only lines collapsed to a disclosure line.
+
+    The INLINE-chat projection of the diff (the elide-exposition render): code
+    lines keep their diff highlighting untouched, while commented-out exposition
+    (markdown-cell prose, comment banners) collapses to one disclosed
+    ``… (N commented exposition line(s) elided — full text in the on-disk
+    render)`` line per run — never a silent drop. The on-disk render always
+    carries the full diff (:func:`_render_section` default), so the elided text
+    stays auditable out of chat.
+    """
+    out: list[str] = []
+    run = 0
+    for line in diff:
+        if _is_exposition_diff_line(line):
+            run += 1
+            continue
+        if run:
+            out.append(
+                f"… ({run} commented exposition line(s) elided — full text in the on-disk render)"
+            )
+            run = 0
+        out.append(line)
+    if run:
+        out.append(
+            f"… ({run} commented exposition line(s) elided — full text in the on-disk render)"
+        )
+    return out
+
+
+def _render_section(sv: SectionView, *, elide_exposition: bool = False) -> list[str]:
+    """The markdown lines for one section (pure, deterministic).
+
+    ``elide_exposition`` selects the INLINE-CHAT projection: the diff's
+    comment-only runs collapse to disclosed elision lines
+    (:func:`_elide_exposition_diff`) so the chat relay carries the code diff
+    without the prose fluff. The DEFAULT (``False``) is the full body — the
+    on-disk trusted render (``render_store``) always uses it, so the complete
+    exposition remains auditable out of chat.
+    """
     lines: list[str] = []
     lines.append(f"## section: {sv.slug}  [tier: {sv.tier}]")
     lines.append("")
@@ -843,7 +896,7 @@ def _render_section(sv: SectionView) -> list[str]:
     lines.append("")
     if sv.diff:
         lines.append("```diff")
-        lines.extend(sv.diff)
+        lines.extend(_elide_exposition_diff(sv.diff) if elide_exposition else sv.diff)
         lines.append("```")
     else:
         lines.append("(no changes — inherited from template)")
@@ -1067,12 +1120,19 @@ def _render_audit_net_digest(view: AuditView) -> list[str]:
     return lines
 
 
-def render_markdown(view: AuditView) -> str:
+def render_markdown(view: AuditView, *, elide_exposition: bool = False) -> str:
     """Render *view* as deterministic, code-authored markdown (D6 posture).
 
     Pure formatting of the projection's own fields — slug, tier, classification,
     diff, assertions, flags per section — with NO LLM-freeform prose. Same view
     → byte-identical markdown.
+
+    ``elide_exposition`` selects the INLINE-CHAT projection (the read-and-sign
+    surface since the sign-off popup retired, 2026-07-27): each section's diff
+    keeps its code lines and highlighting but collapses commented-out exposition
+    runs to disclosed elision lines, so the chat relay is not padded with prose
+    the human can audit out-of-chat in the on-disk render (which always carries
+    the full body — the default ``False`` this function keeps for it).
     """
     lines: list[str] = []
     lines.append("# Notebook audit view")
@@ -1095,7 +1155,7 @@ def render_markdown(view: AuditView) -> str:
         lines.append("(no sections)")
         lines.append("")
     for sv in view.sections:
-        lines.extend(_render_section(sv))
+        lines.extend(_render_section(sv, elide_exposition=elide_exposition))
 
     lines.extend(_render_next_actions(view))
     lines.extend(_render_dropped_drafts(view))
@@ -1107,9 +1167,10 @@ def render_summary_markdown(view: AuditView, render_paths: Mapping[str, str] | N
     """The bodies-OMITTED DIGEST render (run-#12 finding 12, B1; user-ruled: OMIT
     at the source, never compact downstream).
 
-    Under popup-primary the model is no longer the display channel: the diff /
-    assertion / flag BODIES live in the per-section render files and the
-    sign-off popup, so shipping ~11k tokens of them through the agent every
+    For the loop's routine passes the model need not carry the bodies: the
+    diff / assertion / flag BODIES live in the per-section render files (and
+    the inline ``full: true`` relay carries them when the human is actually
+    reviewing), so shipping ~11k tokens of them through the agent every
     loop pass is pure cost plus a re-summarization temptation. This render
     carries the header, ONE metadata line per section (slug, tier,
     classification, sha12s, verdict/diff COUNTS), a POINTER to where that
@@ -1122,7 +1183,7 @@ def render_summary_markdown(view: AuditView, render_paths: Mapping[str, str] | N
     """
     paths = render_paths or {}
     lines: list[str] = []
-    lines.append("# Notebook audit view (metadata; bodies live in the render files + popup)")
+    lines.append("# Notebook audit view (metadata; bodies live in the render files)")
     lines.append("")
     lines.append(f"- view_sha: {view.view_sha}")
     lines.append(f"- source module_sha: {view.source_module_sha}")

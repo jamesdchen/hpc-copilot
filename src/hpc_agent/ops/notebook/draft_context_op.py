@@ -356,20 +356,27 @@ def _listing_for_root(
 # ── render ───────────────────────────────────────────────────────────────────
 
 
-def _render_markdown(result: NotebookDraftContextResult) -> str:
-    """Deterministic, code-authored markdown (trusted-display; no LLM prose)."""
+def _render_markdown(
+    result: NotebookDraftContextResult, section_bodies: list[tuple[str, str]]
+) -> str:
+    """Deterministic, code-authored markdown (trusted-display; no LLM prose).
+
+    *section_bodies* is the ``(slug, raw cell source)`` list the render embeds
+    verbatim — passed separately because the wire rows carry identity only
+    (F4: the body rides once, here, never twice).
+    """
     lines: list[str] = ["# Notebook draft context", ""]
 
     lines.append("## template sections")
     lines.append("")
-    if not result.template_sections:
+    if not section_bodies:
         lines.append("(no sections)")
         lines.append("")
-    for sec in result.template_sections:
-        lines.append(f"### {sec.slug}")
+    for slug, source in section_bodies:
+        lines.append(f"### {slug}")
         lines.append("")
         lines.append("```python")
-        lines.append(sec.source.rstrip("\n"))
+        lines.append(source.rstrip("\n"))
         lines.append("```")
         lines.append("")
 
@@ -443,7 +450,12 @@ def _compute(
     """Build the projection from scratch (cache miss path)."""
     template_text = _read_text(experiment_dir, template_relpath, kind="template")
     parsed = parse_percent_source(template_text)
-    template_sections = [TemplateSection(slug=s.slug, source=s.source) for s in parsed.sections]
+    # F4 (context-footprint plan): the wire row carries IDENTITY (slug +
+    # normalized sha12); the cell prose rides only in the markdown render.
+    template_sections = [
+        TemplateSection(slug=s.slug, source_sha12=s.section_sha[:12]) for s in parsed.sections
+    ]
+    section_bodies = [(s.slug, s.source) for s in parsed.sections]
 
     template_tree = _parse_tolerant(template_text)
     source_root_dirs = _root_dirs(experiment_dir, source_roots)
@@ -480,7 +492,7 @@ def _compute(
         source_roots=source_roots,
         input_roots=input_roots,
     )
-    return result.model_copy(update={"markdown": _render_markdown(result)})
+    return result.model_copy(update={"markdown": _render_markdown(result, section_bodies)})
 
 
 def _stat_files(

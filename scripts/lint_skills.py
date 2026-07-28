@@ -134,6 +134,22 @@ RULES: list[Rule] = [
         ),
         check_function="check_step_ends_in_action",
     ),
+    Rule(
+        id="branch-reference-integrity",
+        severity="error",
+        description=(
+            "Branch-gated skill references (context-footprint F3, "
+            "docs/plans/context-footprint-2026-07-27.md): every "
+            "`references/<file>.md` a SKILL body names must exist in the "
+            "skill's own references/ directory, and every file in that "
+            "directory must be named by its SKILL body — a dangling "
+            "reference sends the agent to a file that isn't there, and an "
+            "orphan is dead guidance no branch can reach (the "
+            "guard-can-fire posture). Error from birth: the rule fires "
+            "deterministically on a structural fact."
+        ),
+        check_function="check_branch_reference_integrity",
+    ),
 ]
 
 
@@ -481,12 +497,40 @@ def check_step_ends_in_action(path: Path, lines: list[str]) -> list[tuple[int, s
 
 _CheckFunc = Callable[[Path, list[str]], list[tuple[int, str]]]
 
+_REFERENCE_RE = re.compile(r"references/([A-Za-z0-9._-]+\.md)")
+
+
+def check_branch_reference_integrity(path: Path, lines: list[str]) -> list[tuple[int, str]]:
+    """Dangling `references/<file>.md` mentions + orphan files in references/.
+
+    A mention anywhere in the SKILL body counts (trigger lines are prose, not
+    Steps); the file must exist under the skill's own ``references/``
+    directory. The inverse holds too: a file in ``references/`` that no SKILL
+    line names is unreachable guidance — reported on line 0.
+    """
+    refs_dir = path.parent / "references"
+    named: set[str] = set()
+    out: list[tuple[int, str]] = []
+    for line_no, line in enumerate(lines, start=1):
+        for match in _REFERENCE_RE.finditer(line):
+            name = match.group(1)
+            named.add(name)
+            if not (refs_dir / name).is_file():
+                out.append((line_no, f"dangling reference: references/{name} does not exist"))
+    if refs_dir.is_dir():
+        for file in sorted(refs_dir.glob("*.md")):
+            if file.name not in named:
+                out.append((0, f"orphan reference file: references/{file.name} named by no line"))
+    return out
+
+
 CHECK_BY_ID: dict[str, _CheckFunc] = {
     "prose-decide": check_prose_decide,
     "embedded-recovery-menu": check_embedded_recovery_menu,
     "return-without-tool-call-guard": check_return_step_guard,
     "trailing-narration-example": check_trailing_narration_example,
     "step-without-action-ending": check_step_ends_in_action,
+    "branch-reference-integrity": check_branch_reference_integrity,
 }
 
 

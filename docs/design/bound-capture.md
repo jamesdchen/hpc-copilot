@@ -1,7 +1,14 @@
 # Bound capture — attestation carried by the channel, not reconstructed from the stream
 
 Status: **PLANNED** (banked 2026-07-11, run-#12 finding-10 design note
-promoted; dispatch-ready for an Opus wave). Prereq reading:
+promoted; dispatch-ready for an Opus wave). **2026-07-27 caveat: the MCP
+elicitation popup — the reference binding surface this doc's shipped half
+(the overnight-consent bound tier) was written against — is RETIRED
+(`docs/design/mcp-elicitation.md`, drift-log final entry). The store's
+`bound` round-trip and the overnight gate's bound tier remain for a
+conforming SECOND harness's binding surface; core itself now ships no bound
+writer, and the overnight gate gained a token-exact chat tier beside the
+bound one.** Prereq reading:
 `docs/design/mcp-elicitation.md` (D1–D6, E-render), `run12-findings.md`
 findings 9/10, `state/utterances.py` module docstring.
 

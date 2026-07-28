@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/read_decisions.output.json",
   "title": "read-decisions output data",
-  "description": "A scope's decision journal, oldest first.",
+  "description": "A scope's decision journal, oldest first.\n\nDigest mode (spec ``digest: true``) fills ``records_digest`` and leaves\n``records`` EMPTY; the default fills ``records`` and OMITS\n``records_digest`` entirely (the serializer drops the ``None`` — the\ndefault response stays byte-identical to the pre-digest wire shape).\n``count`` is the journal's record count in both modes.",
   "type": "object",
   "required": [
     "path",
@@ -26,6 +26,21 @@
       "minimum": 0,
       "title": "Count",
       "type": "integer"
+    },
+    "records_digest": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/DecisionRecordDigest"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Records Digest"
     }
   },
   "$defs": {
@@ -130,6 +145,57 @@
         "response"
       ],
       "title": "decision journal record",
+      "type": "object"
+    },
+    "DecisionRecordDigest": {
+      "additionalProperties": false,
+      "description": "One record's identity/ordering metadata — everything the preflight scan\nreads, none of the prose. ``response_sha12`` fingerprints the response text\n(verifiable against the full record); ``resolved_keys`` names the resolved\nmapping's keys without its values.",
+      "properties": {
+        "ts": {
+          "title": "Ts",
+          "type": "string"
+        },
+        "block": {
+          "title": "Block",
+          "type": "string"
+        },
+        "response_sha12": {
+          "title": "Response Sha12",
+          "type": "string"
+        },
+        "response_chars": {
+          "minimum": 0,
+          "title": "Response Chars",
+          "type": "integer"
+        },
+        "resolved_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Resolved Keys",
+          "type": "array"
+        },
+        "attestor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestor Id"
+        }
+      },
+      "required": [
+        "ts",
+        "block",
+        "response_sha12",
+        "response_chars",
+        "resolved_keys"
+      ],
+      "title": "read-decisions record digest",
       "type": "object"
     }
   }

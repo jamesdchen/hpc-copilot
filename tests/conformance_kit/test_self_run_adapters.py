@@ -14,7 +14,7 @@ Both run OFFLINE, in-process against the hook cores / render stack — no live
 harness, no network (the conformance-lane boundary). The modules are addressed by
 FILE PATH (not ``--pyargs``) so the package ``conftest.py`` registers
 ``--harness-adapter`` before option parsing (the K2/K4 standalone idiom); the
-child cwd is the repo root so the ``tests`` package (the elicitation rig) and the
+child cwd is the repo root so the ``tests`` package and the
 kit conftest resolve. The notebook leg ``importorskip``s the render stack the CI
 notebook job installs, and puts the plugin src on the child ``PYTHONPATH``.
 """

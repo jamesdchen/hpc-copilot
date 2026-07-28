@@ -105,13 +105,25 @@ def cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # ── template sections ────────────────────────────────────────────────────────
 
 
-def test_template_sections_verbatim(tmp_path: Path) -> None:
+def test_template_sections_identity_rows_and_body_in_markdown_only(tmp_path: Path) -> None:
+    # F4 (context-footprint plan): the wire rows carry IDENTITY (slug + the
+    # audit's normalized sha12); the cell prose rides ONCE, in the markdown
+    # render — never twice in the same response.
     _setup(tmp_path)
     result = _run(tmp_path)
     slugs = [s.slug for s in result.template_sections]
     assert slugs == ["build-widget", "report"]
-    # cell prose carried verbatim (the import line is inside the section source).
-    assert "from engines.widget import make_widget" in result.template_sections[0].source
+    for sec in result.template_sections:
+        assert len(sec.source_sha12) == 12
+        assert not hasattr(sec, "source")
+    # The prose is carried verbatim in the render (the relay surface)...
+    assert "from engines.widget import make_widget" in result.markdown
+    # ...and nowhere in the structured half.
+    structured = result.model_dump(mode="json")
+    structured.pop("markdown")
+    import json as _json
+
+    assert "from engines.widget import make_widget" not in _json.dumps(structured)
 
 
 # ── resolved engines: signature + docstring extraction ───────────────────────

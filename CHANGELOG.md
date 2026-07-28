@@ -17,6 +17,110 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — agent reincorporation at the recon-only level (2026-07-27)
+
+Per `docs/plans/agent-delegation-2026-07-27.md` (user-ordered: "reincorporate
+agents on some level, just not the same level that we were doing before"). The
+retired level put an agent INSIDE the execution path; this one puts it only
+BESIDE — a subagent is a **context firewall for read-only reconnaissance**, and
+the verbose transcript (tool schemas, envelopes, render bytes) lives and dies
+in the subagent while the main session gets a compact advisory brief:
+
+- **`hpc-recon`, a read-only core-shipped agent** —
+  `slash_commands/agents/hpc-recon.md`, the first agent core ships since the §6
+  worker removal. `tools: Bash, Read, Grep, Glob` (no `Write`/`Edit` by
+  charter); the body confines `Bash` to `hpc-agent` query/validate verbs and
+  forbids paraphrasing a relay-VERBATIM render — render-bearing verbs come back
+  as `render_path` + shas + counts. The existing `agent_assets`
+  `agents/` walk installs it with zero machinery change.
+- **Per-skill `## Delegation (hpc-recon)` sections + `Task`** on the five
+  workflow skills (`hpc-submit`, `hpc-status`, `hpc-aggregate`, `hpc-campaign`,
+  `hpc-notebook-audit`): one `- delegable:` bullet per handoff naming its verbs,
+  one `- locked:` bullet restating the boundary (`append-decision`, the
+  `y`/nudge rendezvous, sign-off and standing consent, every verbatim relay).
+- **`docs/design/agent-delegation.md`** carries the doctrine and names the
+  retired level as the recorded anti-pattern: **delegation never enters the
+  trust chain** — a subagent's report is model-carried text, worth exactly
+  nothing to the gates, which read journals, stores, and the utterance log. No
+  gate changed, and none needed to; the `hpc-worker` spawn transport stays
+  retired and is not coming back at any level.
+- **`tests/contracts/test_agent_delegation_guidance.py`** mechanizes it: every
+  verb a `- delegable:` bullet names must be `verb=query`/`verb=validate` in the
+  LIVE primitive registry (resolved, never a hand list — a primitive decorated
+  tomorrow is locked today), every section carries its `- locked:` restatement
+  and `Task`, `hpc-recon.md` grants no write tool and keeps the never-paraphrase
+  rule, and a synthetic skill offering `append-decision` is refused.
+
+### Changed — context-footprint reduction, five levers (2026-07-27)
+
+Per `docs/plans/context-footprint-2026-07-27.md` (user-ordered; the governing
+rule: defer only what a BRANCH needs — the mainline stays inline, every
+deferral disclosed with a pointer):
+
+- **MCP `tools/list` schemas are structure-only.** The embedded spec schemas
+  keep types/`required`/`enum`/property names but drop the nested per-field
+  documentation prose; the spec property's description points at `describe` /
+  `hpc-agent describe <verb>`, which still serve the full contract (the
+  packaged schema files are untouched — the trim is a serve-time projection).
+- **Oversized structural refusals offload their detail.** When a refusal's
+  message+remediation exceeds 2000 bytes, the full text lands in a
+  content-addressed `.hpc/briefs/refusal-<sha12>.txt` and the envelope
+  carries a line-boundary truncation + the path. Authorship-marked
+  (read-and-sign) refusals always stay inline whole; no existing `.hpc` ⇒ no
+  offload (no-scaffold); any write error fails open to the full inline text.
+- **Branch-gated skill guidance moved to `references/` files** read only when
+  the branch is taken: hpc-submit's `revise-resolved` / `retarget-run`
+  recovery arms, hpc-notebook-audit's interview-handoff on-ramp. A new
+  error-severity `branch-reference-integrity` lint rule refuses dangling or
+  orphan reference files.
+- **`read-decisions` gained `digest: true`** — per-record identity/ordering
+  metadata (ts, block, attestor, response sha12 + length, resolved key names)
+  with the bodies omitted; the default response is byte-identical to before
+  (the additive key is absent, not null). The submit/status preflight scans
+  now use it.
+- **Wire: `notebook-draft-context` no longer double-carries the template
+  prose.** `template_sections[]` rows now carry `slug` + `source_sha12` (the
+  audit's normalized sha) instead of the verbatim cell `source`; the prose
+  rides once, in the `markdown` render the skill relays. The content-keyed
+  cache self-heals (an old-shape payload fails validation and recomputes).
+
+### Removed — the MCP elicitation channel; the inline chat relay is the read-and-sign surface (2026-07-27)
+
+- **MCP elicitation removed wholesale (user-ruled).** In retrospect, relying on
+  a third-party client's implementation of MCP elicitation was the wrong basis
+  for the sign-off surface: form rendering is entirely client discretion (no
+  markdown/sizing guarantee — `docs/design/mcp-elicitation-facts.md`), and the
+  live harness rendered the dialog too small to carry an audit. Removed:
+  `_kernel/extension/mcp_elicitation.py`; the bidirectional pump (`mcp-serve`
+  is again a strict synchronous request → response server — reader thread,
+  outbound-request wait, pending slot all gone); the `append-decision`
+  elicit-then-retry firing site; the per-session `capabilities.elicitation`
+  store + dark flag; `ELICITATION_SERVER_IMPLEMENTED` and the
+  `elicitation_server` / `elicitation_client` evidence keys of
+  `harness-capabilities`; `render_store.read_render_digest` / `RenderDigest`
+  (popup-only consumers); the conformance kit's E7 legs; the elicitation test
+  suites + `tests/_mcp_harness.py`. `HARNESS_CONTRACT_VERSION` 1.2.0 → 1.3.0
+  (MINOR: the channel was optional and non-load-bearing; no conforming harness
+  is invalidated — `docs/internals/harness-contract.md` "MCP elicitation …
+  RETIRED"). The `failure_features.authorship_evidence` refusal marker
+  survives (harness-agnostic refusal-cause metadata).
+- **The inline chat relay is the read-and-sign surface.**
+  `notebook-audit-view` with `full: true` now emits the inline review
+  projection: the code diff rides with its highlighting intact while
+  commented-out exposition runs collapse to disclosed elision lines
+  (`… (N commented exposition line(s) elided — full text in the on-disk
+  render)`); the content-addressed render file keeps the FULL exposition for
+  out-of-chat auditing. The human reads the relay (or the render file) and
+  types the sign-off in chat — the `UserPromptSubmit` capture hook is the one
+  capability-1 channel, and the T8 gate's evidence tiers are unchanged.
+- **Overnight standing consent gained a token-exact chat tier.** The gate's
+  bound-capture-only posture (USER RULING 3) presumed the popup as the binding
+  surface; with it retired, a typed chat consent now grants when it names the
+  boundary token-exactly, every declared heal class, and the spec's `cmd_sha`
+  by an 8+ hex prefix — a token derivable only from the refusal's
+  code-rendered coverage brief, which is now rendered inline in the refusal.
+  The bound tier remains for a conforming second harness's binding surface.
+
 First implementation wave of the fork's guiding design
 ([`docs/design/human-amplification-blocks.md`](docs/design/human-amplification-blocks.md)):
 workflows decompose into **blocks** that chain deterministically in code and

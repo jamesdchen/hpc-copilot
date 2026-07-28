@@ -30,14 +30,14 @@ naming-gate family: ``_names_target_sha_prefix`` / scope-unlock precedent):
   the home-log utterance (there is deliberately no utterance-writing verb,
   pinned by the contracts suite), so the bootstrap cannot be self-satisfied.
 
-Every refusal here is a PLAIN :class:`errors.SpecInvalid` — NEVER the E2
+Every refusal here is a PLAIN :class:`errors.SpecInvalid` — NEVER the
 ``authorship_evidence: missing`` marker. This is the one place the marker
 family deliberately breaks the convention, and the reason is load-bearing:
-the marker drives the MCP elicitation retry, and a re-elicited utterance is
-captured into the CURRENT session's namespace (the second repo) — the wrong
-log, a guaranteed-failing round-trip, exactly what
-``_refuse_missing_authorship``'s docstring reserves the marker against. The
-refusal message instead directs the human: "in a session whose cwd is the
+the marker says "a freshly typed utterance in THIS session resolves this",
+but a fresh utterance here is captured into the CURRENT session's namespace
+(the second repo) — the wrong log, a guaranteed-failing round-trip, exactly
+what ``_refuse_missing_authorship``'s docstring reserves the marker against.
+The refusal message instead directs the human: "in a session whose cwd is the
 home repo, state: trust this repo's utterance log <hash>".
 """
 

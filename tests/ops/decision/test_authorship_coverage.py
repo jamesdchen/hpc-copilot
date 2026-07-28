@@ -3,10 +3,10 @@
 The gate submodules (registration / conclusion / challenge / reproduction /
 overnight_consent) each have a focused behavior suite, but the TWO shared
 primitives every one of them builds on — :func:`_is_bare_ack` (the bare-ack
-discriminator) and :func:`_refuse_missing_authorship` (the E2 authorship-missing
+discriminator) and :func:`_refuse_missing_authorship` (the authorship-missing
 marker) — had NO direct boundary battery. A silent bug here lets an
 un-authored ``y`` commit a value that appeared only in the agent's proposal, or
-strips the marker the MCP elicit-then-retry seam keys on.
+strips the machine-readable marker a harness keys on to prompt the human.
 
 This file pins both at the boundary:
 
@@ -106,8 +106,8 @@ def test_refuse_raises_spec_invalid_with_the_message() -> None:
 
 
 def test_refuse_attaches_exact_authorship_missing_marker() -> None:
-    # kills: mutating the marker KEY or VALUE — the MCP elicit-then-retry hook
-    # keys on the distinct ``authorship_evidence`` key, so the block must be
+    # kills: mutating the marker KEY or VALUE — a consumer keys on the distinct
+    # ``authorship_evidence`` key, so the block must be
     # EXACTLY {"authorship_evidence": "missing"}.
     with pytest.raises(errors.SpecInvalid) as exc:
         _refuse_missing_authorship("bare ack")

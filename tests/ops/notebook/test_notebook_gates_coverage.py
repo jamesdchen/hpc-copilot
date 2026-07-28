@@ -137,8 +137,8 @@ def _marker_of(exc: BaseException) -> Any:
 
 def test_signoff_bare_ack_refused_with_authorship_marker(tmp_path: Path) -> None:
     """A bare ``y`` cannot sign off a section — refused at the base authorship
-    floor, and the refusal carries the E2 authorship-missing marker (the popup
-    cue). Kills a mutant that drops the ``_is_bare_ack`` leg."""
+    floor, and the refusal carries the authorship-missing marker (the
+    prompt-the-human cue). Kills a mutant that drops the ``_is_bare_ack`` leg."""
     _write_notebook(tmp_path, _source())
     sv = _canonical_section(tmp_path)
     write_render(tmp_path, audit_id=_AUDIT, view=sv)  # render present → not the render leg

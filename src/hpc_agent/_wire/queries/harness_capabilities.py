@@ -4,7 +4,7 @@ The wire surface of LSP-style capability NEGOTIATION for the harness contract
 (``docs/internals/harness-contract.md``, "Capability negotiation"). The verb is a
 pure READ that DETECTS the capability set a conforming harness provides — the
 declaration IS what code can verify (installed hooks in ``~/.claude/settings.json``,
-the utterance log's presence for this repo, the MCP elicitation flag), never a
+the utterance log's presence for this repo), never a
 self-asserted manifest. A capability the code cannot observe reads ``"unknown"``,
 not ``true``.
 

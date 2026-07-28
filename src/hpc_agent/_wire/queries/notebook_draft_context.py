@@ -97,12 +97,20 @@ class NotebookDraftContextSpec(BaseModel):
 
 
 class TemplateSection(BaseModel):
-    """One template section echoed verbatim: its slug + raw cell prose."""
+    """One template section's IDENTITY row: slug + normalized-source sha12.
+
+    F4 (``docs/plans/context-footprint-2026-07-27.md``): the raw cell prose
+    used to ride here verbatim AND in ``markdown`` — the same bytes twice in
+    every response. The body now rides ONLY in the ``markdown`` render (the
+    relay surface); this row keeps the identity a consumer can verify against
+    it (``source_sha12`` is the audit's normalized section sha, truncated —
+    the same hash ``notebook-lint`` / the audit view report).
+    """
 
     model_config = ConfigDict(extra="forbid", title="draft-context template section")
 
     slug: str
-    source: str
+    source_sha12: str
 
 
 class ResolvedEngine(BaseModel):

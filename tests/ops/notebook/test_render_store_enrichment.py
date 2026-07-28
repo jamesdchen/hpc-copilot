@@ -5,7 +5,9 @@ journals, with two PRESENTATION-ONLY blocks: the ``### linked sources`` src dige
 (the engine versions the section binds) and a ``### prior sign-off`` advisory (this
 exact content already human-signed under another audit). Both are BYTE-ABSENT when
 they do not apply — an existing render is unchanged — and neither enters ``view_sha``.
-``read_render_digest`` parses both back off the code-written render bytes.
+Assertions read the code-written render bytes directly (the on-disk artifact IS
+the oracle; the popup-era ``read_render_digest`` parser retired with the MCP
+elicitation channel).
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import json
 from pathlib import Path
 
 from hpc_agent.ops.notebook.audit_view import build_audit_view
-from hpc_agent.ops.notebook.render_store import read_render_digest, render_bytes, write_render
+from hpc_agent.ops.notebook.render_store import read_render_header, render_bytes, write_render
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import append_decision
 
@@ -54,6 +56,23 @@ def _section_view(source_text: str = _SOURCE):
     return next(sv for sv in view.sections if sv.slug == "model")
 
 
+def _linked_sources_block(body: str) -> str:
+    """The ``### linked sources`` block's own lines (stops at the next header)."""
+    lines: list[str] = []
+    in_block = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped == "### linked sources":
+            in_block = True
+            continue
+        if stripped.startswith(("### ", "## ")):
+            in_block = False
+            continue
+        if in_block:
+            lines.append(stripped)
+    return "\n".join(lines)
+
+
 # ── slice 1: the src digest ──────────────────────────────────────────────────
 
 
@@ -67,11 +86,9 @@ def test_src_digest_appears_with_linked_sources(tmp_path: Path) -> None:
     assert "engine.train @ src/engine.py:1" in body
     assert "`x, y=1`" in body
     assert "module_sha " in body
-    digest = read_render_digest(path)
-    assert digest is not None
-    assert digest.linked_engine_count == 1
-    assert len(digest.linked_engines) == 1
-    assert "engine.train @ src/engine.py:1" in digest.linked_engines[0]
+    # Exactly one engine line in the block (no elision disclosure).
+    assert body.count("- engine.train @") == 1
+    assert "more" not in _linked_sources_block(body)
 
 
 def test_src_digest_byte_absent_without_linked_sources(tmp_path: Path) -> None:
@@ -100,11 +117,6 @@ def test_src_digest_byte_absent_without_linked_sources(tmp_path: Path) -> None:
     assert "### prior sign-off" not in body
     # Byte-identical to the un-enriched render.
     assert body == render_bytes(audit_id=_AUDIT, view=sv)
-    digest = read_render_digest(path)
-    assert digest is not None
-    assert digest.linked_engine_count == 0
-    assert digest.linked_engines == ()
-    assert digest.prior_signoff is None
 
 
 def test_src_digest_caps_and_discloses_more(tmp_path: Path) -> None:
@@ -133,11 +145,9 @@ def test_src_digest_caps_and_discloses_more(tmp_path: Path) -> None:
     sv = _section_view(src_text)
     path = write_render(tmp_path, audit_id=_AUDIT, view=sv)
     body = path.read_text(encoding="utf-8")
-    assert "… +2 more" in body
-    digest = read_render_digest(path)
-    assert digest is not None
-    assert digest.linked_engine_count == 8  # full count preserved
-    assert len(digest.linked_engines) == 6  # list capped
+    assert "… +2 more" in body  # elision disclosed, full count recoverable
+    block = _linked_sources_block(body)
+    assert sum(1 for ln in block.splitlines() if ln.startswith("- eng")) == 6  # list capped
 
 
 def test_src_digest_absent_for_standalone_audit(tmp_path: Path) -> None:
@@ -232,10 +242,7 @@ def test_prior_signoff_line_appears_from_different_audit(tmp_path: Path) -> None
     path = write_render(tmp_path, audit_id=_AUDIT, view=sv)
     body = path.read_text(encoding="utf-8")
     assert "### prior sign-off" in body
-    assert "identical content signed 2026-05-01 under audit audit-OLD" in body
-    digest = read_render_digest(path)
-    assert digest is not None
-    assert digest.prior_signoff == "identical content signed 2026-05-01 under audit audit-OLD"
+    assert "- identical content signed 2026-05-01 under audit audit-OLD" in body
 
 
 def test_prior_signoff_absent_when_only_current_audit_signed(tmp_path: Path) -> None:
@@ -271,6 +278,6 @@ def test_prior_signoff_never_changes_view_sha(tmp_path: Path) -> None:
     sv = _section_view()
     _record_prior_signoff(tmp_path, "audit-OLD", sv, ts="2026-05-01T09:00:00Z")
     path = write_render(tmp_path, audit_id=_AUDIT, view=sv)
-    digest = read_render_digest(path)
-    assert digest is not None
-    assert digest.view_sha == sv.view_sha  # unchanged by the advisory block
+    header = read_render_header(path)
+    assert header is not None
+    assert header["view_sha"] == sv.view_sha  # unchanged by the advisory block

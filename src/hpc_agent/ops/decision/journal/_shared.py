@@ -19,11 +19,13 @@ from hpc_agent.infra.env_flags import env_actor
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
 from hpc_agent.state.interview_doc import iter_interview_docs
 
-# ── E2: the authorship-refusal marker (docs/design/mcp-elicitation.md D4/E2) ──
+# ── the authorship-refusal marker (E2 heritage) ───────────────────────────────
 
-# The machine-readable discriminator the MCP elicitation hook keys on to detect
-# an authorship/sign-off refusal WITHOUT parsing prose. It rides the additive,
-# contractually-open ``failure_features`` block: ``cli/_helpers.py::_err_from_hpc``
+# The machine-readable discriminator that lets any harness detect an
+# authorship/sign-off refusal WITHOUT parsing prose — i.e. distinguish "a
+# freshly typed human sentence in chat resolves this" from a structural refusal
+# nothing typed can fix. It rides the additive, contractually-open
+# ``failure_features`` block: ``cli/_helpers.py::_err_from_hpc``
 # lifts ``getattr(exc, "failure_features", None)`` verbatim into the ok:false
 # envelope and the MCP ``structuredContent`` preserves it. Precedence is the seam
 # that makes this safe: a NON-None ``exc.failure_features`` WINS over the
@@ -32,13 +34,15 @@ from hpc_agent.state.interview_doc import iter_interview_docs
 # that default synthesizes a ``failure_features`` block for EVERY spec_invalid,
 # consumers must key on the distinct ``authorship_evidence`` KEY, never on the
 # block's mere presence. The gate stays 100% harness-agnostic: it names a refusal
-# CAUSE ("the human's authorship evidence is missing"), never a transport — the
-# retry-after-elicit seam lives in the MCP layer (D4), not here.
+# CAUSE ("the human's authorship evidence is missing"), never a transport.
+# (Historical: the retired MCP elicitation popup keyed its retry on this marker;
+# the marker predates-and-outlives that consumer — it is refusal-cause metadata,
+# not popup plumbing.)
 _AUTHORSHIP_EVIDENCE_MISSING = {"authorship_evidence": "missing"}
 
 
 def _refuse_missing_authorship(message: str) -> NoReturn:
-    """Raise a ``spec_invalid`` refusal carrying the E2 authorship-missing marker.
+    """Raise a ``spec_invalid`` refusal carrying the authorship-missing marker.
 
     Used ONLY for the authorship-BAR raise sites — the refusals a freshly typed
     human sign-off / rationale would resolve (a bare ack, an un-named section
@@ -46,9 +50,9 @@ def _refuse_missing_authorship(message: str) -> NoReturn:
     human-attributed utterance). Structural / setup refusals in the same gates (a
     stale hash, an unresolvable source / template, a missing or stale render, a
     moved view ingredient, a malformed ``resolved``, a block-convention
-    violation) are deliberately NOT marked: re-eliciting an utterance cannot fix
-    them, so an MCP retry-once keyed on the marker would be a guaranteed-failing
-    round-trip (D4's retry re-checks the gate against the now-present utterance).
+    violation) are deliberately NOT marked: no freshly typed utterance can fix
+    them, so a consumer prompting the human off the marker would drive a
+    guaranteed-failing round-trip.
     """
     exc = errors.SpecInvalid(message)
     exc.failure_features = dict(_AUTHORSHIP_EVIDENCE_MISSING)  # type: ignore[attr-defined]
@@ -148,12 +152,13 @@ def _actor_scoped_human_texts(experiment_dir: Path, ids: list[str]) -> list[str]
 # agent-composed revoke/verdict/unlock rides through (the B4 exposure, philosophy
 # audit 2026-07 sweep log). The sha-prefix-bound FILING gates need no anchor (an
 # 8-hex prefix cannot pre-exist the artifact it fingerprints — temporal binding
-# by vocabulary impossibility). The overnight-consent gate RETIRED its unbounded
-# reader entirely (USER RULING 3, 2026-07-12): it reads only BOUND consent records
-# (:func:`_bound_consent_records`) captured at a surface that named exactly what
-# they cover, so the chat pool it once word-overlapped is never consulted — the
-# same vocabulary-impossibility class as the sha-prefix gates (a chat hook cannot
-# forge a ``bound`` binding), documented in the route-through exemption.
+# by vocabulary impossibility). The overnight-consent gate is in that sha-prefix
+# class too (re-ruled 2026-07-27 with the elicitation popup's retirement): its
+# chat tier requires the typed consent to name the spec's ``cmd_sha`` by an 8+
+# hex prefix — a token derivable only from the code-rendered coverage brief the
+# refusal displays — so no ts anchor is needed there either; its bound tier
+# (:func:`_bound_consent_records`) matches an exact binding a chat hook is
+# structurally unable to forge, documented in the route-through exemption.
 
 
 def _fresh_human_texts(

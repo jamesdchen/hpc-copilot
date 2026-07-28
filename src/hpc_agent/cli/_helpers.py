@@ -129,6 +129,90 @@ def _ok(
     _emit(env)
 
 
+# ─── F2: oversized structural-refusal offload (context-footprint plan) ───────
+#
+# A refusal's ``message`` + ``remediation`` ride the envelope into the model's
+# context on every failed call. Structural refusals can carry long forensic
+# prose the mainline never needs whole — the branchpoint rule: the action line
+# stays inline, the detail is the branch, offloaded to a content-addressed
+# brief file the agent (or human) opens only when actually debugging. The
+# read-and-sign refusals (the ``authorship_evidence``-marked ones — the
+# human's inline read surface since the elicitation retirement) are NEVER
+# offloaded. Fail-open throughout: no existing ``.hpc`` dir (the no-scaffold
+# rule — files/subdirs inside a claimed ``.hpc`` are fine, the dir itself is
+# never created here), any write error, or an under-budget refusal ⇒ the
+# envelope is byte-identical to today.
+
+#: Combined message+remediation budget before the offload fires. Generous —
+#: typical refusals are far under it, so the offload is the rare branch.
+_REFUSAL_INLINE_MAX_BYTES = 2000
+#: What stays inline once the offload fires (line-boundary truncation).
+_REFUSAL_INLINE_KEEP_MESSAGE = 1200
+_REFUSAL_INLINE_KEEP_REMEDIATION = 600
+
+
+def _truncate_at_line(text: str, max_bytes: int) -> str:
+    """*text* cut to ≤ *max_bytes* UTF-8 bytes at a line boundary (or hard cut)."""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    cut = raw[:max_bytes].decode("utf-8", errors="ignore")
+    line_cut = cut.rsplit("\n", 1)[0]
+    return line_cut if line_cut else cut
+
+
+def _offload_oversized_refusal(
+    payload: dict[str, Any], experiment_dir: Path | None = None
+) -> dict[str, Any]:
+    """Offload an oversized structural refusal's detail to ``.hpc/briefs/``.
+
+    Returns *payload* unchanged (the common case) or a copy whose ``message`` /
+    ``remediation`` are line-boundary-truncated with a disclosed pointer at the
+    content-addressed brief file carrying the FULL text. Authorship-marked
+    refusals pass through whole (they are the human's read surface). Fail-open:
+    any error keeps the envelope byte-identical.
+    """
+    features = payload.get("failure_features")
+    if isinstance(features, dict) and "authorship_evidence" in features:
+        return payload
+    message = str(payload.get("message") or "")
+    remediation = payload.get("remediation")
+    remediation_text = str(remediation) if isinstance(remediation, str) else ""
+    full = message + (f"\n\nRemediation: {remediation_text}" if remediation_text else "")
+    if len(full.encode("utf-8")) <= _REFUSAL_INLINE_MAX_BYTES:
+        return payload
+    try:
+        base = Path(experiment_dir) if experiment_dir is not None else Path.cwd()
+        hpc = base / ".hpc"
+        if not hpc.is_dir():
+            return payload  # no-scaffold: never claim a namespace on the error path
+        import hashlib
+
+        briefs = hpc / "briefs"
+        briefs.mkdir(exist_ok=True)
+        sha12 = hashlib.sha256(full.encode("utf-8")).hexdigest()[:12]
+        path = briefs / f"refusal-{sha12}.txt"
+        if not path.exists():  # content-addressed → idempotent
+            path.write_text(full, encoding="utf-8")
+        pointer = f"… full detail: {path.relative_to(base).as_posix()}"
+        out = dict(payload)
+        if len(message.encode("utf-8")) > _REFUSAL_INLINE_KEEP_MESSAGE:
+            out["message"] = (
+                _truncate_at_line(message, _REFUSAL_INLINE_KEEP_MESSAGE) + f"\n{pointer}"
+            )
+        if (
+            remediation_text
+            and len(remediation_text.encode("utf-8")) > _REFUSAL_INLINE_KEEP_REMEDIATION
+        ):
+            out["remediation"] = (
+                _truncate_at_line(remediation_text, _REFUSAL_INLINE_KEEP_REMEDIATION)
+                + f"\n{pointer}"
+            )
+        return out
+    except OSError:
+        return payload
+
+
 def _err(
     *,
     error_code: str,
@@ -139,6 +223,7 @@ def _err(
     failure_features: dict[str, Any] | None = None,
     escalation: dict[str, Any] | None = None,
     spec_skeleton: Any = None,
+    experiment_dir: Path | None = None,
 ) -> int:
     payload = {
         "ok": False,
@@ -157,6 +242,7 @@ def _err(
         # A minimal valid instance of the failing schema (refusals-carry-a-valid-
         # skeleton). Only ever set on a spec_invalid schema-validation refusal.
         payload["spec_skeleton"] = spec_skeleton
+    payload = _offload_oversized_refusal(payload, experiment_dir)
     _emit(payload)
     return _EXIT_CODE_BY_CATEGORY.get(category, EXIT_INTERNAL)
 
@@ -201,7 +287,7 @@ def _spec_invalid_failure_features(exc: Exception | None) -> dict[str, Any]:
     return {"error_class": "code_bug", "error_class_raw": raw}
 
 
-def _err_from_hpc(exc: errors.HpcError) -> int:
+def _err_from_hpc(exc: errors.HpcError, *, experiment_dir: Path | None = None) -> int:
     remediation = exc.remediation
     # No hard pre-flight agent gate any more: ``ssh_run`` uses
     # ``BatchMode=yes`` so a missing/usable-auth failure fails fast on its
@@ -252,6 +338,7 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
         remediation=remediation,
         failure_features=failure_features,
         spec_skeleton=getattr(exc, "spec_skeleton", None),
+        experiment_dir=experiment_dir,
     )
 
 

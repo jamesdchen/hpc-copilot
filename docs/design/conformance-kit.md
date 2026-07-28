@@ -33,13 +33,14 @@ TCK / Web-Platform-Tests pattern. The kit does two jobs at once:
 
 The protocol rides (user-approved, DECIDED inputs to this plan):
 
-- **Capability 1 rides MCP ELICITATION** where clients support it — the
-  elicitation sections of `docs/internals/harness-contract.md` have LANDED
-  (ba83eac3), and the `harness-capabilities` verb (`ops/harness_capabilities.py`)
-  EXISTS in the registry. This kit CONSUMES both; it builds neither. (K6
-  consumes the E3-a-reshaped `harness-capabilities` result; wave C's K10
-  re-reads the now-present elicitation sections before stamping the
-  version.)
+- **Capability 1 rides MCP ELICITATION** where clients support it — **RETIRED
+  2026-07-27**: the elicitation channel was removed wholesale
+  (`docs/design/mcp-elicitation.md`, drift-log final entry;
+  `docs/internals/harness-contract.md` "MCP elicitation … RETIRED"), so the
+  kit's E7 legs were deleted with it (see the E7 reservation note's retirement
+  addendum below). Capability 1 rides the hook path alone; the
+  `harness-capabilities` verb remains the negotiation surface the kit
+  consumes.
 - **The attestation/dossier export steals the in-toto/DSSE Statement
   envelope**: subject = sealed file digests, predicateType = our record
   vocabulary, predicate = the records verbatim; v1 = unsigned Statements in
@@ -129,8 +130,8 @@ class HarnessAdapter(Protocol):
     def answer_question(
         self, experiment_dir: Path, offered_labels: list[str], answer: str
     ) -> None:
-        """Drive YOUR structured-question channel (the AskUserQuestion /
-        MCP-elicitation analog) with *answer* against *offered_labels* —
+        """Drive YOUR structured-question channel (the AskUserQuestion analog)
+        with *answer* against *offered_labels* —
         exercises the clicked-vs-typed provenance line (_is_clicked)."""
 
     def detect_capabilities(self, experiment_dir: Path) -> frozenset[str]:
@@ -482,6 +483,13 @@ live negotiation. The duplex rig the kit's reference adapter consumes
 already exists: `tests/_mcp_harness.py` (`FakeMcpClient`, built by
 elicitation E1 — the cross-slate reuse-ledger item; one rig, two plans).
 No kit code here; the kit remains its own plan.
+**RETIREMENT ADDENDUM (2026-07-27):** the elicitation channel was removed
+wholesale (`docs/design/mcp-elicitation.md`, drift-log final entry), so the
+E7 legs this note reserved — and later built in
+`conformance/test_negotiation.py` — were DELETED with it, along with the
+`tests/_mcp_harness.py` duplex rig (its only consumers were the elicitation
+suites and these legs). The K6 adapter legs (declared == detected == behaved
+per seam) are untouched.
 
 **Multi-human reservation note (2026-07-09, `docs/design/multi-human.md` MT8
 landed on a sibling branch; no kit code exists here yet).** When the kit lands

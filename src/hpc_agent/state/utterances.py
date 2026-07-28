@@ -23,8 +23,9 @@ A record MAY additionally carry ``bound`` — an opaque mapping the WRITER binds
 the utterance to the exact subject it was captured FOR (``docs/design/bound-capture.md``).
 A ``UserPromptSubmit`` / ``AskUserQuestion`` chat capture NEVER sets it (those
 surfaces know no scope); only a view-aware surface that knows precisely what the
-typed text signs (the MCP elicitation popup, or a conforming second harness)
-writes ``bound``, so a bound record IMPLIES the elicitation channel. The store is
+typed text signs (a conforming second harness's binding surface — core ships
+none since the MCP elicitation popup retired, 2026-07-27) writes ``bound``, so a
+bound record IMPLIES a binding capture surface. The store is
 opaque to its shape — it round-trips ``bound`` verbatim; only a gate matches it
 (the overnight standing-consent gate is the first bound reader — USER RULING 3,
 2026-07-12). The additive key needs no schema bump: every reader here reads
@@ -206,8 +207,8 @@ def append_utterance(
     ``bound`` key when it is a non-empty mapping, and OMITTED otherwise — so a
     chat-hook capture (which passes nothing) is byte-identical to before. The
     store never inspects its shape; only a gate matches it. A view-aware surface
-    that knows exactly what the typed text signs (the MCP elicitation popup)
-    passes it; the chat hooks never do.
+    that knows exactly what the typed text signs (a conforming second harness's
+    binding surface) passes it; the chat hooks never do.
 
     Returns ``None`` (a clean no-op) when:
 

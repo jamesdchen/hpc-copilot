@@ -128,11 +128,12 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
 
     engine_state = _enable_ssh_engine_default()
 
-    # Run-12 finding 13 (cp1252 mojibake) is enforced HERE, exactly once, while
-    # the process is still single-threaded: once ``serve()`` starts, the stdin
-    # reader thread is permanently blocked in ``readline()``, and a
-    # reconfigure-under-read returns a false EOF on Windows (the second-call
-    # connection-closed class, regression 17243a17). The per-dispatch
+    # Run-12 finding 13 (cp1252 mojibake) is enforced HERE, exactly once, before
+    # ``serve()`` starts reading the transport: a reconfigure racing an
+    # in-flight read on the same stream returned a false EOF on Windows when a
+    # reader thread existed (the second-call connection-closed class, regression
+    # 17243a17), and even single-threaded, a per-dispatch reconfigure of the
+    # transport is a session-level concern misplaced. The per-dispatch
     # reconfigure in ``cli.dispatch`` never sees the real streams over MCP —
     # the in-process runner shields them (``_shield_real_stdin`` + redirects).
     for _stream in (sys.stdin, sys.stdout, sys.stderr):

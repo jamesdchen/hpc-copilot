@@ -106,7 +106,7 @@ def dispatch_envelope():
         try:
             envelope = json.loads(stdout)
         except (json.JSONDecodeError, ValueError):
-            envelope = {}
+            envelope = {"_raw_stdout": stdout[:2000], "_raw_stderr": _stderr[:2000]}
         envelope["_exit_code"] = exit_code
         return envelope
 

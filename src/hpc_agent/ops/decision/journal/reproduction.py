@@ -109,7 +109,7 @@ def _assert_reproduction_verdict_authorship(
     extend the named sample is a structural inconsistency, refused.
 
     Marking (the E2 scoping): the authorship-bar refusals (bare ack, no/ambiguous/
-    unmatched prefix) carry the elicitation marker via
+    unmatched prefix) carry the authorship-missing marker via
     :func:`_refuse_missing_authorship` — a freshly typed human utterance naming the
     right prefix resolves them. The STRUCTURAL refusals (wrong scope kind,
     non-bool ``accept``, an unresolvable sidecar / cmd_sha, a contradicting

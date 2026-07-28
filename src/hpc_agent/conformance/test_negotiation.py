@@ -26,26 +26,16 @@ BEHAVED leg, never a per-harness detection; ``utterance-log`` and
 ``relay-enforcement`` are per-harness SEAMS whose ``declared`` and ``detected``
 sets must AGREE.
 
-**The elicitation leg (E7).** MCP elicitation is a second capability-1 channel,
-and its negotiation is per-session: *declared* = the client's ``initialize``
-``capabilities.elicitation``, *detected* = the server's per-session store
-(``McpServer._client_elicitation``), *behaved* = elicitation fires only when the
-bit is true (degrade-to-hook otherwise, silently). The detection leg here is the
-fake-client ``initialize`` SEAM — NOT the CLI ``harness-capabilities`` probe,
-which honestly reports client support as ``"per-session"`` and can never witness
-a live negotiation. The duplex rig is consumed (never modified) from
-``tests/_mcp_harness.py``; it is ``importorskip``-guarded so the shipped kit
-module stays importable when run from the wheel outside the repo.
+(The former E7 elicitation leg — the MCP-elicitation second capability-1
+channel's per-session negotiation — was retired with that channel on
+2026-07-27: the hook/chat path is THE capability-1 channel, so there is no
+per-session negotiation left to assert.)
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-import pytest
+from typing import TYPE_CHECKING
 
 from hpc_agent.conformance.adapter import (
     CAP_RELAY_ENFORCEMENT,
@@ -147,155 +137,6 @@ def test_declared_backgrounding_behaves(
     handle = harness_adapter.start_background(fixture_repo, stub_worker_argv(fixture_repo))
     wake = harness_adapter.await_wake(handle, 30.0)
     assert wake.woke and wake.terminal_seen, "backgrounding declared but did not behave"
-
-
-# ─── the elicitation leg (E7) — declared == detected == behaved ──────────────
-#
-# Envelope idioms reused from ``tests/test_mcp_elicitation_firing.py`` (the RIG,
-# FakeMcpClient, is consumed from ``tests/_mcp_harness.py`` — never reinvented).
-
-
-def _envelope(**kw: Any) -> str:
-    return json.dumps(kw, sort_keys=True)
-
-
-def _authorship_refusal() -> str:
-    return _envelope(
-        ok=False,
-        error_code="spec_invalid",
-        category="user",
-        retry_safe=False,
-        message="authorship evidence is missing",
-        failure_features={"authorship_evidence": "missing"},
-    )
-
-
-class _ScriptedRunner:
-    """A CliRunner that returns a fixed ``(exit, stdout, stderr)`` per call and
-    records argv, so a test can count invocations (no retry on the degrade path)."""
-
-    def __init__(self, out: str) -> None:
-        self.out = out
-        self.calls: list[list[str]] = []
-
-    def __call__(self, argv: list[str]) -> tuple[int, str, str]:
-        self.calls.append(list(argv))
-        return (1, self.out, "")
-
-
-def _append_params(experiment_dir: Path | None = None) -> dict[str, Any]:
-    spec: dict[str, Any] = {
-        "scope_kind": "scope",
-        "scope_id": "calib-scope-1",
-        "block": "scope-unlock",
-        "response": "reopen calibration for reanalysis",
-        "resolved": {"scope_action": "unlock"},
-    }
-    args: dict[str, Any] = {"spec": spec}
-    if experiment_dir is not None:
-        args["experiment_dir"] = str(experiment_dir)
-    return {"name": "append-decision", "arguments": args}
-
-
-def _prime_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the journal home to *tmp_path*, claim the namespace, and seed one
-    unrelated utterance — so the scope-unlock rationale (uncovered by the seed) is
-    genuinely refused by the REAL authorship gate (the guard-can-fire posture)."""
-    from hpc_agent.state.run_record import journal_dir
-    from hpc_agent.state.utterances import append_utterance
-
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(home))
-    experiment_dir = tmp_path / "repo"
-    experiment_dir.mkdir()
-    journal_dir(experiment_dir)
-    assert append_utterance(experiment_dir, "placeholder unrelated onboarding seed") is not None
-    return experiment_dir
-
-
-def test_elicitation_declared_detected_behaved_when_client_supports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """DECLARED (client ``initialize`` elicitation) == DETECTED (the per-session
-    store) == BEHAVED (an authorship-refused ``append-decision`` fires
-    ``elicitation/create`` and captures the typed sign-off)."""
-    harness = pytest.importorskip("tests._mcp_harness")
-    from hpc_agent._kernel.extension import mcp_server as mcp
-    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
-    from hpc_agent.state.utterances import read_utterances as _read
-
-    register_primitives()
-    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
-    server = mcp.McpServer(
-        registry=get_registry(), allow_mutations=True, catalog="curated", runner=None
-    )
-    typed = "reopen calibration for reanalysis of the drift"
-    with harness.FakeMcpClient(server) as client:
-        client.initialize(elicitation=True)  # DECLARED
-        assert server._client_elicitation is True  # DETECTED (per-session store)
-        client.send(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": _append_params(experiment_dir),
-            }
-        )
-        req = client.recv(timeout=60.0)  # BEHAVED: elicitation fired
-        assert req["method"] == "elicitation/create"
-        client.send(
-            {
-                "jsonrpc": "2.0",
-                "id": req["id"],
-                "result": {"action": "accept", "content": {"utterance": typed}},
-            }
-        )
-        resp = client.recv(timeout=60.0)
-    structured = resp["result"]["structuredContent"]
-    assert structured["elicitation"] == "captured"
-    assert structured["sha256"] == hashlib.sha256(typed.encode("utf-8")).hexdigest()
-    assert _read(experiment_dir)[-1]["text"] == typed
-
-
-def test_elicitation_absent_when_client_silent() -> None:
-    """WITHOUT the declaration: the per-session store is False, NO outbound
-    elicitation fires, and the refusal returns directly — the hook-tier degrade
-    (behaved-absent). declared == detected == behaved, all three absent."""
-    harness = pytest.importorskip("tests._mcp_harness")
-    from hpc_agent._kernel.extension import mcp_server as mcp
-    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
-
-    register_primitives()
-    runner = _ScriptedRunner(_authorship_refusal())
-    server = mcp.McpServer(
-        registry=get_registry(), allow_mutations=True, catalog="curated", runner=runner
-    )
-    with harness.FakeMcpClient(server) as client:
-        client.initialize(elicitation=False)  # NOT declared
-        assert server._client_elicitation is False  # detected absent
-        client.send({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": _append_params()})
-        resp = client.recv(timeout=10.0)
-    assert "method" not in resp, "an elicitation/create fired despite no client declaration"
-    structured = resp["result"]["structuredContent"]
-    assert structured["ok"] is False
-    assert "elicitation" not in structured  # the original refusal, unchanged
-    assert len(runner.calls) == 1  # no retry — the degrade path
-
-
-def test_harness_capabilities_reports_elicitation_honestly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The separate-process probe stays HONEST: it reports the server-side bit it
-    can verify (``elicitation_server`` True) and refuses to assert client support
-    it cannot witness (``elicitation_client`` ``"per-session"``, not ``yes``)."""
-    from hpc_agent.ops.harness_capabilities import harness_capabilities
-
-    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "home"))
-    result = harness_capabilities(experiment_dir=tmp_path / "repo")
-    evidence = result.capabilities["utterance_log"].evidence
-    assert evidence["elicitation_server"] is True
-    assert evidence["elicitation_client"] == "per-session"
 
 
 # Referenced so a stale rename of the rendezvous constant fails loudly here too

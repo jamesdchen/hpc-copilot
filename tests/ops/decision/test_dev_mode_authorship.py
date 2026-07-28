@@ -237,11 +237,12 @@ def test_agent_relayed_grant_without_home_utterance_refused(tmp_path: Path) -> N
 
 
 def test_grant_refusals_carry_no_authorship_marker(tmp_path: Path) -> None:
-    """Every grant refusal is a PLAIN SpecInvalid — no E2
-    ``authorship_evidence: missing`` marker: the marker drives the MCP
-    elicitation retry, and a re-elicited utterance lands in the CURRENT
-    session's namespace (the second repo) — the wrong log, a guaranteed-failing
-    round-trip. The value-gate refusal keeps its marker (the contrast pin)."""
+    """Every grant refusal is a PLAIN SpecInvalid — no
+    ``authorship_evidence: missing`` marker: the marker says "a fresh typed
+    utterance in THIS session resolves this", but a fresh utterance here lands
+    in the CURRENT session's namespace (the second repo) — the wrong log, a
+    guaranteed-failing round-trip. The value-gate refusal keeps its marker
+    (the contrast pin)."""
     second, home = _repos(tmp_path)
     _utter(home, "20 seeds at 1M samples")
 
@@ -255,7 +256,7 @@ def test_grant_refusals_carry_no_authorship_marker(tmp_path: Path) -> None:
         _grant(second, home)
     assert getattr(ei_bootstrap.value, "failure_features", None) is None
 
-    # Contrast: the value-derivation refusal STILL arms the elicitation retry.
+    # Contrast: the value-derivation refusal STILL carries the marker.
     _utter(home, _naming_utterance(home))
     _grant(second, home)
     with pytest.raises(errors.SpecInvalid) as ei_value:

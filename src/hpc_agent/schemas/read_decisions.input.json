@@ -28,6 +28,12 @@
       "pattern": "^[A-Za-z0-9._\\-]+$",
       "title": "Scope Id",
       "type": "string"
+    },
+    "digest": {
+      "default": false,
+      "description": "F5 (context-footprint plan): true serves records_digest — per-record metadata (ts, block, attestor, response sha12 + length, resolved key names) with the record BODIES omitted (records comes back empty). The chain-coherence preflight scan needs ordering + identity + counts, never the prose; pass false (the default) only when a record's full text is actually needed — the branchpoint rule.",
+      "title": "Digest",
+      "type": "boolean"
     }
   }
 }

@@ -1,10 +1,15 @@
 ---
-status: plan
+status: superseded
 ---
 # Unified render v1 — O3+ chunked read-and-sign (build spec)
 
-**Status: PLANNED, user-ruled 2026-07-10 ("sounds lit as a version 1 — we'll
-update it when users start using it").** The build spec for the unified-render
+**Status: SUPERSEDED (2026-07-27) — the MCP elicitation channel this spec
+chunked popups over was removed wholesale by user ruling (see
+`docs/design/mcp-elicitation.md`, drift-log final entry). The read-and-sign
+surface is the inline `full: true` audit-view relay (exposition elided with
+disclosure) + the typed chat sign-off; there is no popup to chunk. Kept as
+design history. (Was: PLANNED, user-ruled 2026-07-10 — "sounds lit as a
+version 1 — we'll update it when users start using it".)** The build spec for the unified-render
 ruling (`docs/design/mcp-elicitation.md` drift log 2026-07-10: popup = THE
 default read-and-sign surface, one composer, embed the render's own bytes,
 chunk-never-truncate) in the O3+ shape. Grounded in the researched protocol

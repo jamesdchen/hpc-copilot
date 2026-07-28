@@ -168,7 +168,6 @@ src/hpc_agent/state/run_story.py
 src/hpc_agent/state/snapshot_cache.py
 src/hpc_agent/state/stages.py
 src/hpc_agent/state/user_profiles.py
-src/hpc_agent/_kernel/extension/mcp_elicitation.py
 src/hpc_agent/_kernel/hooks/relay_audit_stop/__init__.py
 src/hpc_agent/_kernel/hooks/relay_audit_stop/_shared.py
 src/hpc_agent/ops/decision/journal/_shared.py

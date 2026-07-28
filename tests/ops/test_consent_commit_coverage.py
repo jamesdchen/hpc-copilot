@@ -503,7 +503,7 @@ def test_revoke_bare_ack_refused(tmp_path: Path) -> None:
             response="y",
             resolved={"conclusion_id": "edge-x-2025h1", "reason": "superseded by fresh data"},
         )
-    # The E2 marker rides the refusal so the MCP popup can re-elicit.
+    # The marker discriminates a refusal a freshly typed human utterance resolves.
     assert getattr(ei.value, "failure_features", None) == {"authorship_evidence": "missing"}
 
 

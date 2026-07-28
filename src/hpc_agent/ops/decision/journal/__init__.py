@@ -61,6 +61,7 @@ from hpc_agent._wire.actions.decision_journal import (
     DecisionRecord,
 )
 from hpc_agent._wire.queries.decision_journal import (
+    DecisionRecordDigest,
     ReadDecisionsInput,
     ReadDecisionsResult,
 )
@@ -417,14 +418,43 @@ def read_decisions(*, experiment_dir: Path, spec: ReadDecisionsInput) -> ReadDec
     touchpoints. Blank / individually-corrupt lines are skipped (a bad
     line never strands the rest of the trail).
 
+    ``digest: true`` (F5, ``docs/plans/context-footprint-2026-07-27.md``)
+    serves per-record identity/ordering metadata (``records_digest``) with the
+    record BODIES omitted — the loop's chain-coherence preflight needs
+    ordering + identity + counts, never the prose. The default response is
+    byte-identical to the pre-digest wire shape.
+
     Raises
     ------
     :class:`errors.SpecInvalid`
         Unknown ``scope_kind`` or non-filesystem-safe ``scope_id``.
     """
+    import hashlib
+
     experiment_dir = Path(experiment_dir)
     raw = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
     path = _decisions_path(experiment_dir, spec.scope_kind, spec.scope_id)
+    if spec.digest:
+        digests = []
+        for r in raw:
+            response = str(r.get("response") or "")
+            resolved = r.get("resolved")
+            attestor = r.get("attestor_id")
+            digests.append(
+                DecisionRecordDigest(
+                    ts=str(r.get("ts") or ""),
+                    block=str(r.get("block") or ""),
+                    response_sha12=hashlib.sha256(response.encode("utf-8")).hexdigest()[:12],
+                    response_chars=len(response),
+                    resolved_keys=(
+                        sorted(str(k) for k in resolved) if isinstance(resolved, dict) else []
+                    ),
+                    attestor_id=attestor if isinstance(attestor, str) else None,
+                )
+            )
+        return ReadDecisionsResult(
+            path=str(path), records=[], count=len(raw), records_digest=digests
+        )
     return ReadDecisionsResult(
         path=str(path),
         records=[DecisionRecord.model_validate(r) for r in raw],

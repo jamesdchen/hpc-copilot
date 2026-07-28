@@ -1,7 +1,7 @@
 ---
 name: hpc-status
 description: "Start the status workflow with the code-driven chain (`block-drive`, first block `status-snapshot`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. Snapshot is a cheap journal-first digest of what is running where and what changed since the human last looked; a live run advances to `status-watch`, a detached blocking poll to terminal or anomaly. The skill never resolves a decision and never interprets raw results."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 execution: inline
 category: agent-autonomous
 ---
@@ -91,7 +91,7 @@ It blocks locally on the worker's lease pid (no SSH) and exits the moment the wo
 
 **On `worker_exited`, the brief comes from ONE `block-drive` tick — never from the worker's log.** The tick replays the finished watch's recorded terminal (no SSH, no re-run) and returns the code-digested `brief` plus the code-rendered `relay` line — surface `relay` VERBATIM. Composing the brief yourself from the worker log / tail (job numbers, node names, wall times, your own read-time timestamps) is exactly what the rule-10 relay audit strikes on. Only a genuine terminal (`watch_terminal` / `watch_anomaly`) is recorded and replayed; a `watch_timeout` re-spawns the watch instead.
 
-**While the waiter runs, do the parallel prep (every time, not optionally):** (1) pre-draft the next greenlight's `append-decision` spec from the already-approved `resolved` (only the brief's evidence_digest stays blank); (2) pre-write the next block's spec skeleton; (3) back-half preflight, read-only: `doctor` scan, `read-decisions` chain-coherence check, and the §5 watchdog probe — probe by the EXACT task name `hpc-agent-doctor-<repo_hash>` (`hpc-agent doctor-install` reports it; a bare name-prefix query false-negatives); (4) append to the run's report timeline, sourced only from the journal/briefs/sidecars. Never pre-run anything cluster-facing — the main array stays behind the human gate.
+**While the waiter runs, do the parallel prep (every time, not optionally):** (1) pre-draft the next greenlight's `append-decision` spec from the already-approved `resolved` (only the brief's evidence_digest stays blank); (2) pre-write the next block's spec skeleton; (3) back-half preflight, read-only: `doctor` scan, `read-decisions` chain-coherence check (pass `digest: true` — the scan needs ordering + blocks + counts, never the record prose; `digest: false` only when a record's full text is actually needed), and the §5 watchdog probe — probe by the EXACT task name `hpc-agent-doctor-<repo_hash>` (`hpc-agent doctor-install` reports it; a bare name-prefix query false-negatives); (4) append to the run's report timeline, sourced only from the journal/briefs/sidecars. Never pre-run anything cluster-facing — the main array stays behind the human gate.
 
 While a run is live, **spawn a background tail of the local supervisor's output** (design §5 session tail-loop) so the human sees liveness without polling. If the chat session dies, job output is recovered from the cluster afterward by the guaranteed harvest once re-armed.
 
@@ -118,3 +118,11 @@ A brief's `monitor_arm` is the code-decided watch cadence (`decide-monitor-arm`)
 - **The skill never resolves a decision and never interprets raw results.** Code digests the status into the brief and drafts the recommendation DATA; the human decides.
 - **Auto-resubmit is never the default.** A failed run surfaces as an anomaly whose recommendation is classify-then-resubmit — the human greenlights it; silent auto-resubmit (re-running the same bug) is not a code path.
 - **Every `y`/nudge is journaled** (append-only, one record per exchange).
+
+## Delegation (hpc-recon)
+
+Read-only recon may run in the `hpc-recon` subagent — a context firewall BESIDE the execution path, never inside it. Rationale, and the whole boundary, in [`docs/design/agent-delegation.md`](../../../../docs/design/agent-delegation.md).
+
+- delegable: the parallel-prep back-half preflight — the `doctor` stalled-driver scan and the `read-decisions` digest chain-coherence check — returned as counts, states, and shas.
+- delegable: detached-run liveness recon via `poll-detached`, advisory input to the session's own next tick; the attention render stays with the session (next bullet).
+- locked: `append-decision`, the `y`/nudge rendezvous, every sign-off and standing consent, and every VERBATIM relay — the attention-queue and worker-terminal renders come back as `render_path` + shas and the session reads and relays them itself (that doctrine, §2).

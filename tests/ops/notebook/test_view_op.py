@@ -242,13 +242,20 @@ def test_default_response_carries_no_diff_or_full_body_bytes(tmp_path: Path) -> 
 
 
 def test_full_true_response_carries_the_diff_body(tmp_path: Path) -> None:
-    # `full: true` restores the whole-body render for a harness that model-relays.
+    # `full: true` is the INLINE read-and-sign relay: the code diff rides with
+    # its bytes intact while commented-out exposition is elided WITH disclosure
+    # (the on-disk render keeps the full body — elicitation-retirement ruling).
     _write_modified(tmp_path)
     result = _view(tmp_path, full=True)
     assert "### diff-from-template" in result.markdown
-    # The actual diff bytes are present in the full render.
+    # The actual diff CODE bytes are present in the inline render.
     assert "return 99" in result.markdown
     assert "--- template:model" in result.markdown
+    # The comment-only context lines (the `# %%` / section markers) are elided
+    # with a disclosed count, and the on-disk render still carries them.
+    assert "commented exposition line(s) elided" in result.markdown
+    render_body = (tmp_path / result.sections[-1].render_path).read_text(encoding="utf-8")
+    assert "elided" not in render_body
     # The per-section view_shas and render_paths are identical to the default —
     # `full` selects only how much of the render the RESPONSE carries.
     default = _view(tmp_path)
