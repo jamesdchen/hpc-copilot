@@ -98,6 +98,12 @@ def capture(payload: Any) -> dict[str, Any] | None:
     # mypy's invariance and broke CI's whole-tree check.
     actor = env_actor()
     kwargs: dict[str, Any] = {"actor": actor} if actor else {}
+    # The harness session id (journal→transcript forensics join,
+    # scripts/mine_session_logs.py). Additive + never load-bearing: an absent
+    # or non-string id writes a record byte-identical to the pre-stamp world.
+    session_id = payload.get("session_id")
+    if isinstance(session_id, str) and session_id:
+        kwargs["session"] = session_id
     return append_utterance(cwd_dir, prompt, **kwargs)
 
 
@@ -113,8 +119,9 @@ def main(argv: list[str] | None = None) -> int:
     The payload is read through the ONE robust hook reader
     (:func:`hpc_agent._kernel.hooks.stop_multiplex.read_stdin_payload` —
     ``sys.stdin.buffer`` + utf-8 ``errors="replace"``), so a non-utf8 prompt byte
-    degrades to a replacement char rather than crashing the capture. The frozen
-    ``{ts, sha256, text}`` writer is untouched — this shim adds no field.
+    degrades to a replacement char rather than crashing the capture. The
+    ``{ts, sha256, text}`` core is untouched; the payload's ``session_id``
+    rides as the additive ``session`` key (forensics join, never load-bearing).
     """
     del argv
     from hpc_agent._kernel.hooks.stop_multiplex import read_stdin_payload

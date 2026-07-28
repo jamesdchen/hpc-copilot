@@ -192,8 +192,20 @@ def append_utterance(
     actor: str | None = None,
     *,
     bound: dict[str, Any] | None = None,
+    session: str | None = None,
 ) -> dict[str, Any] | None:
     """Append one human prompt to the repo's utterance log; return the record.
+
+    *session* — the capturing harness's session identifier (Claude Code's
+    ``session_id``, present on every hook payload), written as the additive
+    ``session`` key when non-empty. It is the journal→transcript join: a
+    forensics walker (``scripts/mine_session_logs.py``) can jump from any
+    utterance record straight to the transcript file that carries the full
+    session context around it. Additive like ``bound`` (no schema bump —
+    every reader here reads by key); a caller that passes nothing writes a
+    record byte-identical to before. NEVER load-bearing for any gate: gates
+    read ``ts``/``text``/``bound`` only, so a harness that supplies no
+    session id loses forensics convenience, not trust.
 
     ``actor=None`` appends to the unsuffixed log exactly as before. When the
     harness knows whose session it is (MH2) it passes the session ``actor``
@@ -241,6 +253,8 @@ def append_utterance(
         }
         if isinstance(bound, dict) and bound:
             record["bound"] = bound
+        if isinstance(session, str) and session:
+            record["session"] = session
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
         return record

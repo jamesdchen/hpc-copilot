@@ -198,3 +198,39 @@ def test_capture_unset_env_is_byte_identical_end_to_end(tmp_path: Path) -> None:
     assert record is not None
     assert utterances_path(tmp_path).name == "utterances.jsonl"
     assert read_utterances(tmp_path)[0]["text"] == "hello"
+
+
+def test_capture_stamps_session_id_when_present(tmp_path: Path) -> None:
+    """The payload's ``session_id`` rides as the additive ``session`` key — the
+    journal→transcript forensics join (``scripts/mine_session_logs.py``).
+
+    kills: dropping the stamp (a journal record can no longer name the
+    transcript that carries its session context)."""
+    _scaffold_namespace(tmp_path)
+    record = utterance_capture.capture(
+        {
+            "cwd": str(tmp_path),
+            "prompt": "sign construction — the window change is intentional",
+            "session_id": "901e5f85-4d6a-4087-a3b9-7f3297c4adc2",
+        }
+    )
+    assert record is not None
+    assert record["session"] == "901e5f85-4d6a-4087-a3b9-7f3297c4adc2"
+    assert read_utterances(tmp_path)[0]["session"] == "901e5f85-4d6a-4087-a3b9-7f3297c4adc2"
+
+
+def test_capture_without_session_id_is_byte_identical_to_before(tmp_path: Path) -> None:
+    """No ``session_id`` (or a non-string one) → NO ``session`` key — the record
+    keeps the exact pre-stamp shape (additive-key contract, the ``bound``
+    precedent).
+
+    kills: writing an empty/None session field that would churn every record."""
+    _scaffold_namespace(tmp_path)
+    for payload in (
+        {"cwd": str(tmp_path), "prompt": "no session id here"},
+        {"cwd": str(tmp_path), "prompt": "non-string id", "session_id": 42},
+        {"cwd": str(tmp_path), "prompt": "empty id", "session_id": ""},
+    ):
+        record = utterance_capture.capture(payload)
+        assert record is not None
+        assert "session" not in record
