@@ -70,12 +70,11 @@ flowchart TB
     end
     INTERP ~~~ FRICTION
 
-    subgraph LEGEND["HOW TO READ THIS MAP"]
-        direction TB
-        LA["rectangle: a step or state"] -->|"thin solid arrow: automatic<br/>sequence inside a zone"| LB{{"hexagon: a human gate —<br/>the typed, journaled 'y'"}}
-        LC["zone"] ==>|"thick arrow: a lifecycle<br/>crossing YOU choose to make"| LD["next zone"]
-        LE["input · opt-in rigor · loop-back"] -.->|"dotted arrow: feeds into or<br/>binds onto — not a sequence step"| LF["step"]
-        LNOTE["box shading carries NO meaning —<br/>it is mermaid's default nesting tint;<br/>read shape + line style instead"]
+    subgraph LEGEND["LEGEND (box tint = nesting, no meaning)"]
+        direction LR
+        L1["step"] -->|"automatic"| L2["step"]
+        L3["zone"] ==>|"your decision"| L4["zone"]
+        L5["note"] -.->|"binds on, not a step"| L6{{"human 'y' gate"}}
     end
 ```
 
