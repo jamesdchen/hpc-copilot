@@ -50,32 +50,23 @@ flowchart TB
     EXIST -.->|"@register_run arrives HERE,<br/>not before — a dead idea<br/>never meets the framework"| EP
     RAMP ==> BOUNDARY
     BOUNDARY ==> AFTER
-    LOOPBACK["⟲ back to THE FREE ZONE —<br/>most directions loop back<br/>cheaply, or die here"]
-    INTERP -.-> LOOPBACK
+    INTERP ==>|"⟲ the conclusion is yours — most directions<br/>loop back to cheap local iteration<br/>(or die, having cost nothing)"| FREE
 
-    OPTIN["OPT-IN RIGOR (bind at the boundary, silent otherwise):<br/>notebook audit · pack receipts · overnight consent · multi-actor policy"]
+    OPTIN["OPT-IN RIGOR (bind at the boundary, silent otherwise):<br/>notebook audit · pack receipts · overnight standing consent<br/>(pre-typed y's with hard caps + armed wake) · multi-actor policy"]
     OPTIN -.-> BOUNDARY
 
-    DRIVE["MAIN-LOOP DRIVER — the stateless block-drive tick:<br/>blocks chain in code, detach for cluster waits, park at<br/>code-digested human briefs; the LLM only relays at the<br/>parks (LLM-as-executor was removed by design) — this is<br/>why chat context stays small through a whole campaign"]
+    DRIVE["DRIVING — the stateless block-drive tick: blocks chain<br/>in code, detach for cluster waits, park at code-digested<br/>human briefs. The campaign-run workflow plan relays ticks<br/>so relay traffic stays out of chat; campaign-recon fans out<br/>read-only status sweeps. Both bind HERE and AFTER only —<br/>no workflow ever enters the free zone or the on-ramp"]
     DRIVE -.-> BOUNDARY
     DRIVE -.-> AFTER
+```
 
-    subgraph DEV["THE DEV LOOP (meta) — improving the tool itself, not running experiments"]
-        direction TB
-        FRICTION["friction or gap noticed while<br/>working anywhere in the four<br/>zones above becomes a<br/>candidate package"]
-        PKG["handoff package: ARCHITECT-MEMO<br/>+ unit-specs.json<br/>(docs/plans/_TEMPLATE-handoff/)"]
-        SWARM["fix developed with Claude Code's native<br/>dynamic workflows — the repo's devx layer<br/>(lints, regen, contract tests) rides along<br/>as gates, not as orchestration"]
-        MERGED["PR merged — the upgraded tool is<br/>what every zone runs on next session;<br/>the dev loop never touches<br/>a live experiment"]
-        FRICTION --> PKG --> SWARM --> MERGED
-    end
-    INTERP ~~~ FRICTION
+Legend (kept out of the map — box tint is nesting, no meaning):
 
-    subgraph LEGEND["LEGEND (box tint = nesting, no meaning)"]
-        direction LR
-        L1["step"] -->|"automatic"| L2["step"]
-        L3["zone"] ==>|"your decision"| L4["zone"]
-        L5["note"] -.->|"binds on, not a step"| L6{{"human 'y' gate"}}
-    end
+```mermaid
+flowchart LR
+    L1["step"] -->|"automatic"| L2["step"]
+    L3["zone"] ==>|"your decision"| L4["zone"]
+    L5["note"] -.->|"binds on, not a step"| L6{{"human 'y' gate"}}
 ```
 
 ## Walkthrough

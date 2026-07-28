@@ -47,6 +47,19 @@ The launch discipline built on that:
 - **One exchange, then run.** If the user's nudge changes a value, fold it
   in and launch; do not re-propose unless a correction invalidates other
   proposed fields.
+- **Upfront the y's when the human wants to walk away.** Unattended driving
+  (overnight, long lunches) does NOT mean the workflow passes gates — it
+  means the intake exchange also offers the OVERNIGHT STANDING CONSENT the
+  kernel already consumes (`ops/overnight.py`; `block-drive` auto-advances
+  a consented boundary in code): the human types ONE consent utterance
+  inline — scope, hard caps (`expires_at` + budget/walltime), bound to the
+  current spec identity, with a harness-tracked `status-watch` armed as the
+  wake — journaled via `append-decision` under the overnight block, in the
+  main session, like every y. `campaign-run` then runs gate-free through
+  consented boundaries and parks only on out-of-scope, expired, or
+  spec-changed ones; every auto-advance lands in the consumption ledger and
+  the morning brief. The workflow itself never touches the consent — the
+  upfronting is an INTAKE step, and the consuming is the KERNEL's.
 
 This is the fix for the prior iteration's failure mode: the old build-swarm
 onboarding spent its opening turns coldly deriving what it needed instead
