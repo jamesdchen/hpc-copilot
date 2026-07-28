@@ -37,7 +37,7 @@ ARE the execution — code does the SSH, staging, canary, submit, watch,
 harvest. **No LLM lives inside a block.** The console / cron / detach-
 child entry is `block_drive.block_drive_once` (console script
 `hpc-block-drive`); a plain program calls `run_tick` directly. See
-[`../internals/submit-sequence.md`](../internals/submit-sequence.md) for
+[`submit-sequence.md`](submit-sequence.md) for
 the full submit walkthrough and
 [`../design/block-drive.md`](../design/block-drive.md) for the tick's
 contract.

@@ -56,7 +56,7 @@ def _harvest_if_owed(
     and ``harvest_on_terminal`` leaves the run terminal-with-no-harvest, and the
     next reconcile sees NO transition (the journal already reads terminal) — so a
     transition-ONLY gate would drop the guaranteed harvest forever (audit U8 /
-    rank 2, ``docs/plans/transport-robustness-2026-07-17``). Unlike
+    rank 2, ``docs/history/plans/transport-robustness-2026-07-17``). Unlike
     ``monitor_flow`` (which harvests from a ``finally``), reconcile is invoked
     directly by drivers / the skill and has no such backstop.
 
@@ -359,7 +359,7 @@ def _gather_failure_features(
 def _census_progress_summary(progress: dict[str, int]) -> dict[str, Any]:
     """5-key mid-flight ``last_status`` derived from a PARTIAL announce census.
 
-    Rank 19 (``docs/plans/latency-audit-2026-07-15``): when a partial
+    Rank 19 (``docs/history/plans/latency-audit-2026-07-15``): when a partial
     announcement is present and the run is still in flight, the census
     (``complete``/``failed``/``missing``) plus the cheap alive probe already
     answer the lifecycle question, so reconcile SKIPS the per-task status-reporter
@@ -1269,7 +1269,7 @@ def _reconcile_one(
                     "failed": int(_announce["failed"]),
                     "missing": int(_announce["missing"]),
                 }
-        # Rank 19 (``docs/plans/latency-audit-2026-07-15``): a PARTIAL
+        # Rank 19 (``docs/history/plans/latency-audit-2026-07-15``): a PARTIAL
         # announcement already answers the mid-flight lifecycle question — the
         # announce census (complete/failed/missing) plus the cheap alive probe
         # suffice to say "still in flight, N complete". So when ANY announcement

@@ -1,6 +1,6 @@
 """Pin :func:`hpc_agent.ops.aggregate_flow._incremental_include_patterns`.
 
-Mutation triage-2 (``docs/plans/mutation-triage-2-2026-07-17.md``, Top-3 Unit 3)
+Mutation triage-2 (``docs/history/plans/mutation-triage-2-2026-07-17.md``, Top-3 Unit 3)
 found this at **14/14 mutants survived**, with only one shallow existing test
 (``test_flow_incremental_pull.py``) that is out of the sweep's ``tests_dir`` and
 never isolates the wave-filename regex or the ``is_dir`` guard. This helper picks

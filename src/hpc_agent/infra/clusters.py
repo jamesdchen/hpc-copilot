@@ -300,7 +300,7 @@ class ClusterConfig(BaseModel):
         ships a golden profile; a pinned ``scheduler_profile`` dict is its
         own seed; and a name some loaded plugin registered via
         ``@register`` resolves through the backend registry (the
-        crowd-compute seam — ``docs/proposals/crowd-compute-backend.md``).
+        crowd-compute seam — ``docs/design/crowd-compute-backend.md``).
         Anything else would leave the submit path with nothing to
         register, so it is rejected here at config-load time. The
         registry lookup is deliberately last: it imports backend (and

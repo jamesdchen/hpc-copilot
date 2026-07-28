@@ -2,14 +2,16 @@
 
 User-facing guides for the long-running pipelines an operator drives —
 how to think about them, what state they persist, how iterations
-compose. Read these to use the framework; read
-[`docs/internals/`](../internals/) to change it.
+compose. Read these to use the framework; read the rest of
+`docs/internals/` to change it. (These guides lived under
+`docs/workflows/` until the 2026-07-28 docs reorg folded them into
+`docs/internals/`.)
 
 ## Index
 
 | Doc | Purpose | Pairs with |
 |---|---|---|
-| [`campaign.md`](campaign.md) | The campaign loop — closed-loop iteration over a tasks.py, scaffolded by `/campaign-hpc`, driven by the `hpc-block-drive` tick. | [internals/campaign-lifecycle](../internals/campaign-lifecycle.md) |
+| [`campaign.md`](campaign.md) | The campaign loop — closed-loop iteration over a tasks.py, scaffolded by `/campaign-hpc`, driven by the `hpc-block-drive` tick. | [internals/campaign-lifecycle](campaign-lifecycle.md) |
 | [`memory-across-campaigns.md`](memory-across-campaigns.md) | The `interview` ↔ `recall` loop — how each campaign's intent persists into structured artifacts that ground the next campaign's interview. | [primitives/recall](../primitives/recall.md) · [primitives/interview](../primitives/interview.md) |
 | [`migration-from-hpc-yaml.md`](migration-from-hpc-yaml.md) | One-page upgrade guide for users coming from the pre-primitive `.hpc.yaml` config style. | [reference/cli-spec](../reference/cli-spec.md) |
 | [`code-driven-orchestration.md`](code-driven-orchestration.md) | The third consumption style — a plain program owns the loop (`drive_once`), LLM calls only at typed judgement points (`LlmJudgementResolver` / `structured()` / escalation-as-data). | [integrations/CONTRACT](../integrations/CONTRACT.md) · [design/dag-kernel](../design/dag-kernel.md) |
@@ -29,8 +31,8 @@ The triangle:
             │                                   │
             ▼                                   ▼
   ┌──────────────────────┐         ┌────────────────────────────────┐
-  │  docs/workflows/     │ ◄─────► │  src/hpc_agent/slash_commands/ │
-  │  (this directory)    │  pair   │  skills/<name>/SKILL.md        │
+  │  the workflow docs   │ ◄─────► │  src/hpc_agent/slash_commands/ │
+  │  indexed above       │  pair   │  skills/<name>/SKILL.md        │
   │  "what to expect     │  with   │  "what to do, step by          │
   │   running it"        │         │   step"                        │
   └──────────────────────┘         └────────────────────────────────┘
@@ -38,7 +40,7 @@ The triangle:
 
 - **`docs/architecture.md`** is the layering map — atoms, flows,
   planning, infra, state. Read it to understand WHERE code lives.
-- **`docs/workflows/*.md`** (this directory) is the operator's mental
+- **The workflow docs indexed above** are the operator's mental
   model — what one campaign / one interview-recall loop *does* over
   time, what artifacts persist, what state the next iteration sees.
 - **`src/hpc_agent/slash_commands/skills/<name>/SKILL.md`** is the step-by-step

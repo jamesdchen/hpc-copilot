@@ -6,7 +6,7 @@ runners** instead of an SSH cluster. You orchestrate locally (campaign loop,
 matrix has one cell per task; results come back as artifacts.
 
 This is a **pure-API backend** in the sense of
-[`docs/proposals/crowd-compute-backend.md`](../../../docs/proposals/crowd-compute-backend.md):
+[`docs/design/crowd-compute-backend.md`](../../../docs/design/crowd-compute-backend.md):
 no SSH, no shared filesystem. It plugs into the same registry seam as the
 built-in SGE/SLURM backends.
 
@@ -117,7 +117,7 @@ For most tuning loops the clean path is to **not route through submit-flow** at
 all — drive the backend's dispatch/poll/fetch from your own local loop (propose
 params → `_execute_command` dispatches → `alive_job_ids` polls → `fetch_results`
 pulls → reduce → repeat). The framework's
-[`code-driven-orchestration`](../../../docs/workflows/code-driven-orchestration.md)
+[`code-driven-orchestration`](../../../docs/internals/code-driven-orchestration.md)
 doc documents this seam.
 
 ## Where the input data lives

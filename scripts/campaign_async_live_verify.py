@@ -10,7 +10,7 @@ a cluster result — where only a human can act (kill the driver) or judge
 (byte-for-byte artifact equality), it prints instructions and waits.
 
 It drives nothing destructive itself: the campaign + driver are started by the
-human per ``docs/runbooks/campaign-async-live-verify.md``. This script only
+human per ``docs/internals/campaign-async-live-verify.md``. This script only
 *reads* the live state by shelling out to:
 
 * ``hpc-agent campaign-status --campaign-id <id> --experiment-dir <dir>``
@@ -675,7 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Run on the submit host with the campaign driver already looping. See "
-            "docs/runbooks/campaign-async-live-verify.md for the full procedure."
+            "docs/internals/campaign-async-live-verify.md for the full procedure."
         ),
     )
     p.add_argument(

@@ -21,7 +21,7 @@ Method: 10 lens finders (submit/resume, transport-ssh, scheduler backends,
 cluster runtime, monitor/recovery, aggregation/results, state/journal/
 concurrency, campaign/overnight, agent surface, operator-error/preflight),
 mandatorily deduped against docs/internals/bug-sweep-2026-07-11.md (fixed +
-refuted) and docs/plans/architecture-review-2026-07-13.md (banked); 4-agent
+refuted) and docs/history/plans/architecture-review-2026-07-13.md (banked); 4-agent
 triage (3 shards + cross-lens dedup); 14-agent adversarial verification;
 1 completeness critic. Line numbers are as of `fb8428c` — verify live before
 acting, per the repo's own rule.

@@ -710,7 +710,7 @@ class SubmissionIncomplete(HpcError):
     Distinct from ``abandoned`` (job_ids existed but no longer live) and
     from a network-unreachable cluster. Closes the ``verify-canary``
     ``job_ids in (None, [])`` gap (see
-    ``docs/proposals/recovery-registry.md``, the ``submission_incomplete``
+    ``docs/design/recovery-registry.md``, the ``submission_incomplete``
     section) — previously the verifier silently classified this as
     "abandoned"; this exception is the typed channel that makes the
     distinction observable.

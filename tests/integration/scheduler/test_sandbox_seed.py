@@ -1,5 +1,5 @@
 """Hermetic pins for ``sandbox_seed`` — plan-unit U2 of
-``docs/plans/sandbox-proving-run-2026-07-18.md`` (the §3 trust doctrine).
+``docs/history/plans/sandbox-proving-run-2026-07-18.md`` (the §3 trust doctrine).
 
 The seeder is the ONE sanctioned way a sandbox proving run plants authorship
 evidence into an ephemeral journal namespace so the REAL gates fire against it

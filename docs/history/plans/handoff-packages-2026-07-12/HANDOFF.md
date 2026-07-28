@@ -45,7 +45,7 @@ Three packages, eight file-disjoint units (full prompts in the script):
    `l-fastpath` (narrow the plugin wholesale fast-path disable in
    `cli/dispatch.py` — verify the guard-can-fire analysis first).
 3. **Doc honesty** — `d-rewrite` (`docs/internals/submit-sequence.md` +
-   `docs/workflows/code-driven-orchestration.md` rewritten against block-drive
+   `docs/internals/code-driven-orchestration.md` rewritten against block-drive
    reality; both still narrate the deleted `claude -p` worker / nonexistent
    resolver modules), `d-pins` (two `tests/contracts` pins: doc-referenced
    console scripts/modules must exist; design-doc `status:` headers sane).

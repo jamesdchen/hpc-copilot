@@ -44,7 +44,7 @@ self-recursion, empty `EXECUTOR`) — now under a real round-trip.
 - **Site login profiles.** The SGE lane (`ci/sge/`) covers the SGE *dialect*
   — `qsub -t`/`qstat -u`/`qacct` grammar and the login-shell PATH chain (the
   run-15 F7 class) — via the distro Son-of-Grid-Engine packages. Per §6 of
-  `docs/plans/sandbox-proving-run-2026-07-18.md` ("do not oversell U9"), it
+  `docs/history/plans/sandbox-proving-run-2026-07-18.md` ("do not oversell U9"), it
   can never reproduce a specific *site's* login profile (hoffman2's exact
   PATH shape, banners, module tree); that residue stays live-only.
 - **GPU / MPI paths.** The container is CPU-only; `gpu_array` / `mpi` templates

@@ -1,7 +1,7 @@
 """Tests for the plugin-backend construction seam in
 ``remote_factory.build_remote_backend``.
 
-Core edit #2 of ``docs/proposals/crowd-compute-backend.md``: a
+Core edit #2 of ``docs/design/crowd-compute-backend.md``: a
 *backend_name* the factory's inline ladder doesn't know, but the
 registry does, constructs itself via
 :meth:`HPCBackend.from_build_context` — receiving the whole

@@ -1191,7 +1191,7 @@ def verify_canary(
         # we cannot poll scheduler state at all. Without this guard the
         # poll loop silently classifies the canary as "abandoned" (the gap
         # `errors.SubmissionIncomplete` closes; see
-        # `docs/proposals/recovery-registry.md`, the `submission_incomplete`
+        # `docs/design/recovery-registry.md`, the `submission_incomplete`
         # section), masking a structural submission failure as a recoverable one.
         # The registry-backed remediation routes the operator at the
         # sidecar + cluster-side logs to find the real failure.

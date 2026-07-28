@@ -3,7 +3,7 @@ status: premortem
 created: 2026-07-17
 reviews: harness-activation-2026-07-17.md (committed 6f6a945b)
 baseline: main @ c893d2fa (source verified against this tree)
-style: daemon-engineering-2026-07-16/premortems/ (verdict + numbered binding deltas)
+style: docs/history/plans/daemon-engineering-2026-07-16/premortems/ (verdict + numbered binding deltas)
 ---
 
 # Harness ACTIVATION — adversarial premortem

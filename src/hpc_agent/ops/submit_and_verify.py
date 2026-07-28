@@ -117,7 +117,7 @@ def _check_reducer_on_canary(
 ) -> ReducerCheckResult:
     """Rung 2 of the reducibility ladder: EXECUTE the run's declared custom
     reducer against the verified canary's ONE real task-0 row, before the main
-    array launches (``docs/plans/amortized-reduction-check-2026-07-17.md``).
+    array launches (``docs/history/plans/amortized-reduction-check-2026-07-17.md``).
 
     A verified canary's task-0 output is a GENUINE task artifact — the exact
     shape the main array's tasks write. Run the SAME ``cluster_reduce`` the final
@@ -1128,7 +1128,7 @@ def _gated_cache_skip_result(
     verb="workflow",
     # composes lists the top-level composition ATOMS (submit-flow + verify-canary).
     # The rung-2 canary reducer check also invokes cluster-reduce, but as a
-    # conditional best-effort leg (docs/plans/amortized-reduction-check-2026-07-17.md);
+    # conditional best-effort leg (docs/history/plans/amortized-reduction-check-2026-07-17.md);
     # that cross-subject reach is declared to the layering lint via ROLE_ROOT_ALLOW
     # (scripts/lint_subject_imports.py), the same mechanism verify-canary's own
     # ops/aggregate reach uses — NOT a top-level composition atom.
@@ -1340,8 +1340,9 @@ def submit_and_verify(
     # S2 return and the fused Phase-2 launch, so every verified gate mints once.
     _record_canary_gate_validated(base)
 
-    # Rung 2 of the reducibility ladder (docs/plans/amortized-reduction-check-
-    # 2026-07-17.md): the canary verified ⇒ its task-0 output is a GENUINE task
+    # Rung 2 of the reducibility ladder (docs/history/plans/
+    # amortized-reduction-check-2026-07-17.md): the canary verified ⇒ its
+    # task-0 output is a GENUINE task
     # artifact. Before the main array launches, EXECUTE the run's declared custom
     # reducer against that ONE real row (the SAME cluster_reduce the final harvest
     # runs) so a broken reducer — py3.8-vs-3.13, a missing import, a wrong output

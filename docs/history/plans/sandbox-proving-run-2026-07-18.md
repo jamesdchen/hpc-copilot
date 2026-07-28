@@ -151,7 +151,7 @@ traceability table (§5). Cross-link from `proving-run` runsheets: every future
 live runsheet's pre-flight gains one line — "sandbox proving run green at
 <sha>? (rung-2 gate)".
 
-**LANDED (2026-07-19):** [`docs/internals/sandbox-proving-run.md`](../internals/sandbox-proving-run.md)
+**LANDED (2026-07-19):** [`docs/internals/sandbox-proving-run.md`](../../internals/sandbox-proving-run.md)
 carries the ladder, doctrine, never-certify list, traceability, and the §7
 rulings normatively. No runsheet TEMPLATE file exists (the runsheets under
 `docs/plans/` are dated historical records), so the doc's §6 specifies the

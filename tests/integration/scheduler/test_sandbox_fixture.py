@@ -1,6 +1,6 @@
 """Hermetic tests for the U1 sandbox experiment generator (``sandbox_fixture``).
 
-Covers the plan §4-U1 contract (``docs/plans/sandbox-proving-run-2026-07-18.md``):
+Covers the plan §4-U1 contract (``docs/history/plans/sandbox-proving-run-2026-07-18.md``):
 
 * the fixture materializes ``train.py`` + the three framework files
   (``.hpc/tasks.py`` / ``interview.json`` / ``.hpc/axes.yaml``) through the

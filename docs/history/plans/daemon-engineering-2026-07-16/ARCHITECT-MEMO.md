@@ -15,7 +15,7 @@ remain authoritative for detail:
   in-flight gates, per-unit batteries; `unit-specs.json` is its machine form.
 
 Supersession: this package **supersedes latency-plan units 3.2/3.3**
-(`docs/plans/latency-elimination-2026-07-16/unit-specs.json`) — drift note
+(`docs/history/plans/latency-elimination-2026-07-16/unit-specs.json`) — drift note
 recorded here; do not build those units from the latency package.
 
 USER RULING (2026-07-16): "fully engineer this" — build approved behind

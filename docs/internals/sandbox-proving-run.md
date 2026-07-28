@@ -5,7 +5,7 @@
 doctrine, and the certification boundary those units build under, so no future
 unit can quietly widen what rung-2 evidence means.
 
-- Plan: [`docs/plans/sandbox-proving-run-2026-07-18.md`](../plans/sandbox-proving-run-2026-07-18.md) (units U1–U9, sequencing, risks — the build spec)
+- Plan: [`docs/history/plans/sandbox-proving-run-2026-07-18.md`](../history/plans/sandbox-proving-run-2026-07-18.md) (units U1–U9, sequencing, risks — the build spec)
 - Substrate: [`scheduler-integration-ci.md`](scheduler-integration-ci.md) (the container Slurm lane the sandbox rung reuses), [`.github/workflows/scheduler-integration.yml`](../../.github/workflows/scheduler-integration.yml), [`ci/slurm/`](../../ci/slurm)
 - Seeding precedent: [`src/hpc_agent/conformance/relay_fixtures.py`](../../src/hpc_agent/conformance/relay_fixtures.py) (the conformance kit's sanctioned ephemeral-namespace fixture posture)
 
@@ -120,8 +120,8 @@ Every future live runsheet's pre-flight gains one line:
 
 > sandbox proving run green at \<sha\>? (rung-2 gate — cite the workflow-run id)
 
-No runsheet TEMPLATE file exists today — the runsheets under `docs/plans/`
-(e.g. [`proving-run-15-runsheet.md`](../plans/proving-run-15-runsheet.md)) are
+No runsheet TEMPLATE file exists today — the runsheets under `docs/history/plans/`
+(e.g. [`proving-run-15-runsheet.md`](../history/plans/proving-run-15-runsheet.md)) are
 dated historical records, not templates, and are never retro-edited. Until a
 template exists, this section is the canonical specification of the line;
 copy it into each new runsheet's pre-flight as it is written. The lane stays

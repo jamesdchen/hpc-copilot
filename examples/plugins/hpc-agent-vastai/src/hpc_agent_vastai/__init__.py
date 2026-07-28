@@ -23,7 +23,7 @@ for non-SSH backends.
 
 What this skeleton does NOT do: make API calls. Every compute method
 raises ``NotImplementedError`` until the real implementation lands
-(see ``docs/proposals/crowd-compute-backend.md`` in the hpc-agent
+(see ``docs/design/crowd-compute-backend.md`` in the hpc-agent
 repo).
 """
 

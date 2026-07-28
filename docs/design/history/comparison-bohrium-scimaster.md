@@ -158,7 +158,7 @@ not just planning it:
     pattern Lebesgue would call "burst to additional capacity."
   - CI builds and tests it in an isolated `plugins` job (offline, fake API
     client) and `actionlint`s the shipped workflow template.
-- **`docs/proposals/crowd-compute-backend.md`** — the seam analysis for the
+- **`docs/design/crowd-compute-backend.md`** — the seam analysis for the
   *next* substrates (Vast.ai / SaladCloud / Akash). Two host edits it needed
   (config validation accepting any plugin-registered backend name; registry
   dispatch in `build_remote_backend` via `HPCBackend.from_build_context`) have

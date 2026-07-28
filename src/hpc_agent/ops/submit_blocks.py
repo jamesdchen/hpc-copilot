@@ -1119,7 +1119,7 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     if sv.verify_result is not None:
         brief["verify_result"] = sv.verify_result.model_dump(mode="json")
 
-    # Rung-2 reducibility check (docs/plans/amortized-reduction-check-2026-07-17.md):
+    # Rung-2 reducibility check (docs/history/plans/amortized-reduction-check-2026-07-17.md):
     # the outcome of EXECUTING the run's declared custom reducer against the verified
     # canary's ONE real row rides the brief. A `disclosed` / `unverified` status also
     # carries a code-rendered one-line disclosure appended to the reason so the block

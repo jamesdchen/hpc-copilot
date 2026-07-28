@@ -108,7 +108,7 @@ entry point; 844 commits since 2026-07-01; most-churned files are GENERATED
 
 A1 **`regen-all` entry point** (S). Six regen scripts, three docs each
   listing a different subset (`adding-a-primitive.md:236-241` names five;
-  `handoff-packages-2026-07-12/HANDOFF.md:63-66` six + check;
+  `docs/history/plans/handoff-packages-2026-07-12/HANDOFF.md:63-66` six + check;
   `sync-checklist.md:198-204` four). One `scripts/regen_all.py` (or
   console-script) in dependency order + `--check`; re-point all docs +
   pre-commit at it; delete the per-doc enumerations.
@@ -201,7 +201,7 @@ B5 **Onboarding index** (S–M). The fresh-session read chain (CLAUDE.md →
   with a no-heuristics selection law.
 - 2026-07-15 (fable sweep): 15-agent dive+premortem+critic sweep over this
   plan produced the implementation handoff —
-  `docs/plans/fable-sweep-devx-2026-07-15/` (ARCHITECT-MEMO.md + full unit
+  `docs/history/plans/fable-sweep-devx-2026-07-15/` (ARCHITECT-MEMO.md + full unit
   specs in sweep-results.json). Batch B (B1-B5) is NOT in the sweep — its
   items still need maintainer rulings. Known corrections to this doc from
   the sweep: the generated file is `src/hpc_agent/operations.json` (not

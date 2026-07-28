@@ -1,6 +1,6 @@
 """The ONE §3 trust-doctrine containment guard.
 
-Plan ``docs/plans/sandbox-proving-run-2026-07-18.md`` §3: the sandbox must be
+Plan ``docs/history/plans/sandbox-proving-run-2026-07-18.md`` §3: the sandbox must be
 "structurally incapable of touching a production namespace". Both public
 sandbox guards delegate here so the invariant can never drift into two
 divergent copies:

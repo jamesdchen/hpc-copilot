@@ -51,7 +51,7 @@ class TestKnownSchedulerFamilies:
         # The crowd-compute seam: a backend name registered by a plugin
         # (here: registered directly, the same @register call a plugin's
         # primitive_modules import runs) validates without a pinned
-        # scheduler_profile — see docs/proposals/crowd-compute-backend.md.
+        # scheduler_profile — see docs/design/crowd-compute-backend.md.
         from hpc_agent.infra.backends import _REGISTRY, HPCBackend, register
 
         @register("fakecrowd")

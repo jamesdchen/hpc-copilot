@@ -583,14 +583,14 @@
       "failure_mode": "The 'verbs' live-count definition (159 = cli-truthy catalog entries) contradicts the repo's own established usage, where 'N verbs' means the full registry count. The plan's companion review corrects '167 verbs' to 169 \u2014 i.e. in-repo prose semantics of 'verbs' = registry size, not CLI-exposed subset. No in-scope doc says 'N verbs' today, so nothing fires at land; but the first future doc that writes the conventionally-correct '169 verbs' fails the new pin demanding 159, and an author following the failure message 'fixes' the doc to a number the rest of the repo's prose contradicts.",
       "likelihood": "medium",
       "severity": "medium",
-      "evidence": "docs/plans/architecture-review-2026-07-13.md:399 ('\"167 verbs\" \u2192 **169** (frozen-literal sin the repo explicitly warns about)'); src/hpc_agent/operations.json: 169 entries total, 159 with truthy 'cli' (verified by parse); docs/design/onboarding-map.md:118 'all 142 verbs' (historical, also registry-count-shaped, out of scope but showing the convention).",
+      "evidence": "docs/history/plans/architecture-review-2026-07-13.md:399 ('\"167 verbs\" \u2192 **169** (frozen-literal sin the repo explicitly warns about)'); src/hpc_agent/operations.json: 169 entries total, 159 with truthy 'cli' (verified by parse); docs/design/onboarding-map.md:118 'all 142 verbs' (historical, also registry-count-shaped, out of scope but showing the convention).",
       "mitigation": "Define verbs = len(core_only_operations_catalog()) = registry count (169), matching the plan's own gloss, and note the CLI-exposed subset (159) as a separate term in the docstring; or accept either value for 'verbs' matches with the docstring naming both. Flag to the integrator as a one-line ruling rather than letting the implementing agent pick silently."
      },
      {
       "failure_mode": "The schemas live count in the spec is factually wrong and the glob depth is unspecified. Top-level glob('src/hpc_agent/schemas/*.json') = 244; recursive = 249 (five skill_returns/*.json in a subdirectory); the spec asserts 245 \u2014 matching neither. An autonomous agent will either burn time reconciling ('spec says 245, I get 244 \u2014 is my glob wrong?') or silently pick rglob vs glob, baking a live-count definition off by 5 that mis-corrects the first future doc claiming a schema count. No CI red at land (no in-scope doc claims a schema count), but the count source ships wrong-by-construction relative to the spec.",
       "likelihood": "high",
       "severity": "low",
-      "evidence": "find src/hpc_agent/schemas -name '*.json': 249 recursive, 244 top-level; subdir hits = src/hpc_agent/schemas/skill_returns/*.json (5 files); docs/plans/architecture-review-2026-07-13.md:289 independently says '244 schema stems'. The spec's DC4 says 'glob ... (245 today)'.",
+      "evidence": "find src/hpc_agent/schemas -name '*.json': 249 recursive, 244 top-level; subdir hits = src/hpc_agent/schemas/skill_returns/*.json (5 files); docs/history/plans/architecture-review-2026-07-13.md:289 independently says '244 schema stems'. The spec's DC4 says 'glob ... (245 today)'.",
       "mitigation": "Correct the spec: non-recursive glob('*.json') = 244 (aligns with the review's '244 schema stems'), state explicitly that skill_returns/ sub-schemas are excluded (or included \u2014 but decide), and put the decision in the test's docstring."
      },
      {
@@ -865,7 +865,7 @@
      "scripts/regen_all.py",
      "docs/plans/devx-and-pack-seams-2026-07-15.md",
      "docs/design/history/run13-findings.md",
-     "docs/plans/handoff-packages-2026-07-12/HANDOFF.md",
+     "docs/history/plans/handoff-packages-2026-07-12/HANDOFF.md",
      "docs/generated/operations.md",
      "docs/primitives/README.md",
      "src/hpc_agent/operations.json",
@@ -1026,7 +1026,7 @@
      "docs/internals/sync-checklist.md",
      "docs/internals/regen-debt-ledger.md",
      "docs/internals/engineering-principles.md",
-     "docs/plans/handoff-packages-2026-07-12/HANDOFF.md",
+     "docs/history/plans/handoff-packages-2026-07-12/HANDOFF.md",
      ".pre-commit-config.yaml",
      ".github/workflows/ci.yml",
      "docs/design/registration-kernel.md",

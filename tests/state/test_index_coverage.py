@@ -1,7 +1,7 @@
 """Behaviour-pinning coverage for :mod:`hpc_agent.state.index`.
 
 Paired with ``test_journal_coverage.py`` — see that module's header for the
-mutation-triage rationale (``docs/plans/mutation-triage-2026-07-17.md``,
+mutation-triage rationale (``docs/history/plans/mutation-triage-2026-07-17.md``,
 finding-2: the journal/index provenance substrate ran DARK, with covered-but-
 unasserted logic where a boundary/operator/default mutation would survive).
 

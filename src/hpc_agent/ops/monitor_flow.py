@@ -191,7 +191,7 @@ def _announce_wait_enabled() -> bool:
     poll loop moves to the login node's filesystem client (:func:`wait_for_announce_change`),
     so a marker WAKES the client instead of the client re-dialing every interval.
     Gated (not default-on) because P3's win is only proven at cluster scale: the
-    Wave-2 telemetry gate (docs/plans/latency-elimination-2026-07-16) must confirm
+    Wave-2 telemetry gate (docs/history/plans/latency-elimination-2026-07-16) must confirm
     the remote wait beats the adaptive-backoff dial before it becomes the default.
     """
     raw = os.environ.get("HPC_ANNOUNCE_WAIT", "")

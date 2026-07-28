@@ -1,6 +1,6 @@
 """Pin :func:`hpc_agent.ops.submit_flow._effective_cap_for_backend_name`.
 
-Mutation triage-2 (``docs/plans/mutation-triage-2-2026-07-17.md``, Top-3 Unit 1)
+Mutation triage-2 (``docs/history/plans/mutation-triage-2-2026-07-17.md``, Top-3 Unit 1)
 found this backend->concurrency-cap resolver at **19/19 mutants survived, 0 test
 files referencing it**: it is covered-but-never-asserted. A wrong effective cap
 silently over- or under-submits against a real scheduler (it feeds
