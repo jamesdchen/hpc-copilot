@@ -64,7 +64,7 @@ flowchart TB
         direction TB
         FRICTION["friction or gap noticed while<br/>working anywhere in the four<br/>zones above becomes a<br/>candidate package"]
         PKG["handoff package: ARCHITECT-MEMO<br/>+ unit-specs.json<br/>(docs/plans/_TEMPLATE-handoff/)"]
-        SWARM["swarm-units workflow: file-disjoint units<br/>built in parallel worktrees → per-wave<br/>integrate (one regen + lint gauntlet;<br/>red aborts) → review lenses + fixer"]
+        SWARM["units implemented per plan prose in<br/>parallel worktrees (file claims guarded by<br/>scripts/check_handoff_disjointness.py) →<br/>regen + lint gauntlet → review → PR"]
         MERGED["PR merged — the upgraded tool is<br/>what every zone runs on next session;<br/>the dev loop never touches<br/>a live experiment"]
         FRICTION --> PKG --> SWARM --> MERGED
     end
@@ -148,28 +148,29 @@ reshape a core path, `run-story` renders with no LLM anywhere in the render
 path, and `doctor` (`src/hpc_agent/ops/recover/doctor.py`) drafts
 proposals but restarts nothing.
 
-**The dev loop (meta).** The swarm-units workflow
-(`docs/internals/swarm-units-workflow.md`) sits *outside* the four zones:
-it is how the tool itself gets improved, not a step any experiment passes
-through. Friction noticed anywhere in the lifecycle becomes a handoff
-package (`docs/plans/_TEMPLATE-handoff/` — an architect memo plus
-file-disjoint unit specs), the workflow builds the units in parallel
-worktrees, integrates each wave through a single regen + lint gauntlet
-(a red gauntlet aborts the run rather than becoming the next wave's
-base), passes review lenses plus a fixer, and lands as an ordinary PR.
-Its streamlining is therefore indirect by design: a live experiment never
+**The dev loop (meta).** The handoff-package protocol sits *outside* the
+four zones: it is how the tool itself gets improved, not a step any
+experiment passes through. Friction noticed anywhere in the lifecycle
+becomes a handoff package (`docs/plans/_TEMPLATE-handoff/` — an architect
+memo plus file-disjoint unit specs, claims guarded by
+`scripts/check_handoff_disjointness.py`), the units are implemented per
+plan prose in parallel worktrees, integrated through a single regen +
+lint gauntlet (a red gauntlet stops the wave rather than becoming the
+next wave's base), reviewed, and landed as an ordinary PR. Its
+streamlining is therefore indirect by design: a live experiment never
 sees it; what the researcher sees is that the next session's tool has one
-less rough edge. The main loop does not need this machinery because it
-already has its own deterministic driver: the stateless `block-drive`
-tick (`src/hpc_agent/_kernel/lifecycle/block_drive.py::run_tick`) chains
-the blocks in code, detaches cluster-bound waits into a child process,
-and parks at code-digested briefs — the LLM touches the flow only at
-those parks (`docs/internals/submit-sequence.md`; the LLM-as-executor
-path was deliberately removed). That, plus detach-by-contract monitoring,
-is what keeps chat context small across a whole campaign; an agent
-fan-out layer would duplicate the chain the kernel already owns while
-having no answer for the typed-`y` gates, which are interactive on
-purpose.
+less rough edge. The main loop, meanwhile, has its own deterministic
+driver: the stateless `block-drive` tick
+(`src/hpc_agent/_kernel/lifecycle/block_drive.py::run_tick`) chains the
+blocks in code, detaches cluster-bound waits into a child process, and
+parks at code-digested briefs — the LLM touches the flow only at those
+parks (`docs/internals/submit-sequence.md`; the LLM-as-executor path was
+deliberately removed). Workflow plans wrap that driver without competing
+with it: `campaign-recon` fans out the read-only status sweep, and
+`campaign-run` relays rule-fixed `block-drive` ticks so the tick/wait
+traffic stays out of chat context — parking at every typed-`y` gate,
+which stays interactive and inline on purpose
+(`docs/design/agent-delegation.md` rule 5, `.claude/workflows/README.md`).
 
 ## Where every gate binds
 

@@ -17,6 +17,37 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Changed — delegation reworked: plan-driven relay joins the context firewall (2026-07-28)
+
+User-ordered ("the context firewall is good, but I feel like the dynamic
+workflow can do more"). `docs/design/agent-delegation.md` gains rule 5: a
+`kind: 'script'` step in a validated `.claude/workflows/` plan may relay any
+registry verb except the `append-decision` rendezvous lock — `block-drive`
+ticks included — because the command is a pure authored template and the
+model composes nothing. The load-bearing distinction shifts from *which side
+of the execution path* to **who composes the invocation**. Freeform subagents
+(`hpc-recon`, skill delegation sections) stay recon-only, unchanged.
+
+- **`.claude/workflows/campaign-run.js`** — new flagship at the plan-relay
+  level: drives one campaign through the block chain by relayed `block-drive`
+  ticks and `wait-detached` waits, PARKS at every typed-`y` gate (a tick
+  returning `awaiting_decision` ends the run with the brief pointer; the
+  human journals the `y` inline; `resumeFromRunId` replays completed steps
+  from cache). The workflow never passes a gate — the runtime refuses
+  ungreenlit blocks regardless of caller, so parking is the enforced shape.
+- **`.claude/workflows/campaign-recon.js`** — the recon firewall, mechanized:
+  parallel fan-out of the delegable query verbs, one advisory result of exit
+  codes + bounded outputs + pointers. Replaces `swarm-units.js` as the
+  section flagship (the build-swarm plan and
+  `docs/internals/swarm-units-workflow.md` were deleted by user direction;
+  the swarm-dispatch protocol returns to its durable `docs/plans/`
+  handoff-package form, `scripts/check_handoff_disjointness.py` outliving
+  the deleted driver).
+- **`tests/contracts/test_workflow_plan_delegation.py`** — the boundary
+  mechanized against the live registry: `append-decision` in no plan, in no
+  section; mutating/workflow verbs only inside a plan's `COMMANDS` block;
+  fire paths plus a control arm proving the rule-5 grant is real.
+
 ### Added — agent reincorporation at the recon-only level (2026-07-27)
 
 Per `docs/plans/agent-delegation-2026-07-27.md` (user-ordered: "reincorporate
