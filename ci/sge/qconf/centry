@@ -1,7 +1,7 @@
 arch                a          RESTRING    ==    YES         NO         NONE     0
 calendar            c          RESTRING    ==    YES         NO         NONE     0
 cpu                 cpu        DOUBLE      >=    YES         NO         0        0
-display_win_gui     dwg        BOOLEAN     ==    YES         NO         0        0
+display_win_gui     dwg        BOOL     ==    YES         NO         0        0
 h_core              h_core     MEMORY      <=    YES         NO         0        0
 h_cpu               h_cpu      TIME        <=    YES         NO         0:0:0    0
 h_data              h_data     MEMORY      <=    YES         NO         0        0
@@ -29,7 +29,7 @@ np_load_medium      nlm        DOUBLE      >=    NO          NO         0       
 np_load_short       nls        DOUBLE      >=    NO          NO         0        0
 num_proc            p          INT         ==    YES         NO         0        0
 qname               q          RESTRING    ==    YES         NO         NONE     0
-rerun               re         BOOLEAN     ==    NO          NO         0        0
+rerun               re         BOOL     ==    NO          NO         0        0
 s_core              s_core     MEMORY      <=    YES         NO         0        0
 s_cpu               s_cpu      TIME        <=    YES         NO         0:0:0    0
 s_data              s_data     MEMORY      <=    YES         NO         0        0
