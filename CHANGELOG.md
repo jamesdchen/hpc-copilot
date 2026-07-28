@@ -17,6 +17,19 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Changed — docs reorganized: live plans split from history, odd-duck roots folded (2026-07-28)
+
+- `docs/history/plans/` now holds every executed plan, finished sweep/triage,
+  run runsheet, and retired handoff package (~20 items moved from
+  `docs/plans/`, each with landing evidence); `docs/plans/` keeps only live/
+  BANKED work. `docs/proposals/` → `docs/design/`; `docs/runbooks/` +
+  `docs/workflows/` → `docs/internals/` (guides indexed by
+  `docs/internals/workflows.md`). All moves via `git mv`; references updated
+  repo-wide; the operational-docs contract pins
+  (`tests/contracts/_doc_scan.py`) repointed with the drift log updated.
+- `docs/README.md` rewritten as the per-root admission-rule map: a new doc
+  must fit an existing root, or the reorg conversation comes first.
+
 ### Removed — dev-loop orchestration erased; devx augments Claude Code, never replaces it (2026-07-28)
 
 User-ordered: the bespoke build-dynamics protocol is gone in full. Claude
