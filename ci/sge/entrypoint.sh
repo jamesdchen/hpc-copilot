@@ -36,6 +36,17 @@ HN="$(hostname)"
 JEMALLOC="$(ls /usr/lib/x86_64-linux-gnu/libjemalloc.so.* 2>/dev/null | head -n 1 || true)"
 log "jemalloc preload for daemons: ${JEMALLOC:-none found}"
 
+# The libspoolc duplicated-state repair shim (ci/sge/spoolc_init_shim.c,
+# compiled into the image by the Dockerfile). WITHOUT it sge_qmaster dies in
+# a silent SIGSEGV before answering qconf: the distro build duplicates the
+# SoGE framework's static state between the daemon and the dlopen'd
+# libspoolc.so, and the shlib copy is never initialized (uninitialized
+# pthread keys, NULL default spool context, empty master lists). The shim
+# initializes/syncs all three; classic spooling is unusable without it.
+SHIM=/usr/local/lib/spoolc_init_shim.so
+[ -f "$SHIM" ] || log "WARNING: $SHIM missing (image regression) — qmaster will SIGSEGV at startup"
+DAEMON_PRELOAD="$SHIM${JEMALLOC:+ $JEMALLOC}"
+
 # --- authorized_keys for the test user ---------------------------------------
 # Identical contract to ci/slurm/entrypoint.sh: the workflow provides the
 # PUBLIC half of a throwaway keypair at /pubkey (bind-mount or docker cp).
@@ -136,7 +147,7 @@ if pgrep -x sge_qmaster >/dev/null 2>&1; then
     log "sge_qmaster already running"
 else
     log "starting sge_qmaster (classic spooling)"
-    LD_PRELOAD="$JEMALLOC" /usr/lib/gridengine/sge_qmaster >"$QMASTER_START_LOG" 2>&1
+    LD_PRELOAD="$DAEMON_PRELOAD" /usr/lib/gridengine/sge_qmaster >"$QMASTER_START_LOG" 2>&1
     log "sge_qmaster launch rc=$? (start log: $QMASTER_START_LOG)"
     [ -s "$QMASTER_START_LOG" ] && sed 's/^/[qmaster] /' "$QMASTER_START_LOG" | tail -n 20
 fi
@@ -230,7 +241,7 @@ dump_qmaster_fate() {
     elif command -v strace >/dev/null 2>&1; then
         log "--- retrying qmaster under strace (bounded 20s; log: $STRACE_LOG) ---"
         ( cd "$QMASTER_SPOOL" && ulimit -c unlimited && \
-          LD_PRELOAD="$JEMALLOC" timeout 20 strace -f -o "$STRACE_LOG" \
+          LD_PRELOAD="$DAEMON_PRELOAD" timeout 20 strace -f -o "$STRACE_LOG" \
               /usr/lib/gridengine/sge_qmaster >"$QMASTER_SPOOL/qmaster.strace.start.log" 2>&1 ) || true
         # Re-poll briefly: a just-started daemon may need another beat to bind
         # 6444 — a single immediate probe would mis-declare it dead.
@@ -276,6 +287,14 @@ fi
 [ "$qmaster_up" = 1 ] && log "qmaster answering qconf"
 
 # --- cell bootstrap (idempotent) ----------------------------------------------
+# sgeadmin must be a MANAGER: the daemons setuid to it, and the scheduler
+# thread's own GDI operations are manager-gated — without this every
+# scheduler cycle logs 'denied: "sgeadmin" must be manager' and nothing
+# dispatches. qmaster auto-adds only the STARTING user (root); the sgeadmin
+# grant was spooldefaults' job in the BDB flow, so the classic hand-seed
+# must do it here. (Proven live 2026-07-28: jobs sat qw until this ran.)
+qconf -sm 2>/dev/null | grep -qx sgeadmin || qconf -am sgeadmin || true
+
 # admin + submit host entries for the runtime hostname.
 qconf -sh 2>/dev/null | grep -qx "$HN" || qconf -ah "$HN" || true
 qconf -ss 2>/dev/null | grep -qx "$HN" || qconf -as "$HN" || true
@@ -321,12 +340,20 @@ if [ -f /etc/sge-bootstrap/centry ]; then
 else
     log "WARNING: /etc/sge-bootstrap/centry missing — -l h_rt/h_data submits and the all.q template will break"
 fi
-# Default usersets — parity with init_cluster. Not load-bearing for the smoke
-# (nothing references ACLs), so a failure here is silent-by-design.
-if [ -f /usr/share/gridengine/util/resources/usersets ]; then
-    qconf -Mu /usr/share/gridengine/util/resources/usersets >/dev/null 2>&1 \
-        || qconf -Au /usr/share/gridengine/util/resources/usersets >/dev/null 2>&1 \
-        || true
+# Default usersets — LOAD-BEARING, and shipped as a DIRECTORY. gridengine-
+# common installs /usr/share/gridengine/util/resources/usersets/ as a dir of
+# three files (arusers, deadlineusers, defaultdepartment), so the old
+# single-file [ -f ] probe could never fire. defaultdepartment is required:
+# without it EVERY qsub is refused 'denied: no matching department for user'
+# (proven live 2026-07-28), so a failure here is loud, not silent.
+USERSETS_DIR=/usr/share/gridengine/util/resources/usersets
+if [ -d "$USERSETS_DIR" ]; then
+    for us in "$USERSETS_DIR"/*; do
+        qconf -Au "$us" >/dev/null 2>&1 || qconf -Mu "$us" >/dev/null 2>&1 \
+            || log "WARNING: userset seed failed for $us — qsub will be denied (no matching department)"
+    done
+else
+    log "WARNING: $USERSETS_DIR missing — qsub will be denied (no matching department)"
 fi
 
 # Parallel environment 'shared' — the framework's SGE cpu path requests
@@ -354,7 +381,7 @@ if pgrep -x sge_execd >/dev/null 2>&1; then
     log "sge_execd already running"
 else
     log "starting sge_execd"
-    LD_PRELOAD="$JEMALLOC" /usr/lib/gridengine/sge_execd >"$EXECD_START_LOG" 2>&1
+    LD_PRELOAD="$DAEMON_PRELOAD" /usr/lib/gridengine/sge_execd >"$EXECD_START_LOG" 2>&1
     log "sge_execd launch rc=$? (start log: $EXECD_START_LOG)"
     [ -s "$EXECD_START_LOG" ] && sed 's/^/[execd] /' "$EXECD_START_LOG" | tail -n 20
 fi
