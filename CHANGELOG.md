@@ -17,6 +17,29 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Removed — dev-loop orchestration erased; devx augments Claude Code, never replaces it (2026-07-28)
+
+User-ordered: the bespoke build-dynamics protocol is gone in full. Claude
+Code natively runs dynamic workflows, so the dev loop needs no orchestration
+machinery of its own — the repo's devx layer exists to AUGMENT that
+experience (gates and data, not process):
+
+- **Deleted**: `docs/plans/_TEMPLATE-handoff/` (the architect-memo +
+  unit-specs handoff-package template), `scripts/check_handoff_disjointness.py`
+  and `tests/scripts/test_check_handoff_disjointness.py`. Historical handoff
+  packages under `docs/plans/` remain as records.
+- **Added**: `scripts/devx_ingest.py` — the repo-side collector for the
+  `tag-session` seam. Sweeps `~/.claude/projects/` (recovering each
+  project's real cwd from the `cwd` field inside its transcripts — the
+  munged directory name is lossy), joins session inventories to each
+  experiment's `.hpc/devx/session_tags.jsonl` ledger, and emits one JSON
+  report. A collector, not an interpreter.
+- **Workflow intake discipline** (`.claude/workflows/README.md`): plans
+  front-load their full input surface via `ARGS_CONTRACT`; the launching
+  session resolves every field before launch and proposes the whole arg set
+  warm — one confirm/correct exchange of diffs, never serial cold
+  questions. Mid-run returns are parks only.
+
 ### Changed — dev-loop/product separation: the wheel ships product only (2026-07-28)
 
 User-ordered: "the wheel build should not have dev loop stuff except for
@@ -71,9 +94,8 @@ of the execution path* to **who composes the invocation**. Freeform subagents
   codes + bounded outputs + pointers. Replaces `swarm-units.js` as the
   section flagship (the build-swarm plan and
   `docs/internals/swarm-units-workflow.md` were deleted by user direction;
-  the swarm-dispatch protocol returns to its durable `docs/plans/`
-  handoff-package form, `scripts/check_handoff_disjointness.py` outliving
-  the deleted driver).
+  the rest of the bespoke build protocol followed the next day — see the
+  "dev loop orchestration erased" entry).
 - **`tests/contracts/test_workflow_plan_delegation.py`** — the boundary
   mechanized against the live registry: `append-decision` in no plan, in no
   section; mutating/workflow verbs only inside a plan's `COMMANDS` block;

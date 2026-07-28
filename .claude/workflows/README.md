@@ -26,6 +26,32 @@ mutating/workflow verb appears ONLY inside a plan's `COMMANDS` block —
 model-facing `PROMPTS` text stays at recon scope. Render-bearing output
 travels as pointers + counts, never a paraphrase.
 
+## Intake (frontload the args, warm)
+
+Every plan declares its full input surface up front as `ARGS_CONTRACT` — a
+plain object naming each arg, whether it is required, and what it means.
+The launch discipline built on that:
+
+- **Resolve every field BEFORE launching.** A plan throws on missing
+  required args at t=0; it never discovers mid-run that it needed
+  something from the human. The only mid-run returns are PARKS (gates,
+  failures) — never questions.
+- **Warm, not cold.** The launching session does not interrogate the user
+  field-by-field from zero. It first fills every slot it can itself —
+  cheap local reads, a `campaign-recon` sweep, the previous run's args —
+  and then presents the WHOLE proposed arg set to the user in ONE
+  exchange, as diffs to nudge ("driving run-014 with workflow=submit,
+  maxTicks=25 — correct anything") rather than open questions to answer.
+  The user's correction is a diff against a concrete proposal, which is
+  cheap; a cold "what run id?" is an interruption, which is not.
+- **One exchange, then run.** If the user's nudge changes a value, fold it
+  in and launch; do not re-propose unless a correction invalidates other
+  proposed fields.
+
+This is the fix for the prior iteration's failure mode: the old build-swarm
+onboarding spent its opening turns coldly deriving what it needed instead
+of proposing warm defaults and letting the human steer by exception.
+
 ## Structure contract (portability seam)
 
 Each script is two sections, in order:
@@ -86,16 +112,18 @@ query/validate-only command rule above).
 
 ## Lineage notes
 
-- **2026-07-28 — section repointed at the researcher lifecycle.** The
-  original flagship (`swarm-units.js`, a build swarm over handoff packages)
-  was deleted by user direction: this section now serves *running
-  experiments*, not building the repo. The swarm-dispatch protocol it
-  mechanized returns to its durable form — `docs/plans/` handoff packages
-  (template: `docs/plans/_TEMPLATE-handoff/`) implemented per plan prose,
-  with `scripts/check_handoff_disjointness.py` (which outlives the deleted
-  script; its fire paths stay pinned in
-  `tests/scripts/test_check_handoff_disjointness.py`) guarding file claims.
-  `campaign-recon.js` lands as the flagship at the recon-only delegation
+- **2026-07-28 — section repointed at the researcher lifecycle; the build
+  protocol fully erased.** The original flagship (`swarm-units.js`, a build
+  swarm over handoff packages) was deleted by user direction: this section
+  serves *running experiments*, not building the repo. In a second order
+  the same day the whole bespoke build protocol went with it —
+  `docs/plans/_TEMPLATE-handoff/`, `scripts/check_handoff_disjointness.py`,
+  and its tests — because the dev loop needs no protocol of its own:
+  Claude Code natively runs dynamic workflows, and this repo's devx layer
+  exists to AUGMENT that experience (lints, regen, contract tests, the
+  `tag-session` ingestion seam), never to replace its orchestration.
+  Historical handoff packages under `docs/plans/` remain as records.
+  `campaign-recon.js` landed as the flagship at the recon-only delegation
   level; its adapter (`validatePlan`/`runStep`/`runWithRetry`, the
   `scriptStep` relay prompt, the step vocabulary) is carried over from
   `swarm-units.js` verbatim — the plan data changed, the wheel did not.

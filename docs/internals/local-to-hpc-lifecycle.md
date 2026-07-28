@@ -64,7 +64,7 @@ flowchart TB
         direction TB
         FRICTION["friction or gap noticed while<br/>working anywhere in the four<br/>zones above becomes a<br/>candidate package"]
         PKG["handoff package: ARCHITECT-MEMO<br/>+ unit-specs.json<br/>(docs/plans/_TEMPLATE-handoff/)"]
-        SWARM["units implemented per plan prose in<br/>parallel worktrees (file claims guarded by<br/>scripts/check_handoff_disjointness.py) →<br/>regen + lint gauntlet → review → PR"]
+        SWARM["fix developed with Claude Code's native<br/>dynamic workflows — the repo's devx layer<br/>(lints, regen, contract tests) rides along<br/>as gates, not as orchestration"]
         MERGED["PR merged — the upgraded tool is<br/>what every zone runs on next session;<br/>the dev loop never touches<br/>a live experiment"]
         FRICTION --> PKG --> SWARM --> MERGED
     end
@@ -148,17 +148,19 @@ reshape a core path, `run-story` renders with no LLM anywhere in the render
 path, and `doctor` (`src/hpc_agent/ops/recover/doctor.py`) drafts
 proposals but restarts nothing.
 
-**The dev loop (meta).** The handoff-package protocol sits *outside* the
-four zones: it is how the tool itself gets improved, not a step any
-experiment passes through. Friction noticed anywhere in the lifecycle
-becomes a handoff package (`docs/plans/_TEMPLATE-handoff/` — an architect
-memo plus file-disjoint unit specs, claims guarded by
-`scripts/check_handoff_disjointness.py`), the units are implemented per
-plan prose in parallel worktrees, integrated through a single regen +
-lint gauntlet (a red gauntlet stops the wave rather than becoming the
-next wave's base), reviewed, and landed as an ordinary PR. Its
-streamlining is therefore indirect by design: a live experiment never
-sees it; what the researcher sees is that the next session's tool has one
+**The dev loop (meta).** Improving the tool sits *outside* the four
+zones: it is not a step any experiment passes through, and — since the
+2026-07-28 erasure of the bespoke handoff-package build protocol — it has
+NO orchestration machinery of its own. Claude Code natively runs dynamic
+workflows; the repo's devx layer augments that experience rather than
+replacing it: friction noticed anywhere in the lifecycle is tagged from
+the session itself (`tag-session`, the one devx seam the product ships),
+the maintainer's ingestion sweeps those ledgers plus the session
+transcripts under `~/.claude/projects/`, and a fix is developed with
+ordinary Claude Code sessions/workflows whose *gates* are the repo's own
+— the lint gauntlet, the regen `--check` steps, the contract tests, and
+the enforcement-mapped principles pages. A live experiment never sees any
+of it; what the researcher sees is that the next session's tool has one
 less rough edge. The main loop, meanwhile, has its own deterministic
 driver: the stateless `block-drive` tick
 (`src/hpc_agent/_kernel/lifecycle/block_drive.py::run_tick`) chains the
