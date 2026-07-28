@@ -56,6 +56,10 @@ flowchart TB
     OPTIN["OPT-IN RIGOR (bind at the boundary, silent otherwise):<br/>notebook audit · pack receipts · overnight consent · multi-actor policy"]
     OPTIN -.-> BOUNDARY
 
+    DRIVE["MAIN-LOOP DRIVER — the stateless block-drive tick:<br/>blocks chain in code, detach for cluster waits, park at<br/>code-digested human briefs; the LLM only relays at the<br/>parks (LLM-as-executor was removed by design) — this is<br/>why chat context stays small through a whole campaign"]
+    DRIVE -.-> BOUNDARY
+    DRIVE -.-> AFTER
+
     subgraph DEV["THE DEV LOOP (meta) — improving the tool itself, not running experiments"]
         direction TB
         FRICTION["friction or gap noticed while<br/>working anywhere in the four<br/>zones above becomes a<br/>candidate package"]
@@ -156,7 +160,17 @@ worktrees, integrates each wave through a single regen + lint gauntlet
 base), passes review lenses plus a fixer, and lands as an ordinary PR.
 Its streamlining is therefore indirect by design: a live experiment never
 sees it; what the researcher sees is that the next session's tool has one
-less rough edge.
+less rough edge. The main loop does not need this machinery because it
+already has its own deterministic driver: the stateless `block-drive`
+tick (`src/hpc_agent/_kernel/lifecycle/block_drive.py::run_tick`) chains
+the blocks in code, detaches cluster-bound waits into a child process,
+and parks at code-digested briefs — the LLM touches the flow only at
+those parks (`docs/internals/submit-sequence.md`; the LLM-as-executor
+path was deliberately removed). That, plus detach-by-contract monitoring,
+is what keeps chat context small across a whole campaign; an agent
+fan-out layer would duplicate the chain the kernel already owns while
+having no answer for the typed-`y` gates, which are interactive on
+purpose.
 
 ## Where every gate binds
 
