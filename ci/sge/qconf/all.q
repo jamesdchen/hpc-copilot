@@ -33,7 +33,6 @@ xprojects             NONE
 calendar              NONE
 initial_state         default
 s_rt                  INFINITY
-o_rt                  INFINITY
 h_rt                  INFINITY
 s_cpu                 INFINITY
 h_cpu                 INFINITY

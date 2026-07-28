@@ -11,7 +11,22 @@
 # ENTIRELY: the entrypoint rewrites the cell bootstrap for CLASSIC (flat-
 # file) spooling, which needs no spoolinit/spooldefaults at all — the global
 # configuration is seeded as the flat file $SGE_CELL/common/configuration and
-# every other object is created through qconf on the running qmaster. Those
+# every other object is created through qconf on the running qmaster.
+#
+# ROOT CAUSE of the SIGSEGV family, established by local repro + gdb against
+# the noble binaries (2026-07-28): Debian links the SoGE uti/sgeobj/spool
+# framework modules into BOTH the daemons and the dlopen'd spooling shlib
+# (libspoolc.so), with Ubuntu's default -Wl,-Bsymbolic-functions pinning each
+# copy's internal calls to itself. The shlib copy's per-thread-state modules
+# are never initialized (its pthread keys stay 0 and alias foreign keys) and
+# its process-globals (default spool context, master object lists) stay
+# NULL/empty — so classic spooling crashes in bootstrap_get_ignore_fqdn on
+# the first hostname compare, then aborts in the SGE_TYPE_CQUEUE read, then
+# silently drops every queue instance. The same duplicated-state defect is
+# what kills spooldefaults.bin on the BDB path (jemalloc never was the cure —
+# LP #1774302 is a misattribution for this binary). spoolc_init_shim.c
+# (compiled below, preloaded around both daemon starts by the entrypoint)
+# repairs all three layers; see its header for the mechanism. Those
 # are Debian's Son-of-Grid-Engine build (8.1.9+dfsg, noble universe) — the
 # closest thing to a vanilla Son-of-Grid-Engine install that ships as a
 # maintained package. There is no maintained single-container SGE/UGE image
@@ -70,11 +85,16 @@ RUN echo "gridengine-master shared/gridenginemaster string sgeci" | debconf-set-
 # qmaster-gate timeout retries the daemon start under it, so a silent
 # post-fork death (rc=0 parent, empty start log — the signal-death signature
 # of run 29709733724) names its own signal in `docker logs sgeci`.
+# gcc + libc6-dev: compile spoolc_init_shim.c (below) — the LD_PRELOAD shim
+# that repairs the duplicated-static-state defect in the distro build's
+# dlopen'd libspoolc.so (see the ROOT CAUSE block above).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gridengine-master \
         gridengine-exec \
         gridengine-client \
         libjemalloc2 \
+        gcc \
+        libc6-dev \
         strace \
         openssh-server \
         rsync \
@@ -157,6 +177,15 @@ RUN useradd -m -s /bin/bash hpcuser \
 
 # --- sshd runtime dir ---
 RUN install -d -m 0755 /run/sshd
+
+# --- the libspoolc duplicated-state repair shim ------------------------------
+# Preloaded around the sge_qmaster/sge_execd starts by the entrypoint. Without
+# it qmaster dies (silent SIGSEGV, empty start log) before answering qconf —
+# the exact signature of runs 29709733724/30310994626. See the shim header
+# and the ROOT CAUSE block at the top of this file.
+COPY ci/sge/spoolc_init_shim.c /tmp/spoolc_init_shim.c
+RUN gcc -shared -fPIC -o /usr/local/lib/spoolc_init_shim.so /tmp/spoolc_init_shim.c -ldl \
+    && rm /tmp/spoolc_init_shim.c
 
 COPY ci/sge/entrypoint.sh /usr/local/bin/entrypoint.sh
 # Strip any CRLF a Windows-side checkout may have introduced (a `\r` in the
