@@ -47,6 +47,12 @@ The launch discipline built on that:
 - **One exchange, then run.** If the user's nudge changes a value, fold it
   in and launch; do not re-propose unless a correction invalidates other
   proposed fields.
+- **A park is a question, not a stop (auto-resume).** When a drive parks at
+  a gate and the human journals the `y`, relaunch the workflow with
+  `resumeFromRunId` in the same breath — no "shall I continue?", no waiting
+  for a nudge. Cached steps replay free; the next tick consumes the fresh
+  greenlight. The human's part of the exchange is the decision, never the
+  restart.
 - **Upfront the y's when the human wants to walk away.** Unattended driving
   (overnight, long lunches) does NOT mean the workflow passes gates — it
   means the intake exchange also offers the OVERNIGHT STANDING CONSENT the
