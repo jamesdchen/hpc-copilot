@@ -15,19 +15,19 @@ truth, not this prose.
 flowchart TB
     subgraph FREE["THE FREE ZONE — local experimentation, zero gates"]
         direction TB
-        CODE["write code, any shape:<br/>notebook (jupytext), script, package"]
-        REG["@register_run on a function<br/>(experiment_kit) — the whole contract"]
+        NEW["greenfield path: draft a notebook or<br/>script with @register_run from line one —<br/>two lines, in-process, nothing on disk"]
         DRY["iterate: run locally, dry-run samples,<br/>optional elision check"]
-        CODE --> REG --> DRY --> CODE
+        EXIST["intake path: existing code —<br/>train.py, package module, hydra/click<br/>main, shell script or binary —<br/>no decorator, no kit involvement yet"]
+        NEW --> DRY --> NEW
     end
 
     subgraph RAMP["THE ON-RAMP — assistive, never guesses"]
         direction TB
-        EP["detect / decorate / wrap the entry point<br/>(your file stays byte-untouched<br/>on the wrapper path)"]
-        TASKS["interview materializes .hpc/tasks.py<br/>+ interview.json — never hand-edited"]
-        HUMAN["the tool demands exactly two things<br/>only you can supply:<br/>goal + task_generator"]
-        EP --> TASKS
-        HUMAN -.-> TASKS
+        EP["intake + entry point: detect, then<br/>decorate (bounded AST splice, body<br/>untouched) or wrap (your file stays<br/>byte-untouched on the wrapper path)"]
+        HUMAN["the two fields only a human<br/>can supply (no safe default<br/>exists): goal + task_generator"]
+        TASKS["the interview merges both feeds into<br/>.hpc/tasks.py + interview.json —<br/>never hand-edited"]
+        EP -->|"WHAT to run<br/>(machine-detected)"| TASKS
+        HUMAN -.->|"WHY / what sweep<br/>(human-supplied)"| TASKS
     end
 
     subgraph BOUNDARY["THE BOUNDARY — shared cluster time; the gated blocks"]
@@ -47,12 +47,32 @@ flowchart TB
     end
 
     FREE ==>|"only when YOU decide<br/>the direction is interesting"| RAMP
+    EXIST -.->|"@register_run arrives HERE,<br/>not before — a dead idea<br/>never meets the framework"| EP
     RAMP ==> BOUNDARY
     BOUNDARY ==> AFTER
-    AFTER -.->|"most directions loop back<br/>cheaply, or die here"| FREE
+    LOOPBACK["⟲ back to THE FREE ZONE —<br/>most directions loop back<br/>cheaply, or die here"]
+    INTERP -.-> LOOPBACK
 
     OPTIN["OPT-IN RIGOR (bind at the boundary, silent otherwise):<br/>notebook audit · pack receipts · overnight consent · multi-actor policy"]
     OPTIN -.-> BOUNDARY
+
+    subgraph DEV["THE DEV LOOP (meta) — improving the tool itself, not running experiments"]
+        direction TB
+        FRICTION["friction or gap noticed while<br/>working anywhere in the four<br/>zones above becomes a<br/>candidate package"]
+        PKG["handoff package: ARCHITECT-MEMO<br/>+ unit-specs.json<br/>(docs/plans/_TEMPLATE-handoff/)"]
+        SWARM["swarm-units workflow: file-disjoint units<br/>built in parallel worktrees → per-wave<br/>integrate (one regen + lint gauntlet;<br/>red aborts) → review lenses + fixer"]
+        MERGED["PR merged — the upgraded tool is<br/>what every zone runs on next session;<br/>the dev loop never touches<br/>a live experiment"]
+        FRICTION --> PKG --> SWARM --> MERGED
+    end
+    INTERP ~~~ FRICTION
+
+    subgraph LEGEND["HOW TO READ THIS MAP"]
+        direction TB
+        LA["rectangle: a step or state"] -->|"thin solid arrow: automatic<br/>sequence inside a zone"| LB{{"hexagon: a human gate —<br/>the typed, journaled 'y'"}}
+        LC["zone"] ==>|"thick arrow: a lifecycle<br/>crossing YOU choose to make"| LD["next zone"]
+        LE["input · opt-in rigor · loop-back"] -.->|"dotted arrow: feeds into or<br/>binds onto — not a sequence step"| LF["step"]
+        LNOTE["box shading carries NO meaning —<br/>it is mermaid's default nesting tint;<br/>read shape + line style instead"]
+    end
 ```
 
 ## Walkthrough
@@ -68,7 +88,11 @@ no notebook gate, no block gate — and the notebook drafting loop
 (`src/hpc_agent/ops/notebook/dry_run_op.py`) is explicitly trust-neutral:
 dry-run receipts journal as `execution_scope="sampled"` and are filtered
 out of every attention tier and gate. You iterate at the speed of your own
-editor.
+editor. Nor does the decorator have to come first: existing code — a plain
+`train.py`, a package module, a hydra/click main, even a shell script or
+binary — experiments with zero framework involvement, and `@register_run`
+is spliced or wrapped in *at the on-ramp* (next section), so a direction
+that dies locally never meets the framework at all.
 
 **The on-ramp.** When a direction earns cluster time, the tool's job is to
 make the crossing cheap. `detect-entry-point`
@@ -88,6 +112,11 @@ hand-edited. Two inputs are demanded from the human and are refusable —
 and the type system forbids attaching a safe default to them. Everything
 else is detected, scaffolded, or comes back as a question. Where the tool
 cannot decide, it refuses rather than guesses (`ambiguous_entry_point`).
+The map draws two feeds merging into `tasks.py` because materializing it
+genuinely needs both and neither can substitute for the other: the
+machine-detected *what to run* (the entry point) and the human-supplied
+*why and what sweep* (`goal` + `task_generator`) — the interview is the
+join point where they meet.
 
 **The boundary.** The gated blocks are exactly the members of
 `src/hpc_agent/infra/block_chain.py::GATED_BLOCKS` — today `submit-s2`,
@@ -115,6 +144,19 @@ layer discloses and never gates: `cite-check` reports, challenges never
 reshape a core path, `run-story` renders with no LLM anywhere in the render
 path, and `doctor` (`src/hpc_agent/ops/recover/doctor.py`) drafts
 proposals but restarts nothing.
+
+**The dev loop (meta).** The swarm-units workflow
+(`docs/internals/swarm-units-workflow.md`) sits *outside* the four zones:
+it is how the tool itself gets improved, not a step any experiment passes
+through. Friction noticed anywhere in the lifecycle becomes a handoff
+package (`docs/plans/_TEMPLATE-handoff/` — an architect memo plus
+file-disjoint unit specs), the workflow builds the units in parallel
+worktrees, integrates each wave through a single regen + lint gauntlet
+(a red gauntlet aborts the run rather than becoming the next wave's
+base), passes review lenses plus a fixer, and lands as an ordinary PR.
+Its streamlining is therefore indirect by design: a live experiment never
+sees it; what the researcher sees is that the next session's tool has one
+less rough edge.
 
 ## Where every gate binds
 
