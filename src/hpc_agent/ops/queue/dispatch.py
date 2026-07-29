@@ -21,6 +21,26 @@ Submit TIMING is likewise untouched: gates first, then submit, exactly as
 today. Phase 2 changes WHO triggers dispatch, not WHEN a job enters the
 scheduler relative to its gates.
 
+**D1a — eager submit (§7 R3).** "Gates first, then submit" has no third
+clause: once the gates clear there is NO capacity wait between placement and
+start. A placed item is started in the same tick even when its cluster is
+busy — the job enters the scheduler's own queue and sits ``pending`` there,
+because that queue is the authoritative one (fairshare, backfill, state we
+cannot predict from outside). Neither this verb nor ``queue-advance`` holds
+anything on inferred headroom; a held item is held for a gate, an etiquette
+cap, or a hard-constraint mismatch, and its closed ``reason_code`` says which.
+A long ``pending`` is safe on two §10.S4 facts this seat RELIES on: the submit
+deploys a content-addressed code tree
+(``ops/submit_flow._deploy_code_tree`` → ``infra/code_tree.py``) that a later
+push cannot mutate — the #F20 ``--inplace`` ban generalized from running to
+pending jobs — and the tree GC never reaps a tree a non-terminal run
+references (``code_tree.plan_tree_gc``: a ``submitting``/``in_flight`` record
+pins its tree for exactly as long as its job can still be queued). The
+pending→running→terminal lifecycle is covered by the detached child this verb
+starts (``campaign_run(detach=True)`` re-enters the synchronous
+submit→monitor→aggregate spine, ``ops/campaign_run.py``), and that child's
+retirement wakes the next dispatch (``ops/queue/chain.py``).
+
 **D2 — the claim is the shipped lease, not a new one** (§10.S2). Run ids are
 COMPUTED (``incorporation/build/compute_run_id`` — ``"<run_name>-<cmd_sha[:8]>"``,
 pure and deterministic), so two dispatchers racing one item derive the SAME id

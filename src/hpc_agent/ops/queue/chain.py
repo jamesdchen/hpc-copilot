@@ -3,6 +3,12 @@
 ``docs/plans/run-queue-placement-2026-07-28.md`` §5 names the wake this module
 implements: *"the detached watch terminals that already exist are the
 capacity-freed signal — a run finishing IS the moment to re-tick the queue."*
+Under §7 R3's eager submit that phrase reads precisely: what a retirement frees
+is a POOL slot — the occupancy input to least-loaded placement and to a
+campaign's refill headroom — never scheduler headroom, which was never ours to
+meter. The chained tick advances the LEDGER (place and start what is
+gate-cleared, into the scheduler's own queue); it does not wait for, probe, or
+model the scheduler's state.
 Everything else in the queue was already event-driven or cheap-on-relaunch;
 this was the last always-draining gap. ``queue-advance`` decides, ``queue-dispatch``
 actuates, ``queue-status`` reports — and until now NOTHING invoked the actor when
@@ -55,7 +61,7 @@ corrupt the queue".
 ``run_occupies(None)`` is ``False``, but its docstring is explicit that ``None``
 means only *no record*, never *no slot*. So a missing record is treated here as
 "nothing retired" and does not chain: a ``submit_failed`` iteration that never
-minted a RunRecord freed no capacity.
+minted a RunRecord freed no pool slot.
 
 WHY EVERY retirement chains, not only queue-originated ones
 ------------------------------------------------------------
@@ -67,11 +73,12 @@ is deliberately NOT asked, for two reasons that both point the same way:
   the whole intake ledger — which is precisely what ``queue-dispatch`` does on
   its first line anyway. A gate that pays the full price of the thing it is
   gating is not a gate.
-* **It would be WRONG at the edges.** Cluster capacity is not partitioned by
-  provenance: a hand-submitted run retiring on ``alpha`` frees an ``alpha`` slot
-  a queued item is waiting for, and ``queue-advance`` counts occupancy over the
-  runs, not over the ledger. Chaining only for queue-originated retirements
-  would reintroduce the wedge this module exists to close, one cluster over.
+* **It would be WRONG at the edges.** Pool occupancy is not partitioned by
+  provenance: a hand-submitted run retiring on ``alpha`` lowers the ``alpha``
+  occupied count that least-loaded placement and a campaign pool's refill
+  headroom both read, and ``queue-advance`` counts occupancy over the runs,
+  not over the ledger. Chaining only for queue-originated retirements would
+  reintroduce the wedge this module exists to close, one cluster over.
 
 What IS gated is the only thing that must be: the ledger's existence. An
 experiment with no ``.hpc/queue/intake.jsonl`` never used the queue, and the
@@ -127,13 +134,20 @@ _log = logging.getLogger(__name__)
 #: retirement is machine-fired by definition, no y is being taken for the items
 #: it wakes, so the one-per-y throttle does not apply (§7's catch-up rule:
 #: "advances what consent covers, parks the rest"; an unconsented item parks at
-#: its own cluster-boundary gate, exactly one y each, later). Kept a modest
-#: constant rather than the wire ceiling: each dispatch opens the
-#: cluster-submitting lifecycle, and a wake that fired 50 at once is the
-#: connection-storm lineage the courtesy caps exist for — per-cluster courtesy
-#: caps (when configured) bind inside ``queue-advance`` regardless of this
-#: bound. Not a config knob and not agent-reachable: raising it is a reviewed
-#: edit to this line.
+#: its own cluster-boundary gate, exactly one y each, later). Under §7 R3's
+#: eager submit each of these dispatches SUBMITS: the job enters the
+#: scheduler's queue and sits ``pending`` on its own content-pinned tree
+#: (§10.S4) rather than waiting here for inferred headroom — so the constant
+#: bounds SUBMISSIONS-PER-WAKE, never concurrency, which is the scheduler's.
+#: Kept a modest constant rather than the wire ceiling for exactly that
+#: reason: each dispatch opens the cluster-submitting lifecycle, and a wake
+#: that fired 50 at once is the connection-storm lineage courtesy caps exist
+#: for. Today this constant is the queue's only machine-fire storm bound —
+#: ``queue-advance`` RESERVES ``courtesy_cap_reached`` but ships no cap
+#: producer until a real account-level cap key exists (S11:
+#: ``max_concurrent_jobs`` is per-submission-plan wave grouping, not a
+#: cross-run cap). Not a config knob and not agent-reachable: raising it is a
+#: reviewed edit to this line.
 _WAKE_MAX_DISPATCHES = 5
 
 
@@ -224,9 +238,11 @@ def chain_dispatch_on_retire(
     }
     try:
         # LEDGER-WIDE, never narrowed to this run's cid. ``queue-advance`` owns
-        # placement (R3) and already scopes its own decision to what capacity
-        # allows; narrowing here would be this module deciding where the freed
-        # capacity may be spent, which is exactly the authority it must not take.
+        # placement (R3) and already scopes its own decision to hard
+        # constraints, pins and etiquette caps — never inferred scheduler
+        # capacity (§7 R3); narrowing here would be this module deciding where
+        # the freed pool slot may be spent, which is exactly the authority it
+        # must not take.
         # The UNATTENDED tier is declared (see _WAKE_MAX_DISPATCHES): the batch
         # lifts only the one-per-y throttle, and the tick's result discloses it.
         result = queue_dispatch(

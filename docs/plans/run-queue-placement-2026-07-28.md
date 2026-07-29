@@ -4,9 +4,10 @@ Status: **PHASES 1+2 SHIPPED (2026-07-29) — §6's store, authority, and actor
 are live; the S1 consent leg is wired through both scopes. Per-cluster
 consent caps (the `{cluster: cap}` vocabulary, §3), the brief-UX bundle
 (answer menus + park notifications), the Phase-3 drain loop (§6.3, product
-side + chain-dispatch §5), and the content-addressed trees (§10.S4):
-BUILT (2026-07-29).** Remaining: R3's eager submit itself — its §10.S4
-precondition is met, the behavior is not yet built.
+side + chain-dispatch §5), the content-addressed trees (§10.S4), and R3's
+EAGER SUBMIT (§7 R3 — see its STATUS block for what verification found
+already R3-shaped vs what that pass added): BUILT (2026-07-29).**
+Nothing on this plan's build list remains open.
 Design complete through v2 + adversarial sweep. Motivating order: "there
 needs to be a queue that keeps track of multiple experiments to run as they
 come in and it needs to assign the runs to the proper clusters / split
@@ -297,6 +298,50 @@ Consequences:
 - **`no_capacity` nearly vanishes** as a ledger state: an item held back
   is held for etiquette caps or a hard constraint mismatch, and the
   disclosed reason says which — never a guess about scheduler headroom.
+
+**STATUS: BUILT (2026-07-29).** Landed mostly as a VERIFICATION plus
+disclosure/test hardening, because Phases 1–3 were built R3-shaped from the
+start — the consequence "queue-advance sheds the capacity question" was a
+design decision the builders already obeyed. What verification found, per
+consequence (source of truth is the code + tests, not this paragraph):
+
+- **Submit eagerly** was already the actor's shape: `queue-dispatch`
+  starts a placed item's lifecycle in the SAME tick that consumes the
+  decision (`ops/queue/dispatch.py::_dispatch_one` →
+  `campaign_run(detach=True)`), with no seat between placement and start
+  that could wait on the cluster; the detached child covers the
+  pending→running→terminal lifecycle (the synchronous
+  submit→monitor→aggregate spine, `ops/campaign_run.py`), and its
+  retirement chains the next dispatch (`ops/queue/chain.py`). The §10.S4
+  reliance is now stated where this leans on it (dispatch.py's D1a: the
+  content-pinned tree, plus `code_tree.plan_tree_gc` never reaping a tree
+  a non-terminal run references — a pending job's tree is pinned for as
+  long as it can still be queued).
+- **`queue-advance` sheds the capacity question** was already true:
+  occupancy is the least-loaded ORDERING input and a disclosure, never a
+  hold (`test_never_gates_on_a_scheduler_capacity_inference`); the
+  advisory pending-depth probe sketched above was deliberately NOT built,
+  and §2's original `no_capacity` decision / `batch-status` probe sketch
+  is superseded by this section. Courtesy caps: the vocabulary RESERVES
+  `courtesy_cap_reached` but ships no producer — S11 proved
+  `max_concurrent_jobs` is per-submission-plan wave grouping (still
+  enforced there, `ops/submit/plan_throughput.py`), so a cross-run cap
+  needs its own config key before the code may fire. The other declared
+  caps stand and were each re-classified as non-capacity on their
+  rationale + tests: `check_qos_submit_cap` (`ops/submit_flow.py`) guards
+  a DECLARED per-user limit the scheduler enforces by rejection;
+  campaign pool K / budget headroom are consent caps; the wake edge's
+  `_WAKE_MAX_DISPATCHES=5` is a submissions-per-wake storm bound (its
+  comment now says so in eager-submit terms).
+- **`no_capacity` vanished** by never having existed in the shipped
+  vocabularies: `QueueHoldReason` / `QueueDispatchRefusal` are now pinned
+  EXACT by `tests/ops/queue/test_queue_eager_submit.py`, so a capacity
+  code cannot reappear without failing a named test. The same battery
+  pins the load-bearing behaviors: a busy-past-`max_concurrent_jobs`
+  cluster still gets its dispatch in the same tick, an unattended batch
+  submits eagerly, a hard-constraint hold names the configured ceiling
+  (never capacity), and the actor is source-pinned to never read
+  `occupied_slots`.
 
 **Latency + residency invariants (2026-07-29, adopted from the latency
 review):**
