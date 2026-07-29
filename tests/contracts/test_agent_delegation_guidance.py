@@ -1,9 +1,11 @@
 """Contract: the delegation boundary is mechanized, not merely written down.
 
-`docs/design/agent-delegation.md` re-admits agents at ONE level — a subagent is
-a **context firewall for read-only reconnaissance**, beside the execution path,
-never inside it (the retired level was the haiku-pinned `hpc-worker` spawn
-transport, removed with the worker fence). Two halves of that boundary are
+`docs/design/agent-delegation.md` admits FREEFORM subagents at exactly one
+level — a **context firewall for read-only reconnaissance**, beside the
+execution path, never inside it (the retired level was the haiku-pinned
+`hpc-worker` spawn transport, removed with the worker fence; rule 5's wider
+plan-relay grant belongs to validated workflow plans only, guarded by the
+sibling `test_workflow_plan_delegation.py`). Two halves of that boundary are
 LLM-facing prose with no lint behind them: the per-skill `## Delegation
 (hpc-recon)` sections that say what may be handed off, and the `hpc-recon`
 agent charter that says what the agent may do. Prose drifts; this binds it:

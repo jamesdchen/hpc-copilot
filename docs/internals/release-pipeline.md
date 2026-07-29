@@ -1,7 +1,8 @@
 # Release pipeline: build + publish in CI via PyPI trusted publishing
 
 Status: **SHIPPED** (2026-07-07, `.github/workflows/release.yml`). The `release`
-skill (`src/hpc_agent/slash_commands/skills/release/SKILL.md`) still does all the local,
+skill (`.claude/skills/release/SKILL.md` — repo-level maintainer surface,
+outside the wheel since the 2026-07-28 dev-loop/product separation) still does all the local,
 reversible prep and STOPS; the actual PyPI upload moved off the human's laptop
 into GitHub Actions, triggered by pushing the `v<version>` tag. This document is
 the decision record: the hazards it retires, the trusted-publishing model, and

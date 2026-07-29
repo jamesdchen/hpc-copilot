@@ -2,7 +2,7 @@
 
 Maintainer-facing design rationale for the campaign / headless shift. If
 you're an integrator who just wants to *run* a campaign, start at
-[`docs/workflows/campaign.md`](../workflows/campaign.md) — this document
+[`docs/internals/campaign.md`](campaign.md) — this document
 explains *why* the surface looks the way it does today and what we tried
 before settling there.
 
@@ -52,7 +52,7 @@ walks the operator through one iteration, the assistant decides the
 next set of hyperparameters and fires another `/submit-hpc` itself.
 "Concurrency is opt-in by firing more submits before earlier ones
 finish" — see the still-accurate description in
-[`docs/workflows/campaign.md`](../workflows/campaign.md).
+[`docs/internals/campaign.md`](campaign.md).
 
 What broke:
 
@@ -222,9 +222,9 @@ them is at risk, the new shape is probably re-running an old mistake.
 
 ## See also
 
-- [`docs/workflows/campaign.md`](../workflows/campaign.md) — user-facing
+- [`docs/internals/campaign.md`](campaign.md) — user-facing
   "how do I run a campaign" guide.
-- [`docs/workflows/memory-across-campaigns.md`](../workflows/memory-across-campaigns.md)
+- [`docs/internals/memory-across-campaigns.md`](memory-across-campaigns.md)
   — the `interview` ↔ `recall` loop that persists campaign intent
   across iterations.
 - [`docs/primitives/load-context.md`](../primitives/load-context.md) —

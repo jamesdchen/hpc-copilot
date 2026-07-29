@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/tag_session.input.json",
+  "title": "tag-session input spec",
+  "description": "Inputs to ``tag-session`` — one opaque devx tag record.",
+  "type": "object",
+  "required": [
+    "tags"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "tags": {
+      "description": "One or more OPAQUE tag slugs (e.g. ['friction', 'aggregate-ux']). Core attaches no meaning — the vocabulary belongs to the dev loop's ingestion tooling, not the product. At least one required: an untagged record is unqueryable data.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Tags",
+      "type": "array"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional free-text context, recorded VERBATIM (what happened, what was awkward, what to look at). Never interpreted by core.",
+      "title": "Note"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional caller-supplied session identifier so ingestion can group records from one sitting. Core mints nothing here — the product has no session concept, and inventing one for a devx ledger would be scope the separation just removed.",
+      "title": "Session Id"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional run id the tag is about, OPAQUE here (not validated against the runs store — a tag may name a run that failed to exist; that fact is itself data).",
+      "title": "Run Id"
+    }
+  }
+}

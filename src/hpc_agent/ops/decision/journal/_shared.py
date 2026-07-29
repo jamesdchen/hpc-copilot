@@ -603,7 +603,7 @@ def _derivation_rule(
       so its adjacency to a stated number is a coincidence, never a
       derivation — run-15 accepted a standalone ``n_samples=10000004``
       against the prior drill's stated ``10000003`` through this leg
-      (``docs/plans/proving-run-15-runsheet.md``, gate finding 2).
+      (``docs/history/plans/proving-run-15-runsheet.md``, gate finding 2).
     """
     if norm in strings or val in floats:
         return "verbatim"

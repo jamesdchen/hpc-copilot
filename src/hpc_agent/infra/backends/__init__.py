@@ -75,7 +75,7 @@ class BackendBuildContext:
     """Everything the submit/recover flows know when constructing a backend.
 
     The construction seam for plugin-registered backends
-    (``docs/proposals/crowd-compute-backend.md``):
+    (``docs/design/crowd-compute-backend.md``):
     ``remote_factory.build_remote_backend``'s inline ladder knows the
     SSH-shaped constructor kwargs of the built-in families; any other
     registered backend receives this whole context via
@@ -132,7 +132,7 @@ class HPCBackend(abc.ABC):
     # Whether this backend reaches its scheduler over SSH to a login node with
     # a shared filesystem (the built-in SGE/SLURM/PBS families) — as opposed to
     # a pure-API "crowd-compute" backend that dispatches over HTTPS and ships
-    # data/results as artifacts (docs/proposals/crowd-compute-backend.md). The
+    # data/results as artifacts (docs/design/crowd-compute-backend.md). The
     # submit prelude, preflight, monitor, and aggregate flows read this to skip
     # their SSH / shared-filesystem steps for a pure-API backend instead of
     # re-deriving it from the scheduler name. Default True (the SSH ladder); a
@@ -434,7 +434,7 @@ class HPCBackend(abc.ABC):
         """Construct this backend from the submit-flow build context.
 
         The construction seam for plugin-registered backends
-        (``docs/proposals/crowd-compute-backend.md``):
+        (``docs/design/crowd-compute-backend.md``):
         ``remote_factory.build_remote_backend`` constructs the built-in
         families through its inline ladder (their SSH-shaped kwargs are
         its business); any *other* registered backend is handed the

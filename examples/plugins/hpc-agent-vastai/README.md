@@ -4,7 +4,7 @@ A **non-functional** skeleton showing how a crowd-compute backend
 plugs into hpc-agent as a plugin distribution. Every compute method
 raises `NotImplementedError` with the mapping the real implementation
 must satisfy. Seam analysis and the two deferred host-side edits:
-[`docs/proposals/crowd-compute-backend.md`](../../../docs/proposals/crowd-compute-backend.md).
+[`docs/design/crowd-compute-backend.md`](../../../docs/design/crowd-compute-backend.md).
 
 ## What it demonstrates
 

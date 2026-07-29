@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**174 operations total**: 143 primitive atoms + 31 workflow atoms.
+**175 operations total**: 144 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -121,7 +121,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (34)
+## `mutate` (35)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -158,6 +158,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`reconcile-stale`](../primitives/reconcile-stale.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` | `_(none)_` | — | — |
 | [`resubmit-failed`](../primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `_(none)_` | — | — |
 | [`scope-lock`](../primitives/scope-lock.md) | ✓ | file_write | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`tag-session`](../primitives/tag-session.md) | ✗ | file_write | `hpc-agent tag-session --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`update-run-constraints`](../primitives/update-run-constraints.md) | ✓ | ssh; writes-sidecar | `hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`watcher-install`](../primitives/watcher-install.md) | ✓ | scheduler-submit; ssh | `hpc-agent watcher-install [--experiment-dir <dir>] --run-id <run_id> [--action <action>] --scheduler <scheduler> [--stale-sec <stale_sec>] [--interval-min <interval_min>]` | `_(none)_` | — | — |
 | [`write-run-sidecar`](../primitives/write-run-sidecar.md) | ✓ | file_write | `hpc-agent write-run-sidecar --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

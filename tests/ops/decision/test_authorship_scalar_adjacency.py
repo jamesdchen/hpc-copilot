@@ -1,6 +1,6 @@
 """The off-by-one derivation is scoped to RANGE-SHAPED claims (run-15 gate finding 2).
 
-Proving run 15 (``docs/plans/proving-run-15-runsheet.md``, gate finding 2): the
+Proving run 15 (``docs/history/plans/proving-run-15-runsheet.md``, gate finding 2): the
 human-authorship gate ACCEPTED ``n_samples=10000004`` although the number was
 absent from the experiment namespace's utterance log — the integral off-by-one
 leg (:func:`_derivation_rule`) matched it against the prior drill's stated

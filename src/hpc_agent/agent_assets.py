@@ -982,20 +982,21 @@ def _skill_is_internal(skill_dir: Any) -> bool:
 
 def _install_tree(
     root: Any, target: Path, *, dry_run: bool
-) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Copy one ``commands/`` + ``skills/`` + ``agents/`` asset tree rooted at *root*.
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+    """Copy one ``commands/`` + ``skills/`` + ``agents/`` + ``workflows/`` asset tree.
 
     *root* is any :mod:`importlib.resources` traversable. Returns
-    ``(commands, skills, agents, cleared)`` — the command stems,
-    skill-directory names, agent-definition stems found, and any
-    pre-existing 0-byte collision paths that were auto-cleared so the
-    install could proceed (see :func:`_resolve_dir_collision`). A missing
-    ``commands/``, ``skills/`` or ``agents/`` subtree is skipped, so a
-    plugin may contribute any subset of the three.
+    ``(commands, skills, agents, workflows, cleared)`` — the command stems,
+    skill-directory names, agent-definition stems, workflow-plan stems
+    found, and any pre-existing 0-byte collision paths that were
+    auto-cleared so the install could proceed (see
+    :func:`_resolve_dir_collision`). A missing subtree is skipped, so a
+    plugin may contribute any subset of the four.
     """
     commands: list[str] = []
     skills: list[str] = []
     agents: list[str] = []
+    workflows: list[str] = []
     cleared: list[str] = []
 
     commands_src = root / "commands"
@@ -1062,7 +1063,30 @@ def _install_tree(
                 with as_file(entry) as real:
                     shutil.copy2(real, agents_dst / entry.name)
 
-    return commands, skills, agents, cleared
+    # Workflow plans — a flat ``workflows/*.js`` tree (the researcher-
+    # lifecycle drivers: campaign-recon, campaign-run; the 2026-07-28
+    # delegation rework, ``docs/design/agent-delegation.md`` rule 5). Claude
+    # Code's Workflow tool resolves named workflows from
+    # ``.claude/workflows/``; installing into the target tree makes the
+    # plans invocable from an EXPERIMENT repo, not just this package's own
+    # checkout. Only ``*.js`` plans install — the README beside them in the
+    # package is the plan-author contract, not a runtime asset.
+    workflows_src = root / "workflows"
+    if workflows_src.is_dir():
+        workflows_dst = target / "workflows"
+        cleared_path = _resolve_dir_collision(workflows_dst, "workflow plans", dry_run=dry_run)
+        if cleared_path is not None:
+            cleared.append(cleared_path)
+        for entry in workflows_src.iterdir():
+            if not entry.name.endswith(".js"):
+                continue
+            workflows.append(entry.name[:-3])
+            if not dry_run:
+                workflows_dst.mkdir(parents=True, exist_ok=True)
+                with as_file(entry) as real:
+                    shutil.copy2(real, workflows_dst / entry.name)
+
+    return commands, skills, agents, workflows, cleared
 
 
 # ── manifest-stamped pruning of removed/renamed assets (#F34) ────────────────
@@ -1082,10 +1106,11 @@ def _install_tree(
 _ASSET_MANIFEST_NAME = ".hpc-agent-manifest.json"
 _MANIFEST_KINDS: tuple[tuple[str, str, str | None], ...] = (
     # (kind, subdir, suffix) — skills are per-name DIRECTORIES (suffix None);
-    # commands / agents are flat ``<name>.md`` files.
+    # commands / agents / workflows are flat ``<name>.<suffix>`` files.
     ("commands", "commands", ".md"),
     ("skills", "skills", None),
     ("agents", "agents", ".md"),
+    ("workflows", "workflows", ".js"),
 )
 
 # Pre-manifest orphans — asset names an install shipped BEFORE ownership was
@@ -1230,7 +1255,9 @@ def _prune_stale_assets(
                 target.unlink()
 
     for kind, subdir, suffix in _MANIFEST_KINDS:
-        current_owned = current[kind]
+        # ``.get``: a caller (or a plugin-partial tree) may not carry every
+        # kind — an absent kind owns nothing, it doesn't crash the sweep.
+        current_owned = current.get(kind, set())
         # Manifest-owned names the current tree drops: recorded regardless of
         # whether the file survives, so the manifest stamp and (for skills) the
         # Skill(...) grant are cleared even if the file was hand-deleted.
@@ -1272,6 +1299,7 @@ def _write_asset_manifest(
     commands: set[str],
     skills: set[str],
     agents: set[str],
+    workflows: set[str],
     version: str | None = None,
     dry_run: bool,
 ) -> dict[str, Any]:
@@ -1291,6 +1319,7 @@ def _write_asset_manifest(
         "commands": sorted(commands),
         "skills": sorted(skills),
         "agents": sorted(agents),
+        "workflows": sorted(workflows),
     }
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1338,11 +1367,12 @@ def _prune_skill_permissions(
 def install_agent_assets(
     *, claude_dir: Path | None = None, dry_run: bool = False
 ) -> dict[str, Any]:
-    """Copy bundled slash commands, skills, and agent definitions into *claude_dir*.
+    """Copy bundled commands, skills, agent definitions, and workflow plans into *claude_dir*.
 
     Slash commands land in ``<claude_dir>/commands/``, skills in
-    ``<claude_dir>/skills/<name>/``, and named subagent definitions in
-    ``<claude_dir>/agents/<name>.md``, overwriting any existing files.
+    ``<claude_dir>/skills/<name>/``, named subagent definitions in
+    ``<claude_dir>/agents/<name>.md``, and workflow plans in
+    ``<claude_dir>/workflows/<name>.js``, overwriting any existing files.
     The core ``slash_commands`` assets are installed first; then any
     plugin exposing a ``slash_command_assets`` tree through the
     ``hpc_agent.plugins`` seam is installed over them, so an installed
@@ -1363,6 +1393,7 @@ def install_agent_assets(
             "commands_installed": ["aggregate-hpc", ...],
             "skills_installed": ["hpc-submit", ...],
             "agents_installed": [],
+            "workflows_installed": ["campaign-recon", "campaign-run"],
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_rendezvous_hook": {"settings_path": "...", "action": "added",
@@ -1474,15 +1505,17 @@ def _install_from_profile(
     commands: set[str] = set()
     skills: set[str] = set()
     agents: set[str] = set()
+    workflows: set[str] = set()
     cleared: list[str] = []
 
     for root in asset_roots:
-        tree_commands, tree_skills, tree_agents, tree_cleared = _install_tree(
+        tree_commands, tree_skills, tree_agents, tree_workflows, tree_cleared = _install_tree(
             root, target, dry_run=dry_run
         )
         commands.update(tree_commands)
         skills.update(tree_skills)
         agents.update(tree_agents)
+        workflows.update(tree_workflows)
         cleared.extend(tree_cleared)
 
     # Wire every hook descriptor from the profile into settings.json — additive +
@@ -1522,14 +1555,25 @@ def _install_from_profile(
     # manifest-owned names are removed; a user's own asset is never touched.
     assets_pruned = _prune_stale_assets(
         target,
-        current={"commands": commands, "skills": skills, "agents": agents},
+        current={
+            "commands": commands,
+            "skills": skills,
+            "agents": agents,
+            "workflows": workflows,
+        },
         dry_run=dry_run,
     )
     settings_permissions_pruned = _prune_skill_permissions(
         target, assets_pruned["skills"], dry_run=dry_run
     )
     asset_manifest = _write_asset_manifest(
-        target, commands=commands, skills=skills, agents=agents, version=version, dry_run=dry_run
+        target,
+        commands=commands,
+        skills=skills,
+        agents=agents,
+        workflows=workflows,
+        version=version,
+        dry_run=dry_run,
     )
 
     # Grant Skill(<name>) for every installed skill so Claude Code's auto-mode
@@ -1559,6 +1603,7 @@ def _install_from_profile(
         "commands_installed": sorted(commands),
         "skills_installed": sorted(skills),
         "agents_installed": sorted(agents),
+        "workflows_installed": sorted(workflows),
         "cleared_collisions": cleared,
         "assets_pruned": assets_pruned,
         "asset_manifest": asset_manifest,

@@ -219,6 +219,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [reconcile-stale](reconcile-stale.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` |
 | [scope-lock](scope-lock.md) | yes | file_write: `<experiment>/.hpc/scopes/<tag>.decisions.jsonl` | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` |
+| [tag-session](tag-session.md) | no | file_write: `<experiment>/.hpc/devx/session_tags.jsonl` | `hpc-agent tag-session --spec <path> [--experiment-dir <dir>]` |
 | [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]` |
 | [watcher-install](watcher-install.md) | yes | ssh: `<cluster>`; scheduler-submit: `<cluster>` | `hpc-agent watcher-install [--experiment-dir <dir>] --run-id <run_id> [--action <action>] --scheduler <scheduler> [--stale-sec <stale_sec>] [--interval-min <interval_min>]` |
 | [write-run-sidecar](write-run-sidecar.md) | yes | file_write: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent write-run-sidecar --spec <path> [--experiment-dir <dir>]` |

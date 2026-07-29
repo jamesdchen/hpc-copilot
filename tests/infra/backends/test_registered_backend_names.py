@@ -1,7 +1,7 @@
 """Tests for :func:`hpc_agent.infra.backends.registered_backend_names`.
 
 The helper backs the clusters.yaml ``scheduler`` validator's
-plugin-backend check (``docs/proposals/crowd-compute-backend.md``): it
+plugin-backend check (``docs/design/crowd-compute-backend.md``): it
 must report the built-in backends, import plugin ``primitive_modules``
 for their ``@register`` side effect, and skip a broken plugin module
 silently (the primitive registry owns the loud warning for that

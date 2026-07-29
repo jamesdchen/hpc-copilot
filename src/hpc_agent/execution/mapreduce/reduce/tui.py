@@ -380,7 +380,7 @@ def _open_log(ssh_target: str | None, log_path: str, live: Any) -> None:
     *ssh_target* is configured.
 
     JUSTIFIED TRANSPORT EXEMPTION — transport-robustness AUDIT rank 7
-    (``docs/plans/transport-robustness-2026-07-17/AUDIT.md``, the ``_open_log``
+    (``docs/history/plans/transport-robustness-2026-07-17/AUDIT.md``, the ``_open_log``
     row in §3g, the §6 "one command-plane hole" reusable-asset gap, the §7
     fault-injection point, and step-2 unit U5). This is the single
     command-plane ssh site that does NOT ride the breaker / slot / backoff

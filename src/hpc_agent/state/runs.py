@@ -856,7 +856,7 @@ def find_run_by_cmd_sha(
     strategy (Optuna, PBT, random search) may propose identical params in
     two different iterations, and deduping the later one against the earlier
     would silently drop a trial the strategy meant to run (the cmd_sha
-    collision footgun documented in ``docs/workflows/campaign.md``). The
+    collision footgun documented in ``docs/internals/campaign.md``). The
     scan continues past same-campaign matches, so a non-campaign or
     different-campaign run with the same params is still a valid dedup
     target. This is orthogonal to the #207 code-drift lever above — a

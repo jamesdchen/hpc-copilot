@@ -1,6 +1,6 @@
 """Pin :func:`hpc_agent.infra.transport._pull._disclose_pull_batch`.
 
-Mutation triage-2 (``docs/plans/mutation-triage-2-2026-07-17.md``, Top-3 Unit 2)
+Mutation triage-2 (``docs/history/plans/mutation-triage-2-2026-07-17.md``, Top-3 Unit 2)
 found this at **12/12 mutants survived, 0 test files referencing it**. It is the
 human-facing per-batch pull disclosure — a consent-adjacent honesty surface —
 and nothing pins its content, so a mutated field, counter, or the MiB math would

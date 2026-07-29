@@ -1,4 +1,5 @@
-"""Sandbox authorship seeding — plan-unit U2 of docs/plans/sandbox-proving-run-2026-07-18.md.
+"""Sandbox authorship seeding — plan-unit U2 of
+docs/history/plans/sandbox-proving-run-2026-07-18.md.
 
 A sandbox proving run (rung 2 of the jurisdiction ladder) exercises the REAL
 gates — never bypasses them — against a seeded, namespace-isolated substrate

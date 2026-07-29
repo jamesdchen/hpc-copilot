@@ -1,6 +1,6 @@
 """G10 lockstep contracts: hand-maintained vocabulary sets vs their catalogs.
 
-Generator G10 (``docs/plans/upstream-fixes-2026-07.md``): every hand-maintained
+Generator G10 (``docs/history/plans/upstream-fixes-2026-07.md``): every hand-maintained
 vocabulary set that must stay in lock-step with an owning catalog needs a subset
 / equality contract test so a later edit to one side cannot silently diverge from
 the other. This file adds the pins that were still MISSING after the 2026-07-11

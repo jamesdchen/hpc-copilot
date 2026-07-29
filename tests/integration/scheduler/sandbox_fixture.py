@@ -4,7 +4,7 @@ Builds a scratch experiment dir and onboards it through the REAL intake
 primitives — nothing mocked, nothing hand-written where a primitive owns the
 write — so the sandbox block-loop driver (U3) and the anomaly arms (U6)
 exercise the same code path a live proving run does. Plan:
-``docs/plans/sandbox-proving-run-2026-07-18.md`` §4-U1.
+``docs/history/plans/sandbox-proving-run-2026-07-18.md`` §4-U1.
 
 The layout mirrors the live-proven ``demo-hpc`` pi experiment byte-shape for
 byte-shape where it counts:
@@ -204,7 +204,7 @@ _TRAIN_PY_PI = '''\
 """Sandbox proving executor — Monte-Carlo pi estimation.
 
 Materialized by tests/integration/scheduler/sandbox_fixture.py (plan-unit U1,
-docs/plans/sandbox-proving-run-2026-07-18.md). Mirrors the live proving-run
+docs/history/plans/sandbox-proving-run-2026-07-18.md). Mirrors the live proving-run
 demo shape: a @register_run-decorated run(seed, n_samples) the framework
 discovers by AST and dispatches via `hpc_agent.executor_cli run-registered`.
 Stdlib + the installed hpc_agent only.

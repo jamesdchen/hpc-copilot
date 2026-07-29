@@ -85,7 +85,7 @@ def read_announcements(
     ``present`` is the capability signal — ``True`` iff the positive ack was
     seen, i.e. the announce dir EXISTS (this is an announce-era run whose
     dispatcher has STARTED). The dispatcher creates the dir EAGERLY at run start
-    (rank 6, ``docs/plans/latency-audit-2026-07-15``), so ``present`` flips as
+    (rank 6, ``docs/history/plans/latency-audit-2026-07-15``), so ``present`` flips as
     soon as ANY array task begins executing — not only once the first task
     finishes. A missing announce dir (a pre-announce-wheel run, or a still-queued
     run whose dispatcher has not started yet) or a read carrying no positive ack

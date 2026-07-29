@@ -11,7 +11,7 @@ Two-part contract:
     are checked positively; for the un-ported error classes, only a smoke
     "raises and round-trips remediation through pydantic" check fires.
 
-See ``docs/proposals/recovery-registry.md`` for the design + migration
+See ``docs/design/recovery-registry.md`` for the design + migration
 plan; un-ported kinds in the ``xfail`` list ARE the punch list.
 """
 

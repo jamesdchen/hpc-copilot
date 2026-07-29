@@ -7,8 +7,8 @@ older :mod:`tests.contracts.test_prose_primitive_count` pin only watched
 ``N primitives`` and only to within ±2, so a two-off literal (exactly this
 case) slipped through. This pin freezes the whole family — primitives,
 verbs, schemas, error codes, regen scripts — to STRICT equality against the
-live count, in the operational-truth doc surfaces (``docs/internals`` +
-``docs/workflows``; design/plans narrate history and are out of scope).
+live count, in the operational-truth doc surface (``docs/internals``;
+design/plans narrate history and are out of scope).
 
 Live count sources (each derived, never hardcoded):
 
@@ -268,7 +268,7 @@ def test_live_counts_are_sane() -> None:
 
 def test_frozen_counts_track_live() -> None:
     """Every ``N primitives|verbs|schemas|error codes|regen scripts`` literal
-    in ``docs/internals`` + ``docs/workflows`` equals the live count (or is
+    in ``docs/internals`` equals the live count (or is
     allowlisted with a cited reason).
 
     NOTE for the integrator: on WS4's pre-merge branch this is RED on exactly

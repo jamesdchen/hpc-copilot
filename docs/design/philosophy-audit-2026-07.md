@@ -1,7 +1,7 @@
 # Philosophy audit — 2026-07 (repo-wide doctrine-alignment sweep)
 
 Status: **EXECUTED 2026-07-12 — both sweeps + synthesis complete.** Sweep 1
-minted and verification-corrected `docs/plans/upstream-fixes-2026-07.md`
+minted and verification-corrected `docs/history/plans/upstream-fixes-2026-07.md`
 (15 generators, 12-entry residue); sweep 2 delivered all 26 axis verdicts,
 each twice-verified (Opus adversarial first pass, Fable second pass; every
 verdict CONFIRMED). Verdict table in the Sweep log below; exit criteria
@@ -39,7 +39,7 @@ axis: does the code everywhere still obey the ruling, and is the ruling
    GENERATOR: the design choice that produces this class of defect — or
    state "local defect, no generator" explicitly. Findings clustering on
    one generator become a generator-level proposal in
-   `docs/plans/upstream-fixes-2026-07.md`: the upstream alternative, the
+   `docs/history/plans/upstream-fixes-2026-07.md`: the upstream alternative, the
    symptoms it retires (cite each finding), migration cost, and the
    scope-by-constraint flip trigger (what makes the steady-state design
    shippable). The 2026-07-11 exemplar of the pattern: NAT keepalives,
@@ -75,7 +75,7 @@ axis: does the code everywhere still obey the ruling, and is the ruling
 
    *Sweep 1 — the upstream bug sweep* (one agent, dockets only, no code;
    fits the relay's first idle window). Retro-classifies the bug corpus
-   and MINTS `docs/plans/upstream-fixes-2026-07.md`. Output shape is a
+   and MINTS `docs/history/plans/upstream-fixes-2026-07.md`. Output shape is a
    TABLE (bug → generator → confidence), with an explicit
    **unclassified-residue bucket** — a bug that fits no generator stays
    local-defect; shoehorning is worse than residue. **Entry threshold: a
@@ -238,7 +238,7 @@ back PLAUSIBLE); every ENFORCED verdict carries a fire DEMONSTRATED by at
 least two of the three passes (synthetic violations planted, guard output
 quoted, tree restored). Cheap fixes landed in commits `d9c6632`,
 `65e9b14`, `44536fd`, `081d32e`; specs and enforcement-row proposals are
-banked in `docs/plans/upstream-fixes-2026-07.md` §Sweep-2 merge.
+banked in `docs/history/plans/upstream-fixes-2026-07.md` §Sweep-2 merge.
 
 | Axis | Verdict | The load-bearing fact |
 |---|---|---|

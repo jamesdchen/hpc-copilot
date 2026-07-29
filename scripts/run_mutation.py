@@ -38,7 +38,7 @@ key (``hpc_agent.execution.mapreduce.combiner.x_...``) that the stats-phase
 coverage-join keys on, whereas an ABSOLUTE path bakes the runner's cwd into the
 key (``.home.runner.work.....src.hpc_agent....``) and the join then finds no test
 covering the module and aborts every mutant -- the triage-2 regression that
-zeroed the whole curated matrix (docs/plans/mutation-triage-2-2026-07-17.md,
+zeroed the whole curated matrix (docs/history/plans/mutation-triage-2-2026-07-17.md,
 Finding #1). So the path MUST stay relative.
 
 The reason triage-1 reached for an absolute path was a *different* mutmut
@@ -367,7 +367,7 @@ def render_scoped_pyproject(scope: ModuleScope) -> str:
     time; a relative ``src/hpc_agent/...`` produces the clean dotted key the
     stats-phase coverage-join keys on, while an absolute path bakes the runner
     cwd into the key and the join then covers nothing -- the triage-2 regression
-    that zeroed the whole curated matrix (docs/plans/mutation-triage-2-2026-07-17.md).
+    that zeroed the whole curated matrix (docs/history/plans/mutation-triage-2-2026-07-17.md).
 
     The cwd-relative ``resolve(strict=True)`` crash that triage-1's absolute path
     was dodging (an in-process test ``chdir``\\ ing out of the mutants tree) is

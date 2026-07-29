@@ -30,7 +30,7 @@ status: shipped
 > campaign-awareness on the advisory `find-prior-run` primitive (the
 > authoritative dedup rejection is already wired in `submit_and_record`).
 > For runtime behaviour see
-> [`docs/workflows/campaign.md`](../workflows/campaign.md).
+> [`docs/internals/campaign.md`](../internals/campaign.md).
 
 ## Problem
 
@@ -108,7 +108,7 @@ re-submits dedup automatically — correct for a static `tasks.py`, a
 footgun for any campaign that *deliberately* re-runs equal params
 (Monte-Carlo accumulation, RL same-hyperparams-per-generation, the
 documented stochastic-HPO collision in
-[`campaign.md`](../workflows/campaign.md)). Fix it in the framework:
+[`campaign.md`](../internals/campaign.md)). Fix it in the framework:
 salt `cmd_sha` with the campaign-iteration ordinal (`len(prior)`) for
 campaign-tagged submits, so iteration N never dedups against iteration M.
 

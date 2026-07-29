@@ -169,7 +169,7 @@ Each row links a self-contained section file. Sizes are approximate.
 | [Multi-human: attributed, never verified](principles/multi-human.md) | An opaque harness-asserted actor core compares but never verifies — byte-identical under zero/one declared actor. | ~2.1k tokens |
 | [Repo mechanics: the generated-artifact merge driver keeps ours, never silently drops theirs](principles/repo-mechanics-merge-driver.md) | A keep-ours merge driver for 100%-generated files only; a partially generated file must never carry it. | ~0.6k tokens |
 | [The MCP in-process runner: never touch the real transport streams](principles/mcp-in-process-runner.md) | In-process dispatch swaps out all three real stdio streams; session stream reconfig happens once, before the reader thread exists. | ~0.6k tokens |
-| [Operational docs: counts are verified live, never frozen](principles/operational-docs-counts.md) | A digit count of a counted set equals its live source of truth or sits in a cited allowlist; plus the regen-debt-ledger status pin. | ~0.9k tokens |
+| [Operational docs: counts are verified live, never frozen](principles/operational-docs-counts.md) | A digit count of a counted set equals its live source of truth or sits in a cited allowlist; plus the regen-debt-ledger status pin. | ~1.0k tokens |
 | [The CLI single-verb fast path: byte-identical to the full walk, or it must not run](principles/cli-fast-path.md) | Fast-path opt-in is an enumerated set; discovery verbs answer off the content-keyed bake or take the full walk — never a partial registry. | ~1.1k tokens |
 <!-- END GENERATED SECTION INDEX -->
 

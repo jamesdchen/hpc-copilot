@@ -137,7 +137,7 @@ repos:
         pass_filenames: false
         # Trigger only (the lint re-derives its own targets from
         # scripts/_agent_prose_targets.py — the one scan-root definition).
-        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|scripts/(lint_no_raw_ssh|_agent_prose_targets)\.py)$'
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|\.claude/skills/.*/SKILL\.md|scripts/(lint_no_raw_ssh|_agent_prose_targets)\.py)$'
 
       - id: lint-telemetry-labels
         name: every emitted telemetry field declares cumulative vs per-tick delta
@@ -153,7 +153,7 @@ repos:
         pass_filenames: false
         # Trigger only (the lint re-derives its own targets from
         # scripts/_agent_prose_targets.py — the one scan-root definition).
-        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|scripts/(lint_no_blocklisted_commands|_agent_prose_targets)\.py)$'
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|\.claude/skills/.*/SKILL\.md|scripts/(lint_no_blocklisted_commands|_agent_prose_targets)\.py)$'
 
       - id: lint-plugin-manifests
         name: every loaded plugin's MANIFEST reconciles with runtime reality

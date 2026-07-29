@@ -3,7 +3,7 @@
 **Status: READY TO RUN** (wheel `0.11.3+g1ba0223d` fingerprint-verified on all
 four envs 2026-07-20, incl. Hoffman2). DOCS-ONLY plan. Base = `main`/`1ba0223d`
 (23 ahead of origin — push before or after, the run keys on the wheel not the
-remote). Companion: `proving-run-15-runsheet.md` (submit-once, PROVEN on Slurm
+remote). Companion: `docs/history/plans/proving-run-15-runsheet.md` (submit-once, PROVEN on Slurm
 2026-07-18; its §1 deploy discipline and §2.3 evidence-table style carry over).
 
 **Theme:** run 15 proved the submit-once contract on **discovery/Slurm only**.

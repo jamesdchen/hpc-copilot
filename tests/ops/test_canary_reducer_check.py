@@ -2,7 +2,7 @@
 
 ``submit_and_verify._check_reducer_on_canary`` EXECUTES a run's declared custom
 reducer against the verified canary's ONE real task-0 row before the main array
-launches (``docs/plans/amortized-reduction-check-2026-07-17.md``). It runs the
+launches (``docs/history/plans/amortized-reduction-check-2026-07-17.md``). It runs the
 SAME ``cluster_reduce`` the final harvest runs (one-definition), asserts only the
 contract SHAPE (never a value), DISCLOSES any reducer error verbatim without ever
 refusing the submit, and reports a severed check as ``unverified`` — never

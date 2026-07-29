@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Measure the per-surface stateless dispatch floor (R4 measure-then-decide).
 
-ARCHITECT-MEMO sec 2a (``docs/plans/daemon-engineering-2026-07-16/``) ruled
+ARCHITECT-MEMO sec 2a (``docs/history/plans/daemon-engineering-2026-07-16/``) ruled
 MEASURE-THEN-DECIDE: after the latency waves land the stateless program, measure
 the real per-call floor on the primary Windows box and let the residual gap
 decide whether the WS-DAEMON lifecycle machinery (DW1+) earns its 13 units.

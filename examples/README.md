@@ -16,4 +16,4 @@ adding core dependencies.
   `HPCBackend` registry. All compute methods are documented stubs.
 
 Background and seam analysis:
-[`docs/proposals/crowd-compute-backend.md`](../docs/proposals/crowd-compute-backend.md).
+[`docs/design/crowd-compute-backend.md`](../docs/design/crowd-compute-backend.md).

@@ -51,7 +51,7 @@ Cluster-safety + load-idempotency (UNCHANGED, and still load-bearing)
 
 NOTE: validate end-to-end on your cluster before a long campaign — the
 async ask/tell + K-in-flight timing is the subtle part. See the live-verify
-runbook (``docs/runbooks/campaign-async-live-verify.md``).
+runbook (``docs/internals/campaign-async-live-verify.md``).
 """
 
 from __future__ import annotations

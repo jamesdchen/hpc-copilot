@@ -1,6 +1,6 @@
 """CI lint: a heavy third-party library must not be imported at module scope.
 
-Latency plan B1 (``docs/plans/latency-elimination-2026-07-16/``,
+Latency plan B1 (``docs/history/plans/latency-elimination-2026-07-16/``,
 claim ``cold.jsonschema-import-side-effect`` /
 ``cold.registry-populated-by-importing-the-world``): importing the primitive
 registry imports the world — every ``@primitive`` module is imported so its

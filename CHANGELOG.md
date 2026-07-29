@@ -50,6 +50,144 @@ inside the union schemas). There is no alias or forwarder for the deleted
 verb names — an external caller of one gets the CLI's unknown-verb error and
 should consult `hpc-agent find` / `describe`.
 
+### Fixed — campaign-run: chunked waits + fresh-relaunch parks (fable-sweep 2026-07-29)
+
+An adversarial design sweep (six lenses over the banked run-queue design +
+live kernel; verdict banked in `docs/plans/run-queue-placement-2026-07-28.md`
+§8) confirmed two bugs in the shipped plan, both fixed:
+
+- **The wait relay could never survive a real wait**: it relayed
+  `wait-detached` with the CLI's 7200s default into a ~10-min-bounded
+  harness command — killed before it could report its own timeout, parking
+  every real detached block as `wait_failed`. Now chunked: `timeout_sec:
+  480` per relay, `maxWaitChunks` (default 90 ≈ 12h) with a heartbeat log
+  per chunk, chunk-indexed labels (distinct engine-cache identity), and a
+  `wait_stalled` park on exhaustion.
+- **`resumeFromRunId` across a park replays the park forever**: the engine
+  replays cached calls with unchanged (prompt, opts) verbatim, and the
+  parked tick completed successfully — so a resumed run returned the same
+  `awaiting_decision` without one live call. Auto-resume is now a FRESH
+  relaunch everywhere (plan meta, README, park `resume_hint`) — cheap
+  because block-drive's state is durable; a fresh pass ticks from the
+  current journal.
+
+### Added — workflow plans ship as product; installer learns a workflows/ tree (2026-07-29)
+
+The campaign workflow plans are researcher-lifecycle features, not dev
+conveniences — but they lived only in this repo's `.claude/workflows/`,
+invisible to an experiment repo. Now:
+
+- **`src/hpc_agent/slash_commands/workflows/`** — `campaign-recon.js` +
+  `campaign-run.js` (and the plan-author README) move into the package and
+  ship in the wheel, beside the skills/commands/agents they compose with.
+- **`agent_assets` installs a fourth tree**: `workflows/*.js` →
+  `<claude_dir>/workflows/<name>.js`, reported as `workflows_installed`,
+  manifest-owned (so a retired plan is pruned like any other asset). No
+  `Skill(...)` grant — the Workflow tool resolves plans by name. The README
+  is deliberately not installed (author contract, not a runtime asset).
+- `tests/contracts/test_workflow_plan_delegation.py` sweeps the package
+  location; the delegation doc and lifecycle map repoint. Auto-resume
+  guidance also landed in the same files: a park is a question, not a stop
+  — after the `y` is journaled the session relaunches with
+  `resumeFromRunId` unprompted.
+
+### Changed — docs reorganized: live plans split from history, odd-duck roots folded (2026-07-28)
+
+- `docs/history/plans/` now holds every executed plan, finished sweep/triage,
+  run runsheet, and retired handoff package (~20 items moved from
+  `docs/plans/`, each with landing evidence); `docs/plans/` keeps only live/
+  BANKED work. `docs/proposals/` → `docs/design/`; `docs/runbooks/` +
+  `docs/workflows/` → `docs/internals/` (guides indexed by
+  `docs/internals/workflows.md`). All moves via `git mv`; references updated
+  repo-wide; the operational-docs contract pins
+  (`tests/contracts/_doc_scan.py`) repointed with the drift log updated.
+- `docs/README.md` rewritten as the per-root admission-rule map: a new doc
+  must fit an existing root, or the reorg conversation comes first.
+
+### Removed — dev-loop orchestration erased; devx augments Claude Code, never replaces it (2026-07-28)
+
+User-ordered: the bespoke build-dynamics protocol is gone in full. Claude
+Code natively runs dynamic workflows, so the dev loop needs no orchestration
+machinery of its own — the repo's devx layer exists to AUGMENT that
+experience (gates and data, not process):
+
+- **Deleted**: `docs/plans/_TEMPLATE-handoff/` (the architect-memo +
+  unit-specs handoff-package template), `scripts/check_handoff_disjointness.py`
+  and `tests/scripts/test_check_handoff_disjointness.py`. Historical handoff
+  packages under `docs/plans/` remain as records.
+- **Added**: `scripts/devx_ingest.py` — the repo-side collector for the
+  `tag-session` seam. Sweeps `~/.claude/projects/` (recovering each
+  project's real cwd from the `cwd` field inside its transcripts — the
+  munged directory name is lossy), joins session inventories to each
+  experiment's `.hpc/devx/session_tags.jsonl` ledger, and emits one JSON
+  report. A collector, not an interpreter.
+- **Workflow intake discipline** (`.claude/workflows/README.md`): plans
+  front-load their full input surface via `ARGS_CONTRACT`; the launching
+  session resolves every field before launch and proposes the whole arg set
+  warm — one confirm/correct exchange of diffs, never serial cold
+  questions. Mid-run returns are parks only.
+
+### Changed — dev-loop/product separation: the wheel ships product only (2026-07-28)
+
+User-ordered: "the wheel build should not have dev loop stuff except for
+tagging sessions for devx to ingest as data." Most of the dev loop already
+lived repo-side (`scripts/`, `docs/plans/`, `.claude/workflows/` — never
+packaged); this lands the two pieces that weren't:
+
+- **The `release` skill moved out of the wheel** — from
+  `src/hpc_agent/slash_commands/skills/release/` to the repo-level
+  maintainer surface `.claude/skills/release/`. It stays repo-tracked (the
+  pre-2026-07-04 untracked-copy drift cannot return) and stays under the
+  agent-prose lints: `scripts/_agent_prose_targets.py` gains
+  `MAINTAINER_SKILL_GLOB`, both content lints scan it in default runs, and
+  their ALLOWLIST entries repoint. `lint_skill_command_sync` drops the
+  `release` allowance (no longer on the shipped surface). The installer's
+  `internal: true` skip (bug-sweep #58) stays live for plugin trees, its
+  fire path now synthetic
+  (`tests/cli/test_agent_assets_settings_permissions.py::test_install_tree_skips_an_internal_skill`).
+- **`tag-session`, the one devx seam the product keeps** — a small `mutate`
+  verb (`ops/devx_tag.py`, substrate `state/devx_tags.py`): append one
+  opaque record (`{tags, note?, session_id?, run_id?}`, ts stamped) to the
+  per-experiment `.hpc/devx/session_tags.jsonl` flock-append ledger, for
+  the maintainer's repo-side tooling to ingest. Deliberately inert inside
+  the product: nothing reads a tag back to change behavior — no gate,
+  journal, or decision path consumes it, so it can launder nothing.
+- **The boundary mechanized** —
+  `tests/contracts/test_wheel_product_boundary.py`: no internal/maintainer-
+  flagged skill in the shipped tree (checker = the installer's own
+  `_skill_is_internal`, with its own fire paths), and the relocated
+  maintainer surface provably covered by the prose lints' scan.
+
+### Changed — delegation reworked: plan-driven relay joins the context firewall (2026-07-28)
+
+User-ordered ("the context firewall is good, but I feel like the dynamic
+workflow can do more"). `docs/design/agent-delegation.md` gains rule 5: a
+`kind: 'script'` step in a validated `.claude/workflows/` plan may relay any
+registry verb except the `append-decision` rendezvous lock — `block-drive`
+ticks included — because the command is a pure authored template and the
+model composes nothing. The load-bearing distinction shifts from *which side
+of the execution path* to **who composes the invocation**. Freeform subagents
+(`hpc-recon`, skill delegation sections) stay recon-only, unchanged.
+
+- **`.claude/workflows/campaign-run.js`** — new flagship at the plan-relay
+  level: drives one campaign through the block chain by relayed `block-drive`
+  ticks and `wait-detached` waits, PARKS at every typed-`y` gate (a tick
+  returning `awaiting_decision` ends the run with the brief pointer; the
+  human journals the `y` inline; `resumeFromRunId` replays completed steps
+  from cache). The workflow never passes a gate — the runtime refuses
+  ungreenlit blocks regardless of caller, so parking is the enforced shape.
+- **`.claude/workflows/campaign-recon.js`** — the recon firewall, mechanized:
+  parallel fan-out of the delegable query verbs, one advisory result of exit
+  codes + bounded outputs + pointers. Replaces `swarm-units.js` as the
+  section flagship (the build-swarm plan and
+  `docs/internals/swarm-units-workflow.md` were deleted by user direction;
+  the rest of the bespoke build protocol followed the next day — see the
+  "dev loop orchestration erased" entry).
+- **`tests/contracts/test_workflow_plan_delegation.py`** — the boundary
+  mechanized against the live registry: `append-decision` in no plan, in no
+  section; mutating/workflow verbs only inside a plan's `COMMANDS` block;
+  fire paths plus a control arm proving the rule-5 grant is real.
+
 ### Added — agent reincorporation at the recon-only level (2026-07-27)
 
 Per `docs/plans/agent-delegation-2026-07-27.md` (user-ordered: "reincorporate
@@ -164,7 +302,7 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
 ### Added — packages swarm: MCP surface, latency, doc-honesty (2026-07-12)
 
 Three coordinated packages settled against the tree by the architect memo
-(`docs/plans/` handoff). All fail-open by construction; caches are
+(`docs/history/plans/handoff-packages-2026-07-12/` handoff). All fail-open by construction; caches are
 optimisations, never correctness gates.
 
 - **MCP surface.** `poll-detached` — the instant, non-blocking snapshot of a
@@ -196,7 +334,7 @@ optimisations, never correctness gates.
   (`register_cli`) plugin present", so primitives-only plugins keep the fast
   path (`cli/dispatch.py`).
 - **Doc-honesty.** `docs/internals/submit-sequence.md` and
-  `docs/workflows/code-driven-orchestration.md` rewritten against the live
+  `docs/internals/code-driven-orchestration.md` rewritten against the live
   block-drive substrate (the deleted worker-prompt / resolver modules purged).
   New contract pins guard operational docs: console-script and
   `src/hpc_agent/...` path references in `docs/internals/` + `docs/workflows/`
@@ -403,7 +541,7 @@ optimisations, never correctness gates.
 
 - **`hpc-agent run --detached` / `HPC_AGENT_DRIVE=detached` (opt-in; default unchanged).** The recent cluster ban traced to *an LLM sitting in the connection loop*: `hpc-agent run --workflow status` spawns a `claude -p --bare` worker to **drive** the wait-until-terminal poll; the worker auto-backgrounds at 2 min, ends its turn mid-poll (so the run reports "no report"), and a fallback inline subagent then retries SSH in prose for ~21 min. The deterministic composite it was driving (`status-pipeline` → `monitor_flow`) already runs the whole poll loop in plain code with the connection owned by a single process — the principle `infra/retry.py` states ("the model is out of the loop"); the miss was the *drive layer*. The new **detached** drive mode launches that composite as a DETACHED `hpc-agent` subprocess (NOT a `claude -p` worker) that owns the connection and runs to terminal, and the orchestrator learns the outcome by **reading the journal**, never by spawning an LLM to poke SSH (mirrors DPDispatcher's submit-and-poke loop / jobflow-remote's Runner daemon). The detached child uses `start_new_session` (POSIX) / `DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP` (Windows) so it OUTLIVES the orchestrator — the exact crash that killed the auto-backgrounded `submit-pipeline` ~1s after qsub in 0.10.63 no longer kills the poll.
 - **Journal-read poll helper (`hpc_agent.state.journal_poll`).** `read_run_status` / `poll_until_terminal` read the per-run journal record (the same on-disk state `monitor_flow` writes as it polls) and report terminal `JournalStatus` — **cluster-free, no SSH**. Keys off the durable journal status, not the monitor-flow `lifecycle_state` envelope, so a timed-out-but-still-live run is correctly NOT terminal and the caller keeps waiting. Injectable `sleep`/`now` for hermetic tests.
-- **Scope + safety.** Landed slice: the `status` workflow's blocking wait path (the lifecycle the LLM sat in). `submit`/`aggregate` keep the default worker (deferred — see `docs/workflows/code-driven-orchestration.md`). The flag/env is **opt-in**; the proven `--bare` worker stays the default. Unlike `--inline`, detached is NOT refused when a worker can authenticate (it spawns no LLM, so the #155 context-isolation guard does not apply). Unsupported shapes are refused with `spec_invalid`. Stays entirely in the drive/worker/CLI layer — no `ops/monitor`, backend-status, or `infra/{remote,ssh_*}` changes. New env var documented in `docs/reference/env-vars.md`; `tests/_kernel/lifecycle/test_detached_drive.py`.
+- **Scope + safety.** Landed slice: the `status` workflow's blocking wait path (the lifecycle the LLM sat in). `submit`/`aggregate` keep the default worker (deferred — see `docs/internals/code-driven-orchestration.md`). The flag/env is **opt-in**; the proven `--bare` worker stays the default. Unlike `--inline`, detached is NOT refused when a worker can authenticate (it spawns no LLM, so the #155 context-isolation guard does not apply). Unsupported shapes are refused with `spec_invalid`. Stays entirely in the drive/worker/CLI layer — no `ops/monitor`, backend-status, or `infra/{remote,ssh_*}` changes. New env var documented in `docs/reference/env-vars.md`; `tests/_kernel/lifecycle/test_detached_drive.py`.
 
 ### Removed — §6 worker physical deletion (proving-run-2-hardening Move 3)
 

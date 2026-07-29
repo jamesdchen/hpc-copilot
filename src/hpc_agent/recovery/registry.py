@@ -7,7 +7,7 @@ menus that drifted independently (the empirical 0.10.5 case: an
 ``already_in_flight`` recovery menu landed in ``hpc-submit/SKILL.md``
 only, while ``hpc-aggregate``'s symmetric path was unaware of it).
 
-See ``docs/proposals/recovery-registry.md`` for design rationale.
+See ``docs/design/recovery-registry.md`` for design rationale.
 
 The kind vocabulary is deliberately broader than
 :class:`hpc_agent._kernel.contract.vocabulary.FailureCategory` (classifier
@@ -236,7 +236,7 @@ _SUBMISSION_INCOMPLETE = RecoveryMenu(
             safety_rank=2,
         ),
     ),
-    references=("docs/proposals/recovery-registry.md",),
+    references=("docs/design/recovery-registry.md",),
 )
 
 

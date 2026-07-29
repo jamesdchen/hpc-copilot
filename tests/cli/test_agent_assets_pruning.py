@@ -71,6 +71,7 @@ def test_prune_is_a_noop_without_a_prior_manifest(tmp_path: Path) -> None:
         "commands": [],
         "skills": [],
         "agents": [],
+        "workflows": [],
         "legacy_name_skipped": [],
     }
 
@@ -245,11 +246,17 @@ def test_is_hpc_authored_marker_discrimination(tmp_path: Path) -> None:
 
 def test_write_manifest_stamps_owned_names(tmp_path: Path) -> None:
     report = _write_asset_manifest(
-        tmp_path, commands={"a"}, skills={"s"}, agents=set(), dry_run=False
+        tmp_path,
+        commands={"a"},
+        skills={"s"},
+        agents=set(),
+        workflows={"campaign-run"},
+        dry_run=False,
     )
     assert report["wrote"] is True
     data = json.loads((tmp_path / _ASSET_MANIFEST_NAME).read_text(encoding="utf-8"))
     assert data["commands"] == ["a"]
     assert data["skills"] == ["s"]
     assert data["agents"] == []
+    assert data["workflows"] == ["campaign-run"]
     assert "version" in data

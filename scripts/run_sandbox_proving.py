@@ -1,6 +1,6 @@
 """U3 — the sandbox block-loop driver (rung-2 proving, plan §4-U3).
 
-WHY THIS EXISTS (``docs/plans/sandbox-proving-run-2026-07-18.md``)
+WHY THIS EXISTS (``docs/history/plans/sandbox-proving-run-2026-07-18.md``)
 ------------------------------------------------------------------
 A live proving run today adjudicates TWO different things at once: contract
 kinks (spec shapes, block-chain sequencing, gate provenance, journal

@@ -18,7 +18,7 @@ each through a ``read_run_cmd_sha(experiment_dir, run_id)`` recompute + a
 
 Two consumers legitimately read a terminal WITHOUT a currency compare, and
 carry an explicit exemption here (the B7 "one-definition" enforcement row —
-spec 9 / the sixth-consumer row in ``docs/plans/upstream-fixes-2026-07.md``):
+spec 9 / the sixth-consumer row in ``docs/history/plans/upstream-fixes-2026-07.md``):
 
 * ``state/run_story.py`` (the SEEDED exemption, ``run_story.py:301-306``) —
   it NARRATES history: a run's story enumerates every terminal the run ever

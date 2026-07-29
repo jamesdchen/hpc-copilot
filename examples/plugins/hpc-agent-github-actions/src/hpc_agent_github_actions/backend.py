@@ -1,7 +1,7 @@
 """``HPCBackend`` that fans hpc-agent task arrays out onto GitHub Actions.
 
 A pure-API ("crowd-compute") backend, per
-``docs/proposals/crowd-compute-backend.md``: no SSH, no shared filesystem. The
+``docs/design/crowd-compute-backend.md``: no SSH, no shared filesystem. The
 "scheduler" is the Actions REST API; an "array job of N tasks" is one workflow
 run whose matrix has N cells; the "job id" is the Actions run id; results come
 back as artifacts rather than over a shared mount.
@@ -189,7 +189,7 @@ class GitHubActionsBackend(HPCBackend):
     # Pure-API: no SSH login node, no shared filesystem. The submit prelude,
     # preflight, monitor, and aggregate flows read this to skip their SSH /
     # rsync steps and use this backend's ``alive_job_ids`` / ``fetch_results`` /
-    # ``fetch_logs`` hooks instead (docs/proposals/crowd-compute-backend.md).
+    # ``fetch_logs`` hooks instead (docs/design/crowd-compute-backend.md).
     requires_ssh = False
     # GitHub Actions caps a matrix at 256 jobs per workflow run, so a single
     # fan-out array can hold at most 256 tasks. Declaring it here lets

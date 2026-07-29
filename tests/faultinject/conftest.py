@@ -1,7 +1,7 @@
 """Fault-injection harness — shared fixtures + injection vocabulary.
 
 Step 3 of the transport-robustness sequence
-(``docs/plans/transport-robustness-2026-07-17/``). The AUDIT (step 1) ends with
+(``docs/history/plans/transport-robustness-2026-07-17/``). The AUDIT (step 1) ends with
 a fault-injection test-point inventory (§7): each seam, when a channel is
 SEVERED / HUNG / GARBLED mid-op, exercises a distinct failure path. This
 directory drills those paths and asserts the DOCTRINE outcome, never an

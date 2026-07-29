@@ -1,7 +1,7 @@
 """Behaviour-pinning coverage for :mod:`hpc_agent.state.journal`.
 
 These tests exist because the 2026-07-17 mutation triage
-(``docs/plans/mutation-triage-2026-07-17.md``, finding-2) found the journal +
+(``docs/history/plans/mutation-triage-2026-07-17.md``, finding-2) found the journal +
 index provenance substrate entirely outside mutation scope: covered-but-
 UNASSERTED logic where a boundary/operator/default/return mutation would
 survive the suite. The journal IS the provenance record a stranger reads to

@@ -184,7 +184,7 @@ Journal records, cluster-side announce markers
   (L113-211) EXECUTES the declared `aggregate_cmd` via the same `cluster_reduce` the
   final harvest uses, against the verified canary's real row, before the array
   launches — asserts contract SHAPE only, discloses any error verbatim, never
-  refuses (`docs/plans/amortized-reduction-check-2026-07-17.md`).
+  refuses (`docs/history/plans/amortized-reduction-check-2026-07-17.md`).
 - **Streaming labels.** `ops/aggregate/stream.py` marks per-arm values
   `per-arm-final` and cross-arm stats `final-harvest-only`, every emission carries a
   `completeness_label`.

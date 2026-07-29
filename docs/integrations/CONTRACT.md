@@ -285,7 +285,7 @@ An integrator that wants to embed the loop without the console-script
 surface calls **`drive_once(experiment_dir, *, step_table, dry_run)`**
 directly — no argv to synthesize; the `hpc-block-drive` CLI is a thin
 argparse wrapper over it. See
-[`../workflows/code-driven-orchestration.md`](../workflows/code-driven-orchestration.md)
+[`../internals/code-driven-orchestration.md`](../internals/code-driven-orchestration.md)
 for the full code-driven consumption style.
 
 This is the same "mechanism is neutral; the caller owns the rules" split

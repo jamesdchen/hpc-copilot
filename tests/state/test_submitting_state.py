@@ -1,6 +1,6 @@
 """Reader-tolerance for the ``submitting`` journal status (submit-once U3, phase 1).
 
-The submit-once contract (docs/plans/transport-robustness-2026-07-17) mints a
+The submit-once contract (docs/history/plans/transport-robustness-2026-07-17) mints a
 ``RunRecord`` as ``submitting`` BEFORE the remote dispatch and promotes it to
 ``in_flight`` only once the job id is in hand. NOTHING in phase 1 mints or
 transitions ``submitting`` — these tests exercise the *readers* every existing

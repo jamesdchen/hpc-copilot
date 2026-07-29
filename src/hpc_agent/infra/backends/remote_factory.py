@@ -140,7 +140,7 @@ def build_remote_backend(
         )
 
     # Construction seam for plugin-registered backends
-    # (docs/proposals/crowd-compute-backend.md, core edit #2). A name the
+    # (docs/design/crowd-compute-backend.md, core edit #2). A name the
     # ladder above doesn't know but the registry does — a plugin's
     # ``@register`` ran — constructs itself from the whole build context:
     # the backend, not this factory, decides which fields it needs (a

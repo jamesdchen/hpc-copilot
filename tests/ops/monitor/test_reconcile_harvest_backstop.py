@@ -1,6 +1,6 @@
 """reconcile's terminal harvest is journal-evidence-backstopped, not transition-only.
 
-The rank-2 / audit-U8 latent bug (``docs/plans/transport-robustness-2026-07-17``):
+The rank-2 / audit-U8 latent bug (``docs/history/plans/transport-robustness-2026-07-17``):
 reconcile's settle arms do ``update_run_status`` → ``mark_run(terminal)`` →
 transition-gated ``harvest_on_terminal``. A session-death BETWEEN ``mark_run``
 and the harvest leaves the run **terminal-with-no-harvest**, and the next

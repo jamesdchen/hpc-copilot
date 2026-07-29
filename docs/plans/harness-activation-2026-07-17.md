@@ -13,7 +13,7 @@ supersedes: anti-vendor-lockout-2026-07-17.md §3 T4 (which reserved this design
 now."** Activation is the single biggest concrete lockout item on the standing
 board (`anti-vendor-lockout-2026-07-17.md` §1(1), sized **L**, "the single
 biggest concrete lockout"). This document is the plan of record for it, to the
-house planning standard (`daemon-engineering-2026-07-16/` is the precedent:
+house planning standard (`docs/history/plans/daemon-engineering-2026-07-16/` is the precedent:
 settled-design table + wave plan + file-disjoint unit decomposition +
 residual-risk register written for the premortem to attack). A premortem agent
 reviews this next; §5 is written for that lens, and the `unit-specs` twin is

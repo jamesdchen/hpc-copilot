@@ -1,6 +1,6 @@
 """U6 — the sandbox anomaly matrix (rung-2 proving, plan §4-U6).
 
-WHY THIS EXISTS (``docs/plans/sandbox-proving-run-2026-07-18.md`` §4-U6)
+WHY THIS EXISTS (``docs/history/plans/sandbox-proving-run-2026-07-18.md`` §4-U6)
 ------------------------------------------------------------------------
 The U3 driver (``scripts/run_sandbox_proving.py``) proves the HAPPY path of
 the block chain against the throwaway dockerized cluster. The anomaly arms
