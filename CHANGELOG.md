@@ -213,6 +213,33 @@ clean completion, never a review.
   `assert_greenlit_target` to `assert_greenlit_or_consented`, which
   threads `clean_predecessor` derived at the seat from the two readers.
 
+### Added — two physical-latency legs: wave prefetch + completion-aware cadence (2026-07-29)
+
+The cadence audit's follow-through — after the y-count fell, the two
+remaining physical latencies got their cuts:
+
+- **Wave-incremental harvest prefetch.** The watch tick's combine burst
+  (already one fused ssh exec) now triggers an opportunistic pull of the
+  just-sealed wave's `_combiner` partial into the exact destination the
+  terminal harvest pulls — transfer overlaps compute, and the terminal
+  pull ships only the delta. The `--link-dest` posture exactly: the
+  final harvest re-runs the same pull and the tar engine's content-hash
+  manifest re-verifies every prefetched file (corruption re-pulls), so
+  correctness is identical with, without, or with a poisoned cache.
+  One pull per BURST, never per poll; failure is disclosed data;
+  `HPC_WAVE_PREFETCH=0` opts out; the harvest disclosure prints
+  served-from-cache vs pulled-fresh counts (never fabricated on the
+  count-less legacy engine). The #352 evidence model is untouched —
+  prefetch is pull-only.
+- **Completion-aware backoff ceiling.** The status watch's adaptive
+  300s cap now bows to remaining expected runtime (`running_since +
+  walltime_sec × wave-bound`, armed only by evidence execution began;
+  cap = clamp(remaining/4, floor, 300) — `verify_canary`'s fast-start
+  ramp, inverted). Strictly fewer total polls; unknown walltime keeps
+  today's ramp byte-identical; the estimate bounds a SLEEP and never a
+  verdict (pinned at source level). A one-shot `backoff_ceiling` tick
+  action disclosed the first tick the ceiling binds.
+
 ### Added — the y-minimization bundle's flow legs (2026-07-29)
 
 Six further legs of the same maintainer directive ("minimize the number
