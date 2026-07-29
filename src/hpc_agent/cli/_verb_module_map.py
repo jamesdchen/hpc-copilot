@@ -154,6 +154,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'verify-relay': ('verify-relay', 'hpc_agent.ops.decision.journal.verify_relay'),
     'verify-reproduction': ('verify-reproduction', 'hpc_agent.ops.verify_reproduction'),
     'verify-submitted': ('verify-submitted', 'hpc_agent.ops.verify_submitted'),
+    'wait-any-detached': ('wait-any-detached', 'hpc_agent.ops.monitor.wait_any_detached'),
     'wait-detached': ('wait-detached', 'hpc_agent.ops.monitor.wait_detached'),
     'walk-submit-ambiguities': ('walk-submit-ambiguities', 'hpc_agent.ops.walk_submit_ambiguities'),
     'watcher-install': ('watcher-install', 'hpc_agent.ops.monitor.watcher_install'),

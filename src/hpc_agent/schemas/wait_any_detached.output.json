@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/wait_any_detached.output.json",
+  "title": "wait-any-detached output data",
+  "description": "How the fleet wait ended, plus every watched target's state.\n\n``outcome`` is ``wait-detached``'s vocabulary VERBATIM — the drain plan\nbranches on the same three literals whether it waited on one run or forty:\n\n* ``worker_exited`` — at least one watched worker's pid died during the\n  wait. The triggering rows carry the wake payload; read those runs'\n  journals next.\n* ``no_live_worker`` — at least one target had no live worker at the FIRST\n  poll (already exited, or never launched), so there was already something\n  actionable and the wait returned at once rather than holding a seat. The\n  degenerate all-dead set lands here too.\n* ``timeout`` — the budget elapsed with every watched worker still alive.\n  NOT an anomaly by itself (long queue waits are normal); re-arm the wait\n  with the same set or consult ``queue-status`` / ``status-snapshot``.\n\n``targets`` is the FULL snapshot in the input's order — the triggering rows\nplus every other target's current state — so one return tells the caller\nwhat to act on AND what is still in flight.",
+  "type": "object",
+  "required": [
+    "outcome",
+    "targets",
+    "triggered_count",
+    "waited_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "enum": [
+        "worker_exited",
+        "no_live_worker",
+        "timeout"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "targets": {
+      "items": {
+        "$ref": "#/$defs/DetachedTargetState"
+      },
+      "title": "Targets",
+      "type": "array"
+    },
+    "triggered_count": {
+      "minimum": 0,
+      "title": "Triggered Count",
+      "type": "integer"
+    },
+    "waited_sec": {
+      "minimum": 0,
+      "title": "Waited Sec",
+      "type": "number"
+    }
+  },
+  "$defs": {
+    "DetachedTargetState": {
+      "additionalProperties": false,
+      "description": "One target's state at the moment the wait returned.\n\n``state`` uses ``wait-detached``'s vocabulary for the two resolved cases and\nadds the one a single waiter never has to name (a target that is still\nrunning while a SIBLING target is what returned):\n\n* ``worker_exited`` — this target's lease pid died during the wait.\n* ``no_live_worker`` — no live lease for this target at the first poll: it\n  already exited, or was never launched.\n* ``still_running`` — this target's lease pid was alive when the wait\n  returned (another target triggered, or the budget elapsed).",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "block": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Block"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pid"
+        },
+        "log_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Log Path"
+        },
+        "state": {
+          "enum": [
+            "worker_exited",
+            "no_live_worker",
+            "still_running"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "triggered": {
+          "default": false,
+          "title": "Triggered",
+          "type": "boolean"
+        },
+        "brief": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The exited worker's code-digested decision brief, read from its recorded terminal / pending-decision marker. Null for a still_running target or when no terminal was recorded.",
+          "title": "Brief"
+        },
+        "relay": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The human-facing one-liner CODE rendered for the worker's terminal (the SubmitBlockResult.relay), relayed VERBATIM — never reconstructed from memory. Null when the worker recorded no relay.",
+          "title": "Relay"
+        },
+        "next_verb": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The deterministically-computed next block verb the worker's terminal suggests (its next_block.verb), or null at a human-branch / terminal boundary.",
+          "title": "Next Verb"
+        }
+      },
+      "required": [
+        "run_id",
+        "block",
+        "pid",
+        "log_path",
+        "state"
+      ],
+      "title": "wait-any-detached target state",
+      "type": "object"
+    }
+  }
+}

@@ -130,6 +130,26 @@ item goes wherever headroom is) instead of manual (human picks the cid).
 - Wakes: the detached watch terminals that already exist are the capacity-
   freed signal — a run finishing IS the moment to re-tick the queue. The
   overnight wake-leg machinery (`status_watch_armed`) is reused unchanged.
+  **SHIPPED 2026-07-29 as CHAIN-DISPATCH** (`ops/queue/chain.py`): the
+  retiring run's OWN driver chains exactly one `queue-dispatch` tick at its
+  terminal step — the repo's shipped self-chaining shape (harness-contract
+  capability 3: "S2/S3/S4 detach, campaign reconcile self-chaining, the
+  driver watchdog"), no daemon and no model in the path. Two driver terminal
+  seats call it, because a queue-placed run can retire at either:
+  `ops/campaign_run.py::campaign_run` on its SYNCHRONOUS path (the body the
+  detached child re-enters — the driver `queue-dispatch` itself starts) and
+  `_kernel/lifecycle/block_drive.py::_chain` at its `terminal` return (the
+  driver the `queue-drain` plan relays per drivable item, so a post-park
+  retirement wakes the queue too). Retirement is decided by the ONE
+  `state/queue_occupancy.run_occupies` predicate — a terminal STEP is not a
+  retired RUN (`run_timeout`'s jobs are still live) and a supersession is a
+  retirement with no driver terminal at all. Fire-and-forget by contract: the
+  hook runs AFTER the settlement is durable, never raises, and reports its
+  outcome as a `queue_chain` disclosure on the driver's own result. Gated on
+  one non-creating `stat` of the intake ledger, so a repo that never used the
+  queue pays nothing; the cadence (A retires → B starts → B retires → …)
+  terminates on a dry ledger because a dispatch with nothing to place starts
+  nothing.
 - The dynamic workflow (`campaign-run` generalized, or a sibling
   `queue-drain` plan) relays `queue-drive` ticks exactly as it relays
   `block-drive` ticks today — rule-5 authored templates, N run-loops for
@@ -170,6 +190,16 @@ item goes wherever headroom is) instead of manual (human picks the cid).
    status digest. The plan derives its ceiling from `total_items` today,
    which is correct because §7 R3 deliberately left capacity to the
    scheduler — a real capacity field would only ever narrow the pass.
+4. **The wake edge — CHAIN-DISPATCH (SHIPPED 2026-07-29):** the last
+   always-draining gap. Phase 3 gave the queue a drain LOOP; it did not give
+   it an EVENT. A dispatched run retiring freed capacity that nothing acted
+   on, so the next waiting ledger item sat until a human or a drain pass
+   happened by. `ops/queue/chain.py` closes it at the two driver terminal
+   seats (§5 above has the full shape). With it, the queue is
+   always-draining without a daemon: enqueue wakes it (`campaign-refill`
+   dispatches its own item), retirement wakes it (this), and a drain pass or
+   a human remains the manual backstop — three independent triggers over one
+   idempotent, lock-guarded, request-id-deduped actor.
 
 ## 7. v2 — the ledger loop (2026-07-29, maintainer's synthesis)
 
@@ -384,13 +414,43 @@ status-watch. The proposed claim-lease staleness probe re-specifies the
 same hole. RESOLUTION: port F43 (host + create_time) into the wait path
 and the claim lease; add lease cleanup; anchor the glob.
 
-**S8 — post-y double-driver races (HIGH).** Inline-first-tick + auto-
-resumed pass = two drivers on the same run at every y, by design.
-Pending-marker writes are blind last-writer-wins (`_repark_marker` can
-resurrect a consumed park; a loser's DetachedLeaseHeld becomes a spurious
-`tick_failed` park under abort_on_failure; in-process spans have no lease
-at all). RESOLUTION: drop inline-first-tick OR make it claim-aware; make
-marker clear/re-park a compare-and-swap on (boundary, awaiting_since).
+**S8 — post-y double-driver races (HIGH, FIXED 2026-07-29 — marker
+consumption leg).** Inline-first-tick + auto-resumed pass = two drivers on
+the same run at every y, by design. Pending-marker writes were blind
+last-writer-wins (`_repark_marker` could resurrect a consumed park; a
+loser's DetachedLeaseHeld becomes a spurious `tick_failed` park under
+abort_on_failure; in-process spans have no lease at all). RESOLUTION as
+stated — the marker clear/re-park is now a COMPARE-AND-SWAP on (boundary,
+awaiting_since), inline-first-tick KEPT.
+
+MECHANISM (landed): `state/journal.compare_and_clear_pending_decision` /
+`compare_and_repark_pending_decision` — one locked-RMW definition each,
+sharing `_swap_pending_decision` under the journal's existing per-run
+`_locked` flock (the same critical-section precedent `stamp_drive_attempt`
+and `upsert_run_compare_and_mint` use). `block_drive._consume_marker` is
+the ONE seat both consumption legs (the greenlight resume in `run_tick`
+and the standing-consent auto-advance in
+`_consume_parked_boundary_under_consent`) clear through: it verifies the
+marker on disk is still the `(block, awaiting_since)` pair the tick READ
+before clearing it, so exactly one of two concurrent drivers runs the
+successor span. The swap sits at the marker clear — the last read-only
+point on the resume leg — so the LOSER writes nothing (no span, no
+`_stamp_driver_tick`, no park), never re-parks the consumed decision, and
+never raises: it returns `advanced` with a "another driver advanced this
+boundary first" reason (`_lost_the_consume_race`). That classification is
+deliberate: `skip` / `awaiting_decision` are the two outcomes §7's
+`drive_attempts` charges as futile, and a lost race is not futility — the
+chain DID move, so charging it would let concurrent drivers burn a healthy
+item's retryable(n) budget; the drain's `advanced` branch re-ticks and the
+next read shows the winner's position. `_repark_marker` (the F14
+failed-span leg) now swaps only into an EMPTY slot, closing the
+"resurrect a consumed park" half. Pinned by
+`tests/_kernel/lifecycle/test_block_drive_greenlight_cas.py` (two
+barrier-started threads on one real journal → exactly one span; the
+sequential stale-marker refusal; the re-park resurrection guard).
+STILL OPEN in S8: the loser's `DetachedLeaseHeld` → spurious `tick_failed`
+park under abort_on_failure, and the missing lease on in-process spans —
+neither is a marker-consumption defect.
 
 **S9 — kill window downgrades a human's rerun to an advance (HIGH,
 pre-existing kernel bug the queue multiplies).** SIGKILL between

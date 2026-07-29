@@ -341,6 +341,13 @@ _KERNEL_TO_OPS = DirectionalRule(
             # --approve), so every trust-seam gate fires identically to a
             # standalone append. Lazy-imported inside _commit_fused_approval.
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.decision.journal"),
+            # CHAIN-DISPATCH (run-queue plan §5): the drive loop is one of the two
+            # drivers that can land a queue-placed run's RETIREMENT, so its
+            # terminal return ticks the queue's actor once — the shipped
+            # self-chaining shape, not a new mechanism. Lazy-imported inside
+            # ``_chain``'s terminal branch; the helper never raises and returns
+            # ``None`` for an experiment with no intake ledger.
+            ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.queue.chain"),
             # Stop-hook / alert guards probe ops capability + notify helpers.
             ("_kernel/hooks/alert_count.py", "hpc_agent.ops.recover.notify"),
             (
@@ -497,6 +504,14 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         # but string-name composes are unresolvable to this AST pass, so they earn
         # inventory entries (the cite_check.py precedent).
         ("campaign_refill.py", "ops", "queue"),
+        # CHAIN-DISPATCH (run-queue plan §5): campaign-run is the driver
+        # queue-dispatch starts for every placed item, so its synchronous
+        # terminal step is where a queue-placed run RETIRES — and that is the
+        # moment to re-tick the queue. Deliberately NOT declared via
+        # ``composes=``: the wake edge is fire-and-forget disclosure, not part of
+        # the iteration's contract, and listing queue-dispatch as composed would
+        # claim the iteration depends on it.
+        ("campaign_run.py", "ops", "queue"),
         # run-queue §3 + maintainer order 2026-07-29: the morning digest's
         # ``queue`` paragraph relays queue-advance's rows/text verbatim (one
         # authority, S13). Declared composes=["queue-advance"] on the

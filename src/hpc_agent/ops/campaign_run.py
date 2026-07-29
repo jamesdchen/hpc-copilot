@@ -206,6 +206,14 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
     ``detach=False``, runs the impl, arms the relay-due marker on its terminal,
     and records that terminal for the parent's idempotent replay. So a detached
     iteration still arms relay-due exactly once, on its real outcome.
+
+    CHAIN-DISPATCH (run-queue plan §5): this is the driver ``queue-dispatch``
+    starts for every placed item, so the synchronous path's terminal step is
+    where a queue-placed run RETIRES — and a run finishing IS the moment to
+    re-tick the queue. The hook runs LAST, after the terminal is recorded, is
+    gated on the shipped ``run_occupies`` predicate, and never raises; its
+    outcome rides back as the ``queue_chain`` disclosure. The detached PARENT
+    never reaches it (nothing retired), so one iteration chains exactly once.
     """
     if spec.detach:
         # The journal-poll key is spec.aggregate.run_id (what _block_spec_run_id
@@ -257,6 +265,27 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
     # of re-submitting a fresh array. Runs on the synchronous path — which is what
     # the detached child executes.
     _record_campaign_terminal(experiment_dir, key_run_id=spec.aggregate.run_id, result=result)
+    # CHAIN-DISPATCH — the run queue's wake edge (run-queue plan §5: "a run
+    # finishing IS the moment to re-tick the queue"). This is the driver
+    # ``queue-dispatch`` starts for every placed item, so its terminal step is
+    # where a queue-originated run retires; ``ops/queue/chain.py`` decides
+    # retirement with the ONE ``run_occupies`` predicate and never raises.
+    #
+    # LAST, and deliberately AFTER ``_record_campaign_terminal``: the settlement
+    # must be durable before the wake runs, so nothing the chain does (or fails
+    # to do) can cost this iteration its recorded terminal. The consequence is
+    # that the RECORDED terminal predates the chain and a parent's idempotent
+    # replay therefore carries no ``queue_chain`` — correct, since the replay is
+    # the child's OUTCOME, and the wake belongs to the tick that performed it.
+    # The DETACHED parent never reaches here (it returns a handle above), so one
+    # iteration chains exactly once, from the child that actually retired.
+    from hpc_agent.ops.queue.chain import chain_dispatch_on_retire
+
+    result.queue_chain = chain_dispatch_on_retire(
+        experiment_dir,
+        run_id=result.run_id or spec.aggregate.run_id,
+        origin="campaign-run",
+    )
     return result
 
 

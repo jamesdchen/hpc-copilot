@@ -159,6 +159,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [verify-relay](verify-relay.md) | yes | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` |
 | [verify-reproduction](verify-reproduction.md) | no | filesystem: `<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl`; filesystem: `<experiment>/_aggregated/<repro_run_id>/claim_check_receipts.jsonl`; filesystem: `<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl` | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` |
 | [verify-submitted](verify-submitted.md) | yes | ssh: `<cluster>` | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` |
+| [wait-any-detached](wait-any-detached.md) | yes | _none_ | `hpc-agent wait-any-detached --spec <path>` |
 | [wait-detached](wait-detached.md) | yes | _none_ | `hpc-agent wait-detached --spec <path>` |
 | [walk-submit-ambiguities](walk-submit-ambiguities.md) | yes | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` |
 | [worker-log-digest](worker-log-digest.md) | yes | _none_ | `hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]` |

@@ -1434,6 +1434,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent wait-any-detached --spec <path>",
+    "idempotent": true,
+    "input_schema": "wait_any_detached.input.json",
+    "name": "wait-any-detached",
+    "output_schema": "wait_any_detached.output.json",
+    "python": "hpc_agent.ops.monitor.wait_any_detached.wait_any_detached",
+    "side_effects": [],
+    "summary": "Block until ANY detached worker in a target set exits (lease-pid wait over N runs; local, no SSH). One held seat for a whole fleet instead of one wait-detached per run; returns the triggering target(s) plus every other target's current state.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent wait-detached --spec <path>",
     "idempotent": true,
     "input_schema": "wait_detached.input.json",

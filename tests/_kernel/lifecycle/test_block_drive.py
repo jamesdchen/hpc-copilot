@@ -373,16 +373,27 @@ def faked(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: state["committed"]
     )
-    monkeypatch.setattr(
-        bd,
-        "clear_pending_decision",
-        lambda run_id, **_k: state["cleared"].append(run_id),
-    )
+
+    # S8: the driver consumes the marker through the compare-and-swap seat, so the
+    # fake stands in for THAT (returning True — this tick wins the race).
+    def _fake_consume(run_id: str, **_k: object) -> bool:
+        state["cleared"].append(run_id)
+        return True
+
+    monkeypatch.setattr(bd, "compare_and_clear_pending_decision", _fake_consume)
 
     def _fake_mark(run_id: str, **kw: Any) -> None:
         state["parked"].append({"run_id": run_id, **kw})
 
     monkeypatch.setattr(bd, "mark_pending_decision", _fake_mark)
+
+    # S8: the F14 re-park writes through the compare-and-swap seat (expects the
+    # slot to still be empty). The fake records the same envelope and WINS.
+    def _fake_repark(run_id: str, **kw: Any) -> bool:
+        state["parked"].append({"run_id": run_id, **kw})
+        return True
+
+    monkeypatch.setattr(bd, "compare_and_repark_pending_decision", _fake_repark)
 
     def _fake_run(verb: str, spec: dict[str, Any], experiment_dir: Path) -> tuple[dict, int]:
         state["ran"].append({"verb": verb, "spec": spec})
@@ -856,7 +867,11 @@ def test_run_tick_override_advance_runs_successor_under_materialized_spec(
         bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: dict(committed)
     )
     cleared: list[str] = []
-    monkeypatch.setattr(bd, "clear_pending_decision", lambda run_id, **_k: cleared.append(run_id))
+    monkeypatch.setattr(
+        bd,
+        "compare_and_clear_pending_decision",
+        lambda run_id, **_k: (cleared.append(run_id), True)[1],
+    )
     monkeypatch.setattr(bd, "mark_pending_decision", lambda *_a, **_k: None)
     import hpc_agent._kernel.lifecycle.drive as drive_mod
 
@@ -1141,7 +1156,7 @@ def test_run_tick_resume_validates_against_the_real_spec_model(
     monkeypatch.setattr(
         bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: dict(committed)
     )
-    monkeypatch.setattr(bd, "clear_pending_decision", lambda *_a, **_k: None)
+    monkeypatch.setattr(bd, "compare_and_clear_pending_decision", lambda *_a, **_k: True)
     monkeypatch.setattr(bd, "mark_pending_decision", lambda *_a, **_k: None)
     import hpc_agent._kernel.lifecycle.drive as drive_mod
 

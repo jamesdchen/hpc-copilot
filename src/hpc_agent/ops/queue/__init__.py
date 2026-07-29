@@ -10,6 +10,14 @@ ledger) and *where it runs* (placement). See
   items joined to PROJECTIONS over the existing run stores.
 * :mod:`hpc_agent.ops.queue.advance` — ``queue-advance`` (query): pure
   placement authority — reads only, returns a decision, writes nothing.
+* :mod:`hpc_agent.ops.queue.dispatch` — ``queue-dispatch`` (workflow, Phase 2):
+  the ACTOR — consumes the placement decision and starts each item's normal
+  lifecycle. The queue's only write authority.
+* :mod:`hpc_agent.ops.queue.maintenance` — the JANITOR the actor runs on a
+  dispatching tick (§8 S12): compact the ledger, prune unreferenced terminals.
+* :mod:`hpc_agent.ops.queue.chain` — CHAIN-DISPATCH, the WAKE EDGE (§5): a
+  retiring run's own driver ticks the actor once. Not a verb — a hook the two
+  driver terminal seats call, fire-and-forget.
 
 Leaf module names follow the ``ops/clusters/{list,describe}.py`` precedent
 (subject in the directory, leaf in the filename); the verb names stay the

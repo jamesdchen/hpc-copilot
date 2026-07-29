@@ -187,6 +187,54 @@ IS the tick.
   unparseable lines are kept verbatim so `skipped_records` stays truthful,
   and grooming never raises — the items already started.
 
+### Added — the chain-dispatch wake edge: always-draining without a daemon (2026-07-29)
+
+The plan named a run finishing as the capacity-freed signal, but nothing
+acted on it: when a dispatched run reached a terminal (or was superseded),
+the next waiting ledger item sat until a human or a drain pass happened by.
+`ops/queue/chain.py` closes it event-driven — the retiring run's OWN driver
+chains exactly one `queue-dispatch` tick at its terminal step (the shipped
+self-chaining shape, harness-contract capability 3), no daemon, no model in
+the path. Two driver terminal seats call it (`campaign_run`'s synchronous
+body and `block_drive._chain`'s terminal return), retirement is decided by
+the ONE `run_occupies` predicate (a terminal STEP is not a retired RUN;
+supersession retires with no driver terminal at all), and the hook is
+fire-and-forget: it runs after the settlement is durable, never raises, and
+reports as a `queue_chain` field (`null` for repos that never used the
+queue, which pay one stat). One retirement chains at most one tick, and the
+cadence terminates on a dry ledger. Enqueue, retirement, and a manual drain
+pass are now three independent triggers over one idempotent, lock-guarded,
+request-id-deduped actor.
+
+### Fixed — the post-`y` double-driver race on the pending marker (§8 S8, 2026-07-29)
+
+Two drivers tick the same parked run at every greenlight BY DESIGN — the
+main session's inline first tick and the drain pass. Marker consumption was
+a blind clear: both drivers read the same marker, both ran the successor
+span, and the loser re-parked a CONSUMED decision under a stale boundary.
+Consumption is now a COMPARE-AND-SWAP on `(boundary, awaiting_since)`
+inside the journal's per-run flock (`compare_and_clear_pending_decision`;
+`block_drive._consume_marker` is the one seat both consumption legs use),
+placed at the last read-only point of the resume leg so the LOSER runs no
+span and writes nothing — no watchdog stamp, no re-park, no queue wake, no
+`drive_attempts` charge (a lost race is the opposite of futility: the chain
+moved). Re-parking is the same swap in reverse (lands only into an EMPTY
+slot). Pinned by a deterministic two-thread barrier test on real files and
+real locks: against the pre-fix code the successor span runs twice.
+
+### Added — `wait-any-detached`: one held seat per fleet (plan §7, 2026-07-29)
+
+A drain pass over N running items held N chunked `wait-detached` relays.
+`wait-any-detached` (query, spec-only, pure read) watches a whole
+`targets` set of `{run_id, block?}` pairs on one cadence and returns the
+moment ANY resolves, naming which — with the full per-target snapshot
+(`still_running` is the only new literal) and `wait-detached`'s exact
+outcome vocabulary so the drain plan branches on the same strings. A
+target already resolved at the first poll returns immediately. The
+lease-identity helpers are IMPORTED from `wait-detached`, not forked;
+read-only-ness is pinned by byte-and-mtime inventory tests, and the verb
+joins `wait-detached` on the MCP blocking-verb refusal seam.
+
 ### Fixed — Phase 3 guards proven to fire (adversarial guards-fire review, 2026-07-29)
 
 The queue-drain plan's drivability formula and retry ceiling are now pinned

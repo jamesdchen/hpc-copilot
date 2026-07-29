@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**177 operations total**: 145 primitive atoms + 32 workflow atoms.
+**178 operations total**: 146 primitive atoms + 32 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (77)
+## `query` (78)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -94,6 +94,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`verify-relay`](../primitives/verify-relay.md) | ✓ | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-reproduction`](../primitives/verify-reproduction.md) | ✗ | filesystem | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-submitted`](../primitives/verify-submitted.md) | ✓ | ssh | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
+| [`wait-any-detached`](../primitives/wait-any-detached.md) | ✓ | _none_ | `hpc-agent wait-any-detached --spec <path>` | `_(none)_` | — | — |
 | [`wait-detached`](../primitives/wait-detached.md) | ✓ | _none_ | `hpc-agent wait-detached --spec <path>` | `_(none)_` | — | — |
 | [`walk-submit-ambiguities`](../primitives/walk-submit-ambiguities.md) | ✓ | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` | `_(none)_` | — | — |
 | [`worker-log-digest`](../primitives/worker-log-digest.md) | ✓ | _none_ | `hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

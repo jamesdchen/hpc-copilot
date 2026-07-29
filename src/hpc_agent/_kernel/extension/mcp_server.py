@@ -608,7 +608,7 @@ _DETACH_REQUIRED_VERBS = frozenset(
 # whole wait (proving-run-3 head-of-line class). The MCP-safe alternatives are
 # named in the refusal: ``poll-detached`` for an instant snapshot, or running
 # ``wait-detached`` via backgrounded Bash OUTSIDE this server.
-_BLOCKING_WAIT_VERBS = frozenset({"wait-detached"})
+_BLOCKING_WAIT_VERBS = frozenset({"wait-detached", "wait-any-detached"})
 
 # Blocking WORKFLOW verbs whose spec has NO ``detach`` escape hatch (unlike the
 # ``_DETACH_REQUIRED_VERBS``, whose specs carry ``detach``). Each is a

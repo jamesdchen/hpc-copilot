@@ -50,7 +50,8 @@ from hpc_agent.infra import block_chain
 from hpc_agent.infra.time import parse_iso_utc_or_none
 from hpc_agent.ops import field_ownership
 from hpc_agent.state.journal import (
-    clear_pending_decision,
+    compare_and_clear_pending_decision,
+    compare_and_repark_pending_decision,
     mark_pending_decision,
     read_pending_decision,
 )
@@ -954,6 +955,101 @@ def _commit_fused_approval(experiment_dir: Path, approve: dict[str, Any]) -> Non
     _journal_append(experiment_dir=experiment_dir, spec=spec)
 
 
+# ── S8: the double-driver compare-and-swap ─────────────────────────────────────
+#
+# Two drivers tick the same parked run concurrently BY DESIGN (run-queue plan §7:
+# the main session's inline first tick plus the auto-launched drain pass). Both
+# read the SAME pending marker before either clears it, both find the SAME
+# committed greenlight, and — with a blind ``clear_pending_decision`` — both ran
+# the successor span: one cleared the marker, the other re-parked it, resurrecting
+# a CONSUMED decision under a stale boundary and double-consuming the human's
+# ``y`` (plan §8 S8). The fix is the plan's own stated resolution: make the
+# consumption a COMPARE-AND-SWAP on ``(boundary, awaiting_since)`` under the
+# journal's per-run flock (``state/journal.compare_and_clear_pending_decision`` —
+# ONE definition, the same locked-RMW precedent ``stamp_drive_attempt`` uses), and
+# give the loser a benign disclosed outcome instead of a second span.
+
+
+def _consume_marker(experiment_dir: Path, run_id: str, pending: dict[str, Any]) -> bool:
+    """CAS-consume the parked marker THIS tick read; ``False`` when another driver won.
+
+    The ONE consumption seat: every leg that clears a marker in order to run a
+    successor span (:func:`run_tick`'s greenlight resume and
+    :func:`_consume_parked_boundary_under_consent`'s standing-consent auto-advance)
+    goes through here, so the atomicity cannot hold on one leg and not the other.
+    ``True`` means this tick atomically turned the marker it READ into an empty
+    slot — it owns the successor span. ``False`` means the ``(block,
+    awaiting_since)`` pair on disk is no longer the pair this tick read: another
+    driver consumed the boundary (or re-parked a newer one) in the window between
+    this tick's read and its clear.
+    """
+    return compare_and_clear_pending_decision(
+        run_id,
+        block=pending.get("block"),
+        awaiting_since=pending.get("awaiting_since"),
+        experiment_dir=experiment_dir,
+    )
+
+
+def _lost_the_consume_race(
+    *,
+    run_id: str,
+    workflow: str | None,
+    current_verb: str | None,
+    next_verb: str | None,
+) -> tuple[BlockDriveResult, int]:
+    """The LOSER's benign, disclosed outcome after a lost consumption CAS (§8 S8).
+
+    Every property the loser must have, and where it comes from:
+
+    * **no successor span** — this returns BEFORE :func:`_chain`, so nothing is
+      dispatched and nothing the winner's span writes is written twice (the CAS
+      sits at the marker clear, which precedes every write the resume leg makes:
+      the span itself, its ``_stamp_driver_tick`` watchdog stamp, and any park);
+    * **no re-park** — no ``on_first_failure`` is installed, so the consumed
+      decision is never resurrected;
+    * **no raise** — losing a race the design creates is not an error; the exit
+      code is 0 and the envelope stays ``ok``;
+    * **not awaiting** — the boundary's decision WAS consumed, so reporting
+      ``awaiting_decision`` (or carrying the parked brief) would re-surface a
+      brief the human already answered.
+
+    ACTION CLASSIFICATION (deliberate — the drive_attempts budget reads it).
+    ``skip`` and ``awaiting_decision`` are the two outcomes
+    :func:`~hpc_agent.state.journal.stamp_drive_attempt` charges as futile, and
+    they are charged because they are the two SPINS a drain pass must stop
+    relaying — a tick that moved nothing. A lost CAS is the opposite: the chain
+    DID move past this boundary in this instant, by the other driver, and the
+    concurrency that produced it is a design property of every ``y`` (plan §7),
+    not a wedge. Charging it would let N concurrent drivers on a perfectly
+    healthy run burn the item's retryable(n) budget and drop it from the drain.
+    So the tick reports ``advanced`` — the boundary advanced — and the ``reason``
+    discloses WHO advanced it, which is the channel the drain plan already logs
+    and relays. The vocabulary is NOT widened: a new literal would need the same
+    progress classification, plus schema / plan-command churn, to carry
+    information the reason string already carries, and the drain's
+    ``advanced / reran / chained`` branch already does the right thing with it —
+    tick again, so the NEXT tick reads the winner's fresh state (its new park,
+    its terminal) rather than this tick guessing at it.
+    """
+    return (
+        BlockDriveResult(
+            action="advanced",
+            run_id=run_id,
+            workflow=workflow,
+            current_verb=current_verb,
+            next_verb=next_verb,
+            reason=(
+                f"another driver advanced {current_verb or 'this boundary'} first — the "
+                "committed greenlight was consumed by a concurrent tick (compare-and-swap "
+                "on the pending marker lost). This tick ran no span and left the journal "
+                "untouched; re-read status for the winner's position."
+            ),
+        ),
+        0,
+    )
+
+
 # ── the tick ───────────────────────────────────────────────────────────────────
 
 
@@ -1086,7 +1182,10 @@ def run_tick(
         )
 
     # Executable resume actions consumed the approved ``resolved`` — clear the
-    # pending marker before running so a re-entry does not double-consume it.
+    # pending marker before running so a re-entry does not double-consume it. The
+    # clear is a COMPARE-AND-SWAP on the marker's ``(block, awaiting_since)``
+    # (:func:`_consume_marker`, §8 S8), so a CONCURRENT driver cannot also consume
+    # it: sequential re-entry and parallel re-entry are closed by the same seat.
     # If the FIRST resumed span then FAILS, the approval was NOT consumed: the
     # marker is re-parked verbatim (see :func:`_chain`'s ``on_first_failure``)
     # so the next tick retries the SAME route instead of replaying the resume
@@ -1159,7 +1258,26 @@ def run_tick(
 
     on_first_failure: Callable[[], None] | None = None
     if pending and resume_action and run_id:
-        clear_pending_decision(run_id, experiment_dir=experiment_dir)
+        # S8 COMPARE-AND-SWAP: consume the marker THIS tick read, atomically. A
+        # concurrent driver (the inline first tick vs the drain pass — two by
+        # design at every ``y``) that already consumed this boundary makes the
+        # swap fail; this tick then runs NO span, writes NOTHING, and reports the
+        # benign "advanced by another driver" disclosure. This is the LAST
+        # read-only point on the resume leg: every write below it (the span, its
+        # watchdog stamp, the next park) is downstream of the swap.
+        if not _consume_marker(experiment_dir, run_id, pending):
+            _log.info(
+                "block-drive: lost the pending-marker CAS for %s at %s — another "
+                "driver consumed the greenlight; running no span",
+                run_id,
+                plan.get("current_verb"),
+            )
+            return _lost_the_consume_race(
+                run_id=run_id,
+                workflow=plan.get("workflow") or workflow,
+                current_verb=plan.get("current_verb"),
+                next_verb=plan.get("next_verb") or plan.get("verb"),
+            )
         marker = dict(pending)
         rid = run_id
 
@@ -1358,18 +1476,34 @@ def _chain(
 
         # No decision, no successor → a clean terminal.
         if successor is None:
-            return (
-                BlockDriveResult(
-                    action="terminal",
-                    run_id=run_id or None,
-                    workflow=workflow,
-                    current_verb=verb,
-                    next_verb=None,
-                    stage_reached=stage,
-                    reason=result.get("reason") or f"{verb} reached a terminal — chain complete",
-                ),
-                0,
+            terminal = BlockDriveResult(
+                action="terminal",
+                run_id=run_id or None,
+                workflow=workflow,
+                current_verb=verb,
+                next_verb=None,
+                stage_reached=stage,
+                reason=result.get("reason") or f"{verb} reached a terminal — chain complete",
             )
+            # CHAIN-DISPATCH — the run queue's wake edge (run-queue plan §5).
+            # This driver is the one the ``queue-drain`` plan relays per drivable
+            # item, so a queue item that parked for a greenlight retires HERE
+            # rather than inside a campaign-run child; instrumenting only that
+            # child would leave the whole post-park drain un-woken.
+            #
+            # Built the result FIRST, then chain: the tick's settlement is the
+            # block spans' own durable state plus this record, and both exist
+            # before the wake runs. ``chain_dispatch_on_retire`` never raises,
+            # returns ``None`` for an experiment with no intake ledger (one
+            # stat), and decides retirement with the ONE ``run_occupies``
+            # predicate — a terminal SPAN is not automatically a retired RUN.
+            # Exactly one call per tick: the loop returns here.
+            from hpc_agent.ops.queue.chain import chain_dispatch_on_retire
+
+            terminal.queue_chain = chain_dispatch_on_retire(
+                experiment_dir, run_id=run_id or None, origin="block-drive"
+            )
+            return (terminal, 0)
 
         # A greenlight-GATED successor (block_chain.is_gated is the SoT): an
         # in-code chain never journals the human ``y`` the gate requires, so PARK
@@ -1566,13 +1700,32 @@ def _consume_parked_boundary_under_consent(
     overnight = _consume_overnight(experiment_dir, run_id, gated_next)
     if overnight is None or not overnight.consumed:
         return None
+    # S8 COMPARE-AND-SWAP (same seat as the greenlight resume): a standing consent
+    # is consulted by EVERY driver ticking this run, so two of them reach this line
+    # for the same parked boundary. Only the tick that atomically consumes the
+    # marker it read runs the span; the loser gets the benign disclosure. The
+    # consent ledger's own write above is idempotent per (boundary, spec identity)
+    # — ``consume_boundary_under_consent`` short-circuits on ``_already_consumed``
+    # — so a loser adds no second audit line to the morning brief.
+    if not _consume_marker(experiment_dir, run_id, pending):
+        _log.info(
+            "block-drive: lost the pending-marker CAS for %s at the parked %s boundary "
+            "(standing-consent leg) — another driver advanced it",
+            run_id,
+            gated_next,
+        )
+        return _lost_the_consume_race(
+            run_id=run_id,
+            workflow=(pending.get("workflow") or workflow),
+            current_verb=parked_block if isinstance(parked_block, str) else None,
+            next_verb=gated_next,
+        )
     _log.info(
         "overnight consent for %s consumed the parked %s greenlight on the resume path "
         "— auto-advancing (F12)",
         run_id,
         gated_next,
     )
-    clear_pending_decision(run_id, experiment_dir=experiment_dir)
     marker = dict(pending)
 
     def _repark() -> None:
@@ -1903,11 +2056,19 @@ def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) ->
     SAME route (a nudge's ``rerun`` stays a rerun) instead of degrading to a
     journal-derived ``advance``. A missing run record is logged, not raised —
     the tick is already on its failure path and must still report it.
+
+    S8: the re-write is itself a COMPARE-AND-SWAP (:func:`compare_and_repark_pending_decision`)
+    that expects the slot to still be EMPTY. A blind re-park is the second half of
+    the double-driver hazard the plan names — it can RESURRECT a boundary another
+    driver consumed and moved past while this span was failing, re-parking a
+    decision that no longer exists. When the swap is refused the newer marker
+    wins and this tick's stale one is dropped (logged, never raised: the tick is
+    already reporting a failed span).
     """
     brief = marker.get("brief")
     cursor = marker.get("resume_cursor")
     try:
-        mark_pending_decision(
+        reparked = compare_and_repark_pending_decision(
             run_id,
             block=marker.get("block") or "",
             workflow=marker.get("workflow") or "",
@@ -1919,6 +2080,13 @@ def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) ->
         )
     except OSError:
         _log.warning("failed to re-park the pending marker for %s after a failed span", run_id)
+        return
+    if not reparked:
+        _log.info(
+            "not re-parking %s after the failed span — another driver already parked a "
+            "newer boundary; the stale marker is dropped rather than resurrected (S8)",
+            run_id,
+        )
 
 
 def _latest_committed_resolved(

@@ -147,3 +147,15 @@ class BlockDriveResult(BaseModel):
         default="",
         description="Human-readable one-line summary of the tick's outcome.",
     )
+    queue_chain: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The run queue's WAKE EDGE, as data: what the CHAIN-DISPATCH hook did "
+            "after a `terminal` tick (ops/queue/chain.py; run-queue plan §5 'a run "
+            "finishing IS the moment to re-tick the queue'). Null on every non-"
+            "terminal action and whenever the experiment has no intake ledger. "
+            "Otherwise {chained, run_id, origin, reason} plus {stage_reached, "
+            "dispatched, refused} when a queue-dispatch tick ran, or {error} when it "
+            "failed. Pure disclosure — a failed wake never changes the tick's action."
+        ),
+    )

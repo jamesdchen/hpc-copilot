@@ -270,6 +270,15 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "audit-handoff",
         "verify-relay",
         "wait-detached",
+        # wait-any-detached (run-queue-placement-2026-07-28 §7): the FLEET waiter
+        # — one held seat for N detached workers instead of one wait-detached
+        # relay per run. Spec-taking query; failure_features attaches at the
+        # shared dispatch seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
+        # Its input schema (wait_any_detached.input.json) is baked in the same
+        # commit, so it also appears in the schema-file-parametrized remediation
+        # probes ({} is invalid — a non-empty targets list is required — so the
+        # probe refuses at the wire boundary, before any lease read).
+        "wait-any-detached",
         # poll-detached (packages swarm, memo §2): the instant, non-blocking
         # snapshot of a detached worker — the MCP-safe sibling of wait-detached.
         # Spec-taking query; failure_features attaches at the shared dispatch

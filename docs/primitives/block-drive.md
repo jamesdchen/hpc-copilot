@@ -64,7 +64,11 @@ stage_reached, brief, reason}`, where `action` ∈ `awaiting_decision` · `advan
   `resolved` spec and routed by identity (`cmd_sha`) + field→stage ownership
   (`ops/field_ownership.py`, §4): unchanged → advance to the code-determined
   successor; changed field owned by the current block → re-run it; changed field
-  owned downstream → advance carrying the edit.
+  owned downstream → advance carrying the edit. `advanced` is ALSO what a tick
+  that LOST the consumption compare-and-swap reports — a concurrent driver
+  consumed this boundary first, so this tick ran no span; the `reason` names the
+  other driver and a fresh status read shows the winner's position (see
+  Idempotency).
 - **`chained`** — a deterministic span with no decision point ran and the tick
   continued to the next span in code.
 - **`detached`** — a scheduler-bound span spawned a detached child; the tick
@@ -85,7 +89,24 @@ data / NL" invariant at the rendezvous (§3).
 Idempotent on `run_id`. Re-running re-reads durable state: an un-consumed
 greenlight is consumed once; an uncommitted decision point re-exits with the same
 brief; a terminal chain is a no-op. Re-arming loses nothing — the same discipline
-that makes the recovery machine (`doctor`, watchdog) safe. Each executed span
+that makes the recovery machine (`doctor`, watchdog) safe.
+
+**Consumption is a compare-and-swap, so "consumed once" holds under CONCURRENT
+drivers too** (run-queue plan §8 S8). Two drivers tick the same parked run at
+every `y` by design — the main session's inline first tick and the auto-launched
+drain pass — and both read the same pending marker before either clears it. The
+tick therefore consumes the marker through
+`state/journal.compare_and_clear_pending_decision`: inside the journal's per-run
+flock it verifies the marker on disk is still the `(block, awaiting_since)` pair
+this tick read, and only then clears it. Exactly one driver wins and runs the
+successor span. The loser runs no span, writes nothing (the swap sits ahead of
+every write the resume leg makes — the span, its watchdog stamp, the next park),
+never re-parks the consumed decision, and never raises: it returns `advanced`
+with a `reason` naming the other driver, so a drain pass re-reads status instead
+of being charged a futile tick. The F14 failed-span re-park is the same swap in
+reverse (`compare_and_repark_pending_decision`, which only lands in an empty
+slot), so a stale marker can never resurrect a boundary another driver already
+consumed and moved past. Each executed span
 stamps the dead-man's-switch (`last_tick_at` / `next_tick_due`); the pending
 marker flips the `doctor` read from "stalled — re-arm?" to "awaiting your decision
 since T" so a parked driver never false-alarms (§5, parked ≠ stalled).
