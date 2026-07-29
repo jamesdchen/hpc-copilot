@@ -76,25 +76,61 @@ const STEPS = [
 ]
 const STEP = (id) => STEPS.find((s) => s.id === id)
 
-// Rule-fixed commands. block-drive and wait-detached are workflow/query
-// verbs relayed under rule 5: pure authored templates, specs heredoc'd to
-// mktemp files, nothing model-composed.
-const specRun = (repo, verb, spec) =>
-  `SPEC=$(mktemp) && printf '%s' '${JSON.stringify(spec)}' > "$SPEC" && hpc-agent ${verb} --spec "$SPEC" --experiment-dir ${repo}`
+// ── The RELAY TABLE ─────────────────────────────────────────────────────────
+// Every CLI invocation this plan issues is rendered from exactly one row here,
+// so what the plan RUNS and what the contract test VALIDATES cannot drift.
+// `flags` is the flag set that verb's argparse subparser ACTUALLY declares —
+// nothing wider. That is the whole point: `wait-detached`'s CliShape sets
+// `experiment_dir_arg=False`, so it takes only `--spec`, and the shipped plan
+// appended `--experiment-dir` to EVERY relayed verb unconditionally. Every
+// relayed wait therefore exited rc=2 on argparse's "unrecognized arguments"
+// and every detached block parked as `wait_failed` (fixed 2026-07-29).
+//
+// Strict JSON on purpose: tests/contracts/test_workflow_plan_commands.py
+// json.loads this literal, materializes each row into an argv, and parses it
+// with the REAL argparse tree (hpc_agent.cli.parser.build_parser) — an
+// unsupported or missing flag fails the suite instead of shipping.
+const RELAYS = {
+  "blockDrive": { "verb": "block-drive", "flags": ["spec", "experiment-dir"] },
+  "waitDetached": { "verb": "wait-detached", "flags": ["spec"] }
+}
+
+// One renderer per declared flag: the table names WHICH flags a verb takes,
+// this names how each is spelled. A flag with no renderer is a plan bug and
+// throws in validatePlan(), before anything dispatches.
+const FLAG_RENDER = {
+  spec: () => '--spec "$SPEC"',
+  'experiment-dir': ({ repo }) => `--experiment-dir ${repo}`,
+}
+
+// Rule-fixed command rendering. block-drive and wait-detached are
+// workflow/query verbs relayed under rule 5: pure authored templates, specs
+// heredoc'd to mktemp files, nothing model-composed.
+const relayCommand = (key, inputs, spec) => {
+  const relay = RELAYS[key]
+  const flags = relay.flags.map((flag) => FLAG_RENDER[flag](inputs)).join(' ')
+  return `SPEC=$(mktemp) && printf '%s' '${JSON.stringify(spec)}' > "$SPEC" && hpc-agent ${relay.verb} ${flags}`
+}
 
 const COMMANDS = {
-  blockDrive: ({ repo, runId, workflow }) =>
-    specRun(repo, 'block-drive', workflow ? { run_id: runId, workflow } : { run_id: runId }),
+  blockDrive: (inputs) =>
+    relayCommand(
+      'blockDrive',
+      inputs,
+      inputs.workflow ? { run_id: inputs.runId, workflow: inputs.workflow } : { run_id: inputs.runId }
+    ),
   // timeout_sec 480 keeps each relayed wait comfortably under the harness's
   // ~10-min command bound (fable-sweep 2026-07-29: the CLI's 7200s default
   // would be KILLED by the harness before it could even report its own
   // timeout, parking every real detached block as wait_failed). The chunk
   // loop in the adapter re-arms until terminal or maxWaitChunks.
-  waitDetached: ({ repo, runId, block }) =>
-    specRun(
-      repo,
-      'wait-detached',
-      block ? { run_id: runId, block, timeout_sec: 480 } : { run_id: runId, timeout_sec: 480 }
+  waitDetached: (inputs) =>
+    relayCommand(
+      'waitDetached',
+      inputs,
+      inputs.block
+        ? { run_id: inputs.runId, block: inputs.block, timeout_sec: 480 }
+        : { run_id: inputs.runId, timeout_sec: 480 }
     ),
 }
 
@@ -142,6 +178,19 @@ const validatePlan = () => {
     state[id] = 2
   }
   for (const s of STEPS) visit(s.id)
+  // The relay table is plan data too: a row with no verb, or a flag with no
+  // renderer, must fail at load time rather than render a malformed command.
+  for (const key of Object.keys(RELAYS)) {
+    const relay = RELAYS[key]
+    if (!relay || typeof relay.verb !== 'string' || !relay.verb) problems.push(`RELAYS.${key}: no verb`)
+    if (!relay || !Array.isArray(relay.flags)) {
+      problems.push(`RELAYS.${key}: flags must be an array`)
+      continue
+    }
+    for (const flag of relay.flags) {
+      if (typeof FLAG_RENDER[flag] !== 'function') problems.push(`RELAYS.${key}: flag '${flag}' has no FLAG_RENDER entry`)
+    }
+  }
   if (problems.length) throw new Error(`campaign-run plan invalid:\n${problems.join('\n')}`)
 }
 
@@ -169,17 +218,44 @@ const runWithRetry = async (id, promptInputs, opts) => {
   return null
 }
 
-// The tick's JSON payload, parsed defensively: the relay carries
-// stdout+stderr verbatim, so the payload is the last JSON object line.
-const parseTick = (output) => {
-  for (const line of output.split('\n').reverse()) {
+// ── The ENVELOPE reader ─────────────────────────────────────────────────────
+// The CLI's stdout is ONE envelope line, never a bare result
+// (hpc_agent/cli/_helpers.py): `{"ok": true, "idempotent": ..., "data": {...}}`
+// on success, `{"ok": false, "error_code": ..., "message": ...}` on refusal.
+// The PAYLOAD is the envelope's `data` member.
+//
+// The shipped plan returned the whole envelope here and the loop then read
+// `tick.action` / `tick.brief` / `payload.outcome` off the envelope ROOT — all
+// undefined, always, so `awaiting_decision` / `terminal` / `detached` never
+// matched and every tick fell through to "advance, tick again" until the tick
+// budget ran out. The park branches could not fire (fixed 2026-07-29). Every
+// envelope in this plan is read through THIS function and nowhere else; the
+// contract test pins that (one JSON.parse site, unwrapping `data`, branching
+// on `ok`) against the envelope Python actually emits.
+//
+// Parsed defensively: the relay carries stdout+stderr verbatim, so the envelope
+// is the last parseable JSON object line. Returns {ok, data, error} or null
+// when no envelope line is present at all.
+const parseEnvelope = (output) => {
+  for (const line of String(output || '').split('\n').reverse()) {
     const t = line.trim()
-    if (t.startsWith('{') && t.endsWith('}')) {
-      try {
-        return JSON.parse(t)
-      } catch {
-        // keep scanning — an earlier line may hold the payload
+    if (!t.startsWith('{') || !t.endsWith('}')) continue
+    let env
+    try {
+      env = JSON.parse(t)
+    } catch {
+      continue // keep scanning — an earlier line may hold the envelope
+    }
+    if (env === null || typeof env !== 'object') continue
+    if (env.ok === false) {
+      return {
+        ok: false,
+        data: null,
+        error: { error_code: env.error_code || null, message: env.message || null },
       }
+    }
+    if (env.ok === true && env.data !== null && typeof env.data === 'object') {
+      return { ok: true, data: env.data, error: null }
     }
   }
   return null
@@ -207,11 +283,25 @@ for (let i = 0; i < maxTicks; i++) {
       last_output: relay ? relay.output : '(tick relay agent died)',
     }
   }
-  const tick = parseTick(relay.output)
-  if (!tick) {
+  const parsed = parseEnvelope(relay.output)
+  if (!parsed) {
     phase('Park')
     return { action: 'tick_unparseable', ticks: ticks.length, last_output: relay.output }
   }
+  if (!parsed.ok) {
+    // An `ok:false` envelope is a REFUSAL the kernel stated, not a crash. It can
+    // arrive on exit code 0's sibling paths, so it is branched explicitly rather
+    // than falling through as an empty tick.
+    phase('Park')
+    return {
+      action: 'tick_refused',
+      ticks: ticks.length,
+      error_code: parsed.error.error_code,
+      reason: parsed.error.message,
+      last_output: relay.output,
+    }
+  }
+  const tick = parsed.data
   ticks.push({ action: tick.action, verb: tick.current_verb || tick.next_verb || null })
 
   if (tick.action === 'awaiting_decision') {
@@ -243,9 +333,9 @@ for (let i = 0; i < maxTicks; i++) {
     // the harness's ~10-min command bound). The chunk index in the label
     // keeps every chunk a DISTINCT engine call — identical (prompt, opts)
     // would collide in the resume cache. A 'timeout' outcome logs a
-    // heartbeat and re-arms; any other outcome (terminal, worker exit,
-    // no-live-worker) breaks to the next tick, which reads the journal
-    // truth — the plan never interprets the wait, it only paces it.
+    // heartbeat and re-arms; the other two outcomes wait-detached declares
+    // ('worker_exited', 'no_live_worker') break to the next tick, which reads
+    // the journal truth — the plan never interprets the wait, it only paces it.
     let resolved = false
     for (let chunk = 1; chunk <= maxWaitChunks; chunk++) {
       const wait = await runWithRetry(
@@ -261,8 +351,8 @@ for (let i = 0; i < maxTicks; i++) {
           last_output: wait ? wait.output : '(wait relay agent died)',
         }
       }
-      const payload = parseTick(wait.output)
-      if (payload && payload.outcome === 'timeout') {
+      const waited = parseEnvelope(wait.output)
+      if (waited && waited.ok && waited.data.outcome === 'timeout') {
         log(`tick ${i + 1}: wait chunk ${chunk}/${maxWaitChunks} — still detached at ${block || '?'}`)
         continue
       }
@@ -275,7 +365,8 @@ for (let i = 0; i < maxTicks; i++) {
     }
     continue
   }
-  // advance / advance_carrying / fresh / rerun / skip: tick again
+  // advanced / reran / chained / skip (BlockDriveResult.action's remaining
+  // members): tick again
   log(`tick ${i + 1}: ${tick.action}${tick.current_verb ? ' @ ' + tick.current_verb : ''}`)
 }
 

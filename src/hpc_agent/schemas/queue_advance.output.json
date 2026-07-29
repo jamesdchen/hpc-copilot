@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_advance.output.json",
+  "title": "queue-advance output data",
+  "description": "The DECISION — placements, holds, and the disclosure that carries them.",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "decision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The single instant the decision was computed against (ISO-8601 UTC).",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "decision": {
+      "description": "The call's top-level outcome: 'place' when at least one placement was decided, 'hold' when items are queued but none could be placed, 'empty' when nothing was queued at all. Three states, not two, because 'nothing to do' and 'something to do that I refused to guess at' are opposite situations for the human.",
+      "enum": [
+        "place",
+        "hold",
+        "empty"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "placements": {
+      "description": "The decided placements, at most ``max_placements``, in the order they should be dispatched. A DECISION, not an action: this verb writes nothing (R3) — the actor consumes it.",
+      "items": {
+        "$ref": "#/$defs/QueuePlacement"
+      },
+      "title": "Placements",
+      "type": "array"
+    },
+    "held": {
+      "description": "Every item that stays queued, each with its disclosed reason (R4). Never elided.",
+      "items": {
+        "$ref": "#/$defs/QueueHoldback"
+      },
+      "title": "Held",
+      "type": "array"
+    },
+    "held_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "reason_code -> count over ``held``. The pre-aggregated numbers a morning brief renders ('3 items waiting on gpu capacity') so no consumer has to re-derive them and risk a different total.",
+      "title": "Held Counts",
+      "type": "object"
+    },
+    "queued_total": {
+      "default": 0,
+      "description": "How many items were in state 'queued' and in scope when the decision was computed.",
+      "title": "Queued Total",
+      "type": "integer"
+    },
+    "considered_clusters": {
+      "description": "The candidate cluster keys this call evaluated, after any ``clusters`` restriction. Disclosed because an empty or unexpectedly narrow candidate set is the likeliest cause of a surprising hold.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Considered Clusters",
+      "type": "array"
+    },
+    "occupancy": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "campaign_id -> occupied pool slots at decision time, from the ONE shared predicate ``state/queue_occupancy.occupied_slots`` (R9). The least-loaded input, published so the decision's arithmetic is checkable and so campaign-advance and queue-advance cannot come to different totals.",
+      "title": "Occupancy",
+      "type": "object"
+    },
+    "brief": {
+      "default": "",
+      "description": "The deterministic one-paragraph disclosure the session relays VERBATIM into the y — code-computed from the fields above, never authored. §3: the human's y covers the placement, so the placement has to be in front of them in the same breath as the question.",
+      "title": "Brief",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "QueueClusterVerdict": {
+      "additionalProperties": false,
+      "description": "Why ONE cluster was or was not eligible for ONE item.\n\nThe per-cluster evidence behind a hold. R4 says an item never disappears\nwithout a reason; a reason that says only \"nothing matched\" is a reason the\nhuman cannot act on, so the decision carries its work.",
+      "properties": {
+        "cluster": {
+          "description": "The clusters.yaml top-level key evaluated.",
+          "title": "Cluster",
+          "type": "string"
+        },
+        "eligible": {
+          "description": "True when this cluster satisfied every hard constraint.",
+          "title": "Eligible",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "The specific verdict — which constraint failed and against which configured value (e.g. 'walltime_sec 172800 > constraints.max_walltime 3:00:00'). Names WHICH walltime ceiling it compared, because clusters.yaml carries two that disagree by 8-16x (S11).",
+          "title": "Reason",
+          "type": "string"
+        },
+        "occupied": {
+          "default": 0,
+          "description": "Pool slots this cluster's campaign id already occupies, from the ONE shared predicate ``state/queue_occupancy.occupied_slots`` (R9). The least-loaded tie-break input, and a disclosed number rather than an inferred one — it counts OUR committed work, not the scheduler's queue.",
+          "title": "Occupied",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cluster",
+        "eligible",
+        "reason"
+      ],
+      "title": "queue-advance cluster verdict",
+      "type": "object"
+    },
+    "QueueHoldback": {
+      "additionalProperties": false,
+      "description": "One item that stays QUEUED, with the reason stated (R4).\n\nNever dropped, never guessed at. A held item is a normal outcome — under\n§7 R3 the queue's 'queued' state is almost entirely PRE-GATE (awaiting a y,\nconsent, or placement), not awaiting capacity.",
+      "properties": {
+        "item_id": {
+          "description": "The intake item held back.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "description": "The closed-vocabulary cause, so briefs can COUNT by cause ('3 items waiting on gpu capacity').",
+          "enum": [
+            "no_clusters_configured",
+            "cluster_pin_unknown",
+            "no_cluster_matches_constraints",
+            "courtesy_cap_reached",
+            "item_unresolved",
+            "batch_limit_reached"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The human-readable statement of the same cause, specific enough to act on.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "considered": {
+          "description": "Every cluster evaluated and why each was rejected — empty only when no cluster could be evaluated at all.",
+          "items": {
+            "$ref": "#/$defs/QueueClusterVerdict"
+          },
+          "title": "Considered",
+          "type": "array"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "description": "Structured particulars behind ``reason`` (the unknown pin and its near-miss suggestions, the cap and its current value, the asks that found no host). Machine-readable so a later tier can act on the hold without re-parsing prose.",
+          "title": "Detail",
+          "type": "object"
+        }
+      },
+      "required": [
+        "item_id",
+        "reason_code",
+        "reason"
+      ],
+      "title": "queue-advance holdback",
+      "type": "object"
+    },
+    "QueuePlacement": {
+      "additionalProperties": false,
+      "description": "One decided placement: this item, that cluster, and the disclosed why.\n\nThis is what §3 means by placement living INSIDE the y. The greenlight\nbinds to a spec and the spec names the cluster, so the brief must be able\nto say \"next: rv_sweep item 4 -> hoffman2 (carc at 2/2, item needs gpu)\" —\nevery token of which comes from this object.",
+      "properties": {
+        "item_id": {
+          "description": "The intake item this decision is about.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The item's COMPUTED run id when known (§10.S2) — the key a dispatcher claims on, and the key the occupancy predicate collapses onto.",
+          "title": "Run Id"
+        },
+        "cluster": {
+          "description": "The chosen clusters.yaml top-level key. Never guessed: absent a qualifying cluster the item is HELD instead.",
+          "title": "Cluster",
+          "type": "string"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The concrete ``<base>_<clusterkey>`` campaign id this placement implies, composed from the item's campaign_base and the chosen cluster key (campaign-multi-cluster.md §2). Null for an open-loop item. Composed, never parsed — a base routinely contains underscores, so splitting one back apart is a hazard.",
+          "title": "Campaign Id"
+        },
+        "scheduler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The chosen cluster's scheduler family, disclosed because it changes what the run can promise (S11: SGE cannot enforce the canary success-gate). Validated against the live backend registry.",
+          "title": "Scheduler"
+        },
+        "ssh_target": {
+          "anyOf": [
+            {
+              "pattern": "^[^@]+@[^@]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The chosen cluster's ``user@host`` as resolved from config AT DECISION TIME, for disclosure only. A run's recorded ssh_target is stale-by-design and re-resolved at use; nothing downstream should consume this field as the live target.",
+          "title": "Ssh Target"
+        },
+        "pinned": {
+          "default": false,
+          "description": "True when an explicit cluster pin decided this, not policy (R5). The brief must not present an operator's own choice back to them as the tool's recommendation.",
+          "title": "Pinned",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "The disclosed WHY, in one line, naming the deciding factor and the runner-up. This string is what the y is taken against, so it must state the actual rule that fired (pin / hard constraint elimination / least-loaded / alphabetical tie-break), never a summary of it.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "considered": {
+          "description": "Every cluster evaluated for this item, with its verdict — the evidence behind ``reason``, so a human can check the choice rather than trust it.",
+          "items": {
+            "$ref": "#/$defs/QueueClusterVerdict"
+          },
+          "title": "Considered",
+          "type": "array"
+        }
+      },
+      "required": [
+        "item_id",
+        "cluster",
+        "reason"
+      ],
+      "title": "queue-advance placement",
+      "type": "object"
+    }
+  }
+}

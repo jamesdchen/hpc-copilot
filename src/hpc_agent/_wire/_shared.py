@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 # ── identifiers ──────────────────────────────────────────────────────────────
 
@@ -278,6 +278,108 @@ OptimizationDirection = Literal["minimize", "maximize"]
 # in N iters'); 'prior_window' fires when it fails to beat the prior window of
 # equal size ('improvements have stalled').
 PlateauMode = Literal["prior_window", "all_time_best"]
+
+# ── run queue ────────────────────────────────────────────────────────────────
+
+# Intake ledger identifiers — the client-minted ``request_id`` (the append
+# dedup key, run-queue plan §10.S2 / §8 S12) and the ``item_id`` it becomes.
+# Same filesystem-safe character class as RunIdStrict because these ids are
+# quoted into briefs, compared by exact string, and used to DERIVE a
+# transition's append token (``<item_id>.placed``, state/queue_intake.
+# placement_request_id) and a lock filename; a UUID4 fits unchanged.
+# Semantically distinct from a run id, so it gets its own alias rather than
+# borrowing one. NOTE: an item id is deliberately NOT carried on the scheduler
+# side — the plan's §10.S2.5 sketch (stamp it into the job NAME) is refused by
+# the shipped backend contract, which caps SGE names at 15 chars and consumes
+# job_name byte-for-byte in log paths and canary naming
+# (``infra/backends/_engine.py::build_correlation_flags``). Cluster-side
+# identity rides the correlation token ``<run_id>#<attempt>`` instead.
+QueueItemId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$", min_length=1)]
+
+# The parameter-identity digest a resolve computes, and the pre-image of the
+# COMPUTED run id (``run_id = "<run_name>-<cmd_sha[:8]>"``). Lowercase hex,
+# 8..64 chars, matching the shape ``BuildSubmitSpecInput`` and
+# ``WriteRunSidecarInput`` already pin inline — those two predate this alias and
+# keep their inline pattern; new wire surfaces use the alias so the queue's copy
+# cannot be the one that drifts.
+CmdSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{8,64}$")]
+
+# The COMPLETE lifecycle vocabulary the intake ledger may store (run-queue plan
+# §7 R1, §8 S10): the item ARRIVED, and a cluster was CHOSEN for it. The absent
+# values are the point — "dispatched" / "parked" / "in-flight" / "terminal" are
+# PROJECTIONS computed at read time over the run stores (RunRecords, pending-
+# decision markers, the decision journal), never copied here. S10: an intake
+# ``dispatched`` would duplicate the shipped ``submitting`` RunRecord organ with
+# no write spanning both stores atomically. Python twin:
+# ``hpc_agent.state.queue_intake.INTAKE_STATES``.
+QueueItemState = Literal["queued", "placed"]
+
+
+class QueueResourceAsk(BaseModel):
+    """The TYPED resource ask carried by one queued item (run-queue plan §9).
+
+    §9 weighed free-form (opaque; policy reads known keys) against typed
+    (schema'd) and ruled TYPED: placement filters items against cluster caps,
+    and a filter over free-form keys silently drops an item whose author spelled
+    the key differently — the exact failure R4 forbids (never drop an item,
+    always disclose). Typed makes an unsupported ask a boundary refusal instead.
+
+    Every field is optional: "no ask" is a legitimate, common item, and it means
+    *every* cluster satisfies the hard-constraint leg. These are ASKS, not
+    guarantees — the scheduler remains the capacity authority (§7 R3), so
+    nothing here is inferred scheduler headroom.
+
+    Shared by all three queue verbs (the ask on the way in, the ask echoed by
+    the projection, the ask matched by placement), so it lives here rather than
+    in one verb's module — this file's stated job.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="queue item resource ask")
+
+    gpu: bool = Field(
+        default=False,
+        description=(
+            "True when the item needs a GPU at all. The coarse hard-constraint "
+            "leg: a cluster with no GPU partition cannot host it, and placement "
+            "must say so out loud rather than place and let the job die."
+        ),
+    )
+    gpu_type: GpuType | None = Field(
+        default=None,
+        description=(
+            "Optional specific GPU label the item requires (e.g. 'A100'). "
+            "Matched against a cluster's ``gpu_types``, which clusters.yaml "
+            "documents as INFORMATIONAL — treating it as a hard filter is a "
+            "deliberate promotion of the field, so any placement that used it "
+            "discloses that in its reason."
+        ),
+    )
+    cores: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional per-task core count the item needs. Null = unstated.",
+    )
+    walltime_sec: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional wall-clock the item needs, in seconds. Compared against a "
+            "cluster's walltime ceiling — clusters.yaml carries TWO that "
+            "disagree by 8-16x (top-level ``max_walltime_sec`` vs "
+            "``constraints.max_walltime``, S11), so a placement that used this "
+            "must name WHICH ceiling it compared against."
+        ),
+    )
+    est_core_hours: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Optional estimated total core-hours. Advisory: it feeds consent "
+            "budget accounting and the disclosed ordering, never a capacity "
+            "inference about the scheduler's queue (§7 R3)."
+        ),
+    )
+
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 

@@ -199,6 +199,19 @@ first two.
    resulting run sidecar), the next tick has to detect the orphan
    via `find_in_flight_runs` rather than via a driver-side journal.
    The state-on-disk discipline mostly absorbs this, but it's load-bearing.
+
+   The run queue's CHAIN-DISPATCH wake edge (`ops/queue/chain.py`;
+   `docs/plans/run-queue-placement-2026-07-28.md` §5) is deliberately NOT a
+   counter-example to this rule, and the distinction is worth stating because
+   the two look alike. A self-watchdog would have the driver make a promise
+   about a step it has not taken yet — which is exactly what a killed process
+   cannot keep. The wake edge instead fires AFTER the driver's terminal
+   settlement is already durable (`campaign_run`'s recorded terminal, or a
+   block-drive tick's spans), carries nothing across the boundary, and never
+   raises: a driver killed before it fires simply does not fire, and the queue
+   drains on the next retirement, drain pass, or human tick. So the
+   state-on-disk discipline still absorbs the kill — the chain adds a trigger,
+   not a promise.
 4. **Plugin worker prompts are first-write-wins.** `_procedure_body`
    picks the first plugin to provide a `worker_prompts/<name>.md`
    (via the `worker_prompt_assets` attribute); two plugins

@@ -341,6 +341,13 @@ _KERNEL_TO_OPS = DirectionalRule(
             # --approve), so every trust-seam gate fires identically to a
             # standalone append. Lazy-imported inside _commit_fused_approval.
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.decision.journal"),
+            # CHAIN-DISPATCH (run-queue plan §5): the drive loop is one of the two
+            # drivers that can land a queue-placed run's RETIREMENT, so its
+            # terminal return ticks the queue's actor once — the shipped
+            # self-chaining shape, not a new mechanism. Lazy-imported inside
+            # ``_chain``'s terminal branch; the helper never raises and returns
+            # ``None`` for an experiment with no intake ledger.
+            ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.queue.chain"),
             # Stop-hook / alert guards probe ops capability + notify helpers.
             ("_kernel/hooks/alert_count.py", "hpc_agent.ops.recover.notify"),
             (
@@ -490,6 +497,27 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("audit_preflight.py", "ops", "recover"),
         ("auto_resume_flow.py", "ops", "recover"),
         ("campaign_refill.py", "meta", "campaign"),
+        # run-queue §10.S3 (D5): campaign-refill became a LEDGER PRODUCER — each
+        # slot enqueues its resolved trial (ops/queue/run) and hands that item to
+        # the one dispatcher (ops/queue/dispatch) instead of submitting directly.
+        # Both reaches ARE declared as composes=["queue-run", "queue-dispatch"],
+        # but string-name composes are unresolvable to this AST pass, so they earn
+        # inventory entries (the cite_check.py precedent).
+        ("campaign_refill.py", "ops", "queue"),
+        # CHAIN-DISPATCH (run-queue plan §5): campaign-run is the driver
+        # queue-dispatch starts for every placed item, so its synchronous
+        # terminal step is where a queue-placed run RETIRES — and that is the
+        # moment to re-tick the queue. Deliberately NOT declared via
+        # ``composes=``: the wake edge is fire-and-forget disclosure, not part of
+        # the iteration's contract, and listing queue-dispatch as composed would
+        # claim the iteration depends on it.
+        ("campaign_run.py", "ops", "queue"),
+        # run-queue §3 + maintainer order 2026-07-29: the morning digest's
+        # ``queue`` paragraph relays queue-advance's rows/text verbatim (one
+        # authority, S13). Declared composes=["queue-advance"] on the
+        # status-snapshot decorator; string-name composes are unresolvable to
+        # this AST pass, so the reach earns its inventory entry.
+        ("status_blocks.py", "ops", "queue"),
         # cite-check composes verify-relay's extraction discipline: the number
         # grammar + faithful-render tolerance + false-positive consumers live in
         # ops/decision/journal/verify_relay (promoted public helpers, reused
@@ -529,6 +557,12 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("submit_blocks.py", "ops", "monitor"),
         ("submit_blocks.py", "ops", "recover"),
         ("submit_blocks.py", "ops", "submit"),
+        # crash-only-monitoring W1: the run-terminal sentinel job is announce-plane
+        # machinery (it writes the ops/monitor announce vocabulary's wake marker),
+        # so its helper lives in ops/monitor and the submit flow's role-root file
+        # reaches it here — the submit_blocks.py / resolve_submit_inputs.py
+        # precedent (functions, not primitives, so no composes= is resolvable).
+        ("submit_flow.py", "ops", "monitor"),
         ("submit_flow.py", "ops", "validate"),
         ("submit_pipeline.py", "ops", "validate"),
         ("supersession.py", "ops", "monitor"),

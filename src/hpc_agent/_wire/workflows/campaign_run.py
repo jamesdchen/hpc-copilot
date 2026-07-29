@@ -172,6 +172,20 @@ class CampaignRunResult(DetachedHandleFields):
             "or did not produce a clean result."
         ),
     )
+    queue_chain: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The run queue's WAKE EDGE, as data: what the CHAIN-DISPATCH hook did "
+            "after this iteration's terminal settled (ops/queue/chain.py; run-queue "
+            "plan §5 'a run finishing IS the moment to re-tick the queue'). Null "
+            "when the experiment has no intake ledger (no queue in use) and on the "
+            "`detached` handle (the parent retired nothing — its child chains). "
+            "Otherwise {chained, run_id, origin, reason} plus {stage_reached, "
+            "dispatched, refused} when a queue-dispatch tick ran, or {error} when it "
+            "failed. Pure disclosure: a failed wake NEVER affects this iteration's "
+            "outcome, which is already durable before the hook runs."
+        ),
+    )
     active_env_overrides: dict[str, str] = Field(
         default_factory=dict,
         description=(

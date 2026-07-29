@@ -40,6 +40,7 @@ __all__ = [
     "prune_old_runs",
     "prune_orphan_sidecars",
     "read_job_task_spans",
+    "read_run_cluster",
     "read_run_cmd_sha",
     "read_run_sidecar",
     "resolve_node_sha",
@@ -660,6 +661,25 @@ def read_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
     return str((sidecar or {}).get("cmd_sha") or "")
 
 
+def read_run_cluster(experiment_dir: Path, run_id: str) -> str | None:
+    """The run's placement identity (the sidecar's ``cluster`` key), or ``None``.
+
+    The third-identity-dimension read (run-queue plan §10.S1): consent-consuming
+    boundaries feed this to ``standing_consent_status``'s placement leg. ``None``
+    — not ``""`` — on an unreadable/absent sidecar or a pre-stamp record, because
+    the leg's contract is symmetric absent-disables
+    (:func:`state.placement_drift.detect_placement_drift`): an unprovable
+    placement keeps the leg OFF, exactly as an unprovable ``cmd_sha`` above
+    refuses a replay rather than faking one.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return None
+    cluster = (sidecar or {}).get("cluster")
+    return cluster if isinstance(cluster, str) and cluster else None
+
+
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
     """Return every run-sidecar ``.hpc/runs/<id>.json``, newest-first by mtime.
 
@@ -1119,6 +1139,45 @@ def update_run_sidecar_job_ids(
         return existing
 
     atomic_locked_update(target, _mutate)
+    return target
+
+
+def stamp_sentinel_job(experiment_dir: Path, run_id: str, *, job_id: str) -> Path | None:
+    """Record the run-terminal SENTINEL's scheduler job id on the run sidecar.
+
+    Crash-only-monitoring W1 (``docs/design/crash-only-monitoring.md``): the
+    sentinel is NOT a compute job, so its id is stamped as a SEPARATE
+    ``sentinel_job_id`` field — never appended to ``job_ids``. Every status
+    rollup (reconcile alive-checks, monitor batch status, kill) reads
+    ``job_ids``, and the run's compute-job accounting must stay byte-identical
+    whether or not a sentinel rode along; this field exists so a human (or the
+    doctor) can attribute the extra queue entry.
+
+    Best-effort by contract, mirroring :func:`stamp_canary_runtime`: the
+    sentinel is an optimization, never a correctness gate, so an absent sidecar
+    or any write error returns ``None`` and the caller simply proceeds — the
+    run's own accounting is already durable. Rewrites in place under the shared
+    sidecar lock, preserving every other field.
+    """
+    value = str(job_id).strip()
+    if not value:
+        return None
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        return None
+    from hpc_agent.infra.io import atomic_locked_update
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            # Vanished between the existence check and the lock — nothing to stamp.
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        existing["sentinel_job_id"] = value
+        return existing
+
+    try:
+        atomic_locked_update(target, _mutate)
+    except (OSError, FileNotFoundError):
+        return None
     return target
 
 

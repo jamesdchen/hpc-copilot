@@ -259,6 +259,25 @@
           "description": "Human-facing read, e.g. 'awaiting your decision since <awaiting_since>'. A parked driver is not stalled — doctor never proposes re-arming it.",
           "title": "Note",
           "type": "string"
+        },
+        "diagnosis": {
+          "default": "none",
+          "description": "POINTER to an attached park-time diagnosis dossier: 'attached (N proposed action(s), agent-authored, advisory) — <path>' when an investigator attached one (state/diagnosis), 'none' otherwise. A pointer + count only — the dossier content is display-only advisory matter the human reads from disk, never relayed here.",
+          "title": "Diagnosis",
+          "type": "string"
+        },
+        "diagnosis_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Path of the attached <run_id>.diagnosis.json dossier, or null when none.",
+          "title": "Diagnosis Path"
         }
       },
       "required": [

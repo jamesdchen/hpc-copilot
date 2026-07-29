@@ -52,6 +52,7 @@ construction (the ``harness_capabilities.py`` precedent).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,11 +62,17 @@ from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.decision_journal import read_decisions
+from hpc_agent.state.placement_drift import (
+    detect_placement_drift,
+    normalize_recorded_placement,
+    placement_cluster_caps,
+)
 
 __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
     "CONSENT_SCOPE_KINDS",
     "OVERNIGHT_CONSUMABLE_BLOCKS",
+    "OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE",
     "WAKE_KIND",
     "ConsentDecision",
     "ConsumptionOutcome",
@@ -74,13 +81,21 @@ __all__ = [
     "assert_consent_hard_caps",
     "compose_consent_defaults",
     "arm_consent_wake",
+    "campaign_placement_scope",
+    "campaign_current_placement",
+    "compose_consent_placement",
     "compose_overnight_consent",
+    "render_grant_line",
+    "regrant_offer",
+    "regrant_offer_from_status",
     "consumption_identity",
     "assert_consent_identity_binds",
     "latest_standing_consent",
     "standing_consent_status",
     "assert_standing_consent",
     "is_consumable_boundary",
+    "predecessor_terminal_clean",
+    "boundary_already_ledgered",
     "consume_boundary_under_consent",
     "overnight_ledger_path",
     "record_consumption",
@@ -120,16 +135,37 @@ OVERNIGHT_CONSUMED_BLOCK = "overnight-consumed"
 CONSENT_SCOPE_KINDS = frozenset({"run", "campaign"})
 
 # The block boundaries a standing consent of each scope kind may auto-advance
-# overnight (item 8 seam 1). A boundary NOT named here is NEVER consumed under a
-# consent, no matter how live — the two designated overnight boundaries are the
-# run's main-array launch (``submit-s3``, after the S2 canary verified) and the
-# campaign's anomaly halt (``campaign-watch``'s loud-fail terminator). Every
-# other gated boundary (``submit-s2`` stage/canary, ``submit-s4`` harvest,
-# ``aggregate-run`` reduce) always parks for a live human — a pre-consent cannot
-# launch a canary the human never saw or reduce results they never reviewed.
+# overnight (item 8 seam 1), UNCONDITIONALLY. A boundary named in neither this
+# set nor :data:`OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE` is NEVER consumed under a
+# consent, no matter how live. The two unconditional boundaries are the run's
+# main-array launch (``submit-s3``, after the S2 canary verified) and the
+# campaign's anomaly halt (``campaign-watch``'s loud-fail terminator).
+# ``submit-s2`` (stage/canary) always parks for a live human — the canary IS the
+# human's look, and it is the run's first cluster spend; no consent shape covers
+# it.
 OVERNIGHT_CONSUMABLE_BLOCKS: dict[str, frozenset[str]] = {
     "run": frozenset({"submit-s3"}),
     "campaign": frozenset({"campaign-watch"}),
+}
+
+# The boundaries a standing consent may auto-advance ONLY behind code-derived
+# evidence that the predecessor terminal was CLEAN (maintainer ruling
+# 2026-07-29, the Tier-3 rubber-stamp remover): the harvest (``submit-s4``)
+# after a main array that completed with no anomaly/timeout, and the reduce
+# (``aggregate-run``) after an ``aggregate-check`` that found nothing to
+# review. The pre-ruling posture ("a pre-consent cannot reduce results the
+# human never reviewed") survives in the CONDITION: every dirty path — a
+# partial, an anomaly, an integrity finding — emits a ``needs_decision`` park
+# BEFORE these boundaries are ever offered as successors, so what the consent
+# skips is exactly the rubber-stamp y on a clean terminal, never a review.
+# Interpretation still always parks: ``harvested`` / ``harvest_partial`` are
+# terminal decisions, not gated successors, and no consent consumes them.
+# ``clean_predecessor`` is CALLER-DERIVED CODE EVIDENCE (the in-hand
+# ``needs_decision=False`` result at the driver seat, the recorded predecessor
+# terminal, or a prior ledgered consumption of this same identity) — never an
+# agent-authored input; it defaults False, so absent evidence reads dirty.
+OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE: dict[str, frozenset[str]] = {
+    "run": frozenset({"submit-s4", "aggregate-run"}),
 }
 
 # The ONLY sanctioned cluster watch (the watch-rule amendment): a harness-tracked
@@ -245,6 +281,116 @@ def assert_wake_armed(
 # ── hard caps (item 8 pin c) + spec-identity binding (pin b) ──────────────────
 
 
+def _known_cluster_keys() -> set[str]:
+    """Cluster keys the ACTIVE ``clusters.yaml`` defines, or an empty set.
+
+    THE one read behind both halves of the placement leg's key check — the
+    record-time refusal below and the composer that must not hand it a value it
+    would refuse (:func:`compose_consent_placement`). One helper because the two
+    have to agree exactly: a composer working off a different notion of "known"
+    than the gate would either compose a value that cannot be recorded or drop
+    one that could.
+
+    Empty on ANY read failure, and the callers read that as "no evidence" rather
+    than "no clusters": the gate skips key validation, the composer composes.
+    An unreadable config is not proof a key is wrong.
+    """
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        clusters = load_clusters_config()
+    except Exception:  # noqa: BLE001 — unreadable config is not evidence of a bad key
+        return set()
+    if not isinstance(clusters, dict):
+        return set()
+    return {k for k in clusters if isinstance(k, str) and k}
+
+
+def _assert_placement_wellformed(placement_raw: Any) -> None:
+    """Refuse a placement-bound consent whose binding cannot actually bind (S1).
+
+    The write-side half of the placement leg's fail-open/fail-closed split:
+    CONSUMPTION is deliberately tolerant (absent/unusable disables the check —
+    the human is asleep, false-killing a consent is the forbidden direction),
+    so RECORD time must be strict — the human is awake and can fix a typo now.
+    Without this, a malformed shape (``{"cluster": "carc"}``) silently records
+    a consent the human THINKS is placement-bound but which the leg can never
+    fire on, and a typo'd key (``"hoffman"``) records a binding every real
+    placement mismatches — a guaranteed 3am ``placement-changed`` park this
+    refusal would have caught at grant time.
+
+    ``None`` passes untouched (a placement-blind consent is legitimate — every
+    pre-migration consent is one). Key validation is skipped when clusters.yaml
+    is unloadable: an unreadable config is not evidence the key is wrong, and
+    the shape refusal above it still holds. STRUCTURAL (never the
+    authorship-missing marker) — a fresh utterance cannot fix a malformed
+    record.
+
+    The ``{cluster: cap}`` mapping form (run-queue plan §3, Phase 2) gets the
+    same strict treatment on its cap values: each cluster's block may carry
+    only :data:`state.placement_drift.PLACEMENT_CAP_FIELDS`, each a positive
+    finite number. Consumption tolerantly DROPS a malformed cap
+    (``placement_cluster_caps``), so record time is the only moment a typo'd
+    cap field ("budget" for "budget_cap") can fail loudly instead of silently
+    granting uncapped spend on that cluster.
+    """
+    if placement_raw is None:
+        return
+    from hpc_agent.state.placement_drift import (
+        PLACEMENT_CAP_FIELDS,
+        normalize_recorded_placement,
+    )
+
+    placement = normalize_recorded_placement(placement_raw)
+    if placement is None:
+        raise errors.SpecInvalid(
+            "overnight-consent placement gate: resolved.placement is present but "
+            f"unusable ({placement_raw!r}) — it must be one cluster key, a "
+            "non-empty list of cluster keys, or a {cluster: {caps}} mapping "
+            "whose every value is a (possibly empty) mapping of caps. "
+            "Consumption would silently treat this consent as placement-blind "
+            "(the absent-disables rule), which is not what a present-but-broken "
+            "binding means. Fix the shape or drop the field."
+        )
+    if isinstance(placement_raw, dict):
+        for cluster, caps_raw in placement_raw.items():
+            unknown_fields = sorted(set(caps_raw) - set(PLACEMENT_CAP_FIELDS))
+            if unknown_fields:
+                raise errors.SpecInvalid(
+                    f"overnight-consent placement gate: resolved.placement[{cluster!r}] "
+                    f"carries unknown cap field(s) {unknown_fields} — the {{cluster: cap}} "
+                    f"vocabulary is exactly {list(PLACEMENT_CAP_FIELDS)}. Consumption "
+                    "drops what it cannot read, so an unrecognized field would silently "
+                    "grant uncapped spend on that cluster instead of the cap you typed."
+                )
+            for field in PLACEMENT_CAP_FIELDS:
+                if field in caps_raw and not _is_positive_number(caps_raw[field]):
+                    raise errors.SpecInvalid(
+                        f"overnight-consent placement gate: resolved.placement[{cluster!r}]"
+                        f".{field} ({caps_raw[field]!r}) is not a positive finite number. "
+                        "A cap that cannot bind is a cap consumption silently drops — "
+                        "fix the value or remove the field."
+                    )
+    known = _known_cluster_keys()
+    if not known:
+        return
+    unknown = [c for c in placement if c not in known]
+    if unknown:
+        import difflib
+
+        hints = {c: difflib.get_close_matches(c, sorted(known), n=1) for c in unknown}
+        hint_text = "; ".join(
+            f"{c!r} (did you mean {m[0]!r}?)" if m else repr(c) for c, m in hints.items()
+        )
+        raise errors.SpecInvalid(
+            f"overnight-consent placement gate: resolved.placement names cluster "
+            f"key(s) absent from clusters.yaml: {hint_text}. Known keys: "
+            f"{', '.join(sorted(known))}. A consent bound to a nonexistent key "
+            "mismatches EVERY real placement — it would park overnight with "
+            "placement-changed instead of failing loudly now, while you are awake."
+        )
+
+
 def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
     """Refuse a standing consent that lacks a ceiling or a spec-identity binding.
 
@@ -259,6 +405,9 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
       F15), so consumption can refuse on a spec change (:func:`standing_consent_status`).
       (``cmd_sha`` is exempt from the code-derived-field refusal — it is a
       journal-sanctioned identity echo — so it rides ``resolved`` legitimately.)
+    * ``placement`` (OPTIONAL, S1): when present it must be well-formed and name
+      real cluster keys — :func:`_assert_placement_wellformed`, the strict write
+      side of the consumption leg's deliberate fail-open.
 
     Raises :class:`errors.SpecInvalid` naming the missing leg. STRUCTURAL (never
     the authorship-missing marker) — a fresh utterance cannot supply a cap.
@@ -281,14 +430,20 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
             "not in the future — an already-expired consent grants nothing. Set the "
             "morning boundary ahead of now."
         )
+    # Shape first: a typo'd cap field must refuse with the placement gate's
+    # actionable message, not fall through to a generic "no ceiling" refusal
+    # that misdiagnoses a present-but-malformed cap as an absent one.
+    _assert_placement_wellformed(resolved.get("placement"))
     has_budget = _is_positive_number(resolved.get("budget_cap"))
     has_walltime = _is_positive_number(resolved.get("walltime_cap"))
-    if not (has_budget or has_walltime):
+    if not (has_budget or has_walltime) and not _every_cluster_capped(resolved.get("placement")):
         raise errors.SpecInvalid(
             "overnight-consent caps gate: a standing consent MUST carry at least one "
             "resource ceiling — resolved.budget_cap and/or resolved.walltime_cap "
-            "(a positive number). A consent that caps neither spend nor walltime "
-            "accepts unbounded overnight fallout."
+            "(a positive number), or a {cluster: cap} placement in which EVERY "
+            "named cluster carries a cap (a partially-capped map leaves the "
+            "uncapped cluster unbounded). A consent that caps neither spend nor "
+            "walltime accepts unbounded overnight fallout."
         )
     if not (isinstance(resolved.get("cmd_sha"), str) and resolved["cmd_sha"]):
         raise errors.SpecInvalid(
@@ -298,6 +453,24 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
             "compare the morning's spec against (run #11 correctly refused to carry a "
             "pre-y across a regenerated grid)."
         )
+
+
+def _every_cluster_capped(placement_raw: Any) -> bool:
+    """True when *placement_raw* is the ``{cluster: cap}`` form and EVERY cluster
+    carries at least one cap — the only per-cluster shape that satisfies the
+    ceiling requirement without a global cap.
+
+    A partially-capped map does NOT satisfy it: the uncapped cluster would be
+    unbounded, and "some of your clusters have ceilings" is not what the caps
+    gate promises. (Those consents still record fine WITH a global cap — the
+    per-cluster caps then tighten it per machine.)
+    """
+    from hpc_agent.state.placement_drift import placement_cluster_caps
+
+    if not isinstance(placement_raw, dict):
+        return False
+    caps = placement_cluster_caps(placement_raw)
+    return bool(caps) and all(cluster_caps for cluster_caps in caps.values())
 
 
 def _is_positive_number(val: Any) -> bool:
@@ -463,6 +636,151 @@ def arm_consent_wake(
     return out
 
 
+def _campaign_run_placements(experiment_dir: Path, campaign_id: str) -> list[tuple[str, str]]:
+    """``(submitted_at, cluster_key)`` for every run of *campaign_id*, oldest-first.
+
+    THE one read behind both campaign placement derivations below (§10.S1.4) —
+    one helper, one home, so the set a consent RECORDS and the key consumption
+    COMPARES can never disagree about where a campaign runs.
+
+    The cluster key comes off the run record's ``cluster`` stamp (the same field
+    :func:`state.queue_occupancy.occupancy_detail` reads), never from splitting
+    the campaign id apart: :func:`state.queue_occupancy.compose_campaign_id`
+    composes ``<base>_<cluster>`` and states outright that the composition is
+    COMPOSED and never parsed — campaign bases routinely contain underscores, so
+    a split would hand back a fragment of the base as a "cluster key" and the
+    record-time gate would refuse it as an unknown cluster (or, worse, a real
+    key that happens to match would bind the consent to the wrong machine).
+
+    Fail-open in the placement leg's own direction: any read surprise yields
+    ``[]``, so both derivations report "unknown" and the absent-disables rule
+    (:func:`state.placement_drift.detect_placement_drift`) keeps the leg OFF.
+    Never raises into a consent record or a consumption boundary.
+    """
+    try:
+        from hpc_agent.state.index import find_runs_by_campaign
+
+        records = find_runs_by_campaign(experiment_dir, campaign_id)
+    except Exception:  # noqa: BLE001 — a journal read must never wedge consent
+        return []
+    out: list[tuple[str, str]] = []
+    for record in records:
+        cluster = record.cluster
+        if isinstance(cluster, str) and cluster:
+            submitted = record.submitted_at
+            out.append((submitted if isinstance(submitted, str) else "", cluster))
+    return out
+
+
+def campaign_placement_scope(experiment_dir: Path, campaign_id: str) -> list[str]:
+    """The cluster keys a campaign SPANS — its recorded ``placement_scope`` (S1.4).
+
+    The campaign-scope analog of a run's single ``cluster`` stamp: a campaign may
+    legitimately span several clusters (dynamic split is the point of §4), and
+    :func:`state.placement_drift.detect_placement_drift` compares by MEMBERSHIP
+    over a set precisely so a multi-cluster campaign does not park on every
+    placement swing. Sorted + deduped (the shape
+    :func:`state.placement_drift.normalize_recorded_placement` normalizes to
+    anyway, so the recorded value reads the same as the compared one).
+
+    Empty when the campaign has no runs yet (or none carry a cluster stamp) —
+    nothing to bind, so the composer records no placement and the consent stays
+    placement-blind rather than binding a guess.
+    """
+    return sorted(
+        {cluster for _submitted, cluster in _campaign_run_placements(experiment_dir, campaign_id)}
+    )
+
+
+def campaign_current_placement(experiment_dir: Path, campaign_id: str) -> str | None:
+    """The cluster a campaign is placing on NOW — the consumption-side key (S1.4).
+
+    THE derivation both campaign consent-consuming call sites feed to
+    ``current_placement`` (``meta.campaign.blocks.campaign_watch`` and
+    :func:`self_heal_campaign`), so the two boundaries cannot disagree. The
+    campaign's NEWEST run answers it: a campaign id is per-cluster by
+    construction (``compose_campaign_id``), so in normal operation the set is a
+    singleton and "newest" is moot — but when a campaign HAS moved, the newest
+    run is the placement the consent must be judged against, which is exactly
+    the drift the S1 leg exists to catch. Ordered by ``submitted_at`` with the
+    journal's own oldest-first order as the tiebreak (a record's mtime moves on
+    every status update; its submission time does not).
+
+    ``None`` when no run of the campaign carries a cluster stamp — the
+    absent-disables half of the leg's symmetric rule: an unprovable placement
+    keeps the leg off rather than false-killing a live consent at 3am.
+    """
+    placements = _campaign_run_placements(experiment_dir, campaign_id)
+    if not placements:
+        return None
+    return max(enumerate(placements), key=lambda pair: (pair[1][0], pair[0]))[1][1]
+
+
+def compose_consent_placement(
+    experiment_dir: Path, *, scope_kind: str, scope_id: str, resolved: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Compose a CAMPAIGN consent's ``placement`` from the clusters it spans (S1.4).
+
+    The Phase-2 half of the placement leg (run-queue plan §10.S1.4, D7): a
+    campaign consent must record its cluster SET, or the consumption leg the two
+    campaign boundaries now feed has nothing to compare against and stays
+    silently off — the fail-open failure mode §10.S1 names. Composing it here
+    (rather than asking the human to type cluster keys) mirrors every other
+    poka-yoke in this seat, and the composed value is disclosed in
+    ``composed_defaults`` like the rest — a value code filled must never
+    masquerade as one the human typed.
+
+    Deliberately NARROW:
+
+    * **campaign scope only.** A run scope's placement is the caller's own
+      sidecar read (``state.runs.read_run_cluster``) at the boundary; composing
+      one here would newly force every run consent's chat grant to name a
+      cluster (the §10.S1.5 authorship leg keys off a bound placement), a
+      widening this phase did not decide.
+    * **absent only.** A placement the caller supplied is left EXACTLY as given,
+      malformed included, so :func:`_assert_placement_wellformed` still refuses
+      the human's broken value at record time instead of it being silently
+      overwritten with a derived one.
+    * **provable only.** A campaign with no cluster-stamped run composes
+      nothing: binding a guess would be the false-kill direction, and a
+      placement-blind consent is the documented pre-migration shape.
+    * **recordable only.** A campaign whose runs name a cluster key the ACTIVE
+      ``clusters.yaml`` does not define composes nothing either. This is the
+      composer refusing to hand its own gate a value the gate must refuse:
+      :func:`_assert_placement_wellformed` validates composed keys exactly as it
+      validates typed ones, so without this a campaign carrying a retired or
+      renamed key (``ebm_all_buckets_carc`` on a host whose config no longer
+      defines ``carc``) becomes IMPOSSIBLE to grant overnight consent for — with
+      a refusal pointing at a field the human never typed and cannot edit, whose
+      stated remedy ("fix the shape or drop the field") is unactionable.
+      ALL-OR-NOTHING rather than filtered to the survivors: a campaign whose
+      NEWEST run sits on the unknown key would then be judged against a recorded
+      set that cannot contain it, and consumption would park at 3am — the
+      false-kill this leg forbids. Composing nothing leaves the consent
+      placement-blind, which the absent-disables rule turns into "leg off", the
+      safe direction.
+
+    Note the composed set makes the S1.5 authorship leg bite for campaign
+    consents: a chat grant must now name the cluster(s). That is the intended
+    discipline ("the human says WHERE out loud") and the refusal renders a
+    paste-ready grant line carrying the keys.
+    """
+    out: dict[str, Any] = dict(resolved) if isinstance(resolved, dict) else {}
+    if scope_kind != "campaign":
+        return out
+    if out.get("placement") is not None:
+        return out
+    scope = campaign_placement_scope(experiment_dir, scope_id)
+    if not scope:
+        return out
+    known = _known_cluster_keys()
+    if known and any(cluster not in known for cluster in scope):
+        return out
+    out["placement"] = scope
+    _mark_composed(out, "placement")
+    return out
+
+
 def consumption_identity(experiment_dir: Path, scope_kind: str, scope_id: str) -> str | None:
     """The identity token CONSUMPTION compares a consent's ``cmd_sha`` against (F15).
 
@@ -542,19 +860,193 @@ def compose_overnight_consent(
 
     The single entry the consent write path (``ops/decision/journal.py``
     ``append_decision``) calls BEFORE the authorship + caps + wake gates: fill the
-    cap defaults (:func:`compose_consent_defaults`) and compose/arm the wake
-    (:func:`arm_consent_wake`). Everything composed is disclosed in
-    ``composed_defaults``. ``cmd_sha`` is untouched — the one field a default cannot
-    stand in for, so a consent that omits it still refuses at the caps gate — but a
-    SUPPLIED ``cmd_sha`` bound to the wrong derivation is refused HERE
-    (:func:`assert_consent_identity_binds`, F15) rather than silently refusing all night.
+    cap defaults (:func:`compose_consent_defaults`), compose/arm the wake
+    (:func:`arm_consent_wake`), and — for a CAMPAIGN scope — compose the placement
+    scope the S1 leg compares against (:func:`compose_consent_placement`, §10.S1.4).
+    Everything composed is disclosed in ``composed_defaults``. ``cmd_sha`` is
+    untouched — the one field a default cannot stand in for, so a consent that omits
+    it still refuses at the caps gate — but a SUPPLIED ``cmd_sha`` bound to the wrong
+    derivation is refused HERE (:func:`assert_consent_identity_binds`, F15) rather
+    than silently refusing all night.
+
+    Placement is composed BEFORE the identity binding (and, upstream, before the
+    authorship + caps gates) so the composed set is the value the §10.S1.5
+    authorship leg renders and matches on, and the value
+    :func:`_assert_placement_wellformed` validates — a composed binding no gate
+    sees would be a binding nothing enforces.
     """
     out = compose_consent_defaults(resolved, now_utc=now_utc)
     out = arm_consent_wake(experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out)
+    out = compose_consent_placement(
+        experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out
+    )
     assert_consent_identity_binds(
         experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out
     )
     return out
+
+
+def render_grant_line(
+    *,
+    scope_kind: str,
+    scope_id: str,
+    heal_classes: Iterable[str] = (),
+    cmd_sha: str | None = None,
+    placement: Iterable[str] | None = None,
+    expires_at: str | None = None,
+) -> str:
+    """THE paste-ready grant sentence — the ONE home for the grant vocabulary.
+
+    Renders the exact utterance the token-exact CHAT tier of the authorship gate
+    (``ops/decision/journal/overnight_consent.py``) reads back: the boundary
+    ``scope_id``, every declared heal class, the ``cmd_sha`` by a 12-hex prefix
+    (the tier demands 8+), and every cluster in the bound placement set. Two
+    callers share this sentence shape and must never drift apart:
+
+    * the authorship gate's REFUSAL (the inline coverage brief the human reads
+      in chat and pastes back from), and
+    * the park-time OFFER (``block_drive``'s answer menu — the same tokens
+      offered one rendezvous earlier, so one sitting can grant the overnight
+      consent without a second rendezvous).
+
+    A drift between the two would make one of them fail its own gate — worse
+    than no line at all (the pin
+    ``test_refusal_renders_a_paste_ready_grant_line_that_grants`` exists for).
+    The gate reads TOKENS, not phrasing: rendering the sentence changes the
+    human's typing burden, never the trust story, and pasting it satisfies only
+    the AUTHORSHIP leg — caps + wake are still composed and enforced at record
+    time. PURE + DETERMINISTIC: no I/O, no clock; unusable members are simply
+    omitted (their absence is the gate's business, not this renderer's).
+    """
+    parts = [f"I grant overnight consent for {scope_kind} {scope_id}"]
+    classes = sorted({c for c in (heal_classes or ()) if isinstance(c, str) and c})
+    if classes:
+        parts.append("repair classes " + ", ".join(classes))
+    if isinstance(cmd_sha, str) and cmd_sha:
+        parts.append(f"under spec {cmd_sha[:12]}")
+    clusters = [c for c in (placement or ()) if isinstance(c, str) and c]
+    if clusters:
+        cluster_label = "cluster" if len(clusters) == 1 else "clusters"
+        parts.append(f"on {cluster_label} " + ", ".join(clusters))
+    if isinstance(expires_at, str) and expires_at:
+        parts.append(f"until {expires_at}")
+    return ", ".join(parts)
+
+
+def regrant_offer_from_status(
+    status: ConsentDecision,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    current_cmd_sha: str,
+    current_placement: str | None = None,
+) -> dict[str, Any] | None:
+    """The paste-ready RE-GRANT offer for a consent that died on spec change, or ``None``.
+
+    ``spec-changed`` is the one consent death EVERY code edit inflicts (item 8
+    pin b: consent dies on spec change — deliberately), and the human discovers
+    it as a bare park reason at 3am or a zero in the morning brief, then has to
+    reconstruct the grant by hand. This composer renders the fresh grant line
+    for the CURRENT identity so the re-grant costs one paste: the dead consent's
+    OWN declared coverage (its ``heal_classes`` and bound placement set — the
+    human already chose those; re-offering less would silently narrow the
+    coverage on re-record, re-offering more would be code inventing scope),
+    re-bound to *current_cmd_sha* (falling back to *current_placement* only when
+    the dead consent bound no placement). Rendered by :func:`render_grant_line`
+    — the ONE grant-vocabulary home — never a second sentence assembly.
+
+    Same trust story as the first-grant offer and the refusal's line: the
+    authorship gate reads TOKENS, so this changes the typing burden only —
+    pasting satisfies the AUTHORSHIP leg alone, and re-recording the consent
+    still composes caps + wake and runs every gate unchanged.
+
+    PURE over an already-consulted :class:`ConsentDecision` (no I/O — the
+    park path holds a status in hand); ``None`` for a live consent, any death
+    other than ``spec-changed`` (an expired consent is a fresh decision, not a
+    re-grant), or an unprovable current identity (a line that could not cover
+    the sha-bound consent would fail its own gate).
+    """
+    if status.live or status.reason != "spec-changed" or status.consent is None:
+        return None
+    if not current_cmd_sha:
+        return None
+    resolved = _as_dict(status.consent.get("resolved"))
+    placement = normalize_recorded_placement(resolved.get("placement"))
+    if placement is None and current_placement:
+        placement = (current_placement,)
+    classes = consent_heal_classes(status.consent)
+    offer: dict[str, Any] = {
+        "grant_line": render_grant_line(
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            heal_classes=classes,
+            cmd_sha=current_cmd_sha,
+            placement=placement or (),
+        ),
+        "reason": "spec-changed",
+        "cmd_sha": current_cmd_sha,
+        "note": (
+            "OPTIONAL re-grant offer: the standing consent for this scope died on "
+            "spec change (consent dies with the spec — by design). Pasting this "
+            "line into chat is the human's own typed grant of the AUTHORSHIP leg "
+            "for the CURRENT spec identity, carrying the dead consent's own "
+            "declared coverage; re-recording the consent still composes caps + "
+            "wake and runs every gate unchanged. Nothing is auto-answered."
+        ),
+    }
+    prev = resolved.get("cmd_sha")
+    if isinstance(prev, str) and prev:
+        offer["previous_cmd_sha"] = prev
+    if classes:
+        offer["heal_classes"] = sorted(classes)
+    if placement:
+        offer["placement"] = list(placement)
+    return offer
+
+
+def regrant_offer(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    now_iso: str | None = None,
+) -> dict[str, Any] | None:
+    """Consult a scope's consent against its CURRENT identity and offer the re-grant.
+
+    The I/O wrapper over :func:`regrant_offer_from_status` for surfaces that do
+    not already hold a :class:`ConsentDecision` (the morning brief; the park
+    path derives its own status and calls the pure composer directly). Derives
+    the current identity through :func:`consumption_identity` — the SAME token
+    consumption compares, F15 — and the run's cluster stamp where known.
+    Fail-open: any read surprise yields ``None`` (the offer degrades, never the
+    surface carrying it).
+    """
+    current = consumption_identity(experiment_dir, scope_kind, scope_id)
+    if not current:
+        return None
+    current_placement: str | None = None
+    if scope_kind == "run":
+        from hpc_agent.state.runs import read_run_cluster
+
+        current_placement = read_run_cluster(experiment_dir, scope_id)
+    try:
+        status = standing_consent_status(
+            experiment_dir,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            current_cmd_sha=current,
+            current_placement=current_placement,
+            now_iso=now_iso,
+        )
+    except Exception:  # noqa: BLE001 — a journal surprise must not wedge the caller
+        return None
+    return regrant_offer_from_status(
+        status,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        current_cmd_sha=current,
+        current_placement=current_placement,
+    )
 
 
 # ── consumption: consult the consent, then ledger the auto-advance ────────────
@@ -582,6 +1074,7 @@ def standing_consent_status(
     scope_kind: str,
     scope_id: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     now_iso: str | None = None,
     spent_budget: float = 0.0,
     spent_walltime: float = 0.0,
@@ -598,11 +1091,26 @@ def standing_consent_status(
     * **spec changed** — ``current_cmd_sha`` != the consent's bound ``cmd_sha`` →
       not live (``reason="spec-changed"``). THE reuse of the pre-y cmd_sha gate:
       consent dies on spec change (item 8 pin b).
+    * **placement changed** — ``current_placement`` outside the consent's bound
+      cluster set → not live (``reason="placement-changed"``). The S1 leg
+      (run-queue plan §10.S1): once placement is a machine decision, a consent
+      blind to it would stay live across a re-placement the human never named.
+      Membership over ``resolved["placement"]`` (a key or a key list) via
+      :func:`state.placement_drift.detect_placement_drift` — absent on EITHER
+      side disables the leg, so every pre-migration consent and every caller
+      that does not yet know its cluster is untouched.
     * **over cap** — ``spent_budget`` / ``spent_walltime`` exceeds a declared cap
       → not live (``reason="over-budget-cap"`` / ``"over-walltime-cap"``).
+    * **over per-cluster cap** — the ``{cluster: cap}`` placement form declares a
+      cap for ``current_placement`` and that cluster's metered spend exceeds it →
+      not live (``reason="over-cluster-budget-cap"`` /
+      ``"over-cluster-walltime-cap"``). Metered internally from the consumption
+      ledger's ``detail.cluster`` stamps; leg off when the boundary's cluster is
+      unknown (the S1 absent-disables direction).
 
     The caller supplies ``current_cmd_sha`` (from the block's input-spec identity
-    — ``block_drive._spec_sha`` — or the run sidecar), mirroring how
+    — ``block_drive._spec_sha`` — or the run sidecar) and ``current_placement``
+    (the sidecar's ``cluster`` stamp, where known), mirroring how
     ``block_gate.assert_greenlit_target`` takes the ``verb`` it checks: the gate
     stays pure and the caller owns identity derivation.
     """
@@ -631,12 +1139,43 @@ def standing_consent_status(
     if not (isinstance(bound_sha, str) and bound_sha) or current_cmd_sha != bound_sha:
         return ConsentDecision(False, "spec-changed", consent)
 
+    # S1: the placement leg. Unlike the sha leg above (absent bound sha ⇒ dead),
+    # an absent bound placement keeps the leg OFF — the field postdates every
+    # consent granted before the run queue, and killing those on upgrade is the
+    # exact blast radius §10.S1 forbids. detect_placement_drift owns the
+    # symmetric absent-disables rule; this call just names the reason.
+    if detect_placement_drift(
+        recorded=resolved.get("placement"), current=current_placement
+    ).changed:
+        return ConsentDecision(False, "placement-changed", consent)
+
     budget_cap = resolved.get("budget_cap")
     if _is_positive_number(budget_cap) and spent_budget > float(cast("float", budget_cap)):
         return ConsentDecision(False, "over-budget-cap", consent)
     walltime_cap = resolved.get("walltime_cap")
     if _is_positive_number(walltime_cap) and spent_walltime > float(cast("float", walltime_cap)):
         return ConsentDecision(False, "over-walltime-cap", consent)
+
+    # The {cluster: cap} legs (run-queue plan §3, Phase 2): when the consent's
+    # placement is the mapping form AND the boundary's cluster is known AND that
+    # cluster declares a cap, the cap binds against the PER-CLUSTER meter
+    # (``consumed_spend(cluster=...)``). Metered here from the ledger rather
+    # than taken from the caller: the global ``spent_*`` args predate the
+    # vocabulary and callers cannot know the per-cluster split without the
+    # ledger read anyway. Absent ``current_placement`` keeps the legs off —
+    # the same absent-disables direction as the S1 membership leg above (an
+    # unknown cluster is not evidence of overspend at 3am).
+    cluster_caps = placement_cluster_caps(resolved.get("placement")).get(current_placement or "")
+    if cluster_caps:
+        cluster_budget, cluster_walltime = consumed_spend(
+            experiment_dir, scope_kind, scope_id, cluster=current_placement
+        )
+        cap = cluster_caps.get("budget_cap")
+        if cap is not None and cluster_budget > cap:
+            return ConsentDecision(False, "over-cluster-budget-cap", consent)
+        cap = cluster_caps.get("walltime_cap")
+        if cap is not None and cluster_walltime > cap:
+            return ConsentDecision(False, "over-cluster-walltime-cap", consent)
 
     return ConsentDecision(True, "live", consent)
 
@@ -647,6 +1186,7 @@ def assert_standing_consent(
     scope_kind: str,
     scope_id: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     now_iso: str | None = None,
     spent_budget: float = 0.0,
     spent_walltime: float = 0.0,
@@ -663,6 +1203,7 @@ def assert_standing_consent(
         scope_kind=scope_kind,
         scope_id=scope_id,
         current_cmd_sha=current_cmd_sha,
+        current_placement=current_placement,
         now_iso=now_iso,
         spent_budget=spent_budget,
         spent_walltime=spent_walltime,
@@ -769,7 +1310,9 @@ def read_consumption_ledger(
 # ── the spend meter (sequencing item 1: meter before the first B heal) ────────
 
 
-def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tuple[float, float]:
+def consumed_spend(
+    experiment_dir: Path, scope_kind: str, scope_id: str, *, cluster: str | None = None
+) -> tuple[float, float]:
     """Sum the ``(budget, walltime)`` a scope has ALREADY consumed under its consent.
 
     The spend meter the overnight-repair sequencing puts FIRST (§8 item 1): every
@@ -781,6 +1324,15 @@ def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tupl
     disclosed no-op line spends nothing); fail-safe by construction — a torn ledger
     line contributes nothing rather than raising.
 
+    With ``cluster`` set, only lines stamped ``detail.cluster == cluster`` count —
+    the per-cluster meter behind the ``{cluster: cap}`` legs (run-queue plan §3).
+    :func:`consume_boundary_under_consent` stamps ``detail.cluster`` from the
+    boundary's ``current_placement``, so per-cluster metering starts at the first
+    consumption after the vocabulary landed; lines predating the stamp carry no
+    cluster and count toward NO per-cluster total (they still count globally) —
+    undercounting is the tolerable direction for a cap that did not exist when
+    they were written.
+
     Returns ``(spent_budget, spent_walltime)``. HEAL_FAILED lines are excluded (a
     fail-loud flip is bookkeeping, not spend); HEAL_ATTEMPT lines ARE counted when
     they carry a cost (a respawn that burned walltime is real fallout).
@@ -791,6 +1343,8 @@ def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tupl
         if str(line.get("event_kind") or "") == HEAL_FAILED_KIND:
             continue
         detail = _as_dict(line.get("detail"))
+        if cluster is not None and str(detail.get("cluster") or "") != cluster:
+            continue
         b = detail.get("spent_budget")
         w = detail.get("spent_walltime")
         if _is_positive_number(b):
@@ -884,15 +1438,73 @@ class ConsumptionOutcome:
     line: dict[str, Any] | None
 
 
-def is_consumable_boundary(scope_kind: str, boundary_block: str) -> bool:
+def is_consumable_boundary(
+    scope_kind: str, boundary_block: str, *, clean_predecessor: bool = False
+) -> bool:
     """True when *boundary_block* is a consent-auto-advanceable boundary for the scope.
 
     The SoT for "NEVER auto-advance a boundary whose block isn't named in the
-    consent's scope" (item 8 seam 1): the two designated overnight boundaries are
-    :data:`OVERNIGHT_CONSUMABLE_BLOCKS`. Every other boundary parks for a live human
+    consent's scope" (item 8 seam 1): the unconditional boundaries are
+    :data:`OVERNIGHT_CONSUMABLE_BLOCKS`; with *clean_predecessor* (code-derived
+    evidence the predecessor terminal was clean — the caller's burden, default
+    False) the :data:`OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE` boundaries join them
+    (the 2026-07-29 Tier-3 ruling). Every other boundary parks for a live human
     regardless of any consent.
     """
-    return boundary_block in OVERNIGHT_CONSUMABLE_BLOCKS.get(scope_kind, frozenset())
+    if boundary_block in OVERNIGHT_CONSUMABLE_BLOCKS.get(scope_kind, frozenset()):
+        return True
+    return clean_predecessor and boundary_block in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(
+        scope_kind, frozenset()
+    )
+
+
+def predecessor_terminal_clean(
+    experiment_dir: Path, run_id: str, predecessor_verb: str, *, current_cmd_sha: str
+) -> bool:
+    """Code-derived CLEAN evidence from the predecessor's recorded terminal.
+
+    One of the two evidence sources a gate site may feed
+    :func:`consume_boundary_under_consent`'s ``clean_predecessor`` (the other is
+    :func:`boundary_already_ledgered` — a driver seat that already verified the
+    in-hand result consumed first, and the block's own gate re-verifies against
+    that durable line). True only when the ``(run_id, predecessor)`` terminal
+    record exists, its result parked NO decision (``needs_decision`` false — the
+    clean terminal; every anomaly/timeout/partial/integrity path parks true),
+    and its recorded ``cmd_sha`` matches *current_cmd_sha* (both known) — a
+    terminal recorded for a tree that has since moved is not evidence about
+    today's spec, the same rule the replay path applies. Fail-safe: absent,
+    corrupt, or mismatched reads False (dirty), never raises.
+    """
+    from hpc_agent.state.block_terminal import read_terminal_with_fallback
+
+    try:
+        record = read_terminal_with_fallback(experiment_dir, run_id, predecessor_verb)
+    except Exception:  # noqa: BLE001 — evidence reads fail dirty, never raise into a gate
+        return False
+    if not isinstance(record, dict):
+        return False
+    result = record.get("result")
+    if not isinstance(result, dict) or bool(result.get("needs_decision")):
+        return False
+    recorded_sha = str(record.get("cmd_sha") or "")
+    return not (recorded_sha and current_cmd_sha and recorded_sha != current_cmd_sha)
+
+
+def boundary_already_ledgered(
+    experiment_dir: Path, scope_kind: str, scope_id: str, boundary_block: str, cmd_sha: str
+) -> bool:
+    """True when this boundary was already consumed under this spec identity.
+
+    The second CLEAN evidence source for a gate site: the driver's gated-successor
+    seat verified the in-hand ``needs_decision=False`` result and ledgered the
+    consumption; the block's own consent-aware gate then re-enters the substrate,
+    and THIS durable line is what carries the evidence across the process
+    boundary (liveness is still re-verified — an expired consent refuses even
+    with the line present). Wraps the consumption ledger's own idempotency
+    reader; anomaly-keyed lines do not count (these boundaries consume with no
+    anomaly key).
+    """
+    return _already_consumed(experiment_dir, scope_kind, scope_id, boundary_block, cmd_sha, None)
 
 
 def _already_consumed(
@@ -939,12 +1551,14 @@ def consume_boundary_under_consent(
     scope_id: str,
     boundary_block: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     event_kind: str = "auto-advance",
     failed_at: str | None = None,
     detail: dict[str, Any] | None = None,
     now_iso: str | None = None,
     spent_budget: float | None = None,
     spent_walltime: float | None = None,
+    clean_predecessor: bool = False,
 ) -> ConsumptionOutcome:
     """Consult a scope's standing consent at *boundary_block*; ledger the auto-advance.
 
@@ -955,7 +1569,10 @@ def consume_boundary_under_consent(
 
     * boundary NOT named for the scope → ``consumed=False``,
       ``reason="boundary-not-consumable"`` — the caller PARKS (a live consent for a
-      DIFFERENT boundary never launches this one).
+      DIFFERENT boundary never launches this one). A clean-terminal-conditional
+      boundary (:data:`OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`) consulted WITHOUT the
+      *clean_predecessor* evidence refuses with the more specific
+      ``reason="predecessor-not-clean"`` so the park brief says which leg failed.
     * no live consent (expired / over-cap / spec-changed / no consent) →
       ``consumed=False`` carrying the failing leg — the caller PARKS with the reason
       in the brief.
@@ -965,16 +1582,21 @@ def consume_boundary_under_consent(
       is idempotent per spec identity (:func:`_already_consumed`).
 
     The caller supplies ``current_cmd_sha`` (the run sidecar fingerprint / the campaign
-    spec identity), mirroring how :func:`standing_consent_status` delegates identity
-    derivation. ``spent_budget`` / ``spent_walltime`` default to ``None`` → the SPEND
+    spec identity) and ``current_placement`` (the sidecar's ``cluster`` stamp where the
+    caller knows it; ``None`` keeps the S1 leg off), mirroring how
+    :func:`standing_consent_status` delegates identity derivation.
+    ``spent_budget`` / ``spent_walltime`` default to ``None`` → the SPEND
     METER (:func:`consumed_spend`) supplies the running total from the ledger (§8 item
     1), so the budget/walltime caps are enforced against real consumption; a caller
     that already knows the total passes it explicitly.
     """
-    if not is_consumable_boundary(scope_kind, boundary_block):
-        return ConsumptionOutcome(
-            False, ConsentDecision(False, "boundary-not-consumable", None), None
+    if not is_consumable_boundary(scope_kind, boundary_block, clean_predecessor=clean_predecessor):
+        reason = (
+            "predecessor-not-clean"
+            if boundary_block in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(scope_kind, frozenset())
+            else "boundary-not-consumable"
         )
+        return ConsumptionOutcome(False, ConsentDecision(False, reason, None), None)
     if spent_budget is None or spent_walltime is None:
         metered_budget, metered_walltime = consumed_spend(experiment_dir, scope_kind, scope_id)
         spent_budget = metered_budget if spent_budget is None else spent_budget
@@ -984,6 +1606,7 @@ def consume_boundary_under_consent(
         scope_kind=scope_kind,
         scope_id=scope_id,
         current_cmd_sha=current_cmd_sha,
+        current_placement=current_placement,
         now_iso=now_iso,
         spent_budget=spent_budget,
         spent_walltime=spent_walltime,
@@ -991,6 +1614,12 @@ def consume_boundary_under_consent(
     if not decision.live:
         return ConsumptionOutcome(False, decision, None)
     stamped_detail: dict[str, Any] = {"cmd_sha": current_cmd_sha, **(detail or {})}
+    # The {cluster: cap} meter's data leg: stamp WHERE this consumption placed so
+    # consumed_spend(cluster=...) can split the total per machine. A caller's own
+    # detail.cluster wins (the ** above already kept it); absent placement stamps
+    # nothing — an unknown cluster must not be invented at the audit surface.
+    if current_placement and "cluster" not in stamped_detail:
+        stamped_detail["cluster"] = current_placement
     # F11: the anomaly KIND discriminates the idempotency key so distinct anomalies
     # the same night each earn a ledger line (a boundary with no anomaly ⇒ None ⇒ the
     # prior single-consume-per-identity behaviour for the run's submit-s3 launch).
@@ -1502,6 +2131,13 @@ def self_heal_campaign(
         scope_kind="campaign",
         scope_id=campaign_id,
         current_cmd_sha=identity,
+        # S1 (§10.S1.4): a heal is an unattended respawn, so it must ask the same
+        # placement question the watch boundary asks — a campaign re-placed onto a
+        # cluster the consent never named must not be self-healed there. Derived by
+        # THE one campaign derivation (:func:`campaign_current_placement`, a local
+        # journal read — this function promises zero SSH), and absent-disables keeps
+        # every placement-blind consent untouched.
+        current_placement=campaign_current_placement(experiment_dir, campaign_id),
         now_iso=now,
         spent_budget=metered_budget,
         spent_walltime=metered_walltime,
@@ -1779,6 +2415,20 @@ def overnight_morning_brief(
     except Exception:  # noqa: BLE001 — a class-section read must not wedge the brief
         class_sections = {}
 
+    # RE-GRANT hint (spec-changed consent death): when the latest consent is dead
+    # against the scope's CURRENT identity with reason ``spec-changed``, the brief
+    # carries the fresh paste-ready grant line beside the disclosure — the same
+    # one-home renderer as the authorship refusal and the park-time offer, so the
+    # morning after a code edit the re-grant costs one paste instead of a grammar
+    # reconstruction. ``regrant_offer`` is fail-open (None on any read surprise)
+    # and returns None for a live/expired/absent consent, so the brief is
+    # byte-unchanged everywhere the death is not the spec-changed class.
+    regrant = (
+        regrant_offer(experiment_dir, scope_kind=scope_kind, scope_id=scope_id, now_iso=surfaced_at)
+        if consent is not None
+        else None
+    )
+
     return {
         # LEADS with the fail-loud disclosure when the chain died unrecoverably.
         "heal_failure": heal_failed,
@@ -1803,6 +2453,9 @@ def overnight_morning_brief(
         # F12: non-None only when a consent exists but consumed_count is 0 — the field
         # that explains the zero (a night that produced no auto-advance).
         "unconsumed_reason": unconsumed_reason,
+        # Non-None only when the consent died on spec change: the OPTIONAL
+        # paste-ready re-grant line for the current identity (never auto-answered).
+        "regrant_offer": regrant,
     }
 
 

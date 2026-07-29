@@ -134,6 +134,11 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "aggregate-check",
         "aggregate-run",
         "append-decision",
+        # Park-time diagnosis seam (2026-07-29): the code-composed request
+        # query and the shape-validated opaque attach channel. Both specs
+        # require run_id, so the default empty-{} probe applies.
+        "attach-diagnosis",
+        "diagnosis-request",
         "block-drive",
         "campaign-complete",
         "campaign-greenlight",
@@ -270,6 +275,15 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "audit-handoff",
         "verify-relay",
         "wait-detached",
+        # wait-any-detached (run-queue-placement-2026-07-28 §7): the FLEET waiter
+        # — one held seat for N detached workers instead of one wait-detached
+        # relay per run. Spec-taking query; failure_features attaches at the
+        # shared dispatch seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
+        # Its input schema (wait_any_detached.input.json) is baked in the same
+        # commit, so it also appears in the schema-file-parametrized remediation
+        # probes ({} is invalid — a non-empty targets list is required — so the
+        # probe refuses at the wire boundary, before any lease read).
+        "wait-any-detached",
         # poll-detached (packages swarm, memo §2): the instant, non-blocking
         # snapshot of a detached worker — the MCP-safe sibling of wait-detached.
         # Spec-taking query; failure_features attaches at the shared dispatch
@@ -290,6 +304,21 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # retarget-run (proving-run-5 wave 5.2): the cluster-retarget recovery arm —
         # supersede + re-resolve(new run_name) + re-canary. Spec-taking composite.
         "retarget-run",
+        # run queue phase 1 (run-queue-placement-2026-07-28 §6): the intake
+        # ledger's three verbs. queue-run is a spec-taking mutate ({} is invalid
+        # — request_id is required, so its {} probe reaches the spec gate);
+        # queue-status / queue-advance are all-optional read-only queries, so
+        # {} is VALID for them and they take the bogus-key probe below.
+        # failure_features attaches at the shared dispatch seam for all three.
+        "queue-run",
+        "queue-status",
+        "queue-advance",
+        # run queue phase 2 (§6 Phase 2 / §10): queue-dispatch, the actor. Its
+        # spec is all-optional like queue-advance's, but {} EXECUTES a verb that
+        # STARTS runs, so it takes the bogus-key probe below (the doctor-install
+        # reasoning, one ring further out: an all-optional spec is not a safe
+        # probe when the verb has side effects).
+        "queue-dispatch",
         "aggregate-flow",
         "apply-safe-defaults",
         "build-submit-spec",
@@ -417,6 +446,16 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # scope-status's spec is all-optional ({} is a valid all-tags read) —
     # probe with the bogus key so the wire model rejects it.
     "scope-status": _BOGUS_KEY_SPEC,
+    # queue-status / queue-advance specs are all-optional ({} is a valid
+    # whole-ledger read / whole-ledger placement decision) — probe with the
+    # bogus key so the extra="forbid" wire model rejects it.
+    "queue-status": _BOGUS_KEY_SPEC,
+    "queue-advance": _BOGUS_KEY_SPEC,
+    # queue-dispatch's spec is all-optional too, but unlike its two siblings it
+    # STARTS work — a {} probe would dispatch whatever the fixture tree happens
+    # to have queued. Bogus key, so the extra="forbid" wire model refuses before
+    # anything is actuated.
+    "queue-dispatch": _BOGUS_KEY_SPEC,
     "status-snapshot": _BOGUS_KEY_SPEC,
     "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
 }

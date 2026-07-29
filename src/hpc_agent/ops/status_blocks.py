@@ -193,10 +193,139 @@ def digest_run(record: Any) -> dict[str, Any]:
 # ── status-snapshot ──────────────────────────────────────────────────────────
 
 
+def _queued_age_rows(experiment_dir: Path, now_iso: str) -> list[dict[str, Any]]:
+    """Enqueue age for every still-``queued`` item, longest-waiting first (§10.S3).
+
+    The run-queue plan accepts a cost — "the window widens for items held
+    pre-gate, and the morning brief should show enqueue age for that reason"
+    (§10.S3) — so the digest shows which items have waited longest for a y.
+    ``queue-advance``'s rows are relayed VERBATIM (S13) and its wire model
+    carries no arrival stamp, so age rides BESIDE them: the ledger's own
+    ``enqueued_at`` relayed as stored, plus ``age_sec`` computed by the SAME
+    ``state/queue_intake.enqueue_age_sec`` that ``queue-status`` uses — one
+    derivation, never two, and the renderer/LLM relays the number rather than
+    doing date math (the determinism boundary).
+
+    A record written before the stamp existed surfaces ``age_sec: null`` — age
+    UNKNOWN, disclosed rather than guessed — and sorts after every known age.
+    Clipped to 10 rows like ``held``; ``queued_total`` keeps the clip visible.
+    The read is the tolerant, non-creating fold every queue projection uses.
+    """
+    from hpc_agent.state.queue_intake import (
+        STATE_QUEUED,
+        enqueue_age_sec,
+        items_in_states,
+        read_intake_items,
+    )
+
+    now_dt = parse_iso_utc_or_none(now_iso)
+    rows: list[dict[str, Any]] = []
+    for item in items_in_states(read_intake_items(experiment_dir), [STATE_QUEUED]):
+        item_id = item.get("item_id")
+        if not isinstance(item_id, str) or not item_id:
+            continue
+        enqueued_at = item.get("enqueued_at")
+        rows.append(
+            {
+                "item_id": item_id,
+                "enqueued_at": (
+                    enqueued_at if isinstance(enqueued_at, str) and enqueued_at else None
+                ),
+                "age_sec": enqueue_age_sec(enqueued_at, now_dt) if now_dt is not None else None,
+            }
+        )
+    # Oldest first (the items the human most needs to see), unknown ages last,
+    # item_id as the tie-break so two reads at one instant render identically.
+    rows.sort(key=lambda row: (row["age_sec"] is None, -(row["age_sec"] or 0), row["item_id"]))
+    return rows[:10]
+
+
+def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] | None:
+    """The run-queue paragraph of the morning digest, or ``None`` when nothing is queued.
+
+    Run-queue plan §3 promised the brief could surface "3 items waiting on gpu
+    capacity"; the maintainer ordered it built (2026-07-29). The section calls the
+    placement AUTHORITY (``queue-advance``, pure) and relays its rows and its
+    code-rendered text VERBATIM — S13's rule: a brief relays the authority's
+    words, it never summarizes them, so this surface and a direct
+    ``queue-advance`` call can never disagree. ``held`` is clipped to 10 rows
+    with ``held_total`` keeping the clip visible (the bounded-projection
+    posture); ``held_counts`` still spans everything. ``queued_ages`` rides
+    beside the authority's rows (:func:`_queued_age_rows`): §10.S3's accepted
+    cost is that the enqueue→y window widens for items held pre-gate, so the
+    brief shows each queued item's enqueue age, oldest first.
+
+    Additive + fail-open: an experiment with no queue, an unreadable ledger, or
+    any read surprise yields ``None`` and the snapshot is byte-unchanged — a
+    queue problem must never blank the digest the human reads first.
+    """
+    try:
+        from hpc_agent._wire.queries.queue_advance import QueueAdvanceSpec
+        from hpc_agent.ops.queue.advance import queue_advance
+
+        decision = queue_advance(experiment_dir=experiment_dir, spec=QueueAdvanceSpec(now=now_iso))
+        if decision.queued_total <= 0:
+            return None
+        queued_ages = _queued_age_rows(experiment_dir, now_iso)
+    except Exception:  # noqa: BLE001 — a queue read must never blank the digest
+        return None
+    return {
+        "queued_total": decision.queued_total,
+        "decision": decision.decision,
+        "placements_decided": len(decision.placements),
+        "held": [h.model_dump(mode="json") for h in decision.held[:10]],
+        "held_total": len(decision.held),
+        "held_counts": dict(decision.held_counts),
+        "occupancy": dict(decision.occupancy),
+        "queued_ages": queued_ages,
+        "text": decision.brief,
+    }
+
+
+def _parked_brief_section(experiment_dir: Path, now_iso: str) -> list[dict[str, Any]] | None:
+    """The parked-runs paragraph of the morning digest, or ``None`` when none.
+
+    One row per run parked on a human decision (§5 "parked ≠ stalled"), each
+    carrying the park-time diagnosis POINTER (S13: pointers + counts, never the
+    dossier content — the human reads the render from disk): ``diagnosis`` is
+    the one shared line (:func:`state.diagnosis.diagnosis_pointer_line` —
+    'attached (N proposed action(s), agent-authored, advisory) — <path>' /
+    'none') so this surface, the park notification, and the doctor's parked
+    note cannot drift into three phrasings.
+
+    Additive + fail-open like :func:`_queue_brief_section`: no parked runs, or
+    any read surprise, yields ``None`` and the snapshot is byte-unchanged — an
+    advisory pointer must never blank the digest the human reads first.
+    """
+    try:
+        from hpc_agent.state.diagnosis import diagnosis_pointer, diagnosis_pointer_line
+        from hpc_agent.state.index import find_parked_runs
+
+        rows: list[dict[str, Any]] = []
+        for hit in find_parked_runs(now_iso, experiment_dir=experiment_dir):
+            try:
+                pointer = diagnosis_pointer(experiment_dir, str(hit.get("run_id") or ""))
+            except Exception:  # noqa: BLE001 — advisory read stays fail-open
+                pointer = None
+            rows.append(
+                {
+                    "run_id": hit.get("run_id"),
+                    "block": hit.get("block"),
+                    "workflow": hit.get("workflow"),
+                    "awaiting_since": hit.get("awaiting_since"),
+                    "diagnosis": diagnosis_pointer_line(pointer),
+                    "diagnosis_path": pointer.get("path") if pointer else None,
+                }
+            )
+    except Exception:  # noqa: BLE001 — a parked read must never blank the digest
+        return None
+    return rows or None
+
+
 @primitive(
     name="status-snapshot",
     verb="workflow",
-    composes=["reconcile-journal"],
+    composes=["reconcile-journal", "queue-advance"],
     side_effects=[SideEffect("ssh", "<cluster> (only when reconcile=True)")],
     error_codes=[
         errors.SpecInvalid,
@@ -350,6 +479,17 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     has_live = any(r.status not in TERMINAL_STATUSES for r in records)
     non_terminal_runs = [[r.run_id, r.status] for r in records if r.status not in TERMINAL_STATUSES]
 
+    # Run-queue paragraph (run-queue plan §3/§6 Phase 2; maintainer order
+    # 2026-07-29): a stuck item must not wait silently until the human thinks to
+    # ask queue-status. Computed before the dict so the key can be OMITTED when
+    # the queue is empty — byte-stable for every experiment that never enqueues.
+    queue_section = _queue_brief_section(experiment_dir, now_iso)
+
+    # Parked paragraph (park-time diagnosis seam): one pointer row per parked
+    # run — never the dossier content. Computed like the queue section so the
+    # key is OMITTED when nothing is parked (byte-stable for park-free fleets).
+    parked_section = _parked_brief_section(experiment_dir, now_iso)
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -368,6 +508,10 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         # never judged. Rides the brief dict (no wire contract). Empty when unset.
         "active_env_overrides": active_env_overrides(),
     }
+    if queue_section is not None:
+        brief["queue"] = queue_section
+    if parked_section is not None:
+        brief["parked"] = parked_section
 
     needs_decision = bool(stalled or anomalies)
     if needs_decision:

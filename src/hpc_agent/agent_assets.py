@@ -1393,7 +1393,7 @@ def install_agent_assets(
             "commands_installed": ["aggregate-hpc", ...],
             "skills_installed": ["hpc-submit", ...],
             "agents_installed": [],
-            "workflows_installed": ["campaign-recon", "campaign-run"],
+            "workflows_installed": ["campaign-recon", "campaign-run", ...],
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_rendezvous_hook": {"settings_path": "...", "action": "added",

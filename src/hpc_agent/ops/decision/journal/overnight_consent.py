@@ -165,6 +165,13 @@ def _assert_overnight_consent_authorship(
         else set()
     )
     bound_cmd_sha = res.get("cmd_sha") if isinstance(res.get("cmd_sha"), str) else None
+    # S1 (run-queue plan §10.S1.5): a consent that binds a placement must have the
+    # human name its cluster set out loud — the same discipline the sha prefix
+    # enforces for spec identity. Absent/unusable placement ⇒ no requirement
+    # (every pre-placement consent), mirroring the consumption leg's posture.
+    from hpc_agent.state.placement_drift import normalize_recorded_placement
+
+    bound_placement = normalize_recorded_placement(res.get("placement"))
     now = utcnow()
 
     covered = False
@@ -182,6 +189,13 @@ def _assert_overnight_consent_authorship(
         # consent binds to a spec; both-absent falls through to the caps refusal).
         subj_sha = subject.get("cmd_sha") if isinstance(subject.get("cmd_sha"), str) else None
         if subj_sha != bound_cmd_sha:
+            continue
+        # Placement identity: symmetric both-present compare (S1). A bound record
+        # captured before placement existed carries none and still covers a
+        # placement-bound consent — the conservative direction; the consumption
+        # leg still refuses a placement the consent set does not contain.
+        subj_placement = normalize_recorded_placement(subject.get("placement"))
+        if bound_placement and subj_placement and set(subj_placement) != set(bound_placement):
             continue
         # Repair-class coverage: the human's bound consent must cover at least the
         # classes this consent declares (it can cover more — a superset is fine).
@@ -219,6 +233,10 @@ def _assert_overnight_consent_authorship(
                 continue
             if bound_cmd_sha is not None and not _names_target_sha_prefix(text, bound_cmd_sha):
                 continue
+            # S1: a placement-bound consent's chat grant must name every cluster
+            # in the set — the human says WHERE out loud, not just what.
+            if bound_placement and not all(_names_slug(text, c) for c in bound_placement):
+                continue
             covered = True
             break
 
@@ -247,6 +265,39 @@ def _assert_overnight_consent_authorship(
             coverage_lines.append("  hard caps on the fallout: " + ", ".join(caps))
         if bound_cmd_sha:
             coverage_lines.append(f"  spec identity (cmd_sha): {bound_cmd_sha}")
+        if bound_placement:
+            coverage_lines.append(f"  placement (cluster): {', '.join(bound_placement)}")
+            # The {cluster: cap} form's caps are structural (like budget_cap —
+            # never spoken in the grant), but the human must READ them here:
+            # consenting to a per-cluster ceiling they never saw is the exact
+            # gap this inline coverage render exists to close.
+            from hpc_agent.state.placement_drift import placement_cluster_caps
+
+            per_cluster = placement_cluster_caps(res.get("placement"))
+            for cluster, cluster_caps in sorted(per_cluster.items()):
+                if cluster_caps:
+                    rendered = ", ".join(
+                        f"{field}={value}" for field, value in sorted(cluster_caps.items())
+                    )
+                    coverage_lines.append(f"    {cluster} caps: {rendered}")
+        # A READY-TO-PASTE grant line carrying every token the chat tier reads
+        # (boundary slug, each heal class, an 8+ hex sha prefix, every cluster in
+        # the set). Rendering it is consistent with the tier's own design: the
+        # sha-prefix leg's temporal binding ALREADY assumes the human copies the
+        # token from this brief (vocabulary impossibility, the R6 idiom) — the
+        # binding lives in the tokens, not in the phrasing, so handing the human
+        # the full sentence changes the typing burden, not the trust story.
+        # Rendered through the ONE grant-vocabulary home (``ops/overnight.py``)
+        # shared with the park-time OFFER (``block_drive``'s answer menu), so
+        # the refusal's line and the offered line can never drift apart.
+        grant_line = _overnight.render_grant_line(
+            scope_kind=spec.scope_kind,
+            scope_id=spec.scope_id,
+            heal_classes=consent_classes,
+            cmd_sha=bound_cmd_sha,
+            placement=bound_placement or (),
+            expires_at=composed_expires if isinstance(composed_expires, str) else None,
+        )
         _refuse_missing_authorship(
             "overnight-consent authorship gate: a standing consent accepts the "
             "fallout of unattended overnight advances. No bound consent record "
@@ -264,8 +315,12 @@ def _assert_overnight_consent_authorship(
                 if bound_cmd_sha
                 else ""
             )
+            + (f", and the cluster set ({', '.join(bound_placement)})" if bound_placement else "")
             + ". A bare 'y', a clicked option, or an agent-relayed response "
-            "cannot stand in for it."
+            "cannot stand in for it.\n"
+            "Or copy-paste this grant line into chat (edit freely — the gate "
+            "reads the named tokens, not the phrasing):\n"
+            f"  {grant_line}"
         )
 
     # Legs 2 + 3 — structural (never the authorship marker): hard caps + spec

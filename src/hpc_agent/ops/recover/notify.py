@@ -46,6 +46,10 @@ _NOTIFY_TIMEOUT_SEC = 10
 # Alert-record ``kind`` tags — the second component of the dedup identity.
 _KIND_STALL = "stall"
 _KIND_ALERT = "alert"
+# A run PARKED on a human decision. Distinct from ``stall`` on purpose: parked ≠
+# stalled (block-drive.md §5), and sharing the tag would let a park and a stall of
+# the SAME run collapse onto one dedup identity and silence the second.
+_KIND_PARK = "park"
 
 _ALERTS_LOG_NAME = "doctor.alerts.log"
 # Acknowledgment watermark for the alert log (proving run #3: the watchdog
@@ -231,6 +235,65 @@ def summarize_proposals(proposals: list[dict[str, Any]]) -> str:
     return text
 
 
+def compose_park_notice(parked: dict[str, Any], *, diagnosis: dict[str, Any] | None = None) -> str:
+    """Compose the notification payload for ONE run parked on a human decision.
+
+    THE disclosure this exists for (run-queue-placement-2026-07-28.md §8 S13): a
+    push that says only "run X needs you" forces the human back to a desk to
+    learn what the decision even is, and then to reconstruct the answer grammar
+    from memory. The payload therefore carries BOTH halves of the brief's own
+    park disclosure:
+
+    * its **one-line summary** — the code-composed ``answer_menu["summary"]`` the
+      driver wrote at park (what a bare ``y`` would do, and the spec sha it is
+      pinned to), falling back to the marker's own structured fields when a brief
+      predates the menu;
+    * its **paste-ready answer line** — ``answer_menu["answer_line"]``, the SAME
+      string the desk-side brief offers (the scope-naming ``y <successor> <run>
+      @<sha8>`` when the boundary materialized a successor). Naming the run in
+      the line is what makes a phone answer as trustworthy as a desk answer: the
+      human is not agreeing to "whatever was on screen", they are pasting the
+      tokens that identify the boundary and the spec.
+
+    Composition ONLY — this renders a string and delivers nothing (its caller
+    :func:`raise_park_notification` owns delivery through the existing channels).
+    It NEVER summarizes the brief and never invents an answer: both lines are
+    read verbatim out of the disclosure the driver already composed
+    (:func:`hpc_agent._kernel.lifecycle.answer_menu.compose_answer_menu`), which
+    is itself built from the brief's own structured data.
+
+    Fail-open on every field: a marker with no menu, no block, or no timestamp
+    still yields a deliverable line — a degraded push beats a silent one (the
+    proving-run-#3 lesson, "detection without delivery is silence").
+
+    *diagnosis* is the park-time diagnosis POINTER
+    (:func:`hpc_agent.state.diagnosis.diagnosis_pointer`, read by the caller —
+    this composer stays I/O-free): the notice ends with
+    ``diagnosis: attached (N proposed action(s), agent-authored, advisory) —
+    <path>`` or ``diagnosis: none``. A POINTER + COUNT only, rendered by the
+    one shared line (:func:`state.diagnosis.diagnosis_pointer_line`) — the
+    dossier content is display-only advisory matter the human opens from disk;
+    it never rides the notification, and it never touches the brief's own
+    summary/answer lines above (the trust story is byte-identical).
+    """
+    from hpc_agent.ops.relay_render import answer_menu_of
+    from hpc_agent.state.diagnosis import diagnosis_pointer_line
+
+    run_id = str(parked.get("run_id") or "?")
+    block = parked.get("block")
+    since = parked.get("awaiting_since") or "an unknown time"
+    at_block = f" at block {block}" if block else ""
+    menu = answer_menu_of(parked.get("brief")) or {}
+    summary = menu.get("summary")
+    detail = f" — {summary}" if isinstance(summary, str) and summary else ""
+    text = f"hpc-agent: run {run_id} awaiting your decision since {since}{at_block}{detail}"
+    answer_line = menu.get("answer_line")
+    if isinstance(answer_line, str) and answer_line:
+        text += f"\nTo answer, paste:  {answer_line}"
+    text += f"\ndiagnosis: {diagnosis_pointer_line(diagnosis)}"
+    return text
+
+
 def _alert_identity(
     *,
     run_id: str | None,
@@ -381,6 +444,28 @@ def _try_run(argv: list[str]) -> bool:
     return proc.returncode == 0
 
 
+def _deliver(text: str) -> dict[str, Any]:
+    """Fire the richest platform notifier available for *text*.
+
+    THE one channel table (module docstring): ``msg.exe`` on Windows,
+    ``notify-send`` on POSIX, and — always, via the caller's own
+    :func:`_append_alert_log` write — the loud log file as the guaranteed floor.
+    Extracted so the stall / free-form-alert / park payloads cannot drift into
+    three different channel sets: adding a payload must never add a channel.
+
+    Returns ``{mechanism, delivered}``; ``mechanism`` is the richest channel that
+    fired, ``"logfile"`` when only the floor did.
+    """
+    mechanism = "logfile"
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or "*"
+        if _try_run(["msg", user, text]):
+            mechanism = "msg"
+    elif shutil.which("notify-send") and _try_run(["notify-send", "hpc-agent doctor", text]):
+        mechanism = "notify-send"
+    return {"mechanism": mechanism, "delivered": True}
+
+
 def raise_alert_notification(text: str, *, experiment_dir: Path) -> dict[str, Any]:
     """Surface a free-form *text* alert the same way as a stall proposal.
 
@@ -393,14 +478,7 @@ def raise_alert_notification(text: str, *, experiment_dir: Path) -> dict[str, An
     :func:`raise_stall_notification`. Best-effort, never acts on the cluster.
     """
     log_path = _append_alert_log(text, experiment_dir=experiment_dir, kind=_KIND_ALERT)
-    mechanism = "logfile"
-    if os.name == "nt":
-        user = os.environ.get("USERNAME") or "*"
-        if _try_run(["msg", user, text]):
-            mechanism = "msg"
-    elif shutil.which("notify-send") and _try_run(["notify-send", "hpc-agent doctor", text]):
-        mechanism = "notify-send"
-    return {"mechanism": mechanism, "delivered": True, "text": text, "log_path": log_path}
+    return {**_deliver(text), "text": text, "log_path": log_path}
 
 
 def raise_stall_notification(
@@ -415,18 +493,50 @@ def raise_stall_notification(
     """
     text = summarize_proposals(proposals)
     log_path = _log_stall_proposals(proposals, experiment_dir=experiment_dir)
+    return {**_deliver(text), "text": text, "log_path": log_path}
 
-    mechanism = "logfile"
-    if os.name == "nt":
-        user = os.environ.get("USERNAME") or "*"
-        if _try_run(["msg", user, text]):
-            mechanism = "msg"
-    elif shutil.which("notify-send") and _try_run(["notify-send", "hpc-agent doctor", text]):
-        mechanism = "notify-send"
 
-    return {
-        "mechanism": mechanism,
-        "delivered": True,
-        "text": text,
-        "log_path": log_path,
-    }
+def raise_park_notification(
+    parked: list[dict[str, Any]], *, experiment_dir: Path
+) -> list[dict[str, Any]]:
+    """Surface each parked-run decision as a notification. Best-effort, never acts.
+
+    Disclosure only, and deliberately NO new channel: each notice goes out over
+    the SAME loud-log floor + platform notifier (:func:`_deliver`) the stall and
+    free-form alert paths already use. What is new is the PAYLOAD
+    (:func:`compose_park_notice`) — the brief's own one-line summary and its
+    paste-ready answer line — so answering from a phone is the same trusted
+    decision as answering at a desk.
+
+    One deduped log record per park, identified by ``<run_id>|park|<awaiting_since>``:
+    the awaiting-since timestamp is fixed while a boundary stays parked and moves
+    on a re-park, so a 15-minute watchdog cadence replays to a no-op instead of
+    re-buzzing the human every tick for the same undecided boundary.
+
+    Returns one ``{mechanism, delivered, text, log_path}`` record per notice (the
+    same shape :func:`raise_stall_notification` returns), or ``[]`` for no parks.
+    """
+    from hpc_agent.state.diagnosis import diagnosis_pointer
+
+    records: list[dict[str, Any]] = []
+    for note in parked:
+        # Park-time diagnosis pointer (S13): read fail-open here — the one
+        # place the notice is composed with an experiment_dir in hand — and
+        # hand the composer the pointer only (path + count, never content).
+        try:
+            pointer = diagnosis_pointer(experiment_dir, str(note.get("run_id") or ""))
+        except Exception:  # noqa: BLE001 — an advisory read must never block delivery
+            pointer = None
+        text = compose_park_notice(note, diagnosis=pointer)
+        awaiting = note.get("awaiting_since")
+        log_path = _append_alert_log(
+            text,
+            experiment_dir=experiment_dir,
+            kind=_KIND_PARK,
+            run_id=str(note.get("run_id") or "") or None,
+            since=str(awaiting) if awaiting else None,
+            awaiting_since=str(awaiting) if awaiting else None,
+            status=str(note.get("block") or "") or None,
+        )
+        records.append({**_deliver(text), "text": text, "log_path": log_path})
+    return records

@@ -30,6 +30,7 @@ from hpc_agent.state.run_record import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
     from pathlib import Path
 
 __all__ = [
@@ -402,7 +403,12 @@ def find_parked_runs(now_iso: str, experiment_dir: Path | None = None) -> list[d
     return parked
 
 
-def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
+def prune_terminal_runs(
+    experiment_dir: Path,
+    keep: int = 20,
+    *,
+    protect: Collection[str] | None = None,
+) -> int:
     """Evict oldest TERMINAL runs past *keep*. Returns count removed.
 
     Only :data:`TERMINAL_STATUSES` (complete / failed / abandoned) are
@@ -412,11 +418,24 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
     the only durable evidence reconcile-recovery needs to adopt the array
     or safely re-submit. The guard keys on membership in TERMINAL_STATUSES,
     not ``!= "in_flight"``, so any future non-terminal status is kept too.
+
+    *protect* names run ids that are prune-EXEMPT no matter how old they are.
+    It exists for the run queue (``docs/plans/run-queue-placement-2026-07-28.md``
+    §8 S12, "define pruned-target semantics"): ``queue-status`` projects
+    ``dispatched`` / ``run_status`` / ``terminal`` by joining an intake item to
+    its RunRecord, so pruning a record a live ledger item still references would
+    silently flip that item back to ``dispatched=false`` — the projection would
+    start lying about a run that really did happen. The queue's janitor
+    therefore compacts the ledger FIRST and passes the ids still referenced
+    afterwards, so this prune can only ever remove records nothing points at.
+    ``None`` (the default) protects nothing and preserves every existing
+    caller's behaviour byte-for-byte.
     """
     from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES
 
     if keep < 0:
         raise errors.SpecInvalid("keep must be non-negative")
+    guarded = frozenset(protect or ())
     files = _all_run_files(experiment_dir)
     terminal: list[tuple[float, Path, str]] = []
     for path in files:
@@ -425,7 +444,10 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
             continue
         if payload.get("status", "in_flight") not in TERMINAL_STATUSES:
             continue
-        terminal.append((_safe_mtime(path), path, payload.get("run_id", path.stem)))
+        run_id = payload.get("run_id", path.stem)
+        if run_id in guarded:
+            continue
+        terminal.append((_safe_mtime(path), path, run_id))
     if len(terminal) <= keep:
         return 0
     terminal.sort(key=lambda item: item[0], reverse=True)

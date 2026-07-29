@@ -1,10 +1,21 @@
 # The run queue + cluster placement — design proposal (2026-07-28)
 
-Status: **BANKED — design complete through v2 + adversarial sweep; nothing
-built.** Motivating order: "there needs to be a queue that keeps track of
-multiple experiments to run as they come in and it needs to assign the runs
-to the proper clusters / split across clusters so that there's
-asynchroneity that allows things to be seamless."
+Status: **PHASES 1+2 SHIPPED (2026-07-29) — §6's store, authority, and actor
+are live; the S1 consent leg is wired through both scopes. Per-cluster
+consent caps (the `{cluster: cap}` vocabulary, §3), the brief-UX bundle
+(answer menus + park notifications), the Phase-3 drain loop (§6.3, product
+side + chain-dispatch §5), the content-addressed trees (§10.S4), and R3's
+EAGER SUBMIT (§7 R3 — see its STATUS block for what verification found
+already R3-shaped vs what that pass added): BUILT (2026-07-29).**
+One build item remains QUEUED (maintainer-ordered 2026-07-29): fleet-waiter
+adoption in `queue-drain` — the `wait-any-detached` verb is shipped; the
+drain plan still holds N per-run waits (§7's wait-any bullet carries the
+scope + the tokenomics-not-latency classification).
+Design complete through v2 + adversarial sweep. Motivating order: "there
+needs to be a queue that keeps track of multiple experiments to run as they
+come in and it needs to assign the runs to the proper clusters / split
+across clusters so that there's asynchroneity that allows things to be
+seamless."
 
 ## PICKUP (for a fresh session, 2026-07-29)
 
@@ -19,21 +30,35 @@ Read this file top to bottom — it is self-contained. The state of play:
    this), hold-while-alive / poke-when-dead / capture-always residency.
 2. **The fable-sweep verdict (§8) is the pre-build checklist.** Thirteen
    confirmed clusters. S5/S6 are FIXED in the shipped campaign-run.js.
-   **S1–S4 change the intake record's shape (item_id, placement folded
-   into consent identity, refill intent visible to advance, per-run remote
-   snapshots or run-start sha check) and MUST be resolved in this design
-   doc before any Phase 1 code.** S7–S13 land incrementally with their
-   named resolutions.
-3. **Then build Phase 1** (§6): intake store + `queue-run` +
-   `queue-status` + `queue-advance` with the disclosed-reason policy.
-   Conventions: full verb contract per `docs/internals/adding-a-primitive.md`
-   (the `tag-session` verb, landed 2026-07-28, is the freshest small
-   exemplar of the whole pipeline).
-4. **Open maintainer decisions** (§9) still unanswered: claim-lease
-   recovery (proposed: heartbeat staleness + F43 host/create_time),
-   retryable(n) semantics (proposed: default needs_human — but see S3 of
-   §8 before deciding), typed resource asks, no item sharding, per-repo
-   queue.
+   **S1–S4 are RESOLVED in §10** — the blocking gate is cleared. S7–S13
+   land incrementally with their named resolutions.
+3. **Phases 1+2 are SHIPPED (2026-07-29)**: intake store, `queue-run` /
+   `queue-status` / `queue-advance` / `queue-dispatch`, refill as ledger
+   producer, campaign `placement_scope`, the morning digest's `queue`
+   section. Adversarially reviewed before landing (13 findings → 7 root
+   causes fixed, occupancy slot-release the flagship). Next build:
+   the Phase-3 drain loop (§5's tick + wake + relay).
+4. **Open maintainer decisions** (§9): claim-lease recovery is now
+   ANSWERED by §10.S2 (no new lease — the shipped detached lease keyed on
+   the computed run_id), and retryable(n) — unblocked by §10.S3 — is now
+   BUILT (2026-07-29, RESOLVED as proposed; see §7's failure-classes
+   bullet for the shipped shape). Typed resource asks SHIPPED with
+   Phase 1 (`QueueResourceAsk` on the `queue-run` wire — gpu / gpu_type /
+   cores / walltime_sec / est_core_hours; §9's open half was the
+   vocabulary's EXTENT, which stands answered by that closed field set
+   until a real ask arrives that it cannot express). No item sharding
+   and per-repo queue remain open (both proposed NO).
+5. **§10's verifications are ALL DONE — nothing in this plan is
+   unverified.** The S1 placement leg is BUILT
+   (`state/placement_drift.py` + `standing_consent_status`'s
+   `placement-changed` leg, 2026-07-29) and the full suite passed with
+   zero failures — the conservative absent-disables rule made it purely
+   additive on the consent corpus, as designed. The S4 `--link-dest`
+   probe was RUN ON BOTH CLUSTERS (2026-07-29, table in §10.S4):
+   correctness holds on all four filesystems; hardlink dedup works
+   everywhere except CARC BeeGFS `/scratch1`, where rsync silently
+   degrades to the design's stated copy fallback. S4's content-addressed
+   trees are cleared to build whenever eager submit is scheduled.
 
 ## 0. What already exists (build on, don't duplicate)
 
@@ -90,7 +115,10 @@ it: *"next: rv_sweep item 4 → hoffman2 (carc at 2/2 concurrent jobs, item
 needs gpu, hoffman2 queue depth 3) — y?"*. The human's y covers the
 placement. Under standing/overnight consent the same policy runs
 unattended, and the consent's caps bind per cluster (a consent names its
-scope — extending consent vocabulary to `{cluster: cap}` maps is Phase 2).
+scope — extending consent vocabulary to `{cluster: cap}` maps is Phase 2 —
+BUILT 2026-07-29: `state/placement_drift.placement_cluster_caps` is the
+vocabulary's one reader, `standing_consent_status` carries the per-cluster
+cap legs).
 
 Policy posture, per the tool doctrine:
 
@@ -117,6 +145,26 @@ item goes wherever headroom is) instead of manual (human picks the cid).
 - Wakes: the detached watch terminals that already exist are the capacity-
   freed signal — a run finishing IS the moment to re-tick the queue. The
   overnight wake-leg machinery (`status_watch_armed`) is reused unchanged.
+  **SHIPPED 2026-07-29 as CHAIN-DISPATCH** (`ops/queue/chain.py`): the
+  retiring run's OWN driver chains exactly one `queue-dispatch` tick at its
+  terminal step — the repo's shipped self-chaining shape (harness-contract
+  capability 3: "S2/S3/S4 detach, campaign reconcile self-chaining, the
+  driver watchdog"), no daemon and no model in the path. Two driver terminal
+  seats call it, because a queue-placed run can retire at either:
+  `ops/campaign_run.py::campaign_run` on its SYNCHRONOUS path (the body the
+  detached child re-enters — the driver `queue-dispatch` itself starts) and
+  `_kernel/lifecycle/block_drive.py::_chain` at its `terminal` return (the
+  driver the `queue-drain` plan relays per drivable item, so a post-park
+  retirement wakes the queue too). Retirement is decided by the ONE
+  `state/queue_occupancy.run_occupies` predicate — a terminal STEP is not a
+  retired RUN (`run_timeout`'s jobs are still live) and a supersession is a
+  retirement with no driver terminal at all. Fire-and-forget by contract: the
+  hook runs AFTER the settlement is durable, never raises, and reports its
+  outcome as a `queue_chain` disclosure on the driver's own result. Gated on
+  one non-creating `stat` of the intake ledger, so a repo that never used the
+  queue pays nothing; the cadence (A retires → B starts → B retires → …)
+  terminates on a dry ledger because a dispatch with nothing to place starts
+  nothing.
 - The dynamic workflow (`campaign-run` generalized, or a sibling
   `queue-drain` plan) relays `queue-drive` ticks exactly as it relays
   `block-drive` ticks today — rule-5 authored templates, N run-loops for
@@ -130,10 +178,44 @@ item goes wherever headroom is) instead of manual (human picks the cid).
    `queue-advance` with the default policy, `queue-status` projection.
    Placement disclosed in briefs; dispatch still human-triggered.
 2. **Phase 2 — the actor + consent vocabulary:** `queue-dispatch` detached;
-   standing-consent scopes learn per-cluster caps; morning brief gains the
+   standing-consent scopes learn per-cluster caps (**BUILT 2026-07-29** —
+   the `{cluster: cap}` placement form, §3); morning brief gains the
    queued-items section.
-3. **Phase 3 — the workflow relay:** N run-loops + queue ticks in one plan;
-   merged park queue; park-with-context enrichment.
+3. **Phase 3 — the workflow relay (product side SHIPPED 2026-07-29):** N
+   run-loops + queue ticks in one plan; merged park queue;
+   park-with-context enrichment. Shipped as
+   `src/hpc_agent/slash_commands/workflows/queue-drain.js`: one
+   `queue-status` relay per pass, the drivable set as a mechanical field
+   check over its `items[]` projections (`dispatched ∧ ¬terminal ∧ ¬held ∧
+   ¬superseded_by ∧ (¬parked ∨ greenlight_unadvanced)` — the caller's
+   formula over published fields; the verb mints no `drivable` verdict, so
+   there is one definition and the plan owns it), a `block-drive` loop per
+   drivable item with chunked `wait-detached`, `drive_attempts >= n` held
+   rather than driven (retryable(n), on the kernel's durable counter so the
+   budget survives the pass that spent it), parks RECORDED and left for the
+   human, then re-status. Nothing is carried across passes (S5), and a
+   pass with nothing drivable costs exactly one status relay (§7
+   relaunch-cheapness). Two shipped bugs in `campaign-run.js` were fixed
+   in the same pass — `--experiment-dir` relayed to verbs that do not
+   declare it (rc=2; also hit `campaign-recon`'s `net-triage` probe), and
+   result fields read off the CLI envelope ROOT instead of its `data`
+   member — and `tests/contracts/test_workflow_plan_commands.py` now
+   parses every declared relay against the real argparse tree and pins the
+   envelope unwrapping, so neither class can ship unexecuted again. One
+   Phase-3 ask remains kernel-side and is optional: a pass ceiling on the
+   status digest. The plan derives its ceiling from `total_items` today,
+   which is correct because §7 R3 deliberately left capacity to the
+   scheduler — a real capacity field would only ever narrow the pass.
+4. **The wake edge — CHAIN-DISPATCH (SHIPPED 2026-07-29):** the last
+   always-draining gap. Phase 3 gave the queue a drain LOOP; it did not give
+   it an EVENT. A dispatched run retiring freed capacity that nothing acted
+   on, so the next waiting ledger item sat until a human or a drain pass
+   happened by. `ops/queue/chain.py` closes it at the two driver terminal
+   seats (§5 above has the full shape). With it, the queue is
+   always-draining without a daemon: enqueue wakes it (`campaign-refill`
+   dispatches its own item), retirement wakes it (this), and a drain pass or
+   a human remains the manual backstop — three independent triggers over one
+   idempotent, lock-guarded, request-id-deduped actor.
 
 ## 7. v2 — the ledger loop (2026-07-29, maintainer's synthesis)
 
@@ -225,6 +307,50 @@ Consequences:
   is held for etiquette caps or a hard constraint mismatch, and the
   disclosed reason says which — never a guess about scheduler headroom.
 
+**STATUS: BUILT (2026-07-29).** Landed mostly as a VERIFICATION plus
+disclosure/test hardening, because Phases 1–3 were built R3-shaped from the
+start — the consequence "queue-advance sheds the capacity question" was a
+design decision the builders already obeyed. What verification found, per
+consequence (source of truth is the code + tests, not this paragraph):
+
+- **Submit eagerly** was already the actor's shape: `queue-dispatch`
+  starts a placed item's lifecycle in the SAME tick that consumes the
+  decision (`ops/queue/dispatch.py::_dispatch_one` →
+  `campaign_run(detach=True)`), with no seat between placement and start
+  that could wait on the cluster; the detached child covers the
+  pending→running→terminal lifecycle (the synchronous
+  submit→monitor→aggregate spine, `ops/campaign_run.py`), and its
+  retirement chains the next dispatch (`ops/queue/chain.py`). The §10.S4
+  reliance is now stated where this leans on it (dispatch.py's D1a: the
+  content-pinned tree, plus `code_tree.plan_tree_gc` never reaping a tree
+  a non-terminal run references — a pending job's tree is pinned for as
+  long as it can still be queued).
+- **`queue-advance` sheds the capacity question** was already true:
+  occupancy is the least-loaded ORDERING input and a disclosure, never a
+  hold (`test_never_gates_on_a_scheduler_capacity_inference`); the
+  advisory pending-depth probe sketched above was deliberately NOT built,
+  and §2's original `no_capacity` decision / `batch-status` probe sketch
+  is superseded by this section. Courtesy caps: the vocabulary RESERVES
+  `courtesy_cap_reached` but ships no producer — S11 proved
+  `max_concurrent_jobs` is per-submission-plan wave grouping (still
+  enforced there, `ops/submit/plan_throughput.py`), so a cross-run cap
+  needs its own config key before the code may fire. The other declared
+  caps stand and were each re-classified as non-capacity on their
+  rationale + tests: `check_qos_submit_cap` (`ops/submit_flow.py`) guards
+  a DECLARED per-user limit the scheduler enforces by rejection;
+  campaign pool K / budget headroom are consent caps; the wake edge's
+  `_WAKE_MAX_DISPATCHES=5` is a submissions-per-wake storm bound (its
+  comment now says so in eager-submit terms).
+- **`no_capacity` vanished** by never having existed in the shipped
+  vocabularies: `QueueHoldReason` / `QueueDispatchRefusal` are now pinned
+  EXACT by `tests/ops/queue/test_queue_eager_submit.py`, so a capacity
+  code cannot reappear without failing a named test. The same battery
+  pins the load-bearing behaviors: a busy-past-`max_concurrent_jobs`
+  cluster still gets its dispatch in the same tick, an unattended batch
+  submits eagerly, a hard-constraint hold names the configured ceiling
+  (never capacity), and the actor is source-pinned to never read
+  `occupied_slots`.
+
 **Latency + residency invariants (2026-07-29, adopted from the latency
 review):**
 
@@ -266,6 +392,20 @@ review):**
   (kernel children cannot inject turns; pokes are time-based), so
   hold-while-alive is the proper design and this makes it cheap.
 
+  **STATUS (2026-07-29): verb SHIPPED, adoption QUEUED — the one open
+  build item on this plan.** The kernel verb landed (registered, tested,
+  and both waiters now share one polling loop — the one-definition
+  refactor). What remains is the PLAN-side rewiring: `queue-drain.js`
+  still holds N per-run `wait-detached` loops instead of one
+  `wait-any-detached` seat over the in-flight lease set. Classified a
+  TOKENOMICS unit, not a latency unit (the cadence audit measured the
+  wait returning ≤2s of a worker exit either way — the chunk bounds only
+  the no-news heartbeat), deliberately deferred rather than landing a
+  third structural edit to `queue-drain.js` in one day. Scope when
+  taken: restructure the worker loops' claim/park/budget accounting
+  around a single fleet-wait seat, under the drain plan's
+  execute-the-real-JS contract tests.
+
 **Design decisions still open (v2 additions):**
 
 - Claim lease TTL/steal policy: a driver that dies mid-claim — lease
@@ -274,16 +414,46 @@ review):**
 - Failure classes on parked items: `needs_human` vs `retryable(n)` as
   DECLARED item data consumed by plan code — never an agent's judgment
   call. Proposed: default needs_human; retryable only by explicit intake
-  flag.
+  flag. **RESOLVED AS PROPOSED — BUILT (2026-07-29,** unblocked by §10.S3's
+  resolve-at-enqueue**).** The flag is `QueueRunSpec.retryable` (positive
+  small int, junk refused at the wire; absent = needs_human, byte-identical
+  to the pre-leg behavior), recorded verbatim as an arrival fact. The
+  consumer is kernel code at the top of the `queue-dispatch` tick
+  (`ops/queue/retry.produce_declared_retries`), so the chain-dispatch wake
+  at a run's retirement is also the retry's dispatch: a MECHANICAL failure
+  terminal only (`is_declared_retry_failure` — journal `failed`, never
+  superseded / human-halted / parked / escalation-held; `abandoned`
+  deliberately excluded as a class a machine cannot tell apart) is
+  re-enqueued as a NEW intake item with derived id `<root>.retry<k>`
+  (`#` is outside the item-id charset; the derived id doubles as the
+  append's dedup request_id, so racing ticks write one line) that copies
+  the tip's recorded resolved identity VERBATIM — same spec/run_id/cmd_sha,
+  never a re-resolve (§10.S3), the fresh attempt minted over the same
+  computed run id by the `_ADOPTABLE_STATUSES` complement — and pins the
+  spec's cluster (R5; re-placement would trip the spec-agreement check and
+  §10.S1). Counting is durable and race-safe: `retries_used` = max
+  `retry_attempt` over the chain's folded ledger items, never in-memory,
+  and a live-failure chain can never compact (resubmittable terminals are
+  not history). Gates untouched: the retry's attempt still meets every
+  cluster-boundary gate inside the lifecycle (D1) — the budget automates
+  re-dispatch, never consent. Disclosure: `declared_retries` rows +
+  brief lines on `queue-dispatch` name each enqueued/replayed/exhausted
+  decision a declared-retry; `queue-status` shows `retryable`/`retries_used`
+  per item and its notes name exhaustion when the item parks for a human.
+  Pinned by `tests/ops/queue/test_queue_declared_retry.py` and
+  `tests/state/test_queue_intake_retry.py`.
 
 ## 8. Fable-sweep verdict (2026-07-29) — what WILL go wrong, confirmed
 
 Six adversarial lenses over this design + the live kernel (48 raw findings,
 merged below; load-bearing code citations spot-checked against the tree;
 two findings confirmed directly from the workflow engine's documented
-semantics). **The v2 loop shape survives; the design is NOT buildable as
+semantics). **The v2 loop shape survives; the design was NOT buildable as
 written.** Confirmed clusters, most severe first — each names its required
-resolution:
+resolution. S1–S4 carried the blocking gate; **their resolutions are settled
+in §10** and each entry below now points at its resolution. The findings
+themselves are left unedited: they are the record of what was wrong, and
+§10 is the record of what was decided.
 
 **S1 — consent identity is placement-blind (HIGH).** §3 puts the cluster
 inside the y, but both shipped identity tokens consumption compares are
@@ -345,13 +515,43 @@ status-watch. The proposed claim-lease staleness probe re-specifies the
 same hole. RESOLUTION: port F43 (host + create_time) into the wait path
 and the claim lease; add lease cleanup; anchor the glob.
 
-**S8 — post-y double-driver races (HIGH).** Inline-first-tick + auto-
-resumed pass = two drivers on the same run at every y, by design.
-Pending-marker writes are blind last-writer-wins (`_repark_marker` can
-resurrect a consumed park; a loser's DetachedLeaseHeld becomes a spurious
-`tick_failed` park under abort_on_failure; in-process spans have no lease
-at all). RESOLUTION: drop inline-first-tick OR make it claim-aware; make
-marker clear/re-park a compare-and-swap on (boundary, awaiting_since).
+**S8 — post-y double-driver races (HIGH, FIXED 2026-07-29 — marker
+consumption leg).** Inline-first-tick + auto-resumed pass = two drivers on
+the same run at every y, by design. Pending-marker writes were blind
+last-writer-wins (`_repark_marker` could resurrect a consumed park; a
+loser's DetachedLeaseHeld becomes a spurious `tick_failed` park under
+abort_on_failure; in-process spans have no lease at all). RESOLUTION as
+stated — the marker clear/re-park is now a COMPARE-AND-SWAP on (boundary,
+awaiting_since), inline-first-tick KEPT.
+
+MECHANISM (landed): `state/journal.compare_and_clear_pending_decision` /
+`compare_and_repark_pending_decision` — one locked-RMW definition each,
+sharing `_swap_pending_decision` under the journal's existing per-run
+`_locked` flock (the same critical-section precedent `stamp_drive_attempt`
+and `upsert_run_compare_and_mint` use). `block_drive._consume_marker` is
+the ONE seat both consumption legs (the greenlight resume in `run_tick`
+and the standing-consent auto-advance in
+`_consume_parked_boundary_under_consent`) clear through: it verifies the
+marker on disk is still the `(block, awaiting_since)` pair the tick READ
+before clearing it, so exactly one of two concurrent drivers runs the
+successor span. The swap sits at the marker clear — the last read-only
+point on the resume leg — so the LOSER writes nothing (no span, no
+`_stamp_driver_tick`, no park), never re-parks the consumed decision, and
+never raises: it returns `advanced` with a "another driver advanced this
+boundary first" reason (`_lost_the_consume_race`). That classification is
+deliberate: `skip` / `awaiting_decision` are the two outcomes §7's
+`drive_attempts` charges as futile, and a lost race is not futility — the
+chain DID move, so charging it would let concurrent drivers burn a healthy
+item's retryable(n) budget; the drain's `advanced` branch re-ticks and the
+next read shows the winner's position. `_repark_marker` (the F14
+failed-span leg) now swaps only into an EMPTY slot, closing the
+"resurrect a consumed park" half. Pinned by
+`tests/_kernel/lifecycle/test_block_drive_greenlight_cas.py` (two
+barrier-started threads on one real journal → exactly one span; the
+sequential stale-marker refusal; the re-park resurrection guard).
+STILL OPEN in S8: the loser's `DetachedLeaseHeld` → spurious `tick_failed`
+park under abort_on_failure, and the missing lease on in-process spans —
+neither is a marker-consumption defect.
 
 **S9 — kill window downgrades a human's rerun to an advance (HIGH,
 pre-existing kernel bug the queue multiplies).** SIGKILL between
@@ -416,3 +616,419 @@ disk (never workflow-summarized state).
 - Cross-EXPERIMENT queue (one queue over many repos) — proposed NO: the
   queue is per-experiment-repo like every other store; a lab-level view is
   a reporting sweep, not a store.
+## 10. Resolutions for S1–S4 (2026-07-29) — the pre-Phase-1 gate, cleared
+
+Each resolution below was derived by reading the shipped mechanism rather
+than by designing against the finding's summary. Two of the four findings
+turned out to overstate what has to be built: S2's premise is false (the
+run_id it says must be minted is already COMPUTED, purely), and S2/S3
+collapse into ONE change. Line citations were spot-checked against the tree
+at `dc4c872`.
+
+### S1 — placement is a THIRD identity dimension, not a field in `cmd_sha`
+
+**Confirmed as stated.** Both consent-bound tokens are provably
+cluster-free: `compute_cmd_sha` (`state/run_sha.py:43`) hashes only the
+materialized per-task kwargs — its docstring states "cmd_sha IS THE
+PARAMETER IDENTITY OF THE EXPERIMENT", with executor and `tasks.py` bytes
+deliberately excluded — and `_CAMPAIGN_IDENTITY_FIELDS`
+(`meta/campaign/blocks.py:65`) is goal/budget/strategy/stop/anomaly.
+`consume_boundary_under_consent` (`ops/overnight.py:935`) compares one of
+them via `standing_consent_status`, so a re-placement passes the
+spec-changed leg untouched.
+
+**REJECTED: folding cluster into `cmd_sha`.** That token is also the dedup
+key `find_run_by_cmd_sha` matches on. Folding placement in would make the
+same experiment on two clusters two different experiments — killing dedup,
+reproduction targeting, and §4's whole shared-study merge. The #207
+boundary is load-bearing and stays.
+
+**RESOLUTION — copy the code-identity precedent exactly.** Code has this
+same problem and it was NOT solved by extending `cmd_sha`:
+`state/code_drift.py` records `executor` + `tasks_py_sha` as a SEPARATE
+dimension and compares them with a SEPARATE predicate
+(`detect_code_drift`), precisely because cmd_sha is parameter identity.
+Placement is the third dimension of that same kind.
+
+1. The resolved spec gains an explicit `placement` block —
+   `{cluster_key, ssh_target, remote_path, scheduler}` — resolved BEFORE
+   the brief (§3's existing rule) and stamped on the run sidecar alongside
+   `executor` / `tasks_py_sha`.
+2. Consent binds the PAIR `(cmd_sha, placement_sha)`.
+   `standing_consent_status` gains a placement leg returning a distinct
+   `placement-changed` reason, so the park brief says which dimension moved.
+3. **Conservative in the same direction as `detect_code_drift`:** an
+   absent/empty recorded placement is NOT drift. Every pre-migration
+   consent and sidecar predates the field; firing on absence would park
+   every live consent at upgrade. This mirrors the module's own stated
+   posture ("an empty/absent recorded value is NOT drift ... we cannot
+   prove a pre-#351 record changed").
+4. **Campaign scope uses MEMBERSHIP, not equality.** Do NOT add a cluster
+   field to `_CAMPAIGN_IDENTITY_FIELDS`: a campaign spanning clusters is
+   the entire point of §4, and an equality check would park on every
+   placement swing, defeating dynamic split. The campaign consent instead
+   carries a `placement_scope` — the SET of cluster keys authorized — and
+   consumption checks membership. This is the campaign-scope analog S1
+   asked for, and it is the natural on-ramp to §3's Phase-2 `{cluster:
+   cap}` consent vocabulary (a scope that already names a cluster set is
+   one field away from naming a cap per cluster). The on-ramp was taken
+   (2026-07-29): the `{cluster: cap}` form shipped exactly as predicted —
+   the map's key set IS this membership set, `placement_cluster_caps`
+   reads the caps (§3).
+5. Disclosure follows the shipped discipline: `overnight_consent.py:220`
+   already requires the human's consent text to name the target sha prefix
+   (`_names_target_sha_prefix`). An overnight consent must likewise name
+   its cluster set out loud.
+
+**BUILT + VERIFIED (2026-07-29).** The leg is shipped:
+`state/placement_drift.py` (the one-home predicate, `code_drift`'s sibling),
+a `placement-changed` leg in `standing_consent_status` ordered after
+`spec-changed`, passthroughs in `consume_boundary_under_consent` /
+`assert_standing_consent` / `block_gate.assert_greenlit_or_consented`, the
+sidecar-fed `current_placement` at the run-scope consumption sites
+(`submit_blocks` via `state/runs.read_run_cluster`, `block_drive`'s
+successor-consume), and the §10.S1.5 disclosure in the overnight-consent
+authorship gate (a placement-bound consent's chat grant must name every
+cluster in the set; the coverage render shows the set). The blast-radius
+question is MEASURED, not predicted: full suite green, zero failures — the
+conservative rule held.
+
+One refinement over the sketch above, decided at build time: the bound
+identity is the CLUSTER-KEY SET compared by membership, not a
+`placement_sha` over the full `{cluster_key, ssh_target, remote_path,
+scheduler}` block. (a) a failing leg's reason must be legible in a park
+brief ("consent bound to hoffman2, run now on carc") — a sha hides which
+cluster; (b) `remote_path` legitimately varies WITHIN a cluster once S4's
+content-addressed trees land, and a consent must not die because code was
+re-uploaded to the cluster the human approved. The membership form also IS
+the campaign `placement_scope` (point 4) — one predicate, both scopes,
+already shipped; Phase 2 only has to start writing the list.
+
+### S2 — the premise is false: run_id is COMPUTED, so the shipped lease already works
+
+**The finding's core claim does not hold.** S2 states the claim key
+"cannot exist for an intake item (no run_id until dispatch mints one)".
+Run ids are not minted. `compute-run-id`
+(`incorporation/build/compute_run_id.py`) is a `@primitive(verb="query",
+idempotent=True)` with no side effects, and the derivation is pure:
+
+    run_id = "<run_name>-<cmd_sha[:8]>"
+
+Two workers looking at the same resolved item compute the IDENTICAL run_id.
+The `(run_id, driver_id)` key is therefore available the moment an item is
+resolved — which under §10.S3 is at ENQUEUE, not at dispatch.
+
+**RESOLUTION — no refactor of the claim system. Reorder, don't rebuild.**
+
+1. **Resolve at enqueue** (the same change §10.S3 requires), so run_id
+   exists while the item sits on the ledger.
+2. **Claim with the shipped lease, unchanged.** `_guard_single_lease`
+   (`_kernel/lifecycle/detached.py:353–425`) is already the correct
+   organ: flock'd, stamps `host` and `create_time`, and under F43 REFUSES
+   a lease it cannot verify rather than reclaiming blind. Every one of
+   those behaviours is a landed bug fix. Rewriting the claim system to key
+   on a new `item_id` would re-earn all of them for no gain — the churn is
+   not the main cost; losing the scars is.
+3. **`item_id` still gets minted at enqueue**, but for a different and
+   smaller job: it is the client `request_id` passed as
+   `append_jsonl_line`'s `dedup_key` (`infra/io.py:310`, already shipped),
+   which is what stops a replayed relay from double-enqueuing. That also
+   discharges S12's replay hole with zero new code.
+4. **E4 sequencing becomes a durable per-cid lock.** Today
+   "strictly sequential, sidecar-between-slots" is an in-process loop
+   convention (`ops/campaign_refill.py:26–35`); two passes break it. Use
+   `advisory_flock` — the same primitive under `append_jsonl_line` and
+   `ssh_slots` — held across resolve → sidecar write → spawn, exactly the
+   window the refill docstring calls the crash window.
+5. **A scheduler-visible idempotency token, and an adopt on recovery.** A
+   claim cannot fix `qsub` non-idempotency: a dispatcher that dies after the
+   scheduler accepts but before the record write leaves a live job no local
+   store knows about. On any claim recovery, ADOPT such a job rather than
+   resubmit. This leg is mandatory, and it is independent of the claim.
+
+   **AMENDED AT BUILD TIME (Phase 2) — the carrier is NOT the job name.**
+   This sketch originally said "stamp the item_id into the submitted JOB
+   NAME". The shipped backend contract refuses that, and had already refused
+   it: `infra/backends/_engine.py::build_correlation_flags` records that the
+   correlation token rides a length-unconstrained scheduler CONTEXT/COMMENT
+   field (Slurm `--comment`, SGE/UGE `-ac HPC_TOKEN=`) and is "NEVER put in
+   `job_name` — SGE caps names at 15 chars and `job_name` is consumed
+   byte-for-byte by log paths + canary naming (the whole reason OPEN-1(iii)
+   was rejected)". Stamping an item_id there would silently break stderr log
+   discovery (`_engine.py::stderr_log_path` interpolates `job_name`
+   verbatim) on every SGE cluster. Phase 2 therefore left `job_name`
+   untouched.
+
+   What Phase 2 built instead: cluster-side identity keeps riding the
+   existing correlation token `<run_id>#<attempt>`, and the ADOPT key is the
+   LOCAL runs store — `ops/queue/dispatch.py::_adopted_status` checks for an
+   existing `submitting` / `in_flight` / `complete` RunRecord under the
+   COMPUTED run_id before starting anything, and reports `outcome="adopted"`
+   with the status it found. This works because D2 makes run_id computed and
+   deterministic, so two racers derive the same key without needing to ask
+   the scheduler. The residual gap this sketch worried about — a job the
+   scheduler accepted but no local store knows about — is covered by the
+   pre-existing cluster-durable jobmap MARKER (`infra.jobmap`), which
+   `build_correlation_flags` already names as "the authoritative id binding".
+   No new scheduler query was added.
+
+**Consequence for §9:** the open "claim lease TTL/steal policy" question is
+answered by not existing — there is no new lease to write a policy for.
+
+**Known collision, decide deliberately:** two DIFFERENT items with identical
+resolved params and the same `run_name` compute the same run_id. For
+campaign trials this cannot arise (params differ per trial). For
+hand-enqueued items it is arguably correct (it IS the same experiment), but
+`queue-status` must SAY so — "this item resolves to an already-claimed run"
+— rather than silently collapsing two ledger rows.
+
+### S3 — one shared "occupies a pool slot" predicate, and resolve at enqueue
+
+**Confirmed, and the shipped code already names the exact hole.**
+`ops/campaign_refill.py:19–57` documents that an orphan sidecar self-heals
+through the BUDGET arm (it raises `spent_jobs`) but explicitly not through
+the pool-room arm: "for a pool-room-bound refill under a generous
+`max_jobs` budget the orphan does NOT shrink `pool_room` (K − in_flight)".
+An enqueued-but-undispatched item is precisely that orphan, so every refill
+tick inside the enqueue→dispatch window re-enqueues the same slots.
+
+**RESOLUTION.**
+
+1. **One shared predicate**, consumed by `campaign-advance` and
+   `queue-advance` alike:
+
+       occupied(cid) = journal status ∈ {in_flight, submitting}
+                     ∪ intake items for cid in state {queued, placed}
+       pool_room     = max(0, K − occupied(cid))
+
+   This is R1 applied to the queue's own state: intake is not a second
+   status store, it contributes exactly ONE fact no existing store holds —
+   *this slot is committed to this cid and is not yet a run*. Three call
+   sites currently count occupancy slightly differently; this makes it one
+   definition (the same one-shared-predicate discipline S12 demands for
+   `queue-status`).
+2. **Refill's direct submit is retired**; refill becomes a ledger producer
+   (`queue-run` and return), and the dispatcher is the only submitter.
+   Note WHY this gets easier rather than being pure migration cost: E5's
+   "resolve+submit per slot atomically, minimize the crash window" is a
+   MITIGATION for having no durable record of intent. Once intake IS that
+   record, the atomicity requirement genuinely relaxes.
+3. **Resolve at enqueue, not at dispatch** — load-bearing, and the reason
+   is subtler than S3 states. The async optuna scaffold indexes proposals
+   by sidecar count (`optuna_async_strategy.py::_submitted_count` ==
+   `len(prior_records(...))`) and CACHES per index. If enqueue happened
+   before resolve, two dispatches of one item could resolve at different
+   `_submitted_count`s and receive DIFFERENT trials — a worse bug than the
+   double-enqueue being fixed. Resolving at enqueue consumes the index
+   once, and it is also what makes §10.S1's placement-in-the-spec and
+   §10.S2's computed run_id available while the item is still on the
+   ledger.
+
+**Accepted cost, stated once:** trial params are chosen at enqueue, so a
+long-held item reflects the strategy's knowledge then, not at dispatch.
+This is already true of every cached refill slot, and campaign-produced
+queue depth is K-bounded — but the window widens for items held pre-gate,
+and the morning brief should show enqueue age for that reason.
+
+### S4 — content-addressed code trees; per-RUN copies are the wrong granularity
+
+**Confirmed as stated.** `rsync_push` stage-swaps with `--delete` into ONE
+`remote_path` per (cluster, experiment) (`infra/transport/__init__.py:415–460`);
+drift is checked LOCALLY at submit (`state/code_drift.py`) and nothing
+checks at job start. Under R3's eager submit a job pending for days executes
+whatever a later push left in the tree, with a sidecar that claims
+otherwise — a silent provenance lie, the worst failure class for this tool.
+
+**The plan says "pick one" of per-run snapshots or a run-start sha check.
+Picking one is wrong: the check is necessary but not sufficient, and the
+snapshot should be keyed by CONTENT, not by run.**
+
+1. **Run-start check (the guard) — ships first, one file.** At job start,
+   recompute the code fingerprint over the tree about to execute and refuse
+   to run on mismatch, writing a terminal marker with a distinct
+   `code_drift_at_start` reason. The idiom already exists:
+   `hpc_preamble.sh:343–400` writes `.hpc_failed/<run>.<task>.failed` and
+   refuses to re-run. Cost is one hash per job. This converts a silent lie
+   into a loud, classifiable failure — but it does NOT make the job
+   succeed, and under eager submit every pending job would die on any push.
+   So it cannot be the whole answer.
+2. **Content-addressed trees — key by code version, not by run.** The
+   system ALREADY computes a whole-tree content digest: `Manifest.digest`
+   (`infra/manifest.py:68–88`), used today for the transfer delta, whose
+   docstring invites exactly this — "two trees with identical file content
+   ... produce the same digest, so a stage-in can dedup on it exactly the
+   way `find_run_by_cmd_sha` dedups on the parameter sha". So:
+
+       <remote_path>/.hpc/trees/<manifest digest>/
+
+   N runs with unchanged code share ONE tree; a new tree appears only when
+   the code actually changes. Per-RUN snapshots would duplicate the tree
+   once per run for no added safety — the sharing that is dangerous is
+   ACROSS RUNS OVER TIME, not across the tasks of one array.
+3. **Pointing a run at it is one variable.** The job does `cd "$REPO_DIR"`
+   (`hpc_preamble.sh:82`); `REPO_DIR` is already a per-run spec field
+   derived from `remote_path`. Nothing else in the job path moves.
+4. **This extends a ruling that is already settled, not a new one.**
+   `--inplace` is deliberately banned (#F20,
+   `infra/transport/__init__.py:1386, 1433`) because an in-place rewrite
+   "tears the live dispatcher under a running array job". That is this
+   exact hazard for RUNNING jobs; pending jobs are the same hazard with a
+   longer fuse. Immutable per-version trees are the generalization.
+
+**What this trades (honestly):**
+
+| | cost |
+|---|---|
+| cluster disk | one tree per distinct code VERSION — bounded by edit frequency, not run count. Results are unaffected (already per-run dirs). |
+| cleanup | REAL new bookkeeping: a tree is reapable once no non-terminal run references it. Mitigated by being the same janitor S12 already needs (`prune_terminal_runs` is wired, never called). |
+| debuggability | "which tree did this run use?" becomes a recorded, rendered fact. Small but real. |
+| transfer cost | **unchanged** — this is the cost usually assumed and it is not paid. |
+
+**The `--link-dest` refinement — MEASURED on BOTH clusters (2026-07-29).
+Nothing in §10 remains unverified.** Uploading into a fresh digest-named
+directory would forfeit the delta (a new empty dir means a full transfer).
+rsync's `--link-dest=<previous digest dir>` is built for exactly this:
+unchanged files become hardlinks (zero bytes shipped, zero extra disk),
+changed files are written fresh. Probe run by the maintainer on both login
+nodes (rsync tree1 → `--link-dest` tree2 → replace file in tree1 → read
+tree2):
+
+| filesystem | dedup (hardlinked?) | preserve (old tree survives re-push?) |
+|---|---|---|
+| Hoffman2 `$HOME` | PASS | PASS |
+| Hoffman2 `/u/scratch/...` | PASS | PASS |
+| CARC `/home1` | PASS — same inode | PASS |
+| CARC `/scratch1` (BeeGFS) | **FAIL — silently copied** | PASS |
+
+Verdict: the CORRECTNESS property (a snapshot survives a later push) held on
+ALL FOUR filesystems — the design is safe everywhere it will run. The
+CHEAPNESS property is per-filesystem: Hoffman2 hardlinks everywhere (free
+snapshots); CARC BeeGFS scratch refuses the hardlink and rsync degrades to a
+full copy on its own, which IS the stated fallback — one tree copy per
+distinct code version, bounded by edit frequency, never by run count. So the
+implementation must NOT assume hardlinks: treat `--link-dest` as an
+opportunistic optimization and (optionally) verify with a one-file inode
+probe per (cluster, filesystem) at setup, recording the answer. S4's
+content-addressed trees are cleared to build; eager submit's precondition is
+now purely an implementation-ordering fact, not an open question.
+
+**Ordering:** the guard is Phase 1-safe and can land immediately. The
+content-addressed trees must land before R3's eager submit ships — with
+them in place the guard becomes an assertion that essentially never fires,
+which is the correct end state for a guard.
+
+#### STATUS: BUILT (2026-07-29). Eager submit's precondition is met.
+
+Shipped as designed above, with three implementation rulings the design did
+not settle. Source of truth is the code + its tests, not this paragraph:
+`infra/code_tree.py` (layout, identity, GC planner), the four transport dials
+(`probe_code_tree` / `materialize_code_tree` / `seal_code_tree` /
+`reap_code_trees`), `ops/submit_flow._deploy_code_tree` +
+`_groom_code_trees`; pinned by `tests/infra/test_code_tree.py` and
+`tests/ops/submit/test_code_tree_submit.py`.
+
+1. **The tree holds CODE and symlinks — never a run's bytes.** §3 above said
+   "nothing else in the job path moves", but the job path resolves
+   `result_dir_template`, `${RESULT_DIR:-.}/.hpc_failed`, and the dispatcher's
+   own sidecar RELATIVE TO CWD — so with `$REPO_DIR` on a tree they would all
+   land INSIDE it, where the pull path cannot see them and the GC could delete
+   them. (The trade table's "results are unaffected" was therefore too
+   optimistic as written.) Fixed by symlinking every run-mutable path
+   (`code_tree.TREE_SHARED_PATHS`) back to the base and excluding those paths
+   from the snapshot, so nothing can materialise a real dir over one; the seal
+   step VERIFIES each is a symlink (`[ -L … ]`) and refuses the tree otherwise.
+   Only `REPO_DIR` moves — `remote_path` keeps every other meaning (submission
+   cwd, `log_dir`, jobmap, results, pulls).
+2. **The digest folds in the framework version.** `deploy_runtime` ships
+   package-versioned framework files INTO the tree, so a tree keyed on user
+   code alone would still let a queued job's dispatcher/preamble change
+   underneath it. One digest = everything the job executes. `.hpc/runs/` is
+   excluded from it, or every submission would mint its own tree (the per-RUN
+   granularity this section rejects).
+3. **The janitor's seat is the submit that MINTED a tree** — the same argument
+   `ops/queue/maintenance` uses for grooming on the tick that lengthened the
+   ledger. `probe_code_tree` already lists the trees root in the round-trip it
+   uses to check the seal, so the PLAN costs zero extra network; a submit that
+   REUSES a tree (the fast path) is charged nothing at all. Policy: reapable =
+   unreferenced by any non-terminal run AND outside the newest N=3 AND not the
+   digest being deployed. References are read off each `RunRecord`'s
+   `job_env["REPO_DIR"]` — no new record field, and `None` for a pre-S4 run,
+   which is also the migration story (absent-disables; a legacy run resolves to
+   the base via `code_tree.repo_dir_for_run`). An unreadable journal REFUSES the
+   whole pass rather than reading "no references" out of a failed scan.
+
+`--link-dest` is wired exactly as the probe table demands: opportunistic, never
+assumed, and the code cannot tell a hardlink from BeeGFS's silent copy. The
+run-start code-identity check is untouched — defense in depth. Kill-switch:
+`HPC_NO_CODE_TREES=1` restores the pre-S4 shape.
+
+##### CORRECTION (2026-07-29, first END-TO-END proving run)
+
+The sandbox-proving lane executed this path for real — every prior gate was
+mocked at the engine — and refused it: `[FAIL] s4.table … brief.results_table is
+empty — nothing harvested`. Two defects in ruling 1's symlink layer, both fixed;
+the design is unchanged.
+
+1. **The seal manufactured run-state at the BASE.** `seal_code_tree` ran `mkdir
+   -p <base>/<rel>` for EVERY shared path so `ln -s` would have a live target.
+   But `_combiner/` is written by the LOGIN NODE (`cd <remote_path>`), never
+   through the tree, and its EXISTENCE is evidence: `aggregate_flow` reads an
+   absent `<base>/_combiner/` as "no combiner ever ran" and falls back to the
+   per-task `metrics.json` reduce (#352 — the `@register_run`-sweep shape the
+   proving fixture submits). Pre-creating it switched that fallback off, so the
+   harvest reduced over zero wave partials and reported a SUCCESSFUL, EMPTY
+   table. Ruling 1's mirror: *a tree contains code and symlinks, never a run's
+   bytes — and sealing one must not invent run-state at the base.* The seal now
+   materialises a base target only for `TREE_BASE_MATERIALIZED_PATHS`, the paths
+   a job writes THROUGH the link; `_combiner` / `_aggregated` are linked and left
+   for their real writer.
+2. **`.hpc/announce` was missing from the shared set.** The dispatcher writes its
+   per-task census markers to `$REPO_DIR/.hpc/announce/<run_id>/`, while every
+   reader looks at `<remote_path>/.hpc/announce` — so a tree-pinned run announced
+   into the tree, the monitor census read `present=False` and silently degraded
+   to the reporter walk, and the streaming harvest's `census_arms` would have
+   refused outright. Now symlinked (and excluded from the snapshot, like the
+   other per-run bookkeeping).
+
+Independently, the harvest no longer depends on that directory being absent at
+all: the #352 fallback fires on "no wave partial for this run" for a wave_map-less
+run, which also closes the pre-existing F05 shape (a `--delete`-protected
+`_combiner/` outliving the run that filled it). Pinned by
+`tests/ops/aggregate/test_flow_empty_combiner_dir.py` and the real-shell seal
+test in `tests/infra/test_code_tree.py`.
+
+### What S1–S4 have in common
+
+S1, S2, and S3 are one change wearing three hats: **write a few more facts
+down at the moment an item joins the ledger** (its resolved spec, hence its
+placement and its computed run_id; its `request_id`; and the fact that its
+slot is spoken for). That is why the sweep insisted they be settled on
+paper together — settled separately, they would have produced three
+incompatible intake record shapes. S4 is genuinely independent and belongs
+to eager submit, not to Phase 1.
+
+### Tier-3 (2026-07-29) — clean-terminal-conditional consent for submit-s4 + aggregate-run
+
+**RULING (2026-07-29, maintainer).** A standing consent may consume the
+harvest (`submit-s4`) and reduce (`aggregate-run`) greenlights ONLY behind
+code-derived evidence the predecessor terminal was CLEAN; `submit-s2`
+stays human (the canary IS the human's look); interpretation always parks.
+The pre-ruling posture ("a pre-consent cannot reduce results the human
+never reviewed") survives in the condition — every dirty path parks
+`needs_decision` before these boundaries are offered as successors, so the
+consent skips exactly the rubber-stamp y on a clean completion.
+
+#### STATUS: BUILT (2026-07-29). Enforcement lives in the code, not here.
+
+The conditional set is `ops/overnight.OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`
+(beside the unconditional `OVERNIGHT_CONSUMABLE_BLOCKS`). The
+`clean_predecessor` evidence is caller-derived, never agent-authored: the
+in-hand `needs_decision=False` result at the driver seat (park markers
+stamp `resume_cursor.parked_needs_decision` for the resume path), the
+recorded predecessor terminal (`predecessor_terminal_clean`), or a prior
+ledgered consumption of the same identity (`boundary_already_ledgered`).
+It defaults dirty; a conditional boundary consulted without evidence
+refuses as `predecessor-not-clean`, and the flag widens the consumable SET
+only — every liveness leg still refuses. The docstrings on those symbols
+carry the detail; pinned by `tests/ops/decision/test_overnight_wiring.py`.
+

@@ -152,6 +152,17 @@ _MAX_ADAPTIVE_POLL_SECONDS: float = _env_float("HPC_STATUS_POLL_MAX_SEC", 300.0)
 #: quickly: 60s → 120 → 240 → 300 (cap) within ~10 minutes of quiet.
 _UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
 
+#: Completion-aware backoff ceiling: the effective adaptive cap is
+#: ``clamp(remaining_expected / THIS, poll floor, _MAX_ADAPTIVE_POLL_SECONDS)``
+#: — i.e. the loop always gets ~4 polls inside the window it expects the job
+#: to finish in, so a quiet job's terminal is noticed within ~remaining/4
+#: instead of sitting up to the flat 300s cap. Exact inverse of
+#: ``verify_canary._CANARY_FAST_POLL_SEC``'s geometric fast-start (there the
+#: short critical-path loop ramps UP FROM a fast floor; here the long idle
+#: loop's ceiling ramps DOWN toward the floor as the job approaches its own
+#: requested walltime). A SLEEP bound only — see ``_completion_aware_cap``.
+_BACKOFF_CEILING_DIVISOR: float = 4.0
+
 #: Consecutive DETERMINISTIC broken-env poll failures (reporter rc 126/127:
 #: wrong/absent conda env, or ``hpc_agent`` unimportable on the login node) that
 #: escalate the monitor to a LOUD reporter-unreachable TIMEOUT instead of riding
@@ -372,6 +383,89 @@ def _floor_poll_interval(requested: float) -> float:
     """
     floor = min(_MIN_POLL_INTERVAL_SECONDS, _MAX_ADAPTIVE_POLL_SECONDS)
     return max(float(requested), floor)
+
+
+def _sidecar_walltime_sec(sidecar: dict[str, Any] | None) -> float | None:
+    """The run's requested PER-TASK walltime (seconds) from the sidecar, or ``None``.
+
+    Reads ``resources.walltime_sec`` — the submit-time resource ask
+    ``submit_flow`` snapshots into the per-run sidecar (``state/runs.py``
+    v2 config-snapshot field; same read as
+    ``_kernel.lifecycle.block_drive._run_requested_walltime``). The caller
+    already holds the sidecar from the ONE loop-start read, so this costs
+    zero I/O. ``None`` (no sidecar / no resources / absent / non-numeric /
+    non-positive) switches the completion-aware ceiling OFF entirely — the
+    adaptive backoff then behaves byte-identically to the walltime-less
+    ramp (the additive rule).
+    """
+    if not isinstance(sidecar, dict):
+        return None
+    resources = sidecar.get("resources")
+    walltime = resources.get("walltime_sec") if isinstance(resources, dict) else None
+    if isinstance(walltime, bool) or not isinstance(walltime, (int, float)):
+        return None
+    return float(walltime) if walltime > 0 else None
+
+
+def _shows_execution(status: dict[str, Any]) -> bool:
+    """Positive evidence in *status* that the job has left the queue and RUN.
+
+    ``running > 0`` — the reporter walk / pure-API legs report live executing
+    tasks directly; ``complete > 0`` — a finished task proves execution began
+    (the announce census reports ``running: 0`` by construction, so a quiet
+    census-leg run arms via its complete count). Queued-only snapshots
+    (``pending``-only, including the rank-4 synthetic liveness snapshot) are
+    NOT evidence — queue wait is unbounded, so the completion clock must not
+    start ticking on them.
+    """
+    try:
+        return int(status.get("running", 0)) > 0 or int(status.get("complete", 0)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _completion_aware_cap(
+    *,
+    now_mono: float,
+    running_since: float | None,
+    walltime_sec: float | None,
+    wave_bound: int,
+    poll_floor: float,
+) -> tuple[float, float | None]:
+    """Effective ceiling for the adaptive backoff, tightened near expected end.
+
+    Returns ``(cap_seconds, remaining_expected_seconds | None)`` where the cap
+    is ``clamp(remaining / _BACKOFF_CEILING_DIVISOR, poll_floor,
+    _MAX_ADAPTIVE_POLL_SECONDS)`` and ``remaining`` counts down from
+    ``running_since + walltime_sec × wave_bound`` — data the loop already
+    holds (zero new SSH). Unknown walltime or never-observed-running returns
+    exactly ``(_MAX_ADAPTIVE_POLL_SECONDS, None)``: today's flat cap,
+    byte-identical ramp (the additive rule).
+
+    THIS IS A SLEEP BOUND, NOT A VERDICT
+    (``docs/internals/principles/determinism-boundary.md`` +
+    lifecycle-verdicts' one count→verdict rule): the estimate bounds how long
+    the loop sleeps between polls and must NEVER feed a terminal/escalation
+    decision — those stay exclusively with ``classify_polling``/``_is_terminal``
+    over real status counts. An estimate that has already expired
+    (``remaining <= 0``) merely clamps the cap to the poll floor; the loop
+    keeps polling until the STATUS says terminal.
+
+    Estimate accuracy is deliberately loose in the safe direction:
+    ``wave_bound`` is the sidecar wave count (waves chained sequentially each
+    get one per-task walltime; concurrent waves make this an over-estimate,
+    which just keeps today's cap longer), and an under-estimate (e.g. a wave
+    internally re-batched under a concurrency cap) merely polls faster near
+    the estimated end. Neither direction can touch a verdict.
+    """
+    if running_since is None or walltime_sec is None:
+        return _MAX_ADAPTIVE_POLL_SECONDS, None
+    remaining = (running_since + walltime_sec * max(1, wave_bound)) - now_mono
+    cap = min(
+        max(remaining / _BACKOFF_CEILING_DIVISOR, poll_floor),
+        _MAX_ADAPTIVE_POLL_SECONDS,
+    )
+    return cap, remaining
 
 
 def _announce_status(experiment_dir: Path, run_id: str, *, record: Any) -> Any | None:
@@ -595,6 +689,15 @@ def monitor_flow(
         if isinstance(wm, dict) and wm:
             wave_map = wm
 
+    # Completion-aware backoff ceiling inputs — read ONCE at loop start from
+    # data already in hand (the sidecar read above; zero new SSH, zero extra
+    # reads per tick). ``walltime_sec`` is the per-task walltime ask; the wave
+    # count bounds expected end for a multi-wave run (each sequential wave is
+    # bounded by one per-task walltime; see ``_completion_aware_cap`` for why
+    # both estimate directions are safe for a SLEEP bound).
+    walltime_sec = _sidecar_walltime_sec(sidecar)
+    backoff_wave_bound = max(1, len(wave_map)) if wave_map else 1
+
     state = _LoopState(
         last_combined_waves=list(record.combined_waves),
         last_failed_waves=list(record.failed_waves),
@@ -610,6 +713,14 @@ def monitor_flow(
     effective_interval = float(poll_interval_seconds)
     unchanged_count = 0
     last_fingerprint: str | None = None
+    # Completion-aware ceiling state: the monotonic instant this call FIRST
+    # observed positive execution evidence (``_shows_execution``). ``None``
+    # until then — and reset to ``None`` on a resubmit (auto-resume /
+    # auto-recover), whose fresh array re-queues — which keeps the ramp
+    # byte-identical to today whenever the estimate has no basis. Bounds the
+    # sleep only; never consulted by any terminal/escalation decision.
+    running_since: float | None = None
+    backoff_ceiling_disclosed = False
 
     terminal_cause: str | None = None
     # Consecutive deterministic broken-env poll failures (reporter rc 126/127) —
@@ -1172,6 +1283,35 @@ def monitor_flow(
                                 # envelope will surface failed_waves.
                                 state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
 
+                if diff["newly_combined_waves"]:
+                    # Wave-incremental harvest prefetch: the burst's partials are
+                    # sealed on the cluster (combine success == the combiner
+                    # atomically os.replace()d wave_<N>.json), so pull them NOW —
+                    # overlapping the still-running later waves — into the exact
+                    # local dir the terminal harvest pulls, which then transfers
+                    # only the delta. ONE pull per combine BURST, never per poll
+                    # (cluster etiquette: triggered solely by the wave-completion
+                    # state this loop already read; the pull rides the existing
+                    # throttle/breaker lineage). Opportunistic cache only — the
+                    # terminal harvest re-verifies every prefetched file and
+                    # remains the authority; a failure here is disclosed on the
+                    # tick action row and never disturbs the watch. Same alias
+                    # import shape as harvest_guard._default_aggregate (the
+                    # sanctioned spelling for a top-level ops module).
+                    from hpc_agent.ops import aggregate_flow as aggregate_flow_module
+
+                    prefetch = aggregate_flow_module.prefetch_wave_partials(
+                        experiment_dir, run_id, record=record
+                    )
+                    if prefetch is not None:
+                        actions.append(
+                            {
+                                "kind": "prefetch_wave_partials",
+                                "waves": list(diff["newly_combined_waves"]),
+                                **prefetch,
+                            }
+                        )
+
             # Bounded-unknown watchdog (proving run #3, finding f): a run whose
             # remote workdir vanished mid-run can poll "unknown" indefinitely —
             # nothing alive on the scheduler, no results on disk, no failure
@@ -1294,6 +1434,11 @@ def monitor_flow(
                         unchanged_count = 0
                         last_fingerprint = None
                         effective_interval = float(poll_interval_seconds)
+                        # The fresh array re-QUEUES, so the completion clock's
+                        # old basis is void — disarm it (today's flat cap)
+                        # until execution evidence re-arms it. Sleep bound
+                        # only; the resume verdict above never consulted it.
+                        running_since = None
                         _append_tick(
                             experiment_dir,
                             run_id,
@@ -1379,6 +1524,10 @@ def monitor_flow(
                     unchanged_count = 0
                     last_fingerprint = None
                     effective_interval = float(poll_interval_seconds)
+                    # Same disarm as the auto-resume branch: the recover
+                    # resubmit re-queues fresh clusters, so the completion
+                    # clock re-arms only on new execution evidence.
+                    running_since = None
                     _append_tick(
                         experiment_dir,
                         run_id,
@@ -1496,11 +1645,56 @@ def monitor_flow(
             # Still in flight; update adaptive backoff and record the tick.
             # Fingerprint covers the entire status snapshot (counts, scheduler
             # state, waves block) so any change snaps us back to the floor.
+            #
+            # Completion-aware ceiling: arm the running-since clock on the
+            # first tick whose status shows the job actually EXECUTING
+            # (running > 0 from the walk / pure-API legs, or complete > 0 —
+            # the census leg's proof). Status data already in hand; no I/O.
+            if running_since is None and _shows_execution(last_status):
+                running_since = now_mono
             fingerprint = _status_fingerprint(last_status)
             if last_fingerprint is not None and fingerprint == last_fingerprint:
                 unchanged_count += 1
                 if unchanged_count >= _UNCHANGED_POLLS_BEFORE_BACKOFF:
-                    effective_interval = min(effective_interval * 2.0, _MAX_ADAPTIVE_POLL_SECONDS)
+                    # Bound the doubled sleep by the completion-aware ceiling:
+                    # clamp(remaining_expected / 4, poll floor, flat cap) so
+                    # cadence tightens as the job approaches its own requested
+                    # walltime and the terminal is noticed promptly. Unknown
+                    # walltime / never-observed-running ⇒ cap == the flat
+                    # _MAX_ADAPTIVE_POLL_SECONDS, byte-identical to today. A
+                    # SLEEP bound only — the estimate never reaches
+                    # classify_polling/_is_terminal or any escalation.
+                    cap, remaining_expected = _completion_aware_cap(
+                        now_mono=now_mono,
+                        running_since=running_since,
+                        walltime_sec=walltime_sec,
+                        wave_bound=backoff_wave_bound,
+                        poll_floor=float(poll_interval_seconds),
+                    )
+                    doubled = effective_interval * 2.0
+                    effective_interval = min(doubled, cap)
+                    # Disclose the ceiling's basis on the tick actions the
+                    # FIRST time it actually binds (chose a sleep below what
+                    # the flat-cap rule would have) — one-shot, mirroring the
+                    # walk_fallback_disclosed pattern. Every subsequent bound
+                    # sleep is already visible in next_tick_seconds.
+                    if (
+                        not backoff_ceiling_disclosed
+                        and remaining_expected is not None
+                        and cap < min(doubled, _MAX_ADAPTIVE_POLL_SECONDS)
+                    ):
+                        backoff_ceiling_disclosed = True
+                        actions.append(
+                            {
+                                "kind": "backoff_ceiling",
+                                "remaining_expected_seconds": round(
+                                    max(remaining_expected, 0.0), 1
+                                ),
+                                "cap_seconds": round(cap, 1),
+                                "walltime_sec": walltime_sec,
+                                "wave_bound": backoff_wave_bound,
+                            }
+                        )
             else:
                 unchanged_count = 0
                 effective_interval = float(poll_interval_seconds)

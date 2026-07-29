@@ -127,7 +127,9 @@ survives the turn, and to wake / re-invoke the driving agent when the worker
 reaches a terminal or an anomaly.
 
 **Trust property earned.** The detached-worker machinery (S2/S3/S4 detach,
-campaign reconcile self-chaining, the driver watchdog) can run cluster waits —
+campaign reconcile self-chaining, the run queue's CHAIN-DISPATCH wake edge —
+`ops/queue/chain.py`, one dispatch tick chained by a retiring run's own driver —
+the driver watchdog) can run cluster waits —
 staging, canary polls, harvest — outside the synchronous chat turn without the
 human idle-blocking, while the journal remains the durable rendezvous the woken
 agent reads to resume.

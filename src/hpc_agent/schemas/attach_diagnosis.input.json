@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/attach_diagnosis.input.json",
+  "title": "attach-diagnosis input spec",
+  "description": "Input spec for ``attach-diagnosis`` — shape validation only.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "classification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "classification": {
+      "description": "The investigator's classification, named from the CLOSED set the diagnosis-request disclosed (infra.failure_signatures.CLASSIFIER_CATEGORIES) or the literal 'unmatched' when no catalog category fits. Membership is enforced by the verb; free-text categories are refused.",
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Classification",
+      "type": "string"
+    },
+    "evidence_excerpts": {
+      "description": "Quoted log evidence (path + lines), bounded.",
+      "items": {
+        "$ref": "#/$defs/DiagnosisEvidenceExcerpt"
+      },
+      "maxItems": 20,
+      "title": "Evidence Excerpts",
+      "type": "array"
+    },
+    "proposed_actions": {
+      "description": "Drafted recovery options, bounded. Proposals only.",
+      "items": {
+        "$ref": "#/$defs/DiagnosisProposedAction"
+      },
+      "maxItems": 10,
+      "title": "Proposed Actions",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "DiagnosisEvidenceExcerpt": {
+      "additionalProperties": false,
+      "description": "One quoted log/artifact excerpt: WHERE it came from + the lines quoted.",
+      "properties": {
+        "path": {
+          "description": "The local file the excerpt was read from — one of the paths the diagnosis-request named (run sidecar, worker log, journal record). A pointer for the human to open; never fetched by any surface.",
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "lines": {
+          "description": "The quoted lines (verbatim excerpt, bounded). Display-only advisory matter — no gate or trusted surface ever reads this.",
+          "maxLength": 4000,
+          "title": "Lines",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "lines"
+      ],
+      "title": "attach-diagnosis evidence excerpt",
+      "type": "object"
+    },
+    "DiagnosisProposedAction": {
+      "additionalProperties": false,
+      "description": "One DRAFTED recovery option — a proposal the human may read, never an answer.",
+      "properties": {
+        "label": {
+          "description": "Short name of the drafted option (e.g. 'raise mem_mb and resubmit').",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "rationale": {
+          "description": "Why the investigator drafted it (agent judgment, advisory).",
+          "maxLength": 2000,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "suggested_response_text": {
+          "description": "Text the HUMAN could choose to type as their park answer. Never auto-filled, never rendered as an answer-menu option (the menu is code-authored data only) — the human reads it from the dossier render and decides.",
+          "maxLength": 2000,
+          "title": "Suggested Response Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "rationale",
+        "suggested_response_text"
+      ],
+      "title": "attach-diagnosis proposed action",
+      "type": "object"
+    }
+  }
+}

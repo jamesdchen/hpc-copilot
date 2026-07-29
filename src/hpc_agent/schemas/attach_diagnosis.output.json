@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/attach_diagnosis.output.json",
+  "title": "attach-diagnosis output data",
+  "description": "Shape of the ``data`` field on an ``attach-diagnosis`` envelope.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "path",
+    "attached_at",
+    "classification",
+    "proposed_actions_count",
+    "overwrote"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "path": {
+      "description": "Absolute path of the written <run_id>.diagnosis.json dossier.",
+      "title": "Path",
+      "type": "string"
+    },
+    "attached_at": {
+      "description": "ISO-8601 UTC provenance stamp written by the state layer.",
+      "title": "Attached At",
+      "type": "string"
+    },
+    "classification": {
+      "description": "The classification as stored.",
+      "title": "Classification",
+      "type": "string"
+    },
+    "proposed_actions_count": {
+      "description": "How many drafted actions the dossier carries (the pointer count).",
+      "title": "Proposed Actions Count",
+      "type": "integer"
+    },
+    "overwrote": {
+      "description": "True when a prior diagnosis existed and was replaced (re-attach overwrites — newest advisory dossier wins).",
+      "title": "Overwrote",
+      "type": "boolean"
+    }
+  }
+}

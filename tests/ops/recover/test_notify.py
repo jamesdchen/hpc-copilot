@@ -327,3 +327,130 @@ def test_alerts_ack_clamps_future_up_to_ts_to_now(
     )
     surfaced = notify.read_unacknowledged_alerts(tmp_path)
     assert [a["message"] for a in surfaced] == ["post-ack stall"]
+
+
+# ── (v) the PARK notification payload (run-queue plan §8 S13) ────────────────
+#
+# A push that says only "run X needs you" sends the human back to a desk to learn
+# what the decision is and to reconstruct the answer grammar. ``compose_park_notice``
+# carries the brief's OWN two lines instead — its code-composed summary and its
+# paste-ready answer line — so a phone answer is the same trusted decision as a desk
+# answer. Disclosure only: no new channel, nothing auto-answered.
+
+
+def _park_brief(*, answer_line: str = "y submit-s3 r1 @a1b2c3d4") -> dict[str, object]:
+    from hpc_agent.ops.relay_render import compose_answer_menu
+
+    menu = compose_answer_menu(
+        brief={},
+        block="submit-s2",
+        run_id="r1",
+        target="submit-s3",
+        next_spec_sha="a1b2c3d4" * 8,
+        approve_hint={"utterance": answer_line},
+    )
+    return {"canary": "green", "answer_menu": menu}
+
+
+def _park(run_id: str = "r1", since: str = "2026-07-29T02:00:00+00:00") -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "block": "submit-s2",
+        "awaiting_since": since,
+        "brief": _park_brief(),
+    }
+
+
+def test_park_notice_carries_the_summary_and_the_paste_ready_answer_line() -> None:
+    text = notify.compose_park_notice(_park())
+    # The one-line summary — read verbatim out of the brief's own menu, never
+    # re-derived and never a summary of the brief itself.
+    assert "run r1 awaiting your decision since 2026-07-29T02:00:00+00:00" in text
+    assert "at block submit-s2" in text
+    assert "a bare 'y' advances to submit-s3" in text
+    # The paste-ready line, naming the run + the spec pin — what makes a phone
+    # answer identify the boundary rather than "whatever was on screen".
+    assert "To answer, paste:  y submit-s3 r1 @a1b2c3d4" in text
+    # The park-time diagnosis POINTER closes every notice (none attached here).
+    assert text.endswith("diagnosis: none")
+
+
+def test_park_notice_degrades_without_a_menu_rather_than_going_silent() -> None:
+    """NEGATIVE: a brief from a driver predating the menu (or a torn one) still
+    yields a deliverable line — detection without delivery is silence."""
+    text = notify.compose_park_notice({"run_id": "r1", "awaiting_since": "2026-07-29T02:00:00Z"})
+    assert text == (
+        "hpc-agent: run r1 awaiting your decision since 2026-07-29T02:00:00Z\ndiagnosis: none"
+    )
+    assert "paste" not in text
+    # Nothing at all still names the run slot, never an empty push.
+    assert notify.compose_park_notice({}) == (
+        "hpc-agent: run ? awaiting your decision since an unknown time\ndiagnosis: none"
+    )
+
+
+def test_park_notification_delivers_and_logs_one_record(tmp_path: Path) -> None:
+    records = notify.raise_park_notification([_park()], experiment_dir=tmp_path)
+    assert len(records) == 1
+    assert records[0]["delivered"] is True
+    assert records[0]["mechanism"] == "logfile"  # the notifier is faked off
+    lines = _raw_lines(tmp_path)
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["run_id"] == "r1"
+    assert rec["kind"] == "park"
+    assert "To answer, paste:" in rec["message"]
+
+
+def test_repeated_park_ticks_dedup_to_one_line(tmp_path: Path) -> None:
+    """A 15-minute watchdog cadence must not re-buzz for the same undecided
+    boundary: the identity is ``<run_id>|park|<awaiting_since>``, fixed while the
+    boundary stays parked."""
+    for _ in range(20):
+        notify.raise_park_notification([_park()], experiment_dir=tmp_path)
+    assert len(_raw_lines(tmp_path)) == 1
+
+
+def test_a_repark_is_a_new_park_notification(tmp_path: Path) -> None:
+    """The inverse: a re-park moves ``awaiting_since``, so the human IS told again."""
+    notify.raise_park_notification(
+        [_park(since="2026-07-29T02:00:00+00:00")], experiment_dir=tmp_path
+    )
+    notify.raise_park_notification(
+        [_park(since="2026-07-29T05:00:00+00:00")], experiment_dir=tmp_path
+    )
+    assert len(_raw_lines(tmp_path)) == 2
+
+
+def test_park_and_stall_of_one_run_do_not_collapse(tmp_path: Path) -> None:
+    """Parked ≠ stalled: sharing the dedup ``kind`` would silence the second."""
+    since = "2026-07-29T02:00:00+00:00"
+    notify.raise_stall_notification([_proposal("r1", since)], experiment_dir=tmp_path)
+    notify.raise_park_notification([_park(since=since)], experiment_dir=tmp_path)
+    kinds = {json.loads(ln)["kind"] for ln in _raw_lines(tmp_path)}
+    assert kinds == {"stall", "park"}
+
+
+def test_park_notification_adds_no_channel(tmp_path: Path) -> None:
+    """The S13 constraint, mechanized: the park path fires the SAME notifier the
+    stall + free-form alert paths do (``_deliver``), never a new one."""
+    fired: list[list[str]] = []
+    original = notify._try_run
+    try:
+        notify._try_run = lambda argv: fired.append(list(argv)) or False  # type: ignore[assignment]
+        notify.raise_park_notification([_park()], experiment_dir=tmp_path)
+        notify.raise_alert_notification("x", experiment_dir=tmp_path)
+    finally:
+        notify._try_run = original  # type: ignore[assignment]
+    # Whatever argv shapes the platform offers, both paths use the same set.
+    assert len(fired) in (0, 2)
+    if fired:
+        assert fired[0][0] == fired[1][0]
+
+
+def test_no_parks_notifies_nothing(tmp_path: Path) -> None:
+    """NEGATIVE: an empty park list writes no record and delivers nothing (the
+    stall path deliberately DOES write a degenerate summary line; a park has no
+    equivalent 'no parks' statement worth a durable line)."""
+    assert notify.raise_park_notification([], experiment_dir=tmp_path) == []
+    assert _raw_lines(tmp_path) == []

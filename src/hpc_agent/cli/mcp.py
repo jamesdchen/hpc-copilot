@@ -13,7 +13,14 @@ as tools. ``--allow-mutations`` additionally exposes the mutating verbs
 (submit / aggregate / scaffold); the registry has no scheduler cancel/submit
 verb, so those remain unreachable regardless. ``--catalog tiered`` advertises
 only ``find`` / ``describe`` / ``run-primitive`` to keep per-tool schemas out of
-the model's context for large catalogs.
+the model's context for large catalogs. ``--catalog science`` advertises the
+run-queue PRODUCER subset for a coordinating agent (Claude Science —
+``docs/design/claude-science-integration.md``): EXACTLY ``queue-run`` +
+``queue-status`` + ``queue-advance``, disjoint by construction from every
+gate-crossing verb (``queue-dispatch`` / ``submit-*`` / ``append-decision`` /
+``block-drive``). ``queue-run`` is a ``mutate``, so that catalog is paired with
+``--allow-mutations``; enabling mutations is safe because the membership is fixed
+to those three ungated/pure producer verbs.
 
 ``register(sub)`` is invoked from
 :func:`hpc_agent.cli.parser._register_tier3_modules`.
@@ -143,7 +150,7 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
                 _reconfigure(encoding="utf-8")
 
     catalog = getattr(args, "catalog", "full")
-    if catalog not in ("full", "tiered", "curated"):
+    if catalog not in ("full", "tiered", "curated", "science"):
         catalog = "full"
     server = build_server(
         allow_mutations=bool(getattr(args, "allow_mutations", False)),
@@ -182,7 +189,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--catalog",
-        choices=["full", "tiered", "curated"],
+        choices=["full", "tiered", "curated", "science"],
         default="full",
         help=(
             "full (default): one typed tool per read-only primitive. tiered: "
@@ -191,7 +198,13 @@ def register(sub: argparse._SubParsersAction) -> None:
             "curated: the human-amplification block verbs (those returning a "
             "next_block), the loop driver block-drive + the greenlight commit "
             "append-decision, plus the recovery/opt-in verbs (doctor, kill, "
-            "net-triage, submit-speculate) — the surface install-commands registers."
+            "net-triage, submit-speculate) — the surface install-commands registers. "
+            "science: the run-queue PRODUCER subset for a coordinating agent (Claude "
+            "Science) — EXACTLY queue-run + queue-status + queue-advance, disjoint "
+            "from every gate-crossing verb (no queue-dispatch, no submit-*, no "
+            "append-decision). queue-run is a mutate, so pair it with "
+            "--allow-mutations; only these three ungated/pure producer verbs are "
+            "reachable, so enabling mutations stays safe."
         ),
     )
     p.set_defaults(func=cmd_mcp_serve)

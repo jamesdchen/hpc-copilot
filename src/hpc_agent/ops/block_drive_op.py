@@ -17,6 +17,7 @@ invariant substrate").
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -24,11 +25,56 @@ from hpc_agent._kernel.lifecycle.block_drive import run_tick
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.block_drive import BlockDriveResult, BlockDriveSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.state.journal import DRIVE_PROGRESS_ACTIONS, stamp_drive_attempt
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["block_drive"]
+
+_log = logging.getLogger(__name__)
+
+
+def _count_drive_attempt(experiment_dir: Path, result: BlockDriveResult) -> None:
+    """Stamp this tick's futile-drive counter — the retryable(n) write point.
+
+    THE increment point for ``RunRecord.drive_attempts``
+    (``docs/plans/run-queue-placement-2026-07-28.md`` §7): a drain plan may give
+    a failed drivable item at most *n* drive attempts, and that budget must be
+    KERNEL state read off disk, never a variable the plan carries across
+    relaunches. Placed on the AGENT-FACING seat deliberately — this is the verb a
+    drain pass relays, so the number counts relayed attempts, which is exactly
+    what the policy bounds. The console-script / detach-child entry
+    (``hpc-block-drive``) reaches ``run_tick`` directly and is NOT counted: a
+    detached child's poll is not a pass relaying a tick, and counting it would
+    let a healthy long wait exhaust an item's budget.
+
+    Classification lives in ``state/journal.DRIVE_PROGRESS_ACTIONS`` (one home);
+    this seat only reports which side of it the tick landed on.
+
+    Never raises — and "never" is load-bearing, so the catch is ``Exception``
+    rather than a tuple of the failures anyone thought of. A tick that drove no
+    run (``run_id`` is null on a ``skip``), or one whose record does not exist
+    yet, has nothing to count against; and a bookkeeping failure must not turn a
+    successful drive into an error envelope, because the counter is an advisory
+    budget and the drive ALREADY HAPPENED. The narrower ``(FileNotFoundError,
+    OSError)`` this started as was false advertising: a type-corrupt record
+    (``drive_attempts: "three"``) raises ``ValueError`` out of ``int()`` in
+    :func:`~hpc_agent.state.journal.stamp_drive_attempt` and crashed the drive it
+    was supposed to be advisory to. Same posture as the queue's janitor
+    (``ops/queue/maintenance.py``): hygiene reports, it never vetoes.
+    """
+    run_id = (result.run_id or "").strip()
+    if not run_id:
+        return
+    try:
+        stamp_drive_attempt(
+            run_id,
+            progressed=result.action in DRIVE_PROGRESS_ACTIONS,
+            experiment_dir=experiment_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 — an advisory counter must never fail a drive
+        _log.warning("block-drive: could not stamp drive_attempts for %s (%s)", run_id, exc)
 
 
 @primitive(
@@ -49,7 +95,10 @@ __all__ = ["block_drive"]
     ],
     side_effects=[
         SideEffect("spawns-subprocess", "hpc-agent <block verb> per chained span"),
-        SideEffect("writes-journal", "<run_id> pending_decision marker + watchdog tick"),
+        SideEffect(
+            "writes-journal",
+            "<run_id> pending_decision marker + watchdog tick + drive_attempts counter",
+        ),
     ],
     error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
     idempotent=True,
@@ -80,6 +129,12 @@ def block_drive(experiment_dir: Path, *, spec: BlockDriveSpec) -> BlockDriveResu
     decision. Returns the :class:`BlockDriveResult` record of what the tick did;
     the tick's process exit code is only consumed by the console-script entry
     (``hpc-block-drive`` / detach children), not this agent-facing surface.
+
+    After the tick, stamps the run's ``drive_attempts`` budget
+    (:func:`_count_drive_attempt`) — the one write point for the drain loop's
+    retryable(n) policy. A ``dry_run`` preview is deliberately NOT counted: it
+    executes no span, so charging it would let a plan burn an item's budget by
+    looking at it.
     """
     result, _exit_code = run_tick(
         experiment_dir,
@@ -88,4 +143,6 @@ def block_drive(experiment_dir: Path, *, spec: BlockDriveSpec) -> BlockDriveResu
         dry_run=spec.dry_run,
         approve=spec.approve,
     )
+    if not spec.dry_run:
+        _count_drive_attempt(experiment_dir, result)
     return result

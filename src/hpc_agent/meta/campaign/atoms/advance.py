@@ -24,6 +24,14 @@ from hpc_agent.meta.campaign.atoms.resubmit_cap import (
     DEFAULT_MAX_TASK_RESUBMITS as _DEFAULT_MAX_TASK_RESUBMITS,
 )
 
+# THE shared occupancy predicate (run-queue plan R9 / §10.S3, D6). Imported at
+# module level, not lazily inside the body like this file's other evidence
+# sources, because "campaign-advance's pool arithmetic routes through
+# occupied_slots" is a structural claim about this module that a cheap import
+# census can check — see tests/meta/campaign/atoms/test_advance_refill.py. The
+# module it names documents itself as this caller's counterpart.
+from hpc_agent.state.queue_occupancy import occupied_slots
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -107,7 +115,10 @@ if TYPE_CHECKING:
                 default=None,
                 help=(
                     "Pool-occupancy target K for --async-refill. refill_count = "
-                    "max(0, min(K - in_flight, remaining_max_jobs)). Defaults from "
+                    "max(0, min(K - occupied, remaining_max_jobs)), where occupied "
+                    "is the ONE shared predicate: non-terminal, non-superseded runs "
+                    "of this campaign UNION its queued/placed run-queue items, "
+                    "deduped by run id. Defaults from "
                     "the manifest's top-level max_in_flight, then the framework "
                     f"default ({_DEFAULT_MAX_IN_FLIGHT}). Ignored when async is off."
                 ),
@@ -155,11 +166,21 @@ def campaign_advance(
     ``wait_in_flight`` barrier is **replaced** by a ``refill`` rule ordered
     *after* the budget and stop_* halts — so a converged / over-budget /
     circuit-broken campaign stops refilling rather than topping the pool back
-    up. ``refill`` carries ``refill_count = max(0, min(K - in_flight,
+    up. ``refill`` carries ``refill_count = max(0, min(K - occupied,
     remaining_max_jobs))`` (``K`` = ``max_in_flight``; ``remaining_max_jobs``
     may be ``None`` = unbounded, and already excludes in-flight jobs); when the
-    pool is already full it falls back to
-    ``wait_in_flight``. Crucially, ``wait_in_flight`` STILL fires for the
+    pool is already full it falls back to ``wait_in_flight``.
+
+    ``occupied`` is the ONE shared occupancy predicate
+    (:func:`~hpc_agent.state.queue_occupancy.occupied_slots`, run-queue plan R9 /
+    §10.S3), returned on the payload so the arithmetic stays checkable: this
+    campaign's non-terminal, non-superseded runs UNION its ``{queued, placed}``
+    run-queue items, deduped by slot key. It replaces ``status.in_flight`` in the
+    POOL arithmetic ONLY — an enqueued-but-undispatched item is committed work
+    that no journal knows about yet, and refilling over it re-proposes slots that
+    are already spoken for. The ``wait_in_flight`` / drain-before-stop legs keep
+    counting live journal records, because their question is about orphaning
+    cluster JOBS. Crucially, ``wait_in_flight`` STILL fires for the
     terminal-stop case: when a circuit-breaker / resubmit-cap / convergence stop
     is pending but runs are still in flight, the async ladder drains them
     (``_drain_before_stop``) before emitting the stop, so a terminal stop never
@@ -270,6 +291,11 @@ def campaign_advance(
         "breaker": breaker,
         "resubmit_cap": resubmit_cap,
         "budget_ack": budget_ack,
+        # The ONE occupancy predicate (R9), computed once beside the other
+        # evidence so the ladder's rules stay pure functions of ``evidence``
+        # rather than reaching for the filesystem mid-decision. Only ``_refill``
+        # reads it — see that rule for why the other in-flight readers must not.
+        "occupied": occupied_slots(experiment_dir, campaign_id),
     }
 
     def _over_budget(e: dict[str, Any]) -> CandidateAction | None:
@@ -341,22 +367,40 @@ def campaign_advance(
         return None
 
     def _refill(e: dict[str, Any]) -> CandidateAction | None:
-        # Async-refill only (#362): keep up to K iterations in flight, capped by
-        # budget headroom. This folds decide-concurrency's safe-bound computation
-        # (currently unused by the driver) into the ladder. Reached only AFTER
-        # over_budget + the stop_* halts, so a converged / circuit-broken /
-        # over-budget campaign stops refilling instead of topping the pool back up.
-        n = e["status"]["in_flight"]
+        # Async-refill only (#362): keep up to K iterations OCCUPYING the pool,
+        # capped by budget headroom. This folds decide-concurrency's safe-bound
+        # computation (currently unused by the driver) into the ladder. Reached
+        # only AFTER over_budget + the stop_* halts, so a converged /
+        # circuit-broken / over-budget campaign stops refilling instead of
+        # topping the pool back up.
+        #
+        # The occupancy term is the SHARED predicate (run-queue plan R9 / §10.S3,
+        # D6), not ``status.in_flight``. Read that module's "What changes for the
+        # second caller" section: routing here moves the number two ways on
+        # purpose — UP, because an enqueued-but-undispatched ledger item now
+        # occupies (that is S3's bug: without it every tick inside the
+        # enqueue→dispatch window re-proposes slots that are already spoken for),
+        # and DOWN, because a SUPERSEDED run stops occupying (it holds a slot no
+        # live job is using). ``_wait_in_flight`` and ``_drain_before_stop``
+        # deliberately keep reading ``status.in_flight``: their question is
+        # "would stopping now orphan a cluster JOB?", and a queued ledger item is
+        # not a job — counting it there would make a converged campaign drain
+        # forever behind an item nothing is going to dispatch.
+        occupied = e["occupied"]
+        in_flight = e["status"]["in_flight"]
         remaining_max_jobs = e["budget"]["remaining"].get("max_jobs")  # None = unbounded
         k = max_in_flight if max_in_flight is not None else _DEFAULT_MAX_IN_FLIGHT
         # Two INDEPENDENT caps on how many to submit this tick:
-        #   pool_room  = K - in_flight      — don't exceed K concurrent
+        #   pool_room  = K - occupied       — don't exceed K concurrent
         #   remaining_max_jobs              — jobs still affordable. campaign-budget's
         #     ``remaining`` is cap - spent, and ``spent`` already counts in-flight runs
         #     (they carry sidecars from submit time) — so it must NOT be reduced by
-        #     in_flight again. The old ``min(K, remaining) - n`` double-counted the
+        #     the occupancy again. The old ``min(K, remaining) - n`` double-counted the
         #     in-flight jobs and under-filled the pool by ``n`` on a tight budget.
-        pool_room = max(0, k - n)
+        #     That arm is untouched by D6 and self-corrects for a queued item for
+        #     free: §10.S3 resolves BEFORE enqueueing, so the item's sidecar is
+        #     already written and already counted in ``spent``.
+        pool_room = max(0, k - occupied)
         refill_count = (
             pool_room if remaining_max_jobs is None else max(0, min(pool_room, remaining_max_jobs))
         )
@@ -365,18 +409,24 @@ def campaign_advance(
                 action="refill",
                 params={"refill_count": refill_count},
                 rationale=(
-                    f"async refill: {n} in flight (K={k}, "
-                    f"remaining_max_jobs={remaining_max_jobs}); "
+                    f"async refill: {occupied} pool slot(s) occupied "
+                    f"({in_flight} in flight + queued/placed queue items, deduped "
+                    f"by run id) (K={k}, remaining_max_jobs={remaining_max_jobs}); "
                     f"submit {refill_count} more iteration(s)"
                 ),
             )
-        if n > 0:
+        if occupied > 0:
             # Pool full or out of budget room — wait for a slot rather than over-submit.
-            # The async analogue of the synchronous wait_in_flight guard.
+            # The async analogue of the synchronous wait_in_flight guard. Keyed on
+            # the SAME occupancy the arithmetic above used: a pool held full by
+            # queued items that no one has dispatched yet must not read as
+            # "continue" (the default branch), which would invite the caller to
+            # plan an iteration the pool has no room for.
             return CandidateAction(
                 action="wait_in_flight",
                 rationale=(
-                    f"async pool full: {n} in flight, no refill room "
+                    f"async pool full: {occupied} pool slot(s) occupied "
+                    f"({in_flight} in flight), no refill room "
                     f"(K={k}, remaining_max_jobs={remaining_max_jobs})"
                 ),
             )
@@ -456,6 +506,11 @@ def campaign_advance(
         # Non-None only on a loud-fail terminator (stop_circuit_breaker /
         # stop_resubmit_cap); the drafted brief for the human decision point.
         "anomaly_brief": anomaly_brief,
+        # The shared predicate's number (R9), published beside the payloads it
+        # was computed from: a refill decision rests on it, so a caller must be
+        # able to check the arithmetic without recomputing a second count — the
+        # exact divergence state/queue_occupancy.py exists to prevent.
+        "occupied": evidence["occupied"],
         "status": status,
         "converged": converged,
         "budget": budget,

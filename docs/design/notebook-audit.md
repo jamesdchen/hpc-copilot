@@ -924,7 +924,12 @@ call sites (`tests/ops/decision/test_overnight_wiring.py`, 17 cases):
 * **Seam 1 — auto-advance under consent.** The overnight-consumable boundaries
   are named ONCE (`overnight.OVERNIGHT_CONSUMABLE_BLOCKS`: `submit-s3` for a run,
   `campaign-watch`'s anomaly halt for a campaign); a boundary NOT named there
-  never auto-advances, no matter how live the consent. `overnight`
+  never auto-advances, no matter how live the consent. *(Tier-3 ruling
+  2026-07-29: the named-once vocabulary gained a second, CONDITIONAL tier —
+  `overnight.OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`, harvest + reduce behind
+  code-derived clean-terminal evidence, with its own `predecessor-not-clean`
+  refusal leg; that symbol and the run-queue plan's §10 Tier-3 subsection are
+  the SoT for the consumable set, not this shipping record.)* `overnight`
   `consume_boundary_under_consent` is the ONE consult-and-ledger seat: it reuses
   `standing_consent_status` for liveness (never re-derived) and records the
   auto-advance via `record_consumption` in the SAME breath (an unrecorded

@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_run.input.json",
+  "title": "queue-run input spec",
+  "description": "Inputs to ``queue-run`` — one item's arrival facts, and nothing else.",
+  "type": "object",
+  "required": [
+    "request_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "request_id": {
+      "description": "Client-minted idempotency token (a UUID4 is the expected shape), passed straight through as the intake append's dedup_key and adopted as the item's ``item_id`` (§10.S2). REQUIRED, not derived: the whole point is that the CLIENT decides which two calls are the same call, so a workflow engine replaying a cached turn re-sends the same token and the second append writes nothing. The dedup probe runs inside the ledger's flock, so it is race-free against a concurrent duplicate too.",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "spec": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The spec, recorded VERBATIM on the ledger. Exactly one of ``spec`` / ``spec_ref`` must be given (§1: 'the resolve spec, or a pointer to it'). Inline is right for a machine-produced item — a campaign refill enqueuing a trial — because the item then carries everything a later dispatch needs with no second file to keep alive. Opaque here: queue-run validates that it EXISTS, never what is in it; the resolver owns that invariant. WHICH spec depends on ``run_id``: an item carrying a resolved identity (``run_id`` + ``cmd_sha``) must record the RESOLVED submit-flow spec (``ResolveSubmitInputsResult.submit_spec``), because queue-dispatch composes the shipped lifecycle and never re-resolves — a second resolve would write another sidecar, consume the NEXT optuna proposal, and derive a run_id disagreeing with the one on the ledger (run-queue plan §10.S3/E4/D5). An item with no resolved identity may record an unresolved resolve spec; dispatch refuses it as ``item_unresolved`` rather than resolving on its behalf.",
+      "title": "Spec"
+    },
+    "spec_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pointer to a resolve spec on disk, for an item whose spec is large or already versioned in the repo. Exactly one of ``spec`` / ``spec_ref``. Recorded verbatim and NOT dereferenced at enqueue: a pointer that goes stale is a fact the projection should surface, not a reason to refuse arrival.",
+      "title": "Spec Ref"
+    },
+    "run_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional logical run name. Load-bearing for §10.S2: run ids are COMPUTED, not minted — ``run_id = '<run_name>-<cmd_sha[:8]>'`` — so supplying it is what lets the item carry a run_id while it is still on the ledger, which is in turn what lets the occupancy predicate collapse the item and the run it becomes onto ONE slot. Omit it and the item simply holds its own slot until it resolves.",
+      "title": "Run Name"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The item's COMPUTED run id, supplied by a caller that ALREADY resolved it (§10.S3: campaign-refill resolves first, then enqueues, because resolving consumes the optuna sidecar index exactly once). Never REQUIRED and never derived here — an unresolved hand enqueue stays legal and simply carries no identity yet. Recording it is a correctness precondition rather than a convenience: the occupancy predicate collapses an item and the run it becomes onto ONE slot only when the item knows its run_id, so without it the enqueue-then-dispatch handoff counts one committed slot twice. It asserts nothing about a run EXISTING — the id is a pure function of run_name and cmd_sha; whether a run is live is the run stores' fact (R1).",
+      "title": "Run Id"
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{8,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The resolved parameter identity behind ``run_id`` — its pre-image, since ``run_id`` keeps only the first 8 hex characters. Supplied with ``run_id`` by a caller that resolved first; null otherwise. Carried so a later dispatcher that finds an existing run for this id can state WHICH cmd_sha the ledger committed to instead of inferring agreement from a truncation.",
+      "title": "Cmd Sha"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional EXPLICIT cluster pin — a clusters.yaml top-level key. R5: a pin always wins over policy, because an operator naming a cluster is a decision and the placement default is only a default. This is the sole placement input a caller may assert; the chosen cluster of an unpinned item is ``queue-advance``'s to decide and to disclose. A pin naming a key absent from the active clusters.yaml is REFUSED here (cluster_unknown, with the near-miss suggestion; a BLANK pin is spec_invalid, since omitting the field and blanking it mean opposite things): R5 makes the pin supreme, so nothing downstream would ever re-choose, and enqueueing a typo would convert it into a permanently unplaceable item whose hold-back reason surfaces hours later. queue-advance's ``cluster_pin_unknown`` hold covers the other case — a pin that was valid at enqueue and went stale under a later clusters.yaml edit.",
+      "title": "Cluster"
+    },
+    "campaign_base": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional logical campaign base. Placement composes the concrete campaign id as ``<base>_<clusterkey>`` (docs/design/campaign-multi-cluster.md §2), which is how one study splits across CARC and Hoffman2 while the shared-study merge still reunifies the results. Null for an open-loop item, which belongs to no campaign and occupies no campaign pool slot.",
+      "title": "Campaign Base"
+    },
+    "resources": {
+      "$ref": "#/$defs/QueueResourceAsk",
+      "description": "Typed resource asks (§9's TYPED ruling) used as the hard-constraint leg of placement. Defaults to an empty ask, which means every configured cluster satisfies the item."
+    },
+    "retryable": {
+      "anyOf": [
+        {
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional DECLARED failure-class budget (run-queue plan §7, 'Failure classes on parked items'): when the run this item becomes reaches a MECHANICAL failure terminal (journal status 'failed' — never superseded, human-halted, parked on a decision, or held on an escalation verdict), queue-dispatch re-enqueues and re-dispatches it up to this many times before it parks for a human, each retry disclosed as a declared-retry and counted durably on the ledger. Null (the default) means needs_human — a failed run parks and nothing re-dispatches it, today's behavior byte-for-byte. This is DECLARED item data consumed by kernel code, never an agent's judgment call: the only way an item is retryable is that its enqueuer said so here, and a retry reuses the item's recorded resolved identity verbatim (same spec, same run_id/cmd_sha — never a re-resolve, which would consume the next optuna proposal). A positive small int; junk is refused at this boundary.",
+      "title": "Retryable"
+    }
+  },
+  "$defs": {
+    "QueueResourceAsk": {
+      "additionalProperties": false,
+      "description": "The TYPED resource ask carried by one queued item (run-queue plan §9).\n\n§9 weighed free-form (opaque; policy reads known keys) against typed\n(schema'd) and ruled TYPED: placement filters items against cluster caps,\nand a filter over free-form keys silently drops an item whose author spelled\nthe key differently — the exact failure R4 forbids (never drop an item,\nalways disclose). Typed makes an unsupported ask a boundary refusal instead.\n\nEvery field is optional: \"no ask\" is a legitimate, common item, and it means\n*every* cluster satisfies the hard-constraint leg. These are ASKS, not\nguarantees — the scheduler remains the capacity authority (§7 R3), so\nnothing here is inferred scheduler headroom.\n\nShared by all three queue verbs (the ask on the way in, the ask echoed by\nthe projection, the ask matched by placement), so it lives here rather than\nin one verb's module — this file's stated job.",
+      "properties": {
+        "gpu": {
+          "default": false,
+          "description": "True when the item needs a GPU at all. The coarse hard-constraint leg: a cluster with no GPU partition cannot host it, and placement must say so out loud rather than place and let the job die.",
+          "title": "Gpu",
+          "type": "boolean"
+        },
+        "gpu_type": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional specific GPU label the item requires (e.g. 'A100'). Matched against a cluster's ``gpu_types``, which clusters.yaml documents as INFORMATIONAL — treating it as a hard filter is a deliberate promotion of the field, so any placement that used it discloses that in its reason.",
+          "title": "Gpu Type"
+        },
+        "cores": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional per-task core count the item needs. Null = unstated.",
+          "title": "Cores"
+        },
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional wall-clock the item needs, in seconds. Compared against a cluster's walltime ceiling — clusters.yaml carries TWO that disagree by 8-16x (top-level ``max_walltime_sec`` vs ``constraints.max_walltime``, S11), so a placement that used this must name WHICH ceiling it compared against.",
+          "title": "Walltime Sec"
+        },
+        "est_core_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional estimated total core-hours. Advisory: it feeds consent budget accounting and the disclosed ordering, never a capacity inference about the scheduler's queue (§7 R3).",
+          "title": "Est Core Hours"
+        }
+      },
+      "title": "queue item resource ask",
+      "type": "object"
+    }
+  }
+}

@@ -17,6 +17,558 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — declared retryable(n) failure classes on queue items (run-queue plan §7, 2026-07-29)
+
+The plan's last unblocked open decision, RESOLVED as proposed: `needs_human`
+vs `retryable(n)` is DECLARED item data consumed by kernel code — never an
+agent's judgment call — with `needs_human` the default and retryable only by
+explicit intake flag.
+
+- **The flag.** `queue-run` gains `retryable` (a positive small int, 1–10,
+  junk refused at the wire; the ceiling's twin is
+  `state/queue_intake.RETRYABLE_CAP`, MIRROR-pinned). Absent means
+  needs_human — a failed run parks for the human, byte-for-byte the prior
+  behavior; the field is recorded verbatim as an arrival fact.
+- **The consumer.** At the top of every `queue-dispatch` tick
+  (`ops/queue/retry.produce_declared_retries`) — so the chain-dispatch wake
+  at a run's retirement is also the retry's dispatch: a run at a MECHANICAL
+  failure terminal (`is_declared_retry_failure`, the one classifier — journal
+  `failed` only; never superseded, human-halted, parked on a decision, or
+  held on an escalation verdict, and `abandoned` deliberately excluded as a
+  class a machine cannot tell apart) is re-enqueued as a NEW intake item with
+  derived id `<root>.retry<k>` that copies the recorded resolved identity
+  VERBATIM (same spec/run_id/cmd_sha — never a re-resolve, §10.S3) and pins
+  the spec's cluster (R5). The same tick's advance/dispatch machinery places
+  and starts it — a mint-over-corpse by the existing adopt table — and every
+  cluster-boundary gate still binds inside the lifecycle (D1): the budget
+  automates re-dispatch, never consent.
+- **Durable, race-safe counting.** `retries_used` is derived from the ledger
+  (max `retry_attempt` over the chain's folded items), never in-memory; the
+  derived id doubles as the append's dedup key, so racing ticks write one
+  line, and a live-failure chain can never compact its spend away.
+- **Disclosure.** `queue-dispatch` reports every decision as a
+  `declared_retries` row (enqueued / replayed / exhausted) and names each a
+  declared-retry on its brief — exhaustion parks the item for a human with
+  the budget named, even on a tick with nothing else to dispatch.
+  `queue-status` items carry `retryable` / `retries_used`, and its notes say
+  when a declared retry is pending, awaiting dispatch, or exhausted.
+
+Pinned by `tests/ops/queue/test_queue_declared_retry.py` (classifier
+fire-paths per guard, same-tick retry loop, dedup race, exhaustion, the
+needs_human byte-identity) and `tests/state/test_queue_intake_retry.py`
+(vocabulary, derived id charset, durable count).
+
+### Added — the run queue, Phases 1+2 (run-queue plan §6, 2026-07-29)
+
+The missing organ: intake + placement. Experiments queue as they come in and
+the machine chooses the cluster, with every decision disclosed and every
+gate binding exactly where it always did.
+
+- **Phase 1 — the store + the authority.** `.hpc/queue/intake.jsonl`
+  (append-only, `request_id` dedup so replays cannot double-enqueue) plus
+  three verbs: `queue-run` (mutate, UNGATED — enqueueing spends nothing),
+  `queue-status` (the R1 projection over the run stores; greenlight
+  questions route through the same boundary-scoped predicate
+  attention-queue uses), and `queue-advance` (pure placement authority:
+  pin wins, hard constraints filter, least-loaded by the shared occupancy
+  predicate, alphabetical tie-break — reason always disclosed, no item
+  ever dropped or guessed). `queue-status`/`queue-advance` take an
+  optional spec (the net-triage precedent): a bare CLI call is the
+  whole-ledger read.
+- **Phase 2 — the actor.** `queue-dispatch` consumes placements and starts
+  each item's normal gated lifecycle: derive the computed run_id → ADOPT an
+  existing run rather than resubmit (failed/abandoned deliberately not
+  adopted so retries work) → per-cid dispatch lock (the E4 rule as a real
+  flock) → durable-first placement append → the identical detached
+  `campaign-run` launch refill always used. Placed-but-unstarted items
+  (crash window) are re-actuated, never stranded. `campaign-refill` is now
+  a LEDGER PRODUCER: resolve once → enqueue with the resolved identity →
+  dispatch, all under the lock; its direct-submit path is deleted, and
+  `campaign-advance`'s pool arithmetic counts queued intake through the
+  shared predicate — closing the §10.S3 re-enqueue window.
+- **The S1 placement consent leg.** Consent binds WHERE, not just what:
+  `state/placement_drift.py` (membership over a cluster-key set; absent on
+  either side disables — purely additive on the pre-migration corpus,
+  measured: zero test failures), a `placement-changed` reason in
+  `standing_consent_status`, sidecar-fed `current_placement` at every
+  run-scope consumption site, campaign `placement_scope` composed from the
+  run records' cluster stamps (never parsed from the cid), a record-time
+  gate that refuses malformed shapes and typo'd keys with a near-miss hint,
+  a paste-ready grant line on the authorship refusal, and an AST caller
+  census (`tests/contracts/test_placement_leg_callers.py`, allowlist now
+  EMPTY) so a future call site cannot silently skip the leg.
+- **The morning digest's queue paragraph.** `status-snapshot` gains an
+  additive `queue` section relaying `queue-advance`'s rows and rendered
+  text VERBATIM (one authority, byte-equal — pinned) so a stuck item
+  surfaces without being asked about; absent when the queue is empty,
+  fail-open on any read surprise.
+- **The Claude Science producer seam.** A coordinating agent (Claude
+  Science, `docs/design/claude-science-integration.md`) can now enqueue
+  experiments and observe, but never cross a gate — it plays the same
+  queue-PRODUCER role `campaign-refill` does. A new `science` MCP catalog
+  (`hpc-agent mcp-serve --catalog science --allow-mutations`) advertises
+  EXACTLY `queue-run` + `queue-status` + `queue-advance` and is DISJOINT by
+  construction from every gate-crossing verb — no `queue-dispatch`, no
+  `submit-*`, no `append-decision`, no `block-drive` (the catalog IS the
+  boundary; `tests/test_mcp_science.py` pins the disjointness in both
+  mutation-flag states). It is a SEPARATE, narrower catalog than `curated`,
+  not an edit to curated's membership — the two answer different "who is
+  asking" trust questions. A boundary-free packaged skill
+  (`slash_commands/skills/hpc-science-queue`) teaches the enqueue→observe
+  loop and holds NO dispatch/approve logic; it declares `mcp-catalog:
+  science` in frontmatter so `lint_skill_mcp_reachability` checks its
+  MCP-direct verbs against the science surface, not curated. The human
+  still approves dispatch at the cluster boundary exactly as when a human
+  enqueues.
+
+Intended default, ruled 2026-07-29: a standing consent composes NO
+core-hours `budget_cap` — the composed caps are the morning-boundary expiry
+plus the overnight `walltime_cap` only. Compute spend is unmetered until a
+human names a cap (`budget_cap` opt-in), the right posture pre-GPU.
+
+Adversarial review before landing (three lenses over Phase 2): 13 confirmed
+findings, 7 root causes, all reproduced then fixed with regression tests —
+led by the occupancy ledger half never RELEASING a slot (a completed K=4
+campaign read occupied=4 forever and refill waited on an empty cluster),
+plus a dispatch-lock reentrancy hole that waved a second thread through the
+resolve window, and a composed placement that could name a cluster absent
+from the active config and become un-grantable.
+
+### Added — `{cluster: cap}` per-cluster consent ceilings (run-queue plan §3 Phase 2, 2026-07-29)
+
+The standing consent's `placement` field gains a third form: a
+`{cluster_key: {budget_cap?, walltime_cap?}}` mapping — per-cluster
+ceilings, the opt-in cap vocabulary the "composes NO core-hours
+`budget_cap`" ruling above anticipated (spend stays unmetered until a
+human names a cap; now the cap can be named per machine). The mapping's
+KEY SET is the same membership set the S1 drift leg compares — one field
+away from the campaign `placement_scope`, exactly as plan §10.S1.4
+predicted.
+
+- **One vocabulary reader, strictness split by who is awake.**
+  `state/placement_drift.placement_cluster_caps` is the consumption-side
+  reader, tolerant by design (a cap that cannot bind is DROPPED, never
+  raised); the record-time write gate
+  (`ops/overnight._assert_placement_wellformed`) is strict — unknown cap
+  fields ("budget" for "budget_cap") and non-positive values refuse with
+  the actionable message, and the map's keys get the list form's
+  clusters.yaml typo protection. Both ends share
+  `PLACEMENT_CAP_FIELDS`, so they can never admit different vocabularies.
+  The mapping normalizes to its key set ONLY when every value is a dict:
+  the historical malformed shape `{"cluster": "carc"}` keeps reading
+  unusable, so no legacy record is reinterpreted (none can exist — the
+  write gate refused every mapping shape until now).
+- **The ceiling rule.** A fully-capped map satisfies the caps gate with
+  no global cap; a partially-capped map does NOT (the uncapped cluster
+  would be unbounded) — those consents still record fine WITH a global
+  cap, which the per-cluster caps then tighten per machine.
+- **A per-cluster spend meter.** `consume_boundary_under_consent` stamps
+  `detail.cluster` from the boundary's placement so
+  `consumed_spend(cluster=...)` can split the meter;
+  `standing_consent_status` gains `over-cluster-budget-cap` /
+  `over-cluster-walltime-cap` legs, off when the boundary's cluster is
+  unknown (the S1 absent-disables direction). Unstamped legacy spend
+  counts globally, toward no cluster — undercounting is the tolerable
+  direction for a cap that did not exist when those lines were written.
+- **The human reads the ceiling they are consenting to.** The authorship
+  coverage brief renders each cluster's caps inline; the paste-ready
+  grant line still needs cluster NAMES only — caps stay structural, like
+  `budget_cap` itself.
+
+### Added — clean-terminal-conditional consent for submit-s4 + aggregate-run (Tier-3 ruling, 2026-07-29)
+
+RULING (2026-07-29, maintainer) — the Tier-3 rubber-stamp remover: a
+standing consent may consume the harvest (`submit-s4`) and reduce
+(`aggregate-run`) greenlights ONLY behind code-derived evidence the
+predecessor terminal was CLEAN; `submit-s2` stays human forever (the
+canary IS the human's look); the interpretation terminals (`harvested` /
+`harvest_partial`) still always park. The pre-ruling posture ("a
+pre-consent cannot reduce results the human never reviewed") survives in
+the CONDITION: every dirty path — anomaly, timeout, partial, integrity
+finding — parks `needs_decision` BEFORE these boundaries are offered as
+successors, so what the consent skips is exactly the rubber-stamp y on a
+clean completion, never a review.
+
+- **The conditional set.** `ops/overnight.OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`
+  (`{run: {submit-s4, aggregate-run}}`) beside the unconditional
+  `OVERNIGHT_CONSUMABLE_BLOCKS`; `is_consumable_boundary` /
+  `consume_boundary_under_consent` gain `clean_predecessor` (default
+  False = dirty), and a conditional boundary consulted without evidence
+  refuses with the specific `predecessor-not-clean` reason so the park
+  brief names the failing leg. The flag widens the SET only —
+  expiry/spec/placement/cap legs all still refuse.
+- **Two code-derived evidence readers — never an agent-authored input.**
+  `predecessor_terminal_clean` (the recorded predecessor terminal parked
+  no decision, on the SAME tree — recorded `cmd_sha` matches; absent,
+  corrupt, or mismatched reads dirty) and `boundary_already_ledgered`
+  (the driver seat's durable consumption line carries its in-hand
+  evidence across the process boundary; liveness is still re-verified —
+  an expired consent refuses even with the line present).
+- **The seats.** The driver's gated-successor seat
+  (`block_drive._chain`) passes its in-hand `needs_decision=False`
+  result as the evidence; `park()` stamps
+  `resume_cursor.parked_needs_decision` so the F12 resume path derives
+  it from the marker (absent on pre-ruling markers reads dirty); the
+  `submit-s4` and `aggregate-run` gates switch from
+  `assert_greenlit_target` to `assert_greenlit_or_consented`, which
+  threads `clean_predecessor` derived at the seat from the two readers.
+
+### Added — the diagnosing seat + the sentinel job (2026-07-29)
+
+- **Park-time diagnosis seam.** The third agent seat (after producing
+  and interpreting): a read-only investigator may enrich an anomaly park
+  with a provenance-marked advisory dossier
+  (`.hpc/runs/<run_id>.diagnosis.json`) the human reads at their
+  sitting. Kernel side is two verbs: `diagnosis-request` (pure read —
+  parked stage, failure-signature matches through THE existing
+  classifier, local read-paths only) and `attach-diagnosis` (ungated
+  mutate — advisory data spends nothing; closed category set; stamps
+  `authored_by: agent` itself with no caller seat to forge). Surfaces
+  carry POINTERS + counts only; advisory separation is pinned — the
+  decision-briefs file is byte-identical across an attach and the
+  dossier can never enter an answer menu. queue-drain instructs at most
+  3 investigators per pass, anomaly parks only, hard read-only bans;
+  a failed investigation leaves the park standing unenriched.
+- **W1 sentinel job** (crash-only-monitoring inversion #1, gated OFF by
+  default — `HPC_SENTINEL_JOB`, the telemetry-gate precedent): a tiny
+  scheduler-dependent job (`afterany` behind all wave arrays) writes the
+  shipped `.run_terminal` wake marker from the scheduler's own epilogue
+  knowledge — run-end detection becomes "stat one file" even when a
+  dispatcher dies mid-task; a premature fire is a harmless HINT the
+  census re-reads. Sentinel id lives on the separate sidecar field
+  `sentinel_job_id`; `job_ids` accounting everywhere is byte-identical;
+  submission is opportunistic and never fatal; flag off = byte-identical
+  submits (pinned).
+
+### Added — two physical-latency legs: wave prefetch + completion-aware cadence (2026-07-29)
+
+The cadence audit's follow-through — after the y-count fell, the two
+remaining physical latencies got their cuts:
+
+- **Wave-incremental harvest prefetch.** The watch tick's combine burst
+  (already one fused ssh exec) now triggers an opportunistic pull of the
+  just-sealed wave's `_combiner` partial into the exact destination the
+  terminal harvest pulls — transfer overlaps compute, and the terminal
+  pull ships only the delta. The `--link-dest` posture exactly: the
+  final harvest re-runs the same pull and the tar engine's content-hash
+  manifest re-verifies every prefetched file (corruption re-pulls), so
+  correctness is identical with, without, or with a poisoned cache.
+  One pull per BURST, never per poll; failure is disclosed data;
+  `HPC_WAVE_PREFETCH=0` opts out; the harvest disclosure prints
+  served-from-cache vs pulled-fresh counts (never fabricated on the
+  count-less legacy engine). The #352 evidence model is untouched —
+  prefetch is pull-only.
+- **Completion-aware backoff ceiling.** The status watch's adaptive
+  300s cap now bows to remaining expected runtime (`running_since +
+  walltime_sec × wave-bound`, armed only by evidence execution began;
+  cap = clamp(remaining/4, floor, 300) — `verify_canary`'s fast-start
+  ramp, inverted). Strictly fewer total polls; unknown walltime keeps
+  today's ramp byte-identical; the estimate bounds a SLEEP and never a
+  verdict (pinned at source level). A one-shot `backoff_ceiling` tick
+  action disclosed the first tick the ceiling binds.
+
+### Added — the y-minimization bundle's flow legs (2026-07-29)
+
+Six further legs of the same maintainer directive ("minimize the number
+of ys in the flow"), each landed with fire-proofed tests:
+
+- **S13: the y-taking sitting.** The drain pass's report orders parked
+  items through ONE `attention-queue` relay (the kernel's `order_items`
+  stays the ranking's single home; records are JOINed to that order,
+  unmatched kept after matched — ordered, never filtered; relayed only
+  when >=2 items are parked so the §7 relaunch-cheapness invariant
+  holds; fail-open, disclosed as `park_order`). The auto-resume reflex
+  coalesces: the inline first tick per `y` is untouched, but the fresh
+  drain relaunch is one-per-sitting — pending/running ⇒ skip, not stack.
+- **Consented-tier batch dispatch names its basis.** `max_dispatches > 1`
+  is refused at the actor's wire model unless the spec declares
+  `tier="unattended"` or enumerates `item_ids`; no dispatch-side consent
+  read (the module's D1 ruling — one seat answers the consent question);
+  the declaration grants NOTHING (every item still meets its own gate);
+  basis disclosed as `batch_allowed_by`; the chain-hook wake edge
+  declares the unattended tier with `_WAKE_MAX_DISPATCHES = 5`.
+- **Enqueue age in the morning digest** (§10.S3's accepted cost): the
+  digest's `queue` section gains an additive `queued_ages` list
+  (longest-waiting first, unknown last, clip visible), served by ONE
+  shared derivation with queue-status
+  (`state/queue_intake.enqueue_age_sec`; absent/mangled stamps read age
+  unknown, never guessed; the renderer does no date math).
+- **The grant line is OFFERED where the human already is.**
+  `render_grant_line()` (ops/overnight) is the one home for the sentence
+  the token-exact chat tier reads; the authorship refusal renders
+  through it, and now so do two offers: the FIRST park of a run with no
+  live consent (the answer menu's last, clearly-OPTIONAL entry — never
+  the default, absent at anomaly terminators and wherever the line would
+  fail its own gate) and the SPEC-CHANGED consent death (the park brief
+  and the morning brief's `regrant_offer` re-render the dead consent's
+  own coverage re-bound to the CURRENT identity — the re-grant costs one
+  paste). Round-trip pinned in both directions: an offered line, pasted
+  verbatim, grants.
+- **Eager submit (R3) verified BUILT and pinned.** The posture was
+  already shipped in shape (authority never gates on capacity; the actor
+  starts a placed item in the same tick; §10.S4's content-pinned trees +
+  GC reference-pinning cover pending jobs); the pass classified every
+  hold under the judgment rule (zero capacity-inference holds existed),
+  pinned both hold vocabularies as EXACT capacity-free closed sets, and
+  recast the capacity-worded comments as pool-slot facts.
+- **One polling loop for both detached waiters.** `wait-detached` is now
+  a thin adapter over `wait-any-detached`'s fleet loop (the
+  one-definition rule; degenerate one-target behavior verified
+  byte-identical field-for-field and pinned across all three outcomes).
+
+### Fixed — two workflow-plan relay bugs that made campaign-run silently ineffective (2026-07-29)
+
+- The shared command helper appended `--experiment-dir` to EVERY relayed
+  verb; `wait-detached` does not declare that flag
+  (`CliShape.experiment_dir_arg=False`), so every relayed wait exited rc=2
+  on `unrecognized arguments` and every detached block parked as
+  `wait_failed`. `campaign-recon`'s `net-triage` probe carried the same bug
+  and read back as a permanently anomalous probe. Both plans now declare a
+  `RELAYS` table (verb + the flags that verb actually takes) and render
+  every command from it.
+- The plans' JSON parser returned the whole `{ok, idempotent, data}` CLI
+  envelope while the drive loop read `tick.action` / `tick.brief` /
+  `outcome` off its root — `undefined` for every field, so
+  `awaiting_decision`, `terminal` and `detached` never matched and every
+  tick fell through to `tick_budget_exhausted`. Replaced with a single
+  `parseEnvelope` helper that unwraps `data` and branches explicitly on
+  `ok:false` (new `tick_refused` park carrying the kernel's `error_code`
+  + message).
+
+### Added — the always-draining loop, run-queue Phase 3 (2026-07-29)
+
+- **`queue-drain.js`** (plan §5/§7): a pure relay at the ledger level — one
+  `queue-status` per pass, the drivable set as a mechanical field check over
+  its published projections (`dispatched ∧ ¬terminal ∧ ¬held ∧
+  ¬superseded_by ∧ (¬parked ∨ greenlight_unadvanced)`), a `block-drive` loop
+  per drivable item with 480s-chunked `wait-detached` (labels carry the item
+  id and the chunk index), `drive_attempts >= n` held rather than driven,
+  parks RECORDED and left for the human, then re-status and repeat. Loop
+  bound is `min(drivable, maxLoops, the status read's own ceiling)`,
+  recomputed from each pass's relay and never remembered — a relaunch from
+  scratch is always correct, and a pass with nothing drivable costs exactly
+  one status relay.
+- **`tests/contracts/test_workflow_plan_commands.py` — the execution-level
+  plan gate.** The delegation sweep beside it is regex-only and never runs
+  anything, which is how both bugs above shipped. This one materializes
+  every declared relay into an argv and PARSES it with the real argparse
+  tree (`cli.parser.build_parser`), and pins the envelope unwrapping against
+  key names derived from envelopes `cli/_helpers` actually emits — executing
+  each plan's own `parseEnvelope` over those bytes where a JS runtime is
+  available. Both bug classes are in-suite fire paths with control arms.
+
+### Added — the run queue, Phase 3 kernel substrate (run-queue plan §5/§7, 2026-07-29)
+
+The always-draining loop is plan-side composition of shipped verbs; this is
+the kernel that makes it cheap and decidable. No new verb — `queue-dispatch`
+IS the tick.
+
+- **The drivability formula is fully served by `queue-status` items[], and
+  pinned.** `drivable := dispatched ∧ ¬terminal ∧ (¬parked ∨
+  greenlight_unadvanced)` — all four fields were already correct; a contract
+  test now pins them so a rename cannot silently degrade the plan's formula.
+  Three fields the plan would otherwise have had to INFER are added: `held`
+  (the run is parked on an ESCALATION verdict — a second human-wait axis with
+  no boundary a greenlight can target, so a `parked`-only test relays ticks
+  at it forever), `superseded_by` (the field `queue_occupancy.run_occupies`
+  retires a slot on, non-empty for a window before the terminal status write
+  lands), and `drive_attempts`. `held` joins `counts`; both new stop
+  conditions are disclosed in `notes`. No `drivable` boolean is emitted —
+  the policy is the plan's, and a kernel verdict would be a second
+  definition of it.
+- **Retryable(n) is KERNEL state, not a plan variable.**
+  `RunRecord.drive_attempts` counts CONSECUTIVE agent-facing `block-drive`
+  ticks that moved the run nothing (`awaiting_decision` / `skip`); anything
+  that advanced / reran / chained / detached / reached a terminal resets it
+  to 0. One write point (`ops/block_drive_op`, after a non-`dry_run` tick,
+  via the single `journal.stamp_drive_attempt` definition), read back off
+  disk by `queue-status`. Consecutive rather than cumulative so a healthy
+  long run is never eventually refused; durable so a pass can die mid-flight
+  and its successor reads the same number. The detach-child entry is
+  deliberately NOT counted — a detached poll is not a relayed tick.
+- **The relaunch-cheapness invariant (§7) is restored; S12's two O(history)
+  legs are closed.** `queue-status` folded the WHOLE append-only intake
+  ledger, and its occupancy leg `load_run`s every run file in the namespace.
+  New `ops/queue/maintenance.groom_queue_stores` compacts the ledger of
+  items whose runs have RETIRED (`state.queue_intake.compact_intake_ledger`,
+  under the appenders' own flock, atomic replace, with an auditable
+  watermark), then prunes terminal RunRecords nothing on the ledger still
+  references — `state.index.prune_terminal_runs` gains a `protect` set and
+  gets its FIRST production caller (it had existed, uncalled, since the
+  journal did).
+- **D10 — the WRITE authority grooms; the read paths never do.** Grooming
+  runs in `queue-dispatch`, only on a tick that actually wrote a placement,
+  and is reported as data on `QueueDispatchResult.maintenance`.
+  `queue-status` / `queue-advance` keep `side_effects=[]`: a query that
+  groomed the store it reports on is the F46 bug one layer up. A tick that
+  dispatched NOTHING is charged nothing — that pass is exactly what the
+  invariant is about. Ordering is load-bearing (compact, then prune the
+  survivors' complement), retirement is decided by the ONE `run_occupies`
+  predicate so compaction can never drop an item the pool arithmetic still
+  counts, items the call is reporting on are exempt (adopting onto an
+  already-`complete` run would otherwise erase its own ledger row mid-tick),
+  unparseable lines are kept verbatim so `skipped_records` stays truthful,
+  and grooming never raises — the items already started.
+
+### Added — content-addressed remote code trees (plan §10.S4, 2026-07-29)
+
+A submission now deploys its code snapshot to a tree keyed by that
+snapshot's content digest (`<remote_path>/.hpc/trees/<digest12>/`) and
+points the job's `REPO_DIR` at it, so a job waiting in the scheduler queue
+executes the code it was submitted with *by construction* — a later push
+mints a different digest and cannot reach it. Resubmitting unchanged code
+is a one-ssh no-op verification instead of a re-rsync (the
+submission-overhead win, and eager submit's precondition). `rsync
+--link-dest` against the previous tree is used OPPORTUNISTICALLY for
+bandwidth: it hardlinks on Hoffman2 `$HOME`/`$SCRATCH` and CARC `/home1`
+and silently full-copies on CARC `/scratch1` (BeeGFS) — both measured,
+both correct, only bytes-on-wire differ. `--inplace` stays banned (#F20,
+generalised from running jobs to pending ones). A tree holds code and
+symlinks only: results, logs, `_combiner`, `_aggregated`, `.hpc_failed`
+and `.hpc/runs` are symlinked back to the shared base, verified at seal
+time. Trees are garbage-collected on the submit that mints one — reapable
+when no non-terminal run references the digest and it is outside the
+newest 3 — refusing the whole pass rather than guessing when the journal
+cannot be read. Runs that predate this keep working unchanged
+(absent-disables; no flag-day). The run-start code-identity check remains
+as defense in depth. Opt out with `HPC_NO_CODE_TREES=1`.
+
+### Added — the chain-dispatch wake edge: always-draining without a daemon (2026-07-29)
+
+The plan named a run finishing as the capacity-freed signal, but nothing
+acted on it: when a dispatched run reached a terminal (or was superseded),
+the next waiting ledger item sat until a human or a drain pass happened by.
+`ops/queue/chain.py` closes it event-driven — the retiring run's OWN driver
+chains exactly one `queue-dispatch` tick at its terminal step (the shipped
+self-chaining shape, harness-contract capability 3), no daemon, no model in
+the path. Two driver terminal seats call it (`campaign_run`'s synchronous
+body and `block_drive._chain`'s terminal return), retirement is decided by
+the ONE `run_occupies` predicate (a terminal STEP is not a retired RUN;
+supersession retires with no driver terminal at all), and the hook is
+fire-and-forget: it runs after the settlement is durable, never raises, and
+reports as a `queue_chain` field (`null` for repos that never used the
+queue, which pay one stat). One retirement chains at most one tick, and the
+cadence terminates on a dry ledger. Enqueue, retirement, and a manual drain
+pass are now three independent triggers over one idempotent, lock-guarded,
+request-id-deduped actor.
+
+### Fixed — the post-`y` double-driver race on the pending marker (§8 S8, 2026-07-29)
+
+Two drivers tick the same parked run at every greenlight BY DESIGN — the
+main session's inline first tick and the drain pass. Marker consumption was
+a blind clear: both drivers read the same marker, both ran the successor
+span, and the loser re-parked a CONSUMED decision under a stale boundary.
+Consumption is now a COMPARE-AND-SWAP on `(boundary, awaiting_since)`
+inside the journal's per-run flock (`compare_and_clear_pending_decision`;
+`block_drive._consume_marker` is the one seat both consumption legs use),
+placed at the last read-only point of the resume leg so the LOSER runs no
+span and writes nothing — no watchdog stamp, no re-park, no queue wake, no
+`drive_attempts` charge (a lost race is the opposite of futility: the chain
+moved). Re-parking is the same swap in reverse (lands only into an EMPTY
+slot). Pinned by a deterministic two-thread barrier test on real files and
+real locks: against the pre-fix code the successor span runs twice.
+
+### Added — `wait-any-detached`: one held seat per fleet (plan §7, 2026-07-29)
+
+A drain pass over N running items held N chunked `wait-detached` relays.
+`wait-any-detached` (query, spec-only, pure read) watches a whole
+`targets` set of `{run_id, block?}` pairs on one cadence and returns the
+moment ANY resolves, naming which — with the full per-target snapshot
+(`still_running` is the only new literal) and `wait-detached`'s exact
+outcome vocabulary so the drain plan branches on the same strings. A
+target already resolved at the first poll returns immediately. The
+lease-identity helpers are IMPORTED from `wait-detached`, not forked;
+read-only-ness is pinned by byte-and-mtime inventory tests, and the verb
+joins `wait-detached` on the MCP blocking-verb refusal seam.
+
+### Fixed — the run queue's janitor and projection, adversarial-review pass (2026-07-29)
+
+- **Compacting an item is not retiring its slot (data loss).**
+  `retired_item_ids` applied `run_occupies` to items in ANY intake state, so
+  a `queued` retry re-enqueued over a failed run was compacted off the
+  ledger by the same dispatch tick that reported it held ("never dropped,
+  R4") — for a refill producer, an unbounded enqueue/delete cycle
+  re-opening S3. The same bug deleted a `placed` row whose durable-first
+  placement landed before a start that then refused — exactly the row
+  `queue-dispatch --item-ids` recovers. Retirement now requires state
+  `placed` AND a run the dispatch decision table would ADOPT, routed
+  through the shipped `is_resubmittable_terminal` / `is_held` — no second
+  status-set literal — so the compaction set is a strict subset of the
+  non-occupying set.
+- **`queue-status` paid O(history × campaigns) for an empty page.**
+  `occupancy` was computed over pre-hiding matches, each campaign loading
+  EVERY run file in the namespace (374ms at 1600 runs for a zero-item
+  pass, permanently). Now keyed on the campaigns of items actually
+  returned; ask `queue-advance` for the ledger-wide arithmetic.
+- **R8 now survives a compaction.** Dropping an item's records dropped its
+  dedup entry, so past the journal prune a replayed `request_id` really
+  resubmitted a completed run (optuna prior pollution). The compaction
+  watermark now carries removed `request_id`s as tombstones (bounded,
+  argued against the replay window); `queue-run` returns `replayed=true,
+  compacted=true` and writes nothing.
+- **No more immortal ledger lines.** The retirement census carries the
+  record count it witnessed and the rewrite re-verifies it under the
+  ledger flock, disclosing `raced_items` (relayed in the dispatch brief);
+  an orphan from the opposite ordering is reaped only when a tombstone
+  proves this ledger authored the removal — an unexplained orphan is kept.
+- **`drive_attempts` documents what it actually bounds** — the
+  greenlight-unadvanced spin and the skip spin, not "a wedged run" (a park
+  with no committed greenlight accrues exactly one attempt, then the drain
+  plan's ¬parked clause removes it). Docs only.
+
+### Fixed — three queue-drain loop defects + the S8 comment (invariants review, 2026-07-29)
+
+Each now pinned by EXECUTING the plan's own code under node. (1) A `skip` —
+the kernel's stable "this tick moved nothing, here is why" — was listed
+among the "tick again" actions, so one failing block spent the whole
+25-tick budget re-reading the same answer, stamped `drive_attempts` to 25,
+and left the item held with nothing able to reset it; a skip now ENDS the
+drive loop like a park, reported under its own `skipped[]` key with the
+kernel's reason. (2) Two ledger items resolving to one computed `run_id`
+(§10.S2's collision, published as `collides_with`) were both driven in one
+`parallel()` batch — two concurrent ticks on one run; the batch now claims
+each `run_id` once and records the sibling under `deferred[]`. (3) The
+`total_items` pass ceiling was `>= drivable` by construction and could
+never bind — removed rather than rebound. The plan's S8 comment claimed
+the detached lease arbitrated the tick overlap; corrected to the real
+story (pure-read waits; kernel-side marker CAS for ticks). The pass
+report now groups outcomes under one key per class with a `counts` map,
+so a long pass is readable without walking every verbatim brief.
+
+### Fixed — Phase 3 guards proven to fire (adversarial guards-fire review, 2026-07-29)
+
+The queue-drain plan's drivability formula and retry ceiling are now pinned
+by EXECUTING `queue-drain.js`'s own `isDrivable`/`attemptsOf` under node
+against the real `queue-status` projection, instead of a Python paraphrase
+that agreed with itself while the plan lost terms; `FLAG_RENDER` output is
+pinned to the RELAYS table (the flag bug's signature, one layer down);
+`validatePlan()` is executed rather than assumed; `groom_queue_stores`'
+`protect=` wiring, the dispatch-level grooming disclosure, and the
+detach-child retry-budget exemption each gained a test that fails against
+their removal; `_count_drive_attempt` now catches `Exception` (a
+type-corrupt `drive_attempts` raised `ValueError` and crashed a successful
+drive), and the janitor import in `queue-dispatch` moved inside the
+never-raises envelope. CI installs node and sets `HPC_REQUIRE_NODE=1`, so
+an executed contract arm can no longer pass by silently skipping.
+
+### Added — paste-ready answer menus on park briefs + park notifications (2026-07-29)
+
+Every decision point now hands the human its answers, not just its
+question. Park briefs carry an `answer_menu` composed at the one home
+(`block_drive.park`): the bare-`y` default naming its materialized advance
+target, the scope-naming approve line, and one paste-line per structured
+recommendation — hint and menu share `greenlight_target` so they can never
+name different targets, and anomaly terminators (`canary_failed`,
+`watching_anomaly`) label the bare-`y` default an OVERRIDE instead of
+hiding that it chain-forwards. `doctor --notify` raises park notifications
+carrying the answer line over the existing channels, deduped per
+`(run_id, park, awaiting_since)` — watchdog cadence is a replay no-op, a
+re-park re-notifies, and a park and a stall of one run cannot collapse.
+A mechanized census (`tests/contracts/test_bare_y_coverage.py`) walks
+every boundary in `block_chain.SUCCESSORS` that can park and fails the
+suite if one lacks a menu without a reasoned allowlist entry — with
+negatives proving the census itself fires.
+
 ### Added — QoS submit-cap gate, config-based (2026-07-29)
 
 The successor to the deleted `validate-self-qos-limit`, with its three

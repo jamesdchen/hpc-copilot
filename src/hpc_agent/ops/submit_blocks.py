@@ -51,13 +51,14 @@ from hpc_agent.ops.block_gate import assert_greenlit_or_consented, assert_greenl
 from hpc_agent.ops.data_manifest import render_manifest_disclosure
 from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_status
 from hpc_agent.ops.monitor_flow import monitor_flow
+from hpc_agent.ops.overnight import boundary_already_ledgered, predecessor_terminal_clean
 from hpc_agent.ops.relay_render import render_relay
 from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
 from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.ops.submit_and_verify import launch_main_array, submit_and_verify
 from hpc_agent.ops.submit_preflight import submit_preflight
 from hpc_agent.ops.walk_submit_ambiguities import walk_submit_ambiguities
-from hpc_agent.state.runs import read_run_cmd_sha
+from hpc_agent.state.runs import read_run_cluster, read_run_cmd_sha
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1300,6 +1301,9 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         verb="submit-s3",
         predecessor="S2",
         current_cmd_sha=read_run_cmd_sha(experiment_dir, spec.submit.submit.run_id),
+        # S1: the sidecar's cluster stamp — a consent bound to a cluster set dies
+        # here if the run has been re-placed outside it (placement-changed).
+        current_placement=read_run_cluster(experiment_dir, spec.submit.submit.run_id),
     )
     # Idempotent re-invoke (run #7): replay a prior worker's recorded terminal for
     # the current tree BEFORE the canary-TTL re-check — the run already ran, so
@@ -1538,11 +1542,30 @@ def submit_s4(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:
 
 
 def _submit_s4_impl(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:
-    assert_greenlit_target(
+    # Greenlight gate with the CLEAN-TERMINAL consent fallback (Tier-3 ruling,
+    # 2026-07-29): a live standing consent consumes the S3→S4 greenlight ONLY
+    # behind code-derived evidence the main array completed clean — the recorded
+    # S3 terminal parked no decision on the SAME tree, or the driver's
+    # gated-successor seat already ledgered this consumption (the durable line
+    # that carries its in-hand evidence across the process boundary). Every
+    # anomaly / timeout / partial path parks for a live human exactly as before;
+    # what the consent skips is the rubber-stamp y on a clean completion, and
+    # the interpretation boundary after the harvest still always parks.
+    s4_run_id = spec.aggregate.run_id
+    s4_cmd_sha = read_run_cmd_sha(experiment_dir, s4_run_id)
+    assert_greenlit_or_consented(
         experiment_dir,
-        run_id=spec.aggregate.run_id,
+        run_id=s4_run_id,
         verb="submit-s4",
         predecessor="S3",
+        current_cmd_sha=s4_cmd_sha,
+        current_placement=read_run_cluster(experiment_dir, s4_run_id),
+        clean_predecessor=(
+            predecessor_terminal_clean(
+                experiment_dir, s4_run_id, "submit-s3", current_cmd_sha=s4_cmd_sha
+            )
+            or boundary_already_ledgered(experiment_dir, "run", s4_run_id, "submit-s4", s4_cmd_sha)
+        ),
     )
     # Scope gate (rigor-primitives T3), same gate → detach ordering PROOF as the
     # greenlight above: a locked evidence-scope refuses SYNCHRONOUSLY in the

@@ -59,14 +59,24 @@ def faked(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: state["committed"]
     )
 
-    def _clear(run_id: str, **_k: Any) -> None:
+    def _clear(run_id: str, **_k: Any) -> bool:
+        # S8: the marker is consumed through the compare-and-swap seat; this fake
+        # always WINS the swap (the race itself is pinned in
+        # tests/_kernel/lifecycle/test_block_drive_greenlight_cas.py).
         state["cleared"].append(run_id)
+        return True
 
     def _mark(run_id: str, **kw: Any) -> None:
         state["parked"].append({"run_id": run_id, **kw})
 
-    monkeypatch.setattr(bd, "clear_pending_decision", _clear)
+    monkeypatch.setattr(bd, "compare_and_clear_pending_decision", _clear)
     monkeypatch.setattr(bd, "mark_pending_decision", _mark)
+
+    def _repark(run_id: str, **kw: Any) -> bool:
+        state["parked"].append({"run_id": run_id, **kw})
+        return True
+
+    monkeypatch.setattr(bd, "compare_and_repark_pending_decision", _repark)
 
     def _fake_run(verb: str, spec: dict[str, Any], experiment_dir: Path) -> tuple[dict, int]:
         state["ran"].append({"verb": verb, "spec": spec})

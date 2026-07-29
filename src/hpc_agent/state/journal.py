@@ -44,10 +44,13 @@ __all__ = [
     "is_held",
     "mark_pending_decision",
     "clear_pending_decision",
+    "compare_and_clear_pending_decision",
+    "compare_and_repark_pending_decision",
     "read_pending_decision",
     "is_awaiting_decision",
     "is_resubmittable_terminal",
     "is_kill_confirmed",
+    "stamp_drive_attempt",
     "stamp_tick",
     "stamp_watchdog_tick",
     "stamp_poll_health",
@@ -240,6 +243,71 @@ def stamp_tick(
         record.next_tick_due = next_tick_due
 
     update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+
+
+#: The ``BlockDriveAction`` values that mean the tick MOVED the chain. Anything
+#: outside this set (``awaiting_decision`` — still waiting on the human;
+#: ``skip`` — nothing drivable at this position) moved nothing, and a drain loop
+#: that keeps relaying such a tick is spinning. Written out here rather than
+#: derived from the ``Literal`` because the partition is a POLICY (which outcomes
+#: count as progress), not the vocabulary itself: ``state`` must not import
+#: ``_wire``, and a future action word must be classified deliberately rather
+#: than defaulting into "progress" and silently disarming retryable(n).
+DRIVE_PROGRESS_ACTIONS: frozenset[str] = frozenset(
+    {"advanced", "reran", "chained", "detached", "terminal"}
+)
+
+
+def stamp_drive_attempt(
+    run_id: str,
+    *,
+    progressed: bool,
+    experiment_dir: Path | None = None,
+) -> int:
+    """Record one block-drive tick against *run_id*; return the new futile count.
+
+    THE one definition of the retryable(n) counter
+    (``docs/plans/run-queue-placement-2026-07-28.md`` §7). *progressed* is
+    ``action in`` :data:`DRIVE_PROGRESS_ACTIONS` — the caller classifies, this
+    seat only writes, so there is exactly one place the number changes:
+
+    * ``progressed=True`` → reset to 0. A tick that moved the chain has EARNED
+      the item a fresh budget; a monotonic counter would eventually refuse to
+      drive a perfectly healthy long run, which is worse than the spin it
+      guards against.
+    * ``progressed=False`` → ``+1``. Consecutive futile ticks are exactly what
+      a drain pass must stop relaying.
+
+    Consecutive rather than cumulative, and durable rather than in-plan, is the
+    whole point: the count must survive the pass that observed it dying, and a
+    relaunched pass must read the SAME number off disk (§7's relaunch-cheapness
+    reflex depends on a relaunch losing nothing). ``queue-status`` projects it
+    per item as ``drive_attempts``.
+
+    Which spins it actually bounds, traced through the one counting caller
+    (``ops/block_drive_op``) and the one policy that reads it (the drain plan's
+    ``maxAttempts``): NOT "a genuinely-wedged run" in general. The plan drives
+    only ``dispatched ∧ ¬terminal ∧ (¬parked ∨ greenlight_unadvanced)``, so a run
+    that parks with no committed greenlight is counted exactly ONCE — by the
+    ``awaiting_decision`` tick that parked it — and then frozen out by the
+    ¬parked clause until a human answers. The two spins that CAN accumulate are
+    the ones with no human in them: a committed-but-unadvanced greenlight that
+    re-admits the item every pass while the tick keeps answering
+    ``awaiting_decision``, and a drivable item whose tick keeps answering
+    ``skip``. State the budget that way when quoting it; "wedged run" promises a
+    guard against a case the drivability formula already removes.
+
+    Locked read-modify-write via :func:`update_run_record`; raises
+    :class:`FileNotFoundError` if no record exists for *run_id* — a tick that
+    drove no run has nothing to count against, and inventing a record here would
+    put a journal write on a path that never dispatched anything.
+    """
+
+    def _mutate(record: RunRecord) -> None:
+        record.drive_attempts = 0 if progressed else int(record.drive_attempts) + 1
+
+    written = update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+    return int(written.drive_attempts)
 
 
 #: Grace (seconds) added to the chosen inter-tick cadence when deriving the
@@ -585,11 +653,152 @@ def clear_pending_decision(
     ``y``/nudge and the next driver span consumed the resolved spec, so the run is
     no longer awaiting a decision. Locked RMW via :func:`update_run_status`;
     raises :class:`FileNotFoundError` if no record exists for *run_id*.
+
+    A BLIND clear: it releases whatever marker is on disk. A driver CONSUMING a
+    committed greenlight must instead use
+    :func:`compare_and_clear_pending_decision`, whose compare-and-swap on
+    ``(block, awaiting_since)`` is what keeps two concurrent drivers from both
+    running the successor span (§8 S8). This seat stays for the callers that
+    genuinely mean "release the hold, whatever it is" (test setup, the hook-side
+    completer's post-advance release).
     """
     update_run_status(
         _resolve_experiment_dir(experiment_dir),
         run_id,
         pending_decision={},
+    )
+
+
+def _pending_boundary_identity(marker: Any) -> tuple[str, str] | None:
+    """The ``(block, awaiting_since)`` identity of a pending-decision *marker*.
+
+    THE one derivation of "which parked boundary is this marker" — the pair the
+    compare-and-swap seats below compare. ``None`` for an absent / empty / non-dict
+    marker (the run is not parked), which is itself a legal CAS expectation (the
+    empty slot a re-park expects). Missing sub-fields normalize to ``""`` so a
+    marker written without an ``awaiting_since`` still compares by value rather
+    than raising or silently matching everything.
+    """
+    if not isinstance(marker, dict) or not marker:
+        return None
+    return (str(marker.get("block") or ""), str(marker.get("awaiting_since") or ""))
+
+
+def _swap_pending_decision(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    expected: tuple[str, str] | None,
+    payload: dict[str, Any],
+) -> bool:
+    """Locked compare-and-swap of the ``pending_decision`` slot; True iff it swapped.
+
+    The shared engine under :func:`compare_and_clear_pending_decision` and
+    :func:`compare_and_repark_pending_decision` — ONE critical section, the same
+    per-run flock + read-modify-write shape :func:`update_run_status` /
+    :func:`upsert_run_compare_and_mint` use, so the read of the marker and the
+    write that replaces it cannot be split by another driver.
+
+    *expected* is the ``(block, awaiting_since)`` identity the caller READ (or
+    ``None`` for "the slot must still be empty"). When the on-disk identity does
+    not match, NOTHING is written and the call returns ``False``: the caller lost
+    the race (another driver consumed this boundary, or re-parked a new one).
+
+    Raises :class:`FileNotFoundError` if no record exists for *run_id* — the same
+    failure :func:`clear_pending_decision` raises for a record-less run, so the
+    swap seats are drop-in for the blind writes they replace.
+    """
+    path = _run_path(experiment_dir, run_id)
+    with _locked(path):
+        existing = _read_json(path)
+        if existing is None:
+            raise FileNotFoundError(f"no run record for {run_id!r}")
+        if _pending_boundary_identity(existing.get("pending_decision")) != expected:
+            return False
+        existing["pending_decision"] = dict(payload)
+        record = RunRecord.from_dict(existing)
+        _atomic_write_json(path, record.to_dict())
+    _refresh_index_entry(experiment_dir, record.run_id, record.status)
+    return True
+
+
+def compare_and_clear_pending_decision(
+    run_id: str,
+    *,
+    block: str | None,
+    awaiting_since: str | None,
+    experiment_dir: Path | None = None,
+) -> bool:
+    """CONSUME a parked boundary: clear the marker only if it is still the one read.
+
+    The compare-and-swap counterpart of :func:`clear_pending_decision`, and the
+    seat the block-drive tick consumes a committed greenlight through
+    (``docs/plans/run-queue-placement-2026-07-28.md`` §8 S8). Two drivers may tick
+    the same parked run concurrently BY DESIGN (the main session's inline first
+    tick and an auto-launched drain pass): both read the same marker pre-clear,
+    both see the same committed ``y``, and a blind clear let BOTH run the
+    successor span — one clearing, the other re-parking a CONSUMED decision under
+    a stale boundary. Comparing ``(block, awaiting_since)`` inside the per-run
+    flock makes the consumption atomic: exactly one caller gets ``True``.
+
+    ``False`` means the marker on disk is no longer the ``(block,
+    awaiting_since)`` pair the caller read — either another driver already
+    consumed it (empty slot) or the boundary moved on (a re-park stamps a new
+    ``awaiting_since``; a chained span parks a new ``block``). The loser must NOT
+    run the successor span, must NOT re-park, and must NOT raise: the chain
+    advanced, just not by this caller.
+
+    Raises :class:`FileNotFoundError` if no record exists for *run_id* (as
+    :func:`clear_pending_decision` does).
+    """
+    return _swap_pending_decision(
+        _resolve_experiment_dir(experiment_dir),
+        run_id,
+        # A consume always expects a PARKED marker: an empty slot (identity
+        # ``None``) can never equal this pair, so a caller whose boundary was
+        # already consumed correctly loses.
+        expected=(str(block or ""), str(awaiting_since or "")),
+        payload={},
+    )
+
+
+def compare_and_repark_pending_decision(
+    run_id: str,
+    *,
+    block: str,
+    workflow: str,
+    brief: dict[str, Any],
+    resume_cursor: dict[str, Any],
+    awaiting_since: str,
+    cmd_sha: str | None = None,
+    experiment_dir: Path | None = None,
+) -> bool:
+    """RE-PARK a marker a failed resume span never consumed — only into an EMPTY slot.
+
+    The compare-and-swap counterpart of :func:`mark_pending_decision` for the F14
+    re-park (``block_drive._repark_marker``): the driver cleared the marker before
+    the resumed span, the span failed, so the approval was NOT consumed and the
+    marker must come back. But a BLIND re-write is the other half of the §8 S8
+    double-driver hazard — it can resurrect a boundary another driver has since
+    consumed and moved past, re-parking a decision that no longer exists. Expect
+    the slot to still be EMPTY: ``False`` means someone else parked a NEWER
+    boundary (or re-parked this one) in the meantime, and the newer marker wins.
+
+    Same payload shape as :func:`mark_pending_decision` (one envelope definition);
+    raises :class:`FileNotFoundError` if no record exists for *run_id*.
+    """
+    return _swap_pending_decision(
+        _resolve_experiment_dir(experiment_dir),
+        run_id,
+        expected=None,
+        payload={
+            "block": block,
+            "workflow": workflow,
+            "brief": dict(brief),
+            "resume_cursor": dict(resume_cursor),
+            "awaiting_since": awaiting_since,
+            "cmd_sha": cmd_sha,
+        },
     )
 
 

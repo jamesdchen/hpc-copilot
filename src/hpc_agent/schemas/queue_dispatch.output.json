@@ -1,0 +1,517 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_dispatch.output.json",
+  "title": "queue-dispatch output data",
+  "description": "What this call started, what it refused, and what advance held back.",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "stage_reached",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The single instant this call was computed against (ISO-8601 UTC).",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "stage_reached": {
+      "description": "The call's outcome: 'dispatched' when at least one item entered its lifecycle (started OR adopted), 'nothing_to_dispatch' when there was nothing placed to act on, 'dispatch_refused' when every placed item was refused. Three states, not two, because 'nothing to do' and 'work I could not start' are opposite situations for the human.",
+      "enum": [
+        "dispatched",
+        "nothing_to_dispatch",
+        "dispatch_refused"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "default": false,
+      "description": "True only when a refusal is one a HUMAN must resolve — a blocked resolve (resume-vs-fresh, missing scaffold) or a refused gate. A claim held by a peer is explicitly NOT one: nobody needs to decide anything, the other process is already doing the work.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "One-line summary of the tick's outcome, code-computed from the rows below.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "dispatched": {
+      "description": "One row per item that entered its lifecycle this call, started or adopted.",
+      "items": {
+        "$ref": "#/$defs/DispatchedItem"
+      },
+      "title": "Dispatched",
+      "type": "array"
+    },
+    "refused": {
+      "description": "One row per PLACED item that did not start, each with its disclosed cause (R4).",
+      "items": {
+        "$ref": "#/$defs/DispatchRefusal"
+      },
+      "title": "Refused",
+      "type": "array"
+    },
+    "declared_retries": {
+      "description": "The declared-retry decisions this tick took BEFORE placement ran (§7 failure classes): retry items enqueued for mechanically-failed runs whose items carry a declared retryable(n) budget, and exhausted budgets whose items now park for a human. Empty when no ledger item declares a budget — the default, and the whole leg's cost in that case. An enqueued retry is placed and dispatched by the SAME machinery as any other queued item, so its start also appears under ``dispatched`` when this tick reached it.",
+      "items": {
+        "$ref": "#/$defs/QueueDeclaredRetry"
+      },
+      "title": "Declared Retries",
+      "type": "array"
+    },
+    "held": {
+      "description": "``queue-advance``'s own holdbacks, relayed VERBATIM — items that were never placed, so the actor had nothing to act on. Passed through rather than restated so the authority's reason is the one the human reads (R4).",
+      "items": {
+        "$ref": "#/$defs/QueueHoldback"
+      },
+      "title": "Held",
+      "type": "array"
+    },
+    "refused_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "reason_code -> count over ``refused``. Pre-aggregated so no consumer re-derives a different total.",
+      "title": "Refused Counts",
+      "type": "object"
+    },
+    "held_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "``queue-advance``'s reason_code -> count over ``held``, relayed unchanged.",
+      "title": "Held Counts",
+      "type": "object"
+    },
+    "batch_allowed_by": {
+      "anyOf": [
+        {
+          "enum": [
+            "unattended_tier",
+            "item_ids"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why a ``max_dispatches`` > 1 bound was accepted, or null for a call at the interactive one-per-y default: 'unattended_tier' — the caller declared the standing-consent tier; 'item_ids' — the caller enumerated the batch item by item. The R4 disclosure for the throttle, never a gate outcome: batching exempts no item from its own cluster-boundary gates (D1), it only removes the artificial one-start-per-tick bound.",
+      "title": "Batch Allowed By"
+    },
+    "placements_considered": {
+      "default": 0,
+      "description": "How many placements ``queue-advance`` returned for this call, before any ``item_ids`` narrowing. The denominator behind the rows above, so a call that acted on one of five placements says so.",
+      "title": "Placements Considered",
+      "type": "integer"
+    },
+    "occupancy": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "campaign_id -> occupied pool slots as the ONE shared predicate (``state/queue_occupancy.occupied_slots``, R9) saw them at decision time, relayed from ``queue-advance``. Published so the arithmetic behind a placement stays checkable after the fact.",
+      "title": "Occupancy",
+      "type": "object"
+    },
+    "maintenance": {
+      "additionalProperties": true,
+      "description": "What the queue's JANITOR did on this tick, as data: ``{dropped_items, dropped_records, kept_records, pruned_runs, protected_runs}`` and ``error`` when a leg failed (``ops/queue/maintenance.groom_queue_stores``). The dispatcher is the queue's only WRITE authority, so it is where settled intake records are compacted away and unreferenced terminal RunRecords are pruned — never on a read path, and never on a tick that dispatched nothing (that pass is the one §7's relaunch-cheapness invariant is written about). Empty when no grooming ran. Disclosed rather than silent: a durable store that shrank must say by how much.",
+      "title": "Maintenance",
+      "type": "object"
+    },
+    "brief": {
+      "default": "",
+      "description": "The deterministic one-paragraph disclosure the session relays VERBATIM — code-computed from the fields above, never authored. Placement lives inside the human's y (§3), so what was actually started, adopted, refused and held has to be renderable in one breath.",
+      "title": "Brief",
+      "type": "string"
+    },
+    "active_env_overrides": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Every framework-relevant ``HPC_*`` environment variable exported in THIS process, verbatim (B15 disclosure; mirrors campaign-refill). Dispatch starts cluster-submitting children, so a stray transport override reshapes every one of them — echoing it makes env-vs-record drift visible. Empty when no ``HPC_*`` variable is set.",
+      "title": "Active Env Overrides",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "DispatchRefusal": {
+      "additionalProperties": false,
+      "description": "One PLACED item that did not enter its lifecycle, with the cause stated.\n\nThe actor's half of R4. ``queue-advance``'s holdbacks say \"I could not\nchoose a cluster\"; these say \"a cluster was chosen and I could not start\".\nBoth are normal outcomes carried as DATA, never as envelope errors — a\nclaim held by a peer is a healthy fleet, not a failed call.",
+      "properties": {
+        "item_id": {
+          "description": "The intake item that stayed un-started.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The computed run id, when one was derivable; null for an unresolved item.",
+          "title": "Run Id"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The cluster the item was placed on, when placement got that far.",
+          "title": "Cluster"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The cid this item would have occupied a slot in; null for an open-loop item.",
+          "title": "Campaign Id"
+        },
+        "reason_code": {
+          "description": "The closed-vocabulary cause, so briefs can COUNT by cause and tests can assert on it.",
+          "enum": [
+            "claim_held",
+            "item_unresolved",
+            "resolve_blocked",
+            "cluster_unresolvable",
+            "gate_refused",
+            "lifecycle_failed"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The human-readable statement of the same cause, specific enough to act on — the peer's pid for a held claim, the resolver's own escalation text for a blocked resolve, the gate's refusal verbatim.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "placed": {
+          "default": false,
+          "description": "Whether the placement transition was already on the ledger when the refusal happened. Load-bearing for the operator: a placed-but-un-started item has left ``queue-advance``'s scope (advance reads only queued items), so it will not be re-decided and ``queue-status`` is the surface that must show it.",
+          "title": "Placed",
+          "type": "boolean"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "description": "Structured particulars behind ``reason`` (the holder pid, the resolver stage, the missing cluster key and its near misses), so a later tier can act on the refusal without re-parsing prose.",
+          "title": "Detail",
+          "type": "object"
+        }
+      },
+      "required": [
+        "item_id",
+        "reason_code",
+        "reason"
+      ],
+      "title": "queue-dispatch refusal",
+      "type": "object"
+    },
+    "DispatchedItem": {
+      "additionalProperties": false,
+      "description": "One item whose run lifecycle this call started — or found already started.\n\n``outcome`` is the whole point of the row. Dispatch is idempotent by\nADOPTION, not by suppression: an item whose run already exists is a\nSUCCESS, reported as such, with the evidence that made it one. A dispatcher\nthat silently skipped it would be indistinguishable from one that crashed\nbefore starting anything.",
+      "properties": {
+        "item_id": {
+          "description": "The intake item that entered its lifecycle.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "The COMPUTED run id this dispatch claimed (§10.S2). Required here, unlike on a placement: an item with no derivable id cannot be claimed, adopted or started at all, so it is a refusal (``item_unresolved``) rather than a dispatch.",
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "cmd_sha": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The parameter identity behind ``run_id`` — its pre-image, when the ledger or the resolve supplied one. Carried so an adopt can state which parameters the existing run committed to rather than implying agreement from eight hex characters.",
+          "title": "Cmd Sha"
+        },
+        "cluster": {
+          "description": "The clusters.yaml key the item was placed on and started against. Transport was RE-RESOLVED from this key at use time; the placement's own ssh_target is disclosure only and stale by design.",
+          "title": "Cluster",
+          "type": "string"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The concrete ``<base>_<clusterkey>`` this dispatch counts against — the key of the per-campaign dispatch lock it held and of the pool slot it now occupies. Null for an open-loop item.",
+          "title": "Campaign Id"
+        },
+        "outcome": {
+          "description": "'started' — this call spawned the lifecycle. 'adopted' — a run for this run_id already existed and this call took it as the item's dispatch instead of submitting a second one (§10.S2.5). The submit-once organ makes the difference observable rather than guessed: a live ``submitting`` record IS the in-flight dispatch.",
+          "enum": [
+            "started",
+            "adopted"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "adopted_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "On an adopt, the existing RunRecord's status — 'submitting' (a concurrent dispatch is inside its dispatch→id window; reconcile recovery owns it), or 'in_flight'/'complete' (the work is already done or running). Null on 'started'. The evidence behind the adopt, so nobody has to re-read the journal to check it.",
+          "title": "Adopted Status"
+        },
+        "placed": {
+          "default": false,
+          "description": "True when THIS call appended the placement transition; False when the ledger already carried it (a retry, or a peer that got there first). The transition's append token is derived from the item id, so a replay writes nothing — this is the honest signal of which of the two happened.",
+          "title": "Placed",
+          "type": "boolean"
+        },
+        "detached_pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The detached lifecycle worker's OS process id, informational — do NOT wait on it; the outcome arrives via the journal. Null on an adopt and on a replayed terminal.",
+          "title": "Detached Pid"
+        },
+        "stage_reached": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The composed lifecycle verb's own stage_reached ('detached' on a fresh spawn).",
+          "title": "Stage Reached"
+        },
+        "reason": {
+          "description": "The disclosed WHY, in one line: what was started or adopted and what made that the right call. R4 applies to successes too — an adopt that did not say why it adopted is indistinguishable from a dispatch that silently did nothing.",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "run_id",
+        "cluster",
+        "outcome",
+        "reason"
+      ],
+      "title": "queue-dispatch dispatched item",
+      "type": "object"
+    },
+    "QueueClusterVerdict": {
+      "additionalProperties": false,
+      "description": "Why ONE cluster was or was not eligible for ONE item.\n\nThe per-cluster evidence behind a hold. R4 says an item never disappears\nwithout a reason; a reason that says only \"nothing matched\" is a reason the\nhuman cannot act on, so the decision carries its work.",
+      "properties": {
+        "cluster": {
+          "description": "The clusters.yaml top-level key evaluated.",
+          "title": "Cluster",
+          "type": "string"
+        },
+        "eligible": {
+          "description": "True when this cluster satisfied every hard constraint.",
+          "title": "Eligible",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "The specific verdict — which constraint failed and against which configured value (e.g. 'walltime_sec 172800 > constraints.max_walltime 3:00:00'). Names WHICH walltime ceiling it compared, because clusters.yaml carries two that disagree by 8-16x (S11).",
+          "title": "Reason",
+          "type": "string"
+        },
+        "occupied": {
+          "default": 0,
+          "description": "Pool slots this cluster's campaign id already occupies, from the ONE shared predicate ``state/queue_occupancy.occupied_slots`` (R9). The least-loaded tie-break input, and a disclosed number rather than an inferred one — it counts OUR committed work, not the scheduler's queue.",
+          "title": "Occupied",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cluster",
+        "eligible",
+        "reason"
+      ],
+      "title": "queue-advance cluster verdict",
+      "type": "object"
+    },
+    "QueueDeclaredRetry": {
+      "additionalProperties": false,
+      "description": "One declared-retry decision this dispatch tick took — disclosure, never judgment.\n\nThe retryable(n) failure-class leg (run-queue plan §7 \"Failure classes on\nparked items\", RESOLVED as proposed 2026-07-29): a budget exists only\nbecause the item's ENQUEUER declared one, and the kernel consumes it\nmechanically — a run at a mechanical failure terminal is re-enqueued as a\nderived-id retry item (``<root>.retry<k>``) reusing the recorded resolved\nidentity verbatim, up to n times; past n it parks for a human. Every such\ndecision is a row here, successes included, because a retry that did not\nsay it was a declared retry would be indistinguishable from an agent\nquietly resubmitting a failed run.",
+      "properties": {
+        "root_item_id": {
+          "description": "The chain's root — the item whose enqueuer declared the budget.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Root Item Id",
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The retry item this tick minted (or found already minted, on 'replayed') — ``<root>.retry<attempt>``, the derived id that makes racing ticks collapse onto one ledger line. Null on 'exhausted': nothing was enqueued.",
+          "title": "Item Id"
+        },
+        "attempt": {
+          "description": "Which declared retry this row is about: the attempt just enqueued ('enqueued'/'replayed'), or the count already spent ('exhausted').",
+          "minimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "retryable": {
+          "description": "The declared budget n, read off the ledger — never inferred.",
+          "minimum": 1,
+          "title": "Retryable",
+          "type": "integer"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The FAILED run the chain re-dispatches. The retry reuses this recorded identity verbatim (§10.S3: never a re-resolve), so the fresh attempt is minted over the same run id's corpse.",
+          "title": "Run Id"
+        },
+        "outcome": {
+          "description": "'enqueued' — this tick appended the retry item; 'replayed' — the derived id already existed (a racing or replayed tick got there first; nothing was written); 'exhausted' — the declared budget is spent, nothing was enqueued, and the item parks for a human.",
+          "enum": [
+            "enqueued",
+            "replayed",
+            "exhausted"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The disclosed WHY, naming it a declared-retry: which run failed, which attempt of which budget this is, and — on exhaustion — that the item now parks with its budget named.",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_item_id",
+        "attempt",
+        "retryable",
+        "outcome",
+        "reason"
+      ],
+      "title": "queue-dispatch declared retry",
+      "type": "object"
+    },
+    "QueueHoldback": {
+      "additionalProperties": false,
+      "description": "One item that stays QUEUED, with the reason stated (R4).\n\nNever dropped, never guessed at. A held item is a normal outcome — under\n§7 R3 the queue's 'queued' state is almost entirely PRE-GATE (awaiting a y,\nconsent, or placement), not awaiting capacity.",
+      "properties": {
+        "item_id": {
+          "description": "The intake item held back.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "description": "The closed-vocabulary cause, so briefs can COUNT by cause ('3 items waiting on gpu capacity').",
+          "enum": [
+            "no_clusters_configured",
+            "cluster_pin_unknown",
+            "no_cluster_matches_constraints",
+            "courtesy_cap_reached",
+            "item_unresolved",
+            "batch_limit_reached"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The human-readable statement of the same cause, specific enough to act on.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "considered": {
+          "description": "Every cluster evaluated and why each was rejected — empty only when no cluster could be evaluated at all.",
+          "items": {
+            "$ref": "#/$defs/QueueClusterVerdict"
+          },
+          "title": "Considered",
+          "type": "array"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "description": "Structured particulars behind ``reason`` (the unknown pin and its near-miss suggestions, the cap and its current value, the asks that found no host). Machine-readable so a later tier can act on the hold without re-parsing prose.",
+          "title": "Detail",
+          "type": "object"
+        }
+      },
+      "required": [
+        "item_id",
+        "reason_code",
+        "reason"
+      ],
+      "title": "queue-advance holdback",
+      "type": "object"
+    }
+  }
+}

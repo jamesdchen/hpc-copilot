@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/diagnosis_request.output.json",
+  "title": "diagnosis-request output data",
+  "description": "Shape of the ``data`` field on a ``diagnosis-request`` envelope.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "block",
+    "is_anomaly",
+    "categories",
+    "attach_target",
+    "note"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "block": {
+      "description": "The parked block VERB off the pending-decision marker (e.g. 'submit-s2').",
+      "title": "Block",
+      "type": "string"
+    },
+    "workflow": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The workflow the parked block belongs to, or null.",
+      "title": "Workflow"
+    },
+    "awaiting_since": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When the run began awaiting the decision (ISO-8601 UTC), or null.",
+      "title": "Awaiting Since"
+    },
+    "stage_reached": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The parked block's stage, read from its durable terminal record (state/block_terminal) when one exists — e.g. 'canary_failed', 'watching_anomaly'. Null when no terminal record is on disk.",
+      "title": "Stage Reached"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The block's own code-composed park reason, from the terminal record.",
+      "title": "Reason"
+    },
+    "is_anomaly": {
+      "description": "True when (block, stage) is an anomaly terminator (infra.block_chain.ANOMALY_TERMINATORS), falling back to the park brief's own answer-menu OVERRIDE flag when the stage is unknown.",
+      "title": "Is Anomaly",
+      "type": "boolean"
+    },
+    "signature_matches": {
+      "description": "Failure-signature classifications over evidence the run's stores ALREADY hold (park brief / terminal record), each {source, error_class, suggested_fix, matched_pattern} from THE one catalog classifier (infra.failure_signatures.classify) — never a second matcher. Stored classified_error triples are relayed verbatim under their own source tag.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Signature Matches",
+      "type": "array"
+    },
+    "categories": {
+      "description": "The CLOSED classification vocabulary (infra.failure_signatures.CLASSIFIER_CATEGORIES, sorted). The investigator names its classification from this set, or 'unmatched' when nothing fits — attach-diagnosis refuses anything else.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Categories",
+      "type": "array"
+    },
+    "read_paths": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Named LOCAL files the investigator should read (run sidecar, journal record, monitor log, block terminal, decision briefs) — paths only, existing files only, never content.",
+      "title": "Read Paths",
+      "type": "object"
+    },
+    "worker_logs": {
+      "description": "Local detached-worker log paths for this run (paths only).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Worker Logs",
+      "type": "array"
+    },
+    "attach_target": {
+      "description": "Where attach-diagnosis will write the dossier (<run_id>.diagnosis.json beside the terminal records).",
+      "title": "Attach Target",
+      "type": "string"
+    },
+    "diagnosis_attached": {
+      "default": false,
+      "description": "True when a prior diagnosis dossier is already attached (re-attach overwrites).",
+      "title": "Diagnosis Attached",
+      "type": "boolean"
+    },
+    "note": {
+      "description": "The seam disclosure: the request is code-composed; the investigator's output is stored as an opaque agent-authored proposal, display-only, never a gate input.",
+      "title": "Note",
+      "type": "string"
+    }
+  }
+}

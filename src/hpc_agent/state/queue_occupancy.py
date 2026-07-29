@@ -1,0 +1,569 @@
+"""The ONE "occupies a pool slot" predicate — shared by queue and campaign.
+
+``docs/plans/run-queue-placement-2026-07-28.md`` §10.S3 fixes the definition::
+
+    occupied(cid) = journal status ∈ {in_flight, submitting}
+                  ∪ intake items for cid in state {queued, placed}
+    pool_room     = max(0, K − occupied(cid))
+
+and R9 fixes where it lives: **exactly one module, importable by both
+``queue-advance`` and (later) ``campaign-advance``**. A second inline copy is
+the defect this module exists to prevent — three call sites already count
+occupancy slightly differently (``meta/campaign/atoms/status.py`` counts
+non-terminal records for a cid; ``meta/campaign/atoms/advance.py`` derives
+``pool_room`` from an ``in_flight`` count alone, so a ``submitting`` orphan is
+invisible to it; ``ops/campaign_refill.py`` documents in prose that an orphan
+does not shrink ``pool_room``), and the queue's arrival makes that divergence
+load-bearing rather than cosmetic.
+
+The bug S3 names, concretely: an enqueued-but-undispatched item is in NEITHER
+the journal nor the sidecar store, so every refill tick inside the
+enqueue→dispatch window re-enqueues the same slots. Intake is not a second
+status store (R1) — it contributes exactly ONE fact no existing store holds:
+*this slot is committed to this cid and is not yet a run.* That is the union's
+second term and its whole justification.
+
+Why it lives in ``state/`` and not under a subject
+--------------------------------------------------
+``hpc_agent.state.*`` and ``hpc_agent.infra.*`` are the two roots any subject
+in any role may import (``scripts/lint_subject_imports.py``). The shared
+predicate must be reachable from ``ops/queue/`` AND from
+``meta/campaign/atoms/``; parking it in either subject would make the other's
+import a cross-subject violation, which is precisely the pressure that
+produces a second inline copy. The directional rule ``state`` must not import
+``ops`` is respected: this module reads ``state/index.py`` and
+``state/queue_intake.py`` and nothing else.
+
+Dedup: the slot key, not the row
+--------------------------------
+A placed item and the run it became are ONE slot, not two. Intake never learns
+that an item was dispatched (R1 — ``dispatched`` is a projection), so a naive
+union double-counts an item across the handoff window. The union is therefore
+taken over SLOT KEYS: a run contributes ``run:<run_id>``, and an intake item
+contributes ``run:<run_id>`` when its computed ``run_id`` is known (§10.S2:
+run ids are derived at enqueue, not minted at dispatch) and ``item:<item_id>``
+otherwise. An item that resolves to an already-running run collapses onto it
+exactly; an unresolved item honestly holds its own slot until it resolves.
+
+That collapse is also §10.S2's "known collision" made visible rather than
+silent: two ledger rows whose resolved params and ``run_name`` agree compute
+the SAME ``run_id`` and therefore the same slot key.
+
+A slot RELEASES when the run it became retires
+-----------------------------------------------
+The collapse above has a corollary the first cut missed, and it is the
+difference between a working pool and a wedged one. Intake has no terminal
+state (D8: ``{queued, placed}`` and nothing wider), so a folded item stays on
+the ledger until a compaction pass removes it. If the ledger half counted every
+such item, a campaign that dispatched and COMPLETED ``K`` iterations would read
+as permanently full: the journal half correctly drops the terminal records, the
+ledger half keeps contributing their slot keys, and ``pool_room = K − occupied``
+sticks at zero for the rest of the experiment's life. Verified before the fix:
+four ``placed`` items whose runs were all ``complete`` reported ``occupied=4``
+with an empty journal half.
+
+:func:`retired_item_ids` is that same rule asked ledger-wide instead of
+per-campaign, and then narrowed twice more: it names the items whose runs have
+retired AND whose ledger row is history rather than live intent.
+:func:`retired_item_census` is the form ``queue-dispatch``'s janitor actually
+hands to :func:`hpc_agent.state.queue_intake.compact_intake_ledger` — the same
+ids plus the record count witnessed for each, so the rewrite can verify the
+census under the ledger's own lock. The predicate is
+shared rather than re-derived precisely so compaction can never remove an item
+the count still considers occupying — one definition of retirement, two
+consumers, with compaction taking the STRICTLY SMALLER set.
+
+Retiring a SLOT and compacting an ITEM are not the same question
+-----------------------------------------------------------------
+They were treated as one, and that was a data-loss bug (adversarial-review F1).
+:func:`run_occupies` answers *is this run holding a pool slot?* — a ``failed``
+run is not, and must not be, or a campaign wedges at ``K`` after its first
+failure. Compaction asks a different and stronger question: *is this ledger row
+history?* A row over a ``failed`` / ``abandoned`` run is NOT history, because
+the queue's own decision table says so — ``ops/queue/dispatch._ADOPTABLE_STATUSES``
+deliberately excludes the resubmittable terminals ("a corpse is not a dispatch,
+and the submit-once minter's own decision table mints a fresh attempt over
+one"), so a dispatch that meets one starts a new lifecycle rather than adopting.
+An item whose next dispatch would MINT is a live intent, and erasing it erases
+work nobody recorded anywhere else.
+
+Concretely, the two rows that were being deleted:
+
+* a ``queued`` retry — a run fails, a human or a refill producer re-enqueues the
+  same spec, the item computes the SAME ``run_id`` and sits ``queued`` waiting
+  for its turn. A dispatch tick that held it back for batch limit ("never
+  dropped, R4") then compacted it off the ledger in the same result. For a
+  refill producer this also re-opens S3 as an unbounded enqueue/delete cycle:
+  the producer re-enqueues, the janitor deletes, forever;
+* a ``placed`` row over a corpse — ``_dispatch_one`` appends the placement
+  BEFORE starting (durable-first), so a ``claim_held`` / ``gate_refused`` / crash
+  after that append leaves an item reading ``placed`` whose only RunRecord is the
+  PREVIOUS attempt's corpse. ``queue-dispatch --item-ids`` exists to recover
+  exactly that row; compacting it turns the recovery into ``item_unresolved``.
+
+So compaction retires an item only when ALL of: its state is
+:data:`~hpc_agent.state.queue_intake.STATE_PLACED` (a ``queued`` item has never
+been dispatched — it cannot be the history of anything), its run has stopped
+occupying, its run is not a resubmittable terminal, and no human owes it a
+verdict. The last two route through ``state/journal``'s existing
+:func:`~hpc_agent.state.journal.is_resubmittable_terminal` /
+:func:`~hpc_agent.state.journal.is_held` rather than a second status-set literal
+here, so "a corpse is not a dispatch" has ONE definition in the package.
+
+The accepted cost, stated rather than hidden: a ``placed`` row over a
+never-retried failed run stays on the ledger, so §7's pass-startup cost carries
+one item per un-retried failure. That is the deliberate direction of the
+trade — a ledger line is cheap and a deleted live intent is not recoverable —
+and the residue is bounded by failures, not by total history (every COMPLETE and
+every superseded item still compacts).
+
+So an item is counted only while the run it names is UNRETIRED — no record yet
+(the enqueue→dispatch window, which is the whole reason the ledger half exists)
+or a live one. A terminal or superseded record retires the item's slot by the
+SAME two tests the journal half applies to the record itself, which is what
+makes the two halves one predicate rather than two. An item with no known
+``run_id`` cannot be joined to anything and holds its own slot honestly, exactly
+as before.
+
+The join is by ``run_id`` and not by campaign attribution: an item's run is
+looked up in this campaign's records first and read directly from the journal
+otherwise, because a RunRecord that landed with a different (or blank)
+``campaign_id`` than the item is still the run that item became, and leaving it
+uncounted-as-retired would reproduce the wedge for exactly the campaigns whose
+ids do not compose.
+
+What changes for the second caller
+----------------------------------
+``campaign-advance``'s pool arithmetic (``meta/campaign/atoms/advance.py``
+``_refill``) is this module's intended second caller, and routing it here moves
+the number in TWO directions on purpose:
+
+* **up** — an enqueued-but-undispatched item now occupies. That is S3's bug
+  closed: without it every refill tick inside the enqueue→dispatch window
+  re-enqueues slots that are already spoken for.
+* **down** — a SUPERSEDED run stops occupying. ``campaign-status.in_flight``
+  counts every non-terminal record; a record the supersession organ has closed
+  is holding a slot no live job is using. A run that reached a TERMINAL status
+  stops occupying too, and so does the ledger item that became it (see "A slot
+  RELEASES when the run it became retires" above) — without that second half
+  the rewiring would trade S3's re-enqueue window for a permanent wedge.
+
+Only the POOL arithmetic moves. The ``wait_in_flight`` / drain-before-stop legs
+keep counting live journal records, because their question is "would stopping
+now orphan a cluster JOB?" — a queued ledger item is not a job, and counting it
+there would make a converged campaign drain forever behind an item nothing is
+going to dispatch.
+
+Which cid a ledger item counts under
+-------------------------------------
+Only a PLACEMENT record stamps ``campaign_id`` (``queue_intake``'s record
+shapes), so keying the ledger half on the stored field alone would make R9's
+``{queued, placed}`` reduce to ``{placed}`` — the union's second term would be
+structurally dead and the enqueue→dispatch window S3 named would stay
+uncounted, which is the whole bug this module exists to close. So a queued
+item's cid is DERIVED, by the one composition rule
+(:func:`compose_campaign_id`, ``docs/design/campaign-multi-cluster.md`` §2):
+its campaign base plus its explicit cluster pin. Derived only when BOTH are
+present — an unpinned item's cluster is ``queue-advance``'s to decide (R3/R4),
+so it is committed to no particular cid yet and counting it against a guessed
+one would be the placement guess R4 forbids, dressed as arithmetic.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES, JournalStatus
+from hpc_agent.state.index import find_runs_by_campaign
+from hpc_agent.state.journal import is_held, is_resubmittable_terminal, load_run
+from hpc_agent.state.queue_intake import (
+    INTAKE_STATES,
+    STATE_PLACED,
+    item_run_id,
+    read_intake_items,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from hpc_agent.state.run_record import RunRecord
+
+__all__ = [
+    "OCCUPYING_JOURNAL_STATUSES",
+    "compose_campaign_id",
+    "intake_item_campaign_id",
+    "item_is_history",
+    "occupancy_detail",
+    "occupied_slots",
+    "retired_item_census",
+    "retired_item_ids",
+    "run_occupies",
+    "slot_key",
+]
+
+#: The journal half of the union — every NON-terminal ``JournalStatus``, today
+#: ``{submitting, in_flight}``. Derived from the vocabulary rather than written
+#: out, so a future non-terminal status joins the predicate by construction
+#: instead of by somebody remembering this literal. ``submitting`` is in by that
+#: same construction and must be: it is the pre-dispatch state a submit mints
+#: BEFORE the remote actuation, and an orphaned one can name a LIVE array whose
+#: id-read was severed (the provenance-review F2 argument campaign-status
+#: already applies).
+OCCUPYING_JOURNAL_STATUSES: frozenset[str] = frozenset(
+    str(status) for status in JournalStatus if status not in TERMINAL_STATUSES
+)
+
+
+def slot_key(*, run_id: str | None, item_id: str | None) -> str:
+    """The dedup key for one occupied slot — ``run:<run_id>`` or ``item:<item_id>``.
+
+    Prefers ``run_id``: a run and the intake item that became it are one slot
+    (see the module docstring). The two namespaces are prefixed so an item id
+    can never accidentally collide with a run id.
+    """
+    if run_id:
+        return f"run:{run_id}"
+    if item_id:
+        return f"item:{item_id}"
+    raise ValueError("slot_key requires at least one of run_id / item_id")
+
+
+def run_occupies(record: RunRecord | None) -> bool:
+    """Whether *record* holds a pool slot — the ONE test both halves apply.
+
+    ``True`` for a non-terminal, non-superseded record. ``False`` for a
+    terminal or superseded one, and for ``None`` — which means only "no record",
+    never "no slot": an intake item with no RunRecord yet IS the enqueue→dispatch
+    window the ledger half exists to count, so its caller adds the item's own
+    slot rather than consulting this.
+
+    Extracted rather than inlined twice because the journal half and the ledger
+    half must retire a slot on exactly the same evidence. Two copies of "is this
+    run still occupying?" is the divergence R9 forbids for the count itself,
+    scaled down to one predicate — and the first cut of this module had exactly
+    that asymmetry: it dropped a terminal RECORD but kept the ledger ITEM that
+    became it, so a healthy campaign wedged after ``K`` completed iterations.
+    """
+    if record is None:
+        return False
+    if getattr(record, "superseded_by", ""):
+        return False
+    return record.status in OCCUPYING_JOURNAL_STATUSES
+
+
+def compose_campaign_id(campaign_base: str | None, cluster: str | None) -> str | None:
+    """``<base>_<clusterkey>`` — the ONE composition rule, or ``None``.
+
+    ``docs/design/campaign-multi-cluster.md`` §2 names the per-cluster campaign
+    id after its base and its cluster key. COMPOSED, never parsed: a base
+    routinely contains underscores (``ebm_all_buckets_carc``), so splitting one
+    back apart is a hazard that doc calls out by name.
+
+    Lives here, next to the predicate that consumes it, because occupancy and
+    ``queue-advance`` must agree byte-for-byte on which cid an item belongs to —
+    a second inline ``f"{base}_{cluster}"`` is the same class of divergence R9
+    forbids for the count itself. ``None`` when either half is missing or blank:
+    an open-loop item belongs to no campaign, and an unpinned item's cluster is
+    not yet decided.
+    """
+    if not isinstance(campaign_base, str) or not campaign_base:
+        return None
+    if not isinstance(cluster, str) or not cluster:
+        return None
+    return f"{campaign_base}_{cluster}"
+
+
+def intake_item_campaign_id(item: dict[str, Any]) -> str | None:
+    """The cid a folded intake *item* occupies, or ``None`` when undetermined.
+
+    The stored ``campaign_id`` when a placement record put one there; otherwise
+    the composition of the item's campaign base and its explicit cluster pin
+    (see the module docstring's "Which cid a ledger item counts under"). A
+    queued item with a base but no pin returns ``None`` — it is committed to a
+    campaign but not yet to a cluster, so it occupies no cluster's pool slot.
+
+    Public because ``queue-advance`` must ask the SAME question when deciding
+    whether a placement it just decided newly occupies a slot or merely
+    confirms one the predicate already counted.
+    """
+    stored = item.get("campaign_id")
+    if isinstance(stored, str) and stored:
+        return stored
+    pin = item.get("cluster_pin")
+    if not isinstance(pin, str) or not pin:
+        # A queued item's bare ``cluster`` can only have come from the enqueue
+        # (nothing but a placement record sets it later, and a placement also
+        # sets ``campaign_id``, handled above), so it reads as a pin.
+        pin = item.get("cluster")
+    return compose_campaign_id(item.get("campaign_base"), pin)
+
+
+def _journal_present(experiment_dir: Path) -> bool:
+    """Does this experiment have a journal namespace yet — asked WITHOUT minting one.
+
+    F46, the guard ``state/index.py`` and ``ops/queue/status.py`` both open with.
+    ``load_run`` resolves through ``JournalLayout.run_record`` ->
+    ``state/run_record.journal_dir``, which MKDIRS ``~/.claude/hpc/<repo_hash>/``
+    and writes ``repo.json`` on access — so the join below would mint a ghost
+    namespace for any experiment whose ledger carries a ``run_id`` and whose
+    journal does not exist yet, from a pure read. Computed once per call, for
+    the same reason ``queue-status`` computes it once: the pass this guard
+    short-circuits is exactly the pass that finds nothing.
+    """
+    from hpc_agent.state.run_record import journal_root_if_exists
+
+    return journal_root_if_exists(experiment_dir).exists()
+
+
+def _item_run_record(
+    experiment_dir: Path, run_id: str | None, known: dict[str, RunRecord], *, journal: bool
+) -> RunRecord | None:
+    """The RunRecord an intake item became, or ``None`` when it has not yet.
+
+    Answers from this campaign's own records first — they are already in hand,
+    and that is the case for every item whose run started under this cid. Falls
+    back to a direct journal read because a run's ``campaign_id`` stamp comes
+    off its submit spec, not off the ledger item: a record that landed with a
+    blank or different campaign id is still the run this item became, and
+    missing it would leave that item occupying a slot forever (the wedge, for
+    exactly the campaigns whose ids do not compose). ``None`` when the item
+    carries no run id at all — nothing to join on, so it holds its own slot.
+
+    *journal* is :func:`_journal_present`'s answer, threaded in rather than
+    re-asked: with no namespace there is nothing to find AND the read that would
+    look must not happen at all (F46).
+    """
+    if run_id is None:
+        return None
+    record = known.get(run_id)
+    if record is not None:
+        return record
+    return load_run(experiment_dir, run_id) if journal else None
+
+
+def occupancy_detail(experiment_dir: Path, campaign_id: str) -> dict[str, Any]:
+    """Full, DISCLOSABLE occupancy for *campaign_id* — the evidence behind the count.
+
+    Returns::
+
+        {
+          "campaign_id": str,
+          "occupied": int,               # len(slots) — the R9 number
+          "slots": [str, ...],           # sorted slot keys (the union)
+          "runs": [                      # journal half
+              {"run_id": str, "status": str, "cluster": str}, ...
+          ],
+          "items": [                     # ledger half — the items that DO occupy
+              {"item_id": str, "state": str, "run_id": str | None}, ...
+          ],
+          "retired_items": [             # counted by neither half, and why
+              {..., "retired_by": str},  # the run's terminal status, or its superseder
+          ],
+          "shared_slots": [str, ...],    # slots BOTH halves claim (the handoff window)
+        }
+
+    Placement is a decision a human signs (§3: placement lives inside the y), so
+    the count it rests on must be inspectable — a brief that says "carc at 2
+    occupied" has to be able to name which two. ``shared_slots`` is the
+    double-count that WOULD have happened, surfaced rather than hidden: a
+    non-empty list is the normal, healthy enqueue→dispatch handoff.
+
+    An empty *campaign_id* yields a zero report: open-loop submits belong to no
+    campaign and ``find_runs_by_campaign`` matches nothing (its own contract).
+
+    A superseded run does NOT occupy: ``superseded_by`` marks the record closed
+    by the supersession organ even when its status has not yet caught up, and
+    counting it would hold a slot no live job is using. ``retired_items`` is the
+    ledger half of that same rule (:func:`run_occupies` applied to the run an
+    item became) and is DISCLOSED rather than merely skipped: an operator asking
+    "why is this campaign at 2 of 4?" must be able to see the items that were on
+    the ledger and are no longer holding anything.
+    """
+    runs: list[dict[str, Any]] = []
+    run_slots: set[str] = set()
+    known: dict[str, RunRecord] = {}
+    if campaign_id:
+        for record in find_runs_by_campaign(experiment_dir, campaign_id):
+            known[record.run_id] = record
+            if not run_occupies(record):
+                continue
+            runs.append(
+                {
+                    "run_id": record.run_id,
+                    "status": record.status,
+                    "cluster": record.cluster,
+                }
+            )
+            run_slots.add(slot_key(run_id=record.run_id, item_id=None))
+
+    items: list[dict[str, Any]] = []
+    item_slots: set[str] = set()
+    retired: list[dict[str, Any]] = []
+    if campaign_id:
+        journal = _journal_present(experiment_dir)
+        for item in read_intake_items(experiment_dir):
+            if item.get("state") not in INTAKE_STATES:
+                continue
+            if intake_item_campaign_id(item) != campaign_id:
+                continue
+            item_id = item.get("item_id")
+            if not isinstance(item_id, str) or not item_id:
+                continue
+            run_id = item_run_id(item)
+            row: dict[str, Any] = {
+                "item_id": item_id,
+                "state": item.get("state"),
+                "run_id": run_id,
+            }
+            became = _item_run_record(experiment_dir, run_id, known, journal=journal)
+            if became is not None and not run_occupies(became):
+                # The run this item became has retired. The item is still on the
+                # ledger (intake has no terminal state, and compaction runs only
+                # at the dispatcher's write authority — never on this read path),
+                # so counting it would hold the slot forever — see the module
+                # docstring's "A slot RELEASES when the run it became retires".
+                row["retired_by"] = became.superseded_by or became.status
+                retired.append(row)
+                continue
+            items.append(row)
+            item_slots.add(slot_key(run_id=run_id, item_id=item_id))
+
+    slots = run_slots | item_slots
+    return {
+        "campaign_id": campaign_id,
+        "occupied": len(slots),
+        "slots": sorted(slots),
+        "runs": runs,
+        "items": items,
+        "retired_items": retired,
+        "shared_slots": sorted(run_slots & item_slots),
+    }
+
+
+def item_is_history(record: RunRecord | None) -> bool:
+    """Whether a PLACED item naming *record* is history — the compaction test.
+
+    Strictly stronger than ``not run_occupies(record)``, and deliberately so: a
+    slot is released the moment a run stops running, but a ledger ROW may only be
+    deleted when nothing will ever act on it again (see the module docstring's
+    "Retiring a SLOT and compacting an ITEM are not the same question"). Three
+    conditions, each routed through the shipped single authority for its
+    question rather than re-decided here:
+
+    * :func:`run_occupies` — the slot must already be released (terminal or
+      superseded). ``None`` is False: no record means the item is inside the
+      enqueue→dispatch window, which is the exact fact the ledger half exists to
+      hold, and compacting it would re-open S3's re-enqueue bug;
+    * :func:`hpc_agent.state.journal.is_held` — a run parked on an escalation
+      verdict is a human's open question. Asked SEPARATELY from the next test
+      because ``is_resubmittable_terminal`` folds the hold into its own answer
+      (a held ``failed`` run returns False there, meaning "a plain submit must
+      not proceed"), which is the opposite of what a hold means here;
+    * :func:`hpc_agent.state.journal.is_resubmittable_terminal` — the ONE
+      definition of "a corpse a fresh attempt is minted over", and the
+      complement of ``ops/queue/dispatch._ADOPTABLE_STATUSES``. An item whose
+      next dispatch would MINT rather than ADOPT is a live intent.
+
+    Not applied to a ``queued`` item at all, because the caller never asks: an
+    item that was never placed cannot be the history of a dispatch, whatever its
+    computed ``run_id`` happens to join to.
+    """
+    if record is None:
+        return False
+    if run_occupies(record):
+        return False
+    if is_held(record):
+        return False
+    return not is_resubmittable_terminal(record)
+
+
+def retired_item_census(experiment_dir: Path) -> dict[str, int]:
+    """The compaction-eligible items, each with the record count WITNESSED for it.
+
+    ``item_id -> record_count``. The ids are :func:`retired_item_ids`; the counts
+    are what makes compaction's under-flock verification possible (F10): the
+    janitor computes this census OUTSIDE the ledger lock, and
+    :func:`hpc_agent.state.queue_intake.compact_intake_ledger` re-counts under
+    the lock and refuses to drop any item whose record count moved in between.
+    Without the counts, a concurrent ``queue-dispatch`` (the dispatch lock is
+    per-cid; the ledger is global) can append a placement for an item this census
+    already condemned, and the rewrite deletes a row the other process is
+    simultaneously reporting as ``placed``.
+
+    Returned as a mapping rather than a set so the ids and the counts come from
+    ONE read of the ledger — two reads would reintroduce, between themselves, the
+    very race the counts exist to close.
+
+    Empty when the experiment has no journal namespace: with no records to join,
+    nothing can be shown to have retired, and F46 forbids minting one to find
+    out.
+    """
+    if not _journal_present(experiment_dir):
+        return {}
+    census: dict[str, int] = {}
+    for item in read_intake_items(experiment_dir):
+        # A ``queued`` item is never history — see :func:`item_is_history`. This
+        # subsumes the R1 ``INTAKE_STATES`` membership guard the sibling readers
+        # apply (``STATE_PLACED`` is a member), rather than restating it: a
+        # smuggled state is not ``placed`` either, so it is skipped by the same
+        # comparison.
+        if item.get("state") != STATE_PLACED:
+            continue
+        item_id = item.get("item_id")
+        run_id = item_run_id(item)
+        if not isinstance(item_id, str) or not item_id or run_id is None:
+            continue
+        if item_is_history(load_run(experiment_dir, run_id)):
+            census[item_id] = int(item.get("record_count") or 1)
+    return census
+
+
+def retired_item_ids(experiment_dir: Path) -> set[str]:
+    """Every ledger item that is HISTORY — the compaction-eligible set.
+
+    Ledger-wide (all campaigns, and the open-loop items no campaign claims), and
+    a SUBSET of the items ``occupancy_detail`` reports as no longer occupying, so
+    an item can never be compacted away while the count still treats it as
+    holding a slot. That containment is the whole safety argument for letting a
+    rewrite touch an append-only file at all; it used to be an equality, and the
+    equality was the bug (module docstring, "Retiring a SLOT and compacting an
+    ITEM are not the same question").
+
+    An item is retired when its state is ``placed``, it names a ``run_id``, that
+    run has a RunRecord, and :func:`item_is_history` accepts the record. The four
+    exclusions are the interesting part and each is deliberate:
+
+    * a ``queued`` item has never been dispatched, so it is a live intent
+      whatever its computed ``run_id`` joins to — the F1 data-loss case, where a
+      retry re-enqueued over a failed run was compacted off the ledger by the
+      same tick that promised it stayed queued;
+    * an item with NO ``run_id`` is unresolved and cannot be joined to anything;
+    * an item whose ``run_id`` has NO RunRecord is inside the enqueue→dispatch
+      window, which is the exact fact the ledger half exists to hold. Compacting
+      it would delete the only durable evidence that the slot is spoken for,
+      re-opening S3's re-enqueue bug;
+    * an item over a resubmittable-terminal or HELD run is not history: the
+      queue's own decision table mints a fresh attempt over a corpse, and a hold
+      is a human's open question.
+
+    The consequence a caller must respect: after compaction, no surviving ledger
+    item references a run that is settled AND adoptable, so a journal prune that
+    removes terminal RunRecords must still be handed the survivors as ``protect``
+    — a surviving item over a corpse still joins to it, and pruning that record
+    would flip the item's projection back to ``dispatched=false``. Run compaction
+    first, prune second, with the survivors protected.
+
+    Returns an empty set when the experiment has no journal namespace.
+    """
+    return set(retired_item_census(experiment_dir))
+
+
+def occupied_slots(experiment_dir: Path, campaign_id: str) -> int:
+    """How many pool slots *campaign_id* currently occupies (the R9 number).
+
+    ``pool_room = max(0, K - occupied_slots(...))``. Thin wrapper over
+    :func:`occupancy_detail` so the count and the evidence can never disagree —
+    a caller that wants only the number must not get it from a second, cheaper,
+    subtly different scan.
+    """
+    return int(occupancy_detail(experiment_dir, campaign_id)["occupied"])

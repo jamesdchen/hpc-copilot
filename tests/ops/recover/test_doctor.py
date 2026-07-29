@@ -653,3 +653,122 @@ def test_doctor_envelope_carries_jsonschema_alert(
     assert any("jsonschema is not importable" in a["message"] for a in out["alerts"])
     # A missing dep is a preflight advisory, not a stalled driver.
     assert out["needs_attention"] is False
+
+
+# ─── the PARK push carries the brief's answer line (run-queue plan §8 S13) ────
+
+
+def _park_with_menu(exp: Path, run_id: str, *, awaiting_since: str) -> str:
+    """Park *run_id* with the SAME brief shape ``block_drive.park`` writes.
+
+    Composed through the real composer rather than a hand-written literal, so a
+    change to the menu's shape shows up here instead of a stale fixture passing.
+    Returns the paste-ready answer line the notification must carry.
+    """
+    from hpc_agent.ops.relay_render import compose_answer_menu
+
+    menu = compose_answer_menu(
+        brief={},
+        block="submit-s2",
+        run_id=run_id,
+        target="submit-s3",
+        next_spec_sha="a1b2c3d4" * 8,
+        approve_hint={"utterance": f"y submit-s3 {run_id} @a1b2c3d4"},
+    )
+    assert menu is not None
+    mark_pending_decision(
+        run_id,
+        block="submit-s2",
+        workflow="submit",
+        brief={"canary": "green", "answer_menu": menu},
+        resume_cursor={"workflow": "submit", "run_id": run_id, "next_verb": "submit-s3"},
+        awaiting_since=awaiting_since,
+        experiment_dir=exp,
+    )
+    return str(menu["answer_line"])
+
+
+def _alert_messages(exp: Path) -> list[str]:
+    from hpc_agent.ops.recover.notify import read_unacknowledged_alerts
+
+    return [a["message"] for a in read_unacknowledged_alerts(exp)]
+
+
+def test_doctor_notify_pushes_the_parks_answer_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parked run is something only the human can clear, so ``--notify`` now says
+    so — and carries the brief's own summary plus its paste-ready ``y``-line, so the
+    decision can be answered from a phone on the same terms as at a desk."""
+    from hpc_agent.ops.recover import notify as notify_mod
+
+    monkeypatch.setattr(notify_mod, "_try_run", lambda argv: False)  # never spawn a notifier
+    now = "2026-07-29T03:00:00+00:00"
+    upsert_run(tmp_path, _record("parked"))
+    stamp_tick(
+        "parked",
+        last_tick_at="2026-07-29T02:00:00+00:00",
+        next_tick_due="2026-07-29T02:00:00+00:00",  # overdue, but parked
+        experiment_dir=tmp_path,
+    )
+    answer_line = _park_with_menu(tmp_path, "parked", awaiting_since="2026-07-29T02:30:00+00:00")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now, notify=True))
+    assert out["parked_count"] == 1
+    messages = _alert_messages(tmp_path)
+    assert len(messages) == 1
+    assert "run parked awaiting your decision since 2026-07-29T02:30:00+00:00" in messages[0]
+    assert "a bare 'y' advances to submit-s3" in messages[0]
+    assert f"To answer, paste:  {answer_line}" in messages[0]
+    # The park-time diagnosis POINTER closes the notice (none attached here) —
+    # pointer + count only, never dossier content.
+    assert messages[0].endswith("diagnosis: none")
+
+
+def test_doctor_without_notify_pushes_nothing_for_a_park(tmp_path: Path) -> None:
+    """NEGATIVE: the push stays opt-in — the plain in-session verb is unchanged."""
+    now = "2026-07-29T03:00:00+00:00"
+    upsert_run(tmp_path, _record("parked"))
+    stamp_tick(
+        "parked",
+        last_tick_at="2026-07-29T02:00:00+00:00",
+        next_tick_due="2026-07-29T02:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park_with_menu(tmp_path, "parked", awaiting_since="2026-07-29T02:30:00+00:00")
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+    assert out["parked_count"] == 1
+    assert _alert_messages(tmp_path) == []
+
+
+def test_doctor_notify_skips_a_park_whose_y_is_already_committed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NEGATIVE: a committed-but-unadvanced boundary (§5 Phase-5) is a STALLED
+    driver, not an awaiting decision — pushing "answer this" would ask the human
+    for something they already gave."""
+    from hpc_agent.ops.recover import notify as notify_mod
+
+    monkeypatch.setattr(notify_mod, "_try_run", lambda argv: False)
+    now = "2026-07-29T03:00:00+00:00"
+    upsert_run(tmp_path, _record("decided"))
+    stamp_tick(
+        "decided",
+        last_tick_at="2026-07-29T02:00:00+00:00",
+        next_tick_due="2026-07-29T02:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park_with_menu(tmp_path, "decided", awaiting_since="2026-07-29T02:30:00+00:00")
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="decided",
+        block="submit-s2",
+        response="y",
+        resolved={"next_block": "submit-s3"},
+        ts="2026-07-29T02:40:00+00:00",
+    )
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now, notify=True))
+    assert out["parked_count"] == 0
+    assert out["awaiting_advance_count"] == 1
+    assert _alert_messages(tmp_path) == []

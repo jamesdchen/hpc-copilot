@@ -43,6 +43,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent attach-diagnosis --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "attach_diagnosis.input.json",
+    "name": "attach-diagnosis",
+    "output_schema": "attach_diagnosis.output.json",
+    "python": "hpc_agent.ops.recover.diagnosis.attach_diagnosis",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Attach an investigator's diagnosis dossier for one run — stored as an OPAQUE, provenance-marked agent proposal beside the terminal records (<run_id>.diagnosis.json). Shape-validated only: the classification must come from the closed catalog vocabulary (or 'unmatched'); the content is never interpreted, never enters a decision brief, an answer menu, or any gate. UNGATED — advisory data spends nothing. Re-attach overwrites (newest wins).",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]",
     "idempotent": true,
     "input_schema": null,
@@ -381,6 +395,20 @@
       "removes-files"
     ],
     "summary": "",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent queue-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "queue_run.input.json",
+    "name": "queue-run",
+    "output_schema": "queue_run.output.json",
+    "python": "hpc_agent.ops.queue.run.queue_run",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Enqueue ONE run request onto the per-experiment run queue (.hpc/queue/intake.jsonl): the resolve spec (inline or by reference), optional run name, optional explicit cluster pin, optional campaign base, and typed resource asks (gpu / cores / walltime / est core-hours). UNGATED - enqueueing spends nothing and touches no cluster; gates bind later at the cluster boundary of the run the item becomes, where the brief discloses the placement the y covers. The item lands in state 'queued'; queue-advance decides where it goes and queue-status projects what became of it. An explicit pin is verified against the live clusters.yaml and a typo is refused here rather than becoming a silently unplaceable item. The client-minted request_id is the dedup key, so a replayed relay returns the original item and writes nothing. Pure local flock-append, no SSH.",
     "verb": "mutate"
   },
   {
@@ -843,6 +871,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent diagnosis-request --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "diagnosis_request.input.json",
+    "name": "diagnosis-request",
+    "output_schema": "diagnosis_request.output.json",
+    "python": "hpc_agent.ops.recover.diagnosis.diagnosis_request",
+    "side_effects": [],
+    "summary": "Compose the code-only diagnosis request for one PARKED run: the parked verb/stage/reason off the pending-decision marker, failure-signature matches over evidence the run's stores already hold (the one catalog classifier), the LOCAL log/artifact paths a read-only investigator should read (paths only), and the closed category vocabulary to classify against. Pure read; refuses for a run that is not parked. The kernel never spawns the investigator and never consumes its judgment — findings come back through attach-diagnosis as display-only advisory data.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "dir_digest.input.json",
@@ -1174,6 +1214,30 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent queue-advance [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "queue_advance.input.json",
+    "name": "queue-advance",
+    "output_schema": "queue_advance.output.json",
+    "python": "hpc_agent.ops.queue.advance.queue_advance",
+    "side_effects": [],
+    "summary": "The run queue's placement AUTHORITY: reads queued intake items, clusters.yaml and the one shared occupancy predicate, and returns a DECISION — which item goes to which cluster, under which '<base>_<clusterkey>' campaign id, and the disclosed reason the human's y is taken against. Policy is a shipped deterministic default: an explicit cluster pin always wins; otherwise filter candidates by hard constraints derived from the item's typed resource asks (gpu / gpu_type / walltime / est core-hours) against the cluster's declared ceilings, then least-loaded by occupied pool slots, then stable alphabetical tie-break. It does NOT probe or model scheduler capacity - the scheduler is the capacity queue; ours is cross-cluster choice, courtesy caps and hard-constraint mismatch. Every held item is reported with a closed reason_code and a human-readable reason (never dropped, never guessed), with the per-cluster verdicts behind it. Writes NOTHING: reads only, no SSH, no journal, no cache - the actor consumes the decision.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent queue-status [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "queue_status.input.json",
+    "name": "queue-status",
+    "output_schema": "queue_status.output.json",
+    "python": "hpc_agent.ops.queue.status.queue_status",
+    "side_effects": [],
+    "summary": "The run queue's bounded projection: intake items joined to the run stores. Folds .hpc/queue/intake.jsonl into current items (states 'queued'/'placed' — the only two the ledger stores) and RECOMPUTES every other fact per read — whether the item became a run, is in flight, is parked awaiting a human, is held on an escalation verdict, was superseded, how many consecutive block-drive ticks moved it nothing (drive_attempts — the durable retryable(n) budget), carries a committed-but-unadvanced greenlight, or is terminal — from RunRecords, pending-decision markers and the decision journal, routing the greenlight question through the same boundary-scoped predicate attention-queue uses so the two 'what needs me' surfaces cannot disagree. Reports per-campaign occupied pool slots from the one shared occupancy predicate. Filterable by state / campaign base / cluster, bounded by limit with truncated + total_items, and disclosing every drop (skipped ledger lines, hidden settled items, run_id collisions) in notes. Read-only, no SSH, non-creating, no cache: recomputed on every read.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "read_decisions.input.json",
@@ -1392,6 +1456,18 @@
       "ssh"
     ],
     "summary": "Post-submit health check: map each of a run's submitted job ids to its scheduler state and flag error (SGE Eqw) / held jobs. Returns {ok, states, healthy, error, held, missing, details}. Use it instead of raw `ssh qstat` to confirm an array landed cleanly.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent wait-any-detached --spec <path>",
+    "idempotent": true,
+    "input_schema": "wait_any_detached.input.json",
+    "name": "wait-any-detached",
+    "output_schema": "wait_any_detached.output.json",
+    "python": "hpc_agent.ops.monitor.wait_any_detached.wait_any_detached",
+    "side_effects": [],
+    "summary": "Block until ANY detached worker in a target set exits (lease-pid wait over N runs; local, no SSH). One held seat for a whole fleet instead of one wait-detached per run; returns the triggering target(s) plus every other target's current state.",
     "verb": "query"
   },
   {
@@ -1944,10 +2020,11 @@
     "output_schema": "campaign_refill.output.json",
     "python": "hpc_agent.ops.campaign_refill.campaign_refill",
     "side_effects": [
+      "file_write",
       "scheduler-submit",
       "writes-campaign-state"
     ],
-    "summary": "RFC #362 refill actor: top a greenlit async campaign's pool back up this tick. Calls campaign-advance authoritatively; if it decides refill, resolves + submits refill_count iterations SEQUENTIALLY (each a detached campaign-run). Refuses an un-greenlit campaign (greenlight is the standing consent). Stages: refilled / no_refill_needed / refill_blocked. No new state file, no cursor — partial ticks self-correct via next tick's shrunk refill_count.",
+    "summary": "RFC #362 refill actor: top a greenlit async campaign's pool back up this tick. Calls campaign-advance authoritatively; if it decides refill, resolves refill_count iterations SEQUENTIALLY and, per slot, ENQUEUES the resolved trial on the intake ledger (queue-run) and hands it to the one dispatcher (queue-dispatch) — durable-first, so a crash between the two leaves a visible queued item that shrinks the next tick's pool room instead of an invisible orphan. Refuses an un-greenlit campaign (greenlight is the standing consent). Re-actuates this campaign's STRANDED placements first - items it placed and never started, which queue-advance never re-offers and which hold pool slots until they run. Stages: refilled / no_refill_needed / refill_blocked. No new state file, no cursor - partial ticks self-correct via the recovery leg plus next tick's shrunk refill_count.",
     "verb": "workflow"
   },
   {
@@ -2006,6 +2083,22 @@
       "writes-journal"
     ],
     "summary": "Workflow atom: poll a run to terminal lifecycle (or wall-clock budget); auto-combine waves as they finish; write the same .monitor.jsonl tick log /monitor-hpc writes. Pairs with submit-flow for the campaign loop composition. MVP does not auto-resubmit failed tasks.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent queue-dispatch [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "queue_dispatch.input.json",
+    "name": "queue-dispatch",
+    "output_schema": "queue_dispatch.output.json",
+    "python": "hpc_agent.ops.queue.dispatch.queue_dispatch",
+    "side_effects": [
+      "file_write",
+      "scheduler-submit",
+      "writes-journal"
+    ],
+    "summary": "The run queue's ACTOR: consume queue-advance's placement decisions and start each placed item's normal run lifecycle. It COMPOSES and never submits on its own - no second submit path, no gate of its own, no consent machinery of its own; the greenlight / standing consent bind at the cluster boundary inside the machinery this starts. Per item: derive the COMPUTED run id, adopt an existing submitting/in_flight/complete run instead of resubmitting, take the durable per-campaign dispatch lock, record the placement on the intake ledger, then start a detached campaign-run whose single-lease guard IS the claim - so two dispatchers racing one item derive the same id and the loser reports 'claim_held' rather than duplicating the array. Adds NO intake state: 'dispatched' stays a projection queue-status computes over the run stores. Nothing is dropped - every item comes back dispatched, refused with a closed reason_code, or held with queue-advance's own reason.",
     "verb": "workflow"
   },
   {

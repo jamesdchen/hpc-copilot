@@ -50,7 +50,8 @@ from hpc_agent.infra import block_chain
 from hpc_agent.infra.time import parse_iso_utc_or_none
 from hpc_agent.ops import field_ownership
 from hpc_agent.state.journal import (
-    clear_pending_decision,
+    compare_and_clear_pending_decision,
+    compare_and_repark_pending_decision,
     mark_pending_decision,
     read_pending_decision,
 )
@@ -954,6 +955,101 @@ def _commit_fused_approval(experiment_dir: Path, approve: dict[str, Any]) -> Non
     _journal_append(experiment_dir=experiment_dir, spec=spec)
 
 
+# ── S8: the double-driver compare-and-swap ─────────────────────────────────────
+#
+# Two drivers tick the same parked run concurrently BY DESIGN (run-queue plan §7:
+# the main session's inline first tick plus the auto-launched drain pass). Both
+# read the SAME pending marker before either clears it, both find the SAME
+# committed greenlight, and — with a blind ``clear_pending_decision`` — both ran
+# the successor span: one cleared the marker, the other re-parked it, resurrecting
+# a CONSUMED decision under a stale boundary and double-consuming the human's
+# ``y`` (plan §8 S8). The fix is the plan's own stated resolution: make the
+# consumption a COMPARE-AND-SWAP on ``(boundary, awaiting_since)`` under the
+# journal's per-run flock (``state/journal.compare_and_clear_pending_decision`` —
+# ONE definition, the same locked-RMW precedent ``stamp_drive_attempt`` uses), and
+# give the loser a benign disclosed outcome instead of a second span.
+
+
+def _consume_marker(experiment_dir: Path, run_id: str, pending: dict[str, Any]) -> bool:
+    """CAS-consume the parked marker THIS tick read; ``False`` when another driver won.
+
+    The ONE consumption seat: every leg that clears a marker in order to run a
+    successor span (:func:`run_tick`'s greenlight resume and
+    :func:`_consume_parked_boundary_under_consent`'s standing-consent auto-advance)
+    goes through here, so the atomicity cannot hold on one leg and not the other.
+    ``True`` means this tick atomically turned the marker it READ into an empty
+    slot — it owns the successor span. ``False`` means the ``(block,
+    awaiting_since)`` pair on disk is no longer the pair this tick read: another
+    driver consumed the boundary (or re-parked a newer one) in the window between
+    this tick's read and its clear.
+    """
+    return compare_and_clear_pending_decision(
+        run_id,
+        block=pending.get("block"),
+        awaiting_since=pending.get("awaiting_since"),
+        experiment_dir=experiment_dir,
+    )
+
+
+def _lost_the_consume_race(
+    *,
+    run_id: str,
+    workflow: str | None,
+    current_verb: str | None,
+    next_verb: str | None,
+) -> tuple[BlockDriveResult, int]:
+    """The LOSER's benign, disclosed outcome after a lost consumption CAS (§8 S8).
+
+    Every property the loser must have, and where it comes from:
+
+    * **no successor span** — this returns BEFORE :func:`_chain`, so nothing is
+      dispatched and nothing the winner's span writes is written twice (the CAS
+      sits at the marker clear, which precedes every write the resume leg makes:
+      the span itself, its ``_stamp_driver_tick`` watchdog stamp, and any park);
+    * **no re-park** — no ``on_first_failure`` is installed, so the consumed
+      decision is never resurrected;
+    * **no raise** — losing a race the design creates is not an error; the exit
+      code is 0 and the envelope stays ``ok``;
+    * **not awaiting** — the boundary's decision WAS consumed, so reporting
+      ``awaiting_decision`` (or carrying the parked brief) would re-surface a
+      brief the human already answered.
+
+    ACTION CLASSIFICATION (deliberate — the drive_attempts budget reads it).
+    ``skip`` and ``awaiting_decision`` are the two outcomes
+    :func:`~hpc_agent.state.journal.stamp_drive_attempt` charges as futile, and
+    they are charged because they are the two SPINS a drain pass must stop
+    relaying — a tick that moved nothing. A lost CAS is the opposite: the chain
+    DID move past this boundary in this instant, by the other driver, and the
+    concurrency that produced it is a design property of every ``y`` (plan §7),
+    not a wedge. Charging it would let N concurrent drivers on a perfectly
+    healthy run burn the item's retryable(n) budget and drop it from the drain.
+    So the tick reports ``advanced`` — the boundary advanced — and the ``reason``
+    discloses WHO advanced it, which is the channel the drain plan already logs
+    and relays. The vocabulary is NOT widened: a new literal would need the same
+    progress classification, plus schema / plan-command churn, to carry
+    information the reason string already carries, and the drain's
+    ``advanced / reran / chained`` branch already does the right thing with it —
+    tick again, so the NEXT tick reads the winner's fresh state (its new park,
+    its terminal) rather than this tick guessing at it.
+    """
+    return (
+        BlockDriveResult(
+            action="advanced",
+            run_id=run_id,
+            workflow=workflow,
+            current_verb=current_verb,
+            next_verb=next_verb,
+            reason=(
+                f"another driver advanced {current_verb or 'this boundary'} first — the "
+                "committed greenlight was consumed by a concurrent tick (compare-and-swap "
+                "on the pending marker lost). This tick ran no span and left the journal "
+                "untouched; re-read status for the winner's position."
+            ),
+        ),
+        0,
+    )
+
+
 # ── the tick ───────────────────────────────────────────────────────────────────
 
 
@@ -1086,7 +1182,10 @@ def run_tick(
         )
 
     # Executable resume actions consumed the approved ``resolved`` — clear the
-    # pending marker before running so a re-entry does not double-consume it.
+    # pending marker before running so a re-entry does not double-consume it. The
+    # clear is a COMPARE-AND-SWAP on the marker's ``(block, awaiting_since)``
+    # (:func:`_consume_marker`, §8 S8), so a CONCURRENT driver cannot also consume
+    # it: sequential re-entry and parallel re-entry are closed by the same seat.
     # If the FIRST resumed span then FAILS, the approval was NOT consumed: the
     # marker is re-parked verbatim (see :func:`_chain`'s ``on_first_failure``)
     # so the next tick retries the SAME route instead of replaying the resume
@@ -1159,7 +1258,26 @@ def run_tick(
 
     on_first_failure: Callable[[], None] | None = None
     if pending and resume_action and run_id:
-        clear_pending_decision(run_id, experiment_dir=experiment_dir)
+        # S8 COMPARE-AND-SWAP: consume the marker THIS tick read, atomically. A
+        # concurrent driver (the inline first tick vs the drain pass — two by
+        # design at every ``y``) that already consumed this boundary makes the
+        # swap fail; this tick then runs NO span, writes NOTHING, and reports the
+        # benign "advanced by another driver" disclosure. This is the LAST
+        # read-only point on the resume leg: every write below it (the span, its
+        # watchdog stamp, the next park) is downstream of the swap.
+        if not _consume_marker(experiment_dir, run_id, pending):
+            _log.info(
+                "block-drive: lost the pending-marker CAS for %s at %s — another "
+                "driver consumed the greenlight; running no span",
+                run_id,
+                plan.get("current_verb"),
+            )
+            return _lost_the_consume_race(
+                run_id=run_id,
+                workflow=plan.get("workflow") or workflow,
+                current_verb=plan.get("current_verb"),
+                next_verb=plan.get("next_verb") or plan.get("verb"),
+            )
         marker = dict(pending)
         rid = run_id
 
@@ -1358,18 +1476,34 @@ def _chain(
 
         # No decision, no successor → a clean terminal.
         if successor is None:
-            return (
-                BlockDriveResult(
-                    action="terminal",
-                    run_id=run_id or None,
-                    workflow=workflow,
-                    current_verb=verb,
-                    next_verb=None,
-                    stage_reached=stage,
-                    reason=result.get("reason") or f"{verb} reached a terminal — chain complete",
-                ),
-                0,
+            terminal = BlockDriveResult(
+                action="terminal",
+                run_id=run_id or None,
+                workflow=workflow,
+                current_verb=verb,
+                next_verb=None,
+                stage_reached=stage,
+                reason=result.get("reason") or f"{verb} reached a terminal — chain complete",
             )
+            # CHAIN-DISPATCH — the run queue's wake edge (run-queue plan §5).
+            # This driver is the one the ``queue-drain`` plan relays per drivable
+            # item, so a queue item that parked for a greenlight retires HERE
+            # rather than inside a campaign-run child; instrumenting only that
+            # child would leave the whole post-park drain un-woken.
+            #
+            # Built the result FIRST, then chain: the tick's settlement is the
+            # block spans' own durable state plus this record, and both exist
+            # before the wake runs. ``chain_dispatch_on_retire`` never raises,
+            # returns ``None`` for an experiment with no intake ledger (one
+            # stat), and decides retirement with the ONE ``run_occupies``
+            # predicate — a terminal SPAN is not automatically a retired RUN.
+            # Exactly one call per tick: the loop returns here.
+            from hpc_agent.ops.queue.chain import chain_dispatch_on_retire
+
+            terminal.queue_chain = chain_dispatch_on_retire(
+                experiment_dir, run_id=run_id or None, origin="block-drive"
+            )
+            return (terminal, 0)
 
         # A greenlight-GATED successor (block_chain.is_gated is the SoT): an
         # in-code chain never journals the human ``y`` the gate requires, so PARK
@@ -1386,7 +1520,17 @@ def _chain(
         # not-live / not-named boundary parks exactly as today, carrying the refusal
         # reason so the park brief says WHY the overnight consent did not carry.
         if block_chain.is_gated(successor):
-            overnight = _consume_overnight(experiment_dir, run_id, successor)
+            # This seat is reached only when the in-hand result parked NO decision
+            # (needs_decision returned at the rendezvous above), so the predecessor
+            # terminal is CLEAN by the same evidence the census pins — passed as
+            # the flag rather than assumed inside the substrate, so the evidence
+            # stays derived from real in-hand state if this code ever moves.
+            overnight = _consume_overnight(
+                experiment_dir,
+                run_id,
+                successor,
+                clean_predecessor=not bool(result.get("needs_decision")),
+            )
             if overnight is not None and overnight.consumed:
                 _log.info(
                     "overnight consent for %s consumed the %s greenlight — auto-advancing",
@@ -1456,7 +1600,7 @@ def _chain(
 
 
 def _consume_overnight(
-    experiment_dir: Path, run_id: str, successor: str
+    experiment_dir: Path, run_id: str, successor: str, *, clean_predecessor: bool = False
 ) -> ConsumptionOutcome | None:
     """Consult the run's standing consent at a gated boundary (item 8 seam 1).
 
@@ -1477,10 +1621,13 @@ def _consume_overnight(
     from hpc_agent.state.runs import read_run_sidecar
 
     current_cmd_sha = ""
+    current_placement: str | None = None
     spent_walltime: float | None = None
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
         current_cmd_sha = str((sidecar or {}).get("cmd_sha") or "")
+        raw_cluster = (sidecar or {}).get("cluster")
+        current_placement = raw_cluster if isinstance(raw_cluster, str) and raw_cluster else None
         spent_walltime = _run_requested_walltime(sidecar)
     except Exception:  # noqa: BLE001 — a bad sidecar must not crash the tick; park instead
         current_cmd_sha = ""
@@ -1490,12 +1637,19 @@ def _consume_overnight(
         scope_id=run_id,
         boundary_block=successor,
         current_cmd_sha=current_cmd_sha,
+        # S1 (run-queue plan §10.S1): the sidecar's cluster stamp feeds the
+        # placement leg; None (pre-stamp sidecar, bad read) keeps the leg off.
+        current_placement=current_placement,
         # F16: meter the walltime cap against the fallout THIS boundary authorizes —
         # the main array's requested wall-seconds (walltime_sec × task_count) — passed
         # explicitly so a consent whose walltime_cap is below the launch's cost REFUSES
         # the auto-advance (the mandatory cap the ledger-fed meter, which nothing writes,
         # could never fire). ``None`` when unavailable ⇒ the ledger auto-meter (0 today).
         spent_walltime=spent_walltime,
+        # Tier-3 (2026-07-29): code-derived evidence the predecessor terminal was
+        # clean, threaded verbatim from the caller's seat (the in-hand
+        # needs_decision=False result, or the marker's parked_needs_decision).
+        clean_predecessor=clean_predecessor,
     )
 
 
@@ -1557,16 +1711,44 @@ def _consume_parked_boundary_under_consent(
         awaiting_since=pending.get("awaiting_since"),
     ):
         return None  # the human is redrafting this boundary — do not steamroll (F13)
-    overnight = _consume_overnight(experiment_dir, run_id, gated_next)
+    # Tier-3 clean evidence on the resume path: the marker records whether the
+    # parked result itself demanded a decision. Only a gated-successor park off
+    # a clean terminal reads False; a decision park (canary_verified → submit-s3,
+    # the consumable-by-design case; every anomaly/integrity park, which never
+    # carries a gated next_verb) reads True; a pre-ruling marker (key absent)
+    # reads True — dirty, the conservative default.
+    parked_clean = cursor.get("parked_needs_decision") is False
+    overnight = _consume_overnight(
+        experiment_dir, run_id, gated_next, clean_predecessor=parked_clean
+    )
     if overnight is None or not overnight.consumed:
         return None
+    # S8 COMPARE-AND-SWAP (same seat as the greenlight resume): a standing consent
+    # is consulted by EVERY driver ticking this run, so two of them reach this line
+    # for the same parked boundary. Only the tick that atomically consumes the
+    # marker it read runs the span; the loser gets the benign disclosure. The
+    # consent ledger's own write above is idempotent per (boundary, spec identity)
+    # — ``consume_boundary_under_consent`` short-circuits on ``_already_consumed``
+    # — so a loser adds no second audit line to the morning brief.
+    if not _consume_marker(experiment_dir, run_id, pending):
+        _log.info(
+            "block-drive: lost the pending-marker CAS for %s at the parked %s boundary "
+            "(standing-consent leg) — another driver advanced it",
+            run_id,
+            gated_next,
+        )
+        return _lost_the_consume_race(
+            run_id=run_id,
+            workflow=(pending.get("workflow") or workflow),
+            current_verb=parked_block if isinstance(parked_block, str) else None,
+            next_verb=gated_next,
+        )
     _log.info(
         "overnight consent for %s consumed the parked %s greenlight on the resume path "
         "— auto-advancing (F12)",
         run_id,
         gated_next,
     )
-    clear_pending_decision(run_id, experiment_dir=experiment_dir)
     marker = dict(pending)
 
     def _repark() -> None:
@@ -1612,6 +1794,204 @@ def _boundary_has_post_park_nudge(
     )
 
 
+def greenlight_target(verb: str, successor: str | None) -> str | None:
+    """The verb a human ``y`` at *verb*'s park greenlights, or ``None``.
+
+    The ONE derivation both park-time disclosures key on — the scoped-consent
+    utterance (:func:`_compose_approve_hint_for_park`) and the paste-ready answer
+    menu (:func:`_compose_answer_menu_for_park`) — so the two can never name
+    different targets in the same brief. It is the parked ``successor`` when the
+    block chained into a gated block, else the block's OWN chain-forward successor
+    (:func:`block_chain.chain_successor`), which is the OVERRIDE-BOUNDARY map a
+    ``None``-marker decision park (``aggregate-check`` not_ready /
+    integrity_review) greenlights — exactly as
+    :func:`committed_greenlight_for_boundary` resolves it at consumption. ``None``
+    when neither exists: a boundary with NO materialized default, where a bare
+    ``y`` has nothing to advance to (the census in
+    ``tests/contracts/test_bare_y_coverage.py`` enumerates those and demands a
+    stated reason for each).
+    """
+    target = successor if isinstance(successor, str) and successor else None
+    if target is None:
+        target = block_chain.chain_successor(verb)
+    return target if isinstance(target, str) and target else None
+
+
+def _compose_standing_offer_for_park(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    workflow: str | None,
+    is_anomaly_terminator: bool,
+) -> dict[str, Any] | None:
+    """The OPTIONAL overnight-consent grant OFFER for a run-scope park, or ``None``.
+
+    The 'speculative y done right' (2026-07-29): the run's first rendezvous (the
+    resolve/S1 or S2 brief) is a sitting the human is already in, so the answer
+    menu ADDITIONALLY offers the standing-consent grant line that would
+    otherwise cost a second rendezvous at nightfall. Same gates, same tokens,
+    zero new trust surface: the line is rendered by the ONE grant-vocabulary
+    home (:func:`hpc_agent.ops.overnight.render_grant_line` — the same renderer
+    the authorship gate's refusal uses, so offer and refusal can never drift),
+    and pasting it satisfies only the AUTHORSHIP leg of
+    ``ops/decision/journal/overnight_consent.py`` — recording the consent still
+    runs the poka-yoke compose (caps/wake) and every gate unchanged.
+
+    Composed from code-known tokens ONLY: the run id, the SIDECAR ``cmd_sha``
+    (:func:`state.runs.read_run_cmd_sha` — the identity a consent must bind,
+    ``assert_consent_identity_binds``/F15, never the marker's ``_spec_sha``),
+    and the sidecar's cluster stamp when placement is known
+    (:func:`state.runs.read_run_cluster`). Offered in the MINIMAL form — no
+    heal classes (watcher re-arm only): code never invents repair classes the
+    human did not choose. ONE exception, in the same spirit: when a prior
+    consent DIED on spec change, the RE-GRANT leg
+    (:func:`hpc_agent.ops.overnight.regrant_offer_from_status` — shared with the
+    morning brief) re-offers that dead consent's OWN declared coverage re-bound
+    to the current identity and stamps ``regrant_reason``/``previous_cmd_sha``,
+    so a 3am "spec-changed" park is one paste from re-granted — still the
+    human's classes, never code's.
+
+    ``None`` (no offer) when any of:
+
+    * the park is campaign-scope (``workflow == "campaign"`` — the campaign
+      greenlight already carries its own STANDING scoped utterance,
+      ``consent_hint.compose_approve_hint(standing=True)``);
+    * the boundary is an anomaly terminator (offering "let it run all night"
+      beside an OVERRIDE is wrong; the pure composer drops a stray offer there
+      too, but skipping HERE also spares the sidecar + journal reads);
+    * the sidecar carries no ``cmd_sha`` (a sha-less line could not cover the
+      sha-bound consent the caps gate demands — a line that fails its own gate
+      is worse than none);
+    * a LIVE standing consent already covers the run (nothing left to grant); or
+    * the consent consult raises (fail-safe, the ``_boundary_has_post_park_nudge``
+      posture: a journal surprise degrades the OFFER, never the park).
+    """
+    if not run_id or (workflow or "") == "campaign":
+        return None
+    if is_anomaly_terminator:
+        return None
+    from hpc_agent.ops.overnight import (
+        regrant_offer_from_status,
+        render_grant_line,
+        standing_consent_status,
+    )
+    from hpc_agent.state.runs import read_run_cluster, read_run_cmd_sha
+
+    cmd_sha = read_run_cmd_sha(experiment_dir, run_id)
+    if not cmd_sha:
+        return None
+    cluster = read_run_cluster(experiment_dir, run_id)
+    try:
+        status = standing_consent_status(
+            experiment_dir,
+            scope_kind="run",
+            scope_id=run_id,
+            current_cmd_sha=cmd_sha,
+            current_placement=cluster,
+        )
+    except Exception:  # noqa: BLE001 — a bad scope/journal must not crash the park
+        return None
+    if status.live:
+        return None
+    # RE-GRANT (spec-changed consent death): when a consent EXISTED but died on
+    # a cmd_sha move — the death every code edit inflicts — offer the dead
+    # consent's own declared coverage (its heal classes + placement) re-bound to
+    # the CURRENT identity, so the 3am "spec-changed" park costs one paste to
+    # re-grant. Composed by the same pure helper the morning brief uses
+    # (``regrant_offer_from_status``) over the status already in hand; every
+    # other death (no-consent, expired, over-cap) falls through to the minimal
+    # first-grant form below.
+    regrant = regrant_offer_from_status(
+        status,
+        scope_kind="run",
+        scope_id=run_id,
+        current_cmd_sha=cmd_sha,
+        current_placement=cluster,
+    )
+    if regrant is not None:
+        grant_line = regrant["grant_line"]
+    else:
+        grant_line = render_grant_line(
+            scope_kind="run",
+            scope_id=run_id,
+            heal_classes=(),  # minimal form: watcher re-arm only, no invented classes
+            cmd_sha=cmd_sha,
+            placement=(cluster,) if cluster else (),
+        )
+    offer: dict[str, Any] = {
+        "grant_line": grant_line,
+        "scope_kind": "run",
+        "run_id": run_id,
+        "cmd_sha": cmd_sha,
+        "note": (
+            "OPTIONAL standing-consent offer: pasting this line into chat is "
+            "the human's own typed grant of the overnight-consent AUTHORSHIP "
+            "leg (it pre-authorizes the grant — nothing more). Recording the "
+            "consent still composes caps + wake and runs every gate unchanged, "
+            "and nothing here is auto-filled or auto-selected."
+        ),
+    }
+    if cluster:
+        offer["cluster"] = cluster
+    if regrant is not None:
+        offer["regrant_reason"] = str(regrant["reason"])
+        prev = regrant.get("previous_cmd_sha")
+        if isinstance(prev, str) and prev:
+            offer["previous_cmd_sha"] = prev
+        offer["note"] = str(regrant["note"])
+    return offer
+
+
+def _compose_answer_menu_for_park(
+    *,
+    run_id: str,
+    verb: str,
+    stage: Any,
+    target: str | None,
+    materialized: _MaterializedSuccessor,
+    approve_hint: dict[str, Any] | None,
+    brief: Any,
+    standing_offer: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Compose the boundary's paste-ready ANSWER MENU (run-queue plan §8 S13).
+
+    The park-side adapter over the pure
+    :func:`hpc_agent._kernel.lifecycle.answer_menu.compose_answer_menu`: it hands
+    the composer the tokens the driver already materialized — the greenlight
+    ``target`` (:func:`greenlight_target`), the ``@<sha8>`` spec pin, the
+    already-composed ``approve_hint`` utterance — plus the block's own brief, from
+    which the composer harvests the STRUCTURED recommendation data (and only
+    that: prose recommendations render nothing, §2).
+
+    ``(verb, stage)`` is looked up in :data:`block_chain.ANOMALY_TERMINATORS` and
+    the answer passed through, so the composer can LABEL the default advance an
+    override where that registry says recovery is a genuine human branch. The
+    label is disclosure, not policy: nothing here changes what consuming a bare
+    ``y`` at that boundary does.
+
+    ``standing_offer`` is the already-composed OPTIONAL overnight-consent grant
+    offer (:func:`_compose_standing_offer_for_park`, run-scope + no-live-consent
+    parks only), forwarded so the menu's LAST line can be the standing grant —
+    the composer appends it without ever letting it become the default answer.
+
+    This is the ONE home for the menu, which is why it sits in :func:`park`
+    rather than in any per-family block module: every brief type that parks
+    routes through here, so every brief type ends with its menu.
+    """
+    from hpc_agent._kernel.lifecycle.answer_menu import compose_answer_menu
+
+    return compose_answer_menu(
+        brief=brief if isinstance(brief, dict) else {},
+        block=verb,
+        run_id=run_id,
+        target=target,
+        next_spec_sha=materialized.sha,
+        approve_hint=approve_hint,
+        is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
+        standing_offer=standing_offer,
+    )
+
+
 def _compose_approve_hint_for_park(
     experiment_dir: Path,
     *,
@@ -1645,10 +2025,8 @@ def _compose_approve_hint_for_park(
     """
     from hpc_agent._kernel.lifecycle.consent_hint import brief_cluster, compose_approve_hint
 
-    target = successor
+    target = greenlight_target(verb, successor)
     if target is None:
-        target = block_chain.chain_successor(verb)
-    if not (isinstance(target, str) and target):
         return None
     brief_dict = brief if isinstance(brief, dict) else {}
     cluster = brief_cluster(brief_dict)
@@ -1717,6 +2095,13 @@ def park(
         "next_spec_hint": (
             materialized.spec if materialized.spec is not None else _next_spec_hint(result)
         ),
+        # Tier-3 clean-terminal evidence (2026-07-29 ruling): whether the PARKED
+        # result itself demanded a decision. False = a gated-successor park off a
+        # CLEAN terminal (watching_terminal → submit-s4, ready → aggregate-run) —
+        # the only park kind the clean-terminal-conditional consent boundaries
+        # may consume on the resume path. Absent on pre-ruling markers ⇒ read as
+        # True (dirty) — conservative until the boundary re-parks.
+        "parked_needs_decision": bool(result.get("needs_decision")),
     }
     if materialized.sha is not None:
         # Row 16: sha-stamped at park; consumption (R3) recomputes + refuses on drift.
@@ -1765,6 +2150,42 @@ def park(
     if approve_hint is not None and isinstance(brief, dict):
         brief = {**brief, "approve_hint": approve_hint}
         result["brief"] = brief
+    # PASTE-READY ANSWER MENU (run-queue-placement-2026-07-28.md §8 S13, merged-park
+    # UX): the brief the human reads ENDS with the exact lines they can paste — `y`
+    # for the materialized default advance, the scope-naming form of that same
+    # advance, and one line per STRUCTURED recommendation the brief already carries.
+    # Same disclosure discipline as the two blocks above (driver copy + marker
+    # brief, never the provenance-source decision-brief), and the same trust story
+    # as ``overnight_consent``'s paste-ready grant line: the consumption leg reads
+    # TOKENS, so rendering the sentence changes the typing burden and nothing else.
+    # This is the ONE home — every brief type that parks passes through here.
+    #
+    # SPECULATIVE-Y OFFER (2026-07-29): at a run-scope park with no live standing
+    # consent, the menu ADDITIONALLY offers the overnight-consent grant line, so
+    # one sitting can pre-authorize the downstream overnight consent without a
+    # second rendezvous. Same gates, same tokens, zero new trust surface — the
+    # gate that later reads the pasted grant (the overnight-consent authorship
+    # gate's token-exact chat tier) is unchanged, and the line is rendered by the
+    # same one-home renderer its refusal uses.
+    standing_offer = _compose_standing_offer_for_park(
+        experiment_dir,
+        run_id=run_id,
+        workflow=wf,
+        is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
+    )
+    answer_menu = _compose_answer_menu_for_park(
+        run_id=run_id,
+        verb=verb,
+        stage=stage,
+        target=greenlight_target(verb, successor),
+        materialized=materialized,
+        approve_hint=approve_hint,
+        brief=brief,
+        standing_offer=standing_offer,
+    )
+    if answer_menu is not None and isinstance(brief, dict):
+        brief = {**brief, "answer_menu": answer_menu}
+        result["brief"] = brief
     # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
     # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
     # submit-s2 (the qsub) — S1's resolve leg writes only the per-run sidecar.
@@ -1812,11 +2233,19 @@ def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) ->
     SAME route (a nudge's ``rerun`` stays a rerun) instead of degrading to a
     journal-derived ``advance``. A missing run record is logged, not raised —
     the tick is already on its failure path and must still report it.
+
+    S8: the re-write is itself a COMPARE-AND-SWAP (:func:`compare_and_repark_pending_decision`)
+    that expects the slot to still be EMPTY. A blind re-park is the second half of
+    the double-driver hazard the plan names — it can RESURRECT a boundary another
+    driver consumed and moved past while this span was failing, re-parking a
+    decision that no longer exists. When the swap is refused the newer marker
+    wins and this tick's stale one is dropped (logged, never raised: the tick is
+    already reporting a failed span).
     """
     brief = marker.get("brief")
     cursor = marker.get("resume_cursor")
     try:
-        mark_pending_decision(
+        reparked = compare_and_repark_pending_decision(
             run_id,
             block=marker.get("block") or "",
             workflow=marker.get("workflow") or "",
@@ -1828,6 +2257,13 @@ def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) ->
         )
     except OSError:
         _log.warning("failed to re-park the pending marker for %s after a failed span", run_id)
+        return
+    if not reparked:
+        _log.info(
+            "not re-parking %s after the failed span — another driver already parked a "
+            "newer boundary; the stale marker is dropped rather than resurrected (S8)",
+            run_id,
+        )
 
 
 def _latest_committed_resolved(

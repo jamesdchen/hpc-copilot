@@ -105,5 +105,28 @@ Run-#12 evidence file: findings 3/16/17.3/19 in run12-findings.md.
   liveness-only backend keeps the pinned abandoned via `NotImplementedError`,
   a query failure routes through `unable_to_verify`. Pinned by
   `tests/ops/monitor/test_monitor_pure_api.py`.
-  Still banked, NOT yet built: the sentinel job (W1), the stateless watchdog
-  poll leg (W2), status-watch re-labeling (W3), ssh-gateway unification (W4).
+- **W1 (sentinel job), implemented 2026-07-29 — gated OFF pending live
+  telemetry (`HPC_SENTINEL_JOB`, the `HPC_ANNOUNCE_WAIT` precedent).** At
+  submit, after the main array's ids land and the run is recorded, a tiny
+  dependent job rides along (`--dependency=afterany:<ids>` / SGE
+  `-hold_jid <ids>` / PBS `-W depend=afterany:<ids>` via the ONE
+  `_build_dependency_flag` seam) whose sole act writes the SHIPPED run-terminal
+  wake marker `.hpc/announce/<run_id>/.run_terminal` (tmp+mv atomic, always
+  exit 0) — NOT this doc's older `.hpc_TERMINAL` manifest sketch, which
+  predates the shipped announce machinery: the marker is a HINT the census
+  re-reads (row 11), so the sentinel needs no manifest and afterany-on-kill /
+  hold-release-on-delete premature fires are harmless by construction. Files:
+  `ops/monitor/sentinel.py` (script render + staging + the opportunistic
+  entry point — a staging/submit failure is WARN-disclosed and the run
+  proceeds with the polling census as authority, never fatal),
+  `infra/backends/__init__.py::HPCBackend.submit_sentinel` (dependency +
+  minimal-walltime flags through the existing per-family seams; reuses the one
+  `submit_one` qsub edge), `state/runs.py::stamp_sentinel_job` (the sentinel id
+  lands on a SEPARATE sidecar `sentinel_job_id` field, never `job_ids`, so the
+  run's compute-job accounting is byte-identical), the
+  `ops/submit_flow._submit_one_spec` hook. Pinned by
+  `tests/infra/backends/test_sentinel_submit.py`,
+  `tests/ops/monitor/test_sentinel.py`, `tests/ops/submit/test_flow_sentinel.py`.
+
+Still banked, NOT yet built: the stateless watchdog poll leg (W2),
+status-watch re-labeling (W3), ssh-gateway unification (W4).

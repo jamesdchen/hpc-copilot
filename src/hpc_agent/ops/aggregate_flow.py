@@ -97,6 +97,7 @@ __all__ = [
     "aggregate_flow",
     "aggregate_memo_ignored",
     "per_task_fallback_reducible",
+    "prefetch_wave_partials",
     "record_aggregate_failure",
 ]
 
@@ -250,10 +251,21 @@ class _PullOutcome:
     handling is identical whether the pull ran through the legacy ``rsync_pull``
     (which already returns a ``CompletedProcess`` with these attrs) or O2's
     ``tar_ssh_pull`` (which returns a ``PullResult``).
+
+    The three count fields pass ``PullResult``'s delta accounting through so the
+    harvest can DISCLOSE how much of a pull was served from the local cache (the
+    wave-prefetch / prior-aggregate mirror) vs pulled fresh — a silent cache must
+    never masquerade as a fresh pull. The legacy ``rsync_pull``
+    ``CompletedProcess`` carries no such attrs (rsync's delta is internal), so
+    disclosure call sites read them via ``getattr(..., None)`` and stay silent on
+    that path.
     """
 
     returncode: int
     stderr: str
+    files_pulled: int = 0
+    bytes_pulled: int = 0
+    skipped_unchanged: int = 0
 
 
 def _pull(
@@ -300,6 +312,9 @@ def _pull(
     return _PullOutcome(
         returncode=0 if result.ok else 1,
         stderr=(result.stderr_tail or ""),
+        files_pulled=int(getattr(result, "files_pulled", 0) or 0),
+        bytes_pulled=int(getattr(result, "bytes_pulled", 0) or 0),
+        skipped_unchanged=int(getattr(result, "skipped_unchanged", 0) or 0),
     )
 
 
@@ -407,6 +422,99 @@ def _missing_waves(wave_map_keys: list[str], already_combined: list[int]) -> lis
 # Anchored so ``wave_3.runtime.json`` does not slip through.
 _WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_(\d+)\.json$")
 
+#: The ONE wave-partial include filter every ``_combiner/`` pull uses — the
+#: F08/F09 two-glob shape (:func:`_incremental_include_patterns`) AND the
+#: mid-flight prefetch (:func:`prefetch_wave_partials`). Shared by definition so
+#: the prefetched cache is exactly the file set the terminal harvest re-verifies:
+#: a prefetch that pulled a different set would leave the harvest's delta blind
+#: to part of the cache.
+_WAVE_PARTIAL_INCLUDE: tuple[str, str] = ("wave_*.json", "wave_*.runtime.json")
+
+#: Opt-out env flag for the mid-flight wave-partial prefetch (``"0"`` disables).
+#: Mirrors the ``HPC_AGGREGATE_TAR_PULL`` / ``HPC_CLUSTER_FINAL_REDUCE`` knob
+#: idiom: the prefetch is pure optimization, so the off switch exists for ops
+#: debugging and cluster-etiquette emergencies, never for correctness.
+WAVE_PREFETCH_ENV = "HPC_WAVE_PREFETCH"
+
+
+def prefetch_wave_partials(
+    experiment_dir: Path, run_id: str, *, record: Any
+) -> dict[str, Any] | None:
+    """Opportunistically pull the run's combined wave partials MID-FLIGHT.
+
+    Wave-incremental harvest prefetch: the monitor watch calls this right after
+    a combine burst succeeds — the burst's waves are terminally complete and the
+    cluster combiner has atomically ``os.replace()``d their
+    ``_combiner/<run_id>/wave_<N>.json`` partials (partial EXISTENCE is the
+    combined marker) — so the transfer overlaps the still-running later waves
+    and the terminal harvest's ``_combiner/`` pull transfers only the delta.
+
+    STRICTLY an opportunistic cache — the ``--link-dest`` posture:
+
+    * The FINAL harvest remains the AUTHORITY. :func:`_combiner_only_reduce`
+      re-runs the SAME pull (same remote subdir, same
+      :data:`_WAVE_PARTIAL_INCLUDE` filter, same destination); on the
+      content-hash engine (``tar_ssh_pull``) every prefetched file is
+      re-verified against the cluster's sha256 manifest and any mismatch is
+      re-pulled — wave partials are NOT immutable (a force-recombine rewrites
+      one, F08; a graft invalidates one, run-13 finding 13-addendum), so the
+      prefetch never keys correctness on its own copy. On the legacy rsync
+      engine the existing size+mtime delta applies, exactly as it already does
+      for every re-aggregate. Correctness is identical with, without, or with a
+      corrupted prefetch cache.
+    * PULL-ONLY: no remote writes of any kind, so the #352 evidence model (the
+      remote ``_combiner/``'s existence and contents are EVIDENCE the harvest
+      keys its fallback on — the ``seal base-state`` fix) cannot be disturbed;
+      prefetch can never mint the directory state the seal stopped inventing.
+      A wave_map-less run never combines a wave, so this is never called for it.
+    * BEST-EFFORT, disclosed-not-raised: every failure is returned as data
+      (``ok=False`` + a bounded error tail) for the watch's tick-log action row
+      and never raises into the poll loop.
+    * CLUSTER ETIQUETTE: the caller invokes this at most once per combine BURST
+      (never per poll — it is triggered by the wave-completion state the watch
+      already reads), and the pull rides the existing connection-storm lineage
+      (``throttle_connection`` + the per-host breaker inside both engines).
+
+    The destination is the DEFAULT harvest location
+    ``<experiment_dir>/_aggregated/<run_id>/_combiner``. An aggregate later
+    invoked with a custom ``output_dir`` simply never reads this cache — still
+    correct, just no win. When the default cluster-final reduce handles the
+    terminal harvest (no partial pull at all), the prefetched KBs are unused
+    insurance against its local-reduce fallback — the >=1800s-pull class the
+    deterministic-failure memo records.
+
+    Returns the disclosure dict for the tick-log action row, or ``None`` when
+    disabled via ``HPC_WAVE_PREFETCH=0``.
+    """
+    if os.environ.get(WAVE_PREFETCH_ENV) == "0":
+        return None
+    combiner_local = experiment_dir / "_aggregated" / run_id / "_combiner"
+    try:
+        pull = _pull(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            remote_subdir="_combiner",
+            local_dir=str(combiner_local),
+            include=list(_WAVE_PARTIAL_INCLUDE),
+        )
+    except (errors.HpcError, OSError, ValueError) as exc:
+        # TimeoutError is an OSError subclass; a transport fault must never
+        # disturb the watch — return it as disclosed data instead.
+        return {"ok": False, "error": str(exc)[:200], "dir": str(combiner_local)}
+    if pull.returncode != 0:
+        return {
+            "ok": False,
+            "error": (pull.stderr or "").strip()[-200:],
+            "dir": str(combiner_local),
+        }
+    return {
+        "ok": True,
+        "files_pulled": int(getattr(pull, "files_pulled", 0) or 0),
+        "bytes_pulled": int(getattr(pull, "bytes_pulled", 0) or 0),
+        "skipped_unchanged": int(getattr(pull, "skipped_unchanged", 0) or 0),
+        "dir": str(combiner_local),
+    }
+
 
 def _incremental_include_patterns(
     combiner_local: Path, combined_waves: list[int], run_id: str | None = None
@@ -451,7 +559,7 @@ def _incremental_include_patterns(
         return None
     # A prior pull left local wave files: re-check ALL of them via rsync's
     # delta so a force-recombine (F08) or torn file (F09) is repaired.
-    return ["wave_*.json", "wave_*.runtime.json"]
+    return list(_WAVE_PARTIAL_INCLUDE)
 
 
 def _nonempty_failing_task_ids(
@@ -993,6 +1101,7 @@ def _combiner_only_reduce(
     summary_name: str,
     results_subdir: str = "results",
     out: Path | None = None,
+    has_wave_map: bool = True,
 ) -> tuple[dict[str, Any], list[int], str]:
     """Pull the cluster ``_combiner/`` partials and reduce them locally.
 
@@ -1011,15 +1120,37 @@ def _combiner_only_reduce(
     locally by filename: a force-recombined REMOTE wave (F08) or a torn LOCAL
     wave (F09) must be re-pulled, and a filename-only diff would exclude both.
 
-    No-combiner default (#352): when the ``_combiner/`` tree does not exist on
-    the cluster (the combiner step never ran — the common shape for a
-    ``@register_run`` SSH sweep submitted with no reducer) AND no
-    ``aggregate_cmd`` is configured on the sidecar, fall back to
+    No-combiner default (#352): when the cluster ``_combiner/`` yields NO wave
+    partial for this run, the combiner step never ran for it — the common shape
+    for a ``@register_run`` SSH sweep submitted with no reducer. With no
+    ``aggregate_cmd`` configured on the sidecar, fall back to
     :func:`_per_task_metrics_reduce` — the SAME deterministic weighted-mean
     over per-task ``metrics.json`` the LOCAL / pure-API path uses. Reduction
     stays in code. When an ``aggregate_cmd`` IS configured the original
     cluster-reduce remediation hint is raised instead (the caller chose a
     custom reducer; silently meaning would mask their intent).
+
+    "No partial for this run" has TWO shapes, and *has_wave_map* decides how far
+    the second one reaches:
+
+    * the pull 404s — the directory is not there at all. Unambiguous for every
+      run; the fallback has always fired here.
+    * the pull LANDS and reduces to nothing. For a wave_map-LESS run this is the
+      identical verdict: no combiner was ever in the picture, so ``_combiner/``
+      cannot hold this run's aggregate whatever it contains, and its metrics
+      live only in the per-task sidecars. For a run that DOES declare a
+      wave_map, an empty ``_combiner/`` means its combine leg failed — a
+      condition ``_combine_missing``'s ``combiner_failures`` / the escalation
+      already report — and quietly substituting per-task metrics would mask it,
+      so that run keeps the (empty) combiner verdict.
+
+    Keying the wave_map-less case on rsync's ENOENT alone made it depend on a
+    directory being ABSENT, which is not evidence anyone owns: the
+    ``--delete``-protected ``_combiner/`` outlives the run that made it, and
+    §10.S4's code-tree seal created one while wiring the tree's symlinks. Both
+    made the harvest reduce zero partials to an EMPTY table and report it as a
+    success — the 2026-07-29 sandbox-proving ``s4.table`` failure. An empty
+    aggregate is never a harvest.
     """
     include_patterns = _incremental_include_patterns(
         combiner_local, list(record.combined_waves), run_id
@@ -1031,6 +1162,15 @@ def _combiner_only_reduce(
         local_dir=str(combiner_local),
         include=include_patterns,
     )
+    # "The combiner produced nothing FOR THIS RUN" — the condition the #352
+    # fallback actually needs, which is NOT the same question as "did the pull
+    # 404". Both branches below can set ``no_combiner_reason``: an absent
+    # ``_combiner/`` (any run), and — for a wave_map-LESS run, where no combiner
+    # was ever in the picture — one that is present and holds no partial of
+    # ours. Same evidence, same verdict.
+    no_combiner_reason: str | None = None
+    aggregated: dict[str, Any] = {}
+    incomplete_waves: list[int] = []
     if pull.returncode != 0:
         # No partials at all is a terminal pull failure; partials present
         # but rsync hiccupped is recoverable on retry — surface either way.
@@ -1045,73 +1185,115 @@ def _combiner_only_reduce(
         # transports surface the same condition with slightly different
         # phrasing depending on the platform.
         no_such = "No such file or directory" in stderr_tail or "does not exist" in stderr_tail
-        if no_such:
-            has_agg_cmd = False
-            try:
-                sidecar = read_run_sidecar(experiment_dir, run_id)
-                has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
-            except (
-                FileNotFoundError,
-                OSError,
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-                errors.HpcError,
-            ):
-                pass
-            if not has_agg_cmd:
-                # No combiner ran AND no custom reducer configured — the
-                # @register_run-SSH-sweep-with-no-reducer shape (#352). Fall
-                # back to the SAME deterministic weighted-mean over per-task
-                # metrics.json the LOCAL / pure-API path uses, so reduction is
-                # ALWAYS code, never the model improvising a mean by hand.
-                aggregated = _per_task_metrics_reduce(
-                    experiment_dir,
-                    run_id,
-                    record=record,
-                    out=(out if out is not None else combiner_local.parent),
-                    results_subdir=results_subdir,
-                    summary_name=summary_name,
-                )
-                # No wave partials → no per-wave incomplete-task signal to
-                # surface; the per-task fallback either reduced over readable
-                # sidecars or raised above.
-                return aggregated, [], "per_task_fallback"
-            # has_agg_cmd is True here (the no-cmd case fell back above): the
-            # caller configured a custom reducer, so cluster-reduce is the
-            # right remediation — silently meaning their metrics.json would
-            # mask that intent.
-            cluster_reduce_hint = (
-                f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
-                f"sidecar's aggregate_cmd directly, no combiner needed."
-            )
+        if not no_such:
             raise errors.RemoteCommandFailed(
-                f"the cluster-side _combiner/ for run_id {run_id!r} does not "
-                f"exist at {record.remote_path}/{run_id}/_combiner/ — the "
-                f"combiner step never ran. Usually this means the cluster-side "
-                f"reporter died (check per-task stderr under "
-                f"{record.remote_path}/{run_id}/logs/). Three recovery paths: "
-                f"(1) fix the cluster env (likely a missing Python module) and "
-                f"resubmit — addresses the root cause. "
-                f"(2) {cluster_reduce_hint} "
-                f"(3) scp the raw per-task results locally and reduce on the laptop. "
-                f"rsync_pull stderr: {stderr_tail[:300]}"
+                f"rsync_pull of _combiner failed (exit {pull.returncode}): {stderr_tail[:300]}"
             )
-        raise errors.RemoteCommandFailed(
-            f"rsync_pull of _combiner failed (exit {pull.returncode}): {stderr_tail[:300]}"
+        no_combiner_reason = (
+            f"does not exist at {record.remote_path}/_combiner/ — the combiner "
+            f"step never ran. rsync_pull stderr: {stderr_tail[:300]}"
         )
+    else:
+        # Wave-prefetch disclosure (opportunistic-cache honesty): on the
+        # content-hash engine the pull reports how many files were served from
+        # the local cache — wave partials the watch prefetched mid-flight
+        # (:func:`prefetch_wave_partials`) or a prior aggregate left — vs
+        # pulled fresh, so the prefetch win is visible and a cache hit never
+        # masquerades as a fresh pull. Every served file was content-verified
+        # against the cluster's own hash manifest by ``tar_ssh_pull``'s delta
+        # (a mismatched/corrupt cache entry lands in the fresh count instead).
+        # The legacy rsync ``CompletedProcess`` carries no counts (its delta is
+        # internal), so the line is skipped there — the attrs read as None.
+        served = getattr(pull, "skipped_unchanged", None)
+        fresh = getattr(pull, "files_pulled", None)
+        if served is not None and fresh is not None and (served or fresh):
+            print(
+                f"[aggregate-flow] _combiner harvest pull for run_id {run_id!r}: "
+                f"{served} file(s) served from the local prefetch/delta cache "
+                f"(content-verified unchanged on the cluster), {fresh} pulled "
+                f"fresh ({int(getattr(pull, 'bytes_pulled', 0) or 0)} bytes)."
+            )
+        # Reduce locally. Thread run_id so a prior run's leftover wave partials
+        # (delete-protected ``_combiner/`` is shared across runs at one remote_path)
+        # are skipped instead of contaminating this run's aggregate (F05).
+        aggregated = reduce_partials(combiner_local, run_id=run_id)
+        # Waves where the combiner couldn't read every task's metrics.json
+        # contribute a partial grid_points set; reduce_partials means over
+        # only the readable subset. Surface those waves so the caller does
+        # not treat the aggregate as computed over the full task set. An
+        # unreadable/torn wave file also lands here now (F09) so the loss is
+        # disclosed and the next pull re-fetches the intact remote copy.
+        incomplete_waves = sorted(collect_wave_errors(combiner_local, run_id=run_id))
+        if not aggregated and not has_wave_map:
+            # The pull LANDED and reduced to nothing, on a run that declares NO
+            # wave_map — no combiner was ever in the picture, so ``_combiner/``
+            # cannot hold this run's aggregate whatever it contains. Until now
+            # the only thing keeping the #352 fallback alive for it was rsync's
+            # ENOENT, an accident of the cluster tree's shape rather than
+            # evidence. Three ways the directory is there and still holds
+            # nothing of ours: it is ``--delete``-protected and survives from an
+            # EARLIER run at the same remote_path (F05 filters those partials
+            # out); §10.S4's ``seal_code_tree`` ``mkdir -p``'d it while wiring
+            # the code tree's symlinks (the sandbox-proving s4.table failure —
+            # harvested, table empty); or an operator made it. A wave_map-LESS
+            # run with zero partials IS "no combiner ran", so take the same
+            # branch. (A wave_map run is deliberately NOT diverted here: its
+            # empty ``_combiner/`` is a combine failure with its own report.)
+            no_combiner_reason = (
+                f"exists at {record.remote_path}/_combiner/ but carries no wave "
+                f"partial for this run (an empty or foreign-run _combiner/ tree) "
+                f"and the run declares no wave_map — no combiner ever ran for it"
+            )
+    if not no_combiner_reason:
+        return aggregated, incomplete_waves, "local_reduce"
 
-    # Reduce locally. Thread run_id so a prior run's leftover wave partials
-    # (delete-protected ``_combiner/`` is shared across runs at one remote_path)
-    # are skipped instead of contaminating this run's aggregate (F05).
-    aggregated = reduce_partials(combiner_local, run_id=run_id)
-    # Waves where the combiner couldn't read every task's metrics.json
-    # contribute a partial grid_points set; reduce_partials means over
-    # only the readable subset. Surface those waves so the caller does
-    # not treat the aggregate as computed over the full task set. An
-    # unreadable/torn wave file also lands here now (F09) so the loss is
-    # disclosed and the next pull re-fetches the intact remote copy.
-    incomplete_waves = sorted(collect_wave_errors(combiner_local, run_id=run_id))
-    return aggregated, incomplete_waves, "local_reduce"
+    has_agg_cmd = False
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+        has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
+    except (
+        FileNotFoundError,
+        OSError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        errors.HpcError,
+    ):
+        pass
+    if not has_agg_cmd:
+        # No combiner output AND no custom reducer configured — the
+        # @register_run-SSH-sweep-with-no-reducer shape (#352). Fall
+        # back to the SAME deterministic weighted-mean over per-task
+        # metrics.json the LOCAL / pure-API path uses, so reduction is
+        # ALWAYS code, never the model improvising a mean by hand.
+        aggregated = _per_task_metrics_reduce(
+            experiment_dir,
+            run_id,
+            record=record,
+            out=(out if out is not None else combiner_local.parent),
+            results_subdir=results_subdir,
+            summary_name=summary_name,
+        )
+        # No usable wave partials → no per-wave incomplete-task signal to
+        # surface; the per-task fallback either reduced over readable
+        # sidecars or raised above.
+        return aggregated, [], "per_task_fallback"
+    # has_agg_cmd is True here (the no-cmd case fell back above): the
+    # caller configured a custom reducer, so cluster-reduce is the
+    # right remediation — silently meaning their metrics.json would
+    # mask that intent.
+    cluster_reduce_hint = (
+        f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
+        f"sidecar's aggregate_cmd directly, no combiner needed."
+    )
+    raise errors.RemoteCommandFailed(
+        f"the cluster-side _combiner/ for run_id {run_id!r} {no_combiner_reason}. "
+        f"Usually this means the cluster-side reporter died (check per-task "
+        f"stderr under {record.remote_path}/{run_id}/logs/). Three recovery paths: "
+        f"(1) fix the cluster env (likely a missing Python module) and "
+        f"resubmit — addresses the root cause. "
+        f"(2) {cluster_reduce_hint} "
+        f"(3) scp the raw per-task results locally and reduce on the laptop."
+    )
 
 
 def _pure_api_reduce(
@@ -2415,6 +2597,11 @@ def _aggregate_flow_impl(
             # results_reduce.json) instead of the metrics.json hardcode that read
             # run #10 as a harvest gap. Absent/blank sidecar → metrics.json.
             summary_name=resolved_summary_artifact(sidecar_for_cmd),
+            # Whether the run declares a combiner at all — the same wave_map read
+            # the cluster-final gate above uses. A wave_map-LESS run whose
+            # ``_combiner/`` pull lands empty has no combiner verdict to report,
+            # so it takes the #352 per-task fallback instead of harvesting {}.
+            has_wave_map=bool(wave_map_keys),
         )
         reduce_path = reduce_source
         # Persist a durable local aggregate artifact on the LOCAL-reduce path. The

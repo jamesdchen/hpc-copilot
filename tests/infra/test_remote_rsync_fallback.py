@@ -271,6 +271,9 @@ def test_effective_excludes_always_protects_runtime_files() -> None:
         ".hpc/templates/",
         ".hpc/.deploy_state.json",
         ".hpc/.push_manifest.json",
+        # §10.S4: the content-addressed CODE trees. Cluster-only, so a base
+        # push's --delete would wipe every snapshot a queued job is pinned to.
+        ".hpc/trees/",
     ]
     # A custom exclude that names none of them still carries them all.
     eff = transport._effective_excludes(["only_this/"])

@@ -116,6 +116,16 @@ def _patch_evidence(
     )
     monkeypatch.setattr("hpc_agent.meta.campaign.budget_ack.read_budget_ack", fake_read_ack)
     monkeypatch.setattr("hpc_agent.meta.campaign.budget_ack.ack_covers_spend", fake_ack_covers)
+    # The pool arithmetic reads the SHARED occupancy predicate (§10.S3 / D6), not
+    # ``status.in_flight``. These tests are about the LADDER — which rule fires,
+    # and that the async branch is gated rather than dead — so the predicate is
+    # pinned to the same synthetic number the status fake reports: n live runs
+    # hold n slots, which is exactly the pre-queue identity. The predicate's own
+    # arithmetic (queued items count, superseded runs do not) is exercised
+    # against a real ledger in tests/meta/campaign/atoms/test_advance_refill.py.
+    monkeypatch.setattr(
+        "hpc_agent.meta.campaign.atoms.advance.occupied_slots", lambda _exp, _cid: in_flight
+    )
 
 
 def _reference_sync_decision(

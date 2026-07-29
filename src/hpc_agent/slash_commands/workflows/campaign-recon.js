@@ -31,7 +31,7 @@ export const meta = {
 // human must see verbatim.
 
 const ARGS_CONTRACT = {
-  repo: 'absolute path of the experiment checkout (required; every verb runs with --experiment-dir)',
+  repo: 'absolute path of the experiment checkout (required; relayed as --experiment-dir to every verb whose RELAYS row declares that flag)',
   detached: 'optional array of {run_id, block} detached launches to poll (poll-detached)',
   logPaths: 'optional array of worker log paths to digest (worker-log-digest)',
   digestPaths: 'optional array of directories to summarize (dir-digest)',
@@ -201,25 +201,69 @@ const STEPS = [
 ]
 const STEP = (id) => STEPS.find((s) => s.id === id)
 
-// Rule-fixed commands for kind: 'script' steps. Every entry is a
-// query/validate verb — the contract test resolves each `hpc-agent <verb>`
-// against the live registry and refuses anything else, so a mutating verb
-// cannot land here by drift. Specs are heredoc'd to mktemp files because the
-// verbs take --spec JSON; the template stays a pure (namedInputs) => string.
-const specRun = (repo, verb, spec) =>
-  `SPEC=$(mktemp) && printf '%s' '${JSON.stringify(spec)}' > "$SPEC" && hpc-agent ${verb} --spec "$SPEC" --experiment-dir ${repo}`
+// ── The RELAY TABLE ─────────────────────────────────────────────────────────
+// Rule-fixed commands for kind: 'script' steps. Every entry is a query/validate
+// verb — the contract test resolves each verb against the live registry and
+// refuses anything else, so a mutating verb cannot land here by drift.
+//
+// `flags` is the flag set each verb's argparse subparser ACTUALLY declares.
+// `net-triage` is the one that differs: its CliShape sets
+// `experiment_dir_arg=False` (it triages a HOST, not a checkout), and the
+// shipped plan's shared template appended `--experiment-dir` to every verb
+// unconditionally — so the net-triage probe exited rc=2 on argparse's
+// "unrecognized arguments" and read back as an anomalous probe every time it
+// ran (fixed 2026-07-29, same bug class as campaign-run's wait relay).
+//
+// Strict JSON on purpose: tests/contracts/test_workflow_plan_commands.py
+// json.loads this literal, materializes each row into an argv, and parses it
+// with the REAL argparse tree (hpc_agent.cli.parser.build_parser).
+const RELAYS = {
+  "doctor": { "verb": "doctor", "flags": ["spec", "experiment-dir"] },
+  "attentionQueue": { "verb": "attention-queue", "flags": ["spec", "experiment-dir"] },
+  "evidenceBrief": { "verb": "evidence-brief", "flags": ["spec", "experiment-dir"] },
+  "pollDetached": { "verb": "poll-detached", "flags": ["spec", "experiment-dir"] },
+  "workerLogDigest": { "verb": "worker-log-digest", "flags": ["spec", "experiment-dir"] },
+  "dirDigest": { "verb": "dir-digest", "flags": ["spec", "experiment-dir"] },
+  "readDecisions": { "verb": "read-decisions", "flags": ["spec", "experiment-dir"] },
+  "netTriage": { "verb": "net-triage", "flags": ["spec"] }
+}
+
+// One renderer per declared flag: the table names WHICH flags a verb takes,
+// this names how each is spelled. A flag with no renderer is a plan bug and
+// throws in validatePlan(), before anything dispatches.
+const FLAG_RENDER = {
+  spec: () => '--spec "$SPEC"',
+  'experiment-dir': ({ repo }) => `--experiment-dir ${repo}`,
+}
+
+// Specs are heredoc'd to mktemp files because the verbs take --spec JSON; the
+// template stays a pure (namedInputs) => string.
+const relayCommand = (key, inputs, spec) => {
+  const relay = RELAYS[key]
+  const flags = relay.flags.map((flag) => FLAG_RENDER[flag](inputs)).join(' ')
+  return `SPEC=$(mktemp) && printf '%s' '${JSON.stringify(spec)}' > "$SPEC" && hpc-agent ${relay.verb} ${flags}`
+}
 
 const COMMANDS = {
-  doctor: ({ repo }) => specRun(repo, 'doctor', {}),
-  attentionQueue: ({ repo }) => specRun(repo, 'attention-queue', {}),
-  evidenceBrief: ({ repo, evidenceTags }) =>
-    specRun(repo, 'evidence-brief', evidenceTags && evidenceTags.length ? { tags: evidenceTags } : {}),
-  pollDetached: ({ repo, item }) => specRun(repo, 'poll-detached', { run_id: item.run_id, block: item.block }),
-  workerLogDigest: ({ repo, logPath }) => specRun(repo, 'worker-log-digest', { log_path: logPath }),
-  dirDigest: ({ repo, path }) => specRun(repo, 'dir-digest', { path }),
-  readDecisions: ({ repo, decisionsScope }) =>
-    specRun(repo, 'read-decisions', { scope_kind: decisionsScope.scope_kind, scope_id: decisionsScope.scope_id, digest: true }),
-  netTriage: ({ repo, triageHost }) => specRun(repo, 'net-triage', { host: triageHost }),
+  doctor: (inputs) => relayCommand('doctor', inputs, {}),
+  attentionQueue: (inputs) => relayCommand('attentionQueue', inputs, {}),
+  evidenceBrief: (inputs) =>
+    relayCommand(
+      'evidenceBrief',
+      inputs,
+      inputs.evidenceTags && inputs.evidenceTags.length ? { tags: inputs.evidenceTags } : {}
+    ),
+  pollDetached: (inputs) =>
+    relayCommand('pollDetached', inputs, { run_id: inputs.item.run_id, block: inputs.item.block }),
+  workerLogDigest: (inputs) => relayCommand('workerLogDigest', inputs, { log_path: inputs.logPath }),
+  dirDigest: (inputs) => relayCommand('dirDigest', inputs, { path: inputs.path }),
+  readDecisions: (inputs) =>
+    relayCommand('readDecisions', inputs, {
+      scope_kind: inputs.decisionsScope.scope_kind,
+      scope_id: inputs.decisionsScope.scope_id,
+      digest: true,
+    }),
+  netTriage: (inputs) => relayCommand('netTriage', inputs, { host: inputs.triageHost }),
 }
 
 const PROMPTS = {
@@ -291,6 +335,19 @@ const validatePlan = () => {
     state[id] = 2
   }
   for (const s of STEPS) visit(s.id)
+  // The relay table is plan data too: a row with no verb, or a flag with no
+  // renderer, must fail at load time rather than render a malformed command.
+  for (const key of Object.keys(RELAYS)) {
+    const relay = RELAYS[key]
+    if (!relay || typeof relay.verb !== 'string' || !relay.verb) problems.push(`RELAYS.${key}: no verb`)
+    if (!relay || !Array.isArray(relay.flags)) {
+      problems.push(`RELAYS.${key}: flags must be an array`)
+      continue
+    }
+    for (const flag of relay.flags) {
+      if (typeof FLAG_RENDER[flag] !== 'function') problems.push(`RELAYS.${key}: flag '${flag}' has no FLAG_RENDER entry`)
+    }
+  }
   if (problems.length) throw new Error(`campaign-recon plan invalid:\n${problems.join('\n')}`)
 }
 

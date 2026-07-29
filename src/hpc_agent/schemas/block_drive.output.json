@@ -107,6 +107,20 @@
       "description": "Human-readable one-line summary of the tick's outcome.",
       "title": "Reason",
       "type": "string"
+    },
+    "queue_chain": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run queue's WAKE EDGE, as data: what the CHAIN-DISPATCH hook did after a `terminal` tick (ops/queue/chain.py; run-queue plan §5 'a run finishing IS the moment to re-tick the queue'). Null on every non-terminal action and whenever the experiment has no intake ledger. Otherwise {chained, run_id, origin, reason} plus {stage_reached, dispatched, refused} when a queue-dispatch tick ran, or {error} when it failed. Pure disclosure — a failed wake never changes the tick's action.",
+      "title": "Queue Chain"
     }
   }
 }

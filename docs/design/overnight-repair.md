@@ -381,8 +381,11 @@ re-verifies AND a fresh canary passes:
 3. **Path zones = first filter only** (§3.1).
 4. **Two-zone consent identity.** One standing consent, two zones of consumption:
    *infra heals* (A, and B under caps) consume the consent mechanically;
-   *semantic boundaries* (anything C, plus every non-`OVERNIGHT_CONSUMABLE_BLOCKS`
-   boundary) PARK regardless of any live consent. The consent record's `resolved`
+   *semantic boundaries* (anything C, plus every boundary outside the
+   consent-consumable sets — `OVERNIGHT_CONSUMABLE_BLOCKS` plus, since the
+   Tier-3 ruling 2026-07-29, `OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE` behind
+   clean-terminal evidence; `ops/overnight.py` is the SoT for both) PARK
+   regardless of any live consent. The consent record's `resolved`
    gains a declared heal-class cap (`heal_classes: ["A"]` or `["A","B"]`) — a
    consent that names no classes heals nothing beyond the shipped watcher re-arm.
    (Verified 2026-07-10: buildable — `resolved` is an open dict on

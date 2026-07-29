@@ -95,6 +95,7 @@ if TYPE_CHECKING:
 
     from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
     from hpc_agent.infra.backends import HPCBackend
+    from hpc_agent.infra.code_tree import CodeTreeProbe
 
 __all__ = ["SubmitFlowResult", "fire_second_canary", "submit_flow", "submit_flow_batch"]
 
@@ -432,8 +433,13 @@ def _run_shared_prelude(
     skip_prelude_io: bool,
     per_task_executors: list[str] | None = None,
     reducer_item: tuple[Path, str] | None = None,
-) -> None:
+) -> str | None:
     """Connectivity gate, then rsync+deploy CONCURRENT with the uv probe (#280).
+
+    Returns the content-addressed CODE tree path the batch's jobs must ``cd``
+    into (§10.S4), or ``None`` when the run falls back to the shared base tree
+    (content-addressing disabled, a pure-API backend, ``skip_prelude_io``, or a
+    disclosed tree-deploy failure).
 
     Audit of everything ``submit_flow_batch`` does between spec-build and qsub,
     classified depends-on-rsync / independent / gate:
@@ -472,7 +478,7 @@ def _run_shared_prelude(
     # (docs/design/crowd-compute-backend.md). Branching here, not at the call
     # site, keeps the prelude the single owner of the pre-submit gate.
     if not requires_ssh:
-        return
+        return None
     _validate_ssh_target(ssh_target)
     _preflight_probe(ssh_target, skip=skip_preflight)
 
@@ -501,13 +507,14 @@ def _run_shared_prelude(
         # both outcomes, then prefer the uv SpecInvalid as the more actionable.
         uv_exc: Exception | None = None
         deploy_exc: Exception | None = None
+        code_tree_path: str | None = None
         try:
             fut_uv.result()
         except Exception as exc:  # noqa: BLE001 — re-raised below after deploy joins
             uv_exc = exc
         if fut_deploy is not None:
             try:
-                fut_deploy.result()
+                code_tree_path = fut_deploy.result()
             except Exception as exc:  # noqa: BLE001 — re-raised below
                 deploy_exc = exc
         if uv_exc is not None:
@@ -527,12 +534,29 @@ def _run_shared_prelude(
     # verified it). Only the per-task executors that carry a checkable ``.py``
     # script token actually issue a probe (see preflight_executor_exists), so the
     # canonical ``python3 -c "..."`` one-liner path no-ops.
+    # §10.S4: a skip-staging re-entry (Phase 2 of the two-phase canary gate)
+    # ships nothing but still qsubs the main array. Re-derive its pin read-only
+    # so the array runs the SAME tree Phase 1's canary validated — a canary that
+    # gates code the array does not run proves nothing.
+    if skip_prelude_io and _code_trees_enabled():
+        code_tree_path = _resolve_existing_code_tree(
+            experiment_dir=experiment_dir,
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            rsync_excludes=rsync_excludes,
+        )
+    #
+    # §10.S4: probe the tree the JOB will actually ``cd`` into, not the base —
+    # the content-addressed tree is where ``cd "$REPO_DIR" && <executor>`` runs,
+    # so a missing executor must be caught THERE. Falls back to the base for a
+    # legacy / degraded deploy, which is the pre-S4 probe byte-for-byte.
     if not skip_prelude_io and per_task_executors:
         _run_executor_existence_preflight(
             ssh_target=ssh_target,
-            remote_path=remote_path,
+            remote_path=code_tree_path or remote_path,
             executors=per_task_executors,
         )
+    return code_tree_path
 
 
 def _collect_per_task_executors(
@@ -984,6 +1008,249 @@ def _keep_generated_shippable(excludes: list[str] | None) -> list[str] | None:
     return [e for e in excludes if e.strip().strip("/") not in _GENERATED_SHIPPABLE]
 
 
+#: Operator kill-switch for content-addressed code trees (§10.S4). ``=1`` returns
+#: the submit path to the pre-S4 shape byte-for-byte: no digest, no tree, no GC,
+#: ``REPO_DIR`` = the base. Same escape-valve idiom as ``HPC_NO_DEPLOY_DELTA`` /
+#: ``HPC_NO_DEPLOY_CACHE`` — a cluster-side surprise must be one env var away
+#: from a known-good path, not a redeploy.
+_NO_CODE_TREES_ENV = "HPC_NO_CODE_TREES"
+
+
+def _code_trees_enabled() -> bool:
+    return os.environ.get(_NO_CODE_TREES_ENV) != "1"
+
+
+def _referenced_tree_digests(experiment_dir: Path) -> set[str] | None:
+    """Tree digests every journal-known NON-TERMINAL run points at.
+
+    ``JournalStatus`` has exactly five values and three are terminal, so
+    ``in_flight ∪ submitting`` IS the non-terminal set — a run whose array is
+    sitting in the scheduler queue right now is one or the other. Held / parked
+    runs are ``in_flight`` carrying a marker, so they are already in the first
+    scan; a queue-intake item that has not been dispatched has no journal record
+    and no deployed tree, so it references nothing.
+
+    Reads the digest off each record's ``job_env["REPO_DIR"]`` — the value the
+    submit stamped and the journal has always stored — so "which tree does this
+    run need?" needs no new record field and no migration
+    (:func:`~hpc_agent.infra.code_tree.digest_from_repo_dir` returns ``None`` for
+    a pre-S4 ``REPO_DIR``, i.e. that run references no tree).
+
+    Returns ``None`` when the scan itself failed. That is NOT "no references" —
+    it is "unknown", and :func:`~hpc_agent.infra.code_tree.plan_tree_gc` refuses
+    the whole pass on it. Deleting a tree under a queued job is the one thing
+    this janitor may never do, and a failed read looks exactly like an empty one.
+    """
+    from hpc_agent.infra.code_tree import digest_from_repo_dir
+    from hpc_agent.state.index import find_in_flight_runs, find_submitting_runs
+
+    try:
+        records = [*find_in_flight_runs(experiment_dir), *find_submitting_runs(experiment_dir)]
+    except Exception:  # noqa: BLE001 — an unreadable journal is UNKNOWN, never empty
+        return None
+    out: set[str] = set()
+    for rec in records:
+        digest = digest_from_repo_dir((getattr(rec, "job_env", None) or {}).get("REPO_DIR"))
+        if digest:
+            out.add(digest)
+    return out
+
+
+def _groom_code_trees(
+    *,
+    experiment_dir: Path,
+    ssh_target: str,
+    remote_path: str,
+    probe: CodeTreeProbe,
+    minted: str,
+) -> None:
+    """Reap unreferenced, non-recent code trees. Fail-open: failures are data.
+
+    **Where this runs, and why that is the seat.** On the submit that MINTED a
+    new tree — never on a reuse, never on a read path. The argument is the
+    queue janitor's (``ops/queue/maintenance.groom_queue_stores``: groom on the
+    tick that made the ledger longer), transposed:
+
+    * this is the only moment the framework both *adds* a tree and *already
+      holds* the remote inventory — ``probe_code_tree`` listed the trees root in
+      the same round-trip it used to check the seal, so the PLAN costs zero
+      extra network;
+    * a submit that reuses a tree (the fast path §10.S4 exists to create) adds
+      nothing and is charged nothing — the O(history) journal walk and the
+      ``rm`` leg simply do not happen;
+    * a query surface must not mutate the store it reports on (F46), which rules
+      out ``inspect-deployment`` and ``queue-status``;
+    * a fresh tree deploy has just paid for a full transfer, so one journal walk
+      and at most one ``rm -rf`` leg are noise against it.
+
+    Everything else is the pure planner's (:func:`plan_tree_gc`). This function
+    only supplies its inputs and suppresses its own failures: an untrusted probe
+    (no listing) plans nothing, an unreadable journal REFUSES the plan, and a
+    failed ``rm`` returns an empty reaped set. None of those can fail a submit.
+    """
+    from hpc_agent.infra.code_tree import plan_tree_gc
+    from hpc_agent.infra.transport import reap_code_trees
+
+    _log = logging.getLogger(__name__)
+    if not getattr(probe, "trusted", False):
+        _log.info("code-tree GC: skipped (tree inventory unavailable this pass)")
+        return
+    plan = plan_tree_gc(
+        present=getattr(probe, "known", ()),
+        referenced=_referenced_tree_digests(experiment_dir),
+        # The tree this submit just minted is protected unconditionally — it may
+        # not yet appear in ``known`` (the listing predates it) and no journal
+        # record points at it until the run is recorded.
+        protect=(minted,),
+    )
+    if plan.refused:
+        _log.warning("code-tree GC: refused — %s", plan.refused_reason)
+        return
+    if not plan.reapable:
+        return
+    reaped = reap_code_trees(ssh_target=ssh_target, remote_path=remote_path, digests=plan.reapable)
+    if reaped:
+        _log.info(
+            "code-tree GC: reaped %d unreferenced tree(s): %s", len(reaped), ", ".join(reaped)
+        )
+    else:
+        _log.info("code-tree GC: %d tree(s) planned for reap did not land", len(plan.reapable))
+
+
+def _deploy_code_tree(
+    *,
+    experiment_dir: Path,
+    ssh_target: str,
+    remote_path: str,
+    rsync_excludes: list[str] | None,
+    scheduler: str | None,
+    reducer_item: tuple[Path, str] | None,
+) -> str | None:
+    """Deploy (or verify) the content-addressed CODE tree; return its path.
+
+    §10.S4's core: the submitted job must run the code it was submitted WITH,
+    even if it sits in the scheduler queue for days while the repo moves on. A
+    tree named after its own content cannot be overwritten by a later push,
+    because a changed snapshot hashes to a different name.
+
+    Four steps, and the first one is usually the last:
+
+    1. **probe** — one ssh. A sealed tree means this exact snapshot (code +
+       framework version) is already on the cluster: deploy is a no-op
+       VERIFICATION, not a re-rsync. That is the latency win.
+    2. **materialize** — rsync the snapshot into the digest dir, with
+       ``--link-dest`` against the newest other tree as an OPPORTUNISTIC
+       bandwidth saving (hardlinks where the filesystem allows, a silent full
+       copy on CARC's BeeGFS ``/scratch1` — both correct, §10.S4's probe table).
+    3. **deploy_runtime into the tree** — the framework files the job executes
+       (dispatcher, combiner, templates, preamble) belong to the snapshot, which
+       is why the package version is folded into the digest.
+    4. **seal** — the shared symlinks + the completion marker, written LAST so a
+       torn deploy is rebuilt rather than half-executed.
+
+    Returns the tree path, or ``None`` when content-addressing is off or could
+    not complete. ``None`` is a DISCLOSED degradation to the pre-S4 behaviour —
+    the base tree is already pushed and the run submits against it un-pinned,
+    with the run-start code-identity check still standing as the guard it always
+    was. Losing the pin is worth strictly less than refusing to submit at all,
+    and the failure is named in the log rather than swallowed.
+    """
+    from hpc_agent.infra.transport import (
+        code_snapshot_digest,
+        materialize_code_tree,
+        probe_code_tree,
+        seal_code_tree,
+    )
+
+    _log = logging.getLogger(__name__)
+    excludes = _keep_generated_shippable(rsync_excludes)
+    try:
+        digest = code_snapshot_digest(experiment_dir, excludes)
+        probe = probe_code_tree(ssh_target=ssh_target, remote_path=remote_path, digest=digest)
+        if probe.sealed:
+            _log.info(
+                "staging: code tree %s already on %s — deploy is a no-op verification",
+                digest,
+                ssh_target,
+            )
+            return str(probe.tree_path)
+        _log.info("staging: materializing code tree %s on %s ...", digest, ssh_target)
+        materialize_code_tree(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            local_path=experiment_dir,
+            digest=digest,
+            exclude=excludes,
+            link_dest=probe.link_dest(),
+        )
+        deploy_runtime(
+            ssh_target=ssh_target,
+            remote_path=str(probe.tree_path),
+            scheduler=scheduler,
+            extra_files=[reducer_item] if reducer_item else None,
+        )
+        seal_code_tree(ssh_target=ssh_target, remote_path=remote_path, digest=digest)
+    except Exception as exc:  # noqa: BLE001 — degrade to the legacy base tree, loudly
+        _log.warning(
+            "staging: content-addressed code tree unavailable (%s: %s); this run "
+            "submits against the shared base tree %s and is NOT pinned to its "
+            "snapshot — the run-start code-identity check remains the guard",
+            type(exc).__name__,
+            exc,
+            remote_path,
+        )
+        return None
+    _log.info("staging: code tree %s sealed", digest)
+    _groom_code_trees(
+        experiment_dir=experiment_dir,
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        probe=probe,
+        minted=digest,
+    )
+    return str(probe.tree_path)
+
+
+def _resolve_existing_code_tree(
+    *,
+    experiment_dir: Path,
+    ssh_target: str,
+    remote_path: str,
+    rsync_excludes: list[str] | None,
+) -> str | None:
+    """Read-only: the sealed tree for the CURRENT snapshot, or ``None``.
+
+    The ``skip_rsync_deploy`` re-entry (submit-and-verify's Phase 2, where Phase
+    1 just staged the SAME tree) ships nothing — but it still qsubs the main
+    array, and without this it would qsub it un-pinned while Phase 1's canary ran
+    pinned. A canary that gated on different code than the array it gates proves
+    nothing, so Phase 2 re-derives the digest LOCALLY and confirms the seal in
+    one ssh: no transfer, no deploy, no GC — just the pin.
+
+    Deliberately conservative: an unsealed / unconfirmable tree returns ``None``
+    (the legacy base), never materialises one. A skip-the-staging request must
+    not become a staging request.
+    """
+    from hpc_agent.infra.transport import code_snapshot_digest, probe_code_tree
+
+    _log = logging.getLogger(__name__)
+    try:
+        digest = code_snapshot_digest(experiment_dir, _keep_generated_shippable(rsync_excludes))
+        probe = probe_code_tree(ssh_target=ssh_target, remote_path=remote_path, digest=digest)
+    except Exception as exc:  # noqa: BLE001 — degrade to the legacy base tree
+        _log.warning("staging: could not confirm code tree (%s: %s)", type(exc).__name__, exc)
+        return None
+    if not probe.sealed:
+        _log.warning(
+            "staging: skip-staging re-entry found no sealed code tree for the current "
+            "snapshot on %s; this submission runs against the shared base tree %s",
+            ssh_target,
+            remote_path,
+        )
+        return None
+    return str(probe.tree_path)
+
+
 def _push_and_deploy(
     *,
     experiment_dir: Path,
@@ -992,7 +1259,7 @@ def _push_and_deploy(
     rsync_excludes: list[str] | None,
     scheduler: str | None = None,
     reducer_item: tuple[Path, str] | None = None,
-) -> None:
+) -> str | None:
     """rsync_push + deploy_runtime — the expensive ssh fan-out, done once.
 
     Extracted so :func:`submit_flow_batch` can run it once across N
@@ -1007,6 +1274,19 @@ def _push_and_deploy(
     (guaranteed-ship insurance on top of the rsync that already carries
     ``specs/``). ``None`` (module reducer / no custom reducer) is the unchanged
     path.
+
+    Returns the content-addressed CODE tree the job should ``cd`` into
+    (§10.S4), or ``None`` when content-addressing is disabled/unavailable and
+    the run falls back to the shared base tree.
+
+    The BASE push stays exactly as it was, and that is deliberate: the base is
+    still where the run sidecars, the results, the logs, the ``.hpc_failed``
+    markers and the job script live, and every reader (monitor, aggregate,
+    recover, pull) still finds them there. The digest tree is ADDITIVE — a
+    second transfer of the same snapshot, which ``--link-dest`` reduces to ~0
+    bytes where hardlinks work and to one copy per distinct code version where
+    they do not, and which collapses to a single ssh whenever the code has not
+    changed.
     """
     # Progress legibility (run #7: staging was silent → 0-byte worker logs read
     # as "stuck", three false stall alarms). One line before each network leg.
@@ -1031,6 +1311,16 @@ def _push_and_deploy(
         extra_files=[reducer_item] if reducer_item else None,
     )
     _log.info("staging: deploy complete")
+    if not _code_trees_enabled():
+        return None
+    return _deploy_code_tree(
+        experiment_dir=experiment_dir,
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        rsync_excludes=rsync_excludes,
+        scheduler=scheduler,
+        reducer_item=reducer_item,
+    )
 
 
 def _resolve_reducer_deploy_item(
@@ -2873,6 +3163,7 @@ def _submit_one_spec(
     experiment_dir: Path,
     spec: SubmitFlowSpec,
     canary_decision: tuple[bool, str | None] | None = None,
+    code_tree_path: str | None = None,
 ) -> SubmitFlowResult:
     """Per-spec submission work — backend build + (canary?) + main qsub + record.
 
@@ -2887,6 +3178,15 @@ def _submit_one_spec(
     multi-hour rsync could flip skip→run and fire a canary whose sidecar was never
     mirrored (guaranteed ``sidecar_not_found``, and with afterok the whole sweep
     dropped). ``None`` (a direct caller) re-evaluates locally, unchanged.
+
+    ``code_tree_path`` (§10.S4): the content-addressed CODE tree the batch's
+    prelude sealed. When present it REPLACES ``job_env["REPO_DIR"]`` — the one
+    variable that moves — so the ``cd "$REPO_DIR"`` every task runs lands in a
+    directory named after its own content, and a job that waits days in the
+    queue still executes the snapshot it was submitted with. ``None`` (legacy
+    run, pure-API backend, ``skip_rsync_deploy`` re-entry, disabled or degraded
+    tree deploy) leaves ``REPO_DIR`` exactly as ``build_submit_spec`` derived it
+    — the pre-S4 shared-base behaviour, unchanged.
     """
     job_env_full = _augment_job_env(
         job_env=spec.job_env,
@@ -2894,6 +3194,14 @@ def _submit_one_spec(
         campaign_id=spec.campaign_id,
         cluster=spec.cluster,
     )
+    if code_tree_path:
+        # Not ``setdefault``: ``build_submit_spec`` ALWAYS stamps REPO_DIR (and
+        # asserts it equals the deploy target), so the key is always present and
+        # a setdefault could never fire. The canary reuses this same dict, so
+        # canary and main are pinned to the SAME tree by construction. The value
+        # is also what the GC later reads back off the journaled record to answer
+        # "which tree does this run still need?" — no new record field.
+        job_env_full = {**job_env_full, "REPO_DIR": code_tree_path}
     # Refuse an empty/missing OR bare-name job-script EXECUTOR before anything
     # is qsub'd — the augmented dict is what actually ships to the scheduler
     # (#191 + the proving-run-3 shape extension). experiment_dir lets the guard
@@ -3258,6 +3566,30 @@ def _submit_one_spec(
             auto_recover_on_failure=spec.auto_recover_on_failure,
             max_auto_recovers=spec.max_auto_recovers,
         )
+
+    # ── W1 run-terminal SENTINEL job (crash-only-monitoring, opt-in) ──────
+    # Gated OFF by default behind HPC_SENTINEL_JOB (the HPC_ANNOUNCE_WAIT /
+    # Wave-2 telemetry-gate precedent): flag off returns immediately with zero
+    # cluster traffic, so the submit stays byte-identical. Flag on, a tiny
+    # dependent job (--dependency=afterany / -hold_jid behind the main array's
+    # ids) is staged + submitted OPPORTUNISTICALLY after the run is fully
+    # recorded — the helper never raises; a failure is disclosed (WARN) and the
+    # run proceeds with the polling census as the authority, exactly as today.
+    # The sentinel's id lands on the sidecar's SEPARATE ``sentinel_job_id``
+    # field, never in ``job_ids`` — the run's compute-job accounting (result
+    # envelope, journal, reconcile alive-checks) stays byte-identical.
+    from hpc_agent.ops.monitor.sentinel import maybe_submit_run_terminal_sentinel
+
+    maybe_submit_run_terminal_sentinel(
+        backend_obj,
+        experiment_dir=experiment_dir,
+        ssh_target=spec.ssh_target,
+        remote_path=spec.remote_path,
+        run_id=spec.run_id,
+        job_name=spec.job_name,
+        depend_job_ids=list(job_ids),
+        cwd=experiment_dir,
+    )
 
     if spec.partial_ok:
         from hpc_agent.state.runs import run_sidecar_path
@@ -3669,7 +4001,7 @@ def _submit_flow_batch_locked(
         if skip_rsync_deploy
         else _resolve_reducer_deploy_item(experiment_dir, specs, fresh_indices)
     )
-    _run_shared_prelude(
+    code_tree_path = _run_shared_prelude(
         experiment_dir=experiment_dir,
         ssh_target=ssh_target,
         remote_path=remote_path,
@@ -3702,6 +4034,9 @@ def _submit_flow_batch_locked(
                 experiment_dir=experiment_dir,
                 spec=specs[i],
                 canary_decision=canary_decisions[i],
+                # §10.S4: every spec in a batch shares (ssh_target, remote_path)
+                # and therefore ONE snapshot, so they all pin to the same tree.
+                code_tree_path=code_tree_path,
             )
             # Forward half of the supersession audit link: the backward
             # (superseded_by) half was journaled by the gate BEFORE any

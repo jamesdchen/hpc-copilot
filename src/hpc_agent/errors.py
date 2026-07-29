@@ -34,6 +34,7 @@ __all__ = [
     "AlreadyInFlight",
     "SiblingRunLive",
     "ScopeLocked",
+    "QueueDispatchLockHeld",
     "SourceUnaudited",
     "PackReceiptsMissing",
     "SubmissionIncomplete",
@@ -521,6 +522,42 @@ class ScopeLocked(HpcError):
             "(scope_kind='scope', block='scope-unlock', "
             "resolved={'scope_action': 'unlock'})."
         )
+
+
+class QueueDispatchLockHeld(HpcError):
+    """Another process holds this campaign's run-queue dispatch lock.
+
+    Raised by :func:`hpc_agent.state.queue_locks.campaign_dispatch_lock` when
+    the bounded acquire expires. The lock is the DURABLE form of the
+    sidecar-between-slots rule (run-queue plan §10.S2.4 / E4): resolving a
+    campaign trial consumes the optuna sidecar index, so two processes
+    resolving the same campaign concurrently read the same ``_submitted_count``
+    and propose the SAME trial — one duplicated slot, silently. Serializing the
+    whole resolve → sidecar → start window is what makes the two proposals
+    different; the timeout means somebody else is inside that window right now.
+
+    Not a failure of the caller: a dispatcher that hits this has met a healthy
+    peer, and the run-queue plan's R4 says every held-back item keeps a
+    disclosed reason. ``queue-dispatch`` catches this and reports the item as
+    refused-because-claimed rather than letting it escape as an envelope error.
+
+    Reuses the ``precondition_failed`` error_code (the :class:`ScopeLocked`
+    precedent): the on-disk state the step was invoked against forbids it right
+    now, and adding a new error_code value is a breaking wire-envelope change.
+    ``retry_safe`` is True and means it — the peer will release, nothing was
+    written, and re-running is the correct response.
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = True
+    category = "user"
+    remediation = (
+        "Another dispatcher is inside this campaign's resolve→start window. "
+        "Wait for it and re-run; the queued item is still on the ledger and "
+        "`hpc-agent queue-status` shows it. If no such process exists, the "
+        "lock leaked — confirm with `ps` before deleting the .lock file named "
+        "in the message."
+    )
 
 
 class SourceUnaudited(HpcError):

@@ -162,8 +162,14 @@ exactly the surface the human needed anyway.
 - **`src/hpc_agent/slash_commands/workflows/`** — the validated plans
   (shipped in the wheel, installed by `agent_assets`; portable-plan/adapter
   contract in that directory's README). `campaign-recon.js` operates at
-  rule-1 scope (every command query/validate); `campaign-run.js` exercises
-  rule 5 (plan-relayed `block-drive` ticks that park at every gate).
+  rule-1 scope (every command query/validate); `campaign-run.js` and
+  `queue-drain.js` exercise rule 5 (plan-relayed `block-drive` ticks that
+  park at every gate — one run, and the whole ledger, respectively). Every
+  plan declares its commands as a `RELAYS` table and renders them from it;
+  `tests/contracts/test_workflow_plan_commands.py` materializes each row
+  and PARSES it with the real argparse tree, and pins the `{ok, …, data}`
+  envelope unwrapping — the execution-level half of the boundary the
+  regex sweep below cannot see.
 - **Per-skill `## Delegation (hpc-recon)` sections** — `hpc-submit`,
   `hpc-status`, `hpc-aggregate`, `hpc-campaign`, `hpc-notebook-audit` each
   carry one, in a mechanizable shape: one `- delegable:` bullet per

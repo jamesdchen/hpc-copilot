@@ -121,6 +121,17 @@ PROTECTED_RUNTIME_FILES: list[str] = [
     # manifest prune would lose its record of what we shipped (#66).
     ".hpc/.deploy_state.json",
     ".hpc/.push_manifest.json",
+    # Content-addressed CODE trees (§10.S4, ``infra/code_tree.TREES_REL``). The
+    # digest-keyed snapshots a submission pins its queued job to live at
+    # ``.hpc/trees/<digest>/`` and exist ONLY on the cluster — the local tree has
+    # no such directory, so a base push's ``--delete`` (or the tar fallback's
+    # pre-clean) would wipe every snapshot on every push, un-pinning every job
+    # already sitting in the scheduler queue. That is the same class of break as
+    # the 2026-06-08 ``.hpc/templates/`` wipe this list was created for, with a
+    # worse blast radius: the jobs are already submitted and cannot be told.
+    # Protected here, with the same mechanism, so no caller ``exclude`` can drop
+    # it. Lockstep-pinned by ``tests/infra/test_code_tree.py``.
+    ".hpc/trees/",
 ]
 
 # Paths a scaffolded ``.gitignore`` marks as generated but the cluster

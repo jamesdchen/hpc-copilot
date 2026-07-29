@@ -77,7 +77,9 @@ def test_workflow_plans_install_without_permission_grants(tmp_path: Path) -> Non
 
     assert "campaign-recon" in result["workflows_installed"]
     assert "campaign-run" in result["workflows_installed"]
+    assert "queue-drain" in result["workflows_installed"]
     assert (tmp_path / "workflows" / "campaign-run.js").is_file()
+    assert (tmp_path / "workflows" / "queue-drain.js").is_file()
     # The README beside the plans is the author contract, not a runtime asset.
     assert not (tmp_path / "workflows" / "README.md").exists()
     allow = _allow(_settings(tmp_path))
