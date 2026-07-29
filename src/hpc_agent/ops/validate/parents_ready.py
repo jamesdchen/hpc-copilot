@@ -72,7 +72,11 @@ def observe_run_state(experiment_dir: Path, run_id: str) -> str:
     verb="validate",
     side_effects=[],
     idempotent=True,
-    agent_facing=True,
+    # No CLI shape: composed into ``submit-pipeline``, so no CLI
+    # subcommand and no MCP tool can reach it. Reachability bounds this
+    # flag — see tests/contracts/test_agent_facing_partition.py
+    # ::test_cli_less_primitives_are_not_agent_facing.
+    agent_facing=False,
 )
 def validate_parents_ready(
     experiment_dir: Path,

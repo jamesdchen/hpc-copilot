@@ -205,7 +205,11 @@ def _check_non_null_jsonl(
     verb="validate",
     side_effects=[],
     idempotent=True,
-    agent_facing=True,
+    # No CLI shape: composed into ``validate-campaign``, so no CLI
+    # subcommand and no MCP tool can reach it. Reachability bounds this
+    # flag — see tests/contracts/test_agent_facing_partition.py
+    # ::test_cli_less_primitives_are_not_agent_facing.
+    agent_facing=False,
 )
 def validate_input_dataset(
     experiment_dir: Path,

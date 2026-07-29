@@ -384,7 +384,7 @@
     "verb": "mutate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": null,
@@ -1763,7 +1763,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "dry_run_local.input.json",
@@ -1838,7 +1838,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "validate_executor_signatures.input.json",
@@ -1850,7 +1850,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "validate_input_dataset.input.json",
@@ -1862,7 +1862,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "validate_parents_ready.input.json",
@@ -1874,7 +1874,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": null,
@@ -1886,7 +1886,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "validate_self_qos_limit.input.json",
@@ -1898,7 +1898,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "validate_stochastic_marker.input.json",
@@ -1910,7 +1910,7 @@
     "verb": "validate"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "validate_walltime_against_history.input.json",

@@ -52,39 +52,28 @@ _PRIMITIVE_TO_CLI_VERB: dict[str, str] = {
     "recoveries-show": "recoveries show",
 }
 
-# Primitives that intentionally have no standalone CLI subcommand —
-# composed into other primitives or workflows. Each entry justifies
-# the exception so a future maintainer adding/removing one has to
-# argue for it explicitly.
-_INTENTIONALLY_NO_CLI: set[str] = {
-    # Validators that are part of the ``validate-campaign`` family but
-    # have no standalone CLI verb. Six of them
-    # (validate-executor-signatures, validate-input-dataset,
-    # validate-stochastic-marker, validate-walltime-against-history,
-    # dry-run-local, validate-scaffold-staleness) are explicitly composed
-    # into ``validate-campaign``; ``validate-self-qos-limit`` is registered
-    # for schema/contract symmetry but not yet wired into the workflow body.
-    "dry-run-local",
-    "validate-executor-signatures",
-    "validate-input-dataset",
-    "validate-scaffold-staleness",
-    "validate-self-qos-limit",
-    "validate-stochastic-marker",
-    "validate-walltime-against-history",
-    # DAG readiness gate (docs/design/dag-kernel.md) — composed at the
-    # skill/workflow layer before a parented ``submit-flow``, like its
-    # validate-* siblings above; no standalone agent use case yet.
-    "validate-parents-ready",
-    # Helpers composed by ``submit-flow``'s batch path; the agent
-    # surface for the same effect is just re-running ``submit-flow``.
-    "prune-orphan-sidecars",
-    # Composed by ``plan-throughput`` and ``submit-flow``; no
-    # independent agent use case.
-    "recommend-partition",
-    # Sidecar-mutating helper called from ``resubmit-failed``'s
-    # constraint-override path; not part of the agent surface.
-    "update-run-constraints",
-}
+# NOTE: there is deliberately no ``_INTENTIONALLY_NO_CLI`` exemption set.
+#
+# It used to hold eleven names and it was an artifact of a contradiction, not
+# a design: nine of its entries were CLI-less primitives that
+# ``test_agent_facing_partition`` nonetheless forced to ``agent_facing=True``
+# (``verb=validate`` implied the flag unconditionally), so this gate failed on
+# them and the exemption set was the patch. That contradiction is now resolved
+# at the source — a primitive with no ``CliShape`` declares
+# ``agent_facing=False``, because neither the CLI dispatcher nor the MCP
+# server can reach it — so the loop below skips them on the ``agent_facing``
+# check and needs no allowlist.
+#
+# The other two entries (``recommend-partition``, ``update-run-constraints``)
+# had grown real CLI subcommands and were exempting a check they already
+# passed. Nothing pinned the set against that drift, which is the standing
+# argument against reintroducing it: an exemption list with no liveness test
+# rots silently, and here it was also hiding the flag bug that produced it.
+#
+# If this gate fails, the fix is one of: register a subparser in the
+# appropriate ``cli/<module>.py:register()``; add a deliberate alias to
+# ``_PRIMITIVE_TO_CLI_VERB``; or declare ``agent_facing=False`` if the
+# primitive genuinely is a composed internal with no agent surface.
 
 
 def _live_subcommands() -> set[str]:
@@ -121,8 +110,6 @@ def test_every_agent_facing_primitive_has_a_cli_subcommand(cli_verbs: set[str]) 
         if not entry.get("agent_facing"):
             continue
         name = entry["name"]
-        if name in _INTENTIONALLY_NO_CLI:
-            continue
         verb = _PRIMITIVE_TO_CLI_VERB.get(name, name)
         # Verb-group children are space-separated in cli_verbs ("clusters list").
         if verb in cli_verbs:
@@ -137,9 +124,11 @@ def test_every_agent_facing_primitive_has_a_cli_subcommand(cli_verbs: set[str]) 
             + "\n".join(f"  - {n}" for n in sorted(missing))
             + "\n\nEither register a subparser in the appropriate "
             "cli/<module>.py:register() function, add an entry to "
-            "_PRIMITIVE_TO_CLI_VERB if it's intentionally aliased, "
-            "or add it to _INTENTIONALLY_NO_CLI with a comment "
-            "justifying the exception."
+            "_PRIMITIVE_TO_CLI_VERB if it's intentionally aliased, or "
+            "declare agent_facing=False if it is a composed internal with "
+            "no agent surface (an agent cannot invoke what has no CLI "
+            "subcommand and no MCP tool). Do not reintroduce a blanket "
+            "exemption set — see the note above."
         )
 
 
