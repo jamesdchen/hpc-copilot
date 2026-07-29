@@ -73,8 +73,15 @@ procedure fidelity — e.g. "after submit-flow the per-run sidecar for
 
 ### 1. Pydantic spec models
 
-If the primitive takes a wire `--spec` payload, create
-`src/hpc_agent/_wire/<name>.py`:
+If the primitive takes a wire `--spec` payload, create the model module in
+the `_wire/` subdirectory matching the primitive's VERB — the tree is
+partitioned, not flat (two 2026-07-29 build sessions had to route around
+this line when it said `_wire/<name>.py`):
+
+- `src/hpc_agent/_wire/actions/<name>.py` — `mutate` / `submit` / `scaffold` verbs
+- `src/hpc_agent/_wire/queries/<name>.py` — `query` verbs
+- `src/hpc_agent/_wire/workflows/<name>.py` — `workflow` verbs
+- `src/hpc_agent/_wire/validators/<name>.py` — `validate` verbs
 
 ```python
 from pydantic import BaseModel, ConfigDict, Field

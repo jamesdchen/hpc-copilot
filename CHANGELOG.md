@@ -17,6 +17,64 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — the run queue, Phases 1+2 (run-queue plan §6, 2026-07-29)
+
+The missing organ: intake + placement. Experiments queue as they come in and
+the machine chooses the cluster, with every decision disclosed and every
+gate binding exactly where it always did.
+
+- **Phase 1 — the store + the authority.** `.hpc/queue/intake.jsonl`
+  (append-only, `request_id` dedup so replays cannot double-enqueue) plus
+  three verbs: `queue-run` (mutate, UNGATED — enqueueing spends nothing),
+  `queue-status` (the R1 projection over the run stores; greenlight
+  questions route through the same boundary-scoped predicate
+  attention-queue uses), and `queue-advance` (pure placement authority:
+  pin wins, hard constraints filter, least-loaded by the shared occupancy
+  predicate, alphabetical tie-break — reason always disclosed, no item
+  ever dropped or guessed). `queue-status`/`queue-advance` take an
+  optional spec (the net-triage precedent): a bare CLI call is the
+  whole-ledger read.
+- **Phase 2 — the actor.** `queue-dispatch` consumes placements and starts
+  each item's normal gated lifecycle: derive the computed run_id → ADOPT an
+  existing run rather than resubmit (failed/abandoned deliberately not
+  adopted so retries work) → per-cid dispatch lock (the E4 rule as a real
+  flock) → durable-first placement append → the identical detached
+  `campaign-run` launch refill always used. Placed-but-unstarted items
+  (crash window) are re-actuated, never stranded. `campaign-refill` is now
+  a LEDGER PRODUCER: resolve once → enqueue with the resolved identity →
+  dispatch, all under the lock; its direct-submit path is deleted, and
+  `campaign-advance`'s pool arithmetic counts queued intake through the
+  shared predicate — closing the §10.S3 re-enqueue window.
+- **The S1 placement consent leg.** Consent binds WHERE, not just what:
+  `state/placement_drift.py` (membership over a cluster-key set; absent on
+  either side disables — purely additive on the pre-migration corpus,
+  measured: zero test failures), a `placement-changed` reason in
+  `standing_consent_status`, sidecar-fed `current_placement` at every
+  run-scope consumption site, campaign `placement_scope` composed from the
+  run records' cluster stamps (never parsed from the cid), a record-time
+  gate that refuses malformed shapes and typo'd keys with a near-miss hint,
+  a paste-ready grant line on the authorship refusal, and an AST caller
+  census (`tests/contracts/test_placement_leg_callers.py`, allowlist now
+  EMPTY) so a future call site cannot silently skip the leg.
+- **The morning digest's queue paragraph.** `status-snapshot` gains an
+  additive `queue` section relaying `queue-advance`'s rows and rendered
+  text VERBATIM (one authority, byte-equal — pinned) so a stuck item
+  surfaces without being asked about; absent when the queue is empty,
+  fail-open on any read surprise.
+
+Intended default, ruled 2026-07-29: a standing consent composes NO
+core-hours `budget_cap` — the composed caps are the morning-boundary expiry
+plus the overnight `walltime_cap` only. Compute spend is unmetered until a
+human names a cap (`budget_cap` opt-in), the right posture pre-GPU.
+
+Adversarial review before landing (three lenses over Phase 2): 13 confirmed
+findings, 7 root causes, all reproduced then fixed with regression tests —
+led by the occupancy ledger half never RELEASING a slot (a completed K=4
+campaign read occupied=4 forever and refill waited on an empty cluster),
+plus a dispatch-lock reentrancy hole that waved a second thread through the
+resolve window, and a composed placement that could name a cluster absent
+from the active config and become un-grantable.
+
 ### Fixed — campaign-run: chunked waits + fresh-relaunch parks (fable-sweep 2026-07-29)
 
 An adversarial design sweep (six lenses over the banked run-queue design +

@@ -2256,7 +2256,7 @@
     "input_schema": "status_snapshot.input.json",
     "name": "status-snapshot",
     "output_schema": "status_block.output.json",
-    "python": "hpc_agent.ops.status_blocks.status_snapshot",
+    "python": "hpc_agent.ops.status_blocks._queue_brief_section",
     "side_effects": [
       "ssh"
     ],

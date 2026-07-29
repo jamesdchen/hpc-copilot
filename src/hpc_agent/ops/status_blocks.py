@@ -228,6 +228,43 @@ def digest_run(record: Any) -> dict[str, Any]:
     ),
     agent_facing=True,
 )
+def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] | None:
+    """The run-queue paragraph of the morning digest, or ``None`` when nothing is queued.
+
+    Run-queue plan §3 promised the brief could surface "3 items waiting on gpu
+    capacity"; the maintainer ordered it built (2026-07-29). The section calls the
+    placement AUTHORITY (``queue-advance``, pure) and relays its rows and its
+    code-rendered text VERBATIM — S13's rule: a brief relays the authority's
+    words, it never summarizes them, so this surface and a direct
+    ``queue-advance`` call can never disagree. ``held`` is clipped to 10 rows
+    with ``held_total`` keeping the clip visible (the bounded-projection
+    posture); ``held_counts`` still spans everything.
+
+    Additive + fail-open: an experiment with no queue, an unreadable ledger, or
+    any read surprise yields ``None`` and the snapshot is byte-unchanged — a
+    queue problem must never blank the digest the human reads first.
+    """
+    try:
+        from hpc_agent._wire.queries.queue_advance import QueueAdvanceSpec
+        from hpc_agent.ops.queue.advance import queue_advance
+
+        decision = queue_advance(experiment_dir=experiment_dir, spec=QueueAdvanceSpec(now=now_iso))
+    except Exception:  # noqa: BLE001 — a queue read must never blank the digest
+        return None
+    if decision.queued_total <= 0:
+        return None
+    return {
+        "queued_total": decision.queued_total,
+        "decision": decision.decision,
+        "placements_decided": len(decision.placements),
+        "held": [h.model_dump(mode="json") for h in decision.held[:10]],
+        "held_total": len(decision.held),
+        "held_counts": dict(decision.held_counts),
+        "occupancy": dict(decision.occupancy),
+        "text": decision.brief,
+    }
+
+
 def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> StatusBlockResult:
     """One-shot digest: what is running where + what changed since last looked.
 
@@ -350,6 +387,12 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     has_live = any(r.status not in TERMINAL_STATUSES for r in records)
     non_terminal_runs = [[r.run_id, r.status] for r in records if r.status not in TERMINAL_STATUSES]
 
+    # Run-queue paragraph (run-queue plan §3/§6 Phase 2; maintainer order
+    # 2026-07-29): a stuck item must not wait silently until the human thinks to
+    # ask queue-status. Computed before the dict so the key can be OMITTED when
+    # the queue is empty — byte-stable for every experiment that never enqueues.
+    queue_section = _queue_brief_section(experiment_dir, now_iso)
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -368,6 +411,8 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         # never judged. Rides the brief dict (no wire contract). Empty when unset.
         "active_env_overrides": active_env_overrides(),
     }
+    if queue_section is not None:
+        brief["queue"] = queue_section
 
     needs_decision = bool(stalled or anomalies)
     if needs_decision:

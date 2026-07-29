@@ -1,6 +1,9 @@
 # The run queue + cluster placement — design proposal (2026-07-28)
 
-Status: **S1–S4 RESOLVED (§10, 2026-07-29) — Phase 1 is buildable.**
+Status: **PHASES 1+2 SHIPPED (2026-07-29) — §6's store, authority, and actor
+are live; the S1 consent leg is wired through both scopes.** Remaining: the
+Phase-3 drain loop (maintainer-ordered), content-addressed trees + eager
+submit (probe-cleared, §10.S4), per-cluster consent caps, brief-UX bundle.
 Design complete through v2 + adversarial sweep. Motivating order: "there
 needs to be a queue that keeps track of multiple experiments to run as they
 come in and it needs to assign the runs to the proper clusters / split
@@ -22,11 +25,12 @@ Read this file top to bottom — it is self-contained. The state of play:
    confirmed clusters. S5/S6 are FIXED in the shipped campaign-run.js.
    **S1–S4 are RESOLVED in §10** — the blocking gate is cleared. S7–S13
    land incrementally with their named resolutions.
-3. **Then build Phase 1** (§6): intake store + `queue-run` +
-   `queue-status` + `queue-advance` with the disclosed-reason policy.
-   Conventions: full verb contract per `docs/internals/adding-a-primitive.md`
-   (the `tag-session` verb, landed 2026-07-28, is the freshest small
-   exemplar of the whole pipeline).
+3. **Phases 1+2 are SHIPPED (2026-07-29)**: intake store, `queue-run` /
+   `queue-status` / `queue-advance` / `queue-dispatch`, refill as ledger
+   producer, campaign `placement_scope`, the morning digest's `queue`
+   section. Adversarially reviewed before landing (13 findings → 7 root
+   causes fixed, occupancy slot-release the flagship). Next build:
+   the Phase-3 drain loop (§5's tick + wake + relay).
 4. **Open maintainer decisions** (§9): claim-lease recovery is now
    ANSWERED by §10.S2 (no new lease — the shipped detached lease keyed on
    the computed run_id), and retryable(n) is unblocked (§10.S3 removes the

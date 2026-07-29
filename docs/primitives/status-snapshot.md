@@ -20,7 +20,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.ops.status_blocks.status_snapshot
+  python: hpc_agent.ops.status_blocks._queue_brief_section
 ---
 ## Purpose
 
