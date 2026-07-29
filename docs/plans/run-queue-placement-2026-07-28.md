@@ -196,14 +196,42 @@ Consequences:
   is held for etiquette caps or a hard constraint mismatch, and the
   disclosed reason says which — never a guess about scheduler headroom.
 
+**Latency + residency invariants (2026-07-29, adopted from the latency
+review):**
+
+- **Relaunch-cheapness invariant.** A drain pass that starts, finds
+  nothing drivable, and returns must cost near-zero: one `queue-status`
+  relay, no loops spawned. This is load-bearing for the whole
+  chain-of-relaunches model — "just relaunch it, whenever, for any
+  reason" must be the correct reflex, never something to economize. Any
+  future pass-startup work that scales with ledger HISTORY (rather than
+  with currently-drivable items) violates this.
+- **Held waits count as drivable (default return policy).** A pass
+  returns only when every claimed item is parked-on-human or terminal;
+  items sitting in detached waits keep the pass alive (chunked
+  `wait-detached timeout_sec` + heartbeat). `wait-detached` returns AT
+  the lease terminal, so event→action latency is ~0 while a pass lives —
+  the only dead-air case left is no-live-session, which is the wake
+  tier's job, not the workflow's.
+- **First tick after the y goes inline.** The post-greenlight moment is
+  the one latency-sensitive interactive step (~15–30s if routed through a
+  relaunch). The main session ticks `block-drive` directly, inline, the
+  moment the y commits — instant visible motion, one tick of transcript
+  cost — and the auto-resumed drain pass takes over from the second tick.
+- **The unattended tier is watch → poke → drain.** Capture is the
+  kernel's (the armed detached `status-watch` survives session death and
+  records terminals durably the moment they happen); wake is the
+  harness's (a scheduled re-poke where supported — CCR `send_later` /
+  routines — else the human's next sit-down); catch-up is the drain
+  pass's (stateless, reads what the watch recorded, advances what consent
+  covers, parks the rest). No layer substitutes for another, and only
+  the wake leg is harness-dependent.
+
 **Design decisions still open (v2 additions):**
 
 - Claim lease TTL/steal policy: a driver that dies mid-claim — lease
   expiry by heartbeat staleness (reuse `pid_alive` probe) vs. explicit
   `queue-release`. Proposed: heartbeat staleness, the detached precedent.
-- Return policy: return-when-nothing-drivable (proposed, batch sittings)
-  vs. return-on-first-park (chattier, lower decision latency). Could be an
-  arg with the batch default.
 - Failure classes on parked items: `needs_human` vs `retryable(n)` as
   DECLARED item data consumed by plan code — never an agent's judgment
   call. Proposed: default needs_human; retryable only by explicit intake
