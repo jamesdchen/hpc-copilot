@@ -48,6 +48,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hpc_agent._kernel.lifecycle.consent_hint import _sha8
+
 __all__ = ["answer_menu_of", "compose_answer_menu", "recommendation_options"]
 
 #: Widest ``paste`` column the rendered lines pad to before falling back to a
@@ -60,17 +62,6 @@ _PASTE_COLUMN_MAX = 44
 #: per-case sentence would be code-authored prose ABOUT the recommendation, and
 #: the recommendation's own ``action``/``then`` tokens already say what it is.
 _RECOMMENDATION_MEANS = "structured recommendation carried by this brief"
-
-
-def _sha8(sha: str | None) -> str | None:
-    """The 8-hex display prefix of a full spec sha, or ``None``.
-
-    Mirrors :func:`hpc_agent._kernel.lifecycle.consent_hint._sha8` so the menu's
-    pin and the approve-hint utterance's pin are the same eight characters — the
-    human must be able to see that the line they paste names the spec the brief
-    disclosed.
-    """
-    return sha[:8] if isinstance(sha, str) and sha else None
 
 
 def _option(action: str, then: str | None) -> dict[str, Any]:
