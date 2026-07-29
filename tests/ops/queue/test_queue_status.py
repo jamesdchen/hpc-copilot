@@ -37,6 +37,7 @@ import pytest
 import hpc_agent.ops.queue.status as status_mod
 from hpc_agent import errors
 from hpc_agent._wire.queries.queue_status import QueueStatusSpec
+from hpc_agent.infra.time import parse_iso_utc
 from hpc_agent.ops.attention_queue import (
     GREENLIGHT_UNADVANCED,
     RUN_PARKED,
@@ -51,6 +52,7 @@ from hpc_agent.state.journal import mark_pending_decision, upsert_run
 from hpc_agent.state.queue_intake import (
     append_intake_item,
     append_intake_placement,
+    enqueue_age_sec,
     intake_path,
     intake_path_if_exists,
 )
@@ -195,6 +197,48 @@ def test_computed_at_honours_the_now_override(tmp_path: Path) -> None:
 def test_bad_now_override_is_spec_invalid(tmp_path: Path) -> None:
     with pytest.raises(errors.SpecInvalid):
         queue_status(experiment_dir=tmp_path, spec=QueueStatusSpec(now="last tuesday"))
+
+
+# ── the shared age derivation (§10.S3) ───────────────────────────────────────
+# ``state/queue_intake.enqueue_age_sec`` is THE definition of "how long has this
+# item waited" — queue-status and the morning digest's queue section both call
+# it, so its edges are pinned here once, next to the surface that reports it.
+
+
+def test_enqueue_age_is_code_computed_seconds_clamped_at_zero() -> None:
+    now_dt = parse_iso_utc(_NOW)  # 2026-07-29T12:00:00+00:00
+    assert enqueue_age_sec("2026-07-29T10:00:00+00:00", now_dt) == 7200
+    # Clock skew reads as "just arrived", never as a negative age.
+    assert enqueue_age_sec("2026-07-29T12:00:05+00:00", now_dt) == 0
+
+
+def test_enqueue_age_is_unknown_never_guessed_when_the_stamp_is_absent() -> None:
+    """A pre-stamp record (or a mangled one) surfaces ``None`` — age unknown."""
+    now_dt = parse_iso_utc(_NOW)
+    assert enqueue_age_sec(None, now_dt) is None
+    assert enqueue_age_sec("", now_dt) is None
+    assert enqueue_age_sec("last tuesday", now_dt) is None
+    assert enqueue_age_sec(1234567890, now_dt) is None  # a foreign writer's epoch int
+
+
+def test_pre_stamp_ledger_record_projects_age_unknown(tmp_path: Path) -> None:
+    """Additive across old ledgers: no stamp → no age, and the read alters nothing."""
+    legacy = {
+        "kind": "enqueue",
+        "item_id": "legacy-1",
+        "request_id": "legacy-1",
+        "state": "queued",
+    }
+    ledger = intake_path(tmp_path)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    before = ledger.read_bytes()
+
+    (item,) = queue_status(experiment_dir=tmp_path, spec=_spec()).items
+    assert item.item_id == "legacy-1"
+    assert item.enqueued_at == ""  # relayed as absent, not invented
+    assert item.age_sec is None
+    assert ledger.read_bytes() == before  # the old ledger stays byte-identical
 
 
 # ── ledger facts + the R1 projection ─────────────────────────────────────────

@@ -87,6 +87,7 @@ from hpc_agent.state.journal import is_held, load_run, read_pending_decision
 from hpc_agent.state.queue_intake import (
     STATE_PLACED,
     STATE_QUEUED,
+    enqueue_age_sec,
     fold_intake_records,
     intake_path_if_exists,
     read_intake_records_counted,
@@ -152,20 +153,6 @@ def _resource_ask(raw: Any) -> QueueResourceAsk:
         return QueueResourceAsk.model_validate(raw)
     except ValidationError:
         return QueueResourceAsk()
-
-
-def _age_sec(enqueued_at: str | None, now_dt: datetime) -> int | None:
-    """Seconds from *enqueued_at* to the read's single instant; ``None`` if unparseable.
-
-    §10.S3 accepts a real cost: a campaign item's trial params are chosen at
-    ENQUEUE, so a long-held item reflects the strategy's knowledge then, not
-    now. Age is how a human sees that the item has gone stale. Clamped at zero —
-    a clock skew must read as "just arrived", never as a negative age.
-    """
-    stamped = parse_iso_utc_or_none(enqueued_at)
-    if stamped is None:
-        return None
-    return max(0, int((now_dt - stamped).total_seconds()))
 
 
 def _collisions(items: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -374,7 +361,10 @@ def _build_item(
             state=item.get("state"),  # type: ignore[arg-type]
             enqueued_at=enqueued_at or "",
             updated_at=_text(item.get("updated_at")),
-            age_sec=_age_sec(enqueued_at, now_dt),
+            # The ONE age derivation, shared with the morning digest's queue
+            # section (§10.S3): the two surfaces a human reads must not compute
+            # "how long has this waited" two ways.
+            age_sec=enqueue_age_sec(enqueued_at, now_dt),
             run_name=_text(item.get("run_name")),
             run_id=run_id,
             campaign_base=_text(item.get("campaign_base")),

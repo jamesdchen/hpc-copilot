@@ -138,10 +138,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent._kernel.contract.layout import RepoLayout
 from hpc_agent.infra.io import append_jsonl_line
-from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
+    from datetime import datetime
 
 _log = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ __all__ = [
     "compaction_tombstones",
     "compaction_watermark",
     "compaction_watermark_path",
+    "enqueue_age_sec",
     "find_intake_item",
     "fold_intake_records",
     "intake_path",
@@ -573,6 +575,30 @@ def item_cmd_sha(item: dict[str, Any]) -> str | None:
     agreement from eight hex characters.
     """
     return _nonempty_str(item, "cmd_sha")
+
+
+def enqueue_age_sec(enqueued_at: Any, now_dt: datetime) -> int | None:
+    """Seconds from *enqueued_at* to *now_dt*'s single instant; ``None`` when unknown.
+
+    THE age derivation over the ledger's arrival stamp. §10.S3 accepts a real
+    cost — a campaign item's trial params are chosen at ENQUEUE, so the window
+    widens for items held pre-gate and a long-held item reflects the strategy's
+    knowledge then, not now — and names the mitigation: the surfaces a human
+    reads ("queue-status", the morning digest's queue section) show enqueue age
+    so the longest-waiting items are visible. Both surfaces call THIS function:
+    the age a brief relays and the age ``queue-status`` reports must be one
+    definition, and the renderer/LLM relays the number rather than doing date
+    math (the determinism boundary).
+
+    Tolerant like every reader here: a record written before the stamp existed,
+    or a value a foreign writer mangled, reads as ``None`` — age UNKNOWN,
+    surfaced as absent, never guessed. Clamped at zero so clock skew reads as
+    "just arrived", never as a negative age.
+    """
+    stamped = parse_iso_utc_or_none(enqueued_at if isinstance(enqueued_at, str) else None)
+    if stamped is None:
+        return None
+    return max(0, int((now_dt - stamped).total_seconds()))
 
 
 def compaction_watermark_path(experiment_dir: Path) -> Path:

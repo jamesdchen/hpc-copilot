@@ -193,6 +193,53 @@ def digest_run(record: Any) -> dict[str, Any]:
 # ── status-snapshot ──────────────────────────────────────────────────────────
 
 
+def _queued_age_rows(experiment_dir: Path, now_iso: str) -> list[dict[str, Any]]:
+    """Enqueue age for every still-``queued`` item, longest-waiting first (§10.S3).
+
+    The run-queue plan accepts a cost — "the window widens for items held
+    pre-gate, and the morning brief should show enqueue age for that reason"
+    (§10.S3) — so the digest shows which items have waited longest for a y.
+    ``queue-advance``'s rows are relayed VERBATIM (S13) and its wire model
+    carries no arrival stamp, so age rides BESIDE them: the ledger's own
+    ``enqueued_at`` relayed as stored, plus ``age_sec`` computed by the SAME
+    ``state/queue_intake.enqueue_age_sec`` that ``queue-status`` uses — one
+    derivation, never two, and the renderer/LLM relays the number rather than
+    doing date math (the determinism boundary).
+
+    A record written before the stamp existed surfaces ``age_sec: null`` — age
+    UNKNOWN, disclosed rather than guessed — and sorts after every known age.
+    Clipped to 10 rows like ``held``; ``queued_total`` keeps the clip visible.
+    The read is the tolerant, non-creating fold every queue projection uses.
+    """
+    from hpc_agent.state.queue_intake import (
+        STATE_QUEUED,
+        enqueue_age_sec,
+        items_in_states,
+        read_intake_items,
+    )
+
+    now_dt = parse_iso_utc_or_none(now_iso)
+    rows: list[dict[str, Any]] = []
+    for item in items_in_states(read_intake_items(experiment_dir), [STATE_QUEUED]):
+        item_id = item.get("item_id")
+        if not isinstance(item_id, str) or not item_id:
+            continue
+        enqueued_at = item.get("enqueued_at")
+        rows.append(
+            {
+                "item_id": item_id,
+                "enqueued_at": (
+                    enqueued_at if isinstance(enqueued_at, str) and enqueued_at else None
+                ),
+                "age_sec": enqueue_age_sec(enqueued_at, now_dt) if now_dt is not None else None,
+            }
+        )
+    # Oldest first (the items the human most needs to see), unknown ages last,
+    # item_id as the tie-break so two reads at one instant render identically.
+    rows.sort(key=lambda row: (row["age_sec"] is None, -(row["age_sec"] or 0), row["item_id"]))
+    return rows[:10]
+
+
 def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] | None:
     """The run-queue paragraph of the morning digest, or ``None`` when nothing is queued.
 
@@ -203,7 +250,10 @@ def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] |
     words, it never summarizes them, so this surface and a direct
     ``queue-advance`` call can never disagree. ``held`` is clipped to 10 rows
     with ``held_total`` keeping the clip visible (the bounded-projection
-    posture); ``held_counts`` still spans everything.
+    posture); ``held_counts`` still spans everything. ``queued_ages`` rides
+    beside the authority's rows (:func:`_queued_age_rows`): §10.S3's accepted
+    cost is that the enqueue→y window widens for items held pre-gate, so the
+    brief shows each queued item's enqueue age, oldest first.
 
     Additive + fail-open: an experiment with no queue, an unreadable ledger, or
     any read surprise yields ``None`` and the snapshot is byte-unchanged — a
@@ -214,9 +264,10 @@ def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] |
         from hpc_agent.ops.queue.advance import queue_advance
 
         decision = queue_advance(experiment_dir=experiment_dir, spec=QueueAdvanceSpec(now=now_iso))
+        if decision.queued_total <= 0:
+            return None
+        queued_ages = _queued_age_rows(experiment_dir, now_iso)
     except Exception:  # noqa: BLE001 — a queue read must never blank the digest
-        return None
-    if decision.queued_total <= 0:
         return None
     return {
         "queued_total": decision.queued_total,
@@ -226,6 +277,7 @@ def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] |
         "held_total": len(decision.held),
         "held_counts": dict(decision.held_counts),
         "occupancy": dict(decision.occupancy),
+        "queued_ages": queued_ages,
         "text": decision.brief,
     }
 
