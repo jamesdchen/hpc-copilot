@@ -1,9 +1,10 @@
 # Proving run #16 — runsheet (the lane-fleet live-fire, SGE-side)
 
-**Status: READY TO RUN** (wheel `0.11.3+g1ba0223d` fingerprint-verified on all
-four envs 2026-07-20, incl. Hoffman2). DOCS-ONLY plan. Base = `main`/`1ba0223d`
-(23 ahead of origin — push before or after, the run keys on the wheel not the
-remote). Companion: `docs/history/plans/proving-run-15-runsheet.md` (submit-once, PROVEN on Slurm
+**Status: READY TO RUN after wheel re-cut** (installed `0.11.3+g1ba0223d` is
+now several fix-waves stale — the 2026-07-27 transport/sign-off fixes, the
+registry verb-family merge, and the run-queue mega-wave all post-date it;
+re-cut from `main`/`a8ce9ce0` and re-verify the four-env fingerprint before the
+run). DOCS-ONLY plan. Companion: `docs/history/plans/proving-run-15-runsheet.md` (submit-once, PROVEN on Slurm
 2026-07-18; its §1 deploy discipline and §2.3 evidence-table style carry over).
 
 **Theme:** run 15 proved the submit-once contract on **discovery/Slurm only**.
@@ -70,16 +71,21 @@ First live R1–R3 exercise, during the user's normal notebook-audit prelude:
 2. **R1:** `notebook-audit-view` render shows the assertions leg greened with
    basis `sampled` — and tier stays `human_required` (sampled never auto-clears).
 3. **R2:** the render carries the `### preview (sampled dry-run)` block between
-   `### assertions` and `### lint flags` — relay VERBATIM; confirm the popup
-   carries it (it is the point: as accessible as the review itself).
+   `### assertions` and `### lint flags` — relay VERBATIM; confirm the relayed
+   audit-view render carries it (it is the point: as accessible as the review
+   itself). The popup leg is GONE — MCP elicitation was retired/removed
+   (PRs #24/#26; `docs/internals/harness-contract.md`), so the session's
+   verbatim relay of the render IS the sign-off surface.
 4. **R3:** capture `view_sha` before/after the sampled receipt lands —
    MUST be identical (presentation-only pin, live).
 5. Then full execution → full receipt → basis flips to `full` → auto-clear/
    sign-off proceed normally. **Pass:** no consumer ever treated `sampled` as
    `full`; the human saw the preview block in the actual sign-off surface.
-6. R4 (skill OFFERS the dry-run) is NOT live yet — the 4 SKILL.md edits are
-   still in pending-approvals. If approved before the run, watch the offer fire
-   after each nudge re-draft; else note "R4 pending" and move on.
+6. R4 (skill OFFERS the dry-run) is LIVE — the shipped
+   `hpc-notebook-audit` SKILL.md now mandates the draft → dry-run → revise →
+   audit preview loop in the prelude (no longer pending-approvals). Watch the
+   offer fire after each nudge re-draft; a prelude that skips the preview is a
+   finding.
 
 ## 3. Lane I live leg — the run-15 authorship findings, closed or not
 
@@ -138,6 +144,13 @@ Lane I's grant + home-log evidence reader is the designed fix. Live checks:
 
 ## Drift log
 
+- 2026-07-28/29: §2 re-baselined — the popup leg is obsolete (MCP elicitation
+  retired/removed, PRs #24/#26; the verbatim relay of the audit-view render is
+  the sign-off surface) and the "R4 pending" note was stale (the shipped
+  SKILL.md now mandates the dry-run preview loop in the prelude). Header
+  re-baselined too: main moved to `a8ce9ce0` (transport fixes, registry
+  verb-family merge, run-queue mega-wave); wheel re-cut + four-env fingerprint
+  re-verify is again a pre-flight gate.
 - 2026-07-20: Created, post lane-fleet merge (A–I + preview, main `1ba0223d`,
   wheel re-cut + 4-env fingerprint-verified same day). Grounded in run-15
   drift-log evidence and its open docket: SGE never live-fired, `-ac` token
