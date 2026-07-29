@@ -76,7 +76,7 @@ def test_walker_classifies_all_three_lanes(tmp_path: Path) -> None:
             # A genuine model-composed off-script mutation (ssh + qdel).
             _tool_use(
                 "Bash",
-                {"command": 'ssh.exe -o BatchMode=yes u@dtn "bash -lc \'qdel 111 222\'"'},
+                {"command": "ssh.exe -o BatchMode=yes u@dtn \"bash -lc 'qdel 111 222'\""},
                 "2026-07-27T08:06:00Z",
             ),
             # The 07-27 class: the human hand-submits via a !-prefix bash turn.

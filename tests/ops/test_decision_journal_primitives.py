@@ -1191,7 +1191,11 @@ def test_signoff_stale_utterance_refused_temporal_binding(tmp_path: Path) -> Non
     """Run-#12 finding 10 (the live false-pass): a prior prompt that happens to
     name the slug + diff identifiers is NOT attestation — candidates must
     post-date the render the human signs. The render's mtime is pushed forward
-    to make the pre-existing utterance unambiguously stale."""
+    to make the pre-existing utterance unambiguously stale. Since the
+    stale-vs-missing refusal split (the 2026-07-27 fix set), this shape gets
+    the STALE-specific message (named but predates the current render), not
+    the empty-pool "no ... utterance NAMES" one — the regex pins the temporal
+    wording itself."""
     import os as _os
     import time as _time
 
@@ -1204,7 +1208,10 @@ def test_signoff_stale_utterance_refused_temporal_binding(tmp_path: Path) -> Non
     future = _time.time() + 300
     _os.utime(render, times=(future, future))
     section_sha, view_sha = _nb_shas("model-fit")
-    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
+    with pytest.raises(
+        errors.SpecInvalid,
+        match="NAME the section slug .* but predate .* CURRENT render",
+    ):
         _signoff(
             tmp_path,
             section="model-fit",

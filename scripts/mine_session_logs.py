@@ -221,9 +221,7 @@ def render_markdown(events: list[Event]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("transcripts", nargs="*", type=Path, help="transcript .jsonl paths")
-    parser.add_argument(
-        "--project-dir", type=Path, help="a ~/.claude/projects/<slug> dir to scan"
-    )
+    parser.add_argument("--project-dir", type=Path, help="a ~/.claude/projects/<slug> dir to scan")
     parser.add_argument(
         "--last", type=int, default=0, help="with --project-dir: only the N most recent"
     )
