@@ -213,6 +213,33 @@ clean completion, never a review.
   `assert_greenlit_target` to `assert_greenlit_or_consented`, which
   threads `clean_predecessor` derived at the seat from the two readers.
 
+### Added — the diagnosing seat + the sentinel job (2026-07-29)
+
+- **Park-time diagnosis seam.** The third agent seat (after producing
+  and interpreting): a read-only investigator may enrich an anomaly park
+  with a provenance-marked advisory dossier
+  (`.hpc/runs/<run_id>.diagnosis.json`) the human reads at their
+  sitting. Kernel side is two verbs: `diagnosis-request` (pure read —
+  parked stage, failure-signature matches through THE existing
+  classifier, local read-paths only) and `attach-diagnosis` (ungated
+  mutate — advisory data spends nothing; closed category set; stamps
+  `authored_by: agent` itself with no caller seat to forge). Surfaces
+  carry POINTERS + counts only; advisory separation is pinned — the
+  decision-briefs file is byte-identical across an attach and the
+  dossier can never enter an answer menu. queue-drain instructs at most
+  3 investigators per pass, anomaly parks only, hard read-only bans;
+  a failed investigation leaves the park standing unenriched.
+- **W1 sentinel job** (crash-only-monitoring inversion #1, gated OFF by
+  default — `HPC_SENTINEL_JOB`, the telemetry-gate precedent): a tiny
+  scheduler-dependent job (`afterany` behind all wave arrays) writes the
+  shipped `.run_terminal` wake marker from the scheduler's own epilogue
+  knowledge — run-end detection becomes "stat one file" even when a
+  dispatcher dies mid-task; a premature fire is a harmless HINT the
+  census re-reads. Sentinel id lives on the separate sidecar field
+  `sentinel_job_id`; `job_ids` accounting everywhere is byte-identical;
+  submission is opportunistic and never fatal; flag off = byte-identical
+  submits (pinned).
+
 ### Added — two physical-latency legs: wave prefetch + completion-aware cadence (2026-07-29)
 
 The cadence audit's follow-through — after the y-count fell, the two
