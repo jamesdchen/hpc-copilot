@@ -1419,9 +1419,7 @@ def consume_boundary_under_consent(
     1), so the budget/walltime caps are enforced against real consumption; a caller
     that already knows the total passes it explicitly.
     """
-    if not is_consumable_boundary(
-        scope_kind, boundary_block, clean_predecessor=clean_predecessor
-    ):
+    if not is_consumable_boundary(scope_kind, boundary_block, clean_predecessor=clean_predecessor):
         reason = (
             "predecessor-not-clean"
             if boundary_block in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(scope_kind, frozenset())
