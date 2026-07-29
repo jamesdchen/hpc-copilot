@@ -42,14 +42,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from hpc_agent import errors
-from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.notebook_record_receipt import (
     NotebookRecordedReceipt,
     NotebookRecordReceiptResult,
     NotebookRecordReceiptSkipped,
     NotebookRecordReceiptSpec,
 )
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.audit_source import parse_percent_source
 
@@ -81,38 +79,11 @@ def _read_source_file(experiment_dir: Path, relpath: str) -> str:
         ) from exc
 
 
-@primitive(
-    name=_PRIMITIVE,
-    verb="mutate",
-    side_effects=[
-        SideEffect("file_write", "<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl"),
-    ],
-    error_codes=[errors.SpecInvalid],
-    # Append-only: each call journals a fresh receipt per known slug. A re-record
-    # at an unchanged sha appends a new line (the newest valid receipt wins on
-    # read), so retries are safe but not byte-idempotent — like append-decision.
-    idempotent=False,
-    cli=CliShape(
-        help=(
-            "Journal CODE render receipts for the sections of an audited source "
-            ".py — the emitter's evidence that a section was rendered (executed) "
-            "and whether its assertions errored. Parses the source ON DISK and "
-            "binds each receipt to the freshly-parsed section sha (a receipt can "
-            "only be recorded against current source, and drifts stale when the "
-            "section moves), then appends a notebook-render-receipt record "
-            "(attestor=code) per known slug. Unknown slugs are reported skipped. "
-            "notebook-auto-clear reads these journaled receipts (sha-fresh only) — "
-            "it never accepts an inline caller receipt. Freshness (the sha bind) is "
-            "recomputed here; output_sha/error stay caller-attested (D9), weighed "
-            "by the graduation consumers. Pure local read + journal append, no SSH."
-        ),
-        spec_arg=True,
-        experiment_dir_arg=True,
-        spec_model=NotebookRecordReceiptSpec,
-        schema_ref=SchemaRef(input="notebook_record_receipt"),
-    ),
-    agent_facing=True,
-)
+# Dispatched by the merged ``notebook-record`` verb
+# (``ops/notebook/record_op.py``) on ``kind: "receipt"``; no longer a
+# standalone registration. The seat's semantics (the parse IS the recompute,
+# append-only newest-valid-wins, unknown slugs skipped never fatal) are
+# unchanged and stay pinned by this module's tests.
 def notebook_record_receipt(
     *, experiment_dir: Path, spec: NotebookRecordReceiptSpec
 ) -> NotebookRecordReceiptResult:

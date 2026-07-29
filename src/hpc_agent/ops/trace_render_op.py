@@ -40,7 +40,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeGuard
 
 from hpc_agent import errors
-from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.trace_render import (
     TraceFeatureRow,
     TraceFlag,
@@ -49,7 +48,6 @@ from hpc_agent._wire.queries.trace_render import (
     TraceSketchRow,
     TraceWaterfallRow,
 )
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state import data_trace as dt
 from hpc_agent.state.runs import find_existing_runs, find_run_by_cmd_sha, read_run_sidecar
 
@@ -487,36 +485,14 @@ def _records_sha(records: Sequence[dict[str, Any]]) -> str:
     return dt.records_sha(list(records))
 
 
-# ── the primitive ─────────────────────────────────────────────────────────────
+# ── the entry point ───────────────────────────────────────────────────────────
+#
+# Dispatched by the merged ``trace`` verb (``ops/trace.py``) on
+# ``--spec {"mode": "render", ...}``; no longer a standalone registration. The
+# module keeps the whole implementation (and its data-trace design pins —
+# the never-judgment vocabulary pin scans THIS file) exactly as before.
 
 
-@primitive(
-    name="trace-render",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-    idempotency_key=None,
-    cli=CliShape(
-        help=(
-            "Render one task's data trace as FOUR deterministic markdown views — "
-            "row waterfall (with conservation flags), label-chain line, feature "
-            "lineage (col_set deltas + column births), and the sketch table "
-            "(value_sketch / null_count per column per stage) — under a "
-            "self-describing run/config header. Read-only, no SSH. Selectors "
-            "(exactly one): DIRECT {scope_kind, scope_id, task?}, or the REFERENCE "
-            "lookup {cmd_sha} / {profile} (latest-by via a sidecar join). Absence "
-            "is honest: 'no trace recorded for this scope' rides present/skipped, "
-            "never an error. The render carries NO verdict vocabulary — the trace "
-            "SHOWS, the scientist concludes; relay it verbatim."
-        ),
-        spec_arg=True,
-        experiment_dir_arg=True,
-        spec_model=TraceRenderSpec,
-        schema_ref=SchemaRef(input="trace_render"),
-    ),
-    agent_facing=True,
-)
 def trace_render(*, experiment_dir: Path, spec: TraceRenderSpec) -> TraceRenderResult:
     """Read one task's trace, join its sidecar, and render the four views.
 

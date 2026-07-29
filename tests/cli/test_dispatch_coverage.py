@@ -64,8 +64,8 @@ def _fast_path_on(monkeypatch: pytest.MonkeyPatch) -> None:
 # Representative rows: two identity rows (verb == primitive) and three
 # verb-OVERRIDE rows where the map key differs from the primitive name (the
 # CliShape.verb indirection — the "normalization" of this surface).
-_IDENTITY_ROWS = ["monitor-flow", "reproduce-run"]
-_OVERRIDE_ROWS = ["preflight", "reconcile", "discover"]
+_IDENTITY_ROWS = ["monitor-flow", "reproduce-run", "discover"]
+_OVERRIDE_ROWS = ["preflight", "reconcile"]
 
 
 # ── resolution table: exact module + primitive, and the unpack order ───────────

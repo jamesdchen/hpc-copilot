@@ -111,8 +111,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "conformance-status",
         "evidence-brief",
         "evidence-period",
-        "trace-diff",
-        "trace-render",
+        # trace (the merged verb): the bare lineage query needs no spec, but the
+        # optional --spec selects the render/diff data-trace projections, so
+        # the CLI surface accepts --spec and the empty-spec probes apply.
+        "trace",
         "pack-bind",
         "pack-record-receipt",
         "program-init",
@@ -234,23 +236,16 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # the verb does not appear in the schema-file-parametrized remediation tests
         # (_verb_targets), only in this inventory-vs-CLI drift check.
         "notebook-auto-clear",
-        # notebook-record-receipt (notebook-audit T10): the emitter's CODE
-        # render-receipt journaling verb. Spec-taking mutate; failure_features
+        # notebook-record (the merged journaling verb — kind=config, the
+        # run-#10 standalone-audit seat; kind=receipt, the notebook-audit T10
+        # render-receipt journaling). Spec-taking mutate; failure_features
         # attaches at the shared dispatch seam (so it stays OUT of
-        # XFAIL_NO_FAILURE_FEATURES). Its input schema (notebook_record_receipt.input.json)
-        # is baked by the orchestrator AFTER this wave — until then it is absent, so
-        # the verb does not appear in the schema-file-parametrized remediation tests
-        # (_verb_targets), only in this inventory-vs-CLI drift check.
-        "notebook-record-receipt",
-        # notebook-record-config (run-#10 standalone-audit seat): the journaled
-        # audit-configuration writer for audits with no interview audited_source
-        # opt-in. Spec-taking mutate; failure_features attaches at the shared
-        # dispatch seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES). Its
-        # input schema (notebook_record_config.input.json) is baked in the same
-        # commit, so it also appears in the schema-file-parametrized remediation
-        # probes ({} is invalid — audit_id/input_roots/source_roots are required
-        # — so the probe refuses at model validation, before any journal append).
-        "notebook-record-config",
+        # XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (notebook_record.input.json) is emitted in the same commit, so it
+        # also appears in the schema-file-parametrized remediation probes
+        # ({} is invalid — the kind discriminator is required — so the probe
+        # refuses at model validation, before any journal append).
+        "notebook-record",
         # notebook-scaffold-template: the content-free audit-template scaffold
         # writer. Spec-taking mutate; failure_features attaches at the shared
         # dispatch seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES). Its

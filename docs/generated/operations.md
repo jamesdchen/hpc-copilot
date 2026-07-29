@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**179 operations total**: 148 primitive atoms + 31 workflow atoms.
+**174 operations total**: 143 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (80)
+## `query` (76)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -50,9 +50,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name> [--schema]` | `_(none)_` | — | — |
 | [`detect-entry-point`](../primitives/detect-entry-point.md) | ✓ | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` | `_(none)_` | — | — |
 | [`dir-digest`](../primitives/dir-digest.md) | ✓ | ssh | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`discover-executors`](../primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `_(none)_` | — | — |
-| [`discover-reducers`](../primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`discover-runs`](../primitives/discover-runs.md) | ✓ | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`discover`](../primitives/discover.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--kind <kind>] [--search-dirs <search_dirs>]` | `_(none)_` | — | — |
 | [`doctor`](../primitives/doctor.md) | ✓ | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`evidence-brief`](../primitives/evidence-brief.md) | ✓ | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`evidence-period`](../primitives/evidence-period.md) | ✓ | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -89,9 +87,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`stray-sweep`](../primitives/stray-sweep.md) | ✓ | ssh | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` | `_(none)_` | — | — |
 | [`suggest-setup-action`](../primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`summarize-submit-plan`](../primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `_(none)_` | — | — |
-| [`trace`](../primitives/trace.md) | ✓ | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` | `_(none)_` | — | — |
-| [`trace-diff`](../primitives/trace-diff.md) | ✓ | _none_ | `hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`trace-render`](../primitives/trace-render.md) | ✓ | _none_ | `hpc-agent trace-render --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`trace`](../primitives/trace.md) | ✓ | _none_ | `hpc-agent trace [--spec <path>] [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` | `_(none)_` | — | — |
 | [`verify-aggregation-complete`](../primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` | `_(none)_` | — | — |
 | [`verify-registration`](../primitives/verify-registration.md) | ✓ | _none_ | `hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-relay`](../primitives/verify-relay.md) | ✓ | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -125,7 +121,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (35)
+## `mutate` (34)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -150,8 +146,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`notebook-auto-clear`](../primitives/notebook-auto-clear.md) | ✓ | file_write | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-draft`](../primitives/notebook-draft.md) | ✗ | file_write | `hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-dry-run`](../primitives/notebook-dry-run.md) | ✗ | file_write | `hpc-agent notebook-dry-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`notebook-record-config`](../primitives/notebook-record-config.md) | ✗ | file_write | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`notebook-record-receipt`](../primitives/notebook-record-receipt.md) | ✗ | file_write | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`notebook-record`](../primitives/notebook-record.md) | ✗ | file_write | `hpc-agent notebook-record --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-scaffold-template`](../primitives/notebook-scaffold-template.md) | ✗ | file_write | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`pack-bind`](../primitives/pack-bind.md) | ✗ | file_write | `hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`pack-record-receipt`](../primitives/pack-record-receipt.md) | ✗ | file_write | `hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

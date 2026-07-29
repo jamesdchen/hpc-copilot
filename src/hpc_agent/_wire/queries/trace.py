@@ -1,27 +1,47 @@
-"""Envelope-data model for the ``trace`` query verb.
+"""Envelope-data models for the merged ``trace`` query verb.
 
-``trace`` joins the per-run journal records, the per-run sidecars, and the
-signable provenance manifest into one *derived* execution DAG — the
-"explain exactly what produced this result, and in what order" surface. The
-trace is recomputed from disk on every call (like ``provenance-manifest``),
-so it is always consistent with the runs on disk rather than a second source
-of truth that can drift.
+``trace`` is one verb with three modes:
 
-The node/edge payloads are kept as ``list[dict[str, Any]]`` (the same loose
-shape ``campaign.output.json`` uses for per-iteration history): nodes are
-heterogeneous by ``kind`` (``campaign`` / ``run`` / ``wave``) and over-
+* the default **lineage** query (``--campaign-id`` / ``--run-id`` /
+  ``--format``) joins the per-run journal records, the per-run sidecars, and
+  the signable provenance manifest into one *derived* execution DAG — the
+  "explain exactly what produced this result, and in what order" surface,
+  recomputed from disk on every call (like ``provenance-manifest``) so it is
+  always consistent with the runs on disk rather than a second source of
+  truth that can drift;
+* ``--spec {"mode": "render", ...}`` — the four data-trace projections
+  (``docs/design/data-trace.md`` T5), implemented in
+  :mod:`hpc_agent.ops.trace_render_op`;
+* ``--spec {"mode": "diff", ...}`` — the two-trace first-divergence overlay
+  (data-trace Projection 5), implemented in
+  :mod:`hpc_agent.ops.trace_diff_op`.
+
+The render/diff spec + result shapes stay authored in their own wire modules
+(:mod:`hpc_agent._wire.queries.trace_render` /
+:mod:`hpc_agent._wire.queries.trace_diff` — the data-trace design pins live
+against those files); this module only wraps them into the merged verb's
+``trace.input.json`` / ``trace.output.json`` union. The wrapped classes are
+listed in ``scripts/build_schemas.py``'s embedded-sub-model skip set so they
+no longer emit standalone per-verb schema files.
+
+The lineage node/edge payloads are kept as ``list[dict[str, Any]]`` (the same
+loose shape ``campaign.output.json`` uses for per-iteration history): nodes
+are heterogeneous by ``kind`` (``campaign`` / ``run`` / ``wave``) and over-
 constraining them in the wire schema would buy nothing — the consumer
 dispatches on ``kind``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
+
+from hpc_agent._wire.queries.trace_diff import TraceDiffResult, TraceDiffSpec
+from hpc_agent._wire.queries.trace_render import TraceRenderResult, TraceRenderSpec
 
 
-class TraceResult(BaseModel):
+class TraceLineageResult(BaseModel):
     """Returned by ``hpc-agent trace --campaign-id <id>`` / ``--run-id <id>``."""
 
     model_config = ConfigDict(extra="forbid", title="trace output")
@@ -78,3 +98,35 @@ class TraceResult(BaseModel):
             "format, null otherwise. Pipe it to `dot -Tsvg` to draw the graph."
         ),
     )
+
+
+class TraceRenderProjection(TraceRenderSpec):
+    """The render mode's spec: :class:`TraceRenderSpec` plus the discriminator."""
+
+    mode: Literal["render"]
+
+
+class TraceDiffProjection(TraceDiffSpec):
+    """The diff mode's spec: :class:`TraceDiffSpec` plus the discriminator."""
+
+    mode: Literal["diff"]
+
+
+class TraceSpec(
+    RootModel[Annotated[TraceRenderProjection | TraceDiffProjection, Field(discriminator="mode")]]
+):
+    """The merged verb's optional ``--spec``: a mode-discriminated projection.
+
+    The bare lineage query takes no spec (``--campaign-id`` / ``--run-id``
+    args only); ``mode: render`` / ``mode: diff`` select the data-trace
+    projections. Emitted as ``trace.input.json``.
+    """
+
+
+class TraceResult(RootModel[TraceLineageResult | TraceDiffResult | TraceRenderResult]):
+    """The merged verb's output union — one shape per mode.
+
+    Emitted as ``trace.output.json``; the runtime ``validate_output`` gate and
+    external consumers validate whichever mode's payload was returned against
+    this union.
+    """

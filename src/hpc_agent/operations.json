@@ -273,30 +273,16 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]",
+    "cli": "hpc-agent notebook-record --spec <path> [--experiment-dir <dir>]",
     "idempotent": false,
-    "input_schema": "notebook_record_config.input.json",
-    "name": "notebook-record-config",
-    "output_schema": "notebook_record_config.output.json",
-    "python": "hpc_agent.ops.notebook.record_config_op.notebook_record_config",
+    "input_schema": "notebook_record.input.json",
+    "name": "notebook-record",
+    "output_schema": "notebook_record.output.json",
+    "python": "hpc_agent.ops.notebook.record_op.notebook_record",
     "side_effects": [
       "file_write"
     ],
-    "summary": "Record the audit configuration (input_roots / source_roots / attention_order / output_roots - opaque relpath lists) for a STANDALONE notebook audit, as a journaled record in the audit's own decision journal. Without it a standalone audit (no interview.json audited_source opt-in) runs ROOTLESS-canonical: the lint recomputes with empty roots and the template-mandated source_roots engine-drift binding is silently inactive (run #10). The canonical view reads the interview block FIRST when present (the opt-in path owns the config), else this journaled record. Refuses when interview.json already carries audited_source for this audit_id (one source of truth) and when a config record already exists (immutable-per-audit - supersede with a NEW audit_id). Recording into an audit that already has journal entries succeeds with a LOUD warning: every view_sha moves, prior sign-offs read stale. Optionally carries the audit-OPEN intent (goal + task_axes - the free-text campaign goal and the names of what varies across tasks) on the same immutable seat, the durable record audit-handoff reads (absent = byte-identical). Pure local read + journal append, no SSH.",
-    "verb": "mutate"
-  },
-  {
-    "agent_facing": true,
-    "cli": "hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]",
-    "idempotent": false,
-    "input_schema": "notebook_record_receipt.input.json",
-    "name": "notebook-record-receipt",
-    "output_schema": "notebook_record_receipt.output.json",
-    "python": "hpc_agent.ops.notebook.record_receipt_op.notebook_record_receipt",
-    "side_effects": [
-      "file_write"
-    ],
-    "summary": "Journal CODE render receipts for the sections of an audited source .py — the emitter's evidence that a section was rendered (executed) and whether its assertions errored. Parses the source ON DISK and binds each receipt to the freshly-parsed section sha (a receipt can only be recorded against current source, and drifts stale when the section moves), then appends a notebook-render-receipt record (attestor=code) per known slug. Unknown slugs are reported skipped. notebook-auto-clear reads these journaled receipts (sha-fresh only) — it never accepts an inline caller receipt. Freshness (the sha bind) is recomputed here; output_sha/error stay caller-attested (D9), weighed by the graduation consumers. Pure local read + journal append, no SSH.",
+    "summary": "Journal one notebook-audit record; the spec's `kind` selects the seat. kind=config: record the audit configuration (input_roots / source_roots / attention_order / output_roots - opaque relpath lists) for a STANDALONE audit — without it the audit runs ROOTLESS-canonical (run #10). The canonical view reads the interview block FIRST when present (the opt-in path owns the config), else this journaled record; refuses when interview.json already carries audited_source for this audit_id or when a config record already exists (immutable-per-audit - supersede with a NEW audit_id); recording into an audit with existing journal entries succeeds with a LOUD warning (every view_sha moves, prior sign-offs read stale). kind=receipt: journal CODE render receipts for the sections of an audited source .py — parses the source ON DISK and binds each receipt to the freshly-parsed section sha (a receipt can only be recorded against current source and drifts stale when the section moves); unknown slugs are reported skipped; output_sha/error stay caller-attested (D9), weighed by the graduation consumers. Both kinds: pure local read + journal append, no SSH.",
     "verb": "mutate"
   },
   {
@@ -869,38 +855,14 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]",
+    "cli": "hpc-agent discover [--experiment-dir <dir>] [--kind <kind>] [--search-dirs <search_dirs>]",
     "idempotent": true,
     "input_schema": null,
-    "name": "discover-executors",
+    "name": "discover",
     "output_schema": "discover.output.json",
-    "python": "hpc_agent.state.discover.discover_executors",
+    "python": "hpc_agent.state.discover.discover",
     "side_effects": [],
-    "summary": "List executor scripts in --experiment-dir (CLIs with __main__).",
-    "verb": "query"
-  },
-  {
-    "agent_facing": false,
-    "cli": "hpc-agent discover-reducers [--experiment-dir <dir>]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "discover-reducers",
-    "output_schema": null,
-    "python": "hpc_agent.state.discover.discover_reducers",
-    "side_effects": [],
-    "summary": "List candidate reducer / aggregator scripts in --experiment-dir (matches by filename stem and top-level function names like aggregate / reduce / score). Use at /aggregate-hpc time to find an existing reducer instead of writing a fresh one.",
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
-    "cli": "hpc-agent discover-runs [--experiment-dir <dir>]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "discover-runs",
-    "output_schema": null,
-    "python": "hpc_agent.state.discover.discover_runs",
-    "side_effects": [],
-    "summary": "List @register_run functions under --experiment-dir (path, name, gpu, sha, flags).",
+    "summary": "Scan --experiment-dir for one kind of artifact. --kind executors (default): executor scripts (compute(args) exports, or CLIs with __main__). --kind runs: @register_run functions (path, name, gpu, sha, flags). --kind reducers: candidate reducer / aggregator scripts (by filename stem and top-level function names like aggregate / reduce / score) — use at /aggregate-hpc time to find an existing reducer instead of writing a fresh one. Pure local scan, no SSH; the result carries `kind` plus the matching key (executors / runs / reducers).",
     "verb": "query"
   },
   {
@@ -1356,38 +1318,14 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]",
+    "cli": "hpc-agent trace [--spec <path>] [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]",
     "idempotent": true,
-    "input_schema": null,
+    "input_schema": "trace.input.json",
     "name": "trace",
     "output_schema": "trace.output.json",
     "python": "hpc_agent.ops.trace.trace",
     "side_effects": [],
-    "summary": "Assemble a derived execution DAG for a campaign (--campaign-id) or a single run's lineage (--run-id) by joining the per-run journal records, the per-run sidecars, and the signable provenance manifest. Read-only, no SSH. --format dag (default) emits run + wave nodes and member/derived-from/contains edges; --format flat emits the run list only; --format dot adds a Graphviz `dot` string.",
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
-    "cli": "hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]",
-    "idempotent": true,
-    "input_schema": "trace_diff.input.json",
-    "name": "trace-diff",
-    "output_schema": "trace_diff.output.json",
-    "python": "hpc_agent.ops.trace_diff_op.trace_diff",
-    "side_effects": [],
-    "summary": "Overlay TWO traces from the local store and report, per stage and per atom, where their measurements diverge — dispatched through the ONE semantics registry (exact / set-delta / tolerance / exact-per-key / equality-chain / exact-endpoints). Highlights the FIRST diverging (stage, atom). Read-only, no SSH. Differences are FACTS (`row_count rows 100 → 90`), never verdicts; absence is disclosed. Tolerance is caller-owned (absent → exact).",
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
-    "cli": "hpc-agent trace-render --spec <path> [--experiment-dir <dir>]",
-    "idempotent": true,
-    "input_schema": "trace_render.input.json",
-    "name": "trace-render",
-    "output_schema": "trace_render.output.json",
-    "python": "hpc_agent.ops.trace_render_op.trace_render",
-    "side_effects": [],
-    "summary": "Render one task's data trace as FOUR deterministic markdown views — row waterfall (with conservation flags), label-chain line, feature lineage (col_set deltas + column births), and the sketch table (value_sketch / null_count per column per stage) — under a self-describing run/config header. Read-only, no SSH. Selectors (exactly one): DIRECT {scope_kind, scope_id, task?}, or the REFERENCE lookup {cmd_sha} / {profile} (latest-by via a sidecar join). Absence is honest: 'no trace recorded for this scope' rides present/skipped, never an error. The render carries NO verdict vocabulary — the trace SHOWS, the scientist concludes; relay it verbatim.",
+    "summary": "One trace verb, three modes. Default (no --spec): assemble a derived execution DAG for a campaign (--campaign-id) or a single run's lineage (--run-id) by joining the per-run journal records, the per-run sidecars, and the signable provenance manifest; --format dag (default) emits run + wave nodes and member/derived-from/contains edges, flat emits the run list only, dot adds a Graphviz `dot` string. --spec {\"mode\": \"render\", ...}: render one task's data trace as the four deterministic markdown views (row waterfall with conservation flags, label-chain line, feature lineage, sketch table) under a self-describing header — the render carries NO verdict vocabulary; the trace SHOWS, the scientist concludes; relay it verbatim; absence is honest (present/skipped, never an error). --spec {\"mode\": \"diff\", ...}: overlay TWO traces and report, per stage and per atom, where their measurements diverge — dispatched through the ONE semantics registry, highlighting the FIRST diverging (stage, atom); differences are FACTS (`row_count rows 100 → 90`), never verdicts; tolerance is caller-owned (absent → exact). All modes are read-only local reads, no SSH.",
     "verb": "query"
   },
   {
@@ -1611,7 +1549,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
-    "summary": "Composite head of hpc-classify-axis: preflight (discover-runs + cache-check + recall) → classify-axis-easy → classify-axis recorder, in ONE call. Resolves the single @register_run, then branches: caller data_axis (interview) / cache hit (reuse) / recall structural match / a confident AST match (agent) all record into .hpc/axes.yaml; an unclassifiable/function_not_found matcher verdict records NOTHING and returns {needs_llm_tree: true, source_path, run_name, run_signature_sha, evidence, tried} so the caller walks the LLM decision tree. The LLM makes one call and only works the genuine long tail.",
+    "summary": "Composite head of hpc-classify-axis: preflight (discover --kind runs + cache-check + recall) → classify-axis-easy → classify-axis recorder, in ONE call. Resolves the single @register_run, then branches: caller data_axis (interview) / cache hit (reuse) / recall structural match / a confident AST match (agent) all record into .hpc/axes.yaml; an unclassifiable/function_not_found matcher verdict records NOTHING and returns {needs_llm_tree: true, source_path, run_name, run_signature_sha, evidence, tried} so the caller walks the LLM decision tree. The LLM makes one call and only works the genuine long tail.",
     "verb": "scaffold"
   },
   {
@@ -1759,7 +1697,7 @@
     "output_schema": "classify_axis_preflight.output.json",
     "python": "hpc_agent.ops.classify_axis_preflight.classify_axis_preflight",
     "side_effects": [],
-    "summary": "Composite preflight at the top of classify-axis: discover-runs + cache-check (axes.yaml reuse) + (when no cache hit and no caller-supplied data_axis) recall, sequenced, returned as one envelope.",
+    "summary": "Composite preflight at the top of classify-axis: discover --kind runs + cache-check (axes.yaml reuse) + (when no cache hit and no caller-supplied data_axis) recall, sequenced, returned as one envelope.",
     "verb": "validate"
   },
   {

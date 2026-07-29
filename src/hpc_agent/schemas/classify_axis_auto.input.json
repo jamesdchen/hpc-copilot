@@ -16,7 +16,7 @@
         }
       ],
       "default": null,
-      "description": "The @register_run function to classify. When omitted, the composite resolves it from discover-runs: if exactly one run exists it is used; if several exist, the composite returns spec_invalid (ambiguous_run) listing the candidates.",
+      "description": "The @register_run function to classify. When omitted, the composite resolves it from the runs discovery: if exactly one run exists it is used; if several exist, the composite returns spec_invalid (ambiguous_run) listing the candidates.",
       "title": "Run Name"
     },
     "data_axis": {

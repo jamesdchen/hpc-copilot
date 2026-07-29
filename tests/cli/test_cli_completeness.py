@@ -34,7 +34,6 @@ _PRIMITIVE_TO_CLI_VERB: dict[str, str] = {
     "check-preflight": "preflight",
     "reconcile-journal": "reconcile",
     "resubmit-failed": "resubmit",
-    "discover-executors": "discover",
     # Verb-group children — space-separated form is what `_live_subcommands`
     # surfaces for nested subparsers (``hpc-agent campaign init`` etc.).
     "campaign-init": "campaign init",

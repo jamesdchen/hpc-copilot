@@ -17,6 +17,39 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Changed — BREAKING: verb-surface consolidation, no deprecation cycle (2026-07-29)
+
+Seven registrations collapsed into three merged verbs (179 → 174 primitives;
+user-ordered immediate merge-and-delete, skipping the deprecation ledger). The
+implementations, their tests, and their design pins stay in place — only the
+registration/CLI/wire surface merged; each old verb's spec + result shapes are
+embedded in the merged verb's schema union (`build_schemas.py` skip-set
+entries) rather than emitted as standalone files:
+
+- **`discover`** replaces `discover-executors` / `discover-runs` /
+  `discover-reducers`: `--kind executors|runs|reducers` (default `executors`,
+  so bare `hpc-agent discover` behaves as before apart from a new `kind`
+  result field). Each kind keeps its historical result key, so `data.runs`
+  etc. consumers are unaffected; `--search-dirs` with `--kind runs` is refused
+  loudly. `classify-axis-preflight` now subprocesses `discover --kind runs`
+  (its `discover_runs` sub-result slot is unchanged).
+- **`trace`** absorbs `trace-diff` / `trace-render` as spec modes: the bare
+  lineage query is unchanged; `--spec {"mode": "render"|"diff", ...}` selects
+  the data-trace projections (`trace.input.json` is the mode-discriminated
+  union; `trace.output.json` the per-mode result union). A spec combined with
+  `--campaign-id`/`--run-id` is refused.
+- **`notebook-record`** replaces `notebook-record-config` /
+  `notebook-record-receipt`: one kind-discriminated spec
+  (`kind: "config"|"receipt"`) dispatching to the unchanged seats. The MCP
+  curated/audit-loop verb lists and the `hpc-notebook-audit` skill now name
+  the merged verb.
+
+Removed schema files: `trace_diff.*`, `trace_render.*`,
+`notebook_record_config.*`, `notebook_record_receipt.*` (their shapes live on
+inside the union schemas). There is no alias or forwarder for the deleted
+verb names — an external caller of one gets the CLI's unknown-verb error and
+should consult `hpc-agent find` / `describe`.
+
 ### Added — agent reincorporation at the recon-only level (2026-07-27)
 
 Per `docs/plans/agent-delegation-2026-07-27.md` (user-ordered: "reincorporate

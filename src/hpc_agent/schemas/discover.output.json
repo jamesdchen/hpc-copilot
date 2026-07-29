@@ -4,16 +4,63 @@
   "title": "discover output data",
   "type": "object",
   "required": [
-    "executors"
+    "kind"
   ],
   "additionalProperties": false,
   "properties": {
+    "kind": {
+      "enum": [
+        "executors",
+        "runs",
+        "reducers"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
     "executors": {
-      "items": {
-        "$ref": "#/$defs/_ExecutorEntry"
-      },
-      "title": "Executors",
-      "type": "array"
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_ExecutorEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Executors"
+    },
+    "runs": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_RunEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runs"
+    },
+    "reducers": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_ReducerEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reducers"
     }
   },
   "$defs": {
@@ -51,6 +98,82 @@
         "has_main_guard"
       ],
       "title": "_ExecutorEntry",
+      "type": "object"
+    },
+    "_ReducerEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "matches": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Matches",
+          "type": "array"
+        },
+        "docstring": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Docstring"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "matches"
+      ],
+      "title": "_ReducerEntry",
+      "type": "object"
+    },
+    "_RunEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "gpu": {
+          "title": "Gpu",
+          "type": "boolean"
+        },
+        "run_signature_sha": {
+          "title": "Run Signature Sha",
+          "type": "string"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "gpu",
+        "run_signature_sha",
+        "flags"
+      ],
+      "title": "_RunEntry",
       "type": "object"
     }
   }

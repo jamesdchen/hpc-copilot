@@ -1,7 +1,7 @@
 """Pydantic models for the ``classify-axis-auto`` composite scaffold.
 
 ``classify-axis-auto`` collapses the deterministic head of the
-``hpc-classify-axis`` skill — preflight (``discover-runs`` + cache-check +
+``hpc-classify-axis`` skill — preflight (``discover --kind runs`` + cache-check +
 ``recall``) → the fast-path AST matcher (``classify-axis-easy``) → the
 ``classify-axis`` recorder — into ONE call. The LLM makes one tool call
 and only does work on the genuine long tail (an ``unclassifiable`` /
@@ -35,7 +35,7 @@ class ClassifyAxisAutoInput(BaseModel):
         default=None,
         description=(
             "The @register_run function to classify. When omitted, the "
-            "composite resolves it from discover-runs: if exactly one run "
+            "composite resolves it from the runs discovery: if exactly one run "
             "exists it is used; if several exist, the composite returns "
             "spec_invalid (ambiguous_run) listing the candidates."
         ),

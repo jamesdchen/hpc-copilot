@@ -338,6 +338,11 @@ _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "VerifyReproductionSpec": {"original_run_id": "orig-run"},
     "EvidenceBriefSpec": {"tags": ["x"]},
     "TraceRenderSpec": {"scope_kind": "run", "scope_id": "x"},
+    # TraceSpec is the merged trace verb's mode-discriminated RootModel; the
+    # per-field synthesizer cannot pick a union branch, so supply a complete
+    # render-mode projection (same exactly-one-selector rule as
+    # TraceRenderSpec above, plus the discriminator).
+    "TraceSpec": {"root": {"mode": "render", "scope_kind": "run", "scope_id": "x"}},
     # ChallengeStatusSpec requires EXACTLY ONE addressing mode; the generic
     # synthesizer sets none (all fields optional), so supply one valid mode.
     "ChallengeStatusSpec": {"challenge_id": "x"},
@@ -363,13 +368,20 @@ _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
 
 
 def _synthesize_minimal(model: type[BaseModel]) -> BaseModel:
-    """Build a minimal valid instance by walking required fields."""
+    """Build a minimal valid instance by walking required fields.
+
+    Override-supplied fields are skipped rather than resolved-then-replaced:
+    an override often exists precisely because ``_resolve`` cannot synthesize
+    that field (e.g. a mode-discriminated RootModel union), so resolving it
+    first would raise before the override ever applied.
+    """
+    overrides = _CROSS_FIELD_OVERRIDES.get(model.__name__, {})
     kwargs: dict[str, Any] = {}
     for name, info in model.model_fields.items():
-        if not info.is_required():
+        if name in overrides or not info.is_required():
             continue
         kwargs[name] = _resolve(info.annotation, list(info.metadata))
-    kwargs.update(_CROSS_FIELD_OVERRIDES.get(model.__name__, {}))
+    kwargs.update(overrides)
     return model(**kwargs)
 
 

@@ -33,7 +33,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.trace_diff import (
     FirstDivergence,
     TraceDiffResult,
@@ -42,7 +41,6 @@ from hpc_agent._wire.queries.trace_diff import (
     TraceKey,
     TraceTolerance,
 )
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state.data_trace import (
     ATOM_REGISTRY,
     QUANTILE_KEYS,
@@ -408,33 +406,15 @@ def render_trace_diff(result: TraceDiffResult) -> str:
     return "\n".join(lines) + "\n"
 
 
-# --- the primitive -----------------------------------------------------------
+# --- the entry point ---------------------------------------------------------
+#
+# Dispatched by the merged ``trace`` verb (``ops/trace.py``) on
+# ``--spec {"mode": "diff", ...}``; no longer a standalone registration. The
+# module keeps the whole implementation (and its data-trace design pins —
+# the route-through comparison_for dispatch and the facts-not-verdicts
+# vocabulary) exactly as before.
 
 
-@primitive(
-    name="trace-diff",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-    agent_facing=True,
-    cli=CliShape(
-        help=(
-            "Overlay TWO traces from the local store and report, per stage and "
-            "per atom, where their measurements diverge — dispatched through the "
-            "ONE semantics registry (exact / set-delta / tolerance / "
-            "exact-per-key / equality-chain / exact-endpoints). Highlights the "
-            "FIRST diverging (stage, atom). Read-only, no SSH. Differences are "
-            "FACTS (`row_count rows 100 → 90`), never verdicts; absence is "
-            "disclosed. Tolerance is caller-owned (absent → exact)."
-        ),
-        spec_arg=True,
-        spec_model=TraceDiffSpec,
-        experiment_dir_arg=True,
-        requires_ssh=False,
-        schema_ref=SchemaRef(input="trace_diff"),
-    ),
-)
 def trace_diff(experiment_dir: Path, *, spec: TraceDiffSpec) -> TraceDiffResult:
     """Overlay two store traces; localize + render the first divergence.
 

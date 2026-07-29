@@ -83,7 +83,7 @@ run the mature-repo fallback probe — without a native Read/Glob tool:
   `materialized.data_axis` (when present) into the axes write. Skip the
   discover scan.
 - `materialized.kind == "register_run"` / `"python_module"` — pointers
-  (no wrapper materialized); fall through to normal `discover-runs`,
+  (no wrapper materialized); fall through to normal `discover --kind runs`,
   scoped to `run_name` or `module`/`function`.
 
 The verb reads `interview.json` from the experiment-dir root (the

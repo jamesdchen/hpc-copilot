@@ -158,9 +158,12 @@ _CURATED_EXTRA_VERBS = frozenset(
         # ``notebook-auto-clear`` — the CODE-attestor clearance mutate (recorded
         # roots only; the laundering guard enforces at invocation).
         "notebook-auto-clear",
-        # ``notebook-record-receipt`` — the emitter's sha-bound render-receipt
-        # journaling; unreachable, an emitter reaches for ``python -c``.
-        "notebook-record-receipt",
+        # ``notebook-record`` — the merged journaling verb (kind=receipt: the
+        # emitter's sha-bound render-receipt journaling — unreachable, an
+        # emitter reaches for ``python -c``; kind=config: the standalone
+        # audit's config seat, the run-#10 rootless-canonical fix —
+        # unreachable it would be the next hand-authored spec JSON).
+        "notebook-record",
         # ``notebook-draft-context`` — the deterministic drafting projection
         # (draft-context design): template slugs, resolved engines, call sites,
         # root inventories — the mechanized run-#10 drafting brief.
@@ -170,10 +173,6 @@ _CURATED_EXTRA_VERBS = frozenset(
         # ``notebook-scaffold-template`` — the content-free template scaffold
         # that opens an audit.
         "notebook-scaffold-template",
-        # ``notebook-record-config`` — the standalone audit's config seat (the
-        # run-#10 rootless-canonical fix); unreachable it would be the next
-        # hand-authored spec JSON.
-        "notebook-record-config",
         # ``notebook-dry-run`` — the sampled preview run (drafting prelude);
         # human-sequenced like the rest of the audit loop (no ``next_block``),
         # unioned explicitly — unreachable, the agent execs the source by hand
