@@ -17,6 +17,25 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Removed — BREAKING: two inert primitives deleted after verification (2026-07-29)
+
+Both flagged inert in the agent_facing reachability audit, then resolved by
+investigation rather than kept-by-default (the verify-a-guard-can-fire rule):
+
+- **`decide-resubmit`** — superseded by design. Its only non-trivial branch
+  required `resubmit_failed_threshold > 0`, a knob no spec field, config, or
+  caller anywhere supplies, and the shipped posture is explicit that silent
+  auto-resubmit is not a code path (the recommendation surface is the
+  categorical anomaly table in `status-snapshot`). Hand-authored
+  `decide_resubmit.*` schemas removed with it.
+- **`validate-self-qos-limit`** — never wireable. Its designed feeder (the
+  skill fetching `squeue` / `sacctmgr show qos` raw) was eliminated by the
+  no-raw-ssh affordance removal, and no throttled verb exposes
+  `MaxJobsPerUser`, so the guard could not fire from any surface. The
+  lesson-6 self-DOS bug class it covered is recorded as knowingly unguarded
+  in `docs/plans/backlog-2026-07-17.md` §4 (needs a Slurm QoS-cap probe verb
+  first); the pure validator logic is recoverable from git history.
+
 ### Changed — BREAKING: verb-surface consolidation, no deprecation cycle (2026-07-29)
 
 Seven registrations collapsed into three merged verbs (179 → 174 primitives;

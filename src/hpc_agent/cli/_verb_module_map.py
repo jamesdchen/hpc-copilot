@@ -55,7 +55,6 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'decide-concurrency': ('decide-concurrency', 'hpc_agent.meta.campaign.atoms.decide_concurrency'),
     'decide-monitor-arm': ('decide-monitor-arm', 'hpc_agent.ops.monitor.arm'),
     'decide-partial-handling': ('decide-partial-handling', 'hpc_agent.ops.aggregate.decide_partial_handling'),
-    'decide-resubmit': ('decide-resubmit', 'hpc_agent.ops.decide_resubmit'),
     'decorate-entry-point': ('decorate-entry-point', 'hpc_agent.incorporation.decorate_entry_point'),
     'describe': ('describe', 'hpc_agent.cli.setup'),
     'detect-entry-point': ('detect-entry-point', 'hpc_agent.ops.detect_entry_point'),

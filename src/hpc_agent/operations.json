@@ -819,18 +819,6 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]",
-    "idempotent": true,
-    "input_schema": "decide_resubmit.input.json",
-    "name": "decide-resubmit",
-    "output_schema": "decide_resubmit.output.json",
-    "python": "hpc_agent.ops.decide_resubmit.decide_resubmit",
-    "side_effects": [],
-    "summary": "Decide complete / resubmit / escalate for a terminal-with-failures wave from observable evidence: failed-task count, total-task count, and the resubmit_failed_threshold. failed_fraction == 0 is actually complete; <= threshold auto-resubmits; > threshold escalates the resubmit/investigate/abandon choice (safe_default investigate) rather than wasting cluster time re-running the same bug. The default threshold is 0.0 — every failure escalates unless the caller opts into auto-resubmit by passing a threshold > 0. Replaces hpc-status Step 6 prose.",
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
     "cli": "hpc-agent describe <name> [--schema]",
     "idempotent": true,
     "input_schema": null,
@@ -1833,18 +1821,6 @@
     "name": "validate-scaffold-staleness",
     "output_schema": "validate_scaffold_staleness.output.json",
     "python": "hpc_agent.ops.validate.scaffold_staleness.validate_scaffold_staleness",
-    "side_effects": [],
-    "summary": "",
-    "verb": "validate"
-  },
-  {
-    "agent_facing": false,
-    "cli": null,
-    "idempotent": true,
-    "input_schema": "validate_self_qos_limit.input.json",
-    "name": "validate-self-qos-limit",
-    "output_schema": "validate_self_qos_limit.output.json",
-    "python": "hpc_agent.ops.validate.self_qos_limit.validate_self_qos_limit",
     "side_effects": [],
     "summary": "",
     "verb": "validate"

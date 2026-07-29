@@ -11,7 +11,7 @@ backed_by:
 ---
 # validate-campaign
 
-Compose the three atomic validators that run pre-submit — `validate-executor-signatures`, `validate-input-dataset`, `validate-walltime-against-history` — and aggregate their findings into a single `overall` verdict. (The `validate-self-qos-limit` atom is a sibling, not part of this composition: it needs SSH-fetched data the slash command supplies on its own path.) Each composed atom is independently skippable: when its required spec field is `None`, the workflow skips it and notes that in `validators_run` so the agent can distinguish "no findings because nothing checked" from "no findings because everything passed." This is the hook point the submit-flow invokes before any SSH/qsub side effect; an `overall == "fail"` blocks submission.
+Compose the three atomic validators that run pre-submit — `validate-executor-signatures`, `validate-input-dataset`, `validate-walltime-against-history` — and aggregate their findings into a single `overall` verdict. Each composed atom is independently skippable: when its required spec field is `None`, the workflow skips it and notes that in `validators_run` so the agent can distinguish "no findings because nothing checked" from "no findings because everything passed." This is the hook point the submit-flow invokes before any SSH/qsub side effect; an `overall == "fail"` blocks submission.
 
 ## Inputs
 

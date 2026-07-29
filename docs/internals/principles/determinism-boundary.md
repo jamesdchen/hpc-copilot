@@ -77,4 +77,20 @@ Rows accrue per surface as the verbs land; the first two ship with the
   quietly wired in — it has no composer at all, and giving it one is a behavior
   change (campaigns at or above the QoS cap would start being refused), not a
   cleanup.
+- 2026-07-29 (same day, follow-up ruling) — both inert primitives DELETED
+  after verification, not preserved. `decide-resubmit`: superseded by design,
+  not merely unwired — its only non-trivial branch needs
+  `resubmit_failed_threshold > 0`, a knob that exists nowhere else in the
+  tree (no spec field, no config, no caller), and the shipped posture is
+  explicit that silent auto-resubmit is NOT a code path (`hpc-status`
+  SKILL; `ops/monitor/classify.py`) — the live recommendation is the
+  categorical anomaly table in `ops/status_blocks.py`, so wiring the
+  threshold verb in would have introduced the exact affordance the design
+  removed. `validate-self-qos-limit`: its designed feeder (the slash
+  command running `squeue`/`sacctmgr` raw and passing the numbers in)
+  became impossible when the no-raw-ssh lint removed that affordance
+  class, and no throttled verb exposes the QoS cap — the guard could not
+  legally fire from any current surface without new Slurm-dialect probe
+  work. The bug class it covered is recorded as knowingly unguarded in
+  `docs/plans/backlog-2026-07-17.md` §4 rather than silently dropped.
 - 2026-07-17 — greenlight/unlock kernel-migration RULED A (formally deferred): the BR-14 dispatch investigation proved the fit is absent (no content sha to bind; `reduce` selection semantics would regress the greenlight gate's supersession invariants — a consent hole, not a refactor) and T8 was already migrated. The row's member list now reflects T6+T8 landed, greenlight/unlock deferred-by-ruling. Option B (a non-sha precedence reducer) rejected as a kernel API change without a safety payoff.

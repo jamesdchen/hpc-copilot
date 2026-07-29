@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**175 operations total**: 144 primitive atoms + 31 workflow atoms.
+**173 operations total**: 142 primitive atoms + 31 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (76)
+## `query` (75)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -46,7 +46,6 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`decide-concurrency`](../primitives/decide-concurrency.md) | ✓ | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` | `_(none)_` | — | — |
 | [`decide-monitor-arm`](../primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `_(none)_` | — | — |
 | [`decide-partial-handling`](../primitives/decide-partial-handling.md) | ✓ | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` | `_(none)_` | — | — |
-| [`decide-resubmit`](../primitives/decide-resubmit.md) | ✓ | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` | `_(none)_` | — | — |
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name> [--schema]` | `_(none)_` | — | — |
 | [`detect-entry-point`](../primitives/detect-entry-point.md) | ✓ | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` | `_(none)_` | — | — |
 | [`dir-digest`](../primitives/dir-digest.md) | ✓ | ssh | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -97,7 +96,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`walk-submit-ambiguities`](../primitives/walk-submit-ambiguities.md) | ✓ | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` | `_(none)_` | — | — |
 | [`worker-log-digest`](../primitives/worker-log-digest.md) | ✓ | _none_ | `hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 
-## `validate` (17)
+## `validate` (16)
 
 Read + binary health check. Same composability as `query`.
 
@@ -117,7 +116,6 @@ Read + binary health check. Same composability as `query`.
 | [`validate-input-dataset`](../primitives/validate-input-dataset.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-parents-ready`](../primitives/validate-parents-ready.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-scaffold-staleness`](../primitives/validate-scaffold-staleness.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
-| [`validate-self-qos-limit`](../primitives/validate-self-qos-limit.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
