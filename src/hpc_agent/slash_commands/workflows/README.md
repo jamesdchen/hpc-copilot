@@ -81,10 +81,17 @@ The launch discipline built on that:
 - **One exchange, then run.** If the user's nudge changes a value, fold it
   in and launch; do not re-propose unless a correction invalidates other
   proposed fields.
-- **A park is a question, not a stop (auto-resume).** When a drive parks at
-  a gate and the human journals the `y`, relaunch the workflow FRESH (a new
-  run, same args) in the same breath — no "shall I continue?", no waiting
-  for a nudge. NEVER relaunch with `resumeFromRunId` across a park: the
+- **A park is a question, not a stop (auto-resume, one relaunch per
+  sitting).** When a drive parks at a gate and the human journals the `y`,
+  the first tick goes INLINE the moment the y commits (the §7 latency
+  invariant — coalescing never delays it), and the workflow is relaunched
+  FRESH (a new run, same args) — no "shall I continue?", no waiting for a
+  nudge. COALESCE the relaunch over the sitting: several parked briefs
+  answered in one exchange get ONE relaunch after the last `y`, not one per
+  y — a fresh pass reads the whole ledger, so one pass consumes every
+  greenlight the sitting committed — and a relaunch already pending (or a
+  pass still running) means skip, not stack. NEVER relaunch with
+  `resumeFromRunId` across a park: the
   engine replays cached calls with unchanged (prompt, opts) verbatim, so a
   resumed run returns the recorded `awaiting_decision` result again without
   one live tick — the same park, forever (fable-sweep 2026-07-29). Fresh is

@@ -56,6 +56,7 @@ import pytest
 
 from hpc_agent._kernel.contract.layout import JournalLayout
 from hpc_agent._kernel.lifecycle.block_drive import block_drive_once
+from hpc_agent._wire.queries.attention_queue import AttentionQueueSpec
 from hpc_agent._wire.queries.queue_status import QueueStatusItem, QueueStatusSpec
 from hpc_agent._wire.workflows.block_drive import (
     BlockDriveAction,
@@ -64,6 +65,7 @@ from hpc_agent._wire.workflows.block_drive import (
 )
 from hpc_agent._wire.workflows.campaign_run import CampaignRunResult
 from hpc_agent._wire.workflows.queue_dispatch import QueueDispatchSpec
+from hpc_agent.ops.attention_op import attention_queue as attention_queue_op
 from hpc_agent.ops.block_drive_op import block_drive
 from hpc_agent.ops.queue.dispatch import queue_dispatch
 from hpc_agent.ops.queue.maintenance import groom_queue_stores
@@ -1285,4 +1287,163 @@ def test_the_pass_report_groups_every_outcome_class_under_its_own_key_with_count
         "the pass loop's exits are not all report sites — status_failed / status_unparseable "
         "/ status_refused / nothing_drivable-quiescent / pass_budget_exhausted is five: "
         f"{driver.count('return passReport(')} found"
+    )
+
+
+# ── 7. S13: the park order joined from attention-queue; one relaunch per sitting ─
+#
+# The §13 deferral the pass-report comment records ("ordering is
+# attention-queue's job") is now WIRED, not just deferred: before the final
+# report the driver relays ONE attention-queue read and ``orderParkedRecords``
+# JOINs the kernel's already-ordered items[] onto the parked bucket — a
+# position lookup by run_id, never a plan-side ranking. The executed arm runs
+# the shipped helper over items the REAL attention-queue verb produced, so a
+# helper that re-derives fan-out/class/age, or joins on the wrong key, fails
+# against kernel truth rather than against a hand-built fixture. The static
+# arms pin what execution cannot see: the report-site wiring, the 0-1-parks
+# guard that keeps §7 intact, and the sitting-coalesced AUTO-RESUME doctrine
+# (one relaunch after the batch of y's, the inline first tick never delayed).
+
+
+def test_the_parked_bucket_is_ordered_by_the_real_attention_queue_order(
+    tmp_path: Path,
+) -> None:
+    """EXECUTED: ``orderParkedRecords`` over the wire items the real
+    ``attention-queue`` verb produced for three genuinely parked runs.
+
+    ``awaiting_since`` makes ml-ord0003 the OLDEST park, so the kernel's D2
+    order (equal class, fan-out 0 → oldest-since first) is the REVERSE of the
+    raw drive-completion order the parked bucket accumulates in. A record whose
+    run the queue does not enumerate (the ghost) must keep its raw position
+    AFTER every matched one — the join is fail-open toward showing every brief,
+    never dropping one over an ordering gap.
+    """
+    exp = _exp(tmp_path)
+    stamps = {
+        "ml-ord0001": "2026-07-29T11:00:00+00:00",
+        "ml-ord0002": "2026-07-29T09:00:00+00:00",
+        "ml-ord0003": "2026-07-29T07:00:00+00:00",
+    }
+    for n, (run_id, since) in enumerate(stamps.items(), start=1):
+        _enqueue(exp, f"i-ord{n}", run_id)
+        _place(exp, f"i-ord{n}", run_id)
+        _seed_run(exp, run_id, status="in_flight")
+        mark_pending_decision(
+            run_id,
+            block="submit-s2",
+            workflow="submit",
+            brief={"summary": "canary done"},
+            resume_cursor={},
+            awaiting_since=since,
+            experiment_dir=exp,
+        )
+
+    queue = attention_queue_op(experiment_dir=exp, spec=AttentionQueueSpec(now=_NOW))
+    wire_items = [item.model_dump(mode="json") for item in queue.items]
+    run_order = [
+        entry["subject"]["scope_id"]
+        for entry in wire_items
+        if entry["subject"]["scope_kind"] == "run"
+    ]
+    assert run_order == ["ml-ord0003", "ml-ord0002", "ml-ord0001"], (
+        "the kernel's own order stopped being oldest-since-first for equal-class parks — "
+        f"the join then has nothing meaningful to demonstrate: {run_order}"
+    )
+
+    # The raw bucket, in drive-completion order (the order driveItem returned).
+    parked = [
+        {"item_id": "i-ord1", "run_id": "ml-ord0001", "action": "awaiting_decision"},
+        {"item_id": "i-ghost", "run_id": "ml-nowhere1", "action": "awaiting_decision"},
+        {"item_id": "i-ord2", "run_id": "ml-ord0002", "action": "awaiting_decision"},
+        {"item_id": "i-ord3", "run_id": "ml-ord0003", "action": "awaiting_decision"},
+    ]
+    tail = (
+        "\nconst payload = JSON.parse(process.argv[2])\n"
+        "process.stdout.write("
+        "JSON.stringify(orderParkedRecords(payload.parked, payload.items)))\n"
+    )
+    out = _run_plan_tail(
+        tmp_path, "park-order", tail, json.dumps({"parked": parked, "items": wire_items})
+    )
+
+    assert [record["item_id"] for record in out] == ["i-ord3", "i-ord2", "i-ord1", "i-ghost"], (
+        "the parked bucket is not in the kernel's attention order (matched briefs) with the "
+        f"unmatched ghost kept last in raw order: {[r['item_id'] for r in out]}"
+    )
+    assert len(out) == len(parked)  # ordered, never filtered: every brief survives
+
+
+def test_the_final_report_relays_the_attention_order_and_stays_cheap_without_parks() -> None:
+    """STATIC: the wiring the executed arm cannot see.
+
+    The ordering relay must be table-rendered like every other command (the
+    commands contract materializes the row against the real argparse tree), it
+    must fire at BOTH human-facing report sites (quiescent/nothing_drivable and
+    pass_budget_exhausted — the merged-park returns §13 is about), and it must
+    spend NO relay for 0-1 parked briefs, or the §7 relaunch-cheapness
+    invariant ("an idle pass costs exactly one status relay") quietly gains a
+    second relay.
+    """
+    text = _plan_text()
+    driver = _pass_driver_text()
+    assert re.search(r'"attentionQueue"\s*:\s*\{\s*"verb"\s*:\s*"attention-queue"', text), (
+        "queue-drain.js's RELAYS table has no attention-queue row — the park order must be "
+        "relayed from the kernel's verb, never re-derived in plan code (§13)"
+    )
+    assert "buckets.parked = orderParkedRecords(buckets.parked" in driver, (
+        "the driver never joins the relayed attention order onto the parked bucket — the "
+        "final report ships briefs in raw drive-completion order"
+    )
+    assert driver.count("await orderParked()") == 2, (
+        "the ordering relay must fire at exactly the two human-facing report sites "
+        "(nothing_drivable/quiescent and pass_budget_exhausted): "
+        f"{driver.count('await orderParked()')} call site(s) found"
+    )
+    assert "buckets.parked.length < 2" in driver, (
+        "the 0-1-parks guard is gone: a pass that parked nothing would spend an "
+        "attention-queue relay, violating §7 relaunch-cheapness"
+    )
+    assert driver.count("park_order: parkOrder") == 2, (
+        "the report no longer discloses whether the briefs are kernel-ordered or raw — a "
+        "failed ordering relay would then be indistinguishable from an ordered one"
+    )
+
+
+def test_auto_resume_coalesces_to_one_relaunch_per_sitting_keeping_the_inline_tick() -> None:
+    """STATIC: the S13 y-taking batch, pinned at the relaunch TRIGGER site.
+
+    The relaunch mechanism is instruction-driven (the plan's whenToUse + the
+    README's auto-resume bullet are what the main session executes), so the
+    coalescing lives there: one relaunch after the sitting's LAST y, skip when
+    one is already pending — never one relaunch per y. The §7 latency invariant
+    must survive the batching in the same breath it is stated: the inline first
+    tick fires per y, immediately, and only the RELAUNCH coalesces.
+    """
+    text = _plan_text()
+    readme = (WORKFLOWS_DIR / "README.md").read_text(encoding="utf-8")
+
+    # Plan side: the batched shape, and the per-y reflex GONE.
+    assert "ONE RELAUNCH PER SITTING" in text
+    assert "relaunch ONCE after the last y, not once per y" in text, (
+        "queue-drain.js's whenToUse no longer coalesces the relaunch over a sitting — a "
+        "human answering N briefs triggers N relaunches again (S13)"
+    )
+    assert "skip the relaunch when one is already pending or a pass is still running" in text, (
+        "the already-pending → skip rule is gone: the sitting marker the coalescing rests on"
+    )
+    assert "batching never delays the inline first tick" in text, (
+        "the §7 latency invariant is no longer stated next to the batching rule — the one "
+        "reading that makes coalescing WRONG is delaying the inline tick to batch it"
+    )
+    assert "relaunch this workflow FRESH in the same breath" not in text, (
+        "the per-y relaunch instruction is back — during a multi-brief sitting it fires one "
+        "relaunch per y, which is exactly the shape S13 removes"
+    )
+
+    # README side: the launch doctrine the main session reads says the same.
+    assert "ONE relaunch after the last `y`, not one per" in readme
+    assert "coalescing never delays it" in readme  # the inline first tick
+    assert "means skip, not stack" in readme
+    assert "in the same breath" not in readme, (
+        "the README's auto-resume bullet re-grew the per-y 'same breath' relaunch reflex"
     )

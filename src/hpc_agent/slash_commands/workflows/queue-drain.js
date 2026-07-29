@@ -3,11 +3,11 @@ export const meta = {
   description:
     'Drain the run queue: relay one queue-status, compute the drivable set from its items[] fields in plan code, drive each drivable RUN with plan-relayed block-drive ticks (chunked detached waits), record every park and every skip and move on, then re-status and repeat until nothing is drivable — a PURE relay, the sibling of campaign-run at the ledger level (docs/plans/run-queue-placement-2026-07-28.md §5/§7, rule 5 of docs/design/agent-delegation.md)',
   whenToUse:
-    "When the run queue has work and the tick/wait relay traffic should stay out of the main session's context. Pass args: {repo, maxLoops?, maxPasses?, maxTicks?, maxWaitChunks?, maxAttempts?, campaignBase?, cluster?}. INTAKE FIRST (README, 'Intake'): resolve every ARGS_CONTRACT field BEFORE launching — repo from cwd, the bounds from their defaults — and propose the WHOLE arg set in ONE confirm/correct exchange. RELAUNCH IS THE REFLEX: a pass is stateless and reads everything it needs from its OWN first queue-status relay, so relaunching FRESH at any time, for any reason, is always correct and always cheap — a pass that finds nothing drivable costs exactly one status relay and returns (the §7 relaunch-cheapness invariant). NEVER relaunch with resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns the recorded parks forever without one live tick. The workflow NEVER passes a gate and never decides anything: admission, placement and sequencing are kernel code (queue-advance / queue-dispatch / block-drive), the drivable set is a mechanical field check over relayed items[], and every awaiting_decision is RECORDED and left for the human — this plan does not loop on a parked item, it moves to the next one. A tick that returns `skip` is recorded the same way, under its own skipped[] key with the kernel's reason: a skip is the kernel saying this tick moved nothing and naming why, and it reproduces on every retick, so re-ticking it only spends the item's budget. Two ledger items resolving to one computed run_id (queue-status's collides_with) are never driven together: one is driven, the sibling is reported under deferred[] and picked up by a later pass. AUTO-RESUME: the moment a y is journaled inline, relaunch this workflow FRESH in the same breath; the freshly-drivable item is picked up by the next pass.",
+    "When the run queue has work and the tick/wait relay traffic should stay out of the main session's context. Pass args: {repo, maxLoops?, maxPasses?, maxTicks?, maxWaitChunks?, maxAttempts?, campaignBase?, cluster?}. INTAKE FIRST (README, 'Intake'): resolve every ARGS_CONTRACT field BEFORE launching — repo from cwd, the bounds from their defaults — and propose the WHOLE arg set in ONE confirm/correct exchange. RELAUNCH IS THE REFLEX: a pass is stateless and reads everything it needs from its OWN first queue-status relay, so relaunching FRESH at any time, for any reason, is always correct and always cheap — a pass that finds nothing drivable costs exactly one status relay and returns (the §7 relaunch-cheapness invariant). NEVER relaunch with resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns the recorded parks forever without one live tick. The workflow NEVER passes a gate and never decides anything: admission, placement and sequencing are kernel code (queue-advance / queue-dispatch / block-drive), the drivable set is a mechanical field check over relayed items[], and every awaiting_decision is RECORDED and left for the human — this plan does not loop on a parked item, it moves to the next one. A tick that returns `skip` is recorded the same way, under its own skipped[] key with the kernel's reason: a skip is the kernel saying this tick moved nothing and naming why, and it reproduces on every retick, so re-ticking it only spends the item's budget. Two ledger items resolving to one computed run_id (queue-status's collides_with) are never driven together: one is driven, the sibling is reported under deferred[] and picked up by a later pass. AUTO-RESUME, ONE RELAUNCH PER SITTING: the first tick after a y is the main session's INLINE block-drive tick the moment the y commits (§7 — batching never delays the inline first tick); the FRESH relaunch of this workflow is the coalesced part — when the human answers several parked briefs in one sitting, relaunch ONCE after the last y, not once per y (a fresh pass reads the whole ledger, so one pass consumes every y the sitting committed), and skip the relaunch when one is already pending or a pass is still running. Extra relaunches stay cheap (§7) — coalescing is noise control, never a correctness need.",
   phases: [
     { title: 'Status', detail: 'one queue-status relay per pass; the drivable set is computed from its items[] fields in plan code, never remembered across passes' },
     { title: 'Drive', detail: 'one block-drive loop per drivable RUN (items sharing a computed run_id are deduped, the sibling deferred), chunked wait-detached for detached blocks; a park or a skip is recorded and the loop ends' },
-    { title: 'Report', detail: 'return the outcome buckets (parked / skipped / deferred / held / settled / failed, each with a count) + the last status snapshot when nothing is drivable' },
+    { title: 'Report', detail: 'return the outcome buckets (parked / skipped / deferred / held / settled / failed, each with a count) + the last status snapshot when nothing is drivable; 2+ parked briefs are ordered via one relayed attention-queue read (§13 — the ordering stays kernel-side)' },
   ],
 }
 
@@ -96,7 +96,7 @@ const SCHEMAS = {
   },
 }
 
-// Step vocabulary as in every plan here (see README). All three steps are
+// Step vocabulary as in every plan here (see README). All four steps are
 // kind: 'script' — there is deliberately NO agent-judgment step in this plan:
 // draining is code (queue-status projections + block-drive sequencing) plus
 // rule-fixed relays, and anything needing judgment (a gate, a red tick, a
@@ -139,6 +139,17 @@ const STEPS = [
     effort: 'low',
     retry: 1,
   },
+  {
+    id: 'order-parks',
+    phase: 'Report',
+    kind: 'script',
+    run: 'conditional', // only when the final report carries 2+ parked briefs
+    needs: ['tick'],
+    isolation: 'shared-checkout',
+    command: 'attentionQueue',
+    output: 'SCRIPT_RESULT',
+    effort: 'low',
+  },
 ]
 const STEP = (id) => STEPS.find((s) => s.id === id)
 
@@ -157,13 +168,15 @@ const STEP = (id) => STEPS.find((s) => s.id === id)
 //
 // There is NO drain verb and this plan does not invent one: `queue-status` is
 // the ledger read, `block-drive` is the per-item tick (campaign-run's exemplar,
-// unchanged), `wait-detached` is the pacing. Starting a QUEUED item is
-// `queue-dispatch`'s job and is deliberately absent — this plan drives items
-// that are already dispatched, which is what `drivable` asks.
+// unchanged), `wait-detached` is the pacing, `attention-queue` is the §13 park
+// order (the kernel's D2 total order, read once at report time). Starting a
+// QUEUED item is `queue-dispatch`'s job and is deliberately absent — this plan
+// drives items that are already dispatched, which is what `drivable` asks.
 const RELAYS = {
   "queueStatus": { "verb": "queue-status", "flags": ["spec", "experiment-dir"] },
   "blockDrive": { "verb": "block-drive", "flags": ["spec", "experiment-dir"] },
-  "waitDetached": { "verb": "wait-detached", "flags": ["spec"] }
+  "waitDetached": { "verb": "wait-detached", "flags": ["spec"] },
+  "attentionQueue": { "verb": "attention-queue", "flags": ["spec", "experiment-dir"] }
 }
 
 // One renderer per declared flag: the table names WHICH flags a verb takes,
@@ -207,6 +220,11 @@ const COMMANDS = {
         ? { run_id: inputs.runId, block: inputs.block, timeout_sec: 480 }
         : { run_id: inputs.runId, timeout_sec: 480 }
     ),
+  // The §13 park-order read: single-experiment scope (the repo this pass
+  // drained), empty spec — the D2 ordering is FIXED kernel-side and this plan
+  // holds no knob worth passing (class_order would be the plan re-weighting a
+  // ranking it is forbidden to own).
+  attentionQueue: (inputs) => relayCommand('attentionQueue', inputs, {}),
 }
 
 const PROMPTS = {
@@ -478,13 +496,41 @@ const selectDrivableBatch = (drivable, limit) => {
 // a count beside it. The counts are the point: a pass can accumulate many
 // verbatim park briefs, and a human reading the result must be able to see
 // "3 parked, 1 skipped, 2 deferred" without walking the records. Ordering the
-// records is deliberately NOT done here — that is attention-queue's job (§13),
-// and re-deriving a ranking in this plan would be a second, divergent one.
+// parked records stays attention-queue's job (§13): the driver relays ONE
+// attention-queue read before the final report and orderParkedRecords JOINs its
+// already-ordered items[] — re-deriving a ranking in this plan would be a
+// second, divergent one.
 const BUCKET_KEYS = ['parked', 'skipped', 'deferred', 'held', 'settled', 'failed']
 const passReport = (action, buckets, extra) => {
   const counts = {}
   for (const key of BUCKET_KEYS) counts[key] = buckets[key].length
   return { action, counts, ...buckets, ...(extra || {}) }
+}
+
+// ── The park-queue order: JOINED from attention-queue, never re-derived ─────
+// S13 orders the merged park queue by the kernel's D2 total order (leverage →
+// class → oldest-since → tiebreak), which the attention-queue verb has ALREADY
+// applied to the items[] it relays (ops/attention_op.py). This helper is a
+// mechanical JOIN, the same altitude as isDrivable: each parked record takes
+// the position of the attention item whose subject is its run
+// (subject.scope_kind === 'run', scope_id === run_id, first match wins).
+// Re-deriving fan-out, class, or age here would be the second, divergent
+// ranking the §13 deferral forbids. A record with no attention item (e.g. the
+// non-in_flight park queue-status's notes disclose) keeps its raw position
+// AFTER every matched one — fail-open toward showing every brief, never
+// dropping one over an ordering gap.
+const orderParkedRecords = (parked, attentionItems) => {
+  const rank = new Map() // run_id -> first position in the kernel's order
+  for (let i = 0; i < attentionItems.length; i++) {
+    const subject = attentionItems[i] ? attentionItems[i].subject : null
+    if (!subject || subject.scope_kind !== 'run' || typeof subject.scope_id !== 'string') continue
+    if (!rank.has(subject.scope_id)) rank.set(subject.scope_id, i)
+  }
+  const at = (record) => (rank.has(record.run_id) ? rank.get(record.run_id) : Infinity)
+  return parked
+    .map((record, index) => ({ record, index }))
+    .sort((a, b) => at(a.record) - at(b.record) || a.index - b.index)
+    .map((entry) => entry.record)
 }
 
 validatePlan()
@@ -622,6 +668,25 @@ const buckets = { parked: [], skipped: [], deferred: [], held: [], settled: [], 
 let lastStatus = null
 let passes = 0
 
+// §13 ordering, at the one place the merged park queue meets the human: when
+// the final report carries 2+ briefs, relay ONE attention-queue read and let
+// orderParkedRecords join the kernel's order. 0-1 parks spend no relay (§7:
+// an idle pass still costs exactly one status relay), and a failed/refused/
+// unparseable read leaves raw order — disclosed via the returned tag, which
+// rides the report as park_order. The briefs themselves are never held
+// hostage to the ordering read.
+const orderParked = async () => {
+  if (buckets.parked.length < 2) return 'raw'
+  const relay = await runStep('order-parks', statusInputs, { label: 'drain:report:park-order' })
+  if (!relay || relay.exit_code !== 0) return 'raw (attention-queue relay failed)'
+  const ordered = parseEnvelope(relay.output)
+  if (!ordered || !ordered.ok || !Array.isArray(ordered.data.items)) {
+    return 'raw (attention-queue envelope refused or unparseable)'
+  }
+  buckets.parked = orderParkedRecords(buckets.parked, ordered.data.items)
+  return 'attention-queue'
+}
+
 for (let pass = 1; pass <= maxPasses; pass++) {
   passes = pass
   phase('Status')
@@ -663,10 +728,12 @@ for (let pass = 1; pass <= maxPasses; pass++) {
 
   if (!drivable.length) {
     // The §7 relaunch-cheapness invariant, realized: a pass with nothing to do
-    // cost exactly ONE status relay and spawned no loops.
+    // cost exactly ONE status relay and spawned no loops (orderParked spends a
+    // relay only when earlier passes parked 2+ briefs — an idle pass never has).
     phase('Report')
     log(`pass ${pass}: nothing drivable (${items.length} item(s) in the status page)`)
-    return passReport(passes === 1 ? 'nothing_drivable' : 'quiescent', buckets, { passes, status: lastStatus })
+    const parkOrder = await orderParked()
+    return passReport(passes === 1 ? 'nothing_drivable' : 'quiescent', buckets, { passes, status: lastStatus, park_order: parkOrder })
   }
 
   // THE LOOP BOUND, in full: min(drivable after run_id dedupe, maxLoops). There
@@ -704,9 +771,11 @@ for (let pass = 1; pass <= maxPasses; pass++) {
 }
 
 phase('Report')
+const parkOrder = await orderParked()
 return passReport('pass_budget_exhausted', buckets, {
   passes,
   status: lastStatus,
+  park_order: parkOrder,
   resume_hint:
     'the pass budget ran out with work still drivable — relaunch this workflow FRESH (same args, new run). ' +
     'NEVER resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns these same ' +
