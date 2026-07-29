@@ -17,6 +17,21 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — QoS submit-cap gate, config-based (2026-07-29)
+
+The successor to the deleted `validate-self-qos-limit`, with its three
+faults corrected. New optional cluster key `max_submit_jobs_per_user`
+(the `max_walltime_sec` pattern — static site policy, hand-configured;
+Discovery: normal=5000, gpu=100). When set, `submit-flow` refuses BEFORE
+any rsync/deploy/qsub if journal-known in-flight tasks + the new array
+(+canary) would meet the cap — with split guidance — and discloses
+proximity at 70%. Targets the Slurm SUBMIT cap (`MaxSubmitJobsPerUser`,
+the limit that hard-rejects; array elements each count), not the
+running-jobs throttle the deleted validator compared against. No agent
+in the data path (config + journal + spec, never model-fetched numbers);
+externally-submitted jobs are not visible and the refusal says so;
+unset = no check, with the scheduler's own rejection as backstop.
+
 ### Removed — BREAKING: two inert primitives deleted after verification (2026-07-29)
 
 Both flagged inert in the agent_facing reachability audit, then resolved by

@@ -59,6 +59,7 @@ from hpc_agent.infra.transport import (
     rsync_push,
 )
 from hpc_agent.ops.submit.runner import submit_and_record
+from hpc_agent.state.index import find_in_flight_runs
 from hpc_agent.state.journal import is_resubmittable_terminal, load_run
 
 
@@ -89,7 +90,7 @@ def _submit_flow_batch_handler(ns):  # type: ignore[no-untyped-def]
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
     from pathlib import Path
 
     from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
@@ -598,6 +599,118 @@ def _run_executor_existence_preflight(
 # mirroring DryRunLocalSpec.smoke_timeout_sec. A spec's
 # ``pre_stage_smoke_timeout_sec`` overrides per-submission.
 _PRE_STAGE_SMOKE_TIMEOUT_DEFAULT = 60
+
+
+# ── QoS submit-cap gate (lesson-6 self-DOS class) ────────────────────────────
+#
+# The successor to the deleted `validate-self-qos-limit` primitive, with the
+# three faults of that design corrected (2026-07-29 drift log,
+# docs/internals/principles/determinism-boundary.md): the cap is static
+# cluster CONFIG (`max_submit_jobs_per_user`, the max_walltime_sec pattern)
+# rather than agent-fetched sacctmgr output; it targets the SUBMIT cap (the
+# limit that hard-rejects — Slurm QOSMaxSubmitJobPerUserLimit, array elements
+# each counting) rather than the running-jobs throttle; and it is composed on
+# the submit path by construction rather than registered-and-never-called.
+
+# Fraction of the cap at which a passing submit still discloses proximity —
+# the next normal-sized array will likely hit the limit. Carried over from the
+# deleted validator's `warn_at_pct` default.
+_QOS_WARN_AT_PCT = 0.7
+
+
+def check_qos_submit_cap(
+    *, cap: int, known_in_flight_tasks: int, new_tasks: int
+) -> tuple[str, str] | None:
+    """Pure cap arithmetic: ``("refuse"|"warn", message)`` or ``None`` (pass).
+
+    ``known_in_flight_tasks`` is what this framework's journal can see —
+    jobs submitted outside hpc-agent are invisible, so the predicted total is
+    a FLOOR, disclosed in both messages. The scheduler's own rejection stays
+    the backstop; this gate exists to fire before the staging cost is paid.
+    """
+    predicted = known_in_flight_tasks + new_tasks
+    headroom = max(0, cap - known_in_flight_tasks - 1)
+    if predicted >= cap:
+        return (
+            "refuse",
+            (
+                f"submitting {new_tasks} tasks would put at least {predicted} "
+                f"jobs in the queue, at or above the cluster's configured "
+                f"per-user submit cap of {cap} "
+                f"(clusters.yaml: max_submit_jobs_per_user; array elements "
+                f"each count as one job). The scheduler would reject the "
+                f"array (QOSMaxSubmitJobPerUserLimit) after staging was "
+                f"already paid. Split into submissions of <= {headroom} tasks "
+                f"or wait for in-flight runs to clear (0 headroom means wait "
+                f"is the only option). Counted: {known_in_flight_tasks} "
+                f"in-flight tasks known to this journal + {new_tasks} new; "
+                f"jobs submitted outside hpc-agent are NOT counted, so the "
+                f"real total may be higher."
+            ),
+        )
+    if predicted >= int(round(cap * _QOS_WARN_AT_PCT)):
+        return (
+            "warn",
+            (
+                f"qos submit-cap proximity: this submit brings the journal-known "
+                f"queue total to {predicted} of the configured per-user cap "
+                f"{cap} ({predicted / cap:.0%}). The next normal-sized array "
+                f"may be refused; jobs submitted outside hpc-agent are not "
+                f"counted, so the real total may be higher."
+            ),
+        )
+    return None
+
+
+def _qos_submit_cap_gate(
+    experiment_dir: Path,
+    specs: list[SubmitFlowSpec],
+    fresh_indices: list[int],
+    *,
+    canary_decisions: Mapping[int, tuple[bool, str | None]],
+) -> None:
+    """Refuse (or disclose proximity) before any transport when the batch
+    would exceed the cluster's configured per-user submit cap.
+
+    No-op when the target cluster declares no ``max_submit_jobs_per_user``
+    (config-absent = feature off, like ``max_node_mem_mb``) or when nothing
+    fresh submits. Counts every fresh spec's ``total_tasks`` plus one task per
+    canary that will fire, plus the journal's in-flight tasks on the SAME
+    cluster (a run on another cluster consumes a different queue). Best-effort
+    on infra errors everywhere except the arithmetic itself: an unreadable
+    journal or config must not crash a submit the scheduler would accept.
+    """
+    if not fresh_indices:
+        return
+    cluster = specs[fresh_indices[0]].cluster
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        cluster_cfg = load_clusters_config().get(cluster) or {}
+    except Exception:  # noqa: BLE001 — config trouble surfaces at spec-resolve, not here
+        return
+    cap = cluster_cfg.get("max_submit_jobs_per_user")
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0:
+        return
+    new_tasks = sum(int(specs[i].total_tasks) for i in fresh_indices)
+    new_tasks += sum(1 for i in fresh_indices if canary_decisions[i][0])
+    try:
+        in_flight = sum(
+            int(record.total_tasks or 0)
+            for record in find_in_flight_runs(experiment_dir)
+            if record.cluster == cluster
+        )
+    except Exception:  # noqa: BLE001 — an unreadable index degrades to array-only
+        in_flight = 0
+    verdict = check_qos_submit_cap(cap=cap, known_in_flight_tasks=in_flight, new_tasks=new_tasks)
+    if verdict is None:
+        return
+    kind, message = verdict
+    if kind == "warn":
+        logging.getLogger(__name__).warning(message)
+        print(message, file=sys.stderr, flush=True)
+        return
+    raise errors.SpecInvalid(f"qos submit-cap: {message}")
 
 
 def _disclose_smoke(message: str) -> None:
@@ -3500,6 +3613,18 @@ def _submit_flow_batch_locked(
         # ``sidecar_not_found`` on the cluster.
         if canary_decisions[i][0]:
             _mirror_canary_sidecar(experiment_dir, specs[i].run_id, f"{specs[i].run_id}-canary")
+
+    # QoS submit-cap gate (lesson-6 self-DOS class): refuse an array that would
+    # exceed the cluster's configured per-user SUBMIT cap BEFORE any transport
+    # or scheduler call. Pure local read (config + journal) — runs on every
+    # phase including a skip_rsync_deploy Phase-2 re-entry, because Phase 2 is
+    # where the main arrays actually qsub.
+    _qos_submit_cap_gate(
+        experiment_dir,
+        specs,
+        fresh_indices,
+        canary_decisions=canary_decisions,
+    )
 
     # notebook-audit Addendum 4 item 7: bounded LOCAL task-0 dry-run BEFORE any
     # transport/staging. A units/arg/import bug that would crash every task is
