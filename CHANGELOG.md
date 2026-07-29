@@ -187,6 +187,22 @@ IS the tick.
   unparseable lines are kept verbatim so `skipped_records` stays truthful,
   and grooming never raises — the items already started.
 
+### Fixed — Phase 3 guards proven to fire (adversarial guards-fire review, 2026-07-29)
+
+The queue-drain plan's drivability formula and retry ceiling are now pinned
+by EXECUTING `queue-drain.js`'s own `isDrivable`/`attemptsOf` under node
+against the real `queue-status` projection, instead of a Python paraphrase
+that agreed with itself while the plan lost terms; `FLAG_RENDER` output is
+pinned to the RELAYS table (the flag bug's signature, one layer down);
+`validatePlan()` is executed rather than assumed; `groom_queue_stores`'
+`protect=` wiring, the dispatch-level grooming disclosure, and the
+detach-child retry-budget exemption each gained a test that fails against
+their removal; `_count_drive_attempt` now catches `Exception` (a
+type-corrupt `drive_attempts` raised `ValueError` and crashed a successful
+drive), and the janitor import in `queue-dispatch` moved inside the
+never-raises envelope. CI installs node and sets `HPC_REQUIRE_NODE=1`, so
+an executed contract arm can no longer pass by silently skipping.
+
 ### Added — paste-ready answer menus on park briefs + park notifications (2026-07-29)
 
 Every decision point now hands the human its answers, not just its

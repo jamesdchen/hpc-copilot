@@ -52,10 +52,17 @@ def _count_drive_attempt(experiment_dir: Path, result: BlockDriveResult) -> None
     Classification lives in ``state/journal.DRIVE_PROGRESS_ACTIONS`` (one home);
     this seat only reports which side of it the tick landed on.
 
-    Never raises. A tick that drove no run (``run_id`` is null on a ``skip``), or
-    one whose record does not exist yet, has nothing to count against, and a
-    bookkeeping failure must not turn a successful drive into an error envelope —
-    the counter is an advisory budget, and the drive already happened.
+    Never raises — and "never" is load-bearing, so the catch is ``Exception``
+    rather than a tuple of the failures anyone thought of. A tick that drove no
+    run (``run_id`` is null on a ``skip``), or one whose record does not exist
+    yet, has nothing to count against; and a bookkeeping failure must not turn a
+    successful drive into an error envelope, because the counter is an advisory
+    budget and the drive ALREADY HAPPENED. The narrower ``(FileNotFoundError,
+    OSError)`` this started as was false advertising: a type-corrupt record
+    (``drive_attempts: "three"``) raises ``ValueError`` out of ``int()`` in
+    :func:`~hpc_agent.state.journal.stamp_drive_attempt` and crashed the drive it
+    was supposed to be advisory to. Same posture as the queue's janitor
+    (``ops/queue/maintenance.py``): hygiene reports, it never vetoes.
     """
     run_id = (result.run_id or "").strip()
     if not run_id:
@@ -66,7 +73,7 @@ def _count_drive_attempt(experiment_dir: Path, result: BlockDriveResult) -> None
             progressed=result.action in DRIVE_PROGRESS_ACTIONS,
             experiment_dir=experiment_dir,
         )
-    except (FileNotFoundError, OSError) as exc:  # pragma: no cover - defensive
+    except Exception as exc:  # noqa: BLE001 — an advisory counter must never fail a drive
         _log.warning("block-drive: could not stamp drive_attempts for %s (%s)", run_id, exc)
 
 

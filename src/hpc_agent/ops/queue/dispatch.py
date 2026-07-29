@@ -1048,16 +1048,23 @@ def queue_dispatch(
     # exists to hold.
     maintenance: dict[str, Any] = {}
     if dispatched:
-        from hpc_agent.ops.queue.maintenance import groom_queue_stores
-
         # Every item THIS call reports on is exempt: adopting onto an already-
         # ``complete`` run retires the item the instant its placement lands, and
         # compacting it here would erase — in the same tick — the ledger row this
         # result calls ``placed``. "Never destroy the thing you're operating on."
-        maintenance = groom_queue_stores(
-            exp,
-            exclude_item_ids=[row.item_id for row in dispatched] + [row.item_id for row in refused],
-        )
+        # The import sits INSIDE the never-raises envelope: a broken maintenance
+        # module must degrade to disclosed data like every other janitor failure,
+        # not fail a dispatch that already submitted.
+        try:
+            from hpc_agent.ops.queue.maintenance import groom_queue_stores
+
+            maintenance = groom_queue_stores(
+                exp,
+                exclude_item_ids=[row.item_id for row in dispatched]
+                + [row.item_id for row in refused],
+            )
+        except Exception as exc:  # noqa: BLE001 — the items already started
+            maintenance = {"error": f"{type(exc).__name__}: {exc}"}
 
     result = QueueDispatchResult(
         computed_at=now,

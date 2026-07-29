@@ -36,7 +36,18 @@ producers on the Python side:
 
 The relay table is not documentation: each plan RENDERS its commands from it
 (``relayCommand``), so what this test validates and what the plan runs are the
-same rows.
+same rows. Which is a claim, and claims get pinned: rule 1 above materializes
+argv as ``--{flag}``, but the plan renders through ``FLAG_RENDER``, so a
+renderer that spells a declared flag differently ships green past a table that
+parses perfectly — the flag bug's exact signature, one layer down. So a third
+rule binds the renderer to the table:
+
+3. every ``FLAG_RENDER`` entry renders the flag the table NAMES — pinned
+   statically (the spelling appears in the renderer block) and, under node,
+   by CALLING each renderer and reading what it returned.
+
+And the plan's own load-time gate, ``validatePlan()``, is executed rather than
+admired: a gate no test ever runs is a gate that can be wrong for free.
 """
 
 from __future__ import annotations
@@ -46,23 +57,22 @@ import contextlib
 import io
 import json
 import re
-import shutil
-import subprocess
 import textwrap
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
-from tests._paths import REPO_ROOT
+from tests._node import run_node
+from tests._workflow_plans import WORKFLOWS_DIR, plan_paths, portable_prefix
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
     from hpc_agent._kernel.registry.primitive import PrimitiveMeta
 
-_WORKFLOWS_DIR = REPO_ROOT / "src/hpc_agent/slash_commands/workflows"
+_WORKFLOWS_DIR = WORKFLOWS_DIR
 
 #: The rendezvous verb, locked in every plan section (rule 2). Asked of the
 #: relay TABLE here — the delegation sweep asks it of the rendered text, which
@@ -77,6 +87,11 @@ _RELAYS_RE = re.compile(r"^const\s+RELAYS\s*=\s*(\{.*?^\})", re.S | re.M)
 
 #: ``const parseEnvelope = (output) => { ... }`` — the single envelope reader.
 _ENVELOPE_FN_RE = re.compile(r"^(const\s+parseEnvelope\s*=.*?^\})", re.S | re.M)
+
+#: ``const FLAG_RENDER = { ... }`` — one renderer per declared flag. NOT JSON
+#: (the values are arrow functions), so it is only ever grepped here and
+#: EXECUTED below; nothing reconstructs it in Python.
+_FLAG_RENDER_RE = re.compile(r"^const\s+FLAG_RENDER\s*=\s*\{.*?^\}", re.S | re.M)
 
 #: Dummy values for a materialized argv. argparse only TYPE-converts at parse
 #: time (``--spec`` is a ``pathlib.Path``, ``--experiment-dir`` a path string),
@@ -275,7 +290,13 @@ def registry() -> dict[str, PrimitiveMeta]:
 
 
 def _plan_paths() -> list[Path]:
-    return sorted(_WORKFLOWS_DIR.glob("*.js"))
+    return plan_paths()
+
+
+def _flag_render_block(text: str) -> str | None:
+    """The plan's ``FLAG_RENDER`` source block, or ``None`` if it declares none."""
+    match = _FLAG_RENDER_RE.search(text)
+    return None if match is None else match.group(0)
 
 
 # --------------------------------------------------------------------------
@@ -342,8 +363,6 @@ def test_plan_reads_the_envelope_payload_layer(path: Path, envelope_keys: tuple[
 # The shape gate, executed
 # --------------------------------------------------------------------------
 
-_NODE = shutil.which("node")
-
 _HARNESS_TAIL = (
     "\nconst out = parseEnvelope(process.argv[2])\n"
     "process.stdout.write(JSON.stringify(out === undefined ? null : out))\n"
@@ -352,20 +371,11 @@ _HARNESS_TAIL = (
 
 def _run_reader(tmp_path: Path, reader: str, stdout_text: str) -> Any:
     """Execute a plan's `parseEnvelope` over *stdout_text* and return its result."""
-    script = tmp_path / "reader.mjs"
-    script.write_text(reader + _HARNESS_TAIL, encoding="utf-8")
-    proc = subprocess.run(
-        [str(_NODE), str(script), stdout_text],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    proc = run_node(tmp_path / "reader.mjs", reader + _HARNESS_TAIL, stdout_text)
     assert proc.returncode == 0, f"parseEnvelope threw: {proc.stderr.strip()}"
     return json.loads(proc.stdout)
 
 
-@pytest.mark.skipif(_NODE is None, reason="no JS runtime available to execute the plan helper")
 @pytest.mark.parametrize("path", _plan_paths(), ids=lambda p: p.stem)
 def test_envelope_reader_returns_the_payload_not_the_envelope(
     path: Path,
@@ -387,6 +397,15 @@ def test_envelope_reader_returns_the_payload_not_the_envelope(
     ok_line = json.dumps(ok_envelope, sort_keys=True)
     result = _run_reader(tmp_path, reader, f"some log noise\n{ok_line}\n")
     assert result is not None, f"{path.name}: parseEnvelope returned null for a real ok envelope"
+    # The helper returns its OWN record, which MIRRORS the envelope's member
+    # names on purpose ({ok, data, error} — see each plan's comment). Indexing
+    # it by the Python-derived key names below relies on that mirroring, so say
+    # it out loud and check it rather than letting a rename read as a null.
+    assert {ok_key, payload_key} <= set(result), (
+        f"{path.name}: parseEnvelope returned {sorted(result)}, which does not carry the "
+        f"envelope's {ok_key!r}/{payload_key!r} member names — the reader's record is "
+        "supposed to mirror them so the loop reads one vocabulary end to end"
+    )
     assert result[ok_key] is True, f"{path.name}: real ok envelope did not read as ok"
     assert result[payload_key] == ok_envelope[payload_key], (
         f"{path.name}: parseEnvelope returned {result[payload_key]!r}, not the envelope's "
@@ -404,8 +423,166 @@ def test_envelope_reader_returns_the_payload_not_the_envelope(
 
 
 # --------------------------------------------------------------------------
+# The RENDERER gate — the table is validated, but the renderer is what runs
+# --------------------------------------------------------------------------
+#
+# Rule 1 above materializes each row's argv as ``--{flag}`` and hands it to
+# argparse. The plan does not: it renders through ``FLAG_RENDER[flag](inputs)``.
+# Those are two spellings of the same flag, and only one of them ships. Change a
+# renderer to emit ``--experimentdir`` and the parse gate stays green while every
+# relayed command is rc=2 — Bug A again, one layer below where it was fixed.
+#
+# So the renderer is pinned TO the table: whatever ``FLAG_RENDER`` returns for a
+# flag must begin with that flag as the table spells it.
+
+
+@pytest.mark.parametrize("path", _plan_paths(), ids=lambda p: p.stem)
+def test_every_declared_flag_is_spelled_in_the_renderer_block(path: Path) -> None:
+    """THE RENDERER GATE (static arm). Runs everywhere, catches the spelling."""
+    text = path.read_text(encoding="utf-8")
+    block = _flag_render_block(text)
+    flags = {flag for row in relay_table(text).values() for flag in row.get("flags", [])}
+    if not flags:
+        pytest.skip(f"{path.name} declares no flags")
+    assert block is not None, (
+        f"{path.name}: declares flags {sorted(flags)} but no `FLAG_RENDER = {{...}}` block — "
+        "the parse gate would then be validating a table nothing renders from"
+    )
+    missing = sorted(flag for flag in flags if f"--{flag}" not in block)
+    assert not missing, (
+        f"{path.name}: FLAG_RENDER never spells {missing} the way RELAYS declares them — a "
+        "renderer that emits a different flag parses nowhere (`--experimentdir` is rc=2), "
+        "and the parse gate above cannot see it because it renders argv itself"
+    )
+
+
+@pytest.mark.parametrize("path", _plan_paths(), ids=lambda p: p.stem)
+def test_every_flag_renderer_emits_the_flag_the_table_names(path: Path, tmp_path: Path) -> None:
+    """THE RENDERER GATE (executed arm). Each renderer is CALLED and its output
+    read: a spelling that merely appears somewhere in the block is not the same
+    as the string the plan hands to the shell."""
+    text = path.read_text(encoding="utf-8")
+    if _flag_render_block(text) is None:
+        pytest.skip(f"{path.name} declares no FLAG_RENDER")
+    # A Proxy stands in for `inputs`: renderers destructure whatever they need
+    # ({ repo }, …) and this answers every property without the test having to
+    # know — and hence without a second copy of each renderer's input contract.
+    tail = textwrap.dedent(
+        """
+        const probe = new Proxy({}, {
+          get: (_target, key) => (typeof key === 'symbol' ? undefined : `<${String(key)}>`),
+        })
+        const out = {}
+        for (const [flag, render] of Object.entries(FLAG_RENDER)) out[flag] = render(probe)
+        process.stdout.write(JSON.stringify(out))
+        """
+    )
+    proc = run_node(
+        tmp_path / f"{path.stem}-render.mjs",
+        portable_prefix(text, name=path.name) + tail,
+    )
+    assert proc.returncode == 0, f"{path.name}: rendering the flags threw: {proc.stderr.strip()}"
+    rendered: dict[str, str] = json.loads(proc.stdout)
+
+    declared = {flag for row in relay_table(text).values() for flag in row.get("flags", [])}
+    unrendered = sorted(declared - set(rendered))
+    assert not unrendered, (
+        f"{path.name}: RELAYS declares {unrendered} with no FLAG_RENDER entry — "
+        "`relayCommand` would call undefined and the plan would die at its first relay"
+    )
+    wrong = {
+        flag: out
+        for flag, out in rendered.items()
+        if not (out == f"--{flag}" or out.startswith(f"--{flag} "))
+    }
+    assert not wrong, (
+        f"{path.name}: FLAG_RENDER renders {wrong} — each entry must emit the flag RELAYS "
+        "names (`--<flag>` alone or `--<flag> <value>`), because the argv rule 1 parses is "
+        "built from the TABLE while the command that ships is built from these renderers"
+    )
+
+
+# --------------------------------------------------------------------------
+# The plan's own load-time gate, EXECUTED
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", _plan_paths(), ids=lambda p: p.stem)
+def test_validate_plan_admits_the_shipped_plan_and_refuses_a_broken_relay_row(
+    path: Path, tmp_path: Path
+) -> None:
+    """``validatePlan()`` runs before anything dispatches and is the plan's only
+    self-check — and until now no test ever ran it, so it could have been wrong
+    for free (a gate that cannot fire is inertia, not design).
+
+    Both arms in one: the shipped table loads clean, and the two malformed rows
+    the gate names in prose — a row with no verb, a flag with no renderer — are
+    both reported when appended.
+    """
+    prefix = portable_prefix(path.read_text(encoding="utf-8"), name=path.name)
+    clean = run_node(
+        tmp_path / f"{path.stem}-validate-ok.mjs",
+        prefix + "\nvalidatePlan()\nprocess.stdout.write('admitted')\n",
+    )
+    assert clean.returncode == 0 and clean.stdout == "admitted", (
+        f"{path.name}: validatePlan() refuses the SHIPPED plan — "
+        f"rc={clean.returncode} {clean.stderr.strip()}"
+    )
+
+    broken = run_node(
+        tmp_path / f"{path.stem}-validate-bad.mjs",
+        prefix
+        + textwrap.dedent(
+            """
+            RELAYS.contractProbeNoVerb = { flags: [] }
+            RELAYS.contractProbeBadFlag = { verb: 'queue-status', flags: ['contract-probe-flag'] }
+            try {
+              validatePlan()
+              process.stdout.write('ADMITTED A BROKEN TABLE')
+            } catch (err) {
+              process.stdout.write(err.message)
+            }
+            """
+        ),
+    )
+    assert broken.returncode == 0, f"{path.name}: probe script died: {broken.stderr.strip()}"
+    message = broken.stdout
+    assert "contractProbeNoVerb" in message and "no verb" in message, (
+        f"{path.name}: validatePlan() admitted a RELAYS row with no verb — `relayCommand` "
+        f"would render `hpc-agent undefined ...`. It said: {message!r}"
+    )
+    assert "contractProbeBadFlag" in message and "contract-probe-flag" in message, (
+        f"{path.name}: validatePlan() admitted a flag with no FLAG_RENDER entry — "
+        f"`relayCommand` would call undefined at relay time. It said: {message!r}"
+    )
+
+
+# --------------------------------------------------------------------------
 # Fire paths — the guards are not decorative
 # --------------------------------------------------------------------------
+
+
+def test_a_missing_js_runtime_fails_the_executed_arms_when_ci_requires_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The executed arms are the ones a conforming-LOOKING plan cannot pass, so
+    "node was absent, everything skipped, suite green" is the failure this
+    switch exists to remove. Both halves pinned: a contributor without node
+    still gets a skip, CI (which installs node and sets the env) gets a hard
+    failure if the runtime ever goes missing."""
+    import tests._node as node_mod
+
+    monkeypatch.setattr(node_mod.shutil, "which", lambda _name: None)
+
+    monkeypatch.delenv(node_mod.REQUIRE_NODE_ENV, raising=False)
+    assert node_mod.node_is_required() is False
+    with pytest.raises(pytest.skip.Exception):
+        node_mod.require_node()
+
+    monkeypatch.setenv(node_mod.REQUIRE_NODE_ENV, "1")
+    assert node_mod.node_is_required() is True
+    with pytest.raises(pytest.fail.Exception, match="no `node` is on PATH"):
+        node_mod.require_node()
 
 
 def test_parse_gate_fires_on_the_shipped_flag_bug(cli_parser: argparse.ArgumentParser) -> None:
@@ -481,7 +658,6 @@ def test_shape_gate_fires_on_the_shipped_envelope_bug(
     assert any(ok_key in p for p in problems)
 
 
-@pytest.mark.skipif(_NODE is None, reason="no JS runtime available to execute the plan helper")
 def test_shape_gate_fires_on_the_shipped_envelope_bug_when_executed(
     tmp_path: Path, ok_envelope: dict[str, Any], envelope_keys: tuple[str, str]
 ) -> None:
