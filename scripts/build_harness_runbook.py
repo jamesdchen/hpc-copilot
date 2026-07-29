@@ -157,7 +157,8 @@ def _workflow_section(workflow: str, points: tuple[DecisionPoint, ...]) -> str:
             "requires a journaled human greenlight. At each: relay the brief, a human types "
             "`y`, `append-decision` commits the approved spec, and the next `block-drive` "
             "tick advances into the block. The driver never enters one of these blocks "
-            "without a committed `y`.",
+            "without a committed `y` OR a live standing consent that covers it "
+            "(`ops/overnight.py` owns the consumable sets; consumptions are ledgered).",
             "",
         ]
     else:

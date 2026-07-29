@@ -43,7 +43,7 @@ its chain without a per-step human gate.
 
 `submit-s1` → `submit-s2` *(consent boundary)* → `submit-s3` *(consent boundary)* → `submit-s4` *(consent boundary)*
 
-**Consent boundaries.** The driver PARKS before `submit-s2`, `submit-s3`, `submit-s4` — each mutates the cluster and requires a journaled human greenlight. At each: relay the brief, a human types `y`, `append-decision` commits the approved spec, and the next `block-drive` tick advances into the block. The driver never enters one of these blocks without a committed `y`.
+**Consent boundaries.** The driver PARKS before `submit-s2`, `submit-s3`, `submit-s4` — each mutates the cluster and requires a journaled human greenlight. At each: relay the brief, a human types `y`, `append-decision` commits the approved spec, and the next `block-drive` tick advances into the block. The driver never enters one of these blocks without a committed `y` OR a live standing consent that covers it (`ops/overnight.py` owns the consumable sets; consumptions are ledgered).
 
 **Decision points.**
 
@@ -80,7 +80,7 @@ its chain without a per-step human gate.
 
 `aggregate-check` → `aggregate-run` *(consent boundary)*
 
-**Consent boundaries.** The driver PARKS before `aggregate-run` — each mutates the cluster and requires a journaled human greenlight. At each: relay the brief, a human types `y`, `append-decision` commits the approved spec, and the next `block-drive` tick advances into the block. The driver never enters one of these blocks without a committed `y`.
+**Consent boundaries.** The driver PARKS before `aggregate-run` — each mutates the cluster and requires a journaled human greenlight. At each: relay the brief, a human types `y`, `append-decision` commits the approved spec, and the next `block-drive` tick advances into the block. The driver never enters one of these blocks without a committed `y` OR a live standing consent that covers it (`ops/overnight.py` owns the consumable sets; consumptions are ledgered).
 
 **Decision points.**
 

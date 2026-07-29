@@ -172,6 +172,55 @@ clean completion, never a review.
   `assert_greenlit_target` to `assert_greenlit_or_consented`, which
   threads `clean_predecessor` derived at the seat from the two readers.
 
+### Added — the y-minimization bundle's flow legs (2026-07-29)
+
+Six further legs of the same maintainer directive ("minimize the number
+of ys in the flow"), each landed with fire-proofed tests:
+
+- **S13: the y-taking sitting.** The drain pass's report orders parked
+  items through ONE `attention-queue` relay (the kernel's `order_items`
+  stays the ranking's single home; records are JOINed to that order,
+  unmatched kept after matched — ordered, never filtered; relayed only
+  when >=2 items are parked so the §7 relaunch-cheapness invariant
+  holds; fail-open, disclosed as `park_order`). The auto-resume reflex
+  coalesces: the inline first tick per `y` is untouched, but the fresh
+  drain relaunch is one-per-sitting — pending/running ⇒ skip, not stack.
+- **Consented-tier batch dispatch names its basis.** `max_dispatches > 1`
+  is refused at the actor's wire model unless the spec declares
+  `tier="unattended"` or enumerates `item_ids`; no dispatch-side consent
+  read (the module's D1 ruling — one seat answers the consent question);
+  the declaration grants NOTHING (every item still meets its own gate);
+  basis disclosed as `batch_allowed_by`; the chain-hook wake edge
+  declares the unattended tier with `_WAKE_MAX_DISPATCHES = 5`.
+- **Enqueue age in the morning digest** (§10.S3's accepted cost): the
+  digest's `queue` section gains an additive `queued_ages` list
+  (longest-waiting first, unknown last, clip visible), served by ONE
+  shared derivation with queue-status
+  (`state/queue_intake.enqueue_age_sec`; absent/mangled stamps read age
+  unknown, never guessed; the renderer does no date math).
+- **The grant line is OFFERED where the human already is.**
+  `render_grant_line()` (ops/overnight) is the one home for the sentence
+  the token-exact chat tier reads; the authorship refusal renders
+  through it, and now so do two offers: the FIRST park of a run with no
+  live consent (the answer menu's last, clearly-OPTIONAL entry — never
+  the default, absent at anomaly terminators and wherever the line would
+  fail its own gate) and the SPEC-CHANGED consent death (the park brief
+  and the morning brief's `regrant_offer` re-render the dead consent's
+  own coverage re-bound to the CURRENT identity — the re-grant costs one
+  paste). Round-trip pinned in both directions: an offered line, pasted
+  verbatim, grants.
+- **Eager submit (R3) verified BUILT and pinned.** The posture was
+  already shipped in shape (authority never gates on capacity; the actor
+  starts a placed item in the same tick; §10.S4's content-pinned trees +
+  GC reference-pinning cover pending jobs); the pass classified every
+  hold under the judgment rule (zero capacity-inference holds existed),
+  pinned both hold vocabularies as EXACT capacity-free closed sets, and
+  recast the capacity-worded comments as pool-slot facts.
+- **One polling loop for both detached waiters.** `wait-detached` is now
+  a thin adapter over `wait-any-detached`'s fleet loop (the
+  one-definition rule; degenerate one-target behavior verified
+  byte-identical field-for-field and pinned across all three outcomes).
+
 ### Fixed — two workflow-plan relay bugs that made campaign-run silently ineffective (2026-07-29)
 
 - The shared command helper appended `--experiment-dir` to EVERY relayed
