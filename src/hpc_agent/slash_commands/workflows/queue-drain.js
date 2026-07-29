@@ -1,13 +1,13 @@
 export const meta = {
   name: 'queue-drain',
   description:
-    'Drain the run queue: relay one queue-status, compute the drivable set from its items[] fields in plan code, drive each drivable item with plan-relayed block-drive ticks (chunked detached waits), record every park and move on, then re-status and repeat until nothing is drivable — a PURE relay, the sibling of campaign-run at the ledger level (docs/plans/run-queue-placement-2026-07-28.md §5/§7, rule 5 of docs/design/agent-delegation.md)',
+    'Drain the run queue: relay one queue-status, compute the drivable set from its items[] fields in plan code, drive each drivable RUN with plan-relayed block-drive ticks (chunked detached waits), record every park and every skip and move on, then re-status and repeat until nothing is drivable — a PURE relay, the sibling of campaign-run at the ledger level (docs/plans/run-queue-placement-2026-07-28.md §5/§7, rule 5 of docs/design/agent-delegation.md)',
   whenToUse:
-    "When the run queue has work and the tick/wait relay traffic should stay out of the main session's context. Pass args: {repo, maxLoops?, maxPasses?, maxTicks?, maxWaitChunks?, maxAttempts?, campaignBase?, cluster?}. INTAKE FIRST (README, 'Intake'): resolve every ARGS_CONTRACT field BEFORE launching — repo from cwd, the bounds from their defaults — and propose the WHOLE arg set in ONE confirm/correct exchange. RELAUNCH IS THE REFLEX: a pass is stateless and reads everything it needs from its OWN first queue-status relay, so relaunching FRESH at any time, for any reason, is always correct and always cheap — a pass that finds nothing drivable costs exactly one status relay and returns (the §7 relaunch-cheapness invariant). NEVER relaunch with resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns the recorded parks forever without one live tick. The workflow NEVER passes a gate and never decides anything: admission, placement and sequencing are kernel code (queue-advance / queue-dispatch / block-drive), the drivable set is a mechanical field check over relayed items[], and every awaiting_decision is RECORDED and left for the human — this plan does not loop on a parked item, it moves to the next one. AUTO-RESUME: the moment a y is journaled inline, relaunch this workflow FRESH in the same breath; the freshly-drivable item is picked up by the next pass.",
+    "When the run queue has work and the tick/wait relay traffic should stay out of the main session's context. Pass args: {repo, maxLoops?, maxPasses?, maxTicks?, maxWaitChunks?, maxAttempts?, campaignBase?, cluster?}. INTAKE FIRST (README, 'Intake'): resolve every ARGS_CONTRACT field BEFORE launching — repo from cwd, the bounds from their defaults — and propose the WHOLE arg set in ONE confirm/correct exchange. RELAUNCH IS THE REFLEX: a pass is stateless and reads everything it needs from its OWN first queue-status relay, so relaunching FRESH at any time, for any reason, is always correct and always cheap — a pass that finds nothing drivable costs exactly one status relay and returns (the §7 relaunch-cheapness invariant). NEVER relaunch with resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns the recorded parks forever without one live tick. The workflow NEVER passes a gate and never decides anything: admission, placement and sequencing are kernel code (queue-advance / queue-dispatch / block-drive), the drivable set is a mechanical field check over relayed items[], and every awaiting_decision is RECORDED and left for the human — this plan does not loop on a parked item, it moves to the next one. A tick that returns `skip` is recorded the same way, under its own skipped[] key with the kernel's reason: a skip is the kernel saying this tick moved nothing and naming why, and it reproduces on every retick, so re-ticking it only spends the item's budget. Two ledger items resolving to one computed run_id (queue-status's collides_with) are never driven together: one is driven, the sibling is reported under deferred[] and picked up by a later pass. AUTO-RESUME: the moment a y is journaled inline, relaunch this workflow FRESH in the same breath; the freshly-drivable item is picked up by the next pass.",
   phases: [
     { title: 'Status', detail: 'one queue-status relay per pass; the drivable set is computed from its items[] fields in plan code, never remembered across passes' },
-    { title: 'Drive', detail: 'one block-drive loop per drivable item, chunked wait-detached for detached blocks; a park is recorded and the loop ends' },
-    { title: 'Report', detail: 'return the merged park queue + the last status snapshot when nothing is drivable' },
+    { title: 'Drive', detail: 'one block-drive loop per drivable RUN (items sharing a computed run_id are deduped, the sibling deferred), chunked wait-detached for detached blocks; a park or a skip is recorded and the loop ends' },
+    { title: 'Report', detail: 'return the outcome buckets (parked / skipped / deferred / held / settled / failed, each with a count) + the last status snapshot when nothing is drivable' },
   ],
 }
 
@@ -40,12 +40,28 @@ export const meta = {
 // SESSION's inline tick, not this plan's. The main session ticks block-drive
 // directly the moment the y commits (instant visible motion, one tick of
 // transcript cost); the auto-resumed drain pass takes over from the SECOND
-// tick. Those two tickers can overlap by design and the race is safe because
-// the CLAIMS make it safe: run ids are COMPUTED, so both derive the same id and
-// the shipped single-lease guard (_kernel/lifecycle/detached.py) arbitrates —
-// the loser gets a held claim, never a double-drive. This plan therefore never
-// coordinates with the main session, and must never grow a "wait for the
-// inline tick" step.
+// tick. Those two tickers can overlap BY DESIGN, and each of the two overlapping
+// relays is arbitrated by a DIFFERENT mechanism — say both, because they are not
+// the same claim:
+//   * the WAIT overlap is safe by construction: `wait-detached` is a query verb
+//     with NO declared side effects (ops/monitor/wait_detached.py), a pure read
+//     of the journal, so N concurrent waiters on one run are N reads. The
+//     single-lease guard in _kernel/lifecycle/detached.py is NOT what makes this
+//     safe — that lease keys `(run_id, block)` at _spawn_detached and guards
+//     LAUNCHES, and neither ticker takes it on a non-detaching tick;
+//   * the TICK overlap is arbitrated KERNEL-SIDE: consuming a parked boundary is
+//     a COMPARE-AND-SWAP on the pending-decision marker's `(block,
+//     awaiting_since)` under the journal's per-run lock
+//     (_kernel/lifecycle/block_drive.py's `_consume_marker` →
+//     state/journal.compare_and_clear_pending_decision). Exactly one driver turns
+//     the marker it READ into an empty slot and runs the successor span; the
+//     loser returns BEFORE the chain — no second span, no re-park, no raise —
+//     and discloses the loss in its `reason` (reported as `advanced`, because the
+//     boundary DID advance in that instant, so the futile-tick budget is not
+//     charged for losing a race the design creates).
+// This plan therefore never coordinates with the main session, and must never
+// grow a "wait for the inline tick" step. Both mechanisms are the KERNEL's: if
+// either ever weakened, the fix is kernel-side and this plan does not change.
 //
 // S5 (fresh relaunch) — every value this plan uses comes from ARGS or from the
 // CURRENT pass's queue-status relay. Nothing is carried across passes, nothing
@@ -55,7 +71,7 @@ export const meta = {
 const ARGS_CONTRACT = {
   repo: 'absolute path of the experiment checkout (required; verbs run with --experiment-dir)',
   maxLoops:
-    'optional bound on drivable items driven per pass (default 4); the pass drives min(drivable, maxLoops, the status read\'s own item ceiling)',
+    'optional bound on drivable items driven per pass (default 4); the pass drives min(drivable after run_id dedupe, maxLoops) — there is no third term, see the loop-bound comment',
   maxPasses:
     'optional bound on status→drive→re-status passes per invocation (default 10); hitting it returns action "pass_budget_exhausted" with the parks so far',
   maxTicks:
@@ -370,14 +386,106 @@ const attemptsOf = (item) => {
   return 0
 }
 
-// The pass's ledger-derived ceiling, READ from this pass's own status relay and
-// never remembered. queue-status exposes no capacity FIELD by design (§7 R3:
-// the scheduler IS the capacity queue and queue-advance shed the capacity
-// question), so the ceiling is the one bound the digest does carry —
-// total_items, the count of unsettled items this read matched. It can only
-// narrow the pass, never widen it.
-const statusCeiling = (data, fallback) =>
-  typeof data.total_items === 'number' && data.total_items >= 0 ? data.total_items : fallback
+// ── The tick classifier: what the DRIVE LOOP does with a tick's action ──────
+// BlockDriveResult.action is a closed 7-member literal set
+// (_wire/workflows/block_drive.py). This maps each member to the loop's
+// disposition, and it is a NAMED portable helper rather than a chain of `if`s
+// inside driveItem precisely so the contract can EXECUTE it — the loop body
+// itself needs the engine globals and cannot be run by a test.
+//
+//   park     — awaiting_decision: the HUMAN's turn. Recorded, loop ends.
+//   skip     — the kernel says this tick moved NOTHING and named why: a block
+//              that failed or returned no result (exit N), an R3 sha-pin
+//              refusal, a position it cannot route, a workflow it cannot start.
+//              Every one of those is a STABLE outcome — the next tick re-reads
+//              the same durable position and returns the same skip — so ticking
+//              again is a spin, not a retry. It burned the whole 25-tick budget,
+//              stamped drive_attempts to 25 on disk (skip is a FUTILE action at
+//              block-drive's one write point), and the item was then held
+//              forever, because nothing this plan can do resets that counter:
+//              only real progress through the agent-facing seat does. So a skip
+//              ENDS the loop exactly like a park — one skip, one record, move to
+//              the next item — and the next PASS retries it once, under the
+//              maxAttempts ceiling that is now allowed to work.
+//   terminal — end of chain. Recorded, loop ends.
+//   wait     — detached: the chunked wait paces it, then the loop ticks again.
+//   progress — advanced / reran / chained: the chain moved, tick again.
+//   unknown  — an action outside the literal set (the kernel widened its
+//              vocabulary). The loop ends and SAYS so rather than assuming
+//              progress: assuming progress is the F3 spin with a new name.
+const TICK_DISPOSITION = {
+  awaiting_decision: 'park',
+  skip: 'skip',
+  terminal: 'terminal',
+  detached: 'wait',
+  advanced: 'progress',
+  reran: 'progress',
+  chained: 'progress',
+}
+const tickDisposition = (action) =>
+  Object.prototype.hasOwnProperty.call(TICK_DISPOSITION, action)
+    ? TICK_DISPOSITION[action]
+    : 'unknown'
+
+// ── The batch selector: one driver per RUN, not per item ────────────────────
+// Two ledger items can resolve to the SAME run_id — identical resolved params
+// and run_name compute one id — and queue-status PUBLISHES that as
+// `collides_with` (§10.S2: it must be SAID, never silently collapsed). Both
+// siblings are independently drivable by the field check, and driving them in
+// the same parallel() batch would put TWO concurrent block-drive relays on ONE
+// run: the futile-tick budget double-stamped, the human's greenlight consumed by
+// one driver while the other takes the disclosed CAS loss, two watchdog markers
+// racing. So the batch claims each run_id ONCE. The sibling is not dropped and
+// not decided about — it is RECORDED with the collision named and left for a
+// later pass, which picks it up naturally once the representative retires
+// (nothing is remembered: the next pass re-reads collides_with off its own
+// status relay).
+//
+// The `limit` clip is applied AFTER the collision check on purpose: an item past
+// the bound whose run is already claimed is still a collision the human should
+// see, while one merely past the bound is just next pass's work and needs no
+// record.
+const selectDrivableBatch = (drivable, limit) => {
+  const batch = []
+  const deferred = []
+  const claimed = new Map() // run_id -> the item_id that claimed it this pass
+  for (const item of drivable) {
+    const runId = item.run_id
+    const owner = claimed.get(runId)
+    if (owner !== undefined) {
+      deferred.push({
+        item_id: item.item_id,
+        run_id: runId,
+        action: 'deferred_run_id_collision',
+        driven_item_id: owner,
+        collides_with: Array.isArray(item.collides_with) ? item.collides_with : [],
+        reason:
+          `run_id ${runId} is already being driven by item ${owner} in this pass ` +
+          `(queue-status collides_with); driving both would put two concurrent ticks on ` +
+          `one run. Deferred — a later pass drives it once the first retires.`,
+      })
+      continue
+    }
+    if (batch.length >= limit) continue // just past the bound: next pass's work
+    claimed.set(runId, item.item_id)
+    batch.push(item)
+  }
+  return { batch, deferred }
+}
+
+// ── The pass report ─────────────────────────────────────────────────────────
+// One shape for every return site, with each outcome class under its OWN key and
+// a count beside it. The counts are the point: a pass can accumulate many
+// verbatim park briefs, and a human reading the result must be able to see
+// "3 parked, 1 skipped, 2 deferred" without walking the records. Ordering the
+// records is deliberately NOT done here — that is attention-queue's job (§13),
+// and re-deriving a ranking in this plan would be a second, divergent one.
+const BUCKET_KEYS = ['parked', 'skipped', 'deferred', 'held', 'settled', 'failed']
+const passReport = (action, buckets, extra) => {
+  const counts = {}
+  for (const key of BUCKET_KEYS) counts[key] = buckets[key].length
+  return { action, counts, ...buckets, ...(extra || {}) }
+}
 
 validatePlan()
 if (!args || !args.repo) {
@@ -422,8 +530,9 @@ const driveItem = async (pass, item) => {
     }
     const tick = parsed.data
     ticks.push({ action: tick.action, verb: tick.current_verb || tick.next_verb || null })
+    const disposition = tickDisposition(tick.action)
 
-    if (tick.action === 'awaiting_decision') {
+    if (disposition === 'park') {
       // THE PARK. The brief is code-digested and relay-bound: record it (plus
       // the pointer fields) untouched for the main session to relay verbatim
       // and for the human to answer inline. No agent in this plan sees the y,
@@ -439,10 +548,32 @@ const driveItem = async (pass, item) => {
         reason: tick.reason || null,
       }
     }
-    if (tick.action === 'terminal') {
+    if (disposition === 'skip') {
+      // THE SKIP — a loop-ENDING record, for the same reason the park is one:
+      // the kernel already decided nothing moved, and it will decide that again
+      // on every retick. Disclose the kernel's own words (`reason` carries
+      // "block <verb> failed or returned no result (exit N)", the R3 sha-pin
+      // refusal, or the unroutable-position message) plus the position, so the
+      // human sees WHY without a second relay. Reported under skipped[], not
+      // parked[]: a park is a question waiting on a human, a skip is a stall
+      // waiting on a fix, and collapsing them hides which one is which.
+      return {
+        item_id: item.item_id,
+        run_id: runId,
+        action: 'skip',
+        ticks: ticks.length,
+        current_verb: tick.current_verb || null,
+        next_verb: tick.next_verb || null,
+        reason: tick.reason || null,
+      }
+    }
+    if (disposition === 'terminal') {
       return { item_id: item.item_id, run_id: runId, action: 'terminal', ticks: ticks.length, stage_reached: tick.stage_reached || null }
     }
-    if (tick.action === 'detached') {
+    if (disposition === 'unknown') {
+      return { item_id: item.item_id, run_id: runId, action: 'tick_unknown_action', ticks: ticks.length, tick_action: tick.action || null, reason: tick.reason || null }
+    }
+    if (disposition === 'wait') {
       const block = tick.current_verb || tick.next_verb || null
       log(`${tag}: detached at ${block || '?'} — waiting (chunked)`)
       // Chunked wait: each relay is one bounded wait-detached chunk
@@ -474,17 +605,20 @@ const driveItem = async (pass, item) => {
       }
       continue
     }
-    // advanced / reran / chained / skip (BlockDriveResult.action's remaining
-    // members): tick again
+    // progress — advanced / reran / chained: the chain moved, so tick again.
+    // `skip` is deliberately NOT here (see TICK_DISPOSITION): it is stable, so
+    // ticking it again spends the whole budget re-reading the same answer.
     log(`drain:p${pass}:${item.item_id}: ${tick.action}${tick.current_verb ? ' @ ' + tick.current_verb : ''}`)
   }
   return { item_id: item.item_id, run_id: runId, action: 'tick_budget_exhausted', ticks: ticks.length }
 }
 
-const parked = []
-const held = []
-const settled = []
-const failed = []
+// One bucket per outcome CLASS, reported under its own key with a count
+// (passReport). Distinct keys are not cosmetics: parked[] is the human's queue,
+// skipped[] is the "something is broken" queue, deferred[] is bookkeeping about
+// this pass's own batching, and a reader who has to tell them apart by squinting
+// at an `action` string inside one flat list pays that cost on every pass.
+const buckets = { parked: [], skipped: [], deferred: [], held: [], settled: [], failed: [] }
 let lastStatus = null
 let passes = 0
 
@@ -494,16 +628,16 @@ for (let pass = 1; pass <= maxPasses; pass++) {
   const relay = await runStep('status', statusInputs, { label: `drain:p${pass}:status` })
   if (!relay || relay.exit_code !== 0) {
     phase('Report')
-    return { action: 'status_failed', passes, parked, held, settled, failed, last_output: relay ? relay.output : '(status relay agent died)' }
+    return passReport('status_failed', buckets, { passes, last_output: relay ? relay.output : '(status relay agent died)' })
   }
   const parsed = parseEnvelope(relay.output)
   if (!parsed) {
     phase('Report')
-    return { action: 'status_unparseable', passes, parked, held, settled, failed, last_output: relay.output }
+    return passReport('status_unparseable', buckets, { passes, last_output: relay.output })
   }
   if (!parsed.ok) {
     phase('Report')
-    return { action: 'status_refused', passes, parked, held, settled, failed, error_code: parsed.error.error_code, reason: parsed.error.message }
+    return passReport('status_refused', buckets, { passes, error_code: parsed.error.error_code, reason: parsed.error.message })
   }
   const status = parsed.data
   lastStatus = {
@@ -523,8 +657,8 @@ for (let pass = 1; pass <= maxPasses; pass++) {
   const overAttempts = drivableAll.filter((it) => attemptsOf(it) >= maxAttempts)
   const drivable = drivableAll.filter((it) => attemptsOf(it) < maxAttempts)
   for (const it of overAttempts) {
-    if (held.some((h) => h.item_id === it.item_id)) continue
-    held.push({ item_id: it.item_id, run_id: it.run_id, attempts: attemptsOf(it), max_attempts: maxAttempts, reason: `drive_attempts ${attemptsOf(it)} >= maxAttempts ${maxAttempts}: ${attemptsOf(it)} consecutive tick(s) moved this run nothing; held, not driven` })
+    if (buckets.held.some((h) => h.item_id === it.item_id)) continue
+    buckets.held.push({ item_id: it.item_id, run_id: it.run_id, attempts: attemptsOf(it), max_attempts: maxAttempts, reason: `drive_attempts ${attemptsOf(it)} >= maxAttempts ${maxAttempts}: ${attemptsOf(it)} consecutive tick(s) moved this run nothing; held, not driven` })
   }
 
   if (!drivable.length) {
@@ -532,23 +666,35 @@ for (let pass = 1; pass <= maxPasses; pass++) {
     // cost exactly ONE status relay and spawned no loops.
     phase('Report')
     log(`pass ${pass}: nothing drivable (${items.length} item(s) in the status page)`)
-    return { action: passes === 1 ? 'nothing_drivable' : 'quiescent', passes, parked, held, settled, failed, status: lastStatus }
+    return passReport(passes === 1 ? 'nothing_drivable' : 'quiescent', buckets, { passes, status: lastStatus })
   }
 
-  // The pass's loop count, derived from THIS pass's relayed data every time —
-  // never remembered, never accumulated (§5: state in variables + journals,
-  // and the variables are rebuilt from the relay each pass).
-  const loops = Math.min(drivable.length, maxLoops, statusCeiling(status, drivable.length))
-  const batch = drivable.slice(0, loops)
+  // THE LOOP BOUND, in full: min(drivable after run_id dedupe, maxLoops). There
+  // is no third term and there must not be one that cannot bind. It used to
+  // carry a ceiling read off the status digest — total_items, the count of
+  // unsettled items this read MATCHED before the limit clip — and that term was
+  // structural inertia rather than a guard: total_items >= items.length >=
+  // drivable.length ALWAYS, so the min could never select it. queue-status
+  // publishes no capacity field to re-point it at either, by design (§7 R3: the
+  // scheduler IS the capacity queue and queue-advance shed the capacity
+  // question) — occupancy is a per-campaign_id evidence map, not a pass ceiling.
+  // So the bound is the caller's maxLoops, applied to the deduped set, and
+  // nothing else.
+  const { batch, deferred } = selectDrivableBatch(drivable, maxLoops)
+  for (const record of deferred) {
+    if (buckets.deferred.some((d) => d.item_id === record.item_id)) continue
+    buckets.deferred.push(record)
+  }
   phase('Drive')
-  log(`pass ${pass}: ${drivable.length} drivable, driving ${batch.length} (maxLoops ${maxLoops}, status ceiling ${statusCeiling(status, drivable.length)})`)
+  log(`pass ${pass}: ${drivable.length} drivable, driving ${batch.length} (maxLoops ${maxLoops}${deferred.length ? `, ${deferred.length} deferred on a run_id collision` : ''})`)
   const outcomes = await parallel(batch.map((item) => () => driveItem(pass, item)))
 
   for (const outcome of outcomes) {
     if (!outcome) continue
-    if (outcome.action === 'awaiting_decision') parked.push(outcome)
-    else if (outcome.action === 'terminal') settled.push(outcome)
-    else failed.push(outcome)
+    if (outcome.action === 'awaiting_decision') buckets.parked.push(outcome)
+    else if (outcome.action === 'skip') buckets.skipped.push(outcome)
+    else if (outcome.action === 'terminal') buckets.settled.push(outcome)
+    else buckets.failed.push(outcome)
   }
 
   // Re-status and repeat. Nothing from this pass is carried forward except the
@@ -558,16 +704,11 @@ for (let pass = 1; pass <= maxPasses; pass++) {
 }
 
 phase('Report')
-return {
-  action: 'pass_budget_exhausted',
+return passReport('pass_budget_exhausted', buckets, {
   passes,
-  parked,
-  held,
-  settled,
-  failed,
   status: lastStatus,
   resume_hint:
     'the pass budget ran out with work still drivable — relaunch this workflow FRESH (same args, new run). ' +
     'NEVER resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns these same ' +
     'records without one live relay. Kernel state is durable; a fresh pass re-reads the ledger.',
-}
+})

@@ -34,6 +34,13 @@ four things, one section below each:
    survives a relaunch** — it is read back off disk, because a budget that lives
    in a plan variable dies with the pass that spent it.
 
+Sections 5 and 6 cross the seam the other way: they run the SHIPPED PLAN's own
+functions under node. Section 5 pins its drivability formula; section 6 pins the
+three loop decisions an adversarial review found wrong (a stable ``skip`` looped
+until the tick budget was gone, two items sharing one computed ``run_id`` were
+both driven, and a loop ceiling that could not bind), each against data the real
+kernel produced.
+
 Cluster-free: the journal home is redirected via ``HPC_JOURNAL_DIR`` and the one
 submit seat is mocked; nothing here opens a socket.
 """
@@ -42,7 +49,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 from unittest import mock
 
 import pytest
@@ -50,7 +57,11 @@ import pytest
 from hpc_agent._kernel.contract.layout import JournalLayout
 from hpc_agent._kernel.lifecycle.block_drive import block_drive_once
 from hpc_agent._wire.queries.queue_status import QueueStatusItem, QueueStatusSpec
-from hpc_agent._wire.workflows.block_drive import BlockDriveResult, BlockDriveSpec
+from hpc_agent._wire.workflows.block_drive import (
+    BlockDriveAction,
+    BlockDriveResult,
+    BlockDriveSpec,
+)
 from hpc_agent._wire.workflows.campaign_run import CampaignRunResult
 from hpc_agent._wire.workflows.queue_dispatch import QueueDispatchSpec
 from hpc_agent.ops.block_drive_op import block_drive
@@ -869,3 +880,407 @@ def test_the_shipped_plan_formula_answers_every_class_of_real_item(tmp_path: Pat
         "would then sit forever below maxAttempts and the retry ceiling would be disarmed"
     )
     assert verdict["i-live"]["attempts"] == 0
+
+
+# ── 6. the PLAN's loop decisions, executed as themselves ─────────────────────
+#
+# Section 5 pins WHICH items a pass selects. This one pins what the pass then
+# DOES with them — the three decisions an adversarial invariants review found
+# wrong, each now a named portable helper in ``queue-drain.js`` precisely so a
+# test can run it (the loop body itself needs the engine globals ``agent`` /
+# ``parallel`` / ``phase`` and cannot be executed at all):
+#
+# * ``tickDisposition`` — a stable ``skip`` used to fall through to "tick again",
+#   so ONE failing block spent the whole 25-tick budget re-reading the same
+#   answer, stamped ``drive_attempts`` to 25, and left the item over
+#   ``maxAttempts`` forever (nothing the plan does resets that counter — only
+#   real progress through the agent-facing seat does);
+# * ``selectDrivableBatch`` — two ledger items resolving to one computed
+#   ``run_id`` (the collision ``queue-status`` publishes as ``collides_with``)
+#   were both put in the same ``parallel()`` batch: two concurrent ticks on one
+#   run, double-stamped budget, one greenlight consumed twice;
+# * the loop bound — its third term was ``total_items``, which is
+#   ``>= len(items) >= len(drivable)`` by construction, so the ``min`` could
+#   never select it. A guard that cannot fire is inertia, not design.
+#
+# Every arm below is EXECUTED unless it is explicitly labelled static, and the
+# vocabularies it checks against (``BlockDriveAction``'s literal members, the
+# ``collides_with`` wire field) are imported from the kernel rather than spelled
+# here — a hand list is the copy that drifts.
+
+#: The pass-report bucket keys, read off the plan (never spelled here) so a
+#: renamed bucket fails loudly instead of silently un-pinning the grouping rule.
+_BUCKET_KEYS_RE = re.compile(r"^const\s+BUCKET_KEYS\s*=\s*\[[^\]]*\]", re.M)
+
+
+def _driver_text() -> str:
+    """The plan BELOW its ``validatePlan()`` entry point — the part node cannot run."""
+    text = _plan_text()
+    prefix = portable_prefix(text, name=_PLAN_PATH.name)
+    return text[len(prefix) :]
+
+
+#: Where the PASS driver starts: the outcome buckets it accumulates into. Above
+#: this line the driver is ``driveItem``, whose per-item records are hand-rolled
+#: by design; below it every ``return`` is a pass report.
+_PASS_DRIVER_ANCHOR = "const buckets = {"
+
+
+def _pass_driver_text() -> str:
+    """The pass loop and its exits — every ``return`` here is a report to the human."""
+    driver = _driver_text()
+    index = driver.find(_PASS_DRIVER_ANCHOR)
+    assert index >= 0, (
+        f"queue-drain.js's driver no longer declares `{_PASS_DRIVER_ANCHOR}` — the anchor "
+        "this contract splits driveItem from the pass loop on"
+    )
+    return driver[index:]
+
+
+def _run_plan_tail(tmp_path: Path, stem: str, tail: str, *argv: str) -> Any:
+    """Execute *tail* against the shipped plan's portable prefix; return its JSON."""
+    proc = run_node(
+        tmp_path / f"{stem}.mjs",
+        portable_prefix(_plan_text(), name=_PLAN_PATH.name) + tail,
+        *argv,
+    )
+    assert proc.returncode == 0, f"queue-drain.js {stem} threw: {proc.stderr.strip()}"
+    return json.loads(proc.stdout)
+
+
+# ── 6a. F3: a skip ENDS the drive loop ───────────────────────────────────────
+
+
+def test_the_plan_classifies_every_real_tick_action_and_skip_ends_the_loop(
+    tmp_path: Path,
+) -> None:
+    """EXECUTED: ``queue-drain.js``'s ``tickDisposition`` over the REAL
+    ``BlockDriveAction`` members, imported from the wire model.
+
+    Two claims in one, and the second is the fix:
+
+    * the classifier is TOTAL over the kernel's literal set — no shipped action
+      falls into the ``unknown`` bucket (and ``unknown`` is not decorative: an
+      action outside the set really does land there, which is the loop refusing
+      to assume progress about a vocabulary it has never seen);
+    * the loop-ENDING dispositions are exactly ``{park, skip, terminal}``.
+      ``skip`` sitting outside that set is the whole F3 bug: the kernel returns
+      it for a block that failed, an R3 sha-pin refusal, and an unroutable
+      position — every one of them a STABLE answer the next tick reproduces
+      (pinned against the kernel in the test below), so "tick again" is a spin
+      that costs the item its entire retry budget.
+    """
+    actions = list(get_args(BlockDriveAction))
+    assert "skip" in actions and "awaiting_decision" in actions  # sanity on the import
+    tail = (
+        "\nconst out = {}\n"
+        "for (const action of JSON.parse(process.argv[2])) out[action] = tickDisposition(action)\n"
+        "out['__unknown_probe__'] = tickDisposition('no-such-action-the-kernel-emits')\n"
+        "out['__loop_ending__'] = Object.keys(TICK_DISPOSITION)\n"
+        "process.stdout.write(JSON.stringify(out))\n"
+    )
+    verdict = _run_plan_tail(tmp_path, "dispositions", tail, json.dumps(actions))
+
+    assert verdict.pop("__unknown_probe__") == "unknown", (
+        "an action outside BlockDriveAction did not read as 'unknown' — the loop would "
+        "assume progress about a vocabulary it has never seen, which is F3 with a new name"
+    )
+    classified = set(verdict.pop("__loop_ending__"))
+    assert classified == set(actions), (
+        f"queue-drain.js's TICK_DISPOSITION covers {sorted(classified)} but the kernel "
+        f"ships {sorted(actions)} — an uncovered member ends the loop as 'unknown' rather "
+        "than doing the right thing with it"
+    )
+    assert "unknown" not in verdict.values(), (
+        f"the classifier left a real tick action unclassified: {verdict}"
+    )
+    loop_ending = {action for action, d in verdict.items() if d in {"park", "skip", "terminal"}}
+    assert loop_ending == {"awaiting_decision", "skip", "terminal"}, (
+        f"the drive loop ends on {sorted(loop_ending)}. 'skip' must be in that set: it is a "
+        "STABLE outcome, so continuing the loop spends every remaining tick re-reading the "
+        f"same answer and stamps drive_attempts to maxTicks. Dispositions: {verdict}"
+    )
+    assert verdict["detached"] == "wait"  # the chunked wait paces it, then ticks again
+    assert {verdict["advanced"], verdict["reran"], verdict["chained"]} == {"progress"}
+
+
+def test_a_skip_reproduces_on_every_retick_and_charges_the_budget_each_time(
+    tmp_path: Path,
+) -> None:
+    """The KERNEL truth F3's fix rests on: a ``skip`` is not a transient.
+
+    Driven for real (no ``run_tick`` mock): a run with no pending marker and no
+    workflow to start is a position ``plan_block_action`` cannot route, so every
+    tick returns the SAME ``skip`` with the SAME reason — and each one is charged
+    as a futile drive at ``block-drive``'s one write point. Twenty-five of those
+    is precisely what the pre-fix loop bought, and the item ends up over
+    ``maxAttempts`` with nothing in the plan able to reset the counter.
+    """
+    exp = _exp(tmp_path)
+    _seed_run(exp, "ml-spin0001", status="in_flight")
+
+    first = block_drive(exp, spec=BlockDriveSpec(run_id="ml-spin0001"))
+    second = block_drive(exp, spec=BlockDriveSpec(run_id="ml-spin0001"))
+
+    assert first.action == "skip" and second.action == "skip"
+    assert first.reason == second.reason != ""  # byte-identical: nothing changed
+    assert _on_disk(exp, "ml-spin0001") == 2, (
+        "a skip did not charge the futile-drive budget — then the 25-relay spin the fix "
+        "removes would have been free forever instead of merely expensive"
+    )
+
+
+def test_the_plan_records_a_skip_under_its_own_key_with_the_kernels_reason(
+    tmp_path: Path,
+) -> None:
+    """STATIC: the shipped skip branch discloses what the tick carried, and the
+    driver files it under ``skipped[]`` rather than folding it into ``failed[]``.
+
+    The executed arm above proves the loop STOPS on a skip; it cannot see what
+    the loop then records. This does — and both halves matter, because a skip
+    recorded without the kernel's ``reason`` ("block <verb> failed or returned no
+    result (exit N)", the R3 refusal text) sends the human back for a second
+    relay to find out why.
+    """
+    text = _plan_text()
+    skip_branch = re.search(r"if \(disposition === 'skip'\) \{.*?\n    \}", text, re.S)
+    assert skip_branch is not None, (
+        "queue-drain.js's driveItem has no `disposition === 'skip'` branch — a skip would "
+        "fall through to the progress path and spin"
+    )
+    body = skip_branch.group(0)
+    for read in ("action: 'skip'", "tick.reason", "tick.current_verb", "tick.next_verb"):
+        assert read in body, (
+            f"the skip record never reads {read!r}: the exit/refusal message and the position "
+            f"the kernel disclosed are the whole reason a human can act on it. Branch: {body!r}"
+        )
+    assert "buckets.skipped.push(outcome)" in _driver_text(), (
+        "a skip outcome is not filed under skipped[] — a park is a question waiting on a "
+        "human and a skip is a stall waiting on a fix; one bucket cannot say which"
+    )
+
+
+# ── 6b. F5: one driver per run_id, the collision sibling deferred ────────────
+
+
+def test_the_batch_selector_drives_one_item_per_run_id_and_records_the_sibling(
+    tmp_path: Path,
+) -> None:
+    """EXECUTED: ``selectDrivableBatch`` over wire items the real projection
+    produced for a genuine ``collides_with`` pair.
+
+    Two ledger items with identical resolved params compute ONE run id — §10.S2's
+    acknowledged collision, which ``queue-status`` publishes rather than
+    collapsing. Both are independently drivable by the field check, so the
+    pre-fix ``drivable.slice(0, loops)`` put both in one ``parallel()`` batch:
+    two concurrent ``block-drive`` relays on one run, the futile-tick budget
+    double-stamped, the human's greenlight consumed by one driver while the other
+    takes the kernel's disclosed CAS loss.
+
+    The negative twin runs the pre-fix selection — a plain slice — over the same
+    items in the same script and watches it take both, so this is a difference
+    between two selectors rather than an assertion about one.
+    """
+    exp = _exp(tmp_path)
+    # Same run_id, two request_ids: the shape `_collisions` folds into a pair.
+    _enqueue(exp, "i-dup-a", "ml-dup00001")
+    _place(exp, "i-dup-a", "ml-dup00001")
+    _enqueue(exp, "i-dup-b", "ml-dup00001")
+    _place(exp, "i-dup-b", "ml-dup00001")
+    _enqueue(exp, "i-solo", "ml-solo0001")
+    _place(exp, "i-solo", "ml-solo0001")
+    _seed_run(exp, "ml-dup00001", status="in_flight")
+    _seed_run(exp, "ml-solo0001", status="in_flight")
+
+    result = _status(exp)
+    items = _by_id(result)
+    assert items["i-dup-a"].collides_with == ["i-dup-b"]  # the kernel said it
+    assert items["i-dup-b"].collides_with == ["i-dup-a"]
+    assert items["i-solo"].collides_with == []
+    assert any("run_id ml-dup00001 is claimed by 2 items" in note for note in result.notes)
+
+    wire = [item.model_dump(mode="json") for item in result.items]
+    tail = (
+        "\nconst items = JSON.parse(process.argv[2]).filter(isDrivable)\n"
+        "const picked = selectDrivableBatch(items, 4)\n"
+        # The pre-fix selection, verbatim, in the same script over the same items.
+        "const naive = items.slice(0, Math.min(items.length, 4))\n"
+        "process.stdout.write(JSON.stringify({\n"
+        "  drivable: items.map((i) => i.item_id),\n"
+        "  batch: picked.batch.map((i) => i.item_id),\n"
+        "  deferred: picked.deferred,\n"
+        "  naive: naive.map((i) => i.item_id),\n"
+        "}))\n"
+    )
+    out = _run_plan_tail(tmp_path, "batch", tail, json.dumps(wire))
+
+    assert out["drivable"] == ["i-dup-a", "i-dup-b", "i-solo"], (
+        "the fixture stopped producing three independently drivable items, so the dedupe "
+        f"has nothing to do: {out['drivable']}"
+    )
+    assert out["naive"] == ["i-dup-a", "i-dup-b", "i-solo"], (
+        "the pre-fix selection no longer takes both collision siblings — the negative twin "
+        "has stopped demonstrating the bug this test is about"
+    )
+    assert out["batch"] == ["i-dup-a", "i-solo"], (
+        f"the batch drives {out['batch']}: exactly one item per computed run_id must be "
+        "driven, or two concurrent ticks land on one run"
+    )
+    assert len(out["deferred"]) == 1, f"the sibling was dropped, not recorded: {out['deferred']}"
+    record = out["deferred"][0]
+    assert record["item_id"] == "i-dup-b"
+    assert record["run_id"] == "ml-dup00001"
+    assert record["driven_item_id"] == "i-dup-a"
+    assert record["collides_with"] == ["i-dup-a"], (
+        "the deferral record does not carry the kernel's own collides_with — the human is "
+        f"then told an item was deferred with no way to see why: {record}"
+    )
+    assert "collides_with" in record["reason"] and "ml-dup00001" in record["reason"]
+
+
+def test_a_deferred_sibling_is_drivable_on_its_own_once_the_first_retires(
+    tmp_path: Path,
+) -> None:
+    """The deferral must be a WAIT, not a hold: nothing is remembered across
+    passes, so the sibling has to come back by itself.
+
+    Same two items; the batch is selected from a set that no longer contains the
+    representative (the shape a later pass sees once the first item retires) and
+    the sibling is driven with no record of ever having been deferred.
+    """
+    exp = _exp(tmp_path)
+    _enqueue(exp, "i-dup-a", "ml-dup00002")
+    _place(exp, "i-dup-a", "ml-dup00002")
+    _enqueue(exp, "i-dup-b", "ml-dup00002")
+    _place(exp, "i-dup-b", "ml-dup00002")
+    _seed_run(exp, "ml-dup00002", status="in_flight")
+
+    wire = [item.model_dump(mode="json") for item in _status(exp).items]
+    tail = (
+        "\nconst all = JSON.parse(process.argv[2]).filter(isDrivable)\n"
+        "const later = all.filter((i) => i.item_id !== 'i-dup-a')\n"
+        "const picked = selectDrivableBatch(later, 4)\n"
+        "process.stdout.write(JSON.stringify({\n"
+        "  batch: picked.batch.map((i) => i.item_id),\n"
+        "  deferred: picked.deferred.length,\n"
+        "}))\n"
+    )
+    out = _run_plan_tail(tmp_path, "batch-later", tail, json.dumps(wire))
+
+    assert out["batch"] == ["i-dup-b"], (
+        "the sibling did not become drivable once the representative left the set — the "
+        f"dedupe would then be a permanent hold rather than a deferral: {out}"
+    )
+    assert out["deferred"] == 0
+
+
+# ── 6c. F9: the loop bound has no term that cannot bind ──────────────────────
+
+
+def test_the_removed_status_ceiling_could_never_have_narrowed_a_pass(
+    tmp_path: Path,
+) -> None:
+    """The guard-can-it-fire check, done as arithmetic on real data.
+
+    The loop bound used to be ``min(drivable, maxLoops, total_items)``.
+    ``total_items`` counts every non-terminal item the filters MATCHED, before
+    ``limit`` clips ``items`` and before the plan filters ``items`` down to the
+    drivable ones — so ``total_items >= len(items) >= len(drivable)`` holds by
+    construction and the third term could never be the minimum. Shown here with
+    the ledger clipped (``total_items`` at its most generous relative to the
+    page) and the plan's OWN ``isDrivable`` counting the last term.
+
+    ``queue-status`` publishes no capacity field to re-point it at either: the
+    scheduler IS the capacity queue (§7 R3), and ``occupancy`` is a per-campaign
+    evidence map, not a pass ceiling. So the term is gone rather than rebound.
+    """
+    exp = _exp(tmp_path)
+    for n in range(4):
+        item_id, run_id = f"i-c{n}", f"ml-ceil000{n}"
+        _enqueue(exp, item_id, run_id)
+        _place(exp, item_id, run_id)
+    _seed_run(exp, "ml-ceil0000", status="in_flight")
+    _seed_run(exp, "ml-ceil0001", status="in_flight")
+    # ml-ceil0002 / ml-ceil0003: placed, never dispatched — matched, not drivable.
+
+    result = _status(exp, limit=2, include_settled=False)
+    wire = [item.model_dump(mode="json") for item in result.items]
+    tail = (
+        "\nconst items = JSON.parse(process.argv[2])\n"
+        "process.stdout.write(JSON.stringify({ drivable: items.filter(isDrivable).length }))\n"
+    )
+    drivable = _run_plan_tail(tmp_path, "ceiling", tail, json.dumps(wire))["drivable"]
+
+    assert result.truncated is True and result.total_items == 4  # the clip really happened
+    assert result.total_items >= len(result.items) >= drivable >= 1, (
+        "total_items is no longer an upper bound on the drivable count — if a wire change "
+        "ever makes it one that can bind, the loop bound may take it back, but only then: "
+        f"total_items={result.total_items} items={len(result.items)} drivable={drivable}"
+    )
+
+    text = _plan_text()
+    assert "statusCeiling" not in text, (
+        "the un-fireable ceiling is back in queue-drain.js — a bound that is provably never "
+        "the minimum is inertia, not design"
+    )
+    assert "selectDrivableBatch(drivable, maxLoops)" in _driver_text(), (
+        "the loop bound is no longer `min(drivable after dedupe, maxLoops)` — say what the "
+        "bound is in one place, so the next reader does not have to prove a term inert again"
+    )
+
+
+# ── 6d. the pass report: distinct keys, counts beside them ───────────────────
+
+
+def test_the_pass_report_groups_every_outcome_class_under_its_own_key_with_counts(
+    tmp_path: Path,
+) -> None:
+    """EXECUTED + static: one report shape, one key per class, a count beside it.
+
+    A pass accumulates verbatim park briefs, and S13's ordering is deliberately
+    NOT built here — so the only thing keeping the human's read cost bounded is
+    that the classes are separable and countable without walking the records.
+    The static half pins that every driver return goes through ``passReport``: a
+    single hand-rolled return object is how the keys drift apart again.
+    """
+    keys_src = _BUCKET_KEYS_RE.search(_plan_text())
+    assert keys_src is not None, "queue-drain.js declares no `const BUCKET_KEYS = [...]`"
+    for bucket in ("parked", "skipped", "deferred", "held", "settled", "failed"):
+        assert f"'{bucket}'" in keys_src.group(0), (
+            f"{bucket!r} is not a reported bucket — the outcome classes this plan produces "
+            f"must each land under their own key: {keys_src.group(0)}"
+        )
+
+    tail = (
+        "\nconst buckets = {}\n"
+        "for (const key of BUCKET_KEYS) buckets[key] = []\n"
+        "buckets.parked.push({ item_id: 'i-1' })\n"
+        "buckets.skipped.push({ item_id: 'i-2' }, { item_id: 'i-3' })\n"
+        "buckets.deferred.push({ item_id: 'i-4' })\n"
+        "process.stdout.write(JSON.stringify(passReport('quiescent', buckets, { passes: 2 })))\n"
+    )
+    report = _run_plan_tail(tmp_path, "report", tail)
+
+    assert report["action"] == "quiescent" and report["passes"] == 2
+    assert report["counts"] == {
+        "parked": 1,
+        "skipped": 2,
+        "deferred": 1,
+        "held": 0,
+        "settled": 0,
+        "failed": 0,
+    }, f"the counts do not match the buckets they summarize: {report}"
+    assert [r["item_id"] for r in report["skipped"]] == ["i-2", "i-3"]
+    assert report["parked"] != report["skipped"]  # distinct keys, not one flat list
+
+    driver = _pass_driver_text()
+    hand_rolled = re.findall(r"return \{", driver)
+    assert not hand_rolled, (
+        f"the pass loop has {len(hand_rolled)} hand-rolled return object(s) — every pass "
+        "return must go through passReport() or the report keys drift apart per exit path"
+    )
+    assert driver.count("return passReport(") == 5, (
+        "the pass loop's exits are not all report sites — status_failed / status_unparseable "
+        "/ status_refused / nothing_drivable-quiescent / pass_budget_exhausted is five: "
+        f"{driver.count('return passReport(')} found"
+    )

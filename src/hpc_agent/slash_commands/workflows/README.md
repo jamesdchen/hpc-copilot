@@ -176,6 +176,28 @@ query/validate-only command rule above).
 
 ## Lineage notes
 
+- **2026-07-29 — `queue-drain.js`'s loop decisions fixed, and each one is now
+  a named helper the contract EXECUTES.** An adversarial invariants review
+  found three plan-side defects, all invisible to a regex and none reachable
+  from the driver (the loop body needs `agent`/`parallel`/`phase`), so each
+  decision was extracted into a portable helper above `validatePlan()` and
+  pinned by running it: `tickDisposition` (a `skip` is a STABLE kernel outcome —
+  a failed block, an R3 sha-pin refusal, an unroutable position — so it now ENDS
+  the drive loop like a park instead of spinning 25 relays and stamping
+  `drive_attempts` to the tick budget), `selectDrivableBatch` (two items sharing
+  one computed `run_id` — the `collides_with` collision `queue-status`
+  publishes — used to be driven concurrently; the batch now claims each run once
+  and records the sibling as deferred), and the loop bound (its `total_items`
+  term was `>= len(items) >= len(drivable)` by construction, a guard that could
+  never fire; removed, not rebound — `queue-status` publishes no capacity field).
+  The pass report grew one key per outcome class with a `counts` map beside them
+  (`parked` / `skipped` / `deferred` / `held` / `settled` / `failed`), so a human
+  reading a long pass does not walk the records to tell a question from a stall.
+  The plan's S8 comment was also corrected: it claimed the detached single-lease
+  guard arbitrated the post-greenlight tick overlap, which it does not (that
+  lease keys `(run_id, block)` at spawn). The wait overlap is safe because
+  `wait-detached` is a side-effect-free query; the tick overlap is arbitrated
+  kernel-side by a compare-and-swap on the pending-decision marker.
 - **2026-07-29 — `queue-drain.js` lands; two shipped relay bugs fixed; the
   gate moved from regex to execution.** Phase 3 of
   `docs/plans/run-queue-placement-2026-07-28.md` (§5/§7): `queue-drain.js`

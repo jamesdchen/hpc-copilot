@@ -235,6 +235,25 @@ lease-identity helpers are IMPORTED from `wait-detached`, not forked;
 read-only-ness is pinned by byte-and-mtime inventory tests, and the verb
 joins `wait-detached` on the MCP blocking-verb refusal seam.
 
+### Fixed — three queue-drain loop defects + the S8 comment (invariants review, 2026-07-29)
+
+Each now pinned by EXECUTING the plan's own code under node. (1) A `skip` —
+the kernel's stable "this tick moved nothing, here is why" — was listed
+among the "tick again" actions, so one failing block spent the whole
+25-tick budget re-reading the same answer, stamped `drive_attempts` to 25,
+and left the item held with nothing able to reset it; a skip now ENDS the
+drive loop like a park, reported under its own `skipped[]` key with the
+kernel's reason. (2) Two ledger items resolving to one computed `run_id`
+(§10.S2's collision, published as `collides_with`) were both driven in one
+`parallel()` batch — two concurrent ticks on one run; the batch now claims
+each `run_id` once and records the sibling under `deferred[]`. (3) The
+`total_items` pass ceiling was `>= drivable` by construction and could
+never bind — removed rather than rebound. The plan's S8 comment claimed
+the detached lease arbitrated the tick overlap; corrected to the real
+story (pure-read waits; kernel-side marker CAS for ticks). The pass
+report now groups outcomes under one key per class with a `counts` map,
+so a long pass is readable without walking every verbatim brief.
+
 ### Fixed — Phase 3 guards proven to fire (adversarial guards-fire review, 2026-07-29)
 
 The queue-drain plan's drivability formula and retry ceiling are now pinned
