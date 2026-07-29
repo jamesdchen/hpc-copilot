@@ -99,6 +99,29 @@ def test_corrupt_lease_is_skipped_not_fatal(homedir, monkeypatch) -> None:
     assert out.outcome == "no_live_worker"
 
 
+def test_single_wait_routes_through_the_one_fleet_loop(homedir, monkeypatch) -> None:
+    """ONE polling loop (the one-definition rule): the single waiter is the
+    degenerate one-target call of ``wait-any-detached`` — it holds no poll loop
+    of its own, so the two verbs can never drift on cadence or probe order."""
+    import hpc_agent.ops.monitor.wait_any_detached as fleet_mod
+
+    captured = {}
+    real_fleet_wait = fleet_mod.wait_any_detached
+
+    def spy(*, spec):
+        captured["spec"] = spec
+        return real_fleet_wait(spec=spec)
+
+    monkeypatch.setattr(fleet_mod, "wait_any_detached", spy)
+    out = wait_detached(spec=WaitDetachedInput(run_id="run-abc", block="submit-s2"))
+    assert out.outcome == "no_live_worker"
+    spec = captured["spec"]
+    assert [(t.run_id, t.block) for t in spec.targets] == [("run-abc", "submit-s2")]
+    # The budget contract passes through unchanged (same defaults both sides).
+    assert spec.timeout_sec == WaitDetachedInput(run_id="run-abc").timeout_sec
+    assert spec.poll_interval_sec == WaitDetachedInput(run_id="run-abc").poll_interval_sec
+
+
 # ── L2 wake payload: the worker parks itself; wait-detached hands back the brief ──
 
 

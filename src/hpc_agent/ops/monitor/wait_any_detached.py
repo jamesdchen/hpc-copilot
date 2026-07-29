@@ -29,7 +29,10 @@ same three (``worker_exited`` / ``no_live_worker`` / ``timeout``), so a caller
 branches on ONE vocabulary whether it waited on one run or forty. The
 lease-reading helpers are IMPORTED from ``wait_detached`` rather than
 re-implemented — one definition of "which lease is this target's, and is it
-alive".
+alive" — and the polling loop below is the ONE loop for both verbs:
+``wait_detached`` is the degenerate one-target call of this function (a thin
+result-shape adapter), so the single and fleet waiters can never drift on
+cadence, probe order, or outcome semantics.
 
 Like ``wait-detached`` this is a BLOCKING call: launch it through the harness's
 native backgrounding (Claude Code ``run_in_background``), never over the

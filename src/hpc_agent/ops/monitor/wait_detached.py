@@ -33,7 +33,6 @@ only the notification — doctor/the watchdog still catch the run.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -177,59 +176,45 @@ def wait_detached(*, spec: WaitDetachedInput) -> WaitDetachedResult:
     way), and ``timeout`` when the budget elapses with the worker still
     alive (not an anomaly: long queue waits are normal; re-arm or consult
     ``status-snapshot``).
+
+    ONE polling loop (the repo's one-definition rule): this IS the degenerate
+    one-target call of the fleet waiter, ``ops/monitor/wait_any_detached.py``
+    — same first-poll lease resolution, same probe→budget→sleep tick, same
+    wake-payload reads (the fleet waiter imports THIS module's lease helpers,
+    so identity resolution and terminal reads were already shared; delegating
+    the loop too means the two verbs can never drift on cadence or outcome
+    semantics). This thin adapter only maps the single row back to the flat
+    ``WaitDetachedResult`` shape, byte-identical to the pre-fleet behaviour
+    (pinned by ``tests/ops/monitor/test_wait_any_detached.py``'s equivalence
+    test and this verb's own pins).
     """
-    from hpc_agent._kernel.lifecycle.detached import pid_alive
-    from hpc_agent.state.run_record import current_homedir
+    # Lazy import: the fleet module imports this module's lease helpers at
+    # load, so importing it top-level here would be a cycle.
+    from hpc_agent._wire.queries.wait_any_detached import (  # noqa: PLC0415
+        DetachedTarget,
+        WaitAnyDetachedInput,
+    )
+    from hpc_agent.ops.monitor.wait_any_detached import wait_any_detached  # noqa: PLC0415
 
-    detached_dir = current_homedir() / "_detached"
-    started = time.monotonic()
-    have_dir = detached_dir.is_dir()
-
-    lease = _live_lease(detached_dir, spec.run_id, spec.block) if have_dir else None
-    if lease is None:
-        # No LIVE worker: it either already exited (its recorded terminal is the
-        # wake payload) or was never launched. Recover the pointers from whatever
-        # lease is on disk (dead pid) so an already-done worker still hands back
-        # its brief/relay/next_verb.
-        read_lease = _newest_lease(detached_dir, spec.run_id, spec.block) if have_dir else None
-        brief, relay, next_verb = _terminal_pointers(read_lease, spec.run_id, spec.block)
-        return WaitDetachedResult(
-            outcome="no_live_worker",
-            run_id=spec.run_id,
-            block=(read_lease.get("block") if isinstance(read_lease, dict) else None) or spec.block,
-            pid=None,
-            log_path=read_lease.get("log_path") if isinstance(read_lease, dict) else None,
-            waited_sec=0.0,
-            brief=brief,
-            relay=relay,
-            next_verb=next_verb,
+    fleet = wait_any_detached(
+        spec=WaitAnyDetachedInput(
+            targets=[DetachedTarget(run_id=spec.run_id, block=spec.block)],
+            timeout_sec=spec.timeout_sec,
+            poll_interval_sec=spec.poll_interval_sec,
         )
-
-    pid = int(lease["pid"])
-    while pid_alive(pid):
-        if time.monotonic() - started >= spec.timeout_sec:
-            # Still alive at the budget — no terminal yet, so no wake payload.
-            return WaitDetachedResult(
-                outcome="timeout",
-                run_id=spec.run_id,
-                block=lease.get("block") or spec.block,
-                pid=pid,
-                log_path=lease.get("log_path"),
-                waited_sec=round(time.monotonic() - started, 3),
-            )
-        time.sleep(spec.poll_interval_sec)
-
-    # The worker exited: it parked itself on the way out (L2), so its recorded
-    # terminal carries the decision brief the woken agent needs directly.
-    brief, relay, next_verb = _terminal_pointers(lease, spec.run_id, spec.block)
+    )
+    # Exactly one target in, exactly one row out; the fleet outcome literal for
+    # a one-target set is the single-wait outcome verbatim (a still_running row
+    # exists only under the ``timeout`` outcome here).
+    (row,) = fleet.targets
     return WaitDetachedResult(
-        outcome="worker_exited",
+        outcome=fleet.outcome,
         run_id=spec.run_id,
-        block=lease.get("block") or spec.block,
-        pid=pid,
-        log_path=lease.get("log_path"),
-        waited_sec=round(time.monotonic() - started, 3),
-        brief=brief,
-        relay=relay,
-        next_verb=next_verb,
+        block=row.block,
+        pid=row.pid,
+        log_path=row.log_path,
+        waited_sec=fleet.waited_sec,
+        brief=row.brief,
+        relay=row.relay,
+        next_verb=row.next_verb,
     )

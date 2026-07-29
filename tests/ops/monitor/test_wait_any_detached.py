@@ -301,6 +301,56 @@ def test_dead_at_first_poll_still_reads_the_exited_workers_terminal(
     assert row.brief is not None and row.brief["est_core_hours"] == 4
 
 
+# ── the degenerate case: a one-target set IS wait-detached, field for field ──
+
+
+@pytest.mark.parametrize("outcome", ["worker_exited", "no_live_worker", "timeout"])
+def test_one_target_set_matches_wait_detached_field_for_field(
+    homedir, tmp_path, monkeypatch, outcome
+) -> None:
+    """ONE polling loop (the one-definition rule): ``wait-detached`` delegates to
+    this fleet loop, so a one-target set must match it field for field on every
+    outcome — same outcome literal, same block/pid/log_path resolution, same
+    wake payload. This pin is what keeps the adapter mapping honest."""
+    from hpc_agent._wire.queries.wait_detached import WaitDetachedInput
+    from hpc_agent.ops.monitor.wait_detached import wait_detached
+
+    experiment_dir = tmp_path / "exp"
+    experiment_dir.mkdir()
+    _record_worker_terminal(experiment_dir, run_id="run-a", block="submit-s2")
+    _write_lease(homedir, block="submit-s2", run_id="run-a", pid=11, experiment_dir=experiment_dir)
+
+    def scripted_probe():
+        """A FRESH probe per call — both waiters must see the same script."""
+        if outcome == "worker_exited":
+            seen: list[int] = []
+
+            def probe(pid: int) -> bool:
+                seen.append(pid)
+                return len(seen) <= 2  # first-poll + one tick alive, then dead
+
+            return probe
+        return lambda pid: outcome == "timeout"
+
+    timeout_sec = 0.05 if outcome == "timeout" else 30
+    monkeypatch.setattr(detached_mod, "pid_alive", scripted_probe())
+    single = wait_detached(
+        spec=WaitDetachedInput(run_id="run-a", timeout_sec=timeout_sec, poll_interval_sec=0.01)
+    )
+    monkeypatch.setattr(detached_mod, "pid_alive", scripted_probe())
+    fleet = wait_any_detached(
+        spec=_spec(("run-a", None), timeout_sec=timeout_sec, poll_interval_sec=0.01)
+    )
+
+    assert single.outcome == fleet.outcome == outcome
+    (row,) = fleet.targets
+    assert (row.block, row.pid, row.log_path) == (single.block, single.pid, single.log_path)
+    assert (row.brief, row.relay, row.next_verb) == (single.brief, single.relay, single.next_verb)
+    # waited_sec is wall-clock (not comparable exactly); pin the shared shape.
+    if outcome == "no_live_worker":
+        assert single.waited_sec == fleet.waited_sec == 0.0
+
+
 # ── the invariant that makes concurrent waiters safe: it is a PURE READ ───────
 
 
