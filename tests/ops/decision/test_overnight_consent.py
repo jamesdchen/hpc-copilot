@@ -637,11 +637,23 @@ def test_placement_leg_orders_after_spec_leg(experiment_dir: Path) -> None:
     assert decision.reason == "spec-changed"
 
 
-def test_refusal_renders_a_paste_ready_grant_line_that_grants(experiment_dir: Path) -> None:
+def _pin_clusters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:
+    """Point HPC_CLUSTERS_CONFIG at a temp yaml declaring exactly *keys* — the
+    record-time placement gate validates keys against the loaded config, so a
+    placement-bound test must pin the vocabulary it uses."""
+    path = tmp_path / "consent-clusters.yaml"
+    path.write_text("".join(f"{k}:\n  host: {k}.example.edu\n" for k in keys), encoding="utf-8")
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(path))
+
+
+def test_refusal_renders_a_paste_ready_grant_line_that_grants(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The refusal's copy-paste line is not decoration — pasted verbatim into
     chat, it must carry every token the chat tier reads (boundary, classes,
     sha prefix, cluster set) and therefore grant. A rendered line that fails
     its own gate would be worse than no line at all."""
+    _pin_clusters(tmp_path, monkeypatch, "carc", "hoffman2")
     _arm_wake(_RUN_ID)
     utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
     resolved = _resolved(placement=["carc", "hoffman2"], heal_classes=["env_pin"])
@@ -656,3 +668,52 @@ def test_refusal_renders_a_paste_ready_grant_line_that_grants(experiment_dir: Pa
     append_utterance(experiment_dir, paste_line)
     result = _append(experiment_dir, resolved=resolved)
     assert result.count == 1
+
+
+# ── S1 record-time placement gate: strict where the human is awake ────────────
+
+
+def test_malformed_placement_shape_refused_at_record_time(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A present-but-broken placement must refuse at grant time, not silently
+    record a consent the consumption leg can never fire on (absent-disables
+    would treat it as placement-blind — not what the human meant)."""
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    with pytest.raises(errors.SpecInvalid, match="placement gate.*unusable"):
+        _append(experiment_dir, resolved=_resolved(placement={"cluster": "hoffman2"}))
+
+
+def test_unknown_placement_key_refused_with_near_miss(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd key would mismatch EVERY real placement — a guaranteed 3am
+    placement-changed park. The gate catches it now, with the suggestion."""
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2", "carc")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    with pytest.raises(errors.SpecInvalid, match="did you mean 'hoffman2'"):
+        _append(experiment_dir, resolved=_resolved(placement="hoffman"))
+
+
+def test_valid_placement_passes_the_record_time_gate(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    result = _append(experiment_dir, resolved=_resolved(placement="hoffman2"))
+    assert result.count == 1
+
+
+def test_placement_blind_consent_still_records(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No placement field ⇒ the gate is silent — every pre-migration consent
+    shape must keep recording unchanged."""
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    assert _append(experiment_dir).count == 1

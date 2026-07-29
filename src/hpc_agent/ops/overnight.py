@@ -246,6 +246,68 @@ def assert_wake_armed(
 # ── hard caps (item 8 pin c) + spec-identity binding (pin b) ──────────────────
 
 
+def _assert_placement_wellformed(placement_raw: Any) -> None:
+    """Refuse a placement-bound consent whose binding cannot actually bind (S1).
+
+    The write-side half of the placement leg's fail-open/fail-closed split:
+    CONSUMPTION is deliberately tolerant (absent/unusable disables the check —
+    the human is asleep, false-killing a consent is the forbidden direction),
+    so RECORD time must be strict — the human is awake and can fix a typo now.
+    Without this, a malformed shape (``{"cluster": "carc"}``) silently records
+    a consent the human THINKS is placement-bound but which the leg can never
+    fire on, and a typo'd key (``"hoffman"``) records a binding every real
+    placement mismatches — a guaranteed 3am ``placement-changed`` park this
+    refusal would have caught at grant time.
+
+    ``None`` passes untouched (a placement-blind consent is legitimate — every
+    pre-migration consent is one). Key validation is skipped when clusters.yaml
+    is unloadable: an unreadable config is not evidence the key is wrong, and
+    the shape refusal above it still holds. STRUCTURAL (never the
+    authorship-missing marker) — a fresh utterance cannot fix a malformed
+    record.
+    """
+    if placement_raw is None:
+        return
+    from hpc_agent.state.placement_drift import normalize_recorded_placement
+
+    placement = normalize_recorded_placement(placement_raw)
+    if placement is None:
+        raise errors.SpecInvalid(
+            "overnight-consent placement gate: resolved.placement is present but "
+            f"unusable ({placement_raw!r}) — it must be one cluster key or a "
+            "non-empty list of cluster keys. Consumption would silently treat "
+            "this consent as placement-blind (the absent-disables rule), which "
+            "is not what a present-but-broken binding means. Fix the shape or "
+            "drop the field."
+        )
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        clusters = load_clusters_config()
+    except Exception:  # noqa: BLE001 — unreadable config is not evidence of a bad key
+        return
+    known = (
+        {k for k in clusters if isinstance(k, str) and k} if isinstance(clusters, dict) else set()
+    )
+    if not known:
+        return
+    unknown = [c for c in placement if c not in known]
+    if unknown:
+        import difflib
+
+        hints = {c: difflib.get_close_matches(c, sorted(known), n=1) for c in unknown}
+        hint_text = "; ".join(
+            f"{c!r} (did you mean {m[0]!r}?)" if m else repr(c) for c, m in hints.items()
+        )
+        raise errors.SpecInvalid(
+            f"overnight-consent placement gate: resolved.placement names cluster "
+            f"key(s) absent from clusters.yaml: {hint_text}. Known keys: "
+            f"{', '.join(sorted(known))}. A consent bound to a nonexistent key "
+            "mismatches EVERY real placement — it would park overnight with "
+            "placement-changed instead of failing loudly now, while you are awake."
+        )
+
+
 def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
     """Refuse a standing consent that lacks a ceiling or a spec-identity binding.
 
@@ -260,6 +322,9 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
       F15), so consumption can refuse on a spec change (:func:`standing_consent_status`).
       (``cmd_sha`` is exempt from the code-derived-field refusal — it is a
       journal-sanctioned identity echo — so it rides ``resolved`` legitimately.)
+    * ``placement`` (OPTIONAL, S1): when present it must be well-formed and name
+      real cluster keys — :func:`_assert_placement_wellformed`, the strict write
+      side of the consumption leg's deliberate fail-open.
 
     Raises :class:`errors.SpecInvalid` naming the missing leg. STRUCTURAL (never
     the authorship-missing marker) — a fresh utterance cannot supply a cap.
@@ -291,6 +356,7 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
             "(a positive number). A consent that caps neither spend nor walltime "
             "accepts unbounded overnight fallout."
         )
+    _assert_placement_wellformed(resolved.get("placement"))
     if not (isinstance(resolved.get("cmd_sha"), str) and resolved["cmd_sha"]):
         raise errors.SpecInvalid(
             "overnight-consent identity gate: a standing consent MUST bind to a spec "
