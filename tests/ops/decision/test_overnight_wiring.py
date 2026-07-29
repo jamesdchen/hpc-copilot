@@ -771,7 +771,8 @@ def test_s2_never_consumes_even_with_the_clean_flag(experiment_dir: Path) -> Non
 def test_clean_flag_does_not_bypass_liveness(experiment_dir: Path) -> None:
     """The evidence flag widens the SET, never the liveness legs — an expired
     consent still refuses a clean-terminal boundary."""
-    _seed_consent(experiment_dir, resolved=_resolved(expires_at=_iso(utcnow() - timedelta(minutes=5))))
+    expired = _resolved(expires_at=_iso(utcnow() - timedelta(minutes=5)))
+    _seed_consent(experiment_dir, resolved=expired)
     outcome = overnight.consume_boundary_under_consent(
         experiment_dir,
         scope_kind="run",
