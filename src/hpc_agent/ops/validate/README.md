@@ -25,7 +25,7 @@ A validator that crashes is itself a finding (`validator_crashed`).
 ## Public vs internal
 
 - Each `*.py` (except `__init__.py`) is one public primitive module:
-  `executor_signatures.py`, `input_dataset.py`, `self_qos_limit.py`,
+  `executor_signatures.py`, `input_dataset.py`,
   `stochastic_marker.py`, `walltime_against_history.py`.
 - No internal-only files.
 

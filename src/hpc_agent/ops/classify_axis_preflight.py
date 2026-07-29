@@ -1,6 +1,6 @@
 """``classify-axis-preflight``: composite primitive (WS5 #6).
 
-Collapses the top of ``hpc-classify-axis`` — Step 1 (``discover-runs``),
+Collapses the top of ``hpc-classify-axis`` — Step 1 (``discover --kind runs``),
 Step 2 (cache-check: reuse a still-valid classification from
 ``.hpc/axes.yaml``) and Step 3 (``recall``: pre-fill from prior
 campaigns) — into ONE CLI call so the agent's role at the top of the
@@ -13,8 +13,8 @@ from them and skipped / not-applicable slots returned as ``null``.
 
 Sequencing + conditionality:
 
-* ``discover-runs`` always runs (a subprocess against the existing CLI
-  verb). It resolves the ``@register_run`` functions; the skill picks
+* ``discover --kind runs`` always runs (a subprocess against the existing
+  CLI verb). It resolves the ``@register_run`` functions; the skill picks
   the single run from its ``data.runs``.
 * ``cache-check`` always runs (an in-process ``axes.yaml`` read — there
   is no CLI verb for it; Step 2 of the skill is a plain file read).
@@ -31,7 +31,7 @@ Sequencing + conditionality:
   check-preflight, but data-driven off the cache-check result rather
   than off a flag.
 
-``requires_ssh`` is ``False``: ``discover-runs`` walks ``notebooks/``
+``requires_ssh`` is ``False``: the runs discovery walks ``notebooks/``
 locally, the cache-check reads ``axes.yaml`` locally, and ``recall``
 walks ``interview.json`` files under ``--root`` locally — none of the
 three reach the cluster.
@@ -67,19 +67,21 @@ def _build_subcalls(
 ) -> list[SubCall]:
     """Construct one :class:`SubCall` per non-skipped subprocess sub-step.
 
-    Covers the two subprocess sub-calls only — ``discover-runs`` (always)
+    Covers the two subprocess sub-calls only — ``discover --kind runs`` (always)
     and ``recall`` (only when *run_recall*). The cache-check is an
     in-process ``axes.yaml`` read (no CLI verb) and is run separately by
     :func:`_run_cache_check`, not enumerated here.
 
-    Order is discover-runs first; recall, when run, is appended after the
+    Order is the runs discovery first; recall, when run, is appended after the
     cache-check has already decided it is needed.
     """
     exp_str = str(experiment_dir)
     calls: list[SubCall] = [
         SubCall(
+            # The sub-result slot keeps its historical name (the wire field is
+            # ``discover_runs``); the argv targets the merged ``discover`` verb.
             name="discover-runs",
-            argv=["hpc-agent", "discover-runs", "--experiment-dir", exp_str],
+            argv=["hpc-agent", "discover", "--kind", "runs", "--experiment-dir", exp_str],
         )
     ]
 
@@ -160,7 +162,7 @@ def _run_cache_check(
     idempotent=True,
     cli=CliShape(
         help=(
-            "Composite preflight at the top of classify-axis: discover-runs + "
+            "Composite preflight at the top of classify-axis: discover --kind runs + "
             "cache-check (axes.yaml reuse) + (when no cache hit and no caller-"
             "supplied data_axis) recall, sequenced, returned as one envelope."
         ),
@@ -179,7 +181,7 @@ def _run_cache_check(
                 help=(
                     "Name of the @register_run function to cache-check. When "
                     "omitted, the cache-check reports a miss (the skill resolves "
-                    "the run from discover-runs' output before reusing)."
+                    "the run from the discover --kind runs output before reusing)."
                 ),
             ),
             CliArg(
@@ -216,7 +218,7 @@ def _run_cache_check(
                 ),
             ),
         ),
-        # discover-runs walks notebooks/, the cache-check reads axes.yaml,
+        # the runs discovery walks notebooks/, the cache-check reads axes.yaml,
         # and recall walks interview.json under --root — all local. No SSH.
         requires_ssh=False,
     ),
@@ -232,7 +234,7 @@ def classify_axis_preflight(
     data_axis_supplied: bool = False,
     timeout_sec: float = 60.0,
 ) -> dict[str, Any]:
-    """Run discover-runs → cache-check → (conditional) recall.
+    """Run discover --kind runs → cache-check → (conditional) recall.
 
     Returns a dict matching ``schemas/classify_axis_preflight.output.json``;
     the CLI dispatcher wraps it in a SuccessEnvelope. *experiment_dir*
@@ -240,7 +242,7 @@ def classify_axis_preflight(
     and is coerced internally.
 
     The composite never raises on a sub-call failure — failures surface
-    inside ``SubResult.envelope`` so the discover-runs / cache-check work
+    inside ``SubResult.envelope`` so the runs-discovery / cache-check work
     is preserved even when recall blows up.
 
     ``recall`` is skipped (its slot is ``null``) when *data_axis_supplied*
@@ -253,7 +255,7 @@ def classify_axis_preflight(
 
     started = time.monotonic()
 
-    # 1. discover-runs (always, subprocess).
+    # 1. discover --kind runs (always, subprocess).
     discover_call = _build_subcalls(
         experiment_dir=experiment_dir_path,
         root=root,

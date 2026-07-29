@@ -23,7 +23,7 @@ section with ``{slug: {error: False}}`` and no execution evidence, no freshness
 key. The honest close is to DELETE the trusted input: the mutate verb now reads
 JOURNALED render receipts (:func:`~hpc_agent.state.notebook_audit.read_render_receipts`,
 sha-fresh entries only), which are code attestations bound to the section sha at
-record time (emitted out-of-band by ``notebook-record-receipt``) and therefore
+record time (emitted out-of-band by ``notebook-record``, kind=receipt) and therefore
 stale-by-construction when the section drifts. The read-only ``notebook-audit-view``
 verb keeps its INLINE ``receipt`` for preview because it is read-only and journals
 nothing.

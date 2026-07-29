@@ -29,7 +29,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._wire.queries.trace import TraceResult
+from hpc_agent._wire.queries.trace import TraceLineageResult, TraceSpec
+from hpc_agent._wire.queries.trace_diff import TraceDiffSpec
+from hpc_agent._wire.queries.trace_render import TraceRenderSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign
 from hpc_agent.ops.provenance_manifest import (
@@ -46,8 +48,8 @@ if TYPE_CHECKING:
 
 __all__ = ["trace"]
 
-# The closed set of output formats, mirrored on TraceResult.format. Typed as a
-# Literal (not bare str) so it satisfies the TraceResult field without a cast.
+# The closed set of output formats, mirrored on TraceLineageResult.format. Typed as a
+# Literal (not bare str) so it satisfies the TraceLineageResult field without a cast.
 TraceFormat = Literal["dag", "flat", "dot"]
 
 # Bump when the emitted node/edge shape changes in a way a consumer would need
@@ -209,7 +211,7 @@ def _render_dot(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> str
     return "\n".join(lines)
 
 
-def _trace_campaign(experiment_dir: Path, campaign_id: str, fmt: TraceFormat) -> TraceResult:
+def _trace_campaign(experiment_dir: Path, campaign_id: str, fmt: TraceFormat) -> TraceLineageResult:
     """Assemble the DAG for every run tagged with *campaign_id*."""
     records = find_runs_by_campaign(experiment_dir, campaign_id)
     sidecars: dict[str, dict[str, Any]] = {
@@ -246,7 +248,7 @@ def _trace_campaign(experiment_dir: Path, campaign_id: str, fmt: TraceFormat) ->
     # artifact: a reader can `hpc-agent provenance-manifest` the same campaign
     # and confirm the signatures match.
     signature = manifest_signature(build_provenance_manifest(experiment_dir, campaign_id))
-    return TraceResult(
+    return TraceLineageResult(
         trace_schema_version=TRACE_SCHEMA_VERSION,
         scope="campaign",
         format=fmt,
@@ -259,7 +261,7 @@ def _trace_campaign(experiment_dir: Path, campaign_id: str, fmt: TraceFormat) ->
     )
 
 
-def _trace_run(experiment_dir: Path, run_id: str, fmt: TraceFormat) -> TraceResult:
+def _trace_run(experiment_dir: Path, run_id: str, fmt: TraceFormat) -> TraceLineageResult:
     """Assemble the DAG for one run plus its transitive lineage ancestors."""
     seed_record = load_run(experiment_dir, run_id)
     seed_sidecar = _safe_sidecar(experiment_dir, run_id)
@@ -295,7 +297,7 @@ def _trace_run(experiment_dir: Path, run_id: str, fmt: TraceFormat) -> TraceResu
             nodes.extend(wave_nodes)
             edges.extend(wave_edges)
 
-    return TraceResult(
+    return TraceLineageResult(
         trace_schema_version=TRACE_SCHEMA_VERSION,
         scope="run",
         format=fmt,
@@ -316,14 +318,30 @@ def _trace_run(experiment_dir: Path, run_id: str, fmt: TraceFormat) -> TraceResu
     idempotent=True,
     cli=CliShape(
         help=(
-            "Assemble a derived execution DAG for a campaign (--campaign-id) or "
-            "a single run's lineage (--run-id) by joining the per-run journal "
-            "records, the per-run sidecars, and the signable provenance "
-            "manifest. Read-only, no SSH. --format dag (default) emits run + "
-            "wave nodes and member/derived-from/contains edges; --format flat "
-            "emits the run list only; --format dot adds a Graphviz `dot` string."
+            "One trace verb, three modes. Default (no --spec): assemble a "
+            "derived execution DAG for a campaign (--campaign-id) or a single "
+            "run's lineage (--run-id) by joining the per-run journal records, "
+            "the per-run sidecars, and the signable provenance manifest; "
+            "--format dag (default) emits run + wave nodes and "
+            "member/derived-from/contains edges, flat emits the run list only, "
+            'dot adds a Graphviz `dot` string. --spec {"mode": "render", ...}: '
+            "render one task's data trace as the four deterministic markdown "
+            "views (row waterfall with conservation flags, label-chain line, "
+            "feature lineage, sketch table) under a self-describing header — "
+            "the render carries NO verdict vocabulary; the trace SHOWS, the "
+            "scientist concludes; relay it verbatim; absence is honest "
+            '(present/skipped, never an error). --spec {"mode": "diff", ...}: '
+            "overlay TWO traces and report, per stage and per atom, where their "
+            "measurements diverge — dispatched through the ONE semantics "
+            "registry, highlighting the FIRST diverging (stage, atom); "
+            "differences are FACTS (`row_count rows 100 → 90`), never verdicts; "
+            "tolerance is caller-owned (absent → exact). All modes are "
+            "read-only local reads, no SSH."
         ),
         experiment_dir_arg=True,
+        spec_arg=True,
+        spec_required=False,
+        spec_model=TraceSpec,
         args=(
             CliArg(
                 "--campaign-id",
@@ -353,21 +371,52 @@ def trace(
     campaign_id: str | None = None,
     run_id: str | None = None,
     trace_format: str = "dag",
+    spec: TraceSpec | None = None,
 ) -> dict[str, Any]:
-    """Return a derived execution DAG for a campaign or a single run's lineage.
+    """The merged trace verb: lineage DAG by default, data-trace modes via spec.
 
-    Exactly one of *campaign_id* / *run_id* must be supplied. Campaign scope
-    walks every run tagged with the campaign and attaches the canonical
-    provenance ``signature``; run scope walks the run's ``parent_run_ids``
-    transitively (the resubmit lineage) and carries no signature (a signature
-    attests a whole campaign, not a lineage slice).
+    With no *spec*, exactly one of *campaign_id* / *run_id* must be supplied.
+    Campaign scope walks every run tagged with the campaign and attaches the
+    canonical provenance ``signature``; run scope walks the run's
+    ``parent_run_ids`` transitively (the resubmit lineage) and carries no
+    signature (a signature attests a whole campaign, not a lineage slice).
 
-    Idempotent by construction: the DAG is derived state, recomputed from the
-    journal records + sidecars on every call, so replaying after more submits
-    simply reflects the runs now on disk.
+    With a *spec*, ``spec.mode`` selects a data-trace projection —
+    ``render`` (:func:`hpc_agent.ops.trace_render_op.trace_render`) or
+    ``diff`` (:func:`hpc_agent.ops.trace_diff_op.trace_diff`); the lineage
+    scope args must then be absent (one call, one mode — a spec plus
+    ``--campaign-id`` is refused rather than silently preferring one).
+
+    Idempotent by construction in every mode: all three are derived state,
+    recomputed from on-disk records on every call, so replaying after more
+    submits simply reflects the runs now on disk.
     """
     cid = (campaign_id or "").strip()
     rid = (run_id or "").strip()
+    if spec is not None:
+        if cid or rid:
+            raise errors.SpecInvalid(
+                "trace --spec selects a projection mode; --campaign-id/--run-id "
+                "belong to the bare lineage query — pass one or the other"
+            )
+        projection = spec.root
+        if projection.mode == "render":
+            from hpc_agent.ops.trace_render_op import trace_render
+
+            render_spec = TraceRenderSpec.model_validate(
+                projection.model_dump(mode="json", exclude={"mode"})
+            )
+            render_result = trace_render(experiment_dir=Path(experiment_dir), spec=render_spec)
+            render_dumped: dict[str, Any] = render_result.model_dump(mode="json")
+            return render_dumped
+        from hpc_agent.ops.trace_diff_op import trace_diff
+
+        diff_spec = TraceDiffSpec.model_validate(
+            projection.model_dump(mode="json", exclude={"mode"})
+        )
+        diff_result = trace_diff(Path(experiment_dir), spec=diff_spec)
+        diff_dumped: dict[str, Any] = diff_result.model_dump(mode="json")
+        return diff_dumped
     if bool(cid) == bool(rid):
         raise errors.SpecInvalid("trace requires exactly one of --campaign-id or --run-id")
     fmt = _coerce_format(trace_format)

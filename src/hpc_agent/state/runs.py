@@ -1395,7 +1395,11 @@ _PRUNE_ORPHAN_MIN_AGE_SECONDS: int = 300
     ],
     idempotent=True,
     idempotency_key="experiment_dir",
-    agent_facing=True,
+    # No CLI shape: composed into ``submit-flow``'s batch path, so no CLI
+    # subcommand and no MCP tool can reach it. Reachability bounds this
+    # flag — see tests/contracts/test_agent_facing_partition.py
+    # ::test_cli_less_primitives_are_not_agent_facing.
+    agent_facing=False,
 )
 def prune_orphan_sidecars(
     experiment_dir: Path,

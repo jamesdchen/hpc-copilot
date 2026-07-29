@@ -45,12 +45,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from hpc_agent import errors
-from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.notebook_record_config import (
     NotebookRecordConfigResult,
     NotebookRecordConfigSpec,
 )
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.notebook.canonical import read_interview_audited_source
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.decision_journal import read_decisions
@@ -70,46 +68,11 @@ _LATE_RECORD_WARNING = (
 )
 
 
-@primitive(
-    name=_PRIMITIVE,
-    verb="mutate",
-    side_effects=[
-        SideEffect("file_write", "<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl"),
-    ],
-    error_codes=[errors.SpecInvalid],
-    # Not idempotent: the config is immutable-per-audit, so an immediate retry
-    # of a SUCCEEDED call is itself refused (config already recorded) — honest,
-    # not retry-equivalent (the scaffold-template precedent).
-    idempotent=False,
-    cli=CliShape(
-        help=(
-            "Record the audit configuration (input_roots / source_roots / "
-            "attention_order / output_roots - opaque relpath lists) for a "
-            "STANDALONE notebook audit, as a journaled record in the audit's "
-            "own decision journal. Without it a standalone audit (no "
-            "interview.json audited_source opt-in) runs ROOTLESS-canonical: "
-            "the lint recomputes with empty roots and the template-mandated "
-            "source_roots engine-drift binding is silently inactive (run #10). "
-            "The canonical view reads the interview block FIRST when present "
-            "(the opt-in path owns the config), else this journaled record. "
-            "Refuses when interview.json already carries audited_source for "
-            "this audit_id (one source of truth) and when a config record "
-            "already exists (immutable-per-audit - supersede with a NEW "
-            "audit_id). Recording into an audit that already has journal "
-            "entries succeeds with a LOUD warning: every view_sha moves, prior "
-            "sign-offs read stale. Optionally carries the audit-OPEN intent "
-            "(goal + task_axes - the free-text campaign goal and the names of "
-            "what varies across tasks) on the same immutable seat, the durable "
-            "record audit-handoff reads (absent = byte-identical). Pure local "
-            "read + journal append, no SSH."
-        ),
-        spec_arg=True,
-        experiment_dir_arg=True,
-        spec_model=NotebookRecordConfigSpec,
-        schema_ref=SchemaRef(input="notebook_record_config"),
-    ),
-    agent_facing=True,
-)
+# Dispatched by the merged ``notebook-record`` verb
+# (``ops/notebook/record_op.py``) on ``kind: "config"``; no longer a
+# standalone registration. The seat's semantics (immutable-per-audit, the
+# interview-owns-the-config refusal, the loud late-record warning) are
+# unchanged and stay pinned by this module's tests.
 def notebook_record_config(
     *, experiment_dir: Path, spec: NotebookRecordConfigSpec
 ) -> NotebookRecordConfigResult:

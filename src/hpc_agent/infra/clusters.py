@@ -209,6 +209,25 @@ class ClusterConfig(BaseModel):
     max_node_mem_mb: int | None = Field(
         default=None, description="Largest single-node memory ask the scheduler will accept."
     )
+    max_submit_jobs_per_user: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Scheduler per-user SUBMIT cap (Slurm QOS MaxSubmitJobsPerUser; "
+            "array elements each count as one job). Set it to the cap of the "
+            "QOS your submissions target and the submit path refuses an array "
+            "that would exceed it BEFORE any rsync/deploy/qsub, with split "
+            "guidance — the self-DOS class where one oversized array is "
+            "rejected mid-flow (or blocks the queue) after the staging cost is "
+            "already paid. Static site policy, hand-configured like "
+            "max_walltime_sec; query the live value with `sacctmgr show qos "
+            "format=Name,MaxSubmitPU`. Unset = no client-side check (the "
+            "scheduler's own rejection remains the backstop). The check counts "
+            "this framework's own in-flight tasks (journal) plus the new "
+            "array; jobs submitted outside hpc-agent are NOT visible to it — "
+            "disclosed in the refusal."
+        ),
+    )
     gpu_queues: dict[str, Any] = Field(
         default_factory=dict,
         description="Per-cluster GPU-queue map for live scoring (SGE).",

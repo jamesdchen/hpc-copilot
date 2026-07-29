@@ -50,8 +50,6 @@ src/hpc_agent/schemas/check_task_generator_mismatch.input.json  !merge
 src/hpc_agent/schemas/check_task_generator_mismatch.output.json !merge
 src/hpc_agent/schemas/classify_axis_preflight.input.json      !merge
 src/hpc_agent/schemas/classify_axis_preflight.output.json     !merge
-src/hpc_agent/schemas/decide_resubmit.input.json              !merge
-src/hpc_agent/schemas/decide_resubmit.output.json             !merge
 src/hpc_agent/schemas/detect_entry_point.input.json           !merge
 src/hpc_agent/schemas/detect_entry_point.output.json          !merge
 src/hpc_agent/schemas/inspect_deployment.input.json           !merge

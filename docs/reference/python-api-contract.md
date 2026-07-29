@@ -69,7 +69,7 @@ The Python surface that slash commands and library callers invoke:
 | Mark run terminal | [mark-run-terminal](../primitives/mark-run-terminal.md) | `hpc_agent.ops.monitor.reconcile.mark_terminal` |
 | Read campaign history | [campaign-status](../primitives/campaign-status.md) (Python form) | `hpc_agent.execution.mapreduce.reduce.history.prior` |
 | List in-flight runs | [list-in-flight](../primitives/list-in-flight.md) | `hpc_agent.state.index.find_in_flight_runs` |
-| Discover executors | [discover-executors](../primitives/discover-executors.md) | `hpc_agent.state.discover.discover_executors` |
+| Discover executors | [discover](../primitives/discover.md) (`--kind executors`) | `hpc_agent.state.discover.discover_executors` |
 
 The framework also exposes two library-only helpers that are not
 primitives (no CLI command, not in `hpc-agent capabilities`) but

@@ -16,7 +16,7 @@ backed_by:
 # classify-axis-auto
 
 The deterministic head of the `hpc-classify-axis` skill, collapsed into
-**one call**. Composes `classify-axis-preflight` (`discover-runs` +
+**one call**. Composes `classify-axis-preflight` (`discover --kind runs` +
 cache-check + `recall`) → `classify-axis-easy` (the stdlib AST fast-path
 matcher) → `classify-axis` (the recorder that writes
 `<experiment>/.hpc/axes.yaml`). The three functions are called **directly
@@ -37,7 +37,7 @@ See `hpc_agent/schemas/classify_axis_auto.{input,output}.json`. Every
 field is optional:
 
 - `run_name` — the `@register_run` function to classify. Omit it and the
-  composite resolves the sole run from `discover-runs`; if several exist
+  composite resolves the sole run from `discover --kind runs`; if several exist
   with no scope, it returns `spec_invalid` (`ambiguous_run`).
 - `data_axis` — a caller-resolved classification (the interview / slash
   path, after a human-facing dialog). Same `{kind, halo?, monoid?}` shape

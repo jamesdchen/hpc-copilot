@@ -14,7 +14,7 @@ backed_by:
 # classify-axis-preflight
 
 Composite preflight at the top of every `hpc-classify-axis` invocation:
-runs `discover-runs` → cache-check (`.hpc/axes.yaml` reuse) → (when no
+runs `discover --kind runs` → cache-check (`.hpc/axes.yaml` reuse) → (when no
 cache hit and no caller-supplied `data_axis`) `recall` as one CLI call.
 Collapses Steps 1–3 of the skill so the agent's role shrinks to one tool
 call plus a branch on the returned `data`. Mirror of `status-preflight`
@@ -42,13 +42,13 @@ on a hit. `data.recall` is `null` when the sub-call was skipped.
 
 ## Internal composition
 
-Sequential. `discover-runs` and `recall` are plain `subprocess.run`
+Sequential. `discover --kind runs` and `recall` are plain `subprocess.run`
 calls against the existing CLI verbs; the cache-check is an in-process
 `axes.yaml` read (Step 2 of the skill is a plain file read — there is no
 CLI verb for it) shaped into the same `SubResult` envelope so every
 sub-call introspects uniformly.
 
-Order is `discover-runs` first (resolves the `@register_run` functions),
+Order is `discover --kind runs` first (resolves the `@register_run` functions),
 then the cache-check (reads `executors.<run>`), then — only if needed —
 `recall`. The `recall` sub-call is the "read the prior sub-call's output
 to decide" branch: it runs only when neither `data_axis_supplied` is set
@@ -75,13 +75,13 @@ returned `ok: true`; any that returned `ok: false` flips
 `overall: "fail"`. The failing sub-call's verbatim envelope is preserved
 under `data.<subcall>.envelope` so the caller reads its `error_code`
 without re-running. Sibling work is preserved on failure — a `recall`
-failure doesn't lose the `discover-runs` or cache-check results. A
+failure doesn't lose the `discover --kind runs` or cache-check results. A
 skipped `recall` (`null`) never contributes to `overall`.
 
 ## Idempotency
 
 `idempotent: true`, no idempotency key. Every sub-call is a read-only
-query (`discover-runs` walks `notebooks/`, the cache-check reads
+query (`discover --kind runs` walks `notebooks/`, the cache-check reads
 `axes.yaml`, `recall` walks `interview.json` under `--root`); none reach
 the cluster, so `requires_ssh` is `False`. Re-running is free and
 side-effect-free.

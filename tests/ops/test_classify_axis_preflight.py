@@ -92,7 +92,7 @@ class TestBuildSubcalls:
         )
         assert [c.name for c in calls] == ["discover-runs"]
         exp = str(Path("/exp"))
-        assert calls[0].argv == ["hpc-agent", "discover-runs", "--experiment-dir", exp]
+        assert calls[0].argv == ["hpc-agent", "discover", "--kind", "runs", "--experiment-dir", exp]
 
     def test_recall_appended_with_root_and_task_kind(self) -> None:
         calls = cp._build_subcalls(

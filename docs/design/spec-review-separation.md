@@ -319,7 +319,9 @@ The per-validator work is making each return the right outcome type (its author
 already knows the cardinality). The line becomes a result-shape property,
 lint-enforceable, not a hand-drawn table. Checked against the real validators:
 `recommend-partition → auto_fix`; `validate-input-dataset → conflict`;
-`validate-self-qos-limit → choice (cap/raise/split)`;
+`validate-self-qos-limit → choice (cap/raise/split)` (validator since
+removed — never wireable after the no-raw-ssh affordance removal; the
+cardinality example stands);
 `validate-executor-signatures → conflict`.
 
 **Decided (James, 2026-07-03): `auto_fix` applies-and-shows even when

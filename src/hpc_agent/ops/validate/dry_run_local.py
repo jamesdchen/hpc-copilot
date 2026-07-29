@@ -507,7 +507,11 @@ def _decode_tail(raw: bytes | None) -> str:
     verb="validate",
     side_effects=[],
     idempotent=True,
-    agent_facing=True,
+    # No CLI shape: composed into ``validate-campaign`` and ``submit-flow``, so no CLI
+    # subcommand and no MCP tool can reach it. Reachability bounds this
+    # flag — see tests/contracts/test_agent_facing_partition.py
+    # ::test_cli_less_primitives_are_not_agent_facing.
+    agent_facing=False,
 )
 def dry_run_local(
     experiment_dir: Path,

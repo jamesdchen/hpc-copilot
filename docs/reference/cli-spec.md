@@ -132,7 +132,7 @@ CLI ↔ primitive mapping:
 | `hpc-agent preflight` | [check-preflight](../primitives/check-preflight.md) |
 | `hpc-agent clusters list` | [clusters-list](../primitives/clusters-list.md) |
 | `hpc-agent clusters describe <name> [--strict]` | [clusters-describe](../primitives/clusters-describe.md) |
-| `hpc-agent discover` | [discover-executors](../primitives/discover-executors.md) |
+| `hpc-agent discover [--kind executors\|runs\|reducers]` | [discover](../primitives/discover.md) |
 | `hpc-agent list-in-flight` | [list-in-flight](../primitives/list-in-flight.md) |
 | `hpc-agent campaign status` | [campaign-status](../primitives/campaign-status.md) |
 | `hpc-agent campaign list` | [campaign-list](../primitives/campaign-list.md) |

@@ -109,8 +109,32 @@ _SUFFIX_RULES: tuple[tuple[str, str], ...] = (
 # ``Result`` but is a sub-model embedded in SubmitAndVerifyResult (inlined as a
 # $def), not a primitive output — same reason, so it would strand a top-level
 # schema the reachability lint rejects.
+#
+# The trace/notebook-record verb merges added two more batches of the same
+# class: the per-mode spec/result shapes stay authored in their own wire
+# modules (their design pins scan those files), but they are embedded in the
+# merged verbs' ``trace.input/output.json`` / ``notebook_record.input/output
+# .json`` unions rather than emitted as standalone per-verb files — the verbs
+# ``trace-diff`` / ``trace-render`` / ``notebook-record-config`` /
+# ``notebook-record-receipt`` no longer exist.
 _HELPER_NAMES: frozenset[str] = frozenset(
-    {"SuccessEnvelope", "ErrorEnvelope", "MpiSpec", "ReducerCheckResult"}
+    {
+        "SuccessEnvelope",
+        "ErrorEnvelope",
+        "MpiSpec",
+        "ReducerCheckResult",
+        # merged into trace.input.json / trace.output.json
+        "TraceLineageResult",
+        "TraceDiffSpec",
+        "TraceDiffResult",
+        "TraceRenderSpec",
+        "TraceRenderResult",
+        # merged into notebook_record.input.json / notebook_record.output.json
+        "NotebookRecordConfigSpec",
+        "NotebookRecordConfigResult",
+        "NotebookRecordReceiptSpec",
+        "NotebookRecordReceiptResult",
+    }
 )
 
 

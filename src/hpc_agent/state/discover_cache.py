@@ -1,12 +1,12 @@
-"""Tree-fingerprint cache for ``discover-runs`` (#264).
+"""Tree-fingerprint cache for ``discover --kind runs`` (#264).
 
-``discover-runs`` AST-walks the experiment tree for ``@register_run`` functions
+The runs discovery AST-walks the experiment tree for ``@register_run`` functions
 on every call; within a session the same tree is scanned dozens of times. This
 caches the result, keyed by a fingerprint of the tree's ``.py`` / ``.ipynb``
 files.
 
 Unlike #255 (preflight) / #261 (describe), the key is NOT a single directory
-mtime: ``discover-runs`` is a *recursive* source scan, so a single root
+mtime: the runs discovery is a *recursive* source scan, so a single root
 ``stat`` would miss a nested edit and return stale results. The fingerprint
 instead hashes ``(relpath, mtime_ns, size)`` over every candidate file in the
 tree — any add / edit / delete changes it. Stat-ing the files is far cheaper
@@ -34,7 +34,7 @@ __all__ = ["cache_disabled", "load", "store"]
 
 # Directories never holding user run-source — pruned from the fingerprint walk
 # to keep it cheap. This MUST stay a subset of the set the actual
-# ``discover-runs`` source scan skips (``state.discover._SKIP_DIRS`` /
+# the runs-discovery source scan skips (``state.discover._SKIP_DIRS`` /
 # ``experiment_kit.discover._SKIP_DIRS``): pruning a directory here that the scan
 # still reads would let a ``@register_run`` edit under it change live results
 # WITHOUT changing the fingerprint, serving a stale cache. The scan skips this
@@ -157,7 +157,7 @@ def _dict_to_run_info(d: dict[str, Any]) -> RunInfo:
 
 
 def load(experiment_dir: str | Path) -> list[RunInfo] | None:
-    """Return the cached ``discover-runs`` result, or ``None`` (miss / disabled / error).
+    """Return the cached runs-discovery result, or ``None`` (miss / disabled / error).
 
     A hit requires the stored fingerprint to equal the tree's current
     fingerprint; any read / parse / reconstruct problem returns ``None`` so the
@@ -183,7 +183,7 @@ def load(experiment_dir: str | Path) -> list[RunInfo] | None:
 
 
 def store(experiment_dir: str | Path, infos: list[RunInfo]) -> None:
-    """Cache the ``discover-runs`` *infos* for *experiment_dir* (best-effort).
+    """Cache the runs-discovery *infos* for *experiment_dir* (best-effort).
 
     A no-op when disabled or when any ``RunInfo`` / ``Flag`` won't serialise
     (e.g. an exotic ``Flag.type`` / ``default``) — the live result is still
