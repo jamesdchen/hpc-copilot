@@ -1316,9 +1316,7 @@ def predecessor_terminal_clean(
     if not isinstance(result, dict) or bool(result.get("needs_decision")):
         return False
     recorded_sha = str(record.get("cmd_sha") or "")
-    if recorded_sha and current_cmd_sha and recorded_sha != current_cmd_sha:
-        return False
-    return True
+    return not (recorded_sha and current_cmd_sha and recorded_sha != current_cmd_sha)
 
 
 def boundary_already_ledgered(

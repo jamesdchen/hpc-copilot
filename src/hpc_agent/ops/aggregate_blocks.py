@@ -51,8 +51,8 @@ from hpc_agent.ops.aggregate_flow import (
 )
 from hpc_agent.ops.aggregate_preflight import aggregate_preflight
 from hpc_agent.ops.block_gate import assert_greenlit_or_consented
-from hpc_agent.ops.overnight import boundary_already_ledgered, predecessor_terminal_clean
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
+from hpc_agent.ops.overnight import boundary_already_ledgered, predecessor_terminal_clean
 from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run

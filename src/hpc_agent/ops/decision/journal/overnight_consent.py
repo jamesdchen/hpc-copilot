@@ -273,7 +273,8 @@ def _assert_overnight_consent_authorship(
             # gap this inline coverage render exists to close.
             from hpc_agent.state.placement_drift import placement_cluster_caps
 
-            for cluster, cluster_caps in sorted(placement_cluster_caps(res.get("placement")).items()):
+            per_cluster = placement_cluster_caps(res.get("placement"))
+            for cluster, cluster_caps in sorted(per_cluster.items()):
                 if cluster_caps:
                     rendered = ", ".join(
                         f"{field}={value}" for field, value in sorted(cluster_caps.items())
