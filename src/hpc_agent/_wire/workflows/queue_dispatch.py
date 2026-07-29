@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
     CampaignId,
@@ -122,9 +122,30 @@ class QueueDispatchSpec(BaseModel):
             "Most items to start in this call. Defaults to ONE for the same "
             "reason ``queue-advance.max_placements`` does: a human signs one "
             "decision at a time, and a larger batch belongs to the "
-            "consented/unattended tier. Items beyond the bound stay queued and "
-            "are reported held with advance's ``batch_limit_reached`` — never "
-            "dropped (R4)."
+            "consented/unattended tier — so a value above 1 must either declare "
+            "that tier (``tier='unattended'``) or enumerate the batch item by "
+            "item (``item_ids``); the model refuses a silent raise. Items "
+            "beyond the bound stay queued and are reported held with advance's "
+            "``batch_limit_reached`` — never dropped (R4)."
+        ),
+    )
+    tier: Literal["interactive", "unattended"] = Field(
+        default="interactive",
+        description=(
+            "Which tier this call runs under. 'interactive' (default): a human "
+            "is signing decisions one y at a time, so ``max_dispatches`` stays "
+            "at 1. 'unattended': the CALLER declares the standing-consent tier "
+            "— a machine-fired tick (the retirement wake edge, a scheduled "
+            "drain) where no y is being taken, items a live standing consent "
+            "covers auto-advance at their gates and the rest PARK for their own "
+            "y — which is what makes a >1 batch honest: it removes only the "
+            "one-per-y throttle. A DECLARATION, deliberately not verified here: "
+            "consent binds per item at the cluster boundary inside the "
+            "lifecycle this verb composes, and a dispatch-side consent read "
+            "would be a second seat answering the same question (D1). A falsely "
+            "declared tier therefore bypasses nothing — it buys disclosed "
+            "gate_refused/parked rows. The batch's basis is echoed on the "
+            "result (``batch_allowed_by``), never silent."
         ),
     )
     clusters: list[str] | None = Field(
@@ -144,6 +165,30 @@ class QueueDispatchSpec(BaseModel):
             "reshaping what gets dispatched."
         ),
     )
+
+    @model_validator(mode="after")
+    def _batch_declares_its_basis(self) -> QueueDispatchSpec:
+        """Refuse a >1 batch that neither declares the unattended tier nor names items.
+
+        The interactive default is ONE because placement is disclosed inside a
+        human's y and a human signs one decision at a time; the doctrine
+        reserves a larger batch for the consented/unattended tier. Enforcing
+        that at the wire is what keeps the reservation real: no agent or config
+        can raise the interactive bound SILENTLY, because the batch's basis —
+        the declared tier, or the caller's own enumerated ``item_ids`` (the
+        stranded-recovery shape, where naming each item IS the signature) — is
+        part of the spec and echoed on the result. A disclosure rule, not a
+        gate: every dispatched item still meets its own cluster-boundary gates
+        inside the lifecycle (D1).
+        """
+        if self.max_dispatches > 1 and self.tier != "unattended" and self.item_ids is None:
+            raise ValueError(
+                f"max_dispatches={self.max_dispatches} exceeds the interactive "
+                "one-decision-per-y bound; a larger batch must declare the "
+                "consented tier (tier='unattended') or enumerate its items "
+                "(item_ids) — it is never raised silently"
+            )
+        return self
 
 
 class DispatchedItem(BaseModel):
@@ -349,6 +394,18 @@ class QueueDispatchResult(BaseModel):
     held_counts: dict[str, int] = Field(
         default_factory=dict,
         description="``queue-advance``'s reason_code -> count over ``held``, relayed unchanged.",
+    )
+    batch_allowed_by: Literal["unattended_tier", "item_ids"] | None = Field(
+        default=None,
+        description=(
+            "Why a ``max_dispatches`` > 1 bound was accepted, or null for a "
+            "call at the interactive one-per-y default: 'unattended_tier' — the "
+            "caller declared the standing-consent tier; 'item_ids' — the caller "
+            "enumerated the batch item by item. The R4 disclosure for the "
+            "throttle, never a gate outcome: batching exempts no item from its "
+            "own cluster-boundary gates (D1), it only removes the artificial "
+            "one-start-per-tick bound."
+        ),
     )
     placements_considered: int = Field(
         default=0,

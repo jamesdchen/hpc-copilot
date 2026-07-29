@@ -40,11 +40,21 @@
     },
     "max_dispatches": {
       "default": 1,
-      "description": "Most items to start in this call. Defaults to ONE for the same reason ``queue-advance.max_placements`` does: a human signs one decision at a time, and a larger batch belongs to the consented/unattended tier. Items beyond the bound stay queued and are reported held with advance's ``batch_limit_reached`` — never dropped (R4).",
+      "description": "Most items to start in this call. Defaults to ONE for the same reason ``queue-advance.max_placements`` does: a human signs one decision at a time, and a larger batch belongs to the consented/unattended tier — so a value above 1 must either declare that tier (``tier='unattended'``) or enumerate the batch item by item (``item_ids``); the model refuses a silent raise. Items beyond the bound stay queued and are reported held with advance's ``batch_limit_reached`` — never dropped (R4).",
       "maximum": 50,
       "minimum": 1,
       "title": "Max Dispatches",
       "type": "integer"
+    },
+    "tier": {
+      "default": "interactive",
+      "description": "Which tier this call runs under. 'interactive' (default): a human is signing decisions one y at a time, so ``max_dispatches`` stays at 1. 'unattended': the CALLER declares the standing-consent tier — a machine-fired tick (the retirement wake edge, a scheduled drain) where no y is being taken, items a live standing consent covers auto-advance at their gates and the rest PARK for their own y — which is what makes a >1 batch honest: it removes only the one-per-y throttle. A DECLARATION, deliberately not verified here: consent binds per item at the cluster boundary inside the lifecycle this verb composes, and a dispatch-side consent read would be a second seat answering the same question (D1). A falsely declared tier therefore bypasses nothing — it buys disclosed gate_refused/parked rows. The batch's basis is echoed on the result (``batch_allowed_by``), never silent.",
+      "enum": [
+        "interactive",
+        "unattended"
+      ],
+      "title": "Tier",
+      "type": "string"
     },
     "clusters": {
       "anyOf": [

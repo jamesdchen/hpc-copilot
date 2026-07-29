@@ -77,6 +77,23 @@
       "title": "Held Counts",
       "type": "object"
     },
+    "batch_allowed_by": {
+      "anyOf": [
+        {
+          "enum": [
+            "unattended_tier",
+            "item_ids"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why a ``max_dispatches`` > 1 bound was accepted, or null for a call at the interactive one-per-y default: 'unattended_tier' — the caller declared the standing-consent tier; 'item_ids' — the caller enumerated the batch item by item. The R4 disclosure for the throttle, never a gate outcome: batching exempts no item from its own cluster-boundary gates (D1), it only removes the artificial one-start-per-tick bound.",
+      "title": "Batch Allowed By"
+    },
     "placements_considered": {
       "default": 0,
       "description": "How many placements ``queue-advance`` returned for this call, before any ``item_ids`` narrowing. The denominator behind the rows above, so a call that acted on one of five placements says so.",

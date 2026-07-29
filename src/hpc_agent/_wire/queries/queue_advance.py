@@ -91,7 +91,11 @@ class QueueAdvanceSpec(BaseModel):
         description=(
             "Most placements to decide in this call. Defaults to ONE because "
             "placement is disclosed inside a y and a human signs one decision at "
-            "a time; a larger batch is for the consented/unattended tier. Items "
+            "a time; a larger batch is for the consented/unattended tier. "
+            "Deciding is not actuating (R3), so the bound stays caller-set "
+            "here — the tier is enforced at the ACTOR, where "
+            "``queue-dispatch`` refuses a >1 batch that neither declares "
+            "``tier='unattended'`` nor enumerates its ``item_ids``. Items "
             "beyond the bound are reported as held with reason "
             "'batch_limit_reached', never dropped (R4)."
         ),

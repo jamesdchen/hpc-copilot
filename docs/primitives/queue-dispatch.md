@@ -112,7 +112,18 @@ A `QueueDispatchSpec` JSON spec, every field optional:
   refused rather than dropped.
 - `max_dispatches` (int 1–50, default `1`) — most items to start in this call,
   applied AFTER the authority decided. One by default for the same reason
-  `queue-advance.max_placements` is one.
+  `queue-advance.max_placements` is one. A value above 1 must either declare
+  the unattended tier (`tier: "unattended"`) or enumerate the batch
+  (`item_ids`); the spec refuses a silently raised interactive bound.
+- `tier` (`interactive` | `unattended`, default `interactive`) — which tier
+  this call runs under. `interactive` keeps the one-decision-per-`y` bound;
+  `unattended` is the caller DECLARING the standing-consent tier (the
+  retirement wake edge, a scheduled drain), which allows `max_dispatches` > 1.
+  A declaration, not a gate pass: consent binds per item at the cluster
+  boundary inside the lifecycle this verb composes (D1), so a falsely declared
+  tier bypasses nothing — unconsented items come back as disclosed
+  `gate_refused` rows or park at their own gate for their own `y`. The basis
+  is echoed on the result (`batch_allowed_by`).
 - `clusters` (list of strings, optional) — narrow the candidate cluster set;
   forwarded to `queue-advance`. Never overrides a pin (R5).
 - `now` (string, optional) — ISO-8601 UTC instant for deterministic testing.
@@ -152,6 +163,10 @@ A `QueueDispatchResult` with:
   restated, so the authority's reason is the one the human reads.
 - `refused_counts` / `held_counts` (maps) — `reason_code` -> count,
   pre-aggregated so no consumer re-derives a different total.
+- `batch_allowed_by` (`unattended_tier` | `item_ids` | null) — why a
+  `max_dispatches` > 1 bound was accepted; null for a call at the interactive
+  one-per-`y` default. The disclosure for the lifted throttle (R4), never a
+  gate outcome.
 - `placements_considered` (int) — how many placements `queue-advance` returned
   before any `item_ids` narrowing: the denominator behind the rows above.
 - `occupancy` (map) — `campaign_id` -> occupied pool slots as the one shared

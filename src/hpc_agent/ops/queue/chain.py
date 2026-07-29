@@ -101,9 +101,11 @@ runs. The recursion is bounded for a structural reason rather than by a counter:
 whose parent branch returns a handle without ever reaching the synchronous body
 this module hooks. So a chained dispatch cannot re-enter the chain in-process —
 it hands off to detached children, and each of THOSE chains once, later, when it
-retires. That is the intended drain cadence (A retires → B starts → B retires →
-C starts), one tick per event, and it terminates when the ledger runs dry
-because a dispatch with nothing to place starts nothing.
+retires. That is the intended drain cadence (A retires → the next batch starts,
+each of those chains once when IT retires), one tick per event — each tick
+starting at most :data:`_WAKE_MAX_DISPATCHES` items under the declared
+unattended tier — and it terminates when the ledger runs dry because a dispatch
+with nothing to place starts nothing.
 """
 
 from __future__ import annotations
@@ -120,6 +122,19 @@ if TYPE_CHECKING:
 __all__ = ["chain_dispatch_on_retire"]
 
 _log = logging.getLogger(__name__)
+
+#: The wake edge's dispatch batch. The chain declares the UNATTENDED tier — a
+#: retirement is machine-fired by definition, no y is being taken for the items
+#: it wakes, so the one-per-y throttle does not apply (§7's catch-up rule:
+#: "advances what consent covers, parks the rest"; an unconsented item parks at
+#: its own cluster-boundary gate, exactly one y each, later). Kept a modest
+#: constant rather than the wire ceiling: each dispatch opens the
+#: cluster-submitting lifecycle, and a wake that fired 50 at once is the
+#: connection-storm lineage the courtesy caps exist for — per-cluster courtesy
+#: caps (when configured) bind inside ``queue-advance`` regardless of this
+#: bound. Not a config knob and not agent-reachable: raising it is a reviewed
+#: edit to this line.
+_WAKE_MAX_DISPATCHES = 5
 
 
 def _skipped(run_id: str | None, origin: str, reason: str) -> dict[str, Any]:
@@ -212,7 +227,12 @@ def chain_dispatch_on_retire(
         # placement (R3) and already scopes its own decision to what capacity
         # allows; narrowing here would be this module deciding where the freed
         # capacity may be spent, which is exactly the authority it must not take.
-        result = queue_dispatch(experiment_dir=experiment_dir, spec=QueueDispatchSpec())
+        # The UNATTENDED tier is declared (see _WAKE_MAX_DISPATCHES): the batch
+        # lifts only the one-per-y throttle, and the tick's result discloses it.
+        result = queue_dispatch(
+            experiment_dir=experiment_dir,
+            spec=QueueDispatchSpec(tier="unattended", max_dispatches=_WAKE_MAX_DISPATCHES),
+        )
     except Exception as exc:  # noqa: BLE001 — the retirement is already settled
         _log.warning("queue chain-dispatch after %s failed (%s)", rid, exc)
         row["error"] = f"{type(exc).__name__}: {exc}"

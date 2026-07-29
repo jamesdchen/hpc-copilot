@@ -811,6 +811,14 @@ def _brief(result: QueueDispatchResult) -> str:
         f"{sum(result.held_counts.values())} held of {result.placements_considered} "
         f"placement(s) considered (computed {result.computed_at})."
     ]
+    if result.batch_allowed_by:
+        # §3: the one-per-y throttle was lifted, and the y (or its absence) has
+        # to see on what basis — the tier/enumeration is disclosed in the same
+        # breath as the counts, never inferred from a batch that just happened.
+        lines.append(
+            f"batch: max_dispatches > 1 allowed by {result.batch_allowed_by}; every "
+            "dispatched item still meets its own cluster-boundary gates (D1)."
+        )
     lines += [
         f"{row.outcome}: {row.item_id} -> {row.cluster} as {row.run_id} — {row.reason}"
         for row in result.dispatched
@@ -924,6 +932,14 @@ def queue_dispatch(
     exp = Path(experiment_dir)
     narrowed = spec.item_ids is not None
     wanted = set(spec.item_ids or ())
+
+    # The spec validator already refused a silently-raised batch; what remains
+    # is to DISCLOSE which affordance carried it (R4 applies to successes too).
+    # The declared tier outranks the enumeration when both are present — it is
+    # the stronger claim, and the one the wake edge makes.
+    batch_allowed_by: Literal["unattended_tier", "item_ids"] | None = None
+    if spec.max_dispatches > 1:
+        batch_allowed_by = "unattended_tier" if spec.tier == "unattended" else "item_ids"
 
     adv = queue_advance(
         experiment_dir=exp,
@@ -1083,6 +1099,7 @@ def queue_dispatch(
         held=held,
         refused_counts=refused_counts,
         held_counts=held_counts,
+        batch_allowed_by=batch_allowed_by,
         placements_considered=len(adv.placements),
         occupancy=dict(adv.occupancy),
         maintenance=maintenance,
