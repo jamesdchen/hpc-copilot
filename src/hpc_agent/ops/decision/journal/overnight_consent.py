@@ -267,6 +267,24 @@ def _assert_overnight_consent_authorship(
             coverage_lines.append(f"  spec identity (cmd_sha): {bound_cmd_sha}")
         if bound_placement:
             coverage_lines.append(f"  placement (cluster): {', '.join(bound_placement)}")
+        # A READY-TO-PASTE grant line carrying every token the chat tier reads
+        # (boundary slug, each heal class, an 8+ hex sha prefix, every cluster in
+        # the set). Rendering it is consistent with the tier's own design: the
+        # sha-prefix leg's temporal binding ALREADY assumes the human copies the
+        # token from this brief (vocabulary impossibility, the R6 idiom) — the
+        # binding lives in the tokens, not in the phrasing, so handing the human
+        # the full sentence changes the typing burden, not the trust story.
+        grant_parts = [f"I grant overnight consent for {spec.scope_kind} {spec.scope_id}"]
+        if consent_classes:
+            grant_parts.append("repair classes " + ", ".join(sorted(consent_classes)))
+        if bound_cmd_sha:
+            grant_parts.append(f"under spec {bound_cmd_sha[:12]}")
+        if bound_placement:
+            cluster_label = "cluster" if len(bound_placement) == 1 else "clusters"
+            grant_parts.append(f"on {cluster_label} " + ", ".join(bound_placement))
+        if isinstance(composed_expires, str) and composed_expires:
+            grant_parts.append(f"until {composed_expires}")
+        grant_line = ", ".join(grant_parts)
         _refuse_missing_authorship(
             "overnight-consent authorship gate: a standing consent accepts the "
             "fallout of unattended overnight advances. No bound consent record "
@@ -286,7 +304,10 @@ def _assert_overnight_consent_authorship(
             )
             + (f", and the cluster set ({', '.join(bound_placement)})" if bound_placement else "")
             + ". A bare 'y', a clicked option, or an agent-relayed response "
-            "cannot stand in for it."
+            "cannot stand in for it.\n"
+            "Or copy-paste this grant line into chat (edit freely — the gate "
+            "reads the named tokens, not the phrasing):\n"
+            f"  {grant_line}"
         )
 
     # Legs 2 + 3 — structural (never the authorship marker): hard caps + spec

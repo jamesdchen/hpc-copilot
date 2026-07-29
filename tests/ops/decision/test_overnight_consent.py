@@ -635,3 +635,24 @@ def test_placement_leg_orders_after_spec_leg(experiment_dir: Path) -> None:
     )
     assert decision.live is False
     assert decision.reason == "spec-changed"
+
+
+def test_refusal_renders_a_paste_ready_grant_line_that_grants(experiment_dir: Path) -> None:
+    """The refusal's copy-paste line is not decoration — pasted verbatim into
+    chat, it must carry every token the chat tier reads (boundary, classes,
+    sha prefix, cluster set) and therefore grant. A rendered line that fails
+    its own gate would be worse than no line at all."""
+    _arm_wake(_RUN_ID)
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    resolved = _resolved(placement=["carc", "hoffman2"], heal_classes=["env_pin"])
+    with pytest.raises(errors.SpecInvalid, match="copy-paste") as exc:
+        _append(experiment_dir, resolved=resolved)
+    paste_line = str(exc.value).splitlines()[-1].strip()
+    assert _RUN_ID in paste_line
+    assert "carc" in paste_line and "hoffman2" in paste_line
+    assert "env_pin" in paste_line
+    assert _CMD_SHA[:12] in paste_line
+
+    append_utterance(experiment_dir, paste_line)
+    result = _append(experiment_dir, resolved=resolved)
+    assert result.count == 1
