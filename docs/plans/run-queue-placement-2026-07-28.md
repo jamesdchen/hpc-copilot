@@ -162,6 +162,40 @@ admission/placement in `queue-advance`.
    park at all. "Optuna unparks the ledger" = producer + consent, both
    shipped.
 
+**R3 — the scheduler IS the capacity queue (2026-07-29).** Maintainer:
+"take advantage of the fact that many hpc systems already have a queuing
+system." Slurm/SGE already run the authoritative resource queue —
+fairshare, priorities, backfill, walltime-aware placement — and their
+state is the one thing we cannot predict from outside. So our ledger must
+NOT gate on inferred capacity. Two queues in series, each doing what only
+it can:
+
+| | our ledger | the scheduler's queue |
+|---|---|---|
+| holds work until | human evidence (y / consent) + placement chosen | resources free |
+| authority | gates, budget/consent caps, cross-cluster choice | fairshare, backfill, node allocation |
+| asynchrony | parks + relaunch | pending → running, watched by the detached child |
+
+Consequences:
+
+- **Submit eagerly.** Once an item is greenlit/consented and placed, it
+  goes INTO the scheduler queue and sits there as `pending` — the detached
+  watch already covers that lifecycle. The ledger's "queued" state is
+  therefore almost entirely PRE-GATE (awaiting y, consent, or placement),
+  not awaiting capacity.
+- **`queue-advance` sheds the capacity question.** What remains OURS is
+  only what the scheduler cannot know: (a) cross-cluster choice — each
+  scheduler sees only its own queue; placement inputs are our own
+  in-queue count per cluster and a cheap pending-depth probe, advisory
+  and disclosed; (b) courtesy caps — `clusters.yaml` fields like
+  `max_concurrent_jobs` are lab-etiquette/anti-throttle POLICY (the
+  connection-storm lineage), enforced by us because centers penalize
+  queue-flooding accounts; (c) consent budget caps, which bind spend, not
+  slots.
+- **`no_capacity` nearly vanishes** as a ledger state: an item held back
+  is held for etiquette caps or a hard constraint mismatch, and the
+  disclosed reason says which — never a guess about scheduler headroom.
+
 **Design decisions still open (v2 additions):**
 
 - Claim lease TTL/steal policy: a driver that dies mid-claim — lease
