@@ -978,3 +978,18 @@ def test_a_decision_leaves_a_populated_tree_byte_identical(
     queue_advance(experiment_dir=exp, spec=_spec())
 
     assert _tree(exp) == before
+
+
+def test_bare_call_without_spec_decides_over_the_whole_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec_required=False (the net-triage precedent): ``spec=None`` == ``{}``."""
+    _clusters(tmp_path, monkeypatch)
+    exp = _exp(tmp_path)
+    _enqueue(exp, "i1", campaign_base="sweep")
+
+    bare = queue_advance(experiment_dir=exp)
+    explicit = queue_advance(experiment_dir=exp, spec=QueueAdvanceSpec())
+
+    assert bare.decision == explicit.decision
+    assert [p.item_id for p in bare.placements] == [p.item_id for p in explicit.placements]

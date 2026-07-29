@@ -380,13 +380,17 @@ def _build_item(
             "cache: recomputed on every read."
         ),
         spec_arg=True,
+        # All-optional spec (the net-triage precedent): a bare
+        # `hpc-agent queue-status` is the whole-ledger read — {} is a valid,
+        # meaningful request, so demanding a literal {} file would be ceremony.
+        spec_required=False,
         experiment_dir_arg=True,
         spec_model=QueueStatusSpec,
         schema_ref=SchemaRef(input="queue_status"),
     ),
     agent_facing=True,
 )
-def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec) -> QueueStatusResult:
+def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -> QueueStatusResult:
     """Fold the intake ledger, join it to the run stores, and return one bounded digest.
 
     Order of work, and why it is that order: filter FIRST (the spec's filters
@@ -403,6 +407,7 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec) -> QueueStatusR
     Writes nothing — not a file, not a watermark, not a cache. Raises
     :class:`errors.SpecInvalid` if ``spec.now`` is not ISO-8601 UTC.
     """
+    spec = spec or QueueStatusSpec()  # spec_required=False: bare CLI call → whole-ledger read
     now = (spec.now or "").strip() or utcnow_iso()
     now_dt = parse_iso_utc_or_none(now)
     if now_dt is None:

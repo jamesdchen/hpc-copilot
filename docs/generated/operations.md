@@ -77,8 +77,8 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`poll-detached`](../primitives/poll-detached.md) | ✓ | _none_ | `hpc-agent poll-detached --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |
 | [`program-verify`](../primitives/program-verify.md) | ✓ | filesystem | `hpc-agent program-verify --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`queue-advance`](../primitives/queue-advance.md) | ✓ | _none_ | `hpc-agent queue-advance --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`queue-status`](../primitives/queue-status.md) | ✓ | _none_ | `hpc-agent queue-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`queue-advance`](../primitives/queue-advance.md) | ✓ | _none_ | `hpc-agent queue-advance [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`queue-status`](../primitives/queue-status.md) | ✓ | _none_ | `hpc-agent queue-status [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`read-decisions`](../primitives/read-decisions.md) | ✓ | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`recall`](../primitives/recall.md) | ✓ | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` | `_(none)_` | — | — |
 | [`recommend-partition`](../primitives/recommend-partition.md) | ✓ | _none_ | `hpc-agent recommend-partition --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

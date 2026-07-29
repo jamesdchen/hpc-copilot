@@ -656,3 +656,21 @@ def test_read_leaves_the_experiment_tree_byte_identical(tmp_path: Path) -> None:
     second = queue_status(experiment_dir=exp, spec=_spec())
     assert second.model_dump(mode="json") == first.model_dump(mode="json")
     assert _tree(exp) == before
+
+
+def test_bare_call_without_spec_is_the_whole_ledger_read(tmp_path: Path) -> None:
+    """spec_required=False (the net-triage precedent): ``spec=None`` == ``{}``.
+
+    A bare ``hpc-agent queue-status`` is a valid, meaningful request — the
+    whole-ledger read with defaults — so the atom must accept ``spec=None``
+    and answer exactly as it would for an explicit empty spec.
+    """
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    _enqueue(exp, "item-a", campaign_base="sweep")
+
+    bare = queue_status(experiment_dir=exp)
+    explicit = queue_status(experiment_dir=exp, spec=QueueStatusSpec())
+
+    assert bare.counts == explicit.counts
+    assert [i.item_id for i in bare.items] == [i.item_id for i in explicit.items]

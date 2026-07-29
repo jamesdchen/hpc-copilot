@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent queue-status --spec <path> [--experiment-dir <dir>]
+  cli: hpc-agent queue-status [--spec <path>] [--experiment-dir <dir>]
   python: hpc_agent.ops.queue.status.queue_status
 ---
 # queue-status

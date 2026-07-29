@@ -616,13 +616,19 @@ def _brief(
             "no journal, no cache - the actor consumes the decision."
         ),
         spec_arg=True,
+        # All-optional spec (the net-triage precedent): a bare
+        # `hpc-agent queue-advance` decides placement over the whole queue —
+        # {} is a valid, meaningful request, so the spec file is optional.
+        spec_required=False,
         experiment_dir_arg=True,
         spec_model=QueueAdvanceSpec,
         schema_ref=SchemaRef(input="queue_advance"),
     ),
     agent_facing=True,
 )
-def queue_advance(*, experiment_dir: Path, spec: QueueAdvanceSpec) -> QueueAdvanceResult:
+def queue_advance(
+    *, experiment_dir: Path, spec: QueueAdvanceSpec | None = None
+) -> QueueAdvanceResult:
     """Decide where the queued items go, disclose why, and write nothing.
 
     One pass over the in-scope queued items in ARRIVAL order — the queue's own
@@ -647,6 +653,7 @@ def queue_advance(*, experiment_dir: Path, spec: QueueAdvanceSpec) -> QueueAdvan
     for reshaping the decision. Raises :class:`errors.SpecInvalid` when it is
     not ISO-8601 UTC.
     """
+    spec = spec or QueueAdvanceSpec()  # spec_required=False: bare CLI call → whole-queue decision
     now = (spec.now or "").strip() or utcnow_iso()
     if parse_iso_utc_or_none(now) is None:
         raise errors.SpecInvalid(f"queue-advance: now override {spec.now!r} is not ISO-8601 UTC")
