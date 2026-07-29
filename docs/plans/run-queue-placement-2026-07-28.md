@@ -1,9 +1,11 @@
 # The run queue + cluster placement — design proposal (2026-07-28)
 
 Status: **PHASES 1+2 SHIPPED (2026-07-29) — §6's store, authority, and actor
-are live; the S1 consent leg is wired through both scopes.** Remaining: the
+are live; the S1 consent leg is wired through both scopes. Per-cluster
+consent caps (the `{cluster: cap}` vocabulary, §3) and the brief-UX bundle
+(answer menus + park notifications): BUILT (2026-07-29).** Remaining: the
 Phase-3 drain loop (maintainer-ordered), content-addressed trees + eager
-submit (probe-cleared, §10.S4), per-cluster consent caps, brief-UX bundle.
+submit (probe-cleared, §10.S4).
 Design complete through v2 + adversarial sweep. Motivating order: "there
 needs to be a queue that keeps track of multiple experiments to run as they
 come in and it needs to assign the runs to the proper clusters / split
@@ -103,7 +105,10 @@ it: *"next: rv_sweep item 4 → hoffman2 (carc at 2/2 concurrent jobs, item
 needs gpu, hoffman2 queue depth 3) — y?"*. The human's y covers the
 placement. Under standing/overnight consent the same policy runs
 unattended, and the consent's caps bind per cluster (a consent names its
-scope — extending consent vocabulary to `{cluster: cap}` maps is Phase 2).
+scope — extending consent vocabulary to `{cluster: cap}` maps is Phase 2 —
+BUILT 2026-07-29: `state/placement_drift.placement_cluster_caps` is the
+vocabulary's one reader, `standing_consent_status` carries the per-cluster
+cap legs).
 
 Policy posture, per the tool doctrine:
 
@@ -163,7 +168,8 @@ item goes wherever headroom is) instead of manual (human picks the cid).
    `queue-advance` with the default policy, `queue-status` projection.
    Placement disclosed in briefs; dispatch still human-triggered.
 2. **Phase 2 — the actor + consent vocabulary:** `queue-dispatch` detached;
-   standing-consent scopes learn per-cluster caps; morning brief gains the
+   standing-consent scopes learn per-cluster caps (**BUILT 2026-07-29** —
+   the `{cluster: cap}` placement form, §3); morning brief gains the
    queued-items section.
 3. **Phase 3 — the workflow relay (product side SHIPPED 2026-07-29):** N
    run-loops + queue ticks in one plan; merged park queue;
@@ -570,7 +576,10 @@ Placement is the third dimension of that same kind.
    consumption checks membership. This is the campaign-scope analog S1
    asked for, and it is the natural on-ramp to §3's Phase-2 `{cluster:
    cap}` consent vocabulary (a scope that already names a cluster set is
-   one field away from naming a cap per cluster).
+   one field away from naming a cap per cluster). The on-ramp was taken
+   (2026-07-29): the `{cluster: cap}` form shipped exactly as predicted —
+   the map's key set IS this membership set, `placement_cluster_caps`
+   reads the caps (§3).
 5. Disclosure follows the shipped discipline: `overnight_consent.py:220`
    already requires the human's consent text to name the target sha prefix
    (`_names_target_sha_prefix`). An overnight consent must likewise name
@@ -902,4 +911,29 @@ slot is spoken for). That is why the sweep insisted they be settled on
 paper together — settled separately, they would have produced three
 incompatible intake record shapes. S4 is genuinely independent and belongs
 to eager submit, not to Phase 1.
+
+### Tier-3 (2026-07-29) — clean-terminal-conditional consent for submit-s4 + aggregate-run
+
+**RULING (2026-07-29, maintainer).** A standing consent may consume the
+harvest (`submit-s4`) and reduce (`aggregate-run`) greenlights ONLY behind
+code-derived evidence the predecessor terminal was CLEAN; `submit-s2`
+stays human (the canary IS the human's look); interpretation always parks.
+The pre-ruling posture ("a pre-consent cannot reduce results the human
+never reviewed") survives in the condition — every dirty path parks
+`needs_decision` before these boundaries are offered as successors, so the
+consent skips exactly the rubber-stamp y on a clean completion.
+
+#### STATUS: BUILT (2026-07-29). Enforcement lives in the code, not here.
+
+The conditional set is `ops/overnight.OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`
+(beside the unconditional `OVERNIGHT_CONSUMABLE_BLOCKS`). The
+`clean_predecessor` evidence is caller-derived, never agent-authored: the
+in-hand `needs_decision=False` result at the driver seat (park markers
+stamp `resume_cursor.parked_needs_decision` for the resume path), the
+recorded predecessor terminal (`predecessor_terminal_clean`), or a prior
+ledgered consumption of the same identity (`boundary_already_ledgered`).
+It defaults dirty; a conditional boundary consulted without evidence
+refuses as `predecessor-not-clean`, and the flag widens the consumable SET
+only — every liveness leg still refuses. The docstrings on those symbols
+carry the detail; pinned by `tests/ops/decision/test_overnight_wiring.py`.
 

@@ -93,6 +93,85 @@ plus a dispatch-lock reentrancy hole that waved a second thread through the
 resolve window, and a composed placement that could name a cluster absent
 from the active config and become un-grantable.
 
+### Added — `{cluster: cap}` per-cluster consent ceilings (run-queue plan §3 Phase 2, 2026-07-29)
+
+The standing consent's `placement` field gains a third form: a
+`{cluster_key: {budget_cap?, walltime_cap?}}` mapping — per-cluster
+ceilings, the opt-in cap vocabulary the "composes NO core-hours
+`budget_cap`" ruling above anticipated (spend stays unmetered until a
+human names a cap; now the cap can be named per machine). The mapping's
+KEY SET is the same membership set the S1 drift leg compares — one field
+away from the campaign `placement_scope`, exactly as plan §10.S1.4
+predicted.
+
+- **One vocabulary reader, strictness split by who is awake.**
+  `state/placement_drift.placement_cluster_caps` is the consumption-side
+  reader, tolerant by design (a cap that cannot bind is DROPPED, never
+  raised); the record-time write gate
+  (`ops/overnight._assert_placement_wellformed`) is strict — unknown cap
+  fields ("budget" for "budget_cap") and non-positive values refuse with
+  the actionable message, and the map's keys get the list form's
+  clusters.yaml typo protection. Both ends share
+  `PLACEMENT_CAP_FIELDS`, so they can never admit different vocabularies.
+  The mapping normalizes to its key set ONLY when every value is a dict:
+  the historical malformed shape `{"cluster": "carc"}` keeps reading
+  unusable, so no legacy record is reinterpreted (none can exist — the
+  write gate refused every mapping shape until now).
+- **The ceiling rule.** A fully-capped map satisfies the caps gate with
+  no global cap; a partially-capped map does NOT (the uncapped cluster
+  would be unbounded) — those consents still record fine WITH a global
+  cap, which the per-cluster caps then tighten per machine.
+- **A per-cluster spend meter.** `consume_boundary_under_consent` stamps
+  `detail.cluster` from the boundary's placement so
+  `consumed_spend(cluster=...)` can split the meter;
+  `standing_consent_status` gains `over-cluster-budget-cap` /
+  `over-cluster-walltime-cap` legs, off when the boundary's cluster is
+  unknown (the S1 absent-disables direction). Unstamped legacy spend
+  counts globally, toward no cluster — undercounting is the tolerable
+  direction for a cap that did not exist when those lines were written.
+- **The human reads the ceiling they are consenting to.** The authorship
+  coverage brief renders each cluster's caps inline; the paste-ready
+  grant line still needs cluster NAMES only — caps stay structural, like
+  `budget_cap` itself.
+
+### Added — clean-terminal-conditional consent for submit-s4 + aggregate-run (Tier-3 ruling, 2026-07-29)
+
+RULING (2026-07-29, maintainer) — the Tier-3 rubber-stamp remover: a
+standing consent may consume the harvest (`submit-s4`) and reduce
+(`aggregate-run`) greenlights ONLY behind code-derived evidence the
+predecessor terminal was CLEAN; `submit-s2` stays human forever (the
+canary IS the human's look); the interpretation terminals (`harvested` /
+`harvest_partial`) still always park. The pre-ruling posture ("a
+pre-consent cannot reduce results the human never reviewed") survives in
+the CONDITION: every dirty path — anomaly, timeout, partial, integrity
+finding — parks `needs_decision` BEFORE these boundaries are offered as
+successors, so what the consent skips is exactly the rubber-stamp y on a
+clean completion, never a review.
+
+- **The conditional set.** `ops/overnight.OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`
+  (`{run: {submit-s4, aggregate-run}}`) beside the unconditional
+  `OVERNIGHT_CONSUMABLE_BLOCKS`; `is_consumable_boundary` /
+  `consume_boundary_under_consent` gain `clean_predecessor` (default
+  False = dirty), and a conditional boundary consulted without evidence
+  refuses with the specific `predecessor-not-clean` reason so the park
+  brief names the failing leg. The flag widens the SET only —
+  expiry/spec/placement/cap legs all still refuse.
+- **Two code-derived evidence readers — never an agent-authored input.**
+  `predecessor_terminal_clean` (the recorded predecessor terminal parked
+  no decision, on the SAME tree — recorded `cmd_sha` matches; absent,
+  corrupt, or mismatched reads dirty) and `boundary_already_ledgered`
+  (the driver seat's durable consumption line carries its in-hand
+  evidence across the process boundary; liveness is still re-verified —
+  an expired consent refuses even with the line present).
+- **The seats.** The driver's gated-successor seat
+  (`block_drive._chain`) passes its in-hand `needs_decision=False`
+  result as the evidence; `park()` stamps
+  `resume_cursor.parked_needs_decision` so the F12 resume path derives
+  it from the marker (absent on pre-ruling markers reads dirty); the
+  `submit-s4` and `aggregate-run` gates switch from
+  `assert_greenlit_target` to `assert_greenlit_or_consented`, which
+  threads `clean_predecessor` derived at the seat from the two readers.
+
 ### Fixed — two workflow-plan relay bugs that made campaign-run silently ineffective (2026-07-29)
 
 - The shared command helper appended `--experiment-dir` to EVERY relayed
