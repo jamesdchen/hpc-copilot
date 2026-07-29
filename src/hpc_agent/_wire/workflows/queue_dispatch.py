@@ -367,6 +367,21 @@ class QueueDispatchResult(BaseModel):
             "behind a placement stays checkable after the fact."
         ),
     )
+    maintenance: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "What the queue's JANITOR did on this tick, as data: "
+            "``{dropped_items, dropped_records, kept_records, pruned_runs, "
+            "protected_runs}`` and ``error`` when a leg failed "
+            "(``ops/queue/maintenance.groom_queue_stores``). The dispatcher is "
+            "the queue's only WRITE authority, so it is where settled intake "
+            "records are compacted away and unreferenced terminal RunRecords are "
+            "pruned — never on a read path, and never on a tick that dispatched "
+            "nothing (that pass is the one §7's relaunch-cheapness invariant is "
+            "written about). Empty when no grooming ran. Disclosed rather than "
+            "silent: a durable store that shrank must say by how much."
+        ),
+    )
     brief: str = Field(
         default="",
         description=(

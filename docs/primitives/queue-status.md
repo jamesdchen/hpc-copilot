@@ -21,7 +21,8 @@ stores that already exist**. The intake ledger
 (`<experiment>/.hpc/queue/intake.jsonl`) is an INDEX, not a second journal — it
 records arrival facts and the two states `queued` / `placed`, and nothing else
 (run-queue plan §7 R1, §8 S10). Every other fact this verb reports —
-`dispatched`, `run_status`, `in_flight`, `terminal`, `parked`,
+`dispatched`, `run_status`, `in_flight`, `terminal`, `superseded_by`, `held`,
+`drive_attempts`, `parked`,
 `greenlight_committed` — is RECOMPUTED on every read from RunRecords
 (`state/index.py`), pending-decision markers (`state/journal.py`) and the
 decision journal (`state/decision_journal.py`). A ledger that COPIED park state
@@ -85,11 +86,12 @@ A `QueueStatusResult` with:
   `enqueued_at`, `updated_at`, `age_sec`, `run_name`, `run_id`, `campaign_base`,
   `campaign_id`, `cluster_pin`, `cluster`, `placement_reason`, `resources`,
   `spec_ref`) and its PROJECTED facts (`dispatched`, `run_status`, `in_flight`,
-  `terminal`, `parked`, `park_block`, `awaiting_since`, `greenlight_committed`,
+  `terminal`, `superseded_by`, `held`, `drive_attempts`, `parked`,
+  `park_block`, `awaiting_since`, `greenlight_committed`,
   `greenlight_unadvanced`, `collides_with`).
 - `counts` (dict[str, int]) — `queued`, `placed`, `dispatched`, `in_flight`,
-  `parked`, `greenlight_unadvanced`, `terminal` over ALL matching items before
-  the clip and before settled items are hidden. Always all seven keys,
+  `parked`, `held`, `greenlight_unadvanced`, `terminal` over ALL matching items
+  before the clip and before settled items are hidden. Always all eight keys,
   zero-filled, so a brief can quote one without a membership test.
 - `occupancy` (dict[str, int]) — campaign_id → occupied pool slots, from the one
   shared predicate `state/queue_occupancy.occupied_slots`
@@ -146,6 +148,22 @@ go stale against the journal.
   happens it says so in `notes` rather than diverging quietly. For any run both
   surfaces see, the greenlight answer is the same predicate on the same
   arguments.
+- **Drivability is the CALLER's formula.** A drain plan computes, per item,
+  `drivable := dispatched ∧ ¬terminal ∧ (¬parked ∨ greenlight_unadvanced)`. This
+  verb publishes every input to it — plus the two stop conditions that form
+  cannot express: `held` (the run is parked on an ESCALATION verdict, a human
+  wait with no boundary a greenlight could target, so a `parked`-only test would
+  relay ticks at it forever) and `superseded_by` (the field
+  `queue_occupancy.run_occupies` retires a pool slot on, non-empty for a window
+  before the terminal status write lands). `drive_attempts` is the durable budget
+  behind a retryable(n) policy. No `drivable` boolean is emitted: the policy is
+  the plan's, and a kernel verdict for it would be a second definition.
+- `drive_attempts` counts CONSECUTIVE agent-facing `block-drive` ticks that moved
+  the run nothing (`awaiting_decision` / `skip`); any tick that advanced, reran,
+  chained, detached or reached a terminal resets it to 0. It lives on the
+  RunRecord and is read back off disk on every call, so a drain pass that dies
+  mid-flight loses nothing — which is the whole point of putting a retry budget
+  in the kernel rather than in a plan variable.
 - Two items whose resolved params and `run_name` agree compute the SAME
   `run_id`. That collision is reported in `collides_with` and in `notes`, over
   the whole ledger rather than the filtered page, because §10.S2 requires it be

@@ -53,14 +53,22 @@ A slot RELEASES when the run it became retires
 -----------------------------------------------
 The collapse above has a corollary the first cut missed, and it is the
 difference between a working pool and a wedged one. Intake has no terminal
-state (D8: ``{queued, placed}`` and nothing wider) and nothing compacts it, so
-a folded item lives on the ledger FOREVER. If the ledger half counted every
+state (D8: ``{queued, placed}`` and nothing wider), so a folded item stays on
+the ledger until a compaction pass removes it. If the ledger half counted every
 such item, a campaign that dispatched and COMPLETED ``K`` iterations would read
 as permanently full: the journal half correctly drops the terminal records, the
 ledger half keeps contributing their slot keys, and ``pool_room = K − occupied``
 sticks at zero for the rest of the experiment's life. Verified before the fix:
 four ``placed`` items whose runs were all ``complete`` reported ``occupied=4``
 with an empty journal half.
+
+:func:`retired_item_ids` is that same rule, asked ledger-wide instead of
+per-campaign: it names the items whose runs have retired, and it is what
+``queue-dispatch`` hands to
+:func:`hpc_agent.state.queue_intake.compact_intake_ledger`. The predicate is
+shared rather than re-derived precisely so compaction can never remove an item
+the count still considers occupying — one definition of retirement, two
+consumers.
 
 So an item is counted only while the run it names is UNRETIRED — no record yet
 (the enqueue→dispatch window, which is the whole reason the ledger half exists)
@@ -134,6 +142,7 @@ __all__ = [
     "intake_item_campaign_id",
     "occupancy_detail",
     "occupied_slots",
+    "retired_item_ids",
     "run_occupies",
     "slot_key",
 ]
@@ -355,7 +364,8 @@ def occupancy_detail(experiment_dir: Path, campaign_id: str) -> dict[str, Any]:
             became = _item_run_record(experiment_dir, run_id, known, journal=journal)
             if became is not None and not run_occupies(became):
                 # The run this item became has retired. The item is still on the
-                # ledger (intake has no terminal state and nothing compacts it),
+                # ledger (intake has no terminal state, and compaction runs only
+                # at the dispatcher's write authority — never on this read path),
                 # so counting it would hold the slot forever — see the module
                 # docstring's "A slot RELEASES when the run it became retires".
                 row["retired_by"] = became.superseded_by or became.status
@@ -374,6 +384,52 @@ def occupancy_detail(experiment_dir: Path, campaign_id: str) -> dict[str, Any]:
         "retired_items": retired,
         "shared_slots": sorted(run_slots & item_slots),
     }
+
+
+def retired_item_ids(experiment_dir: Path) -> set[str]:
+    """Every ledger item whose run has RETIRED — the compaction-eligible set.
+
+    Ledger-wide (all campaigns, and the open-loop items no campaign claims),
+    keyed on the SAME :func:`run_occupies` test ``occupancy_detail`` applies per
+    campaign, so an item can never be compacted away while the count still
+    treats it as holding a slot. That symmetry is the whole safety argument for
+    letting a rewrite touch an append-only file at all.
+
+    An item is retired when it names a ``run_id``, that run has a RunRecord, and
+    the record is terminal or superseded. The two exclusions are the interesting
+    ones and both are deliberate:
+
+    * an item with NO ``run_id`` is unresolved and cannot be joined to anything —
+      it is a live intent, not history;
+    * an item whose ``run_id`` has NO RunRecord is inside the enqueue→dispatch
+      window, which is the exact fact the ledger half exists to hold. Compacting
+      it would delete the only durable evidence that the slot is spoken for,
+      re-opening S3's re-enqueue bug.
+
+    The consequence a caller must respect: after compaction, no surviving ledger
+    item references a terminal run, so a journal prune that removes terminal
+    RunRecords cannot change what ``queue-status`` reports for any item still on
+    the ledger. Run the two in that order.
+
+    Returns an empty set when the experiment has no journal namespace — with no
+    records to join, nothing can be shown to have retired, and F46 forbids
+    minting one to find out.
+    """
+    journal = _journal_present(experiment_dir)
+    if not journal:
+        return set()
+    retired: set[str] = set()
+    for item in read_intake_items(experiment_dir):
+        if item.get("state") not in INTAKE_STATES:
+            continue
+        item_id = item.get("item_id")
+        run_id = item_run_id(item)
+        if not isinstance(item_id, str) or not item_id or run_id is None:
+            continue
+        record = load_run(experiment_dir, run_id)
+        if record is not None and not run_occupies(record):
+            retired.add(item_id)
+    return retired
 
 
 def occupied_slots(experiment_dir: Path, campaign_id: str) -> int:

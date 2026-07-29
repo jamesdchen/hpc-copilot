@@ -148,6 +148,7 @@ def test_virgin_experiment_reads_clean_and_scaffolds_nothing(tmp_path: Path) -> 
         "dispatched": 0,
         "in_flight": 0,
         "parked": 0,
+        "held": 0,
         "greenlight_unadvanced": 0,
         "terminal": 0,
     }

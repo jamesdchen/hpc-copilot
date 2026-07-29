@@ -3,7 +3,8 @@ name: block-drive
 verb: workflow
 side_effects:
 - spawns-subprocess: hpc-agent <block verb> per chained span
-- writes-journal: <run_id> pending_decision marker + watchdog tick
+- writes-journal: <run_id> pending_decision marker + watchdog tick + drive_attempts
+    counter
 idempotent: true
 idempotency_key: run_id
 error_codes:
@@ -97,3 +98,16 @@ converting honor-system prose into harness-enforced continuation. Out of session
 the scheduled `doctor` tick advances the same committed-unconsumed `resolved`. The
 `hpc-block-drive` console script is the invariant CLI substrate detach children
 and OS schedulers invoke.
+
+This agent-facing seat is also the ONE write point for the run queue's
+retryable(n) budget (run-queue plan §7). After a non-`dry_run` tick it stamps
+`RunRecord.drive_attempts`: `+1` when the tick moved nothing
+(`awaiting_decision` / `skip`), reset to `0` on any action that advanced,
+reran, chained, detached or reached a terminal. `queue-status` projects it per
+item, so a drain plan can bound how many futile ticks it relays at one item and
+still lose nothing across a relaunch — the budget lives in the kernel, not in a
+plan variable. The console-script / detach-child entry reaches `run_tick`
+directly and is deliberately NOT counted: a detached child's poll is not a pass
+relaying a tick, and counting it would let a healthy long wait exhaust an item's
+budget. Bookkeeping never raises — a drive that happened must not be reported as
+an error because its counter could not be written.

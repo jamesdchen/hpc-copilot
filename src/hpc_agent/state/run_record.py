@@ -355,6 +355,22 @@ class RunRecord:
     # invariant (premortem Δ1/O2). Harmless default 0: a pre-U3 record loads
     # unchanged (``from_dict`` filters to known fields) and never mis-adopts.
     attempt: int = 0
+    # ── consecutive FUTILE block-drive ticks (run-queue Phase 3, §7 retryable(n)) ─
+    # How many agent-facing ``block-drive`` ticks in a row drove this run and
+    # moved NOTHING (``action`` in {awaiting_decision, skip}). Any tick that
+    # advanced / reran / chained / detached / reached a terminal RESETS it to 0
+    # (``state.journal.stamp_drive_attempt``). Deliberately NOT a submit ordinal:
+    # ``attempt`` above counts submits, this counts DRIVES, and conflating them
+    # would make a resubmit forgive a spinning driver.
+    #
+    # It exists so a drain plan's retryable(n) policy is KERNEL state read off
+    # disk rather than a variable the plan carries across relaunches — the whole
+    # chain-of-relaunches model requires a pass to be able to die and be
+    # restarted without losing "I already tried this item n times". Projected by
+    # ``queue-status`` as ``drive_attempts``. Harmless default 0: a pre-Phase-3
+    # record loads unchanged (``from_dict`` filters to known fields) and reads as
+    # "never futilely driven", which is the correct answer for a fresh run.
+    drive_attempts: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

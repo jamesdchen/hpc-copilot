@@ -134,6 +134,59 @@ from the active config and become un-grantable.
   each plan's own `parseEnvelope` over those bytes where a JS runtime is
   available. Both bug classes are in-suite fire paths with control arms.
 
+### Added — the run queue, Phase 3 kernel substrate (run-queue plan §5/§7, 2026-07-29)
+
+The always-draining loop is plan-side composition of shipped verbs; this is
+the kernel that makes it cheap and decidable. No new verb — `queue-dispatch`
+IS the tick.
+
+- **The drivability formula is fully served by `queue-status` items[], and
+  pinned.** `drivable := dispatched ∧ ¬terminal ∧ (¬parked ∨
+  greenlight_unadvanced)` — all four fields were already correct; a contract
+  test now pins them so a rename cannot silently degrade the plan's formula.
+  Three fields the plan would otherwise have had to INFER are added: `held`
+  (the run is parked on an ESCALATION verdict — a second human-wait axis with
+  no boundary a greenlight can target, so a `parked`-only test relays ticks
+  at it forever), `superseded_by` (the field `queue_occupancy.run_occupies`
+  retires a slot on, non-empty for a window before the terminal status write
+  lands), and `drive_attempts`. `held` joins `counts`; both new stop
+  conditions are disclosed in `notes`. No `drivable` boolean is emitted —
+  the policy is the plan's, and a kernel verdict would be a second
+  definition of it.
+- **Retryable(n) is KERNEL state, not a plan variable.**
+  `RunRecord.drive_attempts` counts CONSECUTIVE agent-facing `block-drive`
+  ticks that moved the run nothing (`awaiting_decision` / `skip`); anything
+  that advanced / reran / chained / detached / reached a terminal resets it
+  to 0. One write point (`ops/block_drive_op`, after a non-`dry_run` tick,
+  via the single `journal.stamp_drive_attempt` definition), read back off
+  disk by `queue-status`. Consecutive rather than cumulative so a healthy
+  long run is never eventually refused; durable so a pass can die mid-flight
+  and its successor reads the same number. The detach-child entry is
+  deliberately NOT counted — a detached poll is not a relayed tick.
+- **The relaunch-cheapness invariant (§7) is restored; S12's two O(history)
+  legs are closed.** `queue-status` folded the WHOLE append-only intake
+  ledger, and its occupancy leg `load_run`s every run file in the namespace.
+  New `ops/queue/maintenance.groom_queue_stores` compacts the ledger of
+  items whose runs have RETIRED (`state.queue_intake.compact_intake_ledger`,
+  under the appenders' own flock, atomic replace, with an auditable
+  watermark), then prunes terminal RunRecords nothing on the ledger still
+  references — `state.index.prune_terminal_runs` gains a `protect` set and
+  gets its FIRST production caller (it had existed, uncalled, since the
+  journal did).
+- **D10 — the WRITE authority grooms; the read paths never do.** Grooming
+  runs in `queue-dispatch`, only on a tick that actually wrote a placement,
+  and is reported as data on `QueueDispatchResult.maintenance`.
+  `queue-status` / `queue-advance` keep `side_effects=[]`: a query that
+  groomed the store it reports on is the F46 bug one layer up. A tick that
+  dispatched NOTHING is charged nothing — that pass is exactly what the
+  invariant is about. Ordering is load-bearing (compact, then prune the
+  survivors' complement), retirement is decided by the ONE `run_occupies`
+  predicate so compaction can never drop an item the pool arithmetic still
+  counts, items the call is reporting on are exempt (adopting onto an
+  already-`complete` run would otherwise erase its own ledger row mid-tick),
+  unparseable lines are kept verbatim so `skipped_records` stays truthful,
+  and grooming never raises — the items already started.
+
 ### Added — paste-ready answer menus on park briefs + park notifications (2026-07-29)
 
 Every decision point now hands the human its answers, not just its

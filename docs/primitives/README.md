@@ -266,7 +266,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [campaign-watch](campaign-watch.md) | yes | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` |
 | [migrate-remainder](migrate-remainder.md) | yes | writes-derived-run: `<experiment>/.hpc/migrate/<derived_run_id>/`; ssh: `<source-cluster>` | `hpc-agent migrate-remainder --spec <path> [--experiment-dir <dir>]` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` |
-| [queue-dispatch](queue-dispatch.md) | yes | file_write: `<experiment>/.hpc/queue/intake.jsonl`; scheduler-submit: `<cluster>` | `hpc-agent queue-dispatch [--spec <path>] [--experiment-dir <dir>]` |
+| [queue-dispatch](queue-dispatch.md) | yes | file_write: `<experiment>/.hpc/queue/intake.jsonl`; scheduler-submit: `<cluster>`; writes-journal: `prunes` | `hpc-agent queue-dispatch [--spec <path>] [--experiment-dir <dir>]` |
 | [reproduce-run](reproduce-run.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<repro_run_id>.json` | `hpc-agent reproduce-run --spec <path> [--experiment-dir <dir>]` |
 | [resolve-submit-inputs](resolve-submit-inputs.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` |
 | [retarget-run](retarget-run.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<new_run_id>.json`; ssh: `<old-cluster>` | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` |

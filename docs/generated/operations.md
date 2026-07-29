@@ -211,7 +211,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`campaign-watch`](../primitives/campaign-watch.md) | ✓ | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`migrate-remainder`](../primitives/migrate-remainder.md) | ✓ | ssh; writes-derived-run | `hpc-agent migrate-remainder --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`monitor-flow`](../primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `_(none)_` | — | — |
-| [`queue-dispatch`](../primitives/queue-dispatch.md) | ✓ | file_write; scheduler-submit | `hpc-agent queue-dispatch [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`queue-dispatch`](../primitives/queue-dispatch.md) | ✓ | file_write; scheduler-submit; writes-journal | `hpc-agent queue-dispatch [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`reproduce-run`](../primitives/reproduce-run.md) | ✓ | writes-sidecar | `hpc-agent reproduce-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`resolve-submit-inputs`](../primitives/resolve-submit-inputs.md) | ✓ | writes-sidecar | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`retarget-run`](../primitives/retarget-run.md) | ✓ | ssh; writes-sidecar | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

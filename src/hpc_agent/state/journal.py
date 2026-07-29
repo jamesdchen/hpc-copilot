@@ -48,6 +48,7 @@ __all__ = [
     "is_awaiting_decision",
     "is_resubmittable_terminal",
     "is_kill_confirmed",
+    "stamp_drive_attempt",
     "stamp_tick",
     "stamp_watchdog_tick",
     "stamp_poll_health",
@@ -240,6 +241,58 @@ def stamp_tick(
         record.next_tick_due = next_tick_due
 
     update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+
+
+#: The ``BlockDriveAction`` values that mean the tick MOVED the chain. Anything
+#: outside this set (``awaiting_decision`` — still waiting on the human;
+#: ``skip`` — nothing drivable at this position) moved nothing, and a drain loop
+#: that keeps relaying such a tick is spinning. Written out here rather than
+#: derived from the ``Literal`` because the partition is a POLICY (which outcomes
+#: count as progress), not the vocabulary itself: ``state`` must not import
+#: ``_wire``, and a future action word must be classified deliberately rather
+#: than defaulting into "progress" and silently disarming retryable(n).
+DRIVE_PROGRESS_ACTIONS: frozenset[str] = frozenset(
+    {"advanced", "reran", "chained", "detached", "terminal"}
+)
+
+
+def stamp_drive_attempt(
+    run_id: str,
+    *,
+    progressed: bool,
+    experiment_dir: Path | None = None,
+) -> int:
+    """Record one block-drive tick against *run_id*; return the new futile count.
+
+    THE one definition of the retryable(n) counter
+    (``docs/plans/run-queue-placement-2026-07-28.md`` §7). *progressed* is
+    ``action in`` :data:`DRIVE_PROGRESS_ACTIONS` — the caller classifies, this
+    seat only writes, so there is exactly one place the number changes:
+
+    * ``progressed=True`` → reset to 0. A tick that moved the chain has EARNED
+      the item a fresh budget; a monotonic counter would eventually refuse to
+      drive a perfectly healthy long run, which is worse than the spin it
+      guards against.
+    * ``progressed=False`` → ``+1``. Consecutive futile ticks are exactly what
+      a drain pass must stop relaying.
+
+    Consecutive rather than cumulative, and durable rather than in-plan, is the
+    whole point: the count must survive the pass that observed it dying, and a
+    relaunched pass must read the SAME number off disk (§7's relaunch-cheapness
+    reflex depends on a relaunch losing nothing). ``queue-status`` projects it
+    per item as ``drive_attempts``.
+
+    Locked read-modify-write via :func:`update_run_record`; raises
+    :class:`FileNotFoundError` if no record exists for *run_id* — a tick that
+    drove no run has nothing to count against, and inventing a record here would
+    put a journal write on a path that never dispatched anything.
+    """
+
+    def _mutate(record: RunRecord) -> None:
+        record.drive_attempts = 0 if progressed else int(record.drive_attempts) + 1
+
+    written = update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+    return int(written.drive_attempts)
 
 
 #: Grace (seconds) added to the chosen inter-tick cadence when deriving the

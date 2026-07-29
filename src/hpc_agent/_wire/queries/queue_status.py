@@ -215,6 +215,49 @@ class QueueStatusItem(BaseModel):
             "are hidden by default (``include_settled``) but always counted."
         ),
     )
+    superseded_by: RunIdStrict | None = Field(
+        default=None,
+        description=(
+            "PROJECTION: the run id that CLOSED this item's run, or null. The same "
+            "field ``state/queue_occupancy.run_occupies`` retires a pool slot on "
+            "(R9), surfaced because supersession stamps this BEFORE the status "
+            "catches up — so for that window a superseded run reads "
+            "``terminal=false`` and a drivability test keyed on ``terminal`` alone "
+            "would drive a run the occupancy predicate has already retired. Two "
+            "surfaces disagreeing about whether a run is finished is exactly what "
+            "one shared predicate exists to prevent, so the field is published "
+            "rather than left to be inferred."
+        ),
+    )
+    held: bool = Field(
+        default=False,
+        description=(
+            "PROJECTION: the joined run is parked on an ESCALATION verdict "
+            "(``RunRecord.pending_verdict`` non-empty), decided by the one "
+            "field-as-state predicate ``state/journal.is_held``. This is the "
+            "SECOND human-wait axis and it is deliberately not folded into "
+            "``parked``: a run may hold on an escalation without ever having "
+            "reached a y/nudge boundary, so it carries no pending-decision marker "
+            "and no boundary a greenlight could target. A drain loop that tested "
+            "``parked`` alone would call such an item drivable and relay ticks at "
+            "it forever — the spin this field exists to make decidable."
+        ),
+    )
+    drive_attempts: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "PROJECTION: consecutive agent-facing ``block-drive`` ticks that moved "
+            "this run NOTHING (action ``awaiting_decision`` / ``skip``); any tick "
+            "that advanced / reran / chained / detached / reached a terminal resets "
+            "it to 0. Stamped by ``state/journal.stamp_drive_attempt`` at the one "
+            "write point (``ops/block_drive_op``), stored on the RunRecord, and "
+            "read back off disk here. It is KERNEL state precisely so a "
+            "retryable(n) drain policy survives a relaunch: the budget must not "
+            "live in a plan variable that dies with the pass that spent it (§7). "
+            "0 for an item with no run yet — nothing has been futilely driven."
+        ),
+    )
     parked: bool = Field(
         default=False,
         description=(
@@ -222,7 +265,7 @@ class QueueStatusItem(BaseModel):
             "waiting on a human at a boundary. 'The subagent returns the parked "
             "item to the ledger' is ALREADY TRUE the moment block-drive writes "
             "that marker (§7 R1); there is no return step. Escalation holds "
-            "(``pending_verdict``) are a SEPARATE axis and are not this field."
+            "(``pending_verdict``) are a SEPARATE axis, reported as ``held``."
         ),
     )
     park_block: str | None = Field(
@@ -297,8 +340,9 @@ class QueueStatusResult(BaseModel):
         description=(
             "Counts over ALL matching items before the limit clip — ledger states "
             "('queued', 'placed') and projected classes ('dispatched', 'in_flight', "
-            "'parked', 'greenlight_unadvanced', 'terminal'). The numbers a brief "
-            "quotes, computed over the whole ledger rather than the returned page."
+            "'parked', 'held', 'greenlight_unadvanced', 'terminal'). The numbers a "
+            "brief quotes, computed over the whole ledger rather than the returned "
+            "page."
         ),
     )
     occupancy: dict[str, int] = Field(

@@ -1207,7 +1207,7 @@
     "output_schema": "queue_status.output.json",
     "python": "hpc_agent.ops.queue.status.queue_status",
     "side_effects": [],
-    "summary": "The run queue's bounded projection: intake items joined to the run stores. Folds .hpc/queue/intake.jsonl into current items (states 'queued'/'placed' — the only two the ledger stores) and RECOMPUTES every other fact per read — whether the item became a run, is in flight, is parked awaiting a human, carries a committed-but-unadvanced greenlight, or is terminal — from RunRecords, pending-decision markers and the decision journal, routing the greenlight question through the same boundary-scoped predicate attention-queue uses so the two 'what needs me' surfaces cannot disagree. Reports per-campaign occupied pool slots from the one shared occupancy predicate. Filterable by state / campaign base / cluster, bounded by limit with truncated + total_items, and disclosing every drop (skipped ledger lines, hidden settled items, run_id collisions) in notes. Read-only, no SSH, non-creating, no cache: recomputed on every read.",
+    "summary": "The run queue's bounded projection: intake items joined to the run stores. Folds .hpc/queue/intake.jsonl into current items (states 'queued'/'placed' — the only two the ledger stores) and RECOMPUTES every other fact per read — whether the item became a run, is in flight, is parked awaiting a human, is held on an escalation verdict, was superseded, how many consecutive block-drive ticks moved it nothing (drive_attempts — the durable retryable(n) budget), carries a committed-but-unadvanced greenlight, or is terminal — from RunRecords, pending-decision markers and the decision journal, routing the greenlight question through the same boundary-scoped predicate attention-queue uses so the two 'what needs me' surfaces cannot disagree. Reports per-campaign occupied pool slots from the one shared occupancy predicate. Filterable by state / campaign base / cluster, bounded by limit with truncated + total_items, and disclosing every drop (skipped ledger lines, hidden settled items, run_id collisions) in notes. Read-only, no SSH, non-creating, no cache: recomputed on every read.",
     "verb": "query"
   },
   {
@@ -2057,7 +2057,8 @@
     "python": "hpc_agent.ops.queue.dispatch.queue_dispatch",
     "side_effects": [
       "file_write",
-      "scheduler-submit"
+      "scheduler-submit",
+      "writes-journal"
     ],
     "summary": "The run queue's ACTOR: consume queue-advance's placement decisions and start each placed item's normal run lifecycle. It COMPOSES and never submits on its own - no second submit path, no gate of its own, no consent machinery of its own; the greenlight / standing consent bind at the cluster boundary inside the machinery this starts. Per item: derive the COMPUTED run id, adopt an existing submitting/in_flight/complete run instead of resubmitting, take the durable per-campaign dispatch lock, record the placement on the intake ledger, then start a detached campaign-run whose single-lease guard IS the claim - so two dispatchers racing one item derive the same id and the loser reports 'claim_held' rather than duplicating the array. Adds NO intake state: 'dispatched' stays a projection queue-status computes over the run stores. Nothing is dropped - every item comes back dispatched, refused with a closed reason_code, or held with queue-advance's own reason.",
     "verb": "workflow"

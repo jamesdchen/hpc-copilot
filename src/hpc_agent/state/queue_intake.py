@@ -101,6 +101,23 @@ fold would happily overlay and ``record_count`` would then report as a torn
 item. Deterministic per (item, transition) is what makes the transition as
 replay-safe as the arrival it follows.
 
+Compaction (S12, and the reason R1 permits it)
+----------------------------------------------
+The ledger is append-only per WRITE, not per LIFETIME. Because it is an INDEX
+rather than a journal, a record whose item has SETTLED — the run it became
+reached a terminal status, or was superseded — answers no question any reader
+still asks, while still costing every reader a line. §7's relaunch-cheapness
+invariant makes that unacceptable rather than untidy: pass-startup work must
+scale with ACTIVE items, never with ledger history.
+
+:func:`compact_intake_ledger` rewrites the file without those items' records,
+under the appenders' own flock, atomically, keeping any line it could not parse
+(evidence is never compacted away). It is called from a WRITE authority
+(``queue-dispatch``, the queue's only actor) and never from a read: a query that
+groomed the store it reports on would be the F46 error one layer up.
+:func:`compaction_watermark` records what was removed, so the shrink is
+auditable rather than a file that mysteriously got shorter.
+
 Reading is tolerant — a torn tail, a foreign line, or a shape the fold cannot
 place is SKIPPED, never fatal (the ``state/devx_tags.py`` and decision-journal
 posture). A queue read is on the "what needs me" path; a single bad byte must
@@ -128,6 +145,9 @@ __all__ = [
     "STATE_QUEUED",
     "append_intake_item",
     "append_intake_placement",
+    "compact_intake_ledger",
+    "compaction_watermark",
+    "compaction_watermark_path",
     "find_intake_item",
     "fold_intake_records",
     "intake_path",
@@ -480,6 +500,155 @@ def item_cmd_sha(item: dict[str, Any]) -> str | None:
     agreement from eight hex characters.
     """
     return _nonempty_str(item, "cmd_sha")
+
+
+def compaction_watermark_path(experiment_dir: Path) -> Path:
+    """``.hpc/queue/intake.compaction.json`` — the ledger's compaction watermark.
+
+    A SINGLE document with cumulative counters, never a second ledger: a
+    per-compaction journal would be one more append-only file growing with
+    history, which is the very cost compaction exists to remove. Computed
+    without materializing anything, the same non-creating rule
+    :func:`intake_path_if_exists` follows (F46).
+    """
+    return Path(experiment_dir).resolve() / ".hpc" / "queue" / "intake.compaction.json"
+
+
+def compaction_watermark(experiment_dir: Path) -> dict[str, Any]:
+    """The recorded compaction watermark, or ``{}`` when nothing was ever compacted.
+
+    Tolerant like every other read here: an unreadable or non-object watermark
+    reads as absent rather than raising. It is bookkeeping ABOUT the ledger, so
+    losing it must never make the ledger itself unreadable.
+    """
+    import json
+
+    path = compaction_watermark_path(experiment_dir)
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def compact_intake_ledger(
+    experiment_dir: Path,
+    *,
+    drop_item_ids: Iterable[str],
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Rewrite the ledger without *drop_item_ids*' records. Returns what it did.
+
+    **S12's compaction watermark** (§8 S12, §7's relaunch-cheapness invariant).
+    The intake ledger is an INDEX, not a journal (R1) — its job is to answer
+    *which slots are spoken for right now*, and a record whose item is settled
+    answers nothing while still costing every reader a line. Left alone the file
+    grows with HISTORY, and pass-startup cost growing with history is precisely
+    what §7 forbids: "a drain pass that starts, finds nothing drivable, and
+    returns must cost near-zero".
+
+    WHO decides what is droppable is deliberately NOT here.
+    :func:`hpc_agent.state.queue_occupancy.retired_item_ids` owns that judgement
+    because it already owns :func:`~hpc_agent.state.queue_occupancy.run_occupies`
+    — the ONE test for "has the run this item became retired?" (R9). This
+    function is pure file mechanics over a set of ids handed to it, so there is
+    no second, subtly different notion of settled.
+
+    Conduct, and why each rule is what it is:
+
+    * **Under the ledger's OWN flock** (``<intake.jsonl>.lock``, the same
+      sentinel :func:`hpc_agent.infra.io.append_jsonl_line` takes), so a
+      concurrent enqueue or placement can neither be lost by the rewrite nor
+      read a half-written file. This is the only writer in the package that does
+      not merely append, which is exactly why it must share the appenders' lock.
+    * **Atomic replace**, so a crash leaves the previous ledger intact rather
+      than a truncated one.
+    * **A line the reader could not parse is KEPT verbatim.** A torn tail or a
+      foreign line is data this code did not author and cannot classify;
+      dropping it would silently shrink ``queue-status``'s ``skipped_records``
+      and erase the only evidence that something went wrong. Compaction removes
+      ANSWERED questions, never unanswerable ones.
+    * **No-op when nothing matches** — the file is not rewritten and its mtime
+      is not touched, so a healthy drain tick over an already-compact ledger
+      costs one read.
+
+    **R8 (replay dedup), stated honestly.** ``append_jsonl_line`` dedups an
+    enqueue by scanning the file for the record's ``request_id``; dropping an
+    item's records therefore drops its dedup entry too. That is safe for exactly
+    the reason it is scoped this way: a compacted item's run has RETIRED, so it
+    is not inside any enqueue→dispatch replay window — the window R8 protects is
+    the one between a relay's first call and its cached replay, and a run that
+    reached a terminal status has long since left it. Every STILL-LIVE request
+    keeps every one of its records, so dedup for live items is untouched. The
+    residual case (a very old cached relay replaying an enqueue for a long-dead
+    run) re-enqueues an item that resolves to the SAME computed run id and is
+    ADOPTED by ``queue-dispatch`` against the surviving RunRecord — which is why
+    ledger compaction and journal pruning keep different retention (the prune
+    keeps the newest terminal records).
+
+    *now* overrides the watermark stamp for deterministic tests.
+    """
+    import json
+
+    from hpc_agent.infra.io import advisory_flock, atomic_write_json, atomic_write_text
+
+    drop = {item_id for item_id in drop_item_ids if isinstance(item_id, str) and item_id}
+    path = intake_path_if_exists(experiment_dir)
+    report: dict[str, Any] = {
+        "path": str(path),
+        "compacted": False,
+        "dropped_items": 0,
+        "dropped_records": 0,
+        "kept_records": 0,
+    }
+    if not drop or not path.is_file():
+        return report
+
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with advisory_flock(lock_path, timeout_sec=120.0):
+        try:
+            text = path.read_bytes().decode("utf-8", errors="replace")
+        except OSError as exc:
+            _log.warning("queue_intake: cannot compact unreadable %s (%s)", path, exc)
+            return report
+        kept: list[str] = []
+        dropped_ids: set[str] = set()
+        dropped_records = 0
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)  # unparseable: evidence, not history
+                continue
+            item_id = rec.get("item_id") if isinstance(rec, dict) else None
+            if isinstance(item_id, str) and item_id in drop:
+                dropped_ids.add(item_id)
+                dropped_records += 1
+                continue
+            kept.append(line)
+        report["kept_records"] = len(kept)
+        if not dropped_records:
+            return report
+        atomic_write_text(path, "".join(f"{line}\n" for line in kept))
+        report["compacted"] = True
+        report["dropped_items"] = len(dropped_ids)
+        report["dropped_records"] = dropped_records
+
+        prior = compaction_watermark(experiment_dir)
+        atomic_write_json(
+            compaction_watermark_path(experiment_dir),
+            {
+                "last_compacted_at": now or utcnow_iso(),
+                "compactions": int(prior.get("compactions") or 0) + 1,
+                "items_compacted": int(prior.get("items_compacted") or 0) + len(dropped_ids),
+                "records_dropped": int(prior.get("records_dropped") or 0) + dropped_records,
+                "records_kept": len(kept),
+            },
+        )
+    return report
 
 
 def find_intake_item(

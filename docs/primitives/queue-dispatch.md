@@ -2,8 +2,11 @@
 name: queue-dispatch
 verb: workflow
 side_effects:
-- file_write: <experiment>/.hpc/queue/intake.jsonl (one placement record per item)
+- file_write: <experiment>/.hpc/queue/intake.jsonl (one placement record per item;
+    compacted of settled items after a dispatching tick)
 - scheduler-submit: <cluster> (per dispatched item, via campaign-run)
+- writes-journal: prunes unreferenced terminal RunRecords after a dispatching tick
+    (D10)
 idempotent: true
 idempotency_key: item.run_id
 error_codes:
@@ -153,6 +156,11 @@ A `QueueDispatchResult` with:
   before any `item_ids` narrowing: the denominator behind the rows above.
 - `occupancy` (map) — `campaign_id` -> occupied pool slots as the one shared
   predicate saw them (R9), relayed from `queue-advance`.
+- `maintenance` (map) — what the queue's JANITOR did on this tick:
+  `dropped_items` / `dropped_records` (settled intake records compacted away),
+  `kept_records`, `pruned_runs` (unreferenced terminal RunRecords evicted),
+  `protected_runs`, and `error` when a leg failed. Empty `{}` when no grooming
+  ran. See the D10 note below.
 - `brief` (string) — the deterministic, code-computed disclosure to relay
   verbatim.
 - `active_env_overrides` (map) — every `HPC_*` variable exported in this
@@ -217,6 +225,20 @@ a later call's `item_ids` re-actuates it from the placement it already carries.
 - An item whose submit spec names a different cluster than the placement is
   refused too — starting it would submit to a cluster the occupancy arithmetic
   is not counting the item against (R9), so the pool would over-fill silently.
+- **D10 — the WRITE authority grooms; the read paths never do.** On a tick that
+  actually wrote a placement (and only such a tick), this verb runs
+  `ops/queue/maintenance.groom_queue_stores`: compact the intake ledger of items
+  whose runs have RETIRED, then prune terminal RunRecords nothing on the ledger
+  still references. That restores the run-queue plan's §7 relaunch-cheapness
+  invariant, which §8 S12 found violated in two measured places — `queue-status`
+  folds the whole append-only ledger, and its `occupancy` leg `load_run`s every
+  run file in the namespace. `queue-status` / `queue-advance` declare
+  `side_effects: []` and must stay that way: a query that groomed the store it
+  reports on would be the F46 bug one layer up. A tick that dispatched NOTHING
+  is charged nothing — that pass is exactly what the invariant is about. Items
+  this call reports on are exempt from the compaction (never destroy the thing
+  you're operating on), and grooming never raises: its trouble is DATA on
+  `maintenance.error`, because the items already started.
 - `queue-dispatch` is NOT in `SUPPORTED_DETACHED_BLOCK_VERBS` and must not be
   added: it composes `campaign-run`, which detaches itself. Detaching the
   dispatcher would put a second lease between the claim and the work.

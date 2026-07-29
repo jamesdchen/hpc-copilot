@@ -63,6 +63,15 @@ one of ``dispatched`` / ``refused`` / ``held``, each with a reason a human can
 act on — including the successes, because an adopt that did not say why it
 adopted is indistinguishable from a dispatcher that silently did nothing.
 
+**D10 — the WRITE authority grooms; the read paths never do** (§7's
+relaunch-cheapness invariant, §8 S12). This verb is the queue's only actor, so
+it is where the intake ledger is compacted and unreferenced terminal RunRecords
+are pruned (``ops/queue/maintenance.groom_queue_stores``), on the ticks that
+actually wrote a placement. ``queue-status`` / ``queue-advance`` declare
+``side_effects=[]`` and must stay that way: a query that groomed the store it
+reports on is the F46 bug one layer up. The full argument for this seat — and
+for why compaction must precede the prune — lives in that module's docstring.
+
 What this verb deliberately does NOT do
 ---------------------------------------
 It does not RESOLVE. ``resolve-submit-inputs`` consumes the optuna scaffold's
@@ -812,6 +821,15 @@ def _brief(result: QueueDispatchResult) -> str:
     if result.held_counts:
         counts = ", ".join(f"{result.held_counts[c]} {c}" for c in sorted(result.held_counts))
         lines.append(f"held by queue-advance: {counts}.")
+    groomed = result.maintenance
+    if groomed.get("dropped_items") or groomed.get("pruned_runs"):
+        lines.append(
+            f"maintenance: compacted {groomed.get('dropped_items', 0)} settled item(s) "
+            f"({groomed.get('dropped_records', 0)} ledger record(s)) and pruned "
+            f"{groomed.get('pruned_runs', 0)} unreferenced terminal run record(s)."
+        )
+    if groomed.get("error"):
+        lines.append(f"maintenance did not complete: {groomed['error']} (dispatch is unaffected).")
     return "\n".join(lines)
 
 
@@ -822,9 +840,14 @@ def _brief(result: QueueDispatchResult) -> str:
     side_effects=[
         SideEffect(
             "file_write",
-            "<experiment>/.hpc/queue/intake.jsonl (one placement record per item)",
+            "<experiment>/.hpc/queue/intake.jsonl (one placement record per item; "
+            "compacted of settled items after a dispatching tick)",
         ),
         SideEffect("scheduler-submit", "<cluster> (per dispatched item, via campaign-run)"),
+        SideEffect(
+            "writes-journal",
+            "prunes unreferenced terminal RunRecords after a dispatching tick (D10)",
+        ),
     ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
@@ -1019,6 +1042,23 @@ def queue_dispatch(
     # A held claim is NOT a decision anyone owes: the peer is doing the work.
     needs_decision = any(row.reason_code in _NEEDS_DECISION_REFUSALS for row in refused)
 
+    # D10: groom ONLY on a tick that wrote a placement. A tick that dispatched
+    # nothing is exactly the pass §7's relaunch-cheapness invariant is about, and
+    # charging it an O(history) sweep would break the invariant this grooming
+    # exists to hold.
+    maintenance: dict[str, Any] = {}
+    if dispatched:
+        from hpc_agent.ops.queue.maintenance import groom_queue_stores
+
+        # Every item THIS call reports on is exempt: adopting onto an already-
+        # ``complete`` run retires the item the instant its placement lands, and
+        # compacting it here would erase — in the same tick — the ledger row this
+        # result calls ``placed``. "Never destroy the thing you're operating on."
+        maintenance = groom_queue_stores(
+            exp,
+            exclude_item_ids=[row.item_id for row in dispatched] + [row.item_id for row in refused],
+        )
+
     result = QueueDispatchResult(
         computed_at=now,
         stage_reached=stage,
@@ -1031,6 +1071,7 @@ def queue_dispatch(
         held_counts=held_counts,
         placements_considered=len(adv.placements),
         occupancy=dict(adv.occupancy),
+        maintenance=maintenance,
         active_env_overrides=active_env_overrides(),
     )
     result.brief = _brief(result)

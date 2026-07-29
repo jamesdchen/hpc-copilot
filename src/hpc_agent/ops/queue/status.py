@@ -8,7 +8,8 @@ The verb R1 exists to make possible
 
 The intake ledger stores arrival facts and ``{queued, placed}`` and NOTHING
 else. Every other fact this verb reports — ``dispatched``, ``run_status``,
-``in_flight``, ``terminal``, ``parked``, ``greenlight_committed`` — is
+``in_flight``, ``terminal``, ``superseded_by``, ``held``, ``drive_attempts``,
+``parked``, ``greenlight_committed`` — is
 RECOMPUTED here on every read from stores that are already durable. A ledger
 that COPIED park state would drift from the journal the first time a ``y``
 landed; a ledger that projects it cannot. There is no cache, no digest file,
@@ -41,6 +42,17 @@ silent — a dropped ledger line, a hidden settled item, a clipped page, a
 ``in_flight``-only enumeration cannot see all surface as code-computed
 ``notes``.
 
+**Drivability is the CALLER's formula, computed from fields this verb
+publishes** (Phase 3). The drain plan decides per item, from
+``dispatched ∧ ¬terminal ∧ (¬parked ∨ greenlight_unadvanced)`` and the two
+further stop conditions the four-field form cannot see — ``held`` (an
+escalation verdict: a human wait with no boundary a greenlight could target)
+and ``superseded_by`` (a slot the occupancy predicate has already retired, in
+the window before the status catches up). ``drive_attempts`` is the durable
+budget behind a retryable(n) policy. No ``drivable`` boolean is emitted: the
+policy belongs to the plan, and minting a kernel verdict for it would put a
+second, divergent definition next to the plan's.
+
 Hold-back reasons for items still ``queued`` are NOT invented here.
 ``queue-advance`` is the placement authority and its hold-backs are its
 output (R3/R4: pure, disclosed, unstored); this verb reports that the item is
@@ -67,7 +79,7 @@ from hpc_agent._wire.queries.queue_status import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.decision_journal import is_committed_greenlight_for_boundary
-from hpc_agent.state.journal import load_run, read_pending_decision
+from hpc_agent.state.journal import is_held, load_run, read_pending_decision
 from hpc_agent.state.queue_intake import (
     STATE_PLACED,
     STATE_QUEUED,
@@ -98,8 +110,16 @@ _COUNT_KEYS: tuple[str, ...] = (
     "dispatched",
     "in_flight",
     "parked",
+    "held",
     "greenlight_unadvanced",
     "terminal",
+)
+
+#: The projected keys ``counts`` tallies. Derived from :data:`_COUNT_KEYS` minus
+#: the two LEDGER states, so a new projected class joins both by construction
+#: rather than by somebody remembering to edit a second literal.
+_PROJECTED_COUNT_KEYS: tuple[str, ...] = tuple(
+    key for key in _COUNT_KEYS if key not in {STATE_QUEUED, STATE_PLACED}
 )
 
 
@@ -220,6 +240,9 @@ def _project(experiment_dir: Path, run_id: str | None, *, journal: bool) -> dict
         "run_status": None,
         "in_flight": False,
         "terminal": False,
+        "superseded_by": None,
+        "held": False,
+        "drive_attempts": 0,
         "parked": False,
         "park_block": None,
         "awaiting_since": None,
@@ -236,6 +259,16 @@ def _project(experiment_dir: Path, run_id: str | None, *, journal: bool) -> dict
     projection["run_status"] = status
     projection["in_flight"] = status == _IN_FLIGHT
     projection["terminal"] = status in _TERMINAL_STATUS_NAMES
+    # The three facts a drain loop's drivability test needs and could not infer
+    # from the four above. Each routes through the SHIPPED single authority for
+    # its question rather than re-deciding it here (R7 applied beyond the
+    # greenlight): supersession is the field ``queue_occupancy.run_occupies``
+    # retires a slot on, the escalation hold is ``journal.is_held``'s
+    # field-as-state, and the futile-drive budget is stamped by the one write
+    # point in ``journal.stamp_drive_attempt``.
+    projection["superseded_by"] = _text(record.superseded_by)
+    projection["held"] = is_held(record)
+    projection["drive_attempts"] = max(0, int(record.drive_attempts or 0))
 
     marker = read_pending_decision(run_id, experiment_dir=experiment_dir) or {}
     if not marker:
@@ -367,8 +400,11 @@ def _build_item(
             "stores. Folds .hpc/queue/intake.jsonl into current items (states "
             "'queued'/'placed' — the only two the ledger stores) and RECOMPUTES "
             "every other fact per read — whether the item became a run, is in "
-            "flight, is parked awaiting a human, carries a committed-but-"
-            "unadvanced greenlight, or is terminal — from RunRecords, "
+            "flight, is parked awaiting a human, is held on an escalation "
+            "verdict, was superseded, how many consecutive block-drive ticks "
+            "moved it nothing (drive_attempts — the durable retryable(n) "
+            "budget), carries a committed-but-unadvanced greenlight, or is "
+            "terminal — from RunRecords, "
             "pending-decision markers and the decision journal, routing the "
             "greenlight question through the same boundary-scoped predicate "
             "attention-queue uses so the two 'what needs me' surfaces cannot "
@@ -441,7 +477,7 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
         state = item.get("state")
         if isinstance(state, str) and state in counts:
             counts[state] += 1
-        for key in ("dispatched", "in_flight", "parked", "greenlight_unadvanced", "terminal"):
+        for key in _PROJECTED_COUNT_KEYS:
             if projection[key]:
                 counts[key] += 1
 
@@ -552,6 +588,23 @@ def _notes(
                 f"{_text(item.get('run_id'))} whose status is "
                 f"{projection['run_status']!r}: attention-queue enumerates parks over "
                 "in_flight runs only, so that park is invisible to the fleet digest"
+            )
+    for item, projection in matched:
+        if projection["superseded_by"] and not projection["terminal"]:
+            notes.append(
+                f"item {_text(item.get('item_id'))} names run "
+                f"{_text(item.get('run_id'))}, which is superseded by "
+                f"{projection['superseded_by']} but whose status is still "
+                f"{projection['run_status']!r}: the occupancy predicate has already "
+                "retired its slot, so treat it as finished rather than drivable"
+            )
+    for item, projection in matched:
+        if projection["held"] and not projection["parked"]:
+            notes.append(
+                f"item {_text(item.get('item_id'))} is HELD on an escalation verdict "
+                "with no pending-decision marker: it waits on a human but has no "
+                "boundary a greenlight can target, so a drivability test keyed on "
+                "'parked' alone would relay ticks at it forever"
             )
     for item, projection in matched:
         if item.get("state") == STATE_PLACED and not projection["dispatched"]:
