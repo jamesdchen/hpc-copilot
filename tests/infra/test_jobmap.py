@@ -8,6 +8,7 @@ strings; the round-trip runs them in a local ``bash``).
 
 from __future__ import annotations
 
+import functools
 import json
 import subprocess
 from pathlib import Path
@@ -199,7 +200,12 @@ def _sq(s: str) -> str:
     return shlex.quote(s)
 
 
+@functools.cache
 def _bash_available() -> bool:
+    # Cached: on Windows a bare ``bash`` can resolve to the WSL launcher, whose
+    # cold spawn is expensive — under full-suite xdist load the uncached
+    # per-test probe wedged past 30s and TimeoutExpired (previously uncaught)
+    # FAILED tests this probe exists to skip.
     try:
         return (
             subprocess.run(
@@ -207,5 +213,5 @@ def _bash_available() -> bool:
             ).returncode
             == 0
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
