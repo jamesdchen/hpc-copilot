@@ -673,10 +673,13 @@ def _notes(
             continue  # not the chain's tip; the tip's row speaks for the chain
         spoken_roots.add(root)
         item_id = _text(item.get("item_id"))
-        run_id = _text(item.get("run_id"))
+        # A distinct name: ``run_id`` earlier in this function is a plain str,
+        # and _text's None (an unreadable ledger line) must render as unknown
+        # rather than shadow it.
+        failed_run = _text(item.get("run_id")) or "<unknown>"
         if used >= budget:
             notes.append(
-                f"item {item_id}: run {run_id} FAILED and its declared retryable({budget}) "
+                f"item {item_id}: run {failed_run} FAILED and its declared retryable({budget}) "
                 f"budget is EXHAUSTED ({used} of {budget} used) — it parks for a human. "
                 "The budget was declared at enqueue and consumed by queue-dispatch; "
                 "nothing judged the failure"
@@ -688,11 +691,11 @@ def _notes(
             if used >= 1:
                 notes.append(
                     f"item {item_id}: declared retry {used} of retryable({budget}) for "
-                    f"failed run {run_id} is on the ledger awaiting placement/dispatch"
+                    f"failed run {failed_run} is on the ledger awaiting placement/dispatch"
                 )
         else:
             notes.append(
-                f"item {item_id}: run {run_id} FAILED with a declared retryable({budget}) "
+                f"item {item_id}: run {failed_run} FAILED with a declared retryable({budget}) "
                 f"budget ({used} of {budget} used) — the next queue-dispatch tick "
                 f"re-enqueues declared retry {used + 1}"
             )
