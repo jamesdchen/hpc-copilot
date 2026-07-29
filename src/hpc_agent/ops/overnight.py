@@ -61,7 +61,7 @@ from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.decision_journal import read_decisions
-from hpc_agent.state.placement_drift import detect_placement_drift
+from hpc_agent.state.placement_drift import detect_placement_drift, placement_cluster_caps
 
 __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
@@ -293,21 +293,52 @@ def _assert_placement_wellformed(placement_raw: Any) -> None:
     the shape refusal above it still holds. STRUCTURAL (never the
     authorship-missing marker) — a fresh utterance cannot fix a malformed
     record.
+
+    The ``{cluster: cap}`` mapping form (run-queue plan §3, Phase 2) gets the
+    same strict treatment on its cap values: each cluster's block may carry
+    only :data:`state.placement_drift.PLACEMENT_CAP_FIELDS`, each a positive
+    finite number. Consumption tolerantly DROPS a malformed cap
+    (``placement_cluster_caps``), so record time is the only moment a typo'd
+    cap field ("budget" for "budget_cap") can fail loudly instead of silently
+    granting uncapped spend on that cluster.
     """
     if placement_raw is None:
         return
-    from hpc_agent.state.placement_drift import normalize_recorded_placement
+    from hpc_agent.state.placement_drift import (
+        PLACEMENT_CAP_FIELDS,
+        normalize_recorded_placement,
+    )
 
     placement = normalize_recorded_placement(placement_raw)
     if placement is None:
         raise errors.SpecInvalid(
             "overnight-consent placement gate: resolved.placement is present but "
-            f"unusable ({placement_raw!r}) — it must be one cluster key or a "
-            "non-empty list of cluster keys. Consumption would silently treat "
-            "this consent as placement-blind (the absent-disables rule), which "
-            "is not what a present-but-broken binding means. Fix the shape or "
-            "drop the field."
+            f"unusable ({placement_raw!r}) — it must be one cluster key, a "
+            "non-empty list of cluster keys, or a {cluster: {caps}} mapping "
+            "whose every value is a (possibly empty) mapping of caps. "
+            "Consumption would silently treat this consent as placement-blind "
+            "(the absent-disables rule), which is not what a present-but-broken "
+            "binding means. Fix the shape or drop the field."
         )
+    if isinstance(placement_raw, dict):
+        for cluster, caps_raw in placement_raw.items():
+            unknown_fields = sorted(set(caps_raw) - set(PLACEMENT_CAP_FIELDS))
+            if unknown_fields:
+                raise errors.SpecInvalid(
+                    f"overnight-consent placement gate: resolved.placement[{cluster!r}] "
+                    f"carries unknown cap field(s) {unknown_fields} — the {{cluster: cap}} "
+                    f"vocabulary is exactly {list(PLACEMENT_CAP_FIELDS)}. Consumption "
+                    "drops what it cannot read, so an unrecognized field would silently "
+                    "grant uncapped spend on that cluster instead of the cap you typed."
+                )
+            for field in PLACEMENT_CAP_FIELDS:
+                if field in caps_raw and not _is_positive_number(caps_raw[field]):
+                    raise errors.SpecInvalid(
+                        f"overnight-consent placement gate: resolved.placement[{cluster!r}]"
+                        f".{field} ({caps_raw[field]!r}) is not a positive finite number. "
+                        "A cap that cannot bind is a cap consumption silently drops — "
+                        "fix the value or remove the field."
+                    )
     known = _known_cluster_keys()
     if not known:
         return
@@ -367,16 +398,21 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
             "not in the future — an already-expired consent grants nothing. Set the "
             "morning boundary ahead of now."
         )
+    # Shape first: a typo'd cap field must refuse with the placement gate's
+    # actionable message, not fall through to a generic "no ceiling" refusal
+    # that misdiagnoses a present-but-malformed cap as an absent one.
+    _assert_placement_wellformed(resolved.get("placement"))
     has_budget = _is_positive_number(resolved.get("budget_cap"))
     has_walltime = _is_positive_number(resolved.get("walltime_cap"))
-    if not (has_budget or has_walltime):
+    if not (has_budget or has_walltime) and not _every_cluster_capped(resolved.get("placement")):
         raise errors.SpecInvalid(
             "overnight-consent caps gate: a standing consent MUST carry at least one "
             "resource ceiling — resolved.budget_cap and/or resolved.walltime_cap "
-            "(a positive number). A consent that caps neither spend nor walltime "
-            "accepts unbounded overnight fallout."
+            "(a positive number), or a {cluster: cap} placement in which EVERY "
+            "named cluster carries a cap (a partially-capped map leaves the "
+            "uncapped cluster unbounded). A consent that caps neither spend nor "
+            "walltime accepts unbounded overnight fallout."
         )
-    _assert_placement_wellformed(resolved.get("placement"))
     if not (isinstance(resolved.get("cmd_sha"), str) and resolved["cmd_sha"]):
         raise errors.SpecInvalid(
             "overnight-consent identity gate: a standing consent MUST bind to a spec "
@@ -385,6 +421,24 @@ def assert_consent_hard_caps(resolved: dict[str, Any] | None) -> None:
             "compare the morning's spec against (run #11 correctly refused to carry a "
             "pre-y across a regenerated grid)."
         )
+
+
+def _every_cluster_capped(placement_raw: Any) -> bool:
+    """True when *placement_raw* is the ``{cluster: cap}`` form and EVERY cluster
+    carries at least one cap — the only per-cluster shape that satisfies the
+    ceiling requirement without a global cap.
+
+    A partially-capped map does NOT satisfy it: the uncapped cluster would be
+    unbounded, and "some of your clusters have ceilings" is not what the caps
+    gate promises. (Those consents still record fine WITH a global cap — the
+    per-cluster caps then tighten it per machine.)
+    """
+    from hpc_agent.state.placement_drift import placement_cluster_caps
+
+    if not isinstance(placement_raw, dict):
+        return False
+    caps = placement_cluster_caps(placement_raw)
+    return bool(caps) and all(cluster_caps for cluster_caps in caps.values())
 
 
 def _is_positive_number(val: Any) -> bool:
@@ -852,6 +906,12 @@ def standing_consent_status(
       that does not yet know its cluster is untouched.
     * **over cap** — ``spent_budget`` / ``spent_walltime`` exceeds a declared cap
       → not live (``reason="over-budget-cap"`` / ``"over-walltime-cap"``).
+    * **over per-cluster cap** — the ``{cluster: cap}`` placement form declares a
+      cap for ``current_placement`` and that cluster's metered spend exceeds it →
+      not live (``reason="over-cluster-budget-cap"`` /
+      ``"over-cluster-walltime-cap"``). Metered internally from the consumption
+      ledger's ``detail.cluster`` stamps; leg off when the boundary's cluster is
+      unknown (the S1 absent-disables direction).
 
     The caller supplies ``current_cmd_sha`` (from the block's input-spec identity
     — ``block_drive._spec_sha`` — or the run sidecar) and ``current_placement``
@@ -900,6 +960,27 @@ def standing_consent_status(
     walltime_cap = resolved.get("walltime_cap")
     if _is_positive_number(walltime_cap) and spent_walltime > float(cast("float", walltime_cap)):
         return ConsentDecision(False, "over-walltime-cap", consent)
+
+    # The {cluster: cap} legs (run-queue plan §3, Phase 2): when the consent's
+    # placement is the mapping form AND the boundary's cluster is known AND that
+    # cluster declares a cap, the cap binds against the PER-CLUSTER meter
+    # (``consumed_spend(cluster=...)``). Metered here from the ledger rather
+    # than taken from the caller: the global ``spent_*`` args predate the
+    # vocabulary and callers cannot know the per-cluster split without the
+    # ledger read anyway. Absent ``current_placement`` keeps the legs off —
+    # the same absent-disables direction as the S1 membership leg above (an
+    # unknown cluster is not evidence of overspend at 3am).
+    cluster_caps = placement_cluster_caps(resolved.get("placement")).get(current_placement or "")
+    if cluster_caps:
+        cluster_budget, cluster_walltime = consumed_spend(
+            experiment_dir, scope_kind, scope_id, cluster=current_placement
+        )
+        cap = cluster_caps.get("budget_cap")
+        if cap is not None and cluster_budget > cap:
+            return ConsentDecision(False, "over-cluster-budget-cap", consent)
+        cap = cluster_caps.get("walltime_cap")
+        if cap is not None and cluster_walltime > cap:
+            return ConsentDecision(False, "over-cluster-walltime-cap", consent)
 
     return ConsentDecision(True, "live", consent)
 
@@ -1034,7 +1115,9 @@ def read_consumption_ledger(
 # ── the spend meter (sequencing item 1: meter before the first B heal) ────────
 
 
-def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tuple[float, float]:
+def consumed_spend(
+    experiment_dir: Path, scope_kind: str, scope_id: str, *, cluster: str | None = None
+) -> tuple[float, float]:
     """Sum the ``(budget, walltime)`` a scope has ALREADY consumed under its consent.
 
     The spend meter the overnight-repair sequencing puts FIRST (§8 item 1): every
@@ -1046,6 +1129,15 @@ def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tupl
     disclosed no-op line spends nothing); fail-safe by construction — a torn ledger
     line contributes nothing rather than raising.
 
+    With ``cluster`` set, only lines stamped ``detail.cluster == cluster`` count —
+    the per-cluster meter behind the ``{cluster: cap}`` legs (run-queue plan §3).
+    :func:`consume_boundary_under_consent` stamps ``detail.cluster`` from the
+    boundary's ``current_placement``, so per-cluster metering starts at the first
+    consumption after the vocabulary landed; lines predating the stamp carry no
+    cluster and count toward NO per-cluster total (they still count globally) —
+    undercounting is the tolerable direction for a cap that did not exist when
+    they were written.
+
     Returns ``(spent_budget, spent_walltime)``. HEAL_FAILED lines are excluded (a
     fail-loud flip is bookkeeping, not spend); HEAL_ATTEMPT lines ARE counted when
     they carry a cost (a respawn that burned walltime is real fallout).
@@ -1056,6 +1148,8 @@ def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tupl
         if str(line.get("event_kind") or "") == HEAL_FAILED_KIND:
             continue
         detail = _as_dict(line.get("detail"))
+        if cluster is not None and str(detail.get("cluster") or "") != cluster:
+            continue
         b = detail.get("spent_budget")
         w = detail.get("spent_walltime")
         if _is_positive_number(b):
@@ -1260,6 +1354,12 @@ def consume_boundary_under_consent(
     if not decision.live:
         return ConsumptionOutcome(False, decision, None)
     stamped_detail: dict[str, Any] = {"cmd_sha": current_cmd_sha, **(detail or {})}
+    # The {cluster: cap} meter's data leg: stamp WHERE this consumption placed so
+    # consumed_spend(cluster=...) can split the total per machine. A caller's own
+    # detail.cluster wins (the ** above already kept it); absent placement stamps
+    # nothing — an unknown cluster must not be invented at the audit surface.
+    if current_placement and "cluster" not in stamped_detail:
+        stamped_detail["cluster"] = current_placement
     # F11: the anomaly KIND discriminates the idempotency key so distinct anomalies
     # the same night each earn a ledger line (a boundary with no anomaly ⇒ None ⇒ the
     # prior single-consume-per-identity behaviour for the run's submit-s3 launch).

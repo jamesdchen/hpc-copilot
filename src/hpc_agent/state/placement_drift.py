@@ -41,7 +41,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["PlacementDrift", "detect_placement_drift", "normalize_recorded_placement"]
+__all__ = [
+    "PlacementDrift",
+    "detect_placement_drift",
+    "normalize_recorded_placement",
+    "placement_cluster_caps",
+]
 
 
 @dataclass(frozen=True)
@@ -62,9 +67,20 @@ class PlacementDrift:
 def normalize_recorded_placement(recorded: Any) -> tuple[str, ...] | None:
     """The recorded placement as a sorted cluster-key tuple, or ``None`` if unusable.
 
-    Accepts the two shapes a consent's ``resolved`` dict may carry: one key
-    (``"hoffman2"``, the run scope) or a list of keys (the campaign
-    ``placement_scope``). Anything else — empty, non-string members, a mapping —
+    Accepts the three shapes a consent's ``resolved`` dict may carry: one key
+    (``"hoffman2"``, the run scope), a list of keys (the campaign
+    ``placement_scope``), or a ``{cluster_key: {caps}}`` mapping (the Phase-2
+    ``{cluster: cap}`` vocabulary, run-queue plan §3 — the KEY SET is the
+    membership set; the values carry per-cluster caps and are
+    :func:`placement_cluster_caps`'s business, not drift's). A mapping is usable
+    only when every value is itself a mapping: the historical malformed shape
+    ``{"cluster": "carc"}`` (a field name, not a cluster key) must keep reading
+    as unusable, and requiring dict values is what distinguishes the cap
+    vocabulary from it. No recorded consent predating the vocabulary can carry
+    a mapping here — the write gate refused every mapping shape until the cap
+    form was admitted — so the key-set reading never reinterprets old records.
+
+    Anything else — empty, non-string members, non-dict mapping values —
     disables the check rather than guessing: an unreadable recorded value is a
     value we cannot prove drifted (the ``code_drift`` posture).
     """
@@ -77,7 +93,53 @@ def normalize_recorded_placement(recorded: Any) -> tuple[str, ...] | None:
         if not recorded or not all(isinstance(k, str) and k for k in recorded):
             return None
         return tuple(sorted(set(recorded)))
+    if isinstance(recorded, dict):
+        # The {cluster: cap} form. Same any-unusable-member-disables rule as the
+        # list: a shrunken key set is the false-kill direction.
+        if not recorded or not all(
+            isinstance(k, str) and k and isinstance(v, dict) for k, v in recorded.items()
+        ):
+            return None
+        return tuple(sorted(recorded))
     return None
+
+
+#: The two cap fields a ``{cluster: cap}`` placement value may carry. One home,
+#: shared by the strict write gate (``ops/overnight._assert_placement_wellformed``)
+#: and the tolerant consumption reader (:func:`placement_cluster_caps`), so the
+#: two can never admit different vocabularies.
+PLACEMENT_CAP_FIELDS = ("budget_cap", "walltime_cap")
+
+
+def placement_cluster_caps(recorded: Any) -> dict[str, dict[str, float]]:
+    """The per-cluster caps a ``{cluster: cap}`` placement declares, else ``{}``.
+
+    The consumption-side reader of the Phase-2 vocabulary (run-queue plan §3):
+    for the mapping form, each cluster's value may declare ``budget_cap`` /
+    ``walltime_cap`` (positive finite numbers — the same rule as the consent's
+    global caps). The str/list forms declare no caps. Tolerant in the
+    consumption direction: a malformed cap value is DROPPED (contributes no
+    cap) rather than raising — the strict shape refusal is the write gate's
+    job, at record time, while the human is awake to fix it.
+    """
+    import math
+
+    if normalize_recorded_placement(recorded) is None or not isinstance(recorded, dict):
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for cluster, caps_raw in recorded.items():
+        caps: dict[str, float] = {}
+        for field in PLACEMENT_CAP_FIELDS:
+            val = caps_raw.get(field)
+            if (
+                not isinstance(val, bool)
+                and isinstance(val, (int, float))
+                and math.isfinite(val)
+                and val > 0
+            ):
+                caps[field] = float(val)
+        out[cluster] = caps
+    return out
 
 
 def detect_placement_drift(*, recorded: Any, current: str | None) -> PlacementDrift:

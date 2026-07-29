@@ -977,3 +977,263 @@ def test_campaign_scope_consent_refuses_a_boundary_off_its_cluster_set(
         current_placement="hoffman2",
     )
     assert live.live is True
+
+
+# ── the {cluster: cap} vocabulary (run-queue plan §3, Phase 2) ────────────────
+
+
+def _seed_spend(
+    experiment_dir: Path, *, cluster: str | None, budget: float = 0.0, walltime: float = 0.0
+) -> None:
+    """Ledger one consumption line carrying spend, optionally cluster-stamped."""
+    detail: dict[str, Any] = {"cmd_sha": _CMD_SHA}
+    if budget:
+        detail["spent_budget"] = budget
+    if walltime:
+        detail["spent_walltime"] = walltime
+    if cluster:
+        detail["cluster"] = cluster
+    overnight.record_consumption(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        consumed_block="submit-s3",
+        event_kind="auto-advance",
+        failed_at=_iso(utcnow()),
+        detail=detail,
+    )
+
+
+def test_per_cluster_budget_cap_fires_on_that_clusters_spend(experiment_dir: Path) -> None:
+    """A {cluster: cap} consent refuses consumption on the cluster whose metered
+    spend exceeds its own cap — reason names the per-cluster leg."""
+    _seed_consent_raw(experiment_dir, _resolved(placement={"carc": {"budget_cap": 10.0}}))
+    _seed_spend(experiment_dir, cluster="carc", budget=25.0)
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is False
+    assert decision.reason == "over-cluster-budget-cap"
+
+
+def test_per_cluster_walltime_cap_fires(experiment_dir: Path) -> None:
+    _seed_consent_raw(experiment_dir, _resolved(placement={"carc": {"walltime_cap": 100.0}}))
+    _seed_spend(experiment_dir, cluster="carc", walltime=250.0)
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is False
+    assert decision.reason == "over-cluster-walltime-cap"
+
+
+def test_another_clusters_spend_never_counts(experiment_dir: Path) -> None:
+    """The per-cluster meter splits by detail.cluster: hoffman2's spend must not
+    consume carc's cap."""
+    _seed_consent_raw(
+        experiment_dir,
+        _resolved(placement={"carc": {"budget_cap": 10.0}, "hoffman2": {"budget_cap": 10.0}}),
+    )
+    _seed_spend(experiment_dir, cluster="hoffman2", budget=25.0)
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is True
+    assert decision.reason == "live"
+
+
+def test_unstamped_legacy_spend_counts_toward_no_cluster(experiment_dir: Path) -> None:
+    """Ledger lines predating the cluster stamp count globally but toward no
+    per-cluster total — undercounting is the tolerable direction for a cap
+    that did not exist when they were written."""
+    _seed_consent_raw(experiment_dir, _resolved(placement={"carc": {"budget_cap": 10.0}}))
+    _seed_spend(experiment_dir, cluster=None, budget=25.0)
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is True
+
+
+def test_unknown_current_placement_keeps_the_cap_legs_off(experiment_dir: Path) -> None:
+    """The S1 absent-disables direction applies to the cap legs too: an unknown
+    boundary cluster is not evidence of overspend at 3am."""
+    _seed_consent_raw(experiment_dir, _resolved(placement={"carc": {"budget_cap": 10.0}}))
+    _seed_spend(experiment_dir, cluster="carc", budget=25.0)
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+    )
+    # No current_placement: membership leg off AND cap legs off.
+    assert decision.live is True
+
+
+def test_global_cap_leg_orders_before_the_per_cluster_leg(experiment_dir: Path) -> None:
+    """When both the global and the per-cluster budget cap are blown, the reason
+    names the global leg — the documented leg order."""
+    _seed_consent_raw(
+        experiment_dir,
+        _resolved(budget_cap=5.0, placement={"carc": {"budget_cap": 10.0}}),
+    )
+    _seed_spend(experiment_dir, cluster="carc", budget=25.0)
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+        spent_budget=25.0,
+    )
+    assert decision.live is False
+    assert decision.reason == "over-budget-cap"
+
+
+def test_consumption_stamps_the_cluster_for_the_meter(experiment_dir: Path) -> None:
+    """consume_boundary_under_consent must stamp detail.cluster from the
+    boundary's current_placement so the per-cluster meter has data."""
+    _seed_consent_raw(experiment_dir, _resolved(placement={"carc": {"budget_cap": 100.0}}))
+    outcome = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s3",
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+        detail={"spent_budget": 3.0},
+    )
+    assert outcome.consumed is True
+    assert outcome.line is not None
+    assert outcome.line["detail"]["cluster"] == "carc"
+    assert overnight.consumed_spend(experiment_dir, "run", _RUN_ID, cluster="carc") == (3.0, 0.0)
+    assert overnight.consumed_spend(experiment_dir, "run", _RUN_ID, cluster="hoffman2") == (
+        0.0,
+        0.0,
+    )
+
+
+def test_consumed_spend_cluster_filter_splits_the_totals(experiment_dir: Path) -> None:
+    _seed_spend(experiment_dir, cluster="carc", budget=2.0, walltime=10.0)
+    _seed_spend(experiment_dir, cluster="hoffman2", budget=5.0)
+    _seed_spend(experiment_dir, cluster=None, budget=7.0)
+    assert overnight.consumed_spend(experiment_dir, "run", _RUN_ID) == (14.0, 10.0)
+    assert overnight.consumed_spend(experiment_dir, "run", _RUN_ID, cluster="carc") == (2.0, 10.0)
+    assert overnight.consumed_spend(experiment_dir, "run", _RUN_ID, cluster="hoffman2") == (
+        5.0,
+        0.0,
+    )
+
+
+# ── {cluster: cap} record-time strictness (the write gate) ───────────────────
+
+
+def test_unknown_cap_field_refused_at_record_time(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd cap field ("budget" for "budget_cap") would be silently dropped
+    at consumption — record time is the only moment it can fail loudly."""
+    _pin_clusters(tmp_path, monkeypatch, "carc")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    with pytest.raises(errors.SpecInvalid, match="unknown cap field"):
+        _append(experiment_dir, resolved=_resolved(placement={"carc": {"budget": 10.0}}))
+
+
+def test_non_positive_cap_value_refused_at_record_time(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clusters(tmp_path, monkeypatch, "carc")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    with pytest.raises(errors.SpecInvalid, match="not a positive finite number"):
+        _append(experiment_dir, resolved=_resolved(placement={"carc": {"budget_cap": -1}}))
+
+
+def test_cap_mapping_with_known_keys_records(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clusters(tmp_path, monkeypatch, "carc", "hoffman2")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    result = _append(
+        experiment_dir,
+        resolved=_resolved(placement={"carc": {"budget_cap": 10.0}, "hoffman2": {}}),
+    )
+    assert result.count == 1
+
+
+def test_cap_mapping_key_validated_against_clusters_yaml(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The map form's keys get the same typo protection as the list form."""
+    _pin_clusters(tmp_path, monkeypatch, "carc", "hoffman2")
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    with pytest.raises(errors.SpecInvalid, match="did you mean 'hoffman2'"):
+        _append(experiment_dir, resolved=_resolved(placement={"hoffman": {"budget_cap": 10.0}}))
+
+
+def test_fully_capped_map_satisfies_the_ceiling_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A {cluster: cap} placement in which EVERY cluster carries a cap is a
+    ceiling — no global cap required."""
+    _pin_clusters(tmp_path, monkeypatch, "carc", "hoffman2")
+    overnight.assert_consent_hard_caps(
+        {
+            "expires_at": _iso(utcnow() + timedelta(hours=8)),
+            "cmd_sha": _CMD_SHA,
+            "placement": {"carc": {"budget_cap": 10.0}, "hoffman2": {"walltime_cap": 60.0}},
+        }
+    )
+
+
+def test_partially_capped_map_does_not_satisfy_the_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One uncapped cluster leaves the consent unbounded there — refused
+    without a global cap."""
+    _pin_clusters(tmp_path, monkeypatch, "carc", "hoffman2")
+    with pytest.raises(errors.SpecInvalid, match="caps gate.*EVERY"):
+        overnight.assert_consent_hard_caps(
+            {
+                "expires_at": _iso(utcnow() + timedelta(hours=8)),
+                "cmd_sha": _CMD_SHA,
+                "placement": {"carc": {"budget_cap": 10.0}, "hoffman2": {}},
+            }
+        )
+
+
+def test_coverage_brief_renders_the_per_cluster_caps(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The human must READ the per-cluster ceilings in the refusal's coverage
+    render — consenting to a cap they never saw is the gap the inline render
+    closes. The caps stay structural: the paste line needs the cluster NAMES
+    only, and pasted verbatim it must still grant."""
+    _pin_clusters(tmp_path, monkeypatch, "carc")
+    _arm_wake(_RUN_ID)
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    resolved = _resolved(placement={"carc": {"budget_cap": 10.0}})
+    with pytest.raises(errors.SpecInvalid, match="carc caps: budget_cap=10.0") as exc:
+        _append(experiment_dir, resolved=resolved)
+    paste_line = str(exc.value).splitlines()[-1].strip()
+    assert "carc" in paste_line
+    append_utterance(experiment_dir, paste_line)
+    result = _append(experiment_dir, resolved=resolved)
+    assert result.count == 1

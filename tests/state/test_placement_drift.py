@@ -15,6 +15,7 @@ import pytest
 from hpc_agent.state.placement_drift import (
     detect_placement_drift,
     normalize_recorded_placement,
+    placement_cluster_caps,
 )
 
 # ── the firing cases ─────────────────────────────────────────────────────────
@@ -94,3 +95,54 @@ def test_normalize_deduplicates_and_sorts() -> None:
 
 def test_normalize_str_is_a_singleton() -> None:
     assert normalize_recorded_placement("carc") == ("carc",)
+
+
+# ── the {cluster: cap} form (run-queue plan §3, Phase 2) ─────────────────────
+
+
+def test_cap_mapping_normalizes_to_its_key_set() -> None:
+    """The {cluster: cap} form's KEY SET is the membership set — same drift
+    semantics as the list form, the caps invisible to the predicate."""
+    recorded = {"hoffman2": {"budget_cap": 10.0}, "carc": {}}
+    assert normalize_recorded_placement(recorded) == ("carc", "hoffman2")
+    assert detect_placement_drift(recorded=recorded, current="carc").changed is False
+    assert detect_placement_drift(recorded=recorded, current="discovery").changed is True
+
+
+def test_mapping_with_a_non_dict_value_stays_unusable() -> None:
+    """The historical malformed shape ``{"cluster": "carc"}`` (a field name,
+    not a cluster key) must keep disabling the check — requiring dict values
+    is what separates the cap vocabulary from it."""
+    assert normalize_recorded_placement({"cluster": "carc"}) is None
+    assert normalize_recorded_placement({"carc": {}, "hoffman2": "oops"}) is None
+
+
+def test_caps_extracted_from_the_mapping_form() -> None:
+    caps = placement_cluster_caps(
+        {"carc": {"budget_cap": 10, "walltime_cap": 3600.0}, "hoffman2": {}}
+    )
+    assert caps == {
+        "carc": {"budget_cap": 10.0, "walltime_cap": 3600.0},
+        "hoffman2": {},
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_cap",
+    [0, -5, float("inf"), float("nan"), True, "10", None],
+    ids=["zero", "negative", "inf", "nan", "bool", "str", "none"],
+)
+def test_unusable_cap_values_are_dropped_not_raised(bad_cap: object) -> None:
+    """Consumption-side tolerance: a cap that cannot bind contributes NO cap
+    (the strict refusal is the write gate's job, at record time)."""
+    caps = placement_cluster_caps({"carc": {"budget_cap": bad_cap}})
+    assert caps == {"carc": {}}
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    ["carc", ["carc", "hoffman2"], None, {"cluster": "carc"}, 42],
+    ids=["str", "list", "none", "malformed-mapping", "int"],
+)
+def test_non_cap_forms_declare_no_caps(recorded: object) -> None:
+    assert placement_cluster_caps(recorded) == {}

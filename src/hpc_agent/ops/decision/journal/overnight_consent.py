@@ -267,6 +267,18 @@ def _assert_overnight_consent_authorship(
             coverage_lines.append(f"  spec identity (cmd_sha): {bound_cmd_sha}")
         if bound_placement:
             coverage_lines.append(f"  placement (cluster): {', '.join(bound_placement)}")
+            # The {cluster: cap} form's caps are structural (like budget_cap —
+            # never spoken in the grant), but the human must READ them here:
+            # consenting to a per-cluster ceiling they never saw is the exact
+            # gap this inline coverage render exists to close.
+            from hpc_agent.state.placement_drift import placement_cluster_caps
+
+            for cluster, cluster_caps in sorted(placement_cluster_caps(res.get("placement")).items()):
+                if cluster_caps:
+                    rendered = ", ".join(
+                        f"{field}={value}" for field, value in sorted(cluster_caps.items())
+                    )
+                    coverage_lines.append(f"    {cluster} caps: {rendered}")
         # A READY-TO-PASTE grant line carrying every token the chat tier reads
         # (boundary slug, each heal class, an 8+ hex sha prefix, every cluster in
         # the set). Rendering it is consistent with the tier's own design: the
