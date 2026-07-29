@@ -235,9 +235,7 @@ def summarize_proposals(proposals: list[dict[str, Any]]) -> str:
     return text
 
 
-def compose_park_notice(
-    parked: dict[str, Any], *, diagnosis: dict[str, Any] | None = None
-) -> str:
+def compose_park_notice(parked: dict[str, Any], *, diagnosis: dict[str, Any] | None = None) -> str:
     """Compose the notification payload for ONE run parked on a human decision.
 
     THE disclosure this exists for (run-queue-placement-2026-07-28.md §8 S13): a

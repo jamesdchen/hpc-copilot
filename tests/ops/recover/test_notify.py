@@ -380,8 +380,7 @@ def test_park_notice_degrades_without_a_menu_rather_than_going_silent() -> None:
     yields a deliverable line — detection without delivery is silence."""
     text = notify.compose_park_notice({"run_id": "r1", "awaiting_since": "2026-07-29T02:00:00Z"})
     assert text == (
-        "hpc-agent: run r1 awaiting your decision since 2026-07-29T02:00:00Z"
-        "\ndiagnosis: none"
+        "hpc-agent: run r1 awaiting your decision since 2026-07-29T02:00:00Z\ndiagnosis: none"
     )
     assert "paste" not in text
     # Nothing at all still names the run slot, never an empty push.

@@ -351,9 +351,7 @@ def diagnosis_request(
     ),
     agent_facing=True,
 )
-def attach_diagnosis(
-    experiment_dir: Path, *, spec: AttachDiagnosisSpec
-) -> AttachDiagnosisResult:
+def attach_diagnosis(experiment_dir: Path, *, spec: AttachDiagnosisSpec) -> AttachDiagnosisResult:
     """Write (OVERWRITE) the agent diagnosis dossier for ``spec.run_id``.
 
     SHAPE validation only, plus the one closed-set check the schema declares:

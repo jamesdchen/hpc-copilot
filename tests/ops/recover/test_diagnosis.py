@@ -58,9 +58,7 @@ _ANOMALY_BRIEF = {
         }
     },
     "answer_menu": {
-        "options": [
-            {"paste": "y", "kind": "advance", "override": True, "target": "submit-s3"}
-        ],
+        "options": [{"paste": "y", "kind": "advance", "override": True, "target": "submit-s3"}],
         "answer_line": "y",
         "summary": "parked at submit-s2 — OVERRIDE",
     },
@@ -162,9 +160,7 @@ class TestComposeDiagnosisRequest:
         # Paths only, existing files only — never content.
         assert str(log) in request["worker_logs"]
         assert request["read_paths"]["journal_record"].endswith(f"{RUN}.json")
-        assert request["read_paths"]["block_terminal"].endswith(
-            f"{RUN}.submit-s2.terminal.json"
-        )
+        assert request["read_paths"]["block_terminal"].endswith(f"{RUN}.submit-s2.terminal.json")
         assert request["attach_target"].endswith(f"{RUN}.diagnosis.json")
         assert request["diagnosis_attached"] is False
         # Paths, classifications, and vocabulary — never the log CONTENT: the
@@ -370,9 +366,7 @@ class TestAdvisorySeparation:
         return AttachDiagnosisSpec(
             run_id=RUN,
             classification="gpu_oom",
-            evidence_excerpts=[
-                DiagnosisEvidenceExcerpt(path="/logs/x", lines=f"lines {SENTINEL}")
-            ],
+            evidence_excerpts=[DiagnosisEvidenceExcerpt(path="/logs/x", lines=f"lines {SENTINEL}")],
             proposed_actions=[
                 DiagnosisProposedAction(
                     label=f"label {SENTINEL}",

@@ -103,9 +103,7 @@ class AttachDiagnosisResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="attach-diagnosis output data")
 
     run_id: RunIdStrict
-    path: str = Field(
-        description="Absolute path of the written <run_id>.diagnosis.json dossier."
-    )
+    path: str = Field(description="Absolute path of the written <run_id>.diagnosis.json dossier.")
     attached_at: str = Field(
         description="ISO-8601 UTC provenance stamp written by the state layer."
     )
