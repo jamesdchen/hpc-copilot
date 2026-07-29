@@ -138,6 +138,14 @@ discovery:
   # queue-wait buffer) so a long task survives the cluster's hard
   # walltime ceiling.
   max_walltime_sec: 172800
+  # Per-user scheduler SUBMIT cap (Slurm QOS MaxSubmitJobsPerUser; array
+  # elements each count as one job). Discovery, measured 2026-07-29 via
+  # `sacctmgr show qos`: normal=5000, gpu=100, oneweek=50, largemem=10,
+  # debug=5. Set it to the cap of the QOS your submissions target — the
+  # value below assumes the `normal` QOS; DROP IT TO 100 if your campaigns
+  # submit GPU arrays (the sharp edge: a >100-task GPU array is
+  # hard-rejected by sbatch). Unset = no client-side check.
+  max_submit_jobs_per_user: 5000
   # Cold-start walltime ask (seconds) for the FIRST submit, before a measured
   # runtime prior is available (an optional prior-reading verb, when installed,
   # would otherwise supply one). Omit to fall back to a conservative built-in

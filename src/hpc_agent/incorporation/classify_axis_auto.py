@@ -10,7 +10,7 @@ This primitive collapses the chain into ONE call. It imports and calls
 the three functions DIRECTLY (no subprocess fan-out):
 
 * :func:`hpc_agent.ops.classify_axis_preflight.classify_axis_preflight`
-  — ``discover-runs`` + cache-check + (conditional) ``recall``.
+  — ``discover --kind runs`` + cache-check + (conditional) ``recall``.
 * :func:`hpc_agent.incorporation.classify_axis_easy.classify_axis_easy`
   — the stdlib AST fast-path matcher.
 * :func:`hpc_agent.incorporation.classify_axis.classify_axis`
@@ -210,7 +210,7 @@ def _abstain_hint_evidence(base: str, run_name: str, outcome: _AxisHintOutcome) 
 def _resolve_single_run(
     discover_subresult: dict[str, Any], *, run_name: str | None
 ) -> dict[str, Any]:
-    """Resolve the single ``@register_run`` row from discover-runs' output.
+    """Resolve the single ``@register_run`` row from the runs discovery's output.
 
     *discover_subresult* is the preflight's ``discover_runs`` SubResult
     (``{envelope, elapsed_sec, ok}``). Returns the resolved run row
@@ -225,8 +225,8 @@ def _resolve_single_run(
     envelope = discover_subresult.get("envelope") or {}
     if not discover_subresult.get("ok"):
         code = envelope.get("error_code", "internal")
-        msg = envelope.get("message", "discover-runs failed")
-        raise errors.SpecInvalid(f"discover-runs failed ({code}): {msg}")
+        msg = envelope.get("message", "runs discovery failed")
+        raise errors.SpecInvalid(f"discover --kind runs failed ({code}): {msg}")
     runs: list[dict[str, Any]] = ((envelope.get("data") or {}).get("runs")) or []
 
     if run_name is not None:
@@ -334,7 +334,7 @@ def _record(
     idempotency_key="experiment_dir",
     cli=CliShape(
         help=(
-            "Composite head of hpc-classify-axis: preflight (discover-runs + "
+            "Composite head of hpc-classify-axis: preflight (discover --kind runs + "
             "cache-check + recall) → classify-axis-easy → classify-axis "
             "recorder, in ONE call. Resolves the single @register_run, then "
             "branches: caller data_axis (interview) / cache hit (reuse) / "
@@ -397,9 +397,9 @@ def classify_axis_auto(
 
     data_axis_supplied = spec.data_axis is not None
 
-    # 1. Preflight (discover-runs + cache-check + conditional recall).
+    # 1. Preflight (discover --kind runs + cache-check + conditional recall).
     #    Pass run_name only when the caller scoped it; the run's
-    #    run_signature_sha is only known AFTER discover-runs, so the first
+    #    run_signature_sha is only known AFTER the runs discovery, so the first
     #    pass cache-check reports a miss when run_name is None — we re-read
     #    the cache against the resolved run below.
     preflight = classify_axis_preflight(
@@ -411,7 +411,7 @@ def classify_axis_auto(
         data_axis_supplied=data_axis_supplied,
     )
 
-    # Resolve the single run from discover-runs (the source_path + sha the
+    # Resolve the single run from the runs discovery (the source_path + sha the
     # rest of the pipeline consumes — the invariant the bug violated:
     # `easy` MUST receive exactly what preflight produced).
     run_row = _resolve_single_run(preflight["discover_runs"], run_name=spec.run_name)

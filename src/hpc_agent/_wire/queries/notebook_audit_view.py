@@ -115,7 +115,7 @@ class NotebookAuditViewSpec(BaseModel):
             "receipt, a section WITH assertions is not green (unverified is not "
             "green). An inline entry carries no `section_sha`, so it is not "
             "sha-freshness-gated here — the mutate `notebook-auto-clear` path "
-            "reads JOURNALED, sha-bound receipts (`notebook-record-receipt`) "
+            "reads JOURNALED, sha-bound receipts (`notebook-record`, kind=receipt) "
             "instead, which drift stale by construction."
         ),
     )

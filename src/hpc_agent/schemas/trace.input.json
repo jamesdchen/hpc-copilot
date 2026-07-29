@@ -1,36 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace_diff.input.json",
-  "title": "trace-diff input spec",
-  "description": "Input spec for ``trace-diff``: two store keys + an optional tolerance.\n\n``tolerance`` absent (``None``) — or present with every bound absent — means\nan EXACT comparison of every atom (the no-invented-tolerance rule).",
-  "type": "object",
-  "required": [
-    "a",
-    "b"
-  ],
-  "additionalProperties": false,
-  "properties": {
-    "a": {
-      "$ref": "#/$defs/TraceKey",
-      "description": "The A-side trace key (e.g. today / this arm / the canary)."
-    },
-    "b": {
-      "$ref": "#/$defs/TraceKey",
-      "description": "The B-side trace key (e.g. last-known-good / the other arm / the local run)."
-    },
-    "tolerance": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TraceTolerance"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Caller-owned tolerance; None (or all-absent) → exact comparison."
-    }
-  },
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace.input.json",
+  "title": "TraceSpec",
+  "description": "The merged verb's optional ``--spec``: a mode-discriminated projection.\n\nThe bare lineage query takes no spec (``--campaign-id`` / ``--run-id``\nargs only); ``mode: render`` / ``mode: diff`` select the data-trace\nprojections. Emitted as ``trace.input.json``.",
   "$defs": {
     "KeyTolerance": {
       "additionalProperties": false,
@@ -68,6 +40,44 @@
       "title": "per-key trace tolerance",
       "type": "object"
     },
+    "TraceDiffProjection": {
+      "additionalProperties": false,
+      "description": "The diff mode's spec: :class:`TraceDiffSpec` plus the discriminator.",
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/TraceKey",
+          "description": "The A-side trace key (e.g. today / this arm / the canary)."
+        },
+        "b": {
+          "$ref": "#/$defs/TraceKey",
+          "description": "The B-side trace key (e.g. last-known-good / the other arm / the local run)."
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceTolerance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Caller-owned tolerance; None (or all-absent) → exact comparison."
+        },
+        "mode": {
+          "const": "diff",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "b",
+        "mode"
+      ],
+      "title": "trace-diff input spec",
+      "type": "object"
+    },
     "TraceKey": {
       "additionalProperties": false,
       "description": "A point-lookup key into the local trace store (one task's records).\n\n``task`` defaults to ``0`` — a single-task local run stores under ``task-0``\n(the T1 recorded-answer), and most reference/canary comparisons are of one\ntask, so the caller rarely supplies it.",
@@ -101,6 +111,95 @@
         "scope_id"
       ],
       "title": "trace-diff store key",
+      "type": "object"
+    },
+    "TraceRenderProjection": {
+      "additionalProperties": false,
+      "description": "The render mode's spec: :class:`TraceRenderSpec` plus the discriminator.",
+      "properties": {
+        "scope_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "run",
+                "audit",
+                "local"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Trace store scope kind for the DIRECT point lookup (with scope_id).",
+          "title": "Scope Kind"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Trace store scope id for the DIRECT point lookup (with scope_kind).",
+          "title": "Scope Id"
+        },
+        "task": {
+          "default": 0,
+          "description": "Per-task trace file index (single-task runs use task-0).",
+          "minimum": 0,
+          "title": "Task",
+          "type": "integer"
+        },
+        "cmd_sha": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "REFERENCE lookup: newest run matching this cmd_sha (Class B).",
+          "title": "Cmd Sha"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "REFERENCE lookup: newest run carrying this sidecar profile label (Class B).",
+          "title": "Profile"
+        },
+        "markdown": {
+          "default": true,
+          "description": "Include the code-rendered markdown views in the result.",
+          "title": "Markdown",
+          "type": "boolean"
+        },
+        "mode": {
+          "const": "render",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "trace-render input spec",
       "type": "object"
     },
     "TraceTolerance": {
@@ -147,5 +246,20 @@
       "title": "trace-diff tolerance spec",
       "type": "object"
     }
-  }
+  },
+  "discriminator": {
+    "mapping": {
+      "diff": "#/$defs/TraceDiffProjection",
+      "render": "#/$defs/TraceRenderProjection"
+    },
+    "propertyName": "mode"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TraceRenderProjection"
+    },
+    {
+      "$ref": "#/$defs/TraceDiffProjection"
+    }
+  ]
 }

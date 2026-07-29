@@ -1,111 +1,694 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace.output.json",
-  "title": "trace output",
-  "description": "Returned by ``hpc-agent trace --campaign-id <id>`` / ``--run-id <id>``.",
-  "type": "object",
-  "required": [
-    "trace_schema_version",
-    "scope",
-    "format",
-    "root",
-    "node_count"
-  ],
-  "additionalProperties": false,
-  "properties": {
-    "trace_schema_version": {
-      "description": "Bumped when the emitted node/edge shape changes incompatibly.",
-      "minimum": 1,
-      "title": "Trace Schema Version",
-      "type": "integer"
-    },
-    "scope": {
-      "description": "Whether the DAG was rooted at a campaign or a single run's lineage.",
-      "enum": [
-        "campaign",
-        "run"
-      ],
-      "title": "Scope",
-      "type": "string"
-    },
-    "format": {
-      "description": "`dag` includes edges + per-wave nodes; `flat` is the run list only; `dot` is the full dag plus a rendered Graphviz `dot` string.",
-      "enum": [
-        "dag",
-        "flat",
-        "dot"
-      ],
-      "title": "Format",
-      "type": "string"
-    },
-    "campaign_id": {
-      "anyOf": [
-        {
+  "title": "TraceResult",
+  "description": "The merged verb's output union — one shape per mode.\n\nEmitted as ``trace.output.json``; the runtime ``validate_output`` gate and\nexternal consumers validate whichever mode's payload was returned against\nthis union.",
+  "$defs": {
+    "FirstDivergence": {
+      "additionalProperties": false,
+      "description": "The earliest diverging ``(stage, atom)`` — leads the render and the result.\n\n``atom`` is ``null`` for a STRUCTURAL divergence (a stage present on one side\nonly); ``kind`` names the semantics that parted (``exact`` / ``set-delta`` /\n…) or ``\"structural\"``.",
+      "properties": {
+        "stage": {
+          "description": "The diverging stage name.",
+          "title": "Stage",
           "type": "string"
         },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "The campaign tag, when scope == 'campaign'; null for run scope.",
-      "title": "Campaign Id"
-    },
-    "root": {
-      "description": "Node id of the DAG root (`campaign:<id>` or `run:<seed>`).",
-      "minLength": 1,
-      "title": "Root",
-      "type": "string"
-    },
-    "signature": {
-      "anyOf": [
-        {
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The diverging stage's seq (null only for a degenerate stage).",
+          "title": "Seq"
+        },
+        "atom": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The diverging atom name; null for a structural divergence.",
+          "title": "Atom"
+        },
+        "kind": {
+          "description": "The comparison semantics that parted, or 'structural'.",
+          "title": "Kind",
           "type": "string"
         },
-        {
-          "type": "null"
+        "detail": {
+          "description": "The factual one-line difference (never a verdict).",
+          "title": "Detail",
+          "type": "string"
         }
-      ],
-      "default": null,
-      "description": "The provenance-manifest self-attesting signature for this campaign (64-hex). Campaign scope only — null for run scope.",
-      "title": "Signature"
-    },
-    "node_count": {
-      "description": "Number of nodes in `nodes`.",
-      "minimum": 0,
-      "title": "Node Count",
-      "type": "integer"
-    },
-    "nodes": {
-      "description": "Heterogeneous nodes keyed by `kind`: a `campaign` node, one `run` node per run (carrying its provenance fingerprint + lifecycle status + timing), and one `wave` node per wave (dag format only).",
-      "items": {
-        "additionalProperties": true,
-        "type": "object"
       },
-      "title": "Nodes",
-      "type": "array"
+      "required": [
+        "stage",
+        "kind",
+        "detail"
+      ],
+      "title": "trace-diff first divergence",
+      "type": "object"
     },
-    "edges": {
-      "description": "Directed edges by `rel`: `member` (run→campaign membership), `derived-from` (run→parent run lineage via parent_run_ids), and `contains` (run→wave). Empty in `flat` format.",
-      "items": {
-        "additionalProperties": true,
-        "type": "object"
+    "TraceDiffResult": {
+      "additionalProperties": false,
+      "description": "Result of overlaying two traces — facts, no verdicts.",
+      "properties": {
+        "trace_schema_version": {
+          "description": "The T1 record schema version the diff was computed against.",
+          "minimum": 1,
+          "title": "Trace Schema Version",
+          "type": "integer"
+        },
+        "a": {
+          "$ref": "#/$defs/TraceEndpoint",
+          "description": "The A-side endpoint echo + presence."
+        },
+        "b": {
+          "$ref": "#/$defs/TraceEndpoint",
+          "description": "The B-side endpoint echo + presence."
+        },
+        "clean": {
+          "description": "True when the two traces have NO divergence at any stage/atom.",
+          "title": "Clean",
+          "type": "boolean"
+        },
+        "aligned": {
+          "description": "True when every stage matched on (stage, seq) — no structural divergence.",
+          "title": "Aligned",
+          "type": "boolean"
+        },
+        "tolerance_applied": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Verbatim echo of the caller-owned tolerance (null when exact).",
+          "title": "Tolerance Applied"
+        },
+        "first_divergence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FirstDivergence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The earliest diverging (stage, atom); null on a clean diff."
+        },
+        "stages": {
+          "description": "One entry per aligned/structural position, in seq order: `{stage, seq, side, divergences: [{atom, kind, detail}]}` (side ∈ both | a_only | b_only).",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Stages",
+          "type": "array"
+        },
+        "structural": {
+          "description": "Structural divergences (unmatched stages) in the T1 flag shape.",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Structural",
+          "type": "array"
+        },
+        "render": {
+          "description": "Deterministic, self-describing markdown overlay (trusted-display; no verdicts).",
+          "title": "Render",
+          "type": "string"
+        }
       },
-      "title": "Edges",
-      "type": "array"
+      "required": [
+        "trace_schema_version",
+        "a",
+        "b",
+        "clean",
+        "aligned",
+        "render"
+      ],
+      "title": "trace-diff output",
+      "type": "object"
     },
-    "dot": {
-      "anyOf": [
-        {
+    "TraceEndpoint": {
+      "additionalProperties": false,
+      "description": "One side's key echo + what the store held for it (absence disclosed).",
+      "properties": {
+        "scope_kind": {
+          "description": "The side's trace scope kind.",
+          "title": "Scope Kind",
           "type": "string"
         },
-        {
-          "type": "null"
+        "scope_id": {
+          "description": "The side's scope id.",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "task": {
+          "description": "The side's task index.",
+          "minimum": 0,
+          "title": "Task",
+          "type": "integer"
+        },
+        "present": {
+          "description": "False when the store held no trace for this key (disclosed).",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "stage_count": {
+          "description": "Number of stage records read for this side.",
+          "minimum": 0,
+          "title": "Stage Count",
+          "type": "integer"
         }
+      },
+      "required": [
+        "scope_kind",
+        "scope_id",
+        "task",
+        "present",
+        "stage_count"
       ],
-      "default": null,
-      "description": "Graphviz DOT rendering of the DAG — populated only in `dot` format, null otherwise. Pipe it to `dot -Tsvg` to draw the graph.",
-      "title": "Dot"
+      "title": "trace-diff endpoint",
+      "type": "object"
+    },
+    "TraceFeatureRow": {
+      "additionalProperties": false,
+      "description": "One feature-lineage stage: the col_set delta versus the predecessor.",
+      "properties": {
+        "stage": {
+          "description": "The stage name.",
+          "title": "Stage",
+          "type": "string"
+        },
+        "added": {
+          "description": "Columns present here, absent in the predecessor col_set.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Added",
+          "type": "array"
+        },
+        "dropped": {
+          "description": "Columns present in the predecessor col_set, absent here.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Dropped",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "title": "trace feature-lineage row",
+      "type": "object"
+    },
+    "TraceFlag": {
+      "additionalProperties": false,
+      "description": "One flag in the canonical finding shape (rendered verbatim, never interpreted).",
+      "properties": {
+        "rule": {
+          "description": "The flag rule name (the record's OWN word).",
+          "title": "Rule",
+          "type": "string"
+        },
+        "detail": {
+          "description": "The flag detail (the record's OWN word).",
+          "title": "Detail",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "Opaque pointers/counts the flag carries.",
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "rule",
+        "detail"
+      ],
+      "title": "trace flag",
+      "type": "object"
+    },
+    "TraceLineageResult": {
+      "additionalProperties": false,
+      "description": "Returned by ``hpc-agent trace --campaign-id <id>`` / ``--run-id <id>``.",
+      "properties": {
+        "trace_schema_version": {
+          "description": "Bumped when the emitted node/edge shape changes incompatibly.",
+          "minimum": 1,
+          "title": "Trace Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "description": "Whether the DAG was rooted at a campaign or a single run's lineage.",
+          "enum": [
+            "campaign",
+            "run"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "format": {
+          "description": "`dag` includes edges + per-wave nodes; `flat` is the run list only; `dot` is the full dag plus a rendered Graphviz `dot` string.",
+          "enum": [
+            "dag",
+            "flat",
+            "dot"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The campaign tag, when scope == 'campaign'; null for run scope.",
+          "title": "Campaign Id"
+        },
+        "root": {
+          "description": "Node id of the DAG root (`campaign:<id>` or `run:<seed>`).",
+          "minLength": 1,
+          "title": "Root",
+          "type": "string"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provenance-manifest self-attesting signature for this campaign (64-hex). Campaign scope only — null for run scope.",
+          "title": "Signature"
+        },
+        "node_count": {
+          "description": "Number of nodes in `nodes`.",
+          "minimum": 0,
+          "title": "Node Count",
+          "type": "integer"
+        },
+        "nodes": {
+          "description": "Heterogeneous nodes keyed by `kind`: a `campaign` node, one `run` node per run (carrying its provenance fingerprint + lifecycle status + timing), and one `wave` node per wave (dag format only).",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Nodes",
+          "type": "array"
+        },
+        "edges": {
+          "description": "Directed edges by `rel`: `member` (run→campaign membership), `derived-from` (run→parent run lineage via parent_run_ids), and `contains` (run→wave). Empty in `flat` format.",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "dot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Graphviz DOT rendering of the DAG — populated only in `dot` format, null otherwise. Pipe it to `dot -Tsvg` to draw the graph.",
+          "title": "Dot"
+        }
+      },
+      "required": [
+        "trace_schema_version",
+        "scope",
+        "format",
+        "root",
+        "node_count"
+      ],
+      "title": "trace output",
+      "type": "object"
+    },
+    "TraceRenderResult": {
+      "additionalProperties": false,
+      "description": "The four structured views + the self-describing header + the render string.\n\n``present`` is False (and ``skipped`` carries the disclosure) when the\nresolved scope has no recorded trace — an honest result, never an error.\n``trace_sha`` is a FINGERPRINT over the records (the identity the trace joins\nthe trust chain by), ``\"\"`` when absent.",
+      "properties": {
+        "scope_kind": {
+          "description": "The resolved trace store scope kind.",
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_id": {
+          "description": "The resolved trace store scope id ('' when unresolved).",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "task": {
+          "description": "The per-task index rendered.",
+          "title": "Task",
+          "type": "integer"
+        },
+        "resolved_from": {
+          "description": "How the scope was resolved: 'spec' | 'cmd_sha' | 'profile'.",
+          "title": "Resolved From",
+          "type": "string"
+        },
+        "present": {
+          "description": "Whether a trace was found for the resolved scope.",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "skipped": {
+          "default": "",
+          "description": "Absence disclosure ('' when a trace is present).",
+          "title": "Skipped",
+          "type": "string"
+        },
+        "stage_count": {
+          "default": 0,
+          "description": "Number of records in the trace.",
+          "title": "Stage Count",
+          "type": "integer"
+        },
+        "trace_sha": {
+          "default": "",
+          "description": "Canonical sha over the records ('' when absent).",
+          "title": "Trace Sha",
+          "type": "string"
+        },
+        "header": {
+          "additionalProperties": true,
+          "description": "Self-describing run/config identity from the sidecar join.",
+          "title": "Header",
+          "type": "object"
+        },
+        "waterfall": {
+          "description": "View (a): stage-by-stage row waterfall.",
+          "items": {
+            "$ref": "#/$defs/TraceWaterfallRow"
+          },
+          "title": "Waterfall",
+          "type": "array"
+        },
+        "label_chains": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "View (b): per tracked label, its 'stage=value' chain across stages.",
+          "title": "Label Chains",
+          "type": "object"
+        },
+        "feature_lineage": {
+          "description": "View (c): per-stage col_set add/drop deltas.",
+          "items": {
+            "$ref": "#/$defs/TraceFeatureRow"
+          },
+          "title": "Feature Lineage",
+          "type": "array"
+        },
+        "feature_births": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "View (c): each column mapped to its birth stage.",
+          "title": "Feature Births",
+          "type": "object"
+        },
+        "sketch": {
+          "description": "View (d): per (stage, column) sketch + null_count.",
+          "items": {
+            "$ref": "#/$defs/TraceSketchRow"
+          },
+          "title": "Sketch",
+          "type": "array"
+        },
+        "flags": {
+          "description": "All flags (generic invariants + record-carried), rendered verbatim.",
+          "items": {
+            "$ref": "#/$defs/TraceFlag"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "render": {
+          "default": "",
+          "description": "The code-rendered markdown views ('' when not requested).",
+          "title": "Render",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_kind",
+        "scope_id",
+        "task",
+        "resolved_from",
+        "present"
+      ],
+      "title": "trace-render output data",
+      "type": "object"
+    },
+    "TraceSketchRow": {
+      "additionalProperties": false,
+      "description": "One (stage, column) sketch cell: null_count + the fixed value_sketch fields.",
+      "properties": {
+        "stage": {
+          "description": "The stage name.",
+          "title": "Stage",
+          "type": "string"
+        },
+        "column": {
+          "description": "The column the sketch/null_count is for.",
+          "title": "Column",
+          "type": "string"
+        },
+        "null_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Missing values for this column.",
+          "title": "Null Count"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch min, or null.",
+          "title": "Min"
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch mean, or null.",
+          "title": "Mean"
+        },
+        "std": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch std, or null.",
+          "title": "Std"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch max, or null.",
+          "title": "Max"
+        },
+        "q05": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch q05, or null.",
+          "title": "Q05"
+        },
+        "q50": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch q50, or null.",
+          "title": "Q50"
+        },
+        "q95": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "value_sketch q95, or null.",
+          "title": "Q95"
+        }
+      },
+      "required": [
+        "stage",
+        "column"
+      ],
+      "title": "trace sketch row",
+      "type": "object"
+    },
+    "TraceWaterfallRow": {
+      "additionalProperties": false,
+      "description": "One row-waterfall stage: rows in/out + declared drops + conservation arithmetic.",
+      "properties": {
+        "stage": {
+          "description": "The stage name (fine-grained emit).",
+          "title": "Stage",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The stage's emission sequence number.",
+          "title": "Seq",
+          "type": "integer"
+        },
+        "rows_in": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Predecessor stage's row_count.rows, or null at the head.",
+          "title": "Rows In"
+        },
+        "dropped": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rows this stage declared dropped.",
+          "title": "Dropped"
+        },
+        "rows_out": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rows at this stage's exit.",
+          "title": "Rows Out"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "rows_in - dropped (the conservation pre-image), or null.",
+          "title": "Expected"
+        }
+      },
+      "required": [
+        "stage",
+        "seq"
+      ],
+      "title": "trace waterfall row",
+      "type": "object"
     }
-  }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/TraceLineageResult"
+    },
+    {
+      "$ref": "#/$defs/TraceDiffResult"
+    },
+    {
+      "$ref": "#/$defs/TraceRenderResult"
+    }
+  ]
 }

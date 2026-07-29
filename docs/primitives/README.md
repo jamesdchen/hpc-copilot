@@ -111,13 +111,10 @@ The verb partitions primitives into bands the reader can scan independently:
 | [decide-concurrency](decide-concurrency.md) | yes | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
 | [decide-partial-handling](decide-partial-handling.md) | yes | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` |
-| [decide-resubmit](decide-resubmit.md) | yes | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` |
 | [describe](describe.md) | yes | _none_ | `hpc-agent describe <name> [--schema]` |
 | [detect-entry-point](detect-entry-point.md) | yes | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` |
 | [dir-digest](dir-digest.md) | yes | ssh: `<cluster>` | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` |
-| [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` |
-| [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` |
-| [discover-runs](discover-runs.md) | yes | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` |
+| [discover](discover.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--kind <kind>] [--search-dirs <search_dirs>]` |
 | [doctor](doctor.md) | yes | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` |
 | [evidence-brief](evidence-brief.md) | yes | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` |
 | [evidence-period](evidence-period.md) | yes | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` |
@@ -154,9 +151,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [stray-sweep](stray-sweep.md) | yes | ssh: `<login-node>` | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
-| [trace](trace.md) | yes | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |
-| [trace-diff](trace-diff.md) | yes | _none_ | `hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]` |
-| [trace-render](trace-render.md) | yes | _none_ | `hpc-agent trace-render --spec <path> [--experiment-dir <dir>]` |
+| [trace](trace.md) | yes | _none_ | `hpc-agent trace [--spec <path>] [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` |
 | [verify-registration](verify-registration.md) | yes | _none_ | `hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]` |
 | [verify-relay](verify-relay.md) | yes | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` |
@@ -184,7 +179,6 @@ The verb partitions primitives into bands the reader can scan independently:
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-parents-ready](validate-parents-ready.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-scaffold-staleness](validate-scaffold-staleness.md) | yes | _none_ | `(none — Python-only primitive)` |
-| [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-stochastic-marker](validate-stochastic-marker.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `(none — Python-only primitive)` |
 
@@ -211,8 +205,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [notebook-auto-clear](notebook-auto-clear.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` |
 | [notebook-draft](notebook-draft.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]` |
 | [notebook-dry-run](notebook-dry-run.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-dry-run --spec <path> [--experiment-dir <dir>]` |
-| [notebook-record-config](notebook-record-config.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` |
-| [notebook-record-receipt](notebook-record-receipt.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` |
+| [notebook-record](notebook-record.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record --spec <path> [--experiment-dir <dir>]` |
 | [notebook-scaffold-template](notebook-scaffold-template.md) | no | file_write: `<experiment>/<output_path>` | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` |
 | [pack-bind](pack-bind.md) | no | file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]` |
 | [pack-record-receipt](pack-record-receipt.md) | no | file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]` |

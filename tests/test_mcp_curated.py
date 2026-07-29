@@ -53,9 +53,8 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "notebook-auto-clear",
         "notebook-draft",
         "notebook-draft-context",
-        "notebook-record-receipt",
+        "notebook-record",
         "notebook-scaffold-template",
-        "notebook-record-config",
         # notebook-dry-run — the sampled preview run (drafting prelude);
         # human-sequenced like the loop, unioned explicitly (2026-07-18).
         "notebook-dry-run",
@@ -115,9 +114,8 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "notebook-auto-clear",
         "notebook-draft",
         "notebook-draft-context",
-        "notebook-record-receipt",
+        "notebook-record",
         "notebook-scaffold-template",
-        "notebook-record-config",
     } <= names
     # The prelude verbs the notebook-audit skill calls MCP-first before any
     # drafting (run #11): the GO/NO-GO preflight brief + the evidence point

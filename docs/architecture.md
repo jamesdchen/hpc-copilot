@@ -54,7 +54,7 @@ rules.
 │   │            runner_failures                                      │
 │   ├ submit/     runner, plan_summary, plan_throughput,              │
 │   │            recommend_partition                                  │
-│   └ validate/   executor_signatures, input_dataset, self_qos_limit, │
+│   └ validate/   executor_signatures, input_dataset, │
 │                stochastic_marker, walltime_against_history          │
 │                                                                     │
 │  meta/       "operations about operations" — workflows at root,     │

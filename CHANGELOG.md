@@ -17,6 +17,73 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — QoS submit-cap gate, config-based (2026-07-29)
+
+The successor to the deleted `validate-self-qos-limit`, with its three
+faults corrected. New optional cluster key `max_submit_jobs_per_user`
+(the `max_walltime_sec` pattern — static site policy, hand-configured;
+Discovery: normal=5000, gpu=100). When set, `submit-flow` refuses BEFORE
+any rsync/deploy/qsub if journal-known in-flight tasks + the new array
+(+canary) would meet the cap — with split guidance — and discloses
+proximity at 70%. Targets the Slurm SUBMIT cap (`MaxSubmitJobsPerUser`,
+the limit that hard-rejects; array elements each count), not the
+running-jobs throttle the deleted validator compared against. No agent
+in the data path (config + journal + spec, never model-fetched numbers);
+externally-submitted jobs are not visible and the refusal says so;
+unset = no check, with the scheduler's own rejection as backstop.
+
+### Removed — BREAKING: two inert primitives deleted after verification (2026-07-29)
+
+Both flagged inert in the agent_facing reachability audit, then resolved by
+investigation rather than kept-by-default (the verify-a-guard-can-fire rule):
+
+- **`decide-resubmit`** — superseded by design. Its only non-trivial branch
+  required `resubmit_failed_threshold > 0`, a knob no spec field, config, or
+  caller anywhere supplies, and the shipped posture is explicit that silent
+  auto-resubmit is not a code path (the recommendation surface is the
+  categorical anomaly table in `status-snapshot`). Hand-authored
+  `decide_resubmit.*` schemas removed with it.
+- **`validate-self-qos-limit`** — never wireable. Its designed feeder (the
+  skill fetching `squeue` / `sacctmgr show qos` raw) was eliminated by the
+  no-raw-ssh affordance removal, and no throttled verb exposes
+  `MaxJobsPerUser`, so the guard could not fire from any surface. The
+  lesson-6 self-DOS bug class it covered is recorded as knowingly unguarded
+  in `docs/plans/backlog-2026-07-17.md` §4 (needs a Slurm QoS-cap probe verb
+  first); the pure validator logic is recoverable from git history.
+
+### Changed — BREAKING: verb-surface consolidation, no deprecation cycle (2026-07-29)
+
+Seven registrations collapsed into three merged verbs (179 → 174 primitives;
+user-ordered immediate merge-and-delete, skipping the deprecation ledger). The
+implementations, their tests, and their design pins stay in place — only the
+registration/CLI/wire surface merged; each old verb's spec + result shapes are
+embedded in the merged verb's schema union (`build_schemas.py` skip-set
+entries) rather than emitted as standalone files:
+
+- **`discover`** replaces `discover-executors` / `discover-runs` /
+  `discover-reducers`: `--kind executors|runs|reducers` (default `executors`,
+  so bare `hpc-agent discover` behaves as before apart from a new `kind`
+  result field). Each kind keeps its historical result key, so `data.runs`
+  etc. consumers are unaffected; `--search-dirs` with `--kind runs` is refused
+  loudly. `classify-axis-preflight` now subprocesses `discover --kind runs`
+  (its `discover_runs` sub-result slot is unchanged).
+- **`trace`** absorbs `trace-diff` / `trace-render` as spec modes: the bare
+  lineage query is unchanged; `--spec {"mode": "render"|"diff", ...}` selects
+  the data-trace projections (`trace.input.json` is the mode-discriminated
+  union; `trace.output.json` the per-mode result union). A spec combined with
+  `--campaign-id`/`--run-id` is refused.
+- **`notebook-record`** replaces `notebook-record-config` /
+  `notebook-record-receipt`: one kind-discriminated spec
+  (`kind: "config"|"receipt"`) dispatching to the unchanged seats. The MCP
+  curated/audit-loop verb lists and the `hpc-notebook-audit` skill now name
+  the merged verb.
+
+Removed schema files: `trace_diff.*`, `trace_render.*`,
+`notebook_record_config.*`, `notebook_record_receipt.*` (their shapes live on
+inside the union schemas). There is no alias or forwarder for the deleted
+verb names — an external caller of one gets the CLI's unknown-verb error and
+should consult `hpc-agent find` / `describe`.
+
 ### Fixed — campaign-run: chunked waits + fresh-relaunch parks (fable-sweep 2026-07-29)
 
 An adversarial design sweep (six lenses over the banked run-queue design +

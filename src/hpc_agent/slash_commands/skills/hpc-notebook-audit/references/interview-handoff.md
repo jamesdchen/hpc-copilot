@@ -7,7 +7,7 @@ entirely for a standalone audit.
 **Journal the audit-OPEN intent on the config seat.** Record the `goal` (the
 free-text campaign goal the human typed) and `task_axes` (their free-text
 names for what varies across tasks, e.g. `bucket`, `chunk`) via
-`notebook-record-config` alongside the roots. This is the ONE durable seat
+`notebook-record` (`kind: "config"`) alongside the roots. This is the ONE durable seat
 `audit-handoff` reads to draft the interview, so the intent stops living only
 in chat.
 

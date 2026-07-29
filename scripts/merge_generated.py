@@ -99,8 +99,6 @@ SCHEMA_MERGE_UNSET: tuple[str, ...] = (
     "src/hpc_agent/schemas/check_task_generator_mismatch.output.json",
     "src/hpc_agent/schemas/classify_axis_preflight.input.json",
     "src/hpc_agent/schemas/classify_axis_preflight.output.json",
-    "src/hpc_agent/schemas/decide_resubmit.input.json",
-    "src/hpc_agent/schemas/decide_resubmit.output.json",
     "src/hpc_agent/schemas/detect_entry_point.input.json",
     "src/hpc_agent/schemas/detect_entry_point.output.json",
     "src/hpc_agent/schemas/inspect_deployment.input.json",

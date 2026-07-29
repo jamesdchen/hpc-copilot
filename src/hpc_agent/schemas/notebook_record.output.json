@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_record.output.json",
+  "title": "NotebookRecordResult",
+  "description": "The merged verb's output union — one shape per kind.\n\nEmitted as ``notebook_record.output.json``.",
+  "$defs": {
+    "NotebookRecordConfigResult": {
+      "additionalProperties": false,
+      "description": "Echo of the journaled configuration, plus the loud late-record disclosure.\n\n``warning`` is non-null when the audit already had journal entries at\nrecord time: recording a config moves every view_sha, so prior sign-offs\nwill read stale — correct, disclosed behavior.",
+      "properties": {
+        "audit_id": {
+          "title": "Audit Id",
+          "type": "string"
+        },
+        "input_roots": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Roots",
+          "type": "array"
+        },
+        "source_roots": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Roots",
+          "type": "array"
+        },
+        "attention_order": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attention Order"
+        },
+        "output_roots": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Roots",
+          "type": "array"
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Echo of the recorded audit-open goal utterance (null when none was recorded).",
+          "title": "Goal"
+        },
+        "task_axes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Echo of the recorded audit-open task-axis utterances (null when none were recorded).",
+          "title": "Task Axes"
+        },
+        "observables": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observables"
+        },
+        "warning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Non-null when the audit_id already had journal entries (views signed, receipts recorded, ...) when the config was recorded: the recorded config enters every canonical view recompute, so EVERY view_sha moves and prior sign-offs will read stale against the new canonical view. Disclosed, never silent.",
+          "title": "Warning"
+        }
+      },
+      "required": [
+        "audit_id"
+      ],
+      "title": "notebook-record-config output data",
+      "type": "object"
+    },
+    "NotebookRecordReceiptResult": {
+      "additionalProperties": false,
+      "description": "Honest accounting of one record-receipt pass.\n\n``recorded`` names the sections a receipt was journaled for; ``skipped`` names\nevery entry whose slug was not found in the parsed source.",
+      "properties": {
+        "audit_id": {
+          "title": "Audit Id",
+          "type": "string"
+        },
+        "recorded": {
+          "description": "Sections a render receipt was journaled for, in entry order.",
+          "items": {
+            "$ref": "#/$defs/NotebookRecordedReceipt"
+          },
+          "title": "Recorded",
+          "type": "array"
+        },
+        "skipped": {
+          "description": "Entries NOT journaled — unknown-slug (no such section in source).",
+          "items": {
+            "$ref": "#/$defs/NotebookRecordReceiptSkipped"
+          },
+          "title": "Skipped",
+          "type": "array"
+        }
+      },
+      "required": [
+        "audit_id"
+      ],
+      "title": "notebook-record-receipt output data",
+      "type": "object"
+    },
+    "NotebookRecordReceiptSkipped": {
+      "additionalProperties": false,
+      "description": "One entry that was NOT journaled, with the honest reason.\n\n``reason`` is ``unknown-slug`` — the entry named a slug the parsed source\ndoes not contain (a stale or mistyped slug), so there is no section sha to\nbind a receipt against. Reported, never fatal.",
+      "properties": {
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "section",
+        "reason"
+      ],
+      "title": "notebook-record-receipt skipped entry",
+      "type": "object"
+    },
+    "NotebookRecordedReceipt": {
+      "additionalProperties": false,
+      "description": "One section a render receipt was journaled for this call.",
+      "properties": {
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "section_sha": {
+          "title": "Section Sha",
+          "type": "string"
+        },
+        "output_sha": {
+          "title": "Output Sha",
+          "type": "string"
+        },
+        "error": {
+          "title": "Error",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "section",
+        "section_sha",
+        "output_sha",
+        "error"
+      ],
+      "title": "notebook-record-receipt recorded section",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/NotebookRecordConfigResult"
+    },
+    {
+      "$ref": "#/$defs/NotebookRecordReceiptResult"
+    }
+  ]
+}

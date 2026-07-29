@@ -28,6 +28,7 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 __all__ = [
     "ExecutorInfo",
     "ReducerInfo",
+    "discover",
     "discover_executors",
     "discover_reducers",
     "discover_runs",
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
     from hpc_agent.experiment_kit.discover import RunInfo
 
 
-def _discover_executors_arg_pre(ns: argparse.Namespace) -> dict[str, object]:
+def _discover_arg_pre(ns: argparse.Namespace) -> dict[str, object]:
     """Parse the comma-separated ``--search-dirs`` flag into a tuple kwarg.
 
     The CliArg registers ``--search-dirs`` as a string; this hook splits
@@ -106,20 +107,99 @@ def _discover_runs_result_post(infos: list[RunInfo]) -> dict[str, object]:
     }
 
 
+# The closed --kind set of the merged ``discover`` verb. Each kind keeps its
+# historical result key (``executors`` / ``runs`` / ``reducers``) so a consumer
+# reading ``data.runs`` is unaffected by the verb consolidation.
+_DISCOVER_KINDS = ("executors", "runs", "reducers")
+
+
 @primitive(
-    name="discover-runs",
+    name="discover",
     verb="query",
     side_effects=[],
     idempotent=True,
     cli=CliShape(
-        help="List @register_run functions under --experiment-dir (path, name, gpu, sha, flags).",
-        verb="discover-runs",
+        help=(
+            "Scan --experiment-dir for one kind of artifact. --kind executors "
+            "(default): executor scripts (compute(args) exports, or CLIs with "
+            "__main__). --kind runs: @register_run functions (path, name, gpu, "
+            "sha, flags). --kind reducers: candidate reducer / aggregator "
+            "scripts (by filename stem and top-level function names like "
+            "aggregate / reduce / score) — use at /aggregate-hpc time to find "
+            "an existing reducer instead of writing a fresh one. Pure local "
+            "scan, no SSH; the result carries `kind` plus the matching key "
+            "(executors / runs / reducers)."
+        ),
+        verb="discover",
         experiment_dir_arg=True,
-        args=(),
-        result_post=_discover_runs_result_post,
+        args=(
+            CliArg(
+                "--kind",
+                type=str,
+                choices=_DISCOVER_KINDS,
+                default="executors",
+                help="What to scan for: executors (default), runs, or reducers.",
+            ),
+            CliArg(
+                "--search-dirs",
+                type=str,
+                default=None,
+                help=(
+                    "Comma-separated subdirectory names to scan under "
+                    "--experiment-dir (e.g. 'scripts' or 'scripts,executors'). "
+                    "Applies to --kind executors / reducers only. Default: "
+                    "'executors,scripts,src' with a fallback to the "
+                    "experiment-dir root. Pass this when the caller knows its "
+                    "own layout convention — e.g. an integrator with a "
+                    "modules-only 'src/' should pass --search-dirs scripts."
+                ),
+            ),
+        ),
+        arg_pre=_discover_arg_pre,
     ),
     agent_facing=True,
 )
+def discover(
+    experiment_dir: Path | str,
+    *,
+    kind: str = "executors",
+    search_dirs: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    """Scan *experiment_dir* for one kind of artifact — the merged discovery verb.
+
+    Consolidates the former ``discover-executors`` / ``discover-runs`` /
+    ``discover-reducers`` registrations into one surface. The per-kind scan
+    functions (:func:`discover_executors`, :func:`discover_runs`,
+    :func:`discover_reducers`) stay as plain Python callables for in-process
+    composers; this verb only owns the dispatch and the envelope projection.
+    Each kind keeps its historical result key so ``data.executors`` /
+    ``data.runs`` / ``data.reducers`` consumers are unaffected.
+    """
+    from hpc_agent import errors
+
+    if kind not in _DISCOVER_KINDS:
+        raise errors.SpecInvalid(
+            f"unknown discover kind {kind!r}; expected one of {', '.join(_DISCOVER_KINDS)}"
+        )
+    if kind == "runs" and search_dirs is not None:
+        # The runs scan walks the whole tree by contract (it must see every
+        # @register_run); silently ignoring the flag would be the
+        # wrong-but-plausible class, so refuse loudly instead.
+        raise errors.SpecInvalid("--search-dirs applies to --kind executors/reducers only")
+
+    if kind == "runs":
+        payload = _discover_runs_result_post(discover_runs(experiment_dir))
+    elif kind == "reducers":
+        payload = _discover_reducers_result_post(
+            discover_reducers(experiment_dir, search_dirs=search_dirs)
+        )
+    else:
+        payload = _discover_executors_result_post(
+            discover_executors(experiment_dir, search_dirs=search_dirs)
+        )
+    return {"kind": kind, **payload}
+
+
 def discover_runs(experiment_dir: Path | str) -> list[RunInfo]:
     """Scan *experiment_dir* for ``@register_run`` functions — the run contract.
 
@@ -232,38 +312,6 @@ def is_executor_source(source: str) -> bool:
     return _parse_source(source).is_executor
 
 
-@primitive(
-    name="discover-executors",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-    cli=CliShape(
-        help="List executor scripts in --experiment-dir (CLIs with __main__).",
-        # Legacy verb alias: the slash command + the pinning test know this
-        # primitive as ``hpc-agent discover``; preserve that surface even
-        # though the catalog name is ``discover-executors``.
-        verb="discover",
-        experiment_dir_arg=True,
-        args=(
-            CliArg(
-                "--search-dirs",
-                type=str,
-                default=None,
-                help=(
-                    "Comma-separated subdirectory names to scan under "
-                    "--experiment-dir (e.g. 'scripts' or 'scripts,executors'). "
-                    "Default: 'executors,scripts,src' with a fallback to the "
-                    "experiment-dir root. Pass this when the caller knows its "
-                    "own layout convention — e.g. an integrator with a "
-                    "modules-only 'src/' should pass --search-dirs scripts."
-                ),
-            ),
-        ),
-        arg_pre=_discover_executors_arg_pre,
-        result_post=_discover_executors_result_post,
-    ),
-    agent_facing=True,
-)
 def discover_executors(
     experiment_dir: Path | str,
     *,
@@ -542,22 +590,6 @@ def _classify_reducer(source: str, *, path: Path) -> ReducerInfo | None:
     )
 
 
-@primitive(
-    name="discover-reducers",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-    cli=CliShape(
-        help=(
-            "List candidate reducer / aggregator scripts in --experiment-dir "
-            "(matches by filename stem and top-level function names like "
-            "aggregate / reduce / score). Use at /aggregate-hpc time to find "
-            "an existing reducer instead of writing a fresh one."
-        ),
-        experiment_dir_arg=True,
-        result_post=_discover_reducers_result_post,
-    ),
-)
 def discover_reducers(
     experiment_dir: Path | str,
     *,

@@ -1,7 +1,8 @@
-"""Pydantic models for the ``trace-render`` query verb (data-trace T5).
+"""Pydantic models for the ``trace`` verb's render mode (data-trace T5).
 
 Wire surface over the trace-render projection
-(:mod:`hpc_agent.ops.trace_render_op`). ``trace-render`` is a PURE READ: it
+(:mod:`hpc_agent.ops.trace_render_op`), dispatched by the merged ``trace``
+verb on ``mode: "render"``. A PURE READ: it
 reads ONE task's trace out of the store (:mod:`hpc_agent.state.data_trace`),
 joins the run/audit sidecar for a SELF-DESCRIBING header, and renders the FOUR
 deterministic markdown views (row waterfall, label-chain line, feature lineage,
