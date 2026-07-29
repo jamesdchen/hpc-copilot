@@ -15,8 +15,9 @@ Plans operate at two scopes of `docs/design/agent-delegation.md`:
 - **Plan-relay scope (rule 5)** — a `kind: 'script'` step may relay ANY
   registry verb except the rendezvous lock, `block-drive` ticks included,
   because the command is an authored template and the model composes
-  nothing (`campaign-run.js`). Gates PARK, never pass: a tick that returns
-  `awaiting_decision` ends the run with the brief, the human journals the
+  nothing (`campaign-run.js` drives ONE run; `queue-drain.js` drives the
+  whole ledger). Gates PARK, never pass: a tick that returns
+  `awaiting_decision` ends that loop with the brief, the human journals the
   `y` inline, and the drive relaunches FRESH (kernel state is durable —
   see the auto-resume bullet for why never `resumeFromRunId` across a
   park).
@@ -27,6 +28,37 @@ registry: `append-decision` appears in NO plan, in no section; and any
 mutating/workflow verb appears ONLY inside a plan's `COMMANDS` block —
 model-facing `PROMPTS` text stays at recon scope. Render-bearing output
 travels as pointers + counts, never a paraphrase.
+
+## The relay table (what a plan actually runs, validated by execution)
+
+Every plan declares `RELAYS` — one row per CLI invocation it issues,
+naming the verb and the flags that verb's argparse subparser ACTUALLY
+declares — as **strict JSON**, and renders every command from it
+(`relayCommand`). The table is not documentation: it is the source the
+commands are built from, so what runs and what is validated cannot drift.
+
+`tests/contracts/test_workflow_plan_commands.py` is the execution-level
+gate over it. It `json.loads` each table, materializes every row into an
+argv with dummy values, and hands it to the REAL argparse tree
+(`hpc_agent.cli.parser.build_parser`) — parse step only, no cluster, no
+side effects. A flag the verb does not take, a required flag left out, or
+a verb that is not a verb fails the suite.
+
+The same module pins the ENVELOPE shape. The CLI's stdout is always an
+envelope (`hpc_agent/cli/_helpers.py`): `{ok, idempotent, data}` on
+success, `{ok: false, error_code, …}` on refusal — the result lives one
+layer down, in `data`. A plan that reads CLI output must do it in exactly
+one `parseEnvelope` helper that unwraps `data` and branches on `ok`; the
+test derives both key names from an envelope Python actually emits and,
+where a JS runtime is present, EXECUTES the plan's own helper against
+those bytes.
+
+Both rules exist because both bugs shipped (2026-07-29, fixed): the
+shared command helper appended `--experiment-dir` to verbs that do not
+take it (`wait-detached`, `net-triage` → rc=2, every detached block parked
+as `wait_failed`), and the envelope parser returned the envelope while the
+loop read result fields off its root (`undefined` always, so no park
+branch could fire). Neither is visible to a regex over verb names.
 
 ## Intake (frontload the args, warm)
 
@@ -97,8 +129,14 @@ Each script is two sections, in order:
      (reasoning-effort tier), `abort_on_failure` (a failed instance aborts
      the run instead of log-and-continue), `retry` (re-dispatches for a
      dead instance).
+   - `RELAYS` / `FLAG_RENDER`: the relay table (strict JSON: verb + the
+     flags that verb declares) and one renderer per flag name. Every
+     command is built from a row; nothing hand-rolls an `hpc-agent`
+     string. See "The relay table" above.
    - `PROMPTS` / `COMMANDS`: one pure `(namedInputs) => string` template
      per step — prompts never inline engine API calls or engine state.
+   - `parseEnvelope` (adapter side, when the plan reads CLI output): the
+     ONE envelope reader. See "The relay table" above.
 2. **RUNTIME ADAPTER** — the only section that may call the engine API
    (`agent()`, `parallel()`, `pipeline()`, `phase()`, `log()`, `budget`,
    `workflow()`). It walks the plan: control flow implements `STEPS[].needs`,
@@ -127,6 +165,7 @@ Translate the plan section only:
 | `PROMPTS.<step>`            | the step's agent instruction (template + inputs)  |
 | `SCHEMAS.<key>`             | the step's structured-output/validation schema    |
 | `ARGS_CONTRACT`             | workflow inputs/parameters                        |
+| `RELAYS` / `FLAG_RENDER`    | the command table the step type renders from      |
 
 Engine-specific semantics to re-check when porting, not assume: barrier
 behavior of `needs` under fan-out, failed-instance handling (here: a dead
@@ -136,6 +175,21 @@ target's sandbox model scopes what a step may execute (here: the
 query/validate-only command rule above).
 
 ## Lineage notes
+
+- **2026-07-29 — `queue-drain.js` lands; two shipped relay bugs fixed; the
+  gate moved from regex to execution.** Phase 3 of
+  `docs/plans/run-queue-placement-2026-07-28.md` (§5/§7): `queue-drain.js`
+  is the ledger-level sibling of `campaign-run.js` — relay one
+  `queue-status`, compute the drivable set as a mechanical field check over
+  its `items[]` projections, drive each drivable item with `block-drive`
+  ticks, record parks and move on, re-status and repeat; nothing is
+  remembered across passes, so a relaunch from scratch is always correct
+  and a nothing-to-do pass costs one status relay. In the same pass the
+  two bugs that made `campaign-run` silently ineffective were fixed (the
+  `--experiment-dir`-on-every-verb flag bug, which also hit
+  `campaign-recon`'s `net-triage` probe, and the envelope-root read), and
+  the relay table + `tests/contracts/test_workflow_plan_commands.py` were
+  added so neither class can ship again unexecuted.
 
 - **2026-07-28 — section repointed at the researcher lifecycle; the build
   protocol fully erased.** The original flagship (`swarm-units.js`, a build

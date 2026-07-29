@@ -93,6 +93,47 @@ plus a dispatch-lock reentrancy hole that waved a second thread through the
 resolve window, and a composed placement that could name a cluster absent
 from the active config and become un-grantable.
 
+### Fixed — two workflow-plan relay bugs that made campaign-run silently ineffective (2026-07-29)
+
+- The shared command helper appended `--experiment-dir` to EVERY relayed
+  verb; `wait-detached` does not declare that flag
+  (`CliShape.experiment_dir_arg=False`), so every relayed wait exited rc=2
+  on `unrecognized arguments` and every detached block parked as
+  `wait_failed`. `campaign-recon`'s `net-triage` probe carried the same bug
+  and read back as a permanently anomalous probe. Both plans now declare a
+  `RELAYS` table (verb + the flags that verb actually takes) and render
+  every command from it.
+- The plans' JSON parser returned the whole `{ok, idempotent, data}` CLI
+  envelope while the drive loop read `tick.action` / `tick.brief` /
+  `outcome` off its root — `undefined` for every field, so
+  `awaiting_decision`, `terminal` and `detached` never matched and every
+  tick fell through to `tick_budget_exhausted`. Replaced with a single
+  `parseEnvelope` helper that unwraps `data` and branches explicitly on
+  `ok:false` (new `tick_refused` park carrying the kernel's `error_code`
+  + message).
+
+### Added — the always-draining loop, run-queue Phase 3 (2026-07-29)
+
+- **`queue-drain.js`** (plan §5/§7): a pure relay at the ledger level — one
+  `queue-status` per pass, the drivable set as a mechanical field check over
+  its published projections (`dispatched ∧ ¬terminal ∧ ¬held ∧
+  ¬superseded_by ∧ (¬parked ∨ greenlight_unadvanced)`), a `block-drive` loop
+  per drivable item with 480s-chunked `wait-detached` (labels carry the item
+  id and the chunk index), `drive_attempts >= n` held rather than driven,
+  parks RECORDED and left for the human, then re-status and repeat. Loop
+  bound is `min(drivable, maxLoops, the status read's own ceiling)`,
+  recomputed from each pass's relay and never remembered — a relaunch from
+  scratch is always correct, and a pass with nothing drivable costs exactly
+  one status relay.
+- **`tests/contracts/test_workflow_plan_commands.py` — the execution-level
+  plan gate.** The delegation sweep beside it is regex-only and never runs
+  anything, which is how both bugs above shipped. This one materializes
+  every declared relay into an argv and PARSES it with the real argparse
+  tree (`cli.parser.build_parser`), and pins the envelope unwrapping against
+  key names derived from envelopes `cli/_helpers` actually emits — executing
+  each plan's own `parseEnvelope` over those bytes where a JS runtime is
+  available. Both bug classes are in-suite fire paths with control arms.
+
 ### Added — paste-ready answer menus on park briefs + park notifications (2026-07-29)
 
 Every decision point now hands the human its answers, not just its

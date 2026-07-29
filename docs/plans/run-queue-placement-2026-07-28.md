@@ -145,8 +145,31 @@ item goes wherever headroom is) instead of manual (human picks the cid).
 2. **Phase 2 — the actor + consent vocabulary:** `queue-dispatch` detached;
    standing-consent scopes learn per-cluster caps; morning brief gains the
    queued-items section.
-3. **Phase 3 — the workflow relay:** N run-loops + queue ticks in one plan;
-   merged park queue; park-with-context enrichment.
+3. **Phase 3 — the workflow relay (product side SHIPPED 2026-07-29):** N
+   run-loops + queue ticks in one plan; merged park queue;
+   park-with-context enrichment. Shipped as
+   `src/hpc_agent/slash_commands/workflows/queue-drain.js`: one
+   `queue-status` relay per pass, the drivable set as a mechanical field
+   check over its `items[]` projections (`dispatched ∧ ¬terminal ∧ ¬held ∧
+   ¬superseded_by ∧ (¬parked ∨ greenlight_unadvanced)` — the caller's
+   formula over published fields; the verb mints no `drivable` verdict, so
+   there is one definition and the plan owns it), a `block-drive` loop per
+   drivable item with chunked `wait-detached`, `drive_attempts >= n` held
+   rather than driven (retryable(n), on the kernel's durable counter so the
+   budget survives the pass that spent it), parks RECORDED and left for the
+   human, then re-status. Nothing is carried across passes (S5), and a
+   pass with nothing drivable costs exactly one status relay (§7
+   relaunch-cheapness). Two shipped bugs in `campaign-run.js` were fixed
+   in the same pass — `--experiment-dir` relayed to verbs that do not
+   declare it (rc=2; also hit `campaign-recon`'s `net-triage` probe), and
+   result fields read off the CLI envelope ROOT instead of its `data`
+   member — and `tests/contracts/test_workflow_plan_commands.py` now
+   parses every declared relay against the real argparse tree and pins the
+   envelope unwrapping, so neither class can ship unexecuted again. One
+   Phase-3 ask remains kernel-side and is optional: a pass ceiling on the
+   status digest. The plan derives its ceiling from `total_items` today,
+   which is correct because §7 R3 deliberately left capacity to the
+   scheduler — a real capacity field would only ever narrow the pass.
 
 ## 7. v2 — the ledger loop (2026-07-29, maintainer's synthesis)
 
