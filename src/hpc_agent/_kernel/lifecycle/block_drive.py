@@ -1618,6 +1618,72 @@ def _boundary_has_post_park_nudge(
     )
 
 
+def greenlight_target(verb: str, successor: str | None) -> str | None:
+    """The verb a human ``y`` at *verb*'s park greenlights, or ``None``.
+
+    The ONE derivation both park-time disclosures key on — the scoped-consent
+    utterance (:func:`_compose_approve_hint_for_park`) and the paste-ready answer
+    menu (:func:`_compose_answer_menu_for_park`) — so the two can never name
+    different targets in the same brief. It is the parked ``successor`` when the
+    block chained into a gated block, else the block's OWN chain-forward successor
+    (:func:`block_chain.chain_successor`), which is the OVERRIDE-BOUNDARY map a
+    ``None``-marker decision park (``aggregate-check`` not_ready /
+    integrity_review) greenlights — exactly as
+    :func:`committed_greenlight_for_boundary` resolves it at consumption. ``None``
+    when neither exists: a boundary with NO materialized default, where a bare
+    ``y`` has nothing to advance to (the census in
+    ``tests/contracts/test_bare_y_coverage.py`` enumerates those and demands a
+    stated reason for each).
+    """
+    target = successor if isinstance(successor, str) and successor else None
+    if target is None:
+        target = block_chain.chain_successor(verb)
+    return target if isinstance(target, str) and target else None
+
+
+def _compose_answer_menu_for_park(
+    *,
+    run_id: str,
+    verb: str,
+    stage: Any,
+    target: str | None,
+    materialized: _MaterializedSuccessor,
+    approve_hint: dict[str, Any] | None,
+    brief: Any,
+) -> dict[str, Any] | None:
+    """Compose the boundary's paste-ready ANSWER MENU (run-queue plan §8 S13).
+
+    The park-side adapter over the pure
+    :func:`hpc_agent._kernel.lifecycle.answer_menu.compose_answer_menu`: it hands
+    the composer the tokens the driver already materialized — the greenlight
+    ``target`` (:func:`greenlight_target`), the ``@<sha8>`` spec pin, the
+    already-composed ``approve_hint`` utterance — plus the block's own brief, from
+    which the composer harvests the STRUCTURED recommendation data (and only
+    that: prose recommendations render nothing, §2).
+
+    ``(verb, stage)`` is looked up in :data:`block_chain.ANOMALY_TERMINATORS` and
+    the answer passed through, so the composer can LABEL the default advance an
+    override where that registry says recovery is a genuine human branch. The
+    label is disclosure, not policy: nothing here changes what consuming a bare
+    ``y`` at that boundary does.
+
+    This is the ONE home for the menu, which is why it sits in :func:`park`
+    rather than in any per-family block module: every brief type that parks
+    routes through here, so every brief type ends with its menu.
+    """
+    from hpc_agent._kernel.lifecycle.answer_menu import compose_answer_menu
+
+    return compose_answer_menu(
+        brief=brief if isinstance(brief, dict) else {},
+        block=verb,
+        run_id=run_id,
+        target=target,
+        next_spec_sha=materialized.sha,
+        approve_hint=approve_hint,
+        is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
+    )
+
+
 def _compose_approve_hint_for_park(
     experiment_dir: Path,
     *,
@@ -1651,10 +1717,8 @@ def _compose_approve_hint_for_park(
     """
     from hpc_agent._kernel.lifecycle.consent_hint import brief_cluster, compose_approve_hint
 
-    target = successor
+    target = greenlight_target(verb, successor)
     if target is None:
-        target = block_chain.chain_successor(verb)
-    if not (isinstance(target, str) and target):
         return None
     brief_dict = brief if isinstance(brief, dict) else {}
     cluster = brief_cluster(brief_dict)
@@ -1770,6 +1834,27 @@ def park(
     )
     if approve_hint is not None and isinstance(brief, dict):
         brief = {**brief, "approve_hint": approve_hint}
+        result["brief"] = brief
+    # PASTE-READY ANSWER MENU (run-queue-placement-2026-07-28.md §8 S13, merged-park
+    # UX): the brief the human reads ENDS with the exact lines they can paste — `y`
+    # for the materialized default advance, the scope-naming form of that same
+    # advance, and one line per STRUCTURED recommendation the brief already carries.
+    # Same disclosure discipline as the two blocks above (driver copy + marker
+    # brief, never the provenance-source decision-brief), and the same trust story
+    # as ``overnight_consent``'s paste-ready grant line: the consumption leg reads
+    # TOKENS, so rendering the sentence changes the typing burden and nothing else.
+    # This is the ONE home — every brief type that parks passes through here.
+    answer_menu = _compose_answer_menu_for_park(
+        run_id=run_id,
+        verb=verb,
+        stage=stage,
+        target=greenlight_target(verb, successor),
+        materialized=materialized,
+        approve_hint=approve_hint,
+        brief=brief,
+    )
+    if answer_menu is not None and isinstance(brief, dict):
+        brief = {**brief, "answer_menu": answer_menu}
         result["brief"] = brief
     # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
     # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated

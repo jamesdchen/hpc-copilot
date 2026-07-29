@@ -34,15 +34,22 @@ from __future__ import annotations
 
 from typing import Any
 
-# ``compose_approve_hint`` (the OFFERED-CONSENT scoped-utterance composer) lives in
-# ``_kernel.lifecycle.consent_hint`` so its ``_kernel`` caller (the driver park) can
-# reach it without ``_kernel`` importing UP into ``ops`` (the layering + private-
-# cross-package import lints). Re-exported here — a legal DOWNWARD reach — so this
-# relay-verbatim home and its tests keep the
-# ``from hpc_agent.ops.relay_render import compose_approve_hint`` import path.
+# Both composers below live in ``_kernel.lifecycle`` so their ``_kernel`` caller (the
+# driver park) can reach them without ``_kernel`` importing UP into ``ops`` (the
+# layering + private-cross-package import lints). Re-exported here — a legal DOWNWARD
+# reach — so this relay-verbatim home keeps ONE import path for "the human-facing
+# rendering of a block's own structured evidence":
+#
+# * ``compose_approve_hint`` — the OFFERED-CONSENT scoped-utterance composer (its
+#   tests import it from here).
+# * ``compose_answer_menu`` / ``answer_menu_of`` — the paste-ready ANSWER MENU
+#   composer + its reader (run-queue plan §8 S13). The driver park writes the menu
+#   into the brief; the ``ops``-side consumers read it back through here (most
+#   sharply ``ops/recover/notify.compose_park_notice``).
+from hpc_agent._kernel.lifecycle.answer_menu import answer_menu_of, compose_answer_menu
 from hpc_agent._kernel.lifecycle.consent_hint import compose_approve_hint
 
-__all__ = ["render_relay", "compose_approve_hint"]
+__all__ = ["render_relay", "compose_approve_hint", "compose_answer_menu", "answer_menu_of"]
 
 # The per-task count keys a record's digested ``summary`` carries (mirrors
 # ``status_blocks._COUNT_KEYS`` / the reporter's TaskStatus values). Rendered in

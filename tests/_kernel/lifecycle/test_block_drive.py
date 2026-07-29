@@ -600,6 +600,104 @@ def test_park_at_none_marker_decision_scopes_the_override_successor(
     assert hint["utterance"].startswith("y aggregate-run r1")
 
 
+# ── the paste-ready ANSWER MENU (run-queue plan §8 S13) ────────────────────────
+
+
+def test_park_ends_the_brief_with_a_paste_ready_answer_menu(faked: dict[str, Any]) -> None:
+    """S13: the brief the human reads carries the exact lines they can PASTE.
+
+    ``y`` for the materialized default advance, the scope-naming form of that same
+    advance (the approve hint's utterance, so the two disclosures agree token for
+    token), and the boundary's own summary. The menu rides BOTH the returned brief
+    and the durable marker, so a later tick re-shows the identical lines instead of
+    making the human reconstruct the answer grammar.
+    """
+    faked["results"] = _gated_park_results()
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.brief is not None
+    menu = result.brief["answer_menu"]
+    sha = result.brief["materialized_successor_spec"]["sha256"]
+    assert menu["bare_y_ok"] is True
+    assert menu["options"][0]["paste"] == "y"
+    assert menu["options"][0]["target"] == "aggregate-run"
+    assert f"sha {sha[:8]}" in menu["options"][0]["means"]
+    # The menu's scoped line IS the approve hint's utterance — one boundary, one
+    # set of tokens; a divergence here would hand the human two rival answers.
+    assert menu["options"][1]["paste"] == result.brief["approve_hint"]["utterance"]
+    assert menu["answer_line"] == result.brief["approve_hint"]["utterance"]
+    assert menu["text"].splitlines()[1].startswith("  y ")
+    assert faked["parked"][0]["brief"]["answer_menu"] == menu
+
+
+def test_park_menu_offers_the_briefs_structured_recommendation(faked: dict[str, Any]) -> None:
+    """A structured recommendation the brief ALREADY carries becomes a paste-line.
+
+    ``ops/status_blocks.recommendation_for`` data (``classify-failed-tasks`` /
+    ``resubmit-failed``) is code-composed next-action DATA — rendering it as an
+    answer line is projection, not authorship. Nothing else in the brief becomes a
+    line (the §2 rule the composer's own battery pins from the negative side).
+    """
+    faked["results"] = {
+        "aggregate-check": {
+            "block": "check",
+            "stage_reached": "not_ready",
+            "needs_decision": True,
+            "reason": "readiness gate failed",
+            "run_id": "r1",
+            "brief": {
+                "anomaly": {
+                    "recommendation": {
+                        "action": "classify-failed-tasks",
+                        "then": "resubmit-failed",
+                    }
+                }
+            },
+            "next_block": None,
+        },
+    }
+    result, _ = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert result.brief is not None
+    pastes = [o["paste"] for o in result.brief["answer_menu"]["options"]]
+    assert "classify-failed-tasks, then resubmit-failed" in pastes
+
+
+def test_park_menu_is_deterministic_across_ticks(faked: dict[str, Any]) -> None:
+    """Same record -> same menu (the property the notification payload replays on)."""
+    faked["results"] = _gated_park_results()
+    first, _ = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    faked["parked"].clear()
+    second, _ = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert first.brief is not None and second.brief is not None
+    assert first.brief["answer_menu"] == second.brief["answer_menu"]
+
+
+def test_park_with_no_target_and_no_recommendation_carries_no_menu(
+    faked: dict[str, Any],
+) -> None:
+    """NEGATIVE: an empty menu is never rendered.
+
+    ``submit-s4`` is last in its family, so a ``harvested`` park resolves NO
+    greenlight target — a bare ``y`` has nothing to advance to — and the brief
+    carries no structured recommendation either. The key is simply ABSENT rather
+    than an empty, misleading list. (This is one of the boundaries
+    ``tests/contracts/test_bare_y_coverage.py`` allowlists with its reason.)
+    """
+    result: dict[str, Any] = {"brief": {"results_table": [{"metric": 1}]}}
+    bd.park(
+        Path("."),
+        run_id="r1",
+        workflow="submit",
+        verb="submit-s4",
+        stage="harvested",
+        successor=None,
+        spec={},
+        result=result,
+    )
+    assert "answer_menu" not in result["brief"]
+    assert "answer_menu" not in faked["parked"][0]["brief"]
+
+
 def test_run_tick_parks_at_decision(faked: dict[str, Any]) -> None:
     """A ``needs_decision`` span writes the pending marker and exits (rendezvous)."""
     faked["results"] = {

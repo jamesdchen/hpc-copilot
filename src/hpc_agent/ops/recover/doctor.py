@@ -610,6 +610,12 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     parked_hits = find_parked_runs(now, experiment_dir=experiment_dir)
     parked_notes: list[ParkedRunNote] = []
     advance_proposals: list[AdvanceRunProposal] = []
+    # The push payload for each still-awaiting park (S13): the marker's OWN fields
+    # plus its brief, so ``notify.compose_park_notice`` can read the brief's
+    # one-line summary and its paste-ready answer line straight out of the
+    # disclosure the driver composed at park. Collected here — the only place the
+    # marker is already open — rather than re-read at the notify site.
+    park_notices: list[dict[str, Any]] = []
     for hit in parked_hits:
         run_id = hit["run_id"]
         marker = read_pending_decision(run_id, experiment_dir=experiment_dir) or {}
@@ -629,6 +635,14 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
             advance_proposals.append(_draft_advance_proposal(hit, decision=decision, now=now))
         else:
             parked_notes.append(_draft_parked_note(hit))
+            park_notices.append(
+                {
+                    "run_id": run_id,
+                    "block": marker.get("block") or hit.get("block"),
+                    "awaiting_since": marker.get("awaiting_since") or hit.get("awaiting_since"),
+                    "brief": marker.get("brief"),
+                }
+            )
 
     # Delivery, not just detection (proving run #3): carry the unacknowledged
     # alert-log entries in the envelope too, and lead with an unmistakable
@@ -758,5 +772,18 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         from hpc_agent.ops.recover.notify import raise_stall_notification
 
         raise_stall_notification(dumped["stalled"], experiment_dir=experiment_dir)
+
+    # Parked ≠ stalled, but a park is still something only the human can clear —
+    # and until now the opt-in push said nothing about one, so an overnight park
+    # waited for someone to sit at a desk. Same opt-in flag, same channels
+    # (:func:`raise_park_notification` adds none): what rides out is the brief's
+    # own summary + its paste-ready answer line, so the decision can be answered
+    # from a phone on the same terms it would be answered here. Deduped on
+    # ``<run_id>|park|<awaiting_since>``, so a 15-minute watchdog cadence does not
+    # re-buzz for the same undecided boundary.
+    if spec.notify and park_notices:
+        from hpc_agent.ops.recover.notify import raise_park_notification
+
+        raise_park_notification(park_notices, experiment_dir=experiment_dir)
 
     return dumped
