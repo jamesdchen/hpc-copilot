@@ -227,6 +227,16 @@ review):**
   covers, parks the rest). No layer substitutes for another, and only
   the wake leg is harness-dependent.
 
+- **`wait-any-detached` (Phase 2 efficiency).** Holding N waits as N
+  chunked relay loops costs held-hours × runs in small agent calls. A
+  kernel verb blocking until ANY of a lease set resolves (select over
+  lease pids, same `timeout_sec` chunk contract) collapses the pass to
+  ONE holder for all in-flight runs — cost per night becomes flat, and
+  the plan wakes knowing which run resolved. Rationale, stated once: a
+  held wait is the only EVENT-grade bridge into a turn-based session
+  (kernel children cannot inject turns; pokes are time-based), so
+  hold-while-alive is the proper design and this makes it cheap.
+
 **Design decisions still open (v2 additions):**
 
 - Claim lease TTL/steal policy: a driver that dies mid-claim — lease
