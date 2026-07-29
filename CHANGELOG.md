@@ -17,6 +17,26 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — workflow plans ship as product; installer learns a workflows/ tree (2026-07-29)
+
+The campaign workflow plans are researcher-lifecycle features, not dev
+conveniences — but they lived only in this repo's `.claude/workflows/`,
+invisible to an experiment repo. Now:
+
+- **`src/hpc_agent/slash_commands/workflows/`** — `campaign-recon.js` +
+  `campaign-run.js` (and the plan-author README) move into the package and
+  ship in the wheel, beside the skills/commands/agents they compose with.
+- **`agent_assets` installs a fourth tree**: `workflows/*.js` →
+  `<claude_dir>/workflows/<name>.js`, reported as `workflows_installed`,
+  manifest-owned (so a retired plan is pruned like any other asset). No
+  `Skill(...)` grant — the Workflow tool resolves plans by name. The README
+  is deliberately not installed (author contract, not a runtime asset).
+- `tests/contracts/test_workflow_plan_delegation.py` sweeps the package
+  location; the delegation doc and lifecycle map repoint. Auto-resume
+  guidance also landed in the same files: a park is a question, not a stop
+  — after the `y` is journaled the session relaunches with
+  `resumeFromRunId` unprompted.
+
 ### Changed — docs reorganized: live plans split from history, odd-duck roots folded (2026-07-28)
 
 - `docs/history/plans/` now holds every executed plan, finished sweep/triage,

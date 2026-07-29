@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
     from hpc_agent._kernel.registry.primitive import PrimitiveMeta
 
-_WORKFLOWS_DIR = REPO_ROOT / ".claude/workflows"
+_WORKFLOWS_DIR = REPO_ROOT / "src/hpc_agent/slash_commands/workflows"
 
 #: The rendezvous verb: locked in every section of every plan (rule 2, no
 #: rule-5 exception). Named, not resolved — the lock is about WHAT the verb
@@ -52,7 +52,7 @@ _RENDEZVOUS = "append-decision"
 _INVOCATION_RE = re.compile(r"hpc-agent\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)*)")
 #: A top-level plan block: ``const NAME = ...`` at column 0, running until
 #: the next column-0 ``const``/section separator. The plan format is pinned
-#: by .claude/workflows/README.md (PORTABLE PLAN section order), so this
+#: by the README.md beside the plans (PORTABLE PLAN section order), so this
 #: line-shape parse is parsing a contract, not guessing at freeform JS.
 _BLOCK_RE = re.compile(r"^const\s+(\w+)\s*=", re.M)
 
@@ -129,7 +129,7 @@ def test_the_flagship_plans_ship() -> None:
     directory would make every sweep below vacuous."""
     names = {p.name for p in _plan_paths()}
     assert {"campaign-recon.js", "campaign-run.js"} <= names, (
-        f".claude/workflows/ must ship both flagship plans, found: {sorted(names)}"
+        f"slash_commands/workflows/ must ship both flagship plans, found: {sorted(names)}"
     )
 
 

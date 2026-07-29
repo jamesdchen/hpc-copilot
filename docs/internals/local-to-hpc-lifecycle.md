@@ -163,7 +163,8 @@ with it: `campaign-recon` fans out the read-only status sweep, and
 `campaign-run` relays rule-fixed `block-drive` ticks so the tick/wait
 traffic stays out of chat context — parking at every typed-`y` gate,
 which stays interactive and inline on purpose
-(`docs/design/agent-delegation.md` rule 5, `.claude/workflows/README.md`).
+(`docs/design/agent-delegation.md` rule 5,
+`src/hpc_agent/slash_commands/workflows/README.md`).
 
 ## Where every gate binds
 

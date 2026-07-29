@@ -115,7 +115,9 @@ deliberate re-entry at the recon-only level.
 
 ## 5. Plan-driven relay — what a validated workflow plan may additionally do
 
-A `kind: 'script'` step inside a `.claude/workflows/` plan may relay ANY
+A `kind: 'script'` step inside a validated workflow plan (shipped in
+`src/hpc_agent/slash_commands/workflows/`, installed to
+`<claude_dir>/workflows/`) may relay ANY
 registry verb except the rule-2 locks — including `workflow`-kind verbs like
 `block-drive`, `aggregate-check`, and `aggregate-run` — because in a plan
 the model composes nothing: the command is a pure authored template, the
@@ -157,7 +159,8 @@ exactly the surface the human needed anyway.
   Installed by the existing `agent_assets.py::_copy_asset_tree` `agents/`
   walk to `~/.claude/agents/` with zero machinery change. Freeform spawns
   stay at rule-1 scope; rule 5 does not apply to them.
-- **`.claude/workflows/`** — the validated plans (portable-plan/adapter
+- **`src/hpc_agent/slash_commands/workflows/`** — the validated plans
+  (shipped in the wheel, installed by `agent_assets`; portable-plan/adapter
   contract in that directory's README). `campaign-recon.js` operates at
   rule-1 scope (every command query/validate); `campaign-run.js` exercises
   rule 5 (plan-relayed `block-drive` ticks that park at every gate).

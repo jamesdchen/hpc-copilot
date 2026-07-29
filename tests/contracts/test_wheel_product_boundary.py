@@ -2,12 +2,14 @@
 
 The 2026-07-28 separation (user-ordered: "the wheel build should not have
 dev loop stuff") drew the line at the package boundary. Maintainer/dev-loop
-procedure — the ``release`` skill, the workflow plans, the handoff-package
-protocol, every lint and regen script — lives in the repo tree
-(``.claude/skills/``, ``.claude/workflows/``, ``scripts/``, ``docs/plans/``)
-and never travels in the wheel. The ONE devx affordance the product keeps is
-session tagging (the ``tag-session`` verb): an end-user session can mark
-itself as data for the dev loop to ingest, and nothing more.
+procedure — the ``release`` skill, every lint and regen script — lives in
+the repo tree (``.claude/skills/``, ``scripts/``, ``docs/plans/``) and
+never travels in the wheel. (The campaign workflow PLANS are product —
+researcher-lifecycle drivers shipped in ``slash_commands/workflows/`` and
+installed by ``agent_assets`` since 2026-07-29 — not dev-loop material.)
+The ONE devx affordance the product keeps is session tagging (the
+``tag-session`` verb): an end-user session can mark itself as data for the
+dev loop to ingest, and nothing more.
 
 Mechanized here:
 

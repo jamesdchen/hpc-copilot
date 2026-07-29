@@ -14,7 +14,7 @@ export const meta = {
 // PORTABLE PLAN
 // ----------------------------------------------------------------------------
 // Engine-neutral section; the adapter below is the only part that speaks the
-// Claude Workflow API. Seam contract: .claude/workflows/README.md.
+// Claude Workflow API. Seam contract: README.md beside this file.
 //
 // This plan exercises the plan-relay level (docs/design/agent-delegation.md
 // rule 5): its COMMANDS invoke workflow-kind verbs (block-drive,

@@ -68,6 +68,22 @@ def test_no_maintainer_skill_ships_and_none_is_granted(tmp_path: Path) -> None:
     assert "Skill(hpc-submit)" in allow
 
 
+def test_workflow_plans_install_without_permission_grants(tmp_path: Path) -> None:
+    """The workflow plans (product since 2026-07-29) land in
+    ``<claude_dir>/workflows/<name>.js`` and are reported under
+    ``workflows_installed`` — but get NO ``Skill(...)`` grant: the Workflow
+    tool resolves plans by name, not through the skill permission layer."""
+    result = install_agent_assets(claude_dir=tmp_path)
+
+    assert "campaign-recon" in result["workflows_installed"]
+    assert "campaign-run" in result["workflows_installed"]
+    assert (tmp_path / "workflows" / "campaign-run.js").is_file()
+    # The README beside the plans is the author contract, not a runtime asset.
+    assert not (tmp_path / "workflows" / "README.md").exists()
+    allow = _allow(_settings(tmp_path))
+    assert not any("campaign-run" in rule for rule in allow)
+
+
 def test_install_tree_skips_an_internal_skill(tmp_path: Path) -> None:
     """The ``internal: true`` skip fires on a synthetic tree — the guard that
     kept ``release`` out of end-user installs (bug-sweep #58) must keep firing
@@ -84,7 +100,7 @@ def test_install_tree_skips_an_internal_skill(tmp_path: Path) -> None:
         (skill / "SKILL.md").write_text(front + "Body.\n", encoding="utf-8")
 
     target = tmp_path / "claude"
-    _commands, skills, _agents, _cleared = _install_tree(root, target, dry_run=False)
+    _commands, skills, _agents, _workflows, _cleared = _install_tree(root, target, dry_run=False)
 
     assert skills == ["normal-skill"], f"internal skill must be skipped, got {skills}"
     assert (target / "skills" / "normal-skill" / "SKILL.md").is_file()

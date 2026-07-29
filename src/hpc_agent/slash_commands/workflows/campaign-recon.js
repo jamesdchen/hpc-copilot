@@ -19,7 +19,7 @@ export const meta = {
 // all pure data / pure string-building functions with named inputs. Porting
 // this workflow to another orchestrator means translating THIS section; only
 // the adapter below speaks the Claude Workflow API. The mapping contract lives
-// in .claude/workflows/README.md.
+// in the README.md beside this file.
 //
 // This plan operates at the recon-only delegation level
 // (docs/design/agent-delegation.md): every COMMANDS entry invokes a

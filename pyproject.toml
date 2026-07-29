@@ -170,6 +170,12 @@ hpc_agent = [
     # SKILL body's trigger line names the branch.
     "slash_commands/skills/*/references/*.md",
     "slash_commands/agents/*.md",
+    # Workflow plans are PRODUCT (researcher-lifecycle driving; the
+    # 2026-07-28 delegation rework) — shipped like skills, installed by
+    # agent_assets into <claude_dir>/workflows/. The README travels as the
+    # plan-author contract; only *.js plans are installed.
+    "slash_commands/workflows/*.js",
+    "slash_commands/workflows/*.md",
 ]
 
 [tool.pytest.ini_options]
