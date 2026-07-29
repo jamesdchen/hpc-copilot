@@ -49,6 +49,14 @@ a completed call verbatim from cache — writes no second line and gets the
 ORIGINAL item back with ``replayed=True``. The probe runs inside the ledger's
 flock, so it is race-free against a concurrent duplicate too.
 
+That probe can only see records the ledger still HOLDS, which is why a second
+one runs ahead of it. Once the janitor compacts a settled item its dedup entry
+goes with its records, and a late replay would enqueue — and then really
+resubmit — a run that already finished. So a compacted request_id stays refused
+through the compaction watermark's tombstones
+(:func:`hpc_agent.state.queue_intake.compaction_tombstones`) and comes back as
+``replayed=True, compacted=True`` with the stated reason.
+
 This module is the ``queue-run`` leaf of the ``ops/queue`` subject; the
 substrate it reaches (``state/queue_intake``) deliberately lives outside the
 subject so ``queue-advance`` and ``campaign-advance`` can share it.
@@ -65,10 +73,12 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.queue_run import QueueRunResult, QueueRunSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state.queue_intake import (
+    STATE_PLACED,
     STATE_QUEUED,
     append_intake_item,
     find_intake_item,
     intake_path,
+    is_compaction_tombstone,
     item_cmd_sha,
     item_run_id,
     items_in_states,
@@ -214,6 +224,30 @@ def queue_run(*, experiment_dir: Path, spec: QueueRunSpec) -> QueueRunResult:
         "resources": spec.resources.model_dump(mode="json"),
     }
     replayed = append_intake_item(experiment_dir, record=record, request_id=spec.request_id)
+
+    if is_compaction_tombstone(replayed):
+        # R8 across a compaction. The request WAS honoured — enqueued,
+        # dispatched, its run settled — and the janitor has since removed the
+        # item's records, so there is no ledger row to read back and the
+        # JournalCorrupt guard below would fire on a healthy store. Reported as
+        # the replay it is, with ``compacted`` distinguishing it from a replay
+        # that found a live row: silently minting a second item here is the
+        # double-submission this tombstone exists to stop (a finished run really
+        # resubmitted, and an optuna prior polluted with a duplicate trial).
+        return QueueRunResult(
+            path=str(intake_path(experiment_dir)),
+            item_id=spec.request_id,
+            request_id=spec.request_id,
+            # The state a compacted item necessarily last held: the janitor's
+            # retirement predicate only ever reaches PLACED items
+            # (``state/queue_occupancy.retired_item_ids``).
+            state=STATE_PLACED,
+            replayed=True,
+            compacted=True,
+            enqueued_at="",
+            queued_count=len(items_in_states(read_intake_items(experiment_dir), [STATE_QUEUED])),
+            record=dict(replayed or {}),
+        )
 
     # Read the ledger back rather than echoing what we meant to write: on a
     # replay the truth is the ORIGINAL record (which may already have been

@@ -40,7 +40,7 @@
       "additionalProperties": {
         "type": "integer"
       },
-      "description": "campaign_id -> occupied pool slots, from the ONE shared predicate ``state/queue_occupancy.occupied_slots`` (R9). Surfaced here so the number a refill decision rests on is inspectable from the same read that shows the items, and so a second, subtly different occupancy count has no reason to be written.",
+      "description": "campaign_id -> occupied pool slots, from the ONE shared predicate ``state/queue_occupancy.occupied_slots`` (R9). Surfaced here so the number a refill decision rests on is inspectable from the same read that shows the items, and so a second, subtly different occupancy count has no reason to be written. Keyed on the campaigns of the items this call RETURNS — after settled items are hidden and after ``limit`` clips — so it is evidence about the page you are holding, and so a pass returning zero items does not walk the whole journal namespace once per campaign (the relaunch-cheapness invariant, §7). An empty map therefore means 'no returned item names a campaign', never 'no campaign is occupied'; ask ``queue-advance`` for the ledger-wide pool arithmetic.",
       "title": "Occupancy",
       "type": "object"
     },

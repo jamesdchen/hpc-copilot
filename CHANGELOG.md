@@ -235,6 +235,41 @@ lease-identity helpers are IMPORTED from `wait-detached`, not forked;
 read-only-ness is pinned by byte-and-mtime inventory tests, and the verb
 joins `wait-detached` on the MCP blocking-verb refusal seam.
 
+### Fixed — the run queue's janitor and projection, adversarial-review pass (2026-07-29)
+
+- **Compacting an item is not retiring its slot (data loss).**
+  `retired_item_ids` applied `run_occupies` to items in ANY intake state, so
+  a `queued` retry re-enqueued over a failed run was compacted off the
+  ledger by the same dispatch tick that reported it held ("never dropped,
+  R4") — for a refill producer, an unbounded enqueue/delete cycle
+  re-opening S3. The same bug deleted a `placed` row whose durable-first
+  placement landed before a start that then refused — exactly the row
+  `queue-dispatch --item-ids` recovers. Retirement now requires state
+  `placed` AND a run the dispatch decision table would ADOPT, routed
+  through the shipped `is_resubmittable_terminal` / `is_held` — no second
+  status-set literal — so the compaction set is a strict subset of the
+  non-occupying set.
+- **`queue-status` paid O(history × campaigns) for an empty page.**
+  `occupancy` was computed over pre-hiding matches, each campaign loading
+  EVERY run file in the namespace (374ms at 1600 runs for a zero-item
+  pass, permanently). Now keyed on the campaigns of items actually
+  returned; ask `queue-advance` for the ledger-wide arithmetic.
+- **R8 now survives a compaction.** Dropping an item's records dropped its
+  dedup entry, so past the journal prune a replayed `request_id` really
+  resubmitted a completed run (optuna prior pollution). The compaction
+  watermark now carries removed `request_id`s as tombstones (bounded,
+  argued against the replay window); `queue-run` returns `replayed=true,
+  compacted=true` and writes nothing.
+- **No more immortal ledger lines.** The retirement census carries the
+  record count it witnessed and the rewrite re-verifies it under the
+  ledger flock, disclosing `raced_items` (relayed in the dispatch brief);
+  an orphan from the opposite ordering is reaped only when a tombstone
+  proves this ledger authored the removal — an unexplained orphan is kept.
+- **`drive_attempts` documents what it actually bounds** — the
+  greenlight-unadvanced spin and the skip spin, not "a wedged run" (a park
+  with no committed greenlight accrues exactly one attempt, then the drain
+  plan's ¬parked clause removes it). Docs only.
+
 ### Fixed — three queue-drain loop defects + the S8 comment (invariants review, 2026-07-29)
 
 Each now pinned by EXECUTING the plan's own code under node. (1) A `skip` —

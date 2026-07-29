@@ -406,7 +406,9 @@ def test_a_compacted_ledger_still_answers_status_and_r8_dedup_for_live_items(
     exp = _exp(tmp_path)
     _enqueue(exp, "i-settled", "ml-cccc0001")
     _place(exp, "i-settled", "ml-cccc0001")
-    _seed_run(exp, "ml-cccc0001", status="failed")
+    # "complete", not "failed": a resubmittable terminal is NOT settled history
+    # (the F1 janitor ruling — a corpse under a row may be live retry intent).
+    _seed_run(exp, "ml-cccc0001", status="complete")
     _enqueue(exp, "i-live", "ml-cccc0002")
     _place(exp, "i-live", "ml-cccc0002")
     _seed_run(exp, "ml-cccc0002", status="in_flight")

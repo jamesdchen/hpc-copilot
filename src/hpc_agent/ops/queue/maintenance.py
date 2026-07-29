@@ -57,13 +57,40 @@ survivors as ``protect`` makes the "still referenced" case unreachable rather
 than merely unlikely. S12's "define pruned-target semantics" is that pair of
 rules.
 
-Retirement is decided by ONE predicate
---------------------------------------
-``state/queue_occupancy.retired_item_ids`` — the ledger-wide form of the same
-``run_occupies`` test the occupancy count applies per campaign (R9). Compaction
-therefore cannot remove an item the pool arithmetic still counts as occupying:
-a second, subtly different notion of "settled" is the one way this janitor could
-corrupt the queue, so there is not one.
+Retirement is decided by ONE predicate, and it is NARROWER than "not occupying"
+------------------------------------------------------------------------------
+``state/queue_occupancy.retired_item_census`` — built from the same
+``run_occupies`` test the occupancy count applies per campaign (R9), then
+narrowed by that module's ``item_is_history``. Compaction therefore cannot
+remove an item the pool arithmetic still counts as occupying: a second, subtly
+different notion of "settled" is the one way this janitor could corrupt the
+queue, so there is not one.
+
+The relationship is CONTAINMENT, not equality, and the difference is load-bearing
+(adversarial-review F1). "Stopped occupying a slot" and "is history" are
+different questions: a ``failed`` run releases its slot immediately — it must, or
+a campaign wedges at ``K`` after its first failure — but its ledger row is not
+history, because ``queue-dispatch``'s decision table mints a FRESH attempt over a
+corpse rather than adopting it. Treating the two as one deleted live intents:
+a ``queued`` retry re-enqueued over a failed run, and a ``placed`` row whose
+placement was appended (durable-first) before a start that then refused. Both are
+work no other store records. So the janitor's set is a strict subset of the
+non-occupying set, and the safety argument runs in the direction that cannot
+lose data: everything this pass drops is provably unoccupied, but not everything
+unoccupied is dropped. The predicate module owns the full argument.
+
+Concurrency: the census is verified UNDER the ledger lock
+----------------------------------------------------------
+Deciding what retired means reading and joining the run stores, which cannot
+happen inside the ledger's flock. The dispatch lock does not cover the gap
+either — it is per-cid while the ledger is global — so a ``queue-dispatch`` tick
+for another campaign can append a placement for an item this census has already
+condemned. The census therefore carries the RECORD COUNT it witnessed per item,
+and ``compact_intake_ledger`` re-counts under the lock and declines to drop
+anything that moved (``maintenance.raced_items``). Without that check the rewrite
+deletes a row another process is simultaneously reporting as ``placed``, or —
+when the append lands just after the rewrite — strands a transition record the
+fold can never open and the drop set can never reach again.
 
 Never destroy the thing you are operating on
 --------------------------------------------
@@ -92,7 +119,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent.state.queue_intake import compact_intake_ledger, read_intake_items
-from hpc_agent.state.queue_occupancy import retired_item_ids
+from hpc_agent.state.queue_occupancy import retired_item_census
 
 if TYPE_CHECKING:
     from collections.abc import Collection
@@ -129,10 +156,13 @@ def groom_queue_stores(
     also protected from the prune by construction.
 
     Returns a disclosure dict — ``{"dropped_items", "dropped_records",
-    "kept_records", "pruned_runs", "protected_runs"}``, plus ``"error"`` when a
-    leg failed. Nothing here is silent: a janitor that shrank a durable store
-    without saying by how much would make every later "where did that item go?"
-    unanswerable.
+    "kept_records", "raced_items", "reaped_orphans", "pruned_runs",
+    "protected_runs"}``, plus ``"error"`` when a leg failed. Nothing here is
+    silent: a janitor that shrank a durable store without saying by how much
+    would make every later "where did that item go?" unanswerable. ``raced_items``
+    names the items a concurrent appender touched between this pass's census and
+    the ledger lock — they were NOT compacted, and saying so is what keeps
+    "nothing was dropped" checkable rather than assumed.
 
     ``{}`` is impossible — an experiment with nothing to groom reports zeros, so
     a caller can always quote the numbers.
@@ -141,15 +171,29 @@ def groom_queue_stores(
         "dropped_items": 0,
         "dropped_records": 0,
         "kept_records": 0,
+        "raced_items": [],
+        "reaped_orphans": 0,
         "pruned_runs": 0,
         "protected_runs": 0,
     }
     try:
-        retired = retired_item_ids(experiment_dir) - set(exclude_item_ids)
-        compaction = compact_intake_ledger(experiment_dir, drop_item_ids=retired)
+        # ONE read behind both halves of the census: the ids to drop and the
+        # record count witnessed for each. Two reads would open, between
+        # themselves, the very race the counts are handed to compaction to close.
+        exempt = set(exclude_item_ids)
+        census = {
+            item_id: count
+            for item_id, count in retired_item_census(experiment_dir).items()
+            if item_id not in exempt
+        }
+        compaction = compact_intake_ledger(
+            experiment_dir, drop_item_ids=set(census), witnessed_records=census
+        )
         report["dropped_items"] = int(compaction["dropped_items"])
         report["dropped_records"] = int(compaction["dropped_records"])
         report["kept_records"] = int(compaction["kept_records"])
+        report["raced_items"] = list(compaction.get("raced_items") or [])
+        report["reaped_orphans"] = int(compaction.get("reaped_orphans") or 0)
 
         # Read the ledger AFTER the rewrite: these are the runs a surviving item
         # still joins to, and they are exempt from the prune no matter how old.

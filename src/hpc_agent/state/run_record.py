@@ -363,6 +363,23 @@ class RunRecord:
     # ``attempt`` above counts submits, this counts DRIVES, and conflating them
     # would make a resubmit forgive a spinning driver.
     #
+    # WHAT IT ACTUALLY BOUNDS, traced rather than assumed. It is tempting to read
+    # this as a budget over "a genuinely-wedged run"; it is not, because the only
+    # counting caller stops relaying before a wedge can accumulate. The drain
+    # plan drives ``dispatched ∧ ¬terminal ∧ (¬parked ∨ greenlight_unadvanced)``,
+    # so a run that PARKS with no committed greenlight accrues exactly one
+    # (the ``awaiting_decision`` tick that parked it) and then freezes: the
+    # ¬parked clause removes it from the drivable set, nothing ticks it again,
+    # and the count sits at 1 until the human answers and a progress tick resets
+    # it. What the budget really bounds is the two spins the plan CAN sustain:
+    #   * the greenlight-unadvanced spin — a committed ``y`` re-admits the item,
+    #     but the tick keeps returning ``awaiting_decision`` because the boundary
+    #     did not move, so the plan relays at it every pass;
+    #   * the skip spin — a drivable item whose tick returns ``skip`` (nothing
+    #     drivable at this position) and keeps returning it.
+    # Both are loops with no human in them, which is exactly why the ceiling is
+    # kernel state a relaunched pass reads back rather than a plan variable.
+    #
     # It exists so a drain plan's retryable(n) policy is KERNEL state read off
     # disk rather than a variable the plan carries across relaunches — the whole
     # chain-of-relaunches model requires a pass to be able to die and be

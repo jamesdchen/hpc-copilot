@@ -118,6 +118,12 @@ groomed the store it reports on would be the F46 error one layer up.
 :func:`compaction_watermark` records what was removed, so the shrink is
 auditable rather than a file that mysteriously got shorter.
 
+The watermark also carries the TOMBSTONES — the ``request_id`` of every record
+compaction removed — which is what keeps R8's replay dedup true across a
+compaction (see :func:`compaction_tombstones`). Without them, deleting an item's
+records deletes its dedup entry, and a replayed relay turn re-enqueues a
+COMPLETED run.
+
 Reading is tolerant — a torn tail, a foreign line, or a shape the fold cannot
 place is SKIPPED, never fatal (the ``state/devx_tags.py`` and decision-journal
 posture). A queue read is on the "what needs me" path; a single bad byte must
@@ -128,14 +134,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent._kernel.contract.layout import RepoLayout
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
 _log = logging.getLogger(__name__)
 
@@ -143,15 +149,18 @@ __all__ = [
     "INTAKE_STATES",
     "STATE_PLACED",
     "STATE_QUEUED",
+    "TOMBSTONE_CAP",
     "append_intake_item",
     "append_intake_placement",
     "compact_intake_ledger",
+    "compaction_tombstones",
     "compaction_watermark",
     "compaction_watermark_path",
     "find_intake_item",
     "fold_intake_records",
     "intake_path",
     "intake_path_if_exists",
+    "is_compaction_tombstone",
     "item_cmd_sha",
     "item_run_id",
     "items_in_states",
@@ -161,8 +170,11 @@ __all__ = [
     "read_intake_records_counted",
 ]
 
-STATE_QUEUED = "queued"
-STATE_PLACED = "placed"
+#: Typed as ``Literal`` rather than ``str`` so a caller handing one of them to the
+#: wire's ``QueueItemState`` needs no ``type: ignore``: these two ARE that alias's
+#: members, and spelling that in the type is what lets the checker agree.
+STATE_QUEUED: Literal["queued"] = "queued"
+STATE_PLACED: Literal["placed"] = "placed"
 
 #: The COMPLETE lifecycle vocabulary intake may store (R1). Anything else is a
 #: projection over the run stores and has no business on this ledger.
@@ -175,12 +187,41 @@ _PINNED_KEYS: frozenset[str] = frozenset({"item_id", "request_id", "kind", "enqu
 _KIND_ENQUEUE = "enqueue"
 _KIND_PLACEMENT = "placement"
 
+#: The ``kind`` of the SYNTHETIC record :func:`append_intake_item` returns when a
+#: request_id is tombstoned. Deliberately outside ``{enqueue, placement}``: it is
+#: not a ledger record and is never written to the file — it is the shape of an
+#: answer, and giving it a kind of its own is what lets
+#: :func:`is_compaction_tombstone` classify it without a caller guessing.
+_KIND_COMPACTED = "compacted"
+
 #: Suffix appended to an ``item_id`` to derive the PLACEMENT transition's append
 #: token. A ``.`` because ``item_id`` (wire alias ``QueueItemId``) is
 #: ``^[A-Za-z0-9._\-]+$`` and the derived token is quoted into briefs and
 #: compared as an ordinary id — a ``:`` or ``/`` would leave the charset the
 #: whole queue wire surface validates against.
 _PLACEMENT_TOKEN_SUFFIX = ".placed"
+
+#: Watermark key holding the compaction TOMBSTONES — see
+#: :func:`compaction_tombstones`. Ordered oldest-first so the cap can be applied
+#: by truncating the front.
+_TOMBSTONE_KEY = "tombstoned_request_ids"
+
+#: How many compaction tombstones the watermark retains, newest-first.
+#:
+#: Argued against the replay window it has to cover, because a cap that is too
+#: small silently reinstates the double-submission it exists to prevent. The
+#: window R8 protects is between a relay's first call and the workflow engine's
+#: cached replay of that same turn — bounded by one drain pass, minutes to hours.
+#: Tombstones accrue only for GENUINELY-settled requests (the janitor compacts a
+#: ``placed`` item whose run is complete or superseded and which nothing will
+#: re-attempt — ``state/queue_occupancy.item_is_history``), so the accrual rate
+#: is at most one per completed run. 2000 therefore covers a fleet completing a
+#: run every 30 seconds for a continuous 16 hours before the oldest tombstone
+#: falls off, which is orders of magnitude past any single relay's cache
+#: lifetime. The cost of the cap is one bounded JSON list — read once per enqueue
+#: on a path that already reads the whole ledger — instead of a second file that
+#: grows with history, which is the very cost compaction exists to remove.
+TOMBSTONE_CAP = 2000
 
 
 def intake_path(experiment_dir: Path) -> Path:
@@ -231,9 +272,41 @@ def append_intake_item(
     the item's identity). The append passes ``dedup_key=("request_id", …)``, so
     a replayed relay writes nothing and the PRE-EXISTING record comes back —
     the caller must echo that record rather than mint a second item (R8).
+
+    **A COMPACTED request_id dedups too.** The in-flock probe can only see
+    records the file still holds, so once compaction removes a settled item its
+    dedup entry goes with it and a late replay would re-enqueue a run that
+    already finished (see :func:`compaction_tombstones` for the end-to-end
+    harm). So the tombstone set is consulted first, and a hit returns a
+    SYNTHETIC record — ``kind`` :data:`_KIND_COMPACTED`, classifiable through
+    :func:`is_compaction_tombstone` — carrying the reason, with no line written.
+    It is not the original record because the original is gone; saying so
+    explicitly is the honest answer, and inventing a plausible-looking ledger row
+    would be worse than the duplicate.
+
+    That probe is outside the flock, unlike the record-scan one, and the window
+    that leaves is stated rather than papered over: a compaction that tombstones
+    this exact request_id between the probe and the append will let one line
+    through. It is a strictly smaller window than the one this closes (it needs a
+    replay to land inside a single compaction's critical section, rather than any
+    time after it), and closing it would mean holding the ledger lock across a
+    watermark read — nesting the same non-reentrant flock the append itself
+    takes.
     """
     if not request_id or not request_id.strip():
         raise ValueError("request_id must be a non-empty string (it is the dedup key)")
+    if request_id in compaction_tombstones(experiment_dir):
+        return {
+            "kind": _KIND_COMPACTED,
+            "item_id": request_id,
+            "request_id": request_id,
+            "reason": (
+                f"request_id {request_id!r} was already enqueued, dispatched, and its "
+                "run has settled; the item's records were compacted off the intake "
+                "ledger and its request_id is tombstoned. Nothing was written — "
+                "re-enqueueing it would resubmit a finished run (R8)."
+            ),
+        }
     now = utcnow_iso()
     payload: dict[str, Any] = dict(record)
     payload.update(
@@ -531,10 +604,52 @@ def compaction_watermark(experiment_dir: Path) -> dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
+def compaction_tombstones(experiment_dir: Path) -> frozenset[str]:
+    """The ``request_id``s compaction has removed from this ledger (R8's memory).
+
+    ``append_jsonl_line`` dedups by scanning the FILE for the record's
+    ``request_id``, so compacting an item's records deletes its dedup entry with
+    them. The shipped code argued that away as safe because a compacted item's
+    run had retired; the argument does not hold once the journal prune removes
+    the RunRecord too (``KEEP_TERMINAL_RUNS`` is the only thing that was
+    protecting it). Past that point a replayed relay turn dedup-MISSES,
+    re-enqueues, re-dispatches, finds no record to adopt, and REALLY resubmits a
+    completed run — polluting the optuna prior with a duplicate trial. That is
+    the whole reason this set exists.
+
+    It lives in the existing compaction watermark rather than a new store: it is
+    bookkeeping ABOUT the ledger, it is written by the one seat that already
+    rewrites the ledger, and a second append-only file would be exactly the
+    history-shaped cost compaction exists to remove. Bounded by
+    :data:`TOMBSTONE_CAP`.
+
+    Tolerant like every other read here — an unreadable or ill-shaped watermark
+    reads as "no tombstones", because failing an enqueue over lost bookkeeping
+    would be a worse outcome than the duplicate it guards against.
+    """
+    raw = compaction_watermark(experiment_dir).get(_TOMBSTONE_KEY)
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(value for value in raw if isinstance(value, str) and value)
+
+
+def is_compaction_tombstone(record: dict[str, Any] | None) -> bool:
+    """True when *record* is the synthetic answer :func:`append_intake_item` gives a replay.
+
+    THE test for that outcome, so no caller re-inlines a string comparison
+    against the synthetic ``kind``. A tombstone answer is a SUCCESS — the
+    request was already honoured and its item has since settled — but it is not
+    a ledger row, so a caller that echoes ``record`` verbatim must be able to
+    tell the two apart before it goes looking for the item on the ledger.
+    """
+    return isinstance(record, dict) and record.get("kind") == _KIND_COMPACTED
+
+
 def compact_intake_ledger(
     experiment_dir: Path,
     *,
     drop_item_ids: Iterable[str],
+    witnessed_records: Mapping[str, int] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     """Rewrite the ledger without *drop_item_ids*' records. Returns what it did.
@@ -548,7 +663,7 @@ def compact_intake_ledger(
     returns must cost near-zero".
 
     WHO decides what is droppable is deliberately NOT here.
-    :func:`hpc_agent.state.queue_occupancy.retired_item_ids` owns that judgement
+    :func:`hpc_agent.state.queue_occupancy.retired_item_census` owns that judgement
     because it already owns :func:`~hpc_agent.state.queue_occupancy.run_occupies`
     — the ONE test for "has the run this item became retired?" (R9). This
     function is pure file mechanics over a set of ids handed to it, so there is
@@ -572,19 +687,57 @@ def compact_intake_ledger(
       is not touched, so a healthy drain tick over an already-compact ledger
       costs one read.
 
-    **R8 (replay dedup), stated honestly.** ``append_jsonl_line`` dedups an
-    enqueue by scanning the file for the record's ``request_id``; dropping an
-    item's records therefore drops its dedup entry too. That is safe for exactly
-    the reason it is scoped this way: a compacted item's run has RETIRED, so it
-    is not inside any enqueue→dispatch replay window — the window R8 protects is
-    the one between a relay's first call and its cached replay, and a run that
-    reached a terminal status has long since left it. Every STILL-LIVE request
-    keeps every one of its records, so dedup for live items is untouched. The
-    residual case (a very old cached relay replaying an enqueue for a long-dead
-    run) re-enqueues an item that resolves to the SAME computed run id and is
-    ADOPTED by ``queue-dispatch`` against the surviving RunRecord — which is why
-    ledger compaction and journal pruning keep different retention (the prune
-    keeps the newest terminal records).
+    **The drop set is VERIFIED under the flock** (*witnessed_records*, F10). The
+    caller's census is necessarily computed outside this lock — the janitor has
+    to read and join the run stores to decide what retired — and the dispatch
+    lock that would otherwise serialize it is per-cid while this ledger is
+    global. So a ``queue-dispatch`` tick for a DIFFERENT campaign can append a
+    placement transition for an item this census already condemned, and the
+    rewrite then deletes a row that other process is at that moment reporting as
+    ``placed``. Pass ``{item_id: record_count}`` as observed by the census and
+    this function re-counts each item's records in the file it just read under
+    the lock, dropping ONLY the items whose count is unchanged; the rest are
+    disclosed as ``raced_items`` and left for a later pass, which will see the
+    new records and judge them afresh. Omitting *witnessed_records* keeps the
+    old unverified behaviour and is meant for a caller that has no census to
+    offer (a test calling the mechanics directly).
+
+    Re-reading was preferred over the alternative fix — dropping the orphaned
+    transition afterwards — for the ordering it can actually see. A line that
+    arrives BEFORE this lock is still evidence of a decision another process
+    made and is now reporting on, so declining to compact is the answer that
+    keeps both stores true. Orphan-dropping is applied only to the one ordering
+    re-reading cannot reach (below), where the line is provably the tail of a
+    rewrite THIS ledger already made.
+
+    * **An orphan of a PREVIOUS compaction is reaped.** The other side of the
+      same race: the concurrent placement lands AFTER the rewrite, leaving a
+      transition record whose enqueue is gone. Fold rule 2 (only an enqueue
+      opens an item) makes such a line permanently unfoldable, and because the
+      drop set is derived from FOLDED items it is permanently uncompactable too —
+      an immortal ledger line and a permanent "inspect the ledger" note on every
+      ``queue-status``. A non-enqueue record whose ``item_id`` is a known
+      compaction TOMBSTONE is therefore dropped: this ledger authored that
+      removal, so the line is the tail of its own rewrite rather than foreign
+      evidence, and :func:`append_intake_item` refuses to mint a new item under a
+      tombstoned id, so the id cannot mean anything else. An orphan with no
+      tombstone behind it is KEPT — that one is unexplained, and unexplained is
+      exactly what compaction must never erase.
+
+    **R8 (replay dedup) is preserved rather than argued away.**
+    ``append_jsonl_line`` dedups an enqueue by scanning the file for the record's
+    ``request_id``, so dropping an item's records drops its dedup entry too. The
+    shipped argument for that being safe — "a compacted item's run has RETIRED,
+    so a replay would be ADOPTED by ``queue-dispatch`` against the surviving
+    RunRecord" — held only while the RunRecord survived, and
+    ``KEEP_TERMINAL_RUNS`` is the only thing that makes it. Past that bound the
+    replay dedup-misses, re-enqueues, finds nothing to adopt, and really
+    resubmits a completed run. So every dropped record's ``request_id`` is
+    persisted as a TOMBSTONE on the watermark
+    (:func:`compaction_tombstones`), and :func:`append_intake_item` consults it:
+    the replay writes no line and is disclosed as a duplicate. Every STILL-LIVE
+    request keeps every one of its records, so dedup for live items is untouched
+    either way.
 
     *now* overrides the watermark stamp for deterministic tests.
     """
@@ -600,8 +753,13 @@ def compact_intake_ledger(
         "dropped_items": 0,
         "dropped_records": 0,
         "kept_records": 0,
+        "raced_items": [],
+        "reaped_orphans": 0,
     }
-    if not drop or not path.is_file():
+    tombstones = compaction_tombstones(experiment_dir)
+    if not drop and not tombstones:
+        return report
+    if not path.is_file():
         return report
 
     lock_path = path.with_suffix(path.suffix + ".lock")
@@ -611,9 +769,8 @@ def compact_intake_ledger(
         except OSError as exc:
             _log.warning("queue_intake: cannot compact unreadable %s (%s)", path, exc)
             return report
-        kept: list[str] = []
-        dropped_ids: set[str] = set()
-        dropped_records = 0
+        parsed: list[tuple[str, dict[str, Any] | None]] = []
+        counted: dict[str, int] = {}
         for raw in text.splitlines():
             line = raw.strip()
             if not line:
@@ -621,16 +778,59 @@ def compact_intake_ledger(
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                kept.append(line)  # unparseable: evidence, not history
+                parsed.append((line, None))  # unparseable: evidence, not history
                 continue
-            item_id = rec.get("item_id") if isinstance(rec, dict) else None
-            if isinstance(item_id, str) and item_id in drop:
+            if not isinstance(rec, dict):
+                parsed.append((line, None))
+                continue
+            parsed.append((line, rec))
+            item_id = rec.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                counted[item_id] = counted.get(item_id, 0) + 1
+
+        # F10: the census was taken outside this lock. An item whose record count
+        # has moved since then acquired evidence this pass never saw — another
+        # process is mid-decision on it — so leave it whole and say so.
+        raced = (
+            sorted(
+                item_id
+                for item_id in drop
+                if witnessed_records.get(item_id) != counted.get(item_id)
+            )
+            if witnessed_records is not None
+            else []
+        )
+        report["raced_items"] = raced
+        drop -= set(raced)
+
+        kept: list[str] = []
+        dropped_ids: set[str] = set()
+        dropped_records = 0
+        dropped_request_ids: list[str] = []
+        reaped = 0
+        for line, rec in parsed:
+            if rec is None:
+                kept.append(line)
+                continue
+            item_id = rec.get("item_id")
+            if not isinstance(item_id, str) or not item_id:
+                kept.append(line)
+                continue
+            if item_id in drop:
                 dropped_ids.add(item_id)
                 dropped_records += 1
+                request_id = rec.get("request_id")
+                if isinstance(request_id, str) and request_id:
+                    dropped_request_ids.append(request_id)
+                continue
+            if rec.get("kind") != _KIND_ENQUEUE and item_id in tombstones:
+                # An orphan of a compaction this ledger already performed.
+                reaped += 1
                 continue
             kept.append(line)
         report["kept_records"] = len(kept)
-        if not dropped_records:
+        report["reaped_orphans"] = reaped
+        if not dropped_records and not reaped:
             return report
         atomic_write_text(path, "".join(f"{line}\n" for line in kept))
         report["compacted"] = True
@@ -646,9 +846,28 @@ def compact_intake_ledger(
                 "items_compacted": int(prior.get("items_compacted") or 0) + len(dropped_ids),
                 "records_dropped": int(prior.get("records_dropped") or 0) + dropped_records,
                 "records_kept": len(kept),
+                _TOMBSTONE_KEY: _merged_tombstones(prior, dropped_request_ids),
             },
         )
     return report
+
+
+def _merged_tombstones(prior: dict[str, Any], minted: Iterable[str]) -> list[str]:
+    """The watermark's next tombstone list — oldest-first, deduped, capped.
+
+    Order is carried over from the PRIOR list so the cap truncates the OLDEST
+    entries rather than an arbitrary set: the newest tombstones are the ones
+    whose replay window may still be open (see :data:`TOMBSTONE_CAP`).
+    """
+    raw = prior.get(_TOMBSTONE_KEY)
+    ordered = [v for v in raw if isinstance(v, str) and v] if isinstance(raw, list) else []
+    seen = set(ordered)
+    for request_id in minted:
+        if request_id in seen:
+            continue
+        seen.add(request_id)
+        ordered.append(request_id)
+    return ordered[-TOMBSTONE_CAP:]
 
 
 def find_intake_item(

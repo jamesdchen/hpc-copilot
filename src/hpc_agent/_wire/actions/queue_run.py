@@ -243,10 +243,27 @@ class QueueRunResult(BaseModel):
     replayed: bool = Field(
         default=False,
         description=(
-            "True when this request_id was already on the ledger: NO line was "
-            "written and ``record`` is the ORIGINAL item. The honest signal a "
-            "relay needs — 'you already asked for this' is a different fact from "
-            "'I enqueued it', even though both are success."
+            "True when this request_id was already honoured: NO line was "
+            "written. The honest signal a relay needs — 'you already asked for "
+            "this' is a different fact from 'I enqueued it', even though both "
+            "are success. ``record`` is the ORIGINAL item, unless ``compacted`` "
+            "is also true (see there)."
+        ),
+    )
+    compacted: bool = Field(
+        default=False,
+        description=(
+            "True when this request_id replayed against a COMPACTION TOMBSTONE "
+            "rather than against a live ledger row: the item was enqueued, "
+            "dispatched, its run settled, and the janitor removed its records "
+            "(``state/queue_intake.compaction_tombstones``). ``replayed`` is true "
+            "with it and nothing was written — which is the whole point, because "
+            "without the tombstone the dedup probe would MISS a compacted item "
+            "and re-enqueue a run that already finished (R8). ``record`` then "
+            "carries the tombstone's stated reason instead of the original "
+            "arrival facts, which are gone; ``run_id`` / ``cmd_sha`` are null and "
+            "``enqueued_at`` is empty for the same reason. Never true together "
+            "with a ``record`` the fold produced."
         ),
     )
     run_id: RunIdStrict | None = Field(

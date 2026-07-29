@@ -36,7 +36,11 @@ an unbounded projection over ledger HISTORY is precisely the cost it forbids.
 So: the spec's filters bound the join (only filter-matching items are joined
 to the run stores), ``include_settled=False`` drops items whose run already
 reached a terminal status, and ``limit`` clips the page while
-``total_items`` / ``truncated`` keep the clip visible. Nothing here is
+``total_items`` / ``truncated`` keep the clip visible. The ``occupancy`` block
+obeys the same bound: it is read for the campaigns of the items this call
+RETURNS, because ``occupied_slots`` walks the whole journal namespace per
+campaign and a census over the wider pre-hiding match set made a pass returning
+zero items pay for the experiment's entire run history. Nothing here is
 silent — a dropped ledger line, a hidden settled item, a clipped page, a
 ``run_id`` two items both claim (§10.S2) and a park ``attention-queue``'s
 ``in_flight``-only enumeration cannot see all surface as code-computed
@@ -431,9 +435,11 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
 
     Order of work, and why it is that order: filter FIRST (the spec's filters
     are the bound on how much of the ledger gets joined), project the matches,
-    count over every match, then hide settled items and clip the page. Counting
-    before hiding is what lets ``counts["terminal"]`` stay truthful while
-    ``items`` stays short.
+    count over every match, then hide settled items and clip the page, and only
+    THEN read occupancy — for the campaigns of the items actually returned.
+    Counting before hiding is what lets ``counts["terminal"]`` stay truthful
+    while ``items`` stays short; reading occupancy after both is what keeps a
+    pass that returns nothing from paying an O(history) journal walk (§7).
 
     ``spec.now`` overrides the evaluation instant (the ``doctor`` /
     ``attention-queue`` precedent): it sets the single ``computed_at`` stamp and
@@ -495,10 +501,21 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
             continue
         items.append(model)
 
-    # One occupancy read per DISTINCT campaign present on the matched items —
+    # One occupancy read per DISTINCT campaign present on the RETURNED items —
     # the R9 predicate, never a second inline count. Placement rests on this
-    # number, so it is inspectable from the same read that shows the items.
-    campaign_ids = {_text(item.get("campaign_id")) for item, _ in matched}
+    # number, so it is inspectable from the same read that shows the items, and
+    # keying it on ``items`` rather than on ``matched`` is what makes "the same
+    # read" literal: a campaign whose rows were all hidden as settled or clipped
+    # by ``limit`` has nothing on this page for the number to be evidence about.
+    #
+    # It is also the §7 fix. ``occupied_slots`` -> ``find_runs_by_campaign``
+    # ``load_run``s EVERY run file in the namespace once per campaign, so
+    # computing it over MATCHED items charged pass startup O(history × campaigns)
+    # for a page that could be, and routinely was, EMPTY: the final dispatched
+    # batch is never compacted (grooming excludes the items its own tick reports
+    # on), so a ledger holding any placed item paid that scan forever. Measured
+    # before the fix: 374ms at 1600 runs for a pass returning zero items.
+    campaign_ids = {item.campaign_id for item in items}
     occupancy = {
         cid: occupied_slots(exp, cid) for cid in sorted(c for c in campaign_ids if c is not None)
     }

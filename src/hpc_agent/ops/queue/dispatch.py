@@ -828,6 +828,13 @@ def _brief(result: QueueDispatchResult) -> str:
             f"({groomed.get('dropped_records', 0)} ledger record(s)) and pruned "
             f"{groomed.get('pruned_runs', 0)} unreferenced terminal run record(s)."
         )
+    if groomed.get("raced_items"):
+        lines.append(
+            f"maintenance declined {len(groomed['raced_items'])} item(s) a concurrent tick "
+            f"touched between the census and the ledger lock: "
+            f"{', '.join(groomed['raced_items'])} (they stay on the ledger; the next tick "
+            "judges them afresh)."
+        )
     if groomed.get("error"):
         lines.append(f"maintenance did not complete: {groomed['error']} (dispatch is unaffected).")
     return "\n".join(lines)
