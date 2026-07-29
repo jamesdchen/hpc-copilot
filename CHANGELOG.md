@@ -74,6 +74,25 @@ campaign read occupied=4 forever and refill waited on an empty cluster),
 plus a dispatch-lock reentrancy hole that waved a second thread through the
 resolve window, and a composed placement that could name a cluster absent
 from the active config and become un-grantable.
+
+### Added — paste-ready answer menus on park briefs + park notifications (2026-07-29)
+
+Every decision point now hands the human its answers, not just its
+question. Park briefs carry an `answer_menu` composed at the one home
+(`block_drive.park`): the bare-`y` default naming its materialized advance
+target, the scope-naming approve line, and one paste-line per structured
+recommendation — hint and menu share `greenlight_target` so they can never
+name different targets, and anomaly terminators (`canary_failed`,
+`watching_anomaly`) label the bare-`y` default an OVERRIDE instead of
+hiding that it chain-forwards. `doctor --notify` raises park notifications
+carrying the answer line over the existing channels, deduped per
+`(run_id, park, awaiting_since)` — watchdog cadence is a replay no-op, a
+re-park re-notifies, and a park and a stall of one run cannot collapse.
+A mechanized census (`tests/contracts/test_bare_y_coverage.py`) walks
+every boundary in `block_chain.SUCCESSORS` that can park and fails the
+suite if one lacks a menu without a reasoned allowlist entry — with
+negatives proving the census itself fires.
+
 ### Added — QoS submit-cap gate, config-based (2026-07-29)
 
 The successor to the deleted `validate-self-qos-limit`, with its three
