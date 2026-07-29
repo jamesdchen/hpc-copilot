@@ -463,8 +463,9 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
     # the R9 predicate, never a second inline count. Placement rests on this
     # number, so it is inspectable from the same read that shows the items.
     campaign_ids = {_text(item.get("campaign_id")) for item, _ in matched}
-    campaign_ids.discard(None)
-    occupancy = {cid: occupied_slots(exp, cid) for cid in sorted(campaign_ids) if cid is not None}
+    occupancy = {
+        cid: occupied_slots(exp, cid) for cid in sorted(c for c in campaign_ids if c is not None)
+    }
 
     return QueueStatusResult(
         computed_at=now,
