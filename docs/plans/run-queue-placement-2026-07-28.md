@@ -1,10 +1,11 @@
 # The run queue + cluster placement — design proposal (2026-07-28)
 
-Status: **BANKED — design complete through v2 + adversarial sweep; nothing
-built.** Motivating order: "there needs to be a queue that keeps track of
-multiple experiments to run as they come in and it needs to assign the runs
-to the proper clusters / split across clusters so that there's
-asynchroneity that allows things to be seamless."
+Status: **S1–S4 RESOLVED (§10, 2026-07-29) — Phase 1 is buildable.**
+Design complete through v2 + adversarial sweep. Motivating order: "there
+needs to be a queue that keeps track of multiple experiments to run as they
+come in and it needs to assign the runs to the proper clusters / split
+across clusters so that there's asynchroneity that allows things to be
+seamless."
 
 ## PICKUP (for a fresh session, 2026-07-29)
 
@@ -19,21 +20,23 @@ Read this file top to bottom — it is self-contained. The state of play:
    this), hold-while-alive / poke-when-dead / capture-always residency.
 2. **The fable-sweep verdict (§8) is the pre-build checklist.** Thirteen
    confirmed clusters. S5/S6 are FIXED in the shipped campaign-run.js.
-   **S1–S4 change the intake record's shape (item_id, placement folded
-   into consent identity, refill intent visible to advance, per-run remote
-   snapshots or run-start sha check) and MUST be resolved in this design
-   doc before any Phase 1 code.** S7–S13 land incrementally with their
-   named resolutions.
+   **S1–S4 are RESOLVED in §10** — the blocking gate is cleared. S7–S13
+   land incrementally with their named resolutions.
 3. **Then build Phase 1** (§6): intake store + `queue-run` +
    `queue-status` + `queue-advance` with the disclosed-reason policy.
    Conventions: full verb contract per `docs/internals/adding-a-primitive.md`
    (the `tag-session` verb, landed 2026-07-28, is the freshest small
    exemplar of the whole pipeline).
-4. **Open maintainer decisions** (§9) still unanswered: claim-lease
-   recovery (proposed: heartbeat staleness + F43 host/create_time),
-   retryable(n) semantics (proposed: default needs_human — but see S3 of
-   §8 before deciding), typed resource asks, no item sharding, per-repo
-   queue.
+4. **Open maintainer decisions** (§9): claim-lease recovery is now
+   ANSWERED by §10.S2 (no new lease — the shipped detached lease keyed on
+   the computed run_id), and retryable(n) is unblocked (§10.S3 removes the
+   S3 coupling). Typed resource asks, no item sharding, and per-repo queue
+   remain open.
+5. **Two claims in §10 are proposed-but-unverified** and are called out
+   inline: rsync `--link-dest` hardlink behaviour on the CARC/Hoffman2
+   filesystems (§10.S4), and the blast radius of adding a placement leg to
+   `standing_consent_status` across the live consent test corpus
+   (§10.S1). Verify both before the code that depends on them lands.
 
 ## 0. What already exists (build on, don't duplicate)
 
@@ -281,9 +284,12 @@ review):**
 Six adversarial lenses over this design + the live kernel (48 raw findings,
 merged below; load-bearing code citations spot-checked against the tree;
 two findings confirmed directly from the workflow engine's documented
-semantics). **The v2 loop shape survives; the design is NOT buildable as
+semantics). **The v2 loop shape survives; the design was NOT buildable as
 written.** Confirmed clusters, most severe first — each names its required
-resolution:
+resolution. S1–S4 carried the blocking gate; **their resolutions are settled
+in §10** and each entry below now points at its resolution. The findings
+themselves are left unedited: they are the record of what was wrong, and
+§10 is the record of what was decided.
 
 **S1 — consent identity is placement-blind (HIGH).** §3 puts the cluster
 inside the y, but both shipped identity tokens consumption compares are
@@ -416,3 +422,251 @@ disk (never workflow-summarized state).
 - Cross-EXPERIMENT queue (one queue over many repos) — proposed NO: the
   queue is per-experiment-repo like every other store; a lab-level view is
   a reporting sweep, not a store.
+## 10. Resolutions for S1–S4 (2026-07-29) — the pre-Phase-1 gate, cleared
+
+Each resolution below was derived by reading the shipped mechanism rather
+than by designing against the finding's summary. Two of the four findings
+turned out to overstate what has to be built: S2's premise is false (the
+run_id it says must be minted is already COMPUTED, purely), and S2/S3
+collapse into ONE change. Line citations were spot-checked against the tree
+at `dc4c872`.
+
+### S1 — placement is a THIRD identity dimension, not a field in `cmd_sha`
+
+**Confirmed as stated.** Both consent-bound tokens are provably
+cluster-free: `compute_cmd_sha` (`state/run_sha.py:43`) hashes only the
+materialized per-task kwargs — its docstring states "cmd_sha IS THE
+PARAMETER IDENTITY OF THE EXPERIMENT", with executor and `tasks.py` bytes
+deliberately excluded — and `_CAMPAIGN_IDENTITY_FIELDS`
+(`meta/campaign/blocks.py:65`) is goal/budget/strategy/stop/anomaly.
+`consume_boundary_under_consent` (`ops/overnight.py:935`) compares one of
+them via `standing_consent_status`, so a re-placement passes the
+spec-changed leg untouched.
+
+**REJECTED: folding cluster into `cmd_sha`.** That token is also the dedup
+key `find_run_by_cmd_sha` matches on. Folding placement in would make the
+same experiment on two clusters two different experiments — killing dedup,
+reproduction targeting, and §4's whole shared-study merge. The #207
+boundary is load-bearing and stays.
+
+**RESOLUTION — copy the code-identity precedent exactly.** Code has this
+same problem and it was NOT solved by extending `cmd_sha`:
+`state/code_drift.py` records `executor` + `tasks_py_sha` as a SEPARATE
+dimension and compares them with a SEPARATE predicate
+(`detect_code_drift`), precisely because cmd_sha is parameter identity.
+Placement is the third dimension of that same kind.
+
+1. The resolved spec gains an explicit `placement` block —
+   `{cluster_key, ssh_target, remote_path, scheduler}` — resolved BEFORE
+   the brief (§3's existing rule) and stamped on the run sidecar alongside
+   `executor` / `tasks_py_sha`.
+2. Consent binds the PAIR `(cmd_sha, placement_sha)`.
+   `standing_consent_status` gains a placement leg returning a distinct
+   `placement-changed` reason, so the park brief says which dimension moved.
+3. **Conservative in the same direction as `detect_code_drift`:** an
+   absent/empty recorded placement is NOT drift. Every pre-migration
+   consent and sidecar predates the field; firing on absence would park
+   every live consent at upgrade. This mirrors the module's own stated
+   posture ("an empty/absent recorded value is NOT drift ... we cannot
+   prove a pre-#351 record changed").
+4. **Campaign scope uses MEMBERSHIP, not equality.** Do NOT add a cluster
+   field to `_CAMPAIGN_IDENTITY_FIELDS`: a campaign spanning clusters is
+   the entire point of §4, and an equality check would park on every
+   placement swing, defeating dynamic split. The campaign consent instead
+   carries a `placement_scope` — the SET of cluster keys authorized — and
+   consumption checks membership. This is the campaign-scope analog S1
+   asked for, and it is the natural on-ramp to §3's Phase-2 `{cluster:
+   cap}` consent vocabulary (a scope that already names a cluster set is
+   one field away from naming a cap per cluster).
+5. Disclosure follows the shipped discipline: `overnight_consent.py:220`
+   already requires the human's consent text to name the target sha prefix
+   (`_names_target_sha_prefix`). An overnight consent must likewise name
+   its cluster set out loud.
+
+**UNVERIFIED, verify before landing:** the blast radius of adding a
+placement leg across the existing consent test corpus. The conservative
+absent-is-not-drift rule should make it additive, but that is a prediction,
+not a measurement.
+
+### S2 — the premise is false: run_id is COMPUTED, so the shipped lease already works
+
+**The finding's core claim does not hold.** S2 states the claim key
+"cannot exist for an intake item (no run_id until dispatch mints one)".
+Run ids are not minted. `compute-run-id`
+(`incorporation/build/compute_run_id.py`) is a `@primitive(verb="query",
+idempotent=True)` with no side effects, and the derivation is pure:
+
+    run_id = "<run_name>-<cmd_sha[:8]>"
+
+Two workers looking at the same resolved item compute the IDENTICAL run_id.
+The `(run_id, driver_id)` key is therefore available the moment an item is
+resolved — which under §10.S3 is at ENQUEUE, not at dispatch.
+
+**RESOLUTION — no refactor of the claim system. Reorder, don't rebuild.**
+
+1. **Resolve at enqueue** (the same change §10.S3 requires), so run_id
+   exists while the item sits on the ledger.
+2. **Claim with the shipped lease, unchanged.** `_guard_single_lease`
+   (`_kernel/lifecycle/detached.py:353–425`) is already the correct
+   organ: flock'd, stamps `host` and `create_time`, and under F43 REFUSES
+   a lease it cannot verify rather than reclaiming blind. Every one of
+   those behaviours is a landed bug fix. Rewriting the claim system to key
+   on a new `item_id` would re-earn all of them for no gain — the churn is
+   not the main cost; losing the scars is.
+3. **`item_id` still gets minted at enqueue**, but for a different and
+   smaller job: it is the client `request_id` passed as
+   `append_jsonl_line`'s `dedup_key` (`infra/io.py:310`, already shipped),
+   which is what stops a replayed relay from double-enqueuing. That also
+   discharges S12's replay hole with zero new code.
+4. **E4 sequencing becomes a durable per-cid lock.** Today
+   "strictly sequential, sidecar-between-slots" is an in-process loop
+   convention (`ops/campaign_refill.py:26–35`); two passes break it. Use
+   `advisory_flock` — the same primitive under `append_jsonl_line` and
+   `ssh_slots` — held across resolve → sidecar write → spawn, exactly the
+   window the refill docstring calls the crash window.
+5. **The scheduler's job name is the real idempotency token.** A claim
+   cannot fix `qsub` non-idempotency: a dispatcher that dies after the
+   scheduler accepts but before the record write leaves a live job no local
+   store knows about. Stamp the item_id into the submitted JOB NAME, and on
+   any claim recovery query the scheduler for a job carrying it and ADOPT
+   rather than resubmit. The scheduler is the only store both racers can
+   see. This leg is mandatory, and it is independent of the claim.
+
+**Consequence for §9:** the open "claim lease TTL/steal policy" question is
+answered by not existing — there is no new lease to write a policy for.
+
+**Known collision, decide deliberately:** two DIFFERENT items with identical
+resolved params and the same `run_name` compute the same run_id. For
+campaign trials this cannot arise (params differ per trial). For
+hand-enqueued items it is arguably correct (it IS the same experiment), but
+`queue-status` must SAY so — "this item resolves to an already-claimed run"
+— rather than silently collapsing two ledger rows.
+
+### S3 — one shared "occupies a pool slot" predicate, and resolve at enqueue
+
+**Confirmed, and the shipped code already names the exact hole.**
+`ops/campaign_refill.py:19–57` documents that an orphan sidecar self-heals
+through the BUDGET arm (it raises `spent_jobs`) but explicitly not through
+the pool-room arm: "for a pool-room-bound refill under a generous
+`max_jobs` budget the orphan does NOT shrink `pool_room` (K − in_flight)".
+An enqueued-but-undispatched item is precisely that orphan, so every refill
+tick inside the enqueue→dispatch window re-enqueues the same slots.
+
+**RESOLUTION.**
+
+1. **One shared predicate**, consumed by `campaign-advance` and
+   `queue-advance` alike:
+
+       occupied(cid) = journal status ∈ {in_flight, submitting}
+                     ∪ intake items for cid in state {queued, placed}
+       pool_room     = max(0, K − occupied(cid))
+
+   This is R1 applied to the queue's own state: intake is not a second
+   status store, it contributes exactly ONE fact no existing store holds —
+   *this slot is committed to this cid and is not yet a run*. Three call
+   sites currently count occupancy slightly differently; this makes it one
+   definition (the same one-shared-predicate discipline S12 demands for
+   `queue-status`).
+2. **Refill's direct submit is retired**; refill becomes a ledger producer
+   (`queue-run` and return), and the dispatcher is the only submitter.
+   Note WHY this gets easier rather than being pure migration cost: E5's
+   "resolve+submit per slot atomically, minimize the crash window" is a
+   MITIGATION for having no durable record of intent. Once intake IS that
+   record, the atomicity requirement genuinely relaxes.
+3. **Resolve at enqueue, not at dispatch** — load-bearing, and the reason
+   is subtler than S3 states. The async optuna scaffold indexes proposals
+   by sidecar count (`optuna_async_strategy.py::_submitted_count` ==
+   `len(prior_records(...))`) and CACHES per index. If enqueue happened
+   before resolve, two dispatches of one item could resolve at different
+   `_submitted_count`s and receive DIFFERENT trials — a worse bug than the
+   double-enqueue being fixed. Resolving at enqueue consumes the index
+   once, and it is also what makes §10.S1's placement-in-the-spec and
+   §10.S2's computed run_id available while the item is still on the
+   ledger.
+
+**Accepted cost, stated once:** trial params are chosen at enqueue, so a
+long-held item reflects the strategy's knowledge then, not at dispatch.
+This is already true of every cached refill slot, and campaign-produced
+queue depth is K-bounded — but the window widens for items held pre-gate,
+and the morning brief should show enqueue age for that reason.
+
+### S4 — content-addressed code trees; per-RUN copies are the wrong granularity
+
+**Confirmed as stated.** `rsync_push` stage-swaps with `--delete` into ONE
+`remote_path` per (cluster, experiment) (`infra/transport/__init__.py:415–460`);
+drift is checked LOCALLY at submit (`state/code_drift.py`) and nothing
+checks at job start. Under R3's eager submit a job pending for days executes
+whatever a later push left in the tree, with a sidecar that claims
+otherwise — a silent provenance lie, the worst failure class for this tool.
+
+**The plan says "pick one" of per-run snapshots or a run-start sha check.
+Picking one is wrong: the check is necessary but not sufficient, and the
+snapshot should be keyed by CONTENT, not by run.**
+
+1. **Run-start check (the guard) — ships first, one file.** At job start,
+   recompute the code fingerprint over the tree about to execute and refuse
+   to run on mismatch, writing a terminal marker with a distinct
+   `code_drift_at_start` reason. The idiom already exists:
+   `hpc_preamble.sh:343–400` writes `.hpc_failed/<run>.<task>.failed` and
+   refuses to re-run. Cost is one hash per job. This converts a silent lie
+   into a loud, classifiable failure — but it does NOT make the job
+   succeed, and under eager submit every pending job would die on any push.
+   So it cannot be the whole answer.
+2. **Content-addressed trees — key by code version, not by run.** The
+   system ALREADY computes a whole-tree content digest: `Manifest.digest`
+   (`infra/manifest.py:68–88`), used today for the transfer delta, whose
+   docstring invites exactly this — "two trees with identical file content
+   ... produce the same digest, so a stage-in can dedup on it exactly the
+   way `find_run_by_cmd_sha` dedups on the parameter sha". So:
+
+       <remote_path>/.hpc/trees/<manifest digest>/
+
+   N runs with unchanged code share ONE tree; a new tree appears only when
+   the code actually changes. Per-RUN snapshots would duplicate the tree
+   once per run for no added safety — the sharing that is dangerous is
+   ACROSS RUNS OVER TIME, not across the tasks of one array.
+3. **Pointing a run at it is one variable.** The job does `cd "$REPO_DIR"`
+   (`hpc_preamble.sh:82`); `REPO_DIR` is already a per-run spec field
+   derived from `remote_path`. Nothing else in the job path moves.
+4. **This extends a ruling that is already settled, not a new one.**
+   `--inplace` is deliberately banned (#F20,
+   `infra/transport/__init__.py:1386, 1433`) because an in-place rewrite
+   "tears the live dispatcher under a running array job". That is this
+   exact hazard for RUNNING jobs; pending jobs are the same hazard with a
+   longer fuse. Immutable per-version trees are the generalization.
+
+**What this trades (honestly):**
+
+| | cost |
+|---|---|
+| cluster disk | one tree per distinct code VERSION — bounded by edit frequency, not run count. Results are unaffected (already per-run dirs). |
+| cleanup | REAL new bookkeeping: a tree is reapable once no non-terminal run references it. Mitigated by being the same janitor S12 already needs (`prune_terminal_runs` is wired, never called). |
+| debuggability | "which tree did this run use?" becomes a recorded, rendered fact. Small but real. |
+| transfer cost | **unchanged** — this is the cost usually assumed and it is not paid. |
+
+**PROPOSED, UNVERIFIED — the `--link-dest` refinement.** Uploading into a
+fresh digest-named directory would forfeit the delta (a new empty dir means
+a full transfer). rsync's `--link-dest=<previous digest dir>` is built for
+exactly this: unchanged files become hardlinks (zero bytes shipped, zero
+extra disk), changed files are written fresh. The tree does not currently
+use it. **Verify hardlink semantics on the CARC and Hoffman2 filesystems
+before depending on it** — this claim is derived from the flag's
+documentation, not from an observed run. If it does not hold there, the
+fallback is a plain copy per digest, which costs disk but keeps the
+correctness property intact.
+
+**Ordering:** the guard is Phase 1-safe and can land immediately. The
+content-addressed trees must land before R3's eager submit ships — with
+them in place the guard becomes an assertion that essentially never fires,
+which is the correct end state for a guard.
+
+### What S1–S4 have in common
+
+S1, S2, and S3 are one change wearing three hats: **write a few more facts
+down at the moment an item joins the ledger** (its resolved spec, hence its
+placement and its computed run_id; its `request_id`; and the fact that its
+slot is spoken for). That is why the sweep insisted they be settled on
+paper together — settled separately, they would have produced three
+incompatible intake record shapes. S4 is genuinely independent and belongs
+to eager submit, not to Phase 1.
+
