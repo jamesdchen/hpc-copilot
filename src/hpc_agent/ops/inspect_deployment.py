@@ -100,15 +100,22 @@ def _resolve_target_path(
     Exactly one of *path* / *run_id* selects the target:
 
     * ``--path`` is probed verbatim (after the scratch confinement check).
-    * ``--run-id`` derives ``REPO_DIR`` from the run's journaled
-      ``remote_path`` via :func:`deploy_target_for` — the SAME single
-      derivation ``build_submit_spec`` and ``preflight_executor_exists`` use,
-      so "where the agent inspects" can't drift from "where rsync deployed".
+    * ``--run-id`` resolves ``REPO_DIR`` through
+      :func:`~hpc_agent.infra.code_tree.repo_dir_for_run` — the ONE fallback
+      rule for "where did this run's code actually live". A run pinned to a
+      content-addressed tree (§10.S4) recorded that tree in its own
+      ``job_env["REPO_DIR"]``, so inspecting it must look THERE, not at the
+      shared base whose contents have since moved on. A run that predates
+      content-addressing recorded no tree, and the helper falls back to
+      :func:`deploy_target_for` on the journaled ``remote_path`` — the same
+      single derivation ``build_submit_spec`` and ``preflight_executor_exists``
+      use, byte-for-byte the pre-S4 answer. Absent-disables: no flag-day, no
+      backfill, no branch on a version.
 
     Raises :class:`errors.SpecInvalid` when neither or both are given, or
     when ``--run-id`` names a run with no journal record / no ``remote_path``.
     """
-    from hpc_agent.infra.backends._remote_base import deploy_target_for
+    from hpc_agent.infra.code_tree import repo_dir_for_run
     from hpc_agent.state.journal import load_run
 
     if bool(path) == bool(run_id):
@@ -130,7 +137,7 @@ def _resolve_target_path(
             f"run {run_id!r} has no remote_path recorded (pure-API backend, or a "
             "run that never deployed to a cluster); pass --path instead."
         )
-    repo_dir = deploy_target_for(record.remote_path)
+    repo_dir = repo_dir_for_run(record.remote_path, getattr(record, "job_env", None))
     return repo_dir, repo_dir, run_id
 
 

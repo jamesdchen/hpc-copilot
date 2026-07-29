@@ -813,6 +813,51 @@ content-addressed trees must land before R3's eager submit ships — with
 them in place the guard becomes an assertion that essentially never fires,
 which is the correct end state for a guard.
 
+#### STATUS: BUILT (2026-07-29). Eager submit's precondition is met.
+
+Shipped as designed above, with three implementation rulings the design did
+not settle. Source of truth is the code + its tests, not this paragraph:
+`infra/code_tree.py` (layout, identity, GC planner), the four transport dials
+(`probe_code_tree` / `materialize_code_tree` / `seal_code_tree` /
+`reap_code_trees`), `ops/submit_flow._deploy_code_tree` +
+`_groom_code_trees`; pinned by `tests/infra/test_code_tree.py` and
+`tests/ops/submit/test_code_tree_submit.py`.
+
+1. **The tree holds CODE and symlinks — never a run's bytes.** §3 above said
+   "nothing else in the job path moves", but the job path resolves
+   `result_dir_template`, `${RESULT_DIR:-.}/.hpc_failed`, and the dispatcher's
+   own sidecar RELATIVE TO CWD — so with `$REPO_DIR` on a tree they would all
+   land INSIDE it, where the pull path cannot see them and the GC could delete
+   them. (The trade table's "results are unaffected" was therefore too
+   optimistic as written.) Fixed by symlinking every run-mutable path
+   (`code_tree.TREE_SHARED_PATHS`) back to the base and excluding those paths
+   from the snapshot, so nothing can materialise a real dir over one; the seal
+   step VERIFIES each is a symlink (`[ -L … ]`) and refuses the tree otherwise.
+   Only `REPO_DIR` moves — `remote_path` keeps every other meaning (submission
+   cwd, `log_dir`, jobmap, results, pulls).
+2. **The digest folds in the framework version.** `deploy_runtime` ships
+   package-versioned framework files INTO the tree, so a tree keyed on user
+   code alone would still let a queued job's dispatcher/preamble change
+   underneath it. One digest = everything the job executes. `.hpc/runs/` is
+   excluded from it, or every submission would mint its own tree (the per-RUN
+   granularity this section rejects).
+3. **The janitor's seat is the submit that MINTED a tree** — the same argument
+   `ops/queue/maintenance` uses for grooming on the tick that lengthened the
+   ledger. `probe_code_tree` already lists the trees root in the round-trip it
+   uses to check the seal, so the PLAN costs zero extra network; a submit that
+   REUSES a tree (the fast path) is charged nothing at all. Policy: reapable =
+   unreferenced by any non-terminal run AND outside the newest N=3 AND not the
+   digest being deployed. References are read off each `RunRecord`'s
+   `job_env["REPO_DIR"]` — no new record field, and `None` for a pre-S4 run,
+   which is also the migration story (absent-disables; a legacy run resolves to
+   the base via `code_tree.repo_dir_for_run`). An unreadable journal REFUSES the
+   whole pass rather than reading "no references" out of a failed scan.
+
+`--link-dest` is wired exactly as the probe table demands: opportunistic, never
+assumed, and the code cannot tell a hardlink from BeeGFS's silent copy. The
+run-start code-identity check is untouched — defense in depth. Kill-switch:
+`HPC_NO_CODE_TREES=1` restores the pre-S4 shape.
+
 ### What S1–S4 have in common
 
 S1, S2, and S3 are one change wearing three hats: **write a few more facts

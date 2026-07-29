@@ -40,7 +40,7 @@ import tempfile
 import threading
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
 from hpc_agent.infra.bounded_subprocess import run_capture_bounded
@@ -158,6 +158,9 @@ from ._pull import (
 )
 from ._shared import _DEFAULT
 
+if TYPE_CHECKING:
+    from hpc_agent.infra.code_tree import CodeTreeProbe
+
 __all__ = [
     "DEFAULT_RSYNC_EXCLUDES",
     "MANDATORY_RSYNC_EXCLUDES",
@@ -165,10 +168,15 @@ __all__ = [
     "PROTECTED_RUNTIME_FILES",
     "DeployPayloadSummary",
     "PullResult",
+    "code_snapshot_digest",
     "deploy_payload_summary",
     "iter_exclude_filtered_files",
     "deploy_runtime",
+    "materialize_code_tree",
+    "probe_code_tree",
     "push_run_sidecar",
+    "reap_code_trees",
+    "seal_code_tree",
     "rsync_pull",
     "rsync_push",
     "run_combiner",
@@ -1705,6 +1713,354 @@ def deploy_runtime(
             remote_path=remote_path,
             content=json.dumps(new_manifest, indent=2, sort_keys=True),
         )
+
+
+# ---------------------------------------------------------------------------
+# Content-addressed CODE trees (§10.S4)
+# ---------------------------------------------------------------------------
+#
+# The engine half of :mod:`hpc_agent.infra.code_tree` (which owns the layout
+# argument, the identity fold, and the GC planner). Four dials, in the order a
+# submit uses them:
+#
+#   probe → (sealed? stop — that IS the latency win)
+#         → materialize (rsync into the digest dir, opportunistic --link-dest)
+#         → [caller runs deploy_runtime into the tree]
+#         → seal (shared symlinks + the completion marker, written LAST)
+#
+# and ``reap_code_trees`` for the janitor. They live HERE, in the engine seat,
+# because each drives a subprocess/ssh under a live ``transport.*`` patch — the
+# module's stated rule.
+
+#: Positive-evidence ack for the probe read (run-12 finding 24 discipline): a
+#: severed channel returns rc 0 with empty stdout, which would read as "no seal,
+#: no trees". With the ack, its ABSENCE marks the read UNKNOWN and the probe
+#: reports ``trusted=False`` — the caller then re-materialises (correct, just not
+#: free) instead of trusting a silence.
+_TREE_ACK: Final[str] = "__HPC_TREE_ACK__="
+_TREE_SEALED_TOKEN: Final[str] = "__HPC_TREE_SEALED__"
+
+
+def code_snapshot_digest(local_path: str | Path, exclude: list[str] | None = None) -> str:
+    """The content digest of the CODE snapshot a submit would deploy.
+
+    Manifests the same exclude-filtered file set ``rsync_push`` would ship, minus
+    the run-varying paths (:data:`~hpc_agent.infra.code_tree.CODE_SNAPSHOT_EXTRA_EXCLUDES`
+    — sidecars, failure markers, the trees root itself), then folds the
+    framework's package version in. Backed by the same size+mtime sha cache the
+    push delta uses, so a resubmit of unchanged code re-hashes nothing.
+
+    Excluding ``.hpc/runs/`` is load-bearing, not tidiness: a run sidecar is
+    written per RUN, so including it would mint a fresh digest for every
+    submission — per-RUN tree copies, the granularity §10.S4 rejects — and the
+    sharing that matters (N runs of unchanged code → ONE tree) would never
+    happen.
+    """
+    from hpc_agent.infra.code_tree import CODE_SNAPSHOT_EXTRA_EXCLUDES, format_tree_digest
+
+    eff = _effective_excludes(exclude)
+    for pat in (_PUSH_HASH_CACHE_REL, *CODE_SNAPSHOT_EXTRA_EXCLUDES):
+        if pat not in eff:
+            eff = [*eff, pat]
+    manifest = _local_push_manifest(local_path, eff)
+    return format_tree_digest(manifest.digest, _pkg_version())
+
+
+def probe_code_tree(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    digest: str,
+    timeout: float | None = _DEFAULT,
+) -> CodeTreeProbe:
+    """One ssh leg: is this digest's tree already sealed, and what else is there?
+
+    Returns a :class:`~hpc_agent.infra.code_tree.CodeTreeProbe`. Everything the
+    submit path needs about the remote tree store rides ONE round-trip:
+
+    * ``sealed`` — the tree exists AND carries its completion marker, so the
+      deploy is a no-op *verification* and no bytes move. This is the latency
+      win §10.S4 is after: resubmitting unchanged code costs one ssh.
+    * ``known`` — the digests present, newest-first (``ls -1t``). Feeds the
+      ``--link-dest`` choice and the GC planner, at zero extra cost.
+
+    The sealed branch also ``touch``es the tree, so recency tracks USE and not
+    just creation: a tree that keeps being reused stays at the head of ``ls -1t``
+    and can never age out of the GC's keep-newest floor while it is the working
+    set.
+
+    Fail-open by construction: a transport failure (timeout, breaker open, slot
+    give-up) or a missing ack yields ``trusted=False, sealed=False, known=()``,
+    which routes the caller to a full materialise — never to trusting a tree it
+    could not confirm.
+    """
+    from hpc_agent.infra.code_tree import (
+        TREE_SEAL_REL,
+        CodeTreeProbe,
+        parse_tree_listing,
+        tree_path_for,
+        trees_root_for,
+    )
+    from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
+
+    tree = tree_path_for(remote_path, digest)
+    validate_remote_path(tree)
+    tree_q = shlex.quote(tree)
+    root_q = shlex.quote(trees_root_for(remote_path))
+    seal_q = shlex.quote(TREE_SEAL_REL)
+    inner = (
+        f"if [ -f {tree_q}/{seal_q} ]; then touch {tree_q} 2>/dev/null; "
+        f"echo {_TREE_SEALED_TOKEN}; fi; ls -1t {root_q} 2>/dev/null"
+    )
+    effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+    try:
+        proc = _guarded_ssh_bounded(
+            ssh_target,
+            wrap_with_ack(inner, _TREE_ACK),
+            timeout=effective_timeout,
+            what=f"probe code tree {digest} under {remote_path}",
+        )
+    except (TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        return CodeTreeProbe(digest=digest, tree_path=tree, sealed=False, known=(), trusted=False)
+    clean, rc = split_ack(getattr(proc, "stdout", "") or "", _TREE_ACK)
+    if rc is None:
+        # No ack: the remote shell never reached the trailing echo (severed
+        # channel / expired deadline). UNKNOWN, never a settled "no tree".
+        return CodeTreeProbe(digest=digest, tree_path=tree, sealed=False, known=(), trusted=False)
+    return CodeTreeProbe(
+        digest=digest,
+        tree_path=tree,
+        sealed=_TREE_SEALED_TOKEN in clean,
+        known=parse_tree_listing(clean),
+        trusted=True,
+    )
+
+
+def materialize_code_tree(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    local_path: str | Path,
+    digest: str,
+    exclude: list[str] | None = None,
+    link_dest: str | None = None,
+    timeout: float | None = _DEFAULT,
+) -> None:
+    """Ship the CODE snapshot into ``<remote_path>/.hpc/trees/<digest>/``.
+
+    Never ``--delete`` (the destination is a fresh, private directory — there is
+    nothing of ours to remove and a stray user file is not ours to delete) and
+    **never** ``--inplace``. The ``--inplace`` ban (#F20) was earned on RUNNING
+    jobs: an in-place rewrite tears the dispatcher under a live array. §10.S4
+    extends it to PENDING ones — same hazard, longer fuse — and the extension is
+    cheap to honour because rsync's default temp-file-plus-atomic-rename is what
+    we already rely on everywhere else.
+
+    *link_dest* is an OPPORTUNISTIC bandwidth optimisation and nothing more.
+    Measured on all four filesystems this runs on (§10.S4's probe table):
+    Hoffman2 ``$HOME`` / ``$SCRATCH`` and CARC ``/home1`` hardlink unchanged
+    files (zero bytes, zero extra disk); CARC ``/scratch1`` (BeeGFS) **silently
+    copies instead** — rsync degrades on its own and never says so. Both
+    outcomes are CORRECT and the code deliberately cannot tell them apart: the
+    correctness property (a sealed snapshot survives every later push) held on
+    all four, and only bytes-on-wire differ. Nothing downstream may assume a
+    hardlink exists. A *link_dest* that does not exist is equally harmless —
+    rsync ignores it.
+
+    Raises :class:`RuntimeError` on a non-zero transfer; the caller degrades to
+    the legacy un-pinned base tree rather than submitting against a half-shipped
+    snapshot.
+    """
+    from hpc_agent.infra.code_tree import CODE_SNAPSHOT_EXTRA_EXCLUDES, tree_path_for
+
+    throttle_connection(ssh_target)
+    tree = tree_path_for(remote_path, digest)
+    validate_remote_path(tree)
+    eff = _effective_excludes(exclude)
+    for pat in (_PUSH_HASH_CACHE_REL, *CODE_SNAPSHOT_EXTRA_EXCLUDES):
+        if pat not in eff:
+            eff = [*eff, pat]
+    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+
+    mk = _guarded_ssh_bounded(
+        ssh_target,
+        f"mkdir -p {shlex.quote(tree)}",
+        timeout=SSH_TIMEOUT_SEC,
+        what=f"create code tree {digest} under {remote_path}",
+    )
+    if mk.returncode != 0:
+        raise RuntimeError(
+            f"could not create code tree {tree} on {ssh_target} "
+            f"(exit {mk.returncode}): {(mk.stderr or '').strip()[:300]}"
+        )
+
+    if not _have_rsync():
+        # rsync-less host (native Windows). No ``--link-dest`` analogue exists
+        # for the tar stream, so this is the full-copy outcome the BeeGFS row
+        # already documents as acceptable: one tree copy per distinct code
+        # version, bounded by edit frequency, never by run count.
+        result = guarded_call(
+            ssh_target,
+            functools.partial(
+                _tar_ssh_push,
+                ssh_target=ssh_target,
+                remote_path=tree,
+                local_path=local_path,
+                exclude=eff,
+                delete=False,
+                timeout=effective_timeout,
+                total_bytes=_disclose_payload(local_path, eff),
+            ),
+            probe_fn=liveness_probe(ssh_target),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"tar/ssh code-tree deploy to {ssh_target} failed "
+                f"(exit {result.returncode}): {(result.stderr or '').strip()[:300]}"
+            )
+        return
+
+    exclude_flags: list[str] = []
+    for pattern in eff:
+        exclude_flags += ["--exclude", pattern]
+    src = _msys_local(str(local_path).rstrip("/\\") + "/")
+    dst = f"{ssh_target}:{tree}/"
+    flags = ["rsync", "-az"]
+    if link_dest:
+        flags.append(f"--link-dest={link_dest.rstrip('/')}")
+
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        rsync_env = {**os.environ, **ssh_env()}
+        try:
+            return run_capture_bounded(
+                [*flags, *exclude_flags, src, dst],
+                timeout_sec=effective_timeout,
+                env=rsync_env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"rsync code-tree deploy to {ssh_target} timed out after "
+                f"{effective_timeout}s: {_truncate(f'{src} -> {dst}')}"
+            ) from exc
+
+    result = _with_ssh_backoff(
+        lambda: run_with_named_pipe_retry(_attempt),
+        label=f"rsync code tree {ssh_target}",
+        ssh_target=ssh_target,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"rsync code-tree deploy to {ssh_target} failed "
+            f"(exit {result.returncode}): {(result.stderr or '').strip()[:300]}"
+        )
+
+
+def seal_code_tree(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    digest: str,
+    timeout: float | None = _DEFAULT,
+) -> None:
+    """Link the run-mutable paths back to the base, then write the seal.
+
+    One ssh leg, ``&&``-chained so nothing partial commits. For each entry of
+    :data:`~hpc_agent.infra.code_tree.TREE_SHARED_PATHS` it ensures the BASE dir
+    exists, replaces any stale entry in the tree, symlinks it, and then
+    **verifies the result really is a symlink** (``[ -L … ]``). That check can
+    fire: if a code snapshot ever did materialise a real directory at one of
+    those paths, ``ln -s`` would quietly drop the link INSIDE it and the run's
+    results would land in the tree — invisible to the pull path and reapable by
+    the GC. Refusing the seal makes that outcome a fallback to the legacy base
+    tree (un-pinned, but nothing lost) instead of silent data loss.
+
+    The seal file goes LAST, after the symlinks and after the caller's
+    ``deploy_runtime`` has put the framework files in the tree. Presence of the
+    seal is the ONLY thing :func:`probe_code_tree` accepts as "this tree is
+    complete", so an interrupted deploy leaves a directory the next submit
+    rebuilds rather than a tree a queued job would execute half of — the #F53
+    "bookkeeping never lands ahead of the code it attests" rule, at tree scale.
+
+    Raises :class:`RuntimeError` on failure.
+    """
+    from hpc_agent.infra.code_tree import TREE_SEAL_REL, TREE_SHARED_PATHS, tree_path_for
+
+    tree = tree_path_for(remote_path, digest)
+    validate_remote_path(tree)
+    base = remote_path.rstrip("/")
+    tree_q = shlex.quote(tree)
+    parts: list[str] = [f"mkdir -p {tree_q}/.hpc"]
+    for rel in TREE_SHARED_PATHS:
+        target = shlex.quote(f"{base}/{rel}")
+        link = shlex.quote(f"{tree}/{rel}")
+        parts.append(f"mkdir -p {target}")
+        # ``rm -f`` clears a stale symlink or file but REFUSES a directory, so a
+        # real dir survives to be caught by the ``[ -L ]`` verification below
+        # rather than being deleted with whatever it holds.
+        parts.append(f"rm -f {link}")
+        parts.append(f"ln -s {target} {link}")
+        parts.append(f"[ -L {link} ]")
+    parts.append(f"printf %s {shlex.quote(digest)} > {tree_q}/{shlex.quote(TREE_SEAL_REL)}")
+    cmd = " && ".join(parts)
+    proc = _guarded_ssh_bounded(
+        ssh_target,
+        cmd,
+        timeout=SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout,
+        what=f"seal code tree {digest} under {remote_path}",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"could not seal code tree {tree} on {ssh_target} "
+            f"(exit {proc.returncode}): {(proc.stderr or '').strip()[:300]}"
+        )
+
+
+def reap_code_trees(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    digests: Sequence[str],
+    timeout: float | None = _DEFAULT,
+) -> tuple[str, ...]:
+    """``rm -rf`` the planned trees. FAIL-OPEN — a failure is data, never a raise.
+
+    The executor half of :func:`hpc_agent.infra.code_tree.plan_tree_gc`, mirroring
+    ``infra/prune``'s planner/executor split: every safety decision was already
+    made by the pure planner, so all this does is compose validated paths and
+    delete them. Each digest is re-validated through
+    :func:`~hpc_agent.infra.code_tree.tree_path_for` (which refuses anything that
+    is not fixed-width lowercase hex) and each composed path through
+    ``validate_remote_path``, so no caller — and no truncated remote listing —
+    can widen an ``rm -rf`` beyond one tree directory.
+
+    Returns the digests it attempted; an empty tuple means nothing was planned or
+    the delete did not land. A lost reap costs disk and nothing else: the next
+    pass re-plans it.
+    """
+    from hpc_agent.infra.code_tree import tree_path_for
+
+    paths: list[str] = []
+    reaped: list[str] = []
+    for digest in digests:
+        try:
+            path = tree_path_for(remote_path, digest)
+            validate_remote_path(path)
+        except Exception:  # noqa: BLE001 — a malformed digest is skipped, never widened
+            continue
+        paths.append(shlex.quote(path))
+        reaped.append(digest)
+    if not paths:
+        return ()
+    with contextlib.suppress(TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+        proc = _guarded_ssh_bounded(
+            ssh_target,
+            "rm -rf " + " ".join(paths),
+            timeout=SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout,
+            what=f"reap {len(paths)} code tree(s) under {remote_path}",
+        )
+        if proc.returncode == 0:
+            return tuple(reaped)
+    return ()
 
 
 def rsync_pull(

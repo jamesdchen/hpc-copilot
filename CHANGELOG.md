@@ -187,6 +187,29 @@ IS the tick.
   unparseable lines are kept verbatim so `skipped_records` stays truthful,
   and grooming never raises — the items already started.
 
+### Added — content-addressed remote code trees (plan §10.S4, 2026-07-29)
+
+A submission now deploys its code snapshot to a tree keyed by that
+snapshot's content digest (`<remote_path>/.hpc/trees/<digest12>/`) and
+points the job's `REPO_DIR` at it, so a job waiting in the scheduler queue
+executes the code it was submitted with *by construction* — a later push
+mints a different digest and cannot reach it. Resubmitting unchanged code
+is a one-ssh no-op verification instead of a re-rsync (the
+submission-overhead win, and eager submit's precondition). `rsync
+--link-dest` against the previous tree is used OPPORTUNISTICALLY for
+bandwidth: it hardlinks on Hoffman2 `$HOME`/`$SCRATCH` and CARC `/home1`
+and silently full-copies on CARC `/scratch1` (BeeGFS) — both measured,
+both correct, only bytes-on-wire differ. `--inplace` stays banned (#F20,
+generalised from running jobs to pending ones). A tree holds code and
+symlinks only: results, logs, `_combiner`, `_aggregated`, `.hpc_failed`
+and `.hpc/runs` are symlinked back to the shared base, verified at seal
+time. Trees are garbage-collected on the submit that mints one — reapable
+when no non-terminal run references the digest and it is outside the
+newest 3 — refusing the whole pass rather than guessing when the journal
+cannot be read. Runs that predate this keep working unchanged
+(absent-disables; no flag-day). The run-start code-identity check remains
+as defense in depth. Opt out with `HPC_NO_CODE_TREES=1`.
+
 ### Added — the chain-dispatch wake edge: always-draining without a daemon (2026-07-29)
 
 The plan named a run finishing as the capacity-freed signal, but nothing
