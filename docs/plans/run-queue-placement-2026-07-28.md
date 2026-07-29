@@ -7,7 +7,10 @@ consent caps (the `{cluster: cap}` vocabulary, §3), the brief-UX bundle
 side + chain-dispatch §5), the content-addressed trees (§10.S4), and R3's
 EAGER SUBMIT (§7 R3 — see its STATUS block for what verification found
 already R3-shaped vs what that pass added): BUILT (2026-07-29).**
-Nothing on this plan's build list remains open.
+One build item remains QUEUED (maintainer-ordered 2026-07-29): fleet-waiter
+adoption in `queue-drain` — the `wait-any-detached` verb is shipped; the
+drain plan still holds N per-run waits (§7's wait-any bullet carries the
+scope + the tokenomics-not-latency classification).
 Design complete through v2 + adversarial sweep. Motivating order: "there
 needs to be a queue that keeps track of multiple experiments to run as they
 come in and it needs to assign the runs to the proper clusters / split
@@ -388,6 +391,20 @@ review):**
   held wait is the only EVENT-grade bridge into a turn-based session
   (kernel children cannot inject turns; pokes are time-based), so
   hold-while-alive is the proper design and this makes it cheap.
+
+  **STATUS (2026-07-29): verb SHIPPED, adoption QUEUED — the one open
+  build item on this plan.** The kernel verb landed (registered, tested,
+  and both waiters now share one polling loop — the one-definition
+  refactor). What remains is the PLAN-side rewiring: `queue-drain.js`
+  still holds N per-run `wait-detached` loops instead of one
+  `wait-any-detached` seat over the in-flight lease set. Classified a
+  TOKENOMICS unit, not a latency unit (the cadence audit measured the
+  wait returning ≤2s of a worker exit either way — the chunk bounds only
+  the no-news heartbeat), deliberately deferred rather than landing a
+  third structural edit to `queue-drain.js` in one day. Scope when
+  taken: restructure the worker loops' claim/park/budget accounting
+  around a single fleet-wait seat, under the drain plan's
+  execute-the-real-JS contract tests.
 
 **Design decisions still open (v2 additions):**
 
