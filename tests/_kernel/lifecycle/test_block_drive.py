@@ -709,6 +709,210 @@ def test_park_with_no_target_and_no_recommendation_carries_no_menu(
     assert "answer_menu" not in faked["parked"][0]["brief"]
 
 
+# ── the OPTIONAL standing-consent OFFER at park (the 'speculative y') ─────────
+
+_OFFER_SHA = "a3f2c9d1beef00112233"
+
+
+def _offer_exp_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A real experiment dir + redirected journal home for the offer's I/O legs
+    (the sidecar ``cmd_sha``/``cluster`` reads and the standing-consent consult
+    run for real here — only the block subprocess and the marker are faked)."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "_home"))
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    return exp
+
+
+def _write_offer_sidecar(exp: Path, *, run_id: str = "r1", cluster: str | None = None) -> None:
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        exp,
+        run_id=run_id,
+        cmd_sha=_OFFER_SHA,
+        hpc_agent_version="0.2.0",
+        submitted_at="2026-07-29T00:00:00+00:00",
+        executor="python3 src/run.py",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=1,
+        tasks_py_sha="1" * 64,
+        cluster=cluster,
+    )
+
+
+def test_park_menu_offers_the_standing_grant_line_when_no_consent_exists(
+    faked: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run-scope park with no live standing consent ends its menu with the
+    OPTIONAL overnight-consent grant line — the run id, the SIDECAR cmd_sha
+    prefix, and the cluster stamp, rendered by the same one-home renderer the
+    authorship gate's refusal uses. The default answer is untouched."""
+    exp = _offer_exp_dir(tmp_path, monkeypatch)
+    _write_offer_sidecar(exp, cluster="hoffman2")
+    faked["results"] = _gated_park_results()
+    result, code = run_tick(exp, run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.brief is not None
+    menu = result.brief["answer_menu"]
+    offers = [o for o in menu["options"] if o["kind"] == "standing-offer"]
+    assert len(offers) == 1
+    line = offers[0]["paste"]
+    assert "run r1" in line
+    assert _OFFER_SHA[:12] in line  # the sidecar identity, 8+ hex for the gate
+    assert "hoffman2" in line
+    assert "repair classes" not in line  # minimal form: no invented classes
+    assert offers[0] is menu["options"][-1]  # appended LAST, never the lead
+    assert "OPTIONAL" in offers[0]["means"]
+    # bare_y_ok semantics untouched: the default answer is still the scoped advance.
+    assert menu["bare_y_ok"] is True
+    assert menu["answer_line"] == result.brief["approve_hint"]["utterance"]
+    # The offer rides the durable marker brief too (re-shown on the resume tick).
+    assert faked["parked"][0]["brief"]["answer_menu"] == menu
+
+
+def test_park_menu_offer_absent_when_a_live_consent_already_covers(
+    faked: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NEGATIVE: a live standing consent (same cmd_sha, unexpired, capped) means
+    there is nothing left to grant — the menu carries no offer line.
+
+    Parked at a DECISION boundary (``not_ready``) on purpose: a live consent at
+    a gated/clean boundary would rightly CONSUME the greenlight and auto-advance
+    instead of parking — a decision park is where a live consent and a park
+    coexist, which is exactly where the offer must stay silent."""
+    from datetime import timedelta
+
+    from hpc_agent.infra.time import utcnow
+    from hpc_agent.ops.overnight import OVERNIGHT_CONSENT_BLOCK
+    from hpc_agent.state.decision_journal import append_decision
+
+    exp = _offer_exp_dir(tmp_path, monkeypatch)
+    _write_offer_sidecar(exp, cluster="hoffman2")
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id="r1",
+        block=OVERNIGHT_CONSENT_BLOCK,
+        response=f"I grant overnight consent for run r1, under spec {_OFFER_SHA[:12]}",
+        resolved={
+            "cmd_sha": _OFFER_SHA,
+            "expires_at": (utcnow() + timedelta(hours=8)).isoformat(timespec="seconds"),
+            "budget_cap": 50.0,
+        },
+    )
+    faked["results"] = {
+        "aggregate-check": {
+            "block": "check",
+            "stage_reached": "not_ready",
+            "needs_decision": True,
+            "reason": "readiness gate failed",
+            "run_id": "r1",
+            "brief": {"missing": ["wave-2"]},
+            "next_block": None,
+        },
+    }
+    result, code = run_tick(exp, run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.brief is not None
+    menu = result.brief["answer_menu"]
+    assert all(o["kind"] != "standing-offer" for o in menu["options"])
+    # The rest of the menu is unchanged — the offer leg only ever ADDS a line.
+    assert menu["options"][0]["paste"] == "y"
+
+
+def test_park_menu_reoffers_the_grant_when_the_consent_died_on_spec_change(
+    faked: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RE-GRANT: a consent killed by a cmd_sha move (every code edit) is re-offered
+    at the park that reports the death — the dead consent's OWN declared coverage
+    (classes + placement), re-bound to the CURRENT sidecar identity, rendered by
+    the same one-home renderer. One paste re-grants; nothing is auto-answered."""
+    from datetime import timedelta
+
+    from hpc_agent.infra.time import utcnow
+    from hpc_agent.ops.overnight import OVERNIGHT_CONSENT_BLOCK
+    from hpc_agent.state.decision_journal import append_decision
+
+    old_sha = "beefc0dedead00112233"  # the PRE-EDIT tree fingerprint
+    exp = _offer_exp_dir(tmp_path, monkeypatch)
+    _write_offer_sidecar(exp, cluster="hoffman2")  # the CURRENT identity: _OFFER_SHA
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id="r1",
+        block=OVERNIGHT_CONSENT_BLOCK,
+        response=f"I grant overnight consent for run r1, under spec {old_sha[:12]}",
+        resolved={
+            "cmd_sha": old_sha,  # bound to the PRE-EDIT spec — dead at this park
+            "expires_at": (utcnow() + timedelta(hours=8)).isoformat(timespec="seconds"),
+            "budget_cap": 50.0,
+            "heal_classes": ["env_pin"],
+            "placement": "hoffman2",
+        },
+    )
+    faked["results"] = _gated_park_results()
+    result, code = run_tick(exp, run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.brief is not None
+    offers = [o for o in result.brief["answer_menu"]["options"] if o["kind"] == "standing-offer"]
+    assert len(offers) == 1
+    offer = offers[0]
+    line = offer["paste"]
+    assert _OFFER_SHA[:12] in line  # re-bound to the CURRENT identity …
+    assert old_sha[:12] not in line  # … never the dead one
+    assert "env_pin" in line  # the human's own declared class, preserved
+    assert "hoffman2" in line  # and the bound placement
+    assert offer["regrant_reason"] == "spec-changed"
+    assert offer["previous_cmd_sha"] == old_sha
+    # Still OPTIONAL and never the default answer.
+    assert "OPTIONAL" in offer["means"]
+    assert result.brief["answer_menu"]["answer_line"] != line
+
+
+def test_standing_offer_composer_gates_scope_anomaly_and_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The offer-condition legs, each fired directly: campaign scope, anomaly
+    terminator, and a run with no provable sidecar cmd_sha all offer NOTHING;
+    a cluster-less sidecar still offers, just without a placement clause."""
+    exp = _offer_exp_dir(tmp_path, monkeypatch)
+    _write_offer_sidecar(exp)  # no cluster stamp
+    # Campaign scope: the campaign greenlight is its own standing-consent seat.
+    assert (
+        bd._compose_standing_offer_for_park(
+            exp, run_id="r1", workflow="campaign", is_anomaly_terminator=False
+        )
+        is None
+    )
+    # Anomaly terminator: never offer 'let it run all night' beside an override.
+    assert (
+        bd._compose_standing_offer_for_park(
+            exp, run_id="r1", workflow="submit", is_anomaly_terminator=True
+        )
+        is None
+    )
+    # No sidecar → no provable cmd_sha → a line that could not cover a
+    # sha-bound consent is never offered.
+    assert (
+        bd._compose_standing_offer_for_park(
+            exp, run_id="ghost", workflow="submit", is_anomaly_terminator=False
+        )
+        is None
+    )
+    # Happy minimal: sha named, no cluster clause when placement is unknown.
+    offer = bd._compose_standing_offer_for_park(
+        exp, run_id="r1", workflow="submit", is_anomaly_terminator=False
+    )
+    assert offer is not None
+    assert _OFFER_SHA[:12] in offer["grant_line"]
+    assert "on cluster" not in offer["grant_line"]
+    assert "cluster" not in offer
+    assert "pre-authorizes the grant" in offer["note"]
+
+
 def test_run_tick_parks_at_decision(faked: dict[str, Any]) -> None:
     """A ``needs_decision`` span writes the pending marker and exits (rendezvous)."""
     faked["results"] = {

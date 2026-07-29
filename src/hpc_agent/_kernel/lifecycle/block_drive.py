@@ -1817,6 +1817,131 @@ def greenlight_target(verb: str, successor: str | None) -> str | None:
     return target if isinstance(target, str) and target else None
 
 
+def _compose_standing_offer_for_park(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    workflow: str | None,
+    is_anomaly_terminator: bool,
+) -> dict[str, Any] | None:
+    """The OPTIONAL overnight-consent grant OFFER for a run-scope park, or ``None``.
+
+    The 'speculative y done right' (2026-07-29): the run's first rendezvous (the
+    resolve/S1 or S2 brief) is a sitting the human is already in, so the answer
+    menu ADDITIONALLY offers the standing-consent grant line that would
+    otherwise cost a second rendezvous at nightfall. Same gates, same tokens,
+    zero new trust surface: the line is rendered by the ONE grant-vocabulary
+    home (:func:`hpc_agent.ops.overnight.render_grant_line` — the same renderer
+    the authorship gate's refusal uses, so offer and refusal can never drift),
+    and pasting it satisfies only the AUTHORSHIP leg of
+    ``ops/decision/journal/overnight_consent.py`` — recording the consent still
+    runs the poka-yoke compose (caps/wake) and every gate unchanged.
+
+    Composed from code-known tokens ONLY: the run id, the SIDECAR ``cmd_sha``
+    (:func:`state.runs.read_run_cmd_sha` — the identity a consent must bind,
+    ``assert_consent_identity_binds``/F15, never the marker's ``_spec_sha``),
+    and the sidecar's cluster stamp when placement is known
+    (:func:`state.runs.read_run_cluster`). Offered in the MINIMAL form — no
+    heal classes (watcher re-arm only): code never invents repair classes the
+    human did not choose. ONE exception, in the same spirit: when a prior
+    consent DIED on spec change, the RE-GRANT leg
+    (:func:`hpc_agent.ops.overnight.regrant_offer_from_status` — shared with the
+    morning brief) re-offers that dead consent's OWN declared coverage re-bound
+    to the current identity and stamps ``regrant_reason``/``previous_cmd_sha``,
+    so a 3am "spec-changed" park is one paste from re-granted — still the
+    human's classes, never code's.
+
+    ``None`` (no offer) when any of:
+
+    * the park is campaign-scope (``workflow == "campaign"`` — the campaign
+      greenlight already carries its own STANDING scoped utterance,
+      ``consent_hint.compose_approve_hint(standing=True)``);
+    * the boundary is an anomaly terminator (offering "let it run all night"
+      beside an OVERRIDE is wrong; the pure composer drops a stray offer there
+      too, but skipping HERE also spares the sidecar + journal reads);
+    * the sidecar carries no ``cmd_sha`` (a sha-less line could not cover the
+      sha-bound consent the caps gate demands — a line that fails its own gate
+      is worse than none);
+    * a LIVE standing consent already covers the run (nothing left to grant); or
+    * the consent consult raises (fail-safe, the ``_boundary_has_post_park_nudge``
+      posture: a journal surprise degrades the OFFER, never the park).
+    """
+    if not run_id or (workflow or "") == "campaign":
+        return None
+    if is_anomaly_terminator:
+        return None
+    from hpc_agent.ops.overnight import (
+        regrant_offer_from_status,
+        render_grant_line,
+        standing_consent_status,
+    )
+    from hpc_agent.state.runs import read_run_cluster, read_run_cmd_sha
+
+    cmd_sha = read_run_cmd_sha(experiment_dir, run_id)
+    if not cmd_sha:
+        return None
+    cluster = read_run_cluster(experiment_dir, run_id)
+    try:
+        status = standing_consent_status(
+            experiment_dir,
+            scope_kind="run",
+            scope_id=run_id,
+            current_cmd_sha=cmd_sha,
+            current_placement=cluster,
+        )
+    except Exception:  # noqa: BLE001 — a bad scope/journal must not crash the park
+        return None
+    if status.live:
+        return None
+    # RE-GRANT (spec-changed consent death): when a consent EXISTED but died on
+    # a cmd_sha move — the death every code edit inflicts — offer the dead
+    # consent's own declared coverage (its heal classes + placement) re-bound to
+    # the CURRENT identity, so the 3am "spec-changed" park costs one paste to
+    # re-grant. Composed by the same pure helper the morning brief uses
+    # (``regrant_offer_from_status``) over the status already in hand; every
+    # other death (no-consent, expired, over-cap) falls through to the minimal
+    # first-grant form below.
+    regrant = regrant_offer_from_status(
+        status,
+        scope_kind="run",
+        scope_id=run_id,
+        current_cmd_sha=cmd_sha,
+        current_placement=cluster,
+    )
+    if regrant is not None:
+        grant_line = regrant["grant_line"]
+    else:
+        grant_line = render_grant_line(
+            scope_kind="run",
+            scope_id=run_id,
+            heal_classes=(),  # minimal form: watcher re-arm only, no invented classes
+            cmd_sha=cmd_sha,
+            placement=(cluster,) if cluster else (),
+        )
+    offer: dict[str, Any] = {
+        "grant_line": grant_line,
+        "scope_kind": "run",
+        "run_id": run_id,
+        "cmd_sha": cmd_sha,
+        "note": (
+            "OPTIONAL standing-consent offer: pasting this line into chat is "
+            "the human's own typed grant of the overnight-consent AUTHORSHIP "
+            "leg (it pre-authorizes the grant — nothing more). Recording the "
+            "consent still composes caps + wake and runs every gate unchanged, "
+            "and nothing here is auto-filled or auto-selected."
+        ),
+    }
+    if cluster:
+        offer["cluster"] = cluster
+    if regrant is not None:
+        offer["regrant_reason"] = str(regrant["reason"])
+        prev = regrant.get("previous_cmd_sha")
+        if isinstance(prev, str) and prev:
+            offer["previous_cmd_sha"] = prev
+        offer["note"] = str(regrant["note"])
+    return offer
+
+
 def _compose_answer_menu_for_park(
     *,
     run_id: str,
@@ -1826,6 +1951,7 @@ def _compose_answer_menu_for_park(
     materialized: _MaterializedSuccessor,
     approve_hint: dict[str, Any] | None,
     brief: Any,
+    standing_offer: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Compose the boundary's paste-ready ANSWER MENU (run-queue plan §8 S13).
 
@@ -1843,6 +1969,11 @@ def _compose_answer_menu_for_park(
     label is disclosure, not policy: nothing here changes what consuming a bare
     ``y`` at that boundary does.
 
+    ``standing_offer`` is the already-composed OPTIONAL overnight-consent grant
+    offer (:func:`_compose_standing_offer_for_park`, run-scope + no-live-consent
+    parks only), forwarded so the menu's LAST line can be the standing grant —
+    the composer appends it without ever letting it become the default answer.
+
     This is the ONE home for the menu, which is why it sits in :func:`park`
     rather than in any per-family block module: every brief type that parks
     routes through here, so every brief type ends with its menu.
@@ -1857,6 +1988,7 @@ def _compose_answer_menu_for_park(
         next_spec_sha=materialized.sha,
         approve_hint=approve_hint,
         is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
+        standing_offer=standing_offer,
     )
 
 
@@ -2027,6 +2159,20 @@ def park(
     # as ``overnight_consent``'s paste-ready grant line: the consumption leg reads
     # TOKENS, so rendering the sentence changes the typing burden and nothing else.
     # This is the ONE home — every brief type that parks passes through here.
+    #
+    # SPECULATIVE-Y OFFER (2026-07-29): at a run-scope park with no live standing
+    # consent, the menu ADDITIONALLY offers the overnight-consent grant line, so
+    # one sitting can pre-authorize the downstream overnight consent without a
+    # second rendezvous. Same gates, same tokens, zero new trust surface — the
+    # gate that later reads the pasted grant (the overnight-consent authorship
+    # gate's token-exact chat tier) is unchanged, and the line is rendered by the
+    # same one-home renderer its refusal uses.
+    standing_offer = _compose_standing_offer_for_park(
+        experiment_dir,
+        run_id=run_id,
+        workflow=wf,
+        is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
+    )
     answer_menu = _compose_answer_menu_for_park(
         run_id=run_id,
         verb=verb,
@@ -2035,6 +2181,7 @@ def park(
         materialized=materialized,
         approve_hint=approve_hint,
         brief=brief,
+        standing_offer=standing_offer,
     )
     if answer_menu is not None and isinstance(brief, dict):
         brief = {**brief, "answer_menu": answer_menu}

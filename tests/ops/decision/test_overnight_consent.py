@@ -670,6 +670,158 @@ def test_refusal_renders_a_paste_ready_grant_line_that_grants(
     assert result.count == 1
 
 
+def _write_sidecar(experiment_dir: Path, *, cluster: str | None = None) -> None:
+    """A real run sidecar carrying the CURRENT identity (`cmd_sha=_CMD_SHA`) —
+    the token the park-time / re-grant offers derive their sha clause from."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        experiment_dir,
+        run_id=_RUN_ID,
+        cmd_sha=_CMD_SHA,
+        hpc_agent_version="0.2.0",
+        submitted_at="2026-07-29T00:00:00+00:00",
+        executor="python3 src/run.py",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=1,
+        tasks_py_sha="1" * 64,
+        cluster=cluster,
+    )
+
+
+def test_offered_park_grant_line_round_trips_through_the_authorship_gate(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The park-time OFFER (block_drive's answer menu — the 'speculative y done
+    right') renders through the SAME one-home grant vocabulary as the refusal
+    above (``ops.overnight.render_grant_line``), so the line offered at the
+    run's FIRST park — before any refusal was ever shown — pasted verbatim into
+    chat must satisfy the chat tier for a consent whose resolved binds the same
+    cmd_sha + cluster. An offered line that failed its own gate would be worse
+    than no offer at all."""
+    from hpc_agent._kernel.lifecycle import block_drive as bd
+
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _arm_wake(_RUN_ID)
+    _write_sidecar(experiment_dir, cluster="hoffman2")
+    offer = bd._compose_standing_offer_for_park(
+        experiment_dir, run_id=_RUN_ID, workflow="submit", is_anomaly_terminator=False
+    )
+    assert offer is not None
+    # The offered line carries the tokens the gate reads: boundary, 8+ hex sha
+    # prefix of the SIDECAR identity, and the cluster stamp — no heal classes
+    # (the minimal watcher-re-arm-only form; code invents no classes).
+    assert _RUN_ID in offer["grant_line"]
+    assert _CMD_SHA[:12] in offer["grant_line"]
+    assert "hoffman2" in offer["grant_line"]
+    assert "repair classes" not in offer["grant_line"]
+
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    append_utterance(experiment_dir, offer["grant_line"])
+    result = _append(experiment_dir, resolved=_resolved(placement="hoffman2"))
+    assert result.count == 1
+
+
+# ── the RE-GRANT offer: consent death by spec change costs one paste ──────────
+
+_OLD_SHA = "beefc0dedead00112233"  # the PRE-EDIT tree fingerprint a dead consent binds
+
+
+def test_regrant_offer_renders_the_dead_consents_coverage_for_the_current_spec(
+    experiment_dir: Path,
+) -> None:
+    """A consent killed by a cmd_sha move is re-offered with ITS OWN declared
+    coverage (classes + placement) re-bound to the CURRENT identity — the same
+    one-home sentence, so the morning-after re-grant is one paste."""
+    _write_sidecar(experiment_dir, cluster="hoffman2")
+    _seed_consent_raw(
+        experiment_dir,
+        _resolved(cmd_sha=_OLD_SHA, heal_classes=["env_pin"], placement="hoffman2"),
+    )
+    offer = overnight.regrant_offer(experiment_dir, scope_kind="run", scope_id=_RUN_ID)
+    assert offer is not None
+    assert offer["reason"] == "spec-changed"
+    assert offer["previous_cmd_sha"] == _OLD_SHA
+    assert offer["cmd_sha"] == _CMD_SHA
+    line = offer["grant_line"]
+    assert _CMD_SHA[:12] in line  # re-bound to the CURRENT spec …
+    assert _OLD_SHA[:12] not in line  # … never the dead one
+    assert "env_pin" in line and "hoffman2" in line  # the human's own coverage
+    # The note says honestly what pasting does: authorship only, nothing auto.
+    assert "AUTHORSHIP" in offer["note"]
+    assert "auto-answered" in offer["note"]
+
+
+def test_regrant_offer_only_fires_on_the_spec_changed_death(experiment_dir: Path) -> None:
+    """NEGATIVE legs: a LIVE consent, an EXPIRED one (a fresh decision, not a
+    re-grant), and NO consent at all each offer nothing."""
+    _write_sidecar(experiment_dir)
+    # No consent recorded → nothing to re-grant.
+    assert overnight.regrant_offer(experiment_dir, scope_kind="run", scope_id=_RUN_ID) is None
+    # Expired (checked before the sha leg) → not the spec-changed class.
+    _seed_consent_raw(
+        experiment_dir, _resolved(cmd_sha=_OLD_SHA, expires_at=_iso(utcnow() - timedelta(hours=1)))
+    )
+    assert overnight.regrant_offer(experiment_dir, scope_kind="run", scope_id=_RUN_ID) is None
+    # Live (same sha, unexpired) → nothing left to grant.
+    _seed_consent_raw(experiment_dir, _resolved())
+    assert overnight.regrant_offer(experiment_dir, scope_kind="run", scope_id=_RUN_ID) is None
+
+
+def test_morning_brief_carries_the_regrant_offer_when_consent_died_on_spec_change(
+    experiment_dir: Path,
+) -> None:
+    """The surface that reports the dead consent hands over the fresh line: the
+    morning brief's ``regrant_offer`` names the current sha so the human never
+    reconstructs the grant grammar from a 'spec-changed' reason string."""
+    _write_sidecar(experiment_dir, cluster="hoffman2")
+    _seed_consent_raw(experiment_dir, _resolved(cmd_sha=_OLD_SHA, placement="hoffman2"))
+    brief = overnight.overnight_morning_brief(experiment_dir, scope_kind="run", scope_id=_RUN_ID)
+    assert brief["has_consent"] is True
+    regrant = brief["regrant_offer"]
+    assert regrant is not None
+    assert regrant["reason"] == "spec-changed"
+    assert _CMD_SHA[:12] in regrant["grant_line"]
+    assert "hoffman2" in regrant["grant_line"]
+
+
+def test_morning_brief_regrant_offer_is_none_for_a_live_consent(experiment_dir: Path) -> None:
+    """NEGATIVE: a live consent's brief is byte-unchanged but for the None field."""
+    _write_sidecar(experiment_dir)
+    _seed_consent_raw(experiment_dir, _resolved())
+    brief = overnight.overnight_morning_brief(experiment_dir, scope_kind="run", scope_id=_RUN_ID)
+    assert brief["regrant_offer"] is None
+
+
+def test_regrant_offer_line_round_trips_through_the_authorship_gate(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-offered line, pasted verbatim, must GRANT the replacement consent
+    that re-binds the same coverage to the new sha — the same fire-proof bar as
+    the refusal's line and the first-park offer (a re-grant line that failed its
+    own gate would lose the night twice)."""
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _arm_wake(_RUN_ID)
+    _write_sidecar(experiment_dir, cluster="hoffman2")
+    _seed_consent_raw(
+        experiment_dir,
+        _resolved(cmd_sha=_OLD_SHA, heal_classes=["env_pin"], placement="hoffman2"),
+    )
+    offer = overnight.regrant_offer(experiment_dir, scope_kind="run", scope_id=_RUN_ID)
+    assert offer is not None
+
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    append_utterance(experiment_dir, offer["grant_line"])
+    result = _append(
+        experiment_dir,
+        resolved=_resolved(heal_classes=["env_pin"], placement="hoffman2"),
+    )
+    # The seeded dead consent plus the freshly granted replacement.
+    assert result.count == 2
+    records = sdj.read_decisions(experiment_dir, "run", _RUN_ID)
+    assert records[-1]["resolved"]["cmd_sha"] == _CMD_SHA
+
+
 # ── S1 record-time placement gate: strict where the human is awake ────────────
 
 

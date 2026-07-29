@@ -226,6 +226,81 @@ def test_non_anomaly_terminator_carries_no_override_label() -> None:
     assert "OVERRIDE" not in menu["options"][0]["means"]
 
 
+# ── the OPTIONAL standing-consent OFFER (the 'speculative y done right') ──────
+
+_OFFER = {
+    "grant_line": (
+        "I grant overnight consent for run r1, under spec a3f2c9d1beef, on cluster hoffman2"
+    ),
+    "scope_kind": "run",
+    "run_id": "r1",
+    "cmd_sha": "a3f2c9d1beef00112233",
+    "cluster": "hoffman2",
+}
+
+
+def test_standing_offer_rides_last_and_is_labelled_optional() -> None:
+    """The offer is one more paste-line, appended LAST, carrying the pre-rendered
+    one-home grant sentence verbatim plus its structured scope tokens."""
+    menu = _menu(standing_offer=_OFFER, brief={"recommendation": _FAILED_REC})
+    assert menu is not None
+    offer = menu["options"][-1]
+    assert offer["kind"] == "standing-offer"
+    assert offer["paste"] == _OFFER["grant_line"]
+    assert offer["optional"] is True
+    assert "OPTIONAL" in offer["means"]
+    # The label is HONEST about what pasting does: authorship only, never default.
+    assert "pre-authorizes the grant only" in offer["means"]
+    assert "never the default" in offer["means"]
+    assert offer["run_id"] == "r1"
+    assert offer["cmd_sha"] == _OFFER["cmd_sha"]
+    assert offer["cluster"] == "hoffman2"
+    # Rendered verbatim in the text block — a truncated grant would not grant.
+    assert _OFFER["grant_line"] in menu["text"]
+
+
+def test_standing_offer_never_becomes_the_default_or_the_answer_line() -> None:
+    """bare_y_ok semantics untouched: the offer never auto-selects anything."""
+    menu = _menu(standing_offer=_OFFER)
+    assert menu is not None
+    assert menu["options"][0]["paste"] == "y"
+    assert menu["answer_line"] == "y submit-s2 r1 @a1b2c3d4"
+    assert menu["bare_y_ok"] is True
+    # And a no-default boundary stays no-default with the offer present.
+    no_default = _menu(
+        target=None, approve_hint=None, brief={"recommendation": _FAILED_REC}, standing_offer=_OFFER
+    )
+    assert no_default is not None
+    assert no_default["bare_y_ok"] is False
+    assert no_default["answer_line"] is None
+
+
+def test_standing_offer_alone_mints_no_menu() -> None:
+    """The offer answers nothing at THIS boundary — with no advance and no
+    recommendation there is no menu for it to ride."""
+    assert _menu(target=None, approve_hint=None, brief={}, standing_offer=_OFFER) is None
+
+
+def test_standing_offer_is_dropped_at_an_anomaly_terminator() -> None:
+    """Offering 'let it run all night' beside an anomaly OVERRIDE is wrong — the
+    composer drops a stray offer there no matter what the caller passed."""
+    menu = _menu(is_anomaly_terminator=True, standing_offer=_OFFER)
+    assert menu is not None
+    assert all(o["kind"] != "standing-offer" for o in menu["options"])
+
+
+def test_torn_standing_offer_renders_nothing() -> None:
+    # kills: dropping the non-empty-string ``grant_line`` admission guard.
+    for torn in ({}, {"grant_line": ""}, {"grant_line": 7}, "nope", None):
+        menu = _menu(standing_offer=torn)  # type: ignore[arg-type]
+        assert menu is not None
+        assert all(o["kind"] != "standing-offer" for o in menu["options"])
+
+
+def test_standing_offer_menu_is_deterministic() -> None:
+    assert _menu(standing_offer=_OFFER) == _menu(standing_offer=_OFFER)
+
+
 # ── rendering + disclosure invariants ──────────────────────────────────────────
 
 

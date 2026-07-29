@@ -52,6 +52,7 @@ construction (the ``harness_capabilities.py`` precedent).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,7 +62,11 @@ from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.decision_journal import read_decisions
-from hpc_agent.state.placement_drift import detect_placement_drift, placement_cluster_caps
+from hpc_agent.state.placement_drift import (
+    detect_placement_drift,
+    normalize_recorded_placement,
+    placement_cluster_caps,
+)
 
 __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
@@ -80,6 +85,9 @@ __all__ = [
     "campaign_current_placement",
     "compose_consent_placement",
     "compose_overnight_consent",
+    "render_grant_line",
+    "regrant_offer",
+    "regrant_offer_from_status",
     "consumption_identity",
     "assert_consent_identity_binds",
     "latest_standing_consent",
@@ -876,6 +884,169 @@ def compose_overnight_consent(
         experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out
     )
     return out
+
+
+def render_grant_line(
+    *,
+    scope_kind: str,
+    scope_id: str,
+    heal_classes: Iterable[str] = (),
+    cmd_sha: str | None = None,
+    placement: Iterable[str] | None = None,
+    expires_at: str | None = None,
+) -> str:
+    """THE paste-ready grant sentence — the ONE home for the grant vocabulary.
+
+    Renders the exact utterance the token-exact CHAT tier of the authorship gate
+    (``ops/decision/journal/overnight_consent.py``) reads back: the boundary
+    ``scope_id``, every declared heal class, the ``cmd_sha`` by a 12-hex prefix
+    (the tier demands 8+), and every cluster in the bound placement set. Two
+    callers share this sentence shape and must never drift apart:
+
+    * the authorship gate's REFUSAL (the inline coverage brief the human reads
+      in chat and pastes back from), and
+    * the park-time OFFER (``block_drive``'s answer menu — the same tokens
+      offered one rendezvous earlier, so one sitting can grant the overnight
+      consent without a second rendezvous).
+
+    A drift between the two would make one of them fail its own gate — worse
+    than no line at all (the pin
+    ``test_refusal_renders_a_paste_ready_grant_line_that_grants`` exists for).
+    The gate reads TOKENS, not phrasing: rendering the sentence changes the
+    human's typing burden, never the trust story, and pasting it satisfies only
+    the AUTHORSHIP leg — caps + wake are still composed and enforced at record
+    time. PURE + DETERMINISTIC: no I/O, no clock; unusable members are simply
+    omitted (their absence is the gate's business, not this renderer's).
+    """
+    parts = [f"I grant overnight consent for {scope_kind} {scope_id}"]
+    classes = sorted({c for c in (heal_classes or ()) if isinstance(c, str) and c})
+    if classes:
+        parts.append("repair classes " + ", ".join(classes))
+    if isinstance(cmd_sha, str) and cmd_sha:
+        parts.append(f"under spec {cmd_sha[:12]}")
+    clusters = [c for c in (placement or ()) if isinstance(c, str) and c]
+    if clusters:
+        cluster_label = "cluster" if len(clusters) == 1 else "clusters"
+        parts.append(f"on {cluster_label} " + ", ".join(clusters))
+    if isinstance(expires_at, str) and expires_at:
+        parts.append(f"until {expires_at}")
+    return ", ".join(parts)
+
+
+def regrant_offer_from_status(
+    status: ConsentDecision,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    current_cmd_sha: str,
+    current_placement: str | None = None,
+) -> dict[str, Any] | None:
+    """The paste-ready RE-GRANT offer for a consent that died on spec change, or ``None``.
+
+    ``spec-changed`` is the one consent death EVERY code edit inflicts (item 8
+    pin b: consent dies on spec change — deliberately), and the human discovers
+    it as a bare park reason at 3am or a zero in the morning brief, then has to
+    reconstruct the grant by hand. This composer renders the fresh grant line
+    for the CURRENT identity so the re-grant costs one paste: the dead consent's
+    OWN declared coverage (its ``heal_classes`` and bound placement set — the
+    human already chose those; re-offering less would silently narrow the
+    coverage on re-record, re-offering more would be code inventing scope),
+    re-bound to *current_cmd_sha* (falling back to *current_placement* only when
+    the dead consent bound no placement). Rendered by :func:`render_grant_line`
+    — the ONE grant-vocabulary home — never a second sentence assembly.
+
+    Same trust story as the first-grant offer and the refusal's line: the
+    authorship gate reads TOKENS, so this changes the typing burden only —
+    pasting satisfies the AUTHORSHIP leg alone, and re-recording the consent
+    still composes caps + wake and runs every gate unchanged.
+
+    PURE over an already-consulted :class:`ConsentDecision` (no I/O — the
+    park path holds a status in hand); ``None`` for a live consent, any death
+    other than ``spec-changed`` (an expired consent is a fresh decision, not a
+    re-grant), or an unprovable current identity (a line that could not cover
+    the sha-bound consent would fail its own gate).
+    """
+    if status.live or status.reason != "spec-changed" or status.consent is None:
+        return None
+    if not current_cmd_sha:
+        return None
+    resolved = _as_dict(status.consent.get("resolved"))
+    placement = normalize_recorded_placement(resolved.get("placement"))
+    if placement is None and current_placement:
+        placement = (current_placement,)
+    classes = consent_heal_classes(status.consent)
+    offer: dict[str, Any] = {
+        "grant_line": render_grant_line(
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            heal_classes=classes,
+            cmd_sha=current_cmd_sha,
+            placement=placement or (),
+        ),
+        "reason": "spec-changed",
+        "cmd_sha": current_cmd_sha,
+        "note": (
+            "OPTIONAL re-grant offer: the standing consent for this scope died on "
+            "spec change (consent dies with the spec — by design). Pasting this "
+            "line into chat is the human's own typed grant of the AUTHORSHIP leg "
+            "for the CURRENT spec identity, carrying the dead consent's own "
+            "declared coverage; re-recording the consent still composes caps + "
+            "wake and runs every gate unchanged. Nothing is auto-answered."
+        ),
+    }
+    prev = resolved.get("cmd_sha")
+    if isinstance(prev, str) and prev:
+        offer["previous_cmd_sha"] = prev
+    if classes:
+        offer["heal_classes"] = sorted(classes)
+    if placement:
+        offer["placement"] = list(placement)
+    return offer
+
+
+def regrant_offer(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    now_iso: str | None = None,
+) -> dict[str, Any] | None:
+    """Consult a scope's consent against its CURRENT identity and offer the re-grant.
+
+    The I/O wrapper over :func:`regrant_offer_from_status` for surfaces that do
+    not already hold a :class:`ConsentDecision` (the morning brief; the park
+    path derives its own status and calls the pure composer directly). Derives
+    the current identity through :func:`consumption_identity` — the SAME token
+    consumption compares, F15 — and the run's cluster stamp where known.
+    Fail-open: any read surprise yields ``None`` (the offer degrades, never the
+    surface carrying it).
+    """
+    current = consumption_identity(experiment_dir, scope_kind, scope_id)
+    if not current:
+        return None
+    current_placement: str | None = None
+    if scope_kind == "run":
+        from hpc_agent.state.runs import read_run_cluster
+
+        current_placement = read_run_cluster(experiment_dir, scope_id)
+    try:
+        status = standing_consent_status(
+            experiment_dir,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            current_cmd_sha=current,
+            current_placement=current_placement,
+            now_iso=now_iso,
+        )
+    except Exception:  # noqa: BLE001 — a journal surprise must not wedge the caller
+        return None
+    return regrant_offer_from_status(
+        status,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        current_cmd_sha=current,
+        current_placement=current_placement,
+    )
 
 
 # ── consumption: consult the consent, then ledger the auto-advance ────────────
@@ -2244,6 +2415,20 @@ def overnight_morning_brief(
     except Exception:  # noqa: BLE001 — a class-section read must not wedge the brief
         class_sections = {}
 
+    # RE-GRANT hint (spec-changed consent death): when the latest consent is dead
+    # against the scope's CURRENT identity with reason ``spec-changed``, the brief
+    # carries the fresh paste-ready grant line beside the disclosure — the same
+    # one-home renderer as the authorship refusal and the park-time offer, so the
+    # morning after a code edit the re-grant costs one paste instead of a grammar
+    # reconstruction. ``regrant_offer`` is fail-open (None on any read surprise)
+    # and returns None for a live/expired/absent consent, so the brief is
+    # byte-unchanged everywhere the death is not the spec-changed class.
+    regrant = (
+        regrant_offer(experiment_dir, scope_kind=scope_kind, scope_id=scope_id, now_iso=surfaced_at)
+        if consent is not None
+        else None
+    )
+
     return {
         # LEADS with the fail-loud disclosure when the chain died unrecoverably.
         "heal_failure": heal_failed,
@@ -2268,6 +2453,9 @@ def overnight_morning_brief(
         # F12: non-None only when a consent exists but consumed_count is 0 — the field
         # that explains the zero (a night that produced no auto-advance).
         "unconsumed_reason": unconsumed_reason,
+        # Non-None only when the consent died on spec change: the OPTIONAL
+        # paste-ready re-grant line for the current identity (never auto-answered).
+        "regrant_offer": regrant,
     }
 
 

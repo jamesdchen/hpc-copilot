@@ -287,17 +287,17 @@ def _assert_overnight_consent_authorship(
         # token from this brief (vocabulary impossibility, the R6 idiom) — the
         # binding lives in the tokens, not in the phrasing, so handing the human
         # the full sentence changes the typing burden, not the trust story.
-        grant_parts = [f"I grant overnight consent for {spec.scope_kind} {spec.scope_id}"]
-        if consent_classes:
-            grant_parts.append("repair classes " + ", ".join(sorted(consent_classes)))
-        if bound_cmd_sha:
-            grant_parts.append(f"under spec {bound_cmd_sha[:12]}")
-        if bound_placement:
-            cluster_label = "cluster" if len(bound_placement) == 1 else "clusters"
-            grant_parts.append(f"on {cluster_label} " + ", ".join(bound_placement))
-        if isinstance(composed_expires, str) and composed_expires:
-            grant_parts.append(f"until {composed_expires}")
-        grant_line = ", ".join(grant_parts)
+        # Rendered through the ONE grant-vocabulary home (``ops/overnight.py``)
+        # shared with the park-time OFFER (``block_drive``'s answer menu), so
+        # the refusal's line and the offered line can never drift apart.
+        grant_line = _overnight.render_grant_line(
+            scope_kind=spec.scope_kind,
+            scope_id=spec.scope_id,
+            heal_classes=consent_classes,
+            cmd_sha=bound_cmd_sha,
+            placement=bound_placement or (),
+            expires_at=composed_expires if isinstance(composed_expires, str) else None,
+        )
         _refuse_missing_authorship(
             "overnight-consent authorship gate: a standing consent accepts the "
             "fallout of unattended overnight advances. No bound consent record "

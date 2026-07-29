@@ -38,6 +38,20 @@ Two rules bound what may appear in a menu — both load-bearing:
   successor spec). The menu's ``bare_y_ok`` REPORTS that fact per boundary; it
   never grants it.
 
+The OPTIONAL STANDING OFFER (``standing_offer`` — the 'speculative y done
+right', 2026-07-29) obeys both rules: its ``paste`` string is the
+overnight-consent grant line rendered by the ONE grant-vocabulary home
+(:func:`hpc_agent.ops.overnight.render_grant_line`, the same renderer the
+authorship gate's refusal uses) from tokens the driver already carries (the run
+id, the SIDECAR ``cmd_sha``, the cluster stamp) — this composer receives it
+PRE-RENDERED so it stays pure and ``_kernel`` never imports up into ``ops``.
+Pasting it is the human's own typed grant of the AUTHORSHIP leg only (recording
+the consent still composes caps + wake and runs every gate unchanged); it is
+labelled OPTIONAL, is never ``answer_line`` and never flips ``bare_y_ok``, is
+dropped at an anomaly terminator (offering "let it run all night" beside an
+OVERRIDE is wrong), and cannot mint a menu on its own — it answers nothing at
+THIS boundary.
+
 PURE + DETERMINISTIC: no I/O, no clock, no registry read — the caller supplies
 every token, and the same inputs always render the same menu (the property
 ``tests/contracts/test_bare_y_coverage.py`` enumerates the boundary census
@@ -62,6 +76,18 @@ _PASTE_COLUMN_MAX = 44
 #: per-case sentence would be code-authored prose ABOUT the recommendation, and
 #: the recommendation's own ``action``/``then`` tokens already say what it is.
 _RECOMMENDATION_MEANS = "structured recommendation carried by this brief"
+
+#: The fixed ``means`` label of the standing-consent OFFER (same one-constant
+#: discipline as :data:`_RECOMMENDATION_MEANS`). It must say HONESTLY what the
+#: pasted line does and does not do: OPTIONAL and STANDING (not an answer to
+#: this park, never the default), and it pre-authorizes only the grant's
+#: AUTHORSHIP leg — recording the consent still runs the poka-yoke caps + wake
+#: composition and every gate unchanged.
+_STANDING_OFFER_MEANS = (
+    "OPTIONAL standing grant — overnight consent so later clean boundaries "
+    "advance unattended; pre-authorizes the grant only (caps + wake still "
+    "compose at record time), not an answer to this park, never the default"
+)
 
 
 def _option(action: str, then: str | None) -> dict[str, Any]:
@@ -149,6 +175,45 @@ def recommendation_options(brief: dict[str, Any] | None) -> list[dict[str, Any]]
     return options
 
 
+def _standing_offer_option(
+    standing_offer: dict[str, Any] | None, *, is_anomaly_terminator: bool
+) -> dict[str, Any] | None:
+    """The OPTIONAL standing-consent grant option from a caller's offer, or ``None``.
+
+    The admission mirror of :func:`_as_structured`'s posture: only a mapping
+    carrying a non-empty string ``grant_line`` (the pre-rendered one-home
+    sentence — see the module docstring) renders; a torn offer renders nothing
+    rather than an un-pasteable line. Dropped unconditionally at an anomaly
+    terminator: offering "let it run all night" beside a failed-canary OVERRIDE
+    invites exactly the unattended advance the anomaly exists to interrupt.
+    ``block_drive`` never composes the offer there either, but the rule must
+    hold for EVERY caller of this public composer, so this guard is the one the
+    battery fires directly.
+    """
+    if is_anomaly_terminator or not isinstance(standing_offer, dict):
+        return None
+    grant_line = standing_offer.get("grant_line")
+    if not (isinstance(grant_line, str) and grant_line):
+        return None
+    option: dict[str, Any] = {
+        "paste": grant_line,
+        "means": _STANDING_OFFER_MEANS,
+        "kind": "standing-offer",
+        "optional": True,
+    }
+    # The scope tokens the line names, carried structured beside the sentence
+    # (the ``scope_tokens`` discipline of ``consent_hint.compose_approve_hint``)
+    # so a downstream surface never has to re-parse the rendered prose.
+    # ``regrant_reason``/``previous_cmd_sha`` ride only on the RE-GRANT form (a
+    # prior consent died on spec change and this line re-grants for the current
+    # identity — block_drive stamps them from ``ops.overnight``'s re-grant leg).
+    for key in ("scope_kind", "run_id", "cmd_sha", "cluster", "regrant_reason", "previous_cmd_sha"):
+        value = standing_offer.get(key)
+        if isinstance(value, str) and value:
+            option[key] = value
+    return option
+
+
 def _render_lines(options: list[dict[str, Any]], *, bare_y_ok: bool) -> list[str]:
     """The human-facing menu block: a header, one line per option, a footer.
 
@@ -177,6 +242,7 @@ def compose_answer_menu(
     next_spec_sha: str | None = None,
     approve_hint: dict[str, Any] | None = None,
     is_anomaly_terminator: bool = False,
+    standing_offer: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Compose the paste-ready answer menu for one parked boundary.
 
@@ -203,6 +269,12 @@ def compose_answer_menu(
       the menu must not hide either: the advance option is still listed (it is
       what consumption does) and is labelled an OVERRIDE, so "one keystroke
       submits the main array after a failed canary" can never be a surprise.
+    * ``standing_offer`` is the caller's OPTIONAL overnight-consent grant offer
+      (``block_drive._compose_standing_offer_for_park`` — composed only at a
+      run-scope park with no live standing consent), appended LAST via
+      :func:`_standing_offer_option`: it never becomes ``answer_line``, never
+      flips ``bare_y_ok``, is dropped at an anomaly terminator, and an offer
+      alone never mints a menu (it answers nothing at THIS boundary).
 
     Returns ``{options, lines, text, answer_line, summary, bare_y_ok, note}`` or
     ``None`` when there is nothing to offer at all (no default advance AND no
@@ -239,7 +311,15 @@ def compose_answer_menu(
             answer_line = utterance
     options += recommendation_options(brief)
     if not options:
+        # The standing OFFER alone must not mint a menu: it answers nothing at
+        # THIS boundary, so a menu holding only the offer would violate its own
+        # header ("paste ONE line" — into a park none of the lines resolve).
         return None
+    offer_option = _standing_offer_option(
+        standing_offer, is_anomaly_terminator=is_anomaly_terminator
+    )
+    if offer_option is not None:
+        options.append(offer_option)
 
     bare_y_ok = answer_line is not None
     where = f"parked at {block}" if block else "parked"
@@ -259,8 +339,9 @@ def compose_answer_menu(
         "bare_y_ok": bare_y_ok,
         "note": (
             "code-composed answer menu (S13 merged-park UX): DISPLAY only. Every "
-            "paste-line is built from tokens this brief already carries — nothing "
-            "is auto-filled, nothing is summarized, and no alternative is invented."
+            "paste-line is built from tokens this brief or the driver already "
+            "carries — nothing is auto-filled, nothing is summarized, and no "
+            "alternative is invented."
         ),
     }
 
