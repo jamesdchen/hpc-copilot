@@ -17,6 +17,27 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Fixed — campaign-run: chunked waits + fresh-relaunch parks (fable-sweep 2026-07-29)
+
+An adversarial design sweep (six lenses over the banked run-queue design +
+live kernel; verdict banked in `docs/plans/run-queue-placement-2026-07-28.md`
+§8) confirmed two bugs in the shipped plan, both fixed:
+
+- **The wait relay could never survive a real wait**: it relayed
+  `wait-detached` with the CLI's 7200s default into a ~10-min-bounded
+  harness command — killed before it could report its own timeout, parking
+  every real detached block as `wait_failed`. Now chunked: `timeout_sec:
+  480` per relay, `maxWaitChunks` (default 90 ≈ 12h) with a heartbeat log
+  per chunk, chunk-indexed labels (distinct engine-cache identity), and a
+  `wait_stalled` park on exhaustion.
+- **`resumeFromRunId` across a park replays the park forever**: the engine
+  replays cached calls with unchanged (prompt, opts) verbatim, and the
+  parked tick completed successfully — so a resumed run returned the same
+  `awaiting_decision` without one live call. Auto-resume is now a FRESH
+  relaunch everywhere (plan meta, README, park `resume_hint`) — cheap
+  because block-drive's state is durable; a fresh pass ticks from the
+  current journal.
+
 ### Added — workflow plans ship as product; installer learns a workflows/ tree (2026-07-29)
 
 The campaign workflow plans are researcher-lifecycle features, not dev

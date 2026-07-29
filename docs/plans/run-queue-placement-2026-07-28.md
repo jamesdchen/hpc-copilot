@@ -247,7 +247,137 @@ review):**
   call. Proposed: default needs_human; retryable only by explicit intake
   flag.
 
-## 8. Open questions for the maintainer
+## 8. Fable-sweep verdict (2026-07-29) — what WILL go wrong, confirmed
+
+Six adversarial lenses over this design + the live kernel (48 raw findings,
+merged below; load-bearing code citations spot-checked against the tree;
+two findings confirmed directly from the workflow engine's documented
+semantics). **The v2 loop shape survives; the design is NOT buildable as
+written.** Confirmed clusters, most severe first — each names its required
+resolution:
+
+**S1 — consent identity is placement-blind (HIGH).** §3 puts the cluster
+inside the y, but both shipped identity tokens consumption compares are
+provably cluster-free: run `cmd_sha` is "PURE PARAMETER identity"
+(`state/runs.py` #207) and `_CAMPAIGN_IDENTITY_FIELDS` is
+goal/budget/strategy/stop/anomaly (`meta/campaign/blocks.py`). Re-placement
+to a cluster the consent never named passes the "spec-changed" leg.
+RESOLUTION: fold placement into the consent-bound identity (a placement
+field in the resolved spec that the consumption compare reads), and define
+the campaign-scope analog before Phase 2.
+
+**S2 — pre-dispatch has no claim, and "claims are hygiene" is false for
+dispatch (HIGH).** The claim key `(run_id, driver_id)` cannot exist for an
+intake item (no run_id until dispatch mints one), overlapping passes are
+the design's own steady state, and dispatch (qsub) is not idempotent —
+two dispatches can legally place on different clusters → distinct cids →
+no dedup layer refuses, and a duplicated optuna trial pollutes `prior()`
+history (wrong strategy decisions). RESOLUTION: claims are MANDATORY for
+dispatch, keyed by intake `item_id` (minted at enqueue), with the E4
+sequencing made a durable per-cid lock, not an in-process convention.
+
+**S3 — refill-as-producer double-enqueues (HIGH).** `campaign-advance`
+counts pool room over journal + sidecars; an enqueued-but-undispatched
+item is in neither store, so every refill tick inside the enqueue→dispatch
+window re-enqueues the same slots (and the direct-submit path is never
+retired). RESOLUTION: advance's inputs must include queued intake items
+for the cid (or refill marks intent in the sidecar store it already
+reads); the v2 migration must explicitly retire refill's direct submit.
+
+**S4 — the shared remote tree breaks eager submit (HIGH).** All runs of an
+experiment on one cluster share one rsync'd code tree; integrity fires at
+submit only. A job pending days executes whatever a LATER dispatch rsynced
+— greenlit spec ≠ executed code, with false sha provenance. RESOLUTION
+(pick one, before R3 ships): per-run remote snapshots (dir-per-run_id), or
+a run-start cluster-side sha check against the sidecar that refuses to
+execute on mismatch.
+
+**S5 — resumeFromRunId across a park replays the park forever (HIGH,
+FIXED 2026-07-29).** Engine cache replays unchanged (prompt, opts)
+verbatim; the parked tick completed successfully, so a resumed run
+returns the same park with zero live calls. Auto-resume is now FRESH
+relaunch everywhere (plan meta, README, resume_hint) — cheap because
+kernel state is durable. Chunk labels also now carry a chunk index so
+identical wait chunks never collide in cache.
+
+**S6 — the shipped wait relay could never survive a real wait (HIGH,
+FIXED 2026-07-29).** The CLI's 7200s `wait-detached` default exceeded the
+harness's ~10-min command bound: the relay was killed before it could
+even report timeout → every real detached block parked `wait_failed`.
+`campaign-run.js` now chunks (timeout_sec 480/chunk, maxWaitChunks≈12h,
+heartbeat per chunk, `wait_stalled` park on exhaustion).
+
+**S7 — pid/host-blind liveness, twice (HIGH).** `wait-detached`'s
+`_live_lease` probes bare `pid_alive` — no host, no create_time — though
+F43 added exactly those checks to the LAUNCH guard after a pid-reuse
+wedge; lease files are never unlinked; the block-less glob
+(`*-{run_id}`) can latch a suffix-colliding run or the always-alive
+status-watch. The proposed claim-lease staleness probe re-specifies the
+same hole. RESOLUTION: port F43 (host + create_time) into the wait path
+and the claim lease; add lease cleanup; anchor the glob.
+
+**S8 — post-y double-driver races (HIGH).** Inline-first-tick + auto-
+resumed pass = two drivers on the same run at every y, by design.
+Pending-marker writes are blind last-writer-wins (`_repark_marker` can
+resurrect a consumed park; a loser's DetachedLeaseHeld becomes a spurious
+`tick_failed` park under abort_on_failure; in-process spans have no lease
+at all). RESOLUTION: drop inline-first-tick OR make it claim-aware; make
+marker clear/re-park a compare-and-swap on (boundary, awaiting_since).
+
+**S9 — kill window downgrades a human's rerun to an advance (HIGH,
+pre-existing kernel bug the queue multiplies).** SIGKILL between
+`clear_pending_decision` and the resumed span leaves the y unconsumed and
+the marker gone; the next tick's unscoped journal-derived path advances,
+silently dropping the human's edit (F14 fix covers OSError only, not
+process death). RESOLUTION: kernel fix — durable consume-intent record
+written BEFORE the marker clear.
+
+**S10 — two-store dispatch bookkeeping (MEDIUM).** Intake's `dispatched`
+mirror duplicates the shipped `submitting` RunRecord organ; no atomic
+write spans both, either crash order strands or duplicates, and no
+reconciler is specified. RESOLUTION: intake keeps `queued`/`placed` only;
+"dispatched" is a PROJECTION over the run stores (R1 applied to the
+queue's own state), with the submit-once `submitting` record as the
+handoff fact.
+
+**S11 — scheduler-reality corrections to R3 (MEDIUM, several).**
+`max_concurrent_jobs` is per-run wave grouping, NOT a cross-run account
+cap (no organ enforces one; submit_plan lands ALL waves upfront as held
+jobs); the pending-depth probe counts our own held waves (self-polluting
+anti-affinity feedback); the 24h watch budget is shorter than realistic
+pending (watch dies as 'timeout', wake never fires); clusters.yaml
+carries contradictory walltime ceilings (3h constraints vs 24-48h
+resolver); SGE cannot enforce the canary success-gate (completion-only
+holds — unattended waves run after a failed canary); SGE Eqw (clearable)
+is classified FAILED; scheduler rejection after the y has no re-placement
+path and the F48 cross-cluster guard blocks the obvious manual recovery.
+RESOLUTIONS: an account-level pending cap organ; probe excludes own held
+waves; watch budget ≥ max expected pending or re-armable; reconcile the
+two walltime fields; SGE canary becomes wait-then-submit (dispatch waits
+canary terminal before wave submit); an Eqw 'scheduler-recoverable'
+class; a rejected→re-place transition that requires a fresh y.
+
+**S12 — projection discipline + O(history) (MEDIUM).** queue-status MUST
+route through `is_committed_greenlight_for_boundary` (the bug-sweep-#1
+lesson attention-queue already encodes) or the two "what needs me"
+surfaces disagree; the append-only intake ledger + in-flock dedup scans +
+never-called `prune_terminal_runs` + sidecar MAX_RUNS=500 rotation all
+scale pass-startup with history, violating the relaunch-cheapness
+invariant, and ledger items outlive their join targets. RESOLUTIONS: one
+shared predicate module; intake compaction watermark; wire
+`prune_terminal_runs`; define pruned-target semantics; `queue-run` mints
+a client request_id consumed as the append dedup_key (replayed relays
+double-enqueue otherwise).
+
+**S13 — merged-park UX at depth (MEDIUM).** Return-when-nothing-drivable
+at fleet scale = 15+ verbatim briefs at once (rule 2 forbids
+summarizing), unordered (attention-queue's leverage ordering unused), a
+relaunch per y. RESOLUTIONS: order the park queue via
+`attention_queue.order_items`; batch the y-taking (one relaunch after the
+sitting, not per y); parks carry pointers + the human reads renders from
+disk (never workflow-summarized state).
+
+## 9. Open questions for the maintainer
 
 - Resource-ask vocabulary on intake items: free-form (opaque, policy reads
   known keys) vs typed (schema'd gpu/cores/walltime)? Typed proposed.

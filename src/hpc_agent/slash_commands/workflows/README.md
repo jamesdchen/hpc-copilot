@@ -17,7 +17,9 @@ Plans operate at two scopes of `docs/design/agent-delegation.md`:
   because the command is an authored template and the model composes
   nothing (`campaign-run.js`). Gates PARK, never pass: a tick that returns
   `awaiting_decision` ends the run with the brief, the human journals the
-  `y` inline, and the workflow resumes via `resumeFromRunId` from cache.
+  `y` inline, and the drive relaunches FRESH (kernel state is durable —
+  see the auto-resume bullet for why never `resumeFromRunId` across a
+  park).
 
 Two lines hold at every scope, mechanized by
 `tests/contracts/test_workflow_plan_delegation.py` against the live
@@ -48,11 +50,15 @@ The launch discipline built on that:
   in and launch; do not re-propose unless a correction invalidates other
   proposed fields.
 - **A park is a question, not a stop (auto-resume).** When a drive parks at
-  a gate and the human journals the `y`, relaunch the workflow with
-  `resumeFromRunId` in the same breath — no "shall I continue?", no waiting
-  for a nudge. Cached steps replay free; the next tick consumes the fresh
-  greenlight. The human's part of the exchange is the decision, never the
-  restart.
+  a gate and the human journals the `y`, relaunch the workflow FRESH (a new
+  run, same args) in the same breath — no "shall I continue?", no waiting
+  for a nudge. NEVER relaunch with `resumeFromRunId` across a park: the
+  engine replays cached calls with unchanged (prompt, opts) verbatim, so a
+  resumed run returns the recorded `awaiting_decision` result again without
+  one live tick — the same park, forever (fable-sweep 2026-07-29). Fresh is
+  cheap by construction: the kernel's state is durable, so a fresh pass
+  simply ticks from the current journal and consumes the new greenlight.
+  The human's part of the exchange is the decision, never the restart.
 - **Upfront the y's when the human wants to walk away.** Unattended driving
   (overnight, long lunches) does NOT mean the workflow passes gates — it
   means the intake exchange also offers the OVERNIGHT STANDING CONSENT the

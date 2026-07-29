@@ -1,9 +1,9 @@
 export const meta = {
   name: 'campaign-run',
   description:
-    'Drive one campaign through the block chain by plan-relayed block-drive ticks: advance in code, wait out detached blocks, PARK at every typed-y gate returning the brief, resume from cache after the human greenlights inline — rule 5 of docs/design/agent-delegation.md',
+    'Drive one campaign through the block chain by plan-relayed block-drive ticks: advance in code, wait out detached blocks in bounded chunks, PARK at every typed-y gate returning the brief, relaunch FRESH after the human greenlights inline (kernel state is durable; never resume-from-cache across a park) — rule 5 of docs/design/agent-delegation.md',
   whenToUse:
-    "When a campaign should progress without its tick/wait relay traffic entering the main session's context. Pass args: {repo, runId, workflow?, maxTicks?}. INTAKE FIRST (README, 'Intake'): resolve every ARGS_CONTRACT field BEFORE launching — fill what you can yourself (repo from cwd, runId from the runs store or the user's words, prior-run args), then propose the WHOLE arg set to the user in ONE confirm/correct exchange of diffs; never launch half-resolved, never interrogate cold. For unattended driving, the same intake exchange offers the overnight STANDING CONSENT (typed inline, hard caps + armed wake — README 'Upfront the y's'): block-drive then auto-advances consented boundaries in code and this plan parks only at unconsented ones. The workflow NEVER passes a gate: a tick that returns awaiting_decision ends the run with the brief pointer; the human journals the y inline (append-decision stays with the main session, always). AUTO-RESUME: the moment the y is journaled, relaunch with resumeFromRunId immediately and without asking — completed steps replay from cache and the next tick proceeds; a park is a question, not a stop, and the human should never have to say 'continue'. block-drive keeps owning the sequencing; this plan only relays its rule-fixed invocations (the runtime refuses ungreenlit blocks regardless of caller, so parking is the enforced shape, not a courtesy).",
+    "When a campaign should progress without its tick/wait relay traffic entering the main session's context. Pass args: {repo, runId, workflow?, maxTicks?}. INTAKE FIRST (README, 'Intake'): resolve every ARGS_CONTRACT field BEFORE launching — fill what you can yourself (repo from cwd, runId from the runs store or the user's words, prior-run args), then propose the WHOLE arg set to the user in ONE confirm/correct exchange of diffs; never launch half-resolved, never interrogate cold. For unattended driving, the same intake exchange offers the overnight STANDING CONSENT (typed inline, hard caps + armed wake — README 'Upfront the y's'): block-drive then auto-advances consented boundaries in code and this plan parks only at unconsented ones. The workflow NEVER passes a gate: a tick that returns awaiting_decision ends the run with the brief pointer; the human journals the y inline (append-decision stays with the main session, always). AUTO-RESUME: the moment the y is journaled, relaunch this workflow FRESH (a new run, same args) immediately and without asking — a park is a question, not a stop, and the human should never have to say 'continue'. Never relaunch with resumeFromRunId across a park: the cache replays the recorded awaiting_decision tick verbatim without a live call, so a resumed run returns the SAME park forever. Fresh is cheap by construction — block-drive's state is durable, so a fresh pass simply ticks from the current journal. block-drive keeps owning the sequencing; this plan only relays its rule-fixed invocations (the runtime refuses ungreenlit blocks regardless of caller, so parking is the enforced shape, not a courtesy).",
   phases: [
     { title: 'Drive', detail: 'tick block-drive; advance/skip/rerun loop in plan code; a detached block gets a wait-detached relay before the next tick' },
     { title: 'Park', detail: 'awaiting_decision or terminal: return action + brief pointer to the main session; no agent touches the y' },
@@ -28,6 +28,8 @@ const ARGS_CONTRACT = {
   runId: 'the campaign run id to drive (required; block-drive spec run_id)',
   workflow: "optional block-drive workflow name (e.g. 'submit'); omitted = block-drive default for the run",
   maxTicks: 'optional safety bound on ticks per invocation (default 25); hitting it parks with action "tick_budget_exhausted"',
+  maxWaitChunks:
+    'optional bound on wait-detached chunks per detached block (default 90; ~8 min per chunk ≈ 12h); hitting it parks with action "wait_stalled"',
 }
 
 const SCHEMAS = {
@@ -83,8 +85,17 @@ const specRun = (repo, verb, spec) =>
 const COMMANDS = {
   blockDrive: ({ repo, runId, workflow }) =>
     specRun(repo, 'block-drive', workflow ? { run_id: runId, workflow } : { run_id: runId }),
+  // timeout_sec 480 keeps each relayed wait comfortably under the harness's
+  // ~10-min command bound (fable-sweep 2026-07-29: the CLI's 7200s default
+  // would be KILLED by the harness before it could even report its own
+  // timeout, parking every real detached block as wait_failed). The chunk
+  // loop in the adapter re-arms until terminal or maxWaitChunks.
   waitDetached: ({ repo, runId, block }) =>
-    specRun(repo, 'wait-detached', block ? { run_id: runId, block } : { run_id: runId }),
+    specRun(
+      repo,
+      'wait-detached',
+      block ? { run_id: runId, block, timeout_sec: 480 } : { run_id: runId, timeout_sec: 480 }
+    ),
 }
 
 const PROMPTS = {
@@ -180,6 +191,7 @@ if (!args || !args.repo || !args.runId) {
 }
 const { repo, runId } = args
 const maxTicks = args.maxTicks || 25
+const maxWaitChunks = args.maxWaitChunks || 90
 
 phase('Drive')
 const ticks = []
@@ -213,7 +225,10 @@ for (let i = 0; i < maxTicks; i++) {
       next_verb: tick.next_verb || null,
       brief: tick.brief || null,
       reason: tick.reason || null,
-      resume_hint: 'after the y is journaled inline, relaunch with resumeFromRunId to continue from cache',
+      resume_hint:
+        'after the y is journaled inline, relaunch this workflow FRESH (same args, new run) — ' +
+        'NOT resumeFromRunId: the cache would replay this parked tick verbatim and return the ' +
+        'same park without a live call. Kernel state is durable; fresh ticks from the journal.',
     }
   }
   if (tick.action === 'terminal') {
@@ -221,19 +236,42 @@ for (let i = 0; i < maxTicks; i++) {
     return { action: 'terminal', ticks: ticks.length, stage_reached: tick.stage_reached || null, tick_log: ticks }
   }
   if (tick.action === 'detached') {
-    log(`tick ${i + 1}: detached at ${tick.current_verb || '?'} — waiting`)
-    const wait = await runWithRetry(
-      'wait-detached',
-      { repo, runId, block: tick.current_verb || tick.next_verb || null },
-      { label: `wait:${i + 1}` }
-    )
-    if (!wait || wait.exit_code !== 0) {
-      phase('Park')
-      return {
-        action: 'wait_failed',
-        ticks: ticks.length,
-        last_output: wait ? wait.output : '(wait relay agent died)',
+    const block = tick.current_verb || tick.next_verb || null
+    log(`tick ${i + 1}: detached at ${block || '?'} — waiting (chunked)`)
+    // Chunked wait (fable-sweep 2026-07-29): each relay is one bounded
+    // wait-detached chunk (timeout_sec 480 in the COMMANDS template, under
+    // the harness's ~10-min command bound). The chunk index in the label
+    // keeps every chunk a DISTINCT engine call — identical (prompt, opts)
+    // would collide in the resume cache. A 'timeout' outcome logs a
+    // heartbeat and re-arms; any other outcome (terminal, worker exit,
+    // no-live-worker) breaks to the next tick, which reads the journal
+    // truth — the plan never interprets the wait, it only paces it.
+    let resolved = false
+    for (let chunk = 1; chunk <= maxWaitChunks; chunk++) {
+      const wait = await runWithRetry(
+        'wait-detached',
+        { repo, runId, block },
+        { label: `wait:${i + 1}.${chunk}` }
+      )
+      if (!wait || wait.exit_code !== 0) {
+        phase('Park')
+        return {
+          action: 'wait_failed',
+          ticks: ticks.length,
+          last_output: wait ? wait.output : '(wait relay agent died)',
+        }
       }
+      const payload = parseTick(wait.output)
+      if (payload && payload.outcome === 'timeout') {
+        log(`tick ${i + 1}: wait chunk ${chunk}/${maxWaitChunks} — still detached at ${block || '?'}`)
+        continue
+      }
+      resolved = true
+      break
+    }
+    if (!resolved) {
+      phase('Park')
+      return { action: 'wait_stalled', ticks: ticks.length, block, tick_log: ticks }
     }
     continue
   }
