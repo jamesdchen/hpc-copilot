@@ -88,6 +88,70 @@ QueueDispatchRefusal = Literal[
 ]
 
 
+class QueueDeclaredRetry(BaseModel):
+    """One declared-retry decision this dispatch tick took — disclosure, never judgment.
+
+    The retryable(n) failure-class leg (run-queue plan §7 "Failure classes on
+    parked items", RESOLVED as proposed 2026-07-29): a budget exists only
+    because the item's ENQUEUER declared one, and the kernel consumes it
+    mechanically — a run at a mechanical failure terminal is re-enqueued as a
+    derived-id retry item (``<root>.retry<k>``) reusing the recorded resolved
+    identity verbatim, up to n times; past n it parks for a human. Every such
+    decision is a row here, successes included, because a retry that did not
+    say it was a declared retry would be indistinguishable from an agent
+    quietly resubmitting a failed run.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="queue-dispatch declared retry")
+
+    root_item_id: QueueItemId = Field(
+        description="The chain's root — the item whose enqueuer declared the budget.",
+    )
+    item_id: QueueItemId | None = Field(
+        default=None,
+        description=(
+            "The retry item this tick minted (or found already minted, on "
+            "'replayed') — ``<root>.retry<attempt>``, the derived id that makes "
+            "racing ticks collapse onto one ledger line. Null on 'exhausted': "
+            "nothing was enqueued."
+        ),
+    )
+    attempt: int = Field(
+        ge=0,
+        description=(
+            "Which declared retry this row is about: the attempt just enqueued "
+            "('enqueued'/'replayed'), or the count already spent ('exhausted')."
+        ),
+    )
+    retryable: int = Field(
+        ge=1,
+        description="The declared budget n, read off the ledger — never inferred.",
+    )
+    run_id: RunIdStrict | None = Field(
+        default=None,
+        description=(
+            "The FAILED run the chain re-dispatches. The retry reuses this "
+            "recorded identity verbatim (§10.S3: never a re-resolve), so the "
+            "fresh attempt is minted over the same run id's corpse."
+        ),
+    )
+    outcome: Literal["enqueued", "replayed", "exhausted"] = Field(
+        description=(
+            "'enqueued' — this tick appended the retry item; 'replayed' — the "
+            "derived id already existed (a racing or replayed tick got there "
+            "first; nothing was written); 'exhausted' — the declared budget is "
+            "spent, nothing was enqueued, and the item parks for a human."
+        ),
+    )
+    reason: str = Field(
+        description=(
+            "The disclosed WHY, naming it a declared-retry: which run failed, "
+            "which attempt of which budget this is, and — on exhaustion — that "
+            "the item now parks with its budget named."
+        ),
+    )
+
+
 class QueueDispatchSpec(BaseModel):
     """Inputs to ``queue-dispatch`` — scope and bound, never a placement."""
 
@@ -377,6 +441,19 @@ class QueueDispatchResult(BaseModel):
     refused: list[DispatchRefusal] = Field(
         default_factory=list,
         description="One row per PLACED item that did not start, each with its disclosed cause (R4).",
+    )
+    declared_retries: list[QueueDeclaredRetry] = Field(
+        default_factory=list,
+        description=(
+            "The declared-retry decisions this tick took BEFORE placement ran "
+            "(§7 failure classes): retry items enqueued for mechanically-failed "
+            "runs whose items carry a declared retryable(n) budget, and "
+            "exhausted budgets whose items now park for a human. Empty when no "
+            "ledger item declares a budget — the default, and the whole leg's "
+            "cost in that case. An enqueued retry is placed and dispatched by "
+            "the SAME machinery as any other queued item, so its start also "
+            "appears under ``dispatched`` when this tick reached it."
+        ),
     )
     held: list[QueueHoldback] = Field(
         default_factory=list,

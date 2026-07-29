@@ -90,7 +90,12 @@ from hpc_agent.state.queue_intake import (
     enqueue_age_sec,
     fold_intake_records,
     intake_path_if_exists,
+    item_retry_attempt,
+    item_retry_root,
+    item_retryable,
     read_intake_records_counted,
+    retries_used,
+    retry_chains,
 )
 from hpc_agent.state.queue_occupancy import occupied_slots
 
@@ -239,17 +244,25 @@ def _project(experiment_dir: Path, run_id: str | None, *, journal: bool) -> dict
         "awaiting_since": None,
         "greenlight_committed": False,
         "greenlight_unadvanced": False,
+        # INTERNAL (stripped before the wire): is this run the mechanical
+        # failure terminal a DECLARED retryable(n) budget may re-dispatch?
+        # Routed through the ONE classifier the dispatch-side producer uses
+        # (R7 — the tick that retries and the note that explains must agree).
+        "declared_retry_failure": False,
     }
     if run_id is None or not journal:
         return projection
     record = load_run(experiment_dir, run_id)
     if record is None:
         return projection
+    from hpc_agent.ops.queue.retry import is_declared_retry_failure
+
     status = _text(record.status)
     projection["dispatched"] = True
     projection["run_status"] = status
     projection["in_flight"] = status == _IN_FLIGHT
     projection["terminal"] = status in _TERMINAL_STATUS_NAMES
+    projection["declared_retry_failure"] = is_declared_retry_failure(record)
     # The three facts a drain loop's drivability test needs and could not infer
     # from the four above. Each routes through the SHIPPED single authority for
     # its question rather than re-deciding it here (R7 applied beyond the
@@ -343,6 +356,7 @@ def _build_item(
     projection: dict[str, Any],
     *,
     collisions: dict[str, list[str]],
+    used_by_root: dict[str, int],
     now_dt: datetime,
 ) -> QueueStatusItem | None:
     """One wire item, or ``None`` when the folded record cannot satisfy the shape.
@@ -355,6 +369,11 @@ def _build_item(
     run_id = _text(item.get("run_id"))
     siblings = [other for other in collisions.get(run_id or "", []) if other != item_id]
     enqueued_at = _text(item.get("enqueued_at"))
+    # Internal-only keys computed alongside the projection are stripped before
+    # the splat: the wire shape is the contract, and `extra="forbid"` is the
+    # guard that keeps a private working fact from quietly becoming one.
+    projection = {k: v for k, v in projection.items() if k != "declared_retry_failure"}
+    root = item_retry_root(item)
     try:
         return QueueStatusItem(
             item_id=item_id or "",
@@ -374,6 +393,11 @@ def _build_item(
             placement_reason=_placement_reason(item),
             resources=_resource_ask(item.get("resources")),
             spec_ref=_text(item.get("spec_ref")),
+            # §7 failure classes: the declared budget as the ledger holds it
+            # (junk reads as no declaration — the same tolerant reader the
+            # dispatch producer consults), and the chain's durable spend.
+            retryable=item_retryable(item),
+            retries_used=used_by_root.get(root or "", 0),
             collides_with=sorted(siblings),
             **projection,
         )
@@ -460,6 +484,10 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
     )
 
     collisions = _collisions(folded)
+    # §7 failure classes: the declared-retry spend per chain, computed over the
+    # WHOLE folded ledger (the `_collisions` rule): a read filtered to one item
+    # of a chain must still report the chain's true count.
+    used_by_root = {root: retries_used(chain) for root, chain in retry_chains(folded).items()}
 
     journal = _journal_present(exp)
     matched: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -485,7 +513,9 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
     items: list[QueueStatusItem] = []
     unrenderable = 0
     for item, projection in visible[: spec.limit]:
-        model = _build_item(item, projection, collisions=collisions, now_dt=now_dt)
+        model = _build_item(
+            item, projection, collisions=collisions, used_by_root=used_by_root, now_dt=now_dt
+        )
         if model is None:
             unrenderable += 1
             continue
@@ -524,6 +554,7 @@ def queue_status(*, experiment_dir: Path, spec: QueueStatusSpec | None = None) -
             path=path,
             counts=counts,
             collisions=collisions,
+            used_by_root=used_by_root,
             unfolded=unfolded,
             unrenderable=unrenderable,
             hidden_settled=hidden_settled,
@@ -541,6 +572,7 @@ def _notes(
     path: Path,
     counts: dict[str, int],
     collisions: dict[str, list[str]],
+    used_by_root: dict[str, int],
     unfolded: int,
     unrenderable: int,
     hidden_settled: int,
@@ -619,5 +651,49 @@ def _notes(
                 f"placed item {_text(item.get('item_id'))} has no run record for run_id "
                 f"{_text(item.get('run_id'))}: not yet dispatched, or the record was "
                 "pruned — indistinguishable from here"
+            )
+    # §7 failure classes: one line per declared-retry CHAIN whose run sits at a
+    # mechanical failure terminal, spoken by the chain's TIP only (an earlier
+    # attempt's failure was already answered by the retry that followed it).
+    # The classification routes through the SAME predicate the dispatch-side
+    # producer consumes (`declared_retry_failure`, R7), so the tick that
+    # retries and the note that explains cannot disagree. An exhausted budget
+    # is the load-bearing case — the reason this item now parks for a human
+    # must name the exhaustion, not read like an unexplained failed run.
+    spoken_roots: set[str] = set()
+    for item, projection in matched:
+        if not projection.get("declared_retry_failure"):
+            continue
+        budget = item_retryable(item)
+        root = item_retry_root(item)
+        if budget is None or root is None or root in spoken_roots:
+            continue
+        used = used_by_root.get(root, 0)
+        if item_retry_attempt(item) != used:
+            continue  # not the chain's tip; the tip's row speaks for the chain
+        spoken_roots.add(root)
+        item_id = _text(item.get("item_id"))
+        run_id = _text(item.get("run_id"))
+        if used >= budget:
+            notes.append(
+                f"item {item_id}: run {run_id} FAILED and its declared retryable({budget}) "
+                f"budget is EXHAUSTED ({used} of {budget} used) — it parks for a human. "
+                "The budget was declared at enqueue and consumed by queue-dispatch; "
+                "nothing judged the failure"
+            )
+        elif item.get("state") == STATE_QUEUED:
+            # A queued tip is itself the pending answer. Only a tip that IS a
+            # retry has a declared-retry fact to report; a queued root over a
+            # corpse simply dispatches normally (mint-over-corpse) when placed.
+            if used >= 1:
+                notes.append(
+                    f"item {item_id}: declared retry {used} of retryable({budget}) for "
+                    f"failed run {run_id} is on the ledger awaiting placement/dispatch"
+                )
+        else:
+            notes.append(
+                f"item {item_id}: run {run_id} FAILED with a declared retryable({budget}) "
+                f"budget ({used} of {budget} used) — the next queue-dispatch tick "
+                f"re-enqueues declared retry {used + 1}"
             )
     return notes

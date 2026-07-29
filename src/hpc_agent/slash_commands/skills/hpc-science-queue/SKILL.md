@@ -34,12 +34,13 @@ Each `queue-run` call enqueues ONE run request. The spec's arrival facts:
 - **`cluster`** (optional) — an EXPLICIT pin to a `clusters.yaml` top-level key. A pin always wins placement, and a typo is refused HERE against the live `clusters.yaml` rather than becoming a silently unplaceable item. Omit it to let placement choose.
 - **`campaign_base`** (optional) — a logical campaign base for a multi-cluster study; placement composes the concrete id as `<base>_<clusterkey>`. Null (omitted) for an open-loop item that belongs to no campaign and occupies no pool slot.
 - **`run_name`** (optional) — a logical name; run ids are COMPUTED (`<run_name>-<cmd_sha[:8]>`), never minted.
+- **`retryable`** (optional) — a DECLARED failure-class budget, a small positive int (1–10). Default (omitted) is `needs_human`: a failed run parks for the human and nothing re-dispatches it. Declaring `retryable: n` means a run that reaches a MECHANICAL failure terminal (journal status `failed` — never a superseded, human-halted, parked, or escalation-held run) is re-enqueued and re-dispatched by hpc-copilot's kernel up to n times, each retry disclosed as a declared-retry and counted durably on the ledger, before it parks for the human with the exhaustion named. This is item DATA the kernel consumes — you declare it at enqueue or it does not exist; neither you nor any agent judges a failure retryable after the fact.
 
 `queue-run` returns the enqueued item in state `queued` (with `replayed: true` when the `request_id` matched an earlier call). It touches no cluster; the gates bind later, at the cluster boundary of the run the item becomes, where hpc-copilot's brief discloses the placement the human's approval covers.
 
 ## Observe what became of it
 
-- **`queue-status`** — the queue's bounded projection: intake items joined to the run stores, recomputed on every read. Each item carries a state — `queued`, `placed`, became a run / in flight / terminal, or **parked awaiting a human**. A bare call reads the whole ledger; filter by state, campaign base, or cluster, and bound with a limit. This is where you see that an item you enqueued is **held** and why: read the item's reported reason and per-cluster verdicts, relay them, and wait — the resolution is the human's, not yours. Relay the numbers `queue-status` returns; never a count you remember.
+- **`queue-status`** — the queue's bounded projection: intake items joined to the run stores, recomputed on every read. Each item carries a state — `queued`, `placed`, became a run / in flight / terminal, or **parked awaiting a human**. A bare call reads the whole ledger; filter by state, campaign base, or cluster, and bound with a limit. This is where you see that an item you enqueued is **held** and why: read the item's reported reason and per-cluster verdicts, relay them, and wait — the resolution is the human's, not yours. Items enqueued with a declared `retryable` budget report `retryable`/`retries_used`, and the notes say when a declared retry is pending or the budget is exhausted (at which point the item parks for the human). Relay the numbers `queue-status` returns; never a count you remember.
 - **`queue-advance`** — the placement AUTHORITY's decision and reasoning. It reads queued items, `clusters.yaml`, and the shared occupancy predicate and returns, per item, WHICH cluster it would go to, under which `<base>_<clusterkey>` campaign id, and the disclosed reason — or a closed `reason_code` and human-readable reason when the item is HELD (constraint mismatch, no candidate cluster, courtesy cap). It writes NOTHING: it reports where the human's approval would send the item. A held reason is information to relay and (optionally) to act on by enqueuing a revised item, never a gate for you to clear.
 
 Read a held item's `reason_code` as one of a closed set:
@@ -64,6 +65,7 @@ Read a held item's `reason_code` as one of a closed set:
 | `cluster` | Caller (optional explicit pin, verified against clusters.yaml) |
 | `campaign_base` | Caller (optional; null for an open-loop item) |
 | `run_name` | Caller (optional logical name) |
+| `retryable` | Caller (optional declared failure-class budget, int 1–10; omitted = needs_human) |
 
 ## Notes
 

@@ -37,9 +37,10 @@ Read this file top to bottom — it is self-contained. The state of play:
    the Phase-3 drain loop (§5's tick + wake + relay).
 4. **Open maintainer decisions** (§9): claim-lease recovery is now
    ANSWERED by §10.S2 (no new lease — the shipped detached lease keyed on
-   the computed run_id), and retryable(n) is unblocked (§10.S3 removes the
-   S3 coupling). Typed resource asks, no item sharding, and per-repo queue
-   remain open.
+   the computed run_id), and retryable(n) — unblocked by §10.S3 — is now
+   BUILT (2026-07-29, RESOLVED as proposed; see §7's failure-classes
+   bullet for the shipped shape). Typed resource asks, no item sharding,
+   and per-repo queue remain open.
 5. **§10's verifications are ALL DONE — nothing in this plan is
    unverified.** The S1 placement leg is BUILT
    (`state/placement_drift.py` + `standing_consent_status`'s
@@ -392,7 +393,34 @@ review):**
 - Failure classes on parked items: `needs_human` vs `retryable(n)` as
   DECLARED item data consumed by plan code — never an agent's judgment
   call. Proposed: default needs_human; retryable only by explicit intake
-  flag.
+  flag. **RESOLVED AS PROPOSED — BUILT (2026-07-29,** unblocked by §10.S3's
+  resolve-at-enqueue**).** The flag is `QueueRunSpec.retryable` (positive
+  small int, junk refused at the wire; absent = needs_human, byte-identical
+  to the pre-leg behavior), recorded verbatim as an arrival fact. The
+  consumer is kernel code at the top of the `queue-dispatch` tick
+  (`ops/queue/retry.produce_declared_retries`), so the chain-dispatch wake
+  at a run's retirement is also the retry's dispatch: a MECHANICAL failure
+  terminal only (`is_declared_retry_failure` — journal `failed`, never
+  superseded / human-halted / parked / escalation-held; `abandoned`
+  deliberately excluded as a class a machine cannot tell apart) is
+  re-enqueued as a NEW intake item with derived id `<root>.retry<k>`
+  (`#` is outside the item-id charset; the derived id doubles as the
+  append's dedup request_id, so racing ticks write one line) that copies
+  the tip's recorded resolved identity VERBATIM — same spec/run_id/cmd_sha,
+  never a re-resolve (§10.S3), the fresh attempt minted over the same
+  computed run id by the `_ADOPTABLE_STATUSES` complement — and pins the
+  spec's cluster (R5; re-placement would trip the spec-agreement check and
+  §10.S1). Counting is durable and race-safe: `retries_used` = max
+  `retry_attempt` over the chain's folded ledger items, never in-memory,
+  and a live-failure chain can never compact (resubmittable terminals are
+  not history). Gates untouched: the retry's attempt still meets every
+  cluster-boundary gate inside the lifecycle (D1) — the budget automates
+  re-dispatch, never consent. Disclosure: `declared_retries` rows +
+  brief lines on `queue-dispatch` name each enqueued/replayed/exhausted
+  decision a declared-retry; `queue-status` shows `retryable`/`retries_used`
+  per item and its notes name exhaustion when the item parks for a human.
+  Pinned by `tests/ops/queue/test_queue_declared_retry.py` and
+  `tests/state/test_queue_intake_retry.py`.
 
 ## 8. Fable-sweep verdict (2026-07-29) — what WILL go wrong, confirmed
 

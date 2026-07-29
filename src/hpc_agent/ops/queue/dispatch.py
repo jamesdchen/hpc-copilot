@@ -83,6 +83,20 @@ one of ``dispatched`` / ``refused`` / ``held``, each with a reason a human can
 act on — including the successes, because an adopt that did not say why it
 adopted is indistinguishable from a dispatcher that silently did nothing.
 
+**D11 — declared retries are consumed at the top of the tick** (§7 "failure
+classes", RESOLVED 2026-07-29). Before the authority reads the ledger, this
+verb consumes any DECLARED ``retryable(n)`` budgets
+(``ops/queue/retry.produce_declared_retries``): an item whose run sits at a
+mechanical failure terminal and whose enqueuer declared a budget is
+re-enqueued as a derived-id retry item (``<root>.retry<k>``) reusing the
+recorded resolved identity verbatim, and the SAME tick's advance/dispatch
+machinery places and starts it — the fresh attempt is a mint-over-corpse by
+the ``_ADOPTABLE_STATUSES`` table below, and every cluster-boundary gate
+still binds inside the lifecycle (D1). No declaration (the default) means
+needs_human: nothing is retried, nothing is written, byte-for-byte the
+pre-leg behavior. Every decision — enqueued, replayed, exhausted — is a
+disclosed ``declared_retries`` row naming itself a declared-retry.
+
 **D10 — the WRITE authority grooms; the read paths never do** (§7's
 relaunch-cheapness invariant, §8 S12). This verb is the queue's only actor, so
 it is where the intake ledger is compacted and unreferenced terminal RunRecords
@@ -820,11 +834,20 @@ def _ledger_target(item: dict[str, Any]) -> _Target | None:
 
 def _brief(result: QueueDispatchResult) -> str:
     """The deterministic one-paragraph disclosure, computed and never authored."""
+    # §7 failure classes: every declared-retry decision travels in the same
+    # breath as the tick that took it — an exhausted budget must be named even
+    # on a tick that otherwise had nothing to dispatch.
+    retry_lines = [
+        f"declared-retry ({row.outcome}): {row.reason}" for row in result.declared_retries
+    ]
     if result.stage_reached == "nothing_to_dispatch":
-        return (
-            f"Run queue: nothing to dispatch (computed {result.computed_at}). "
-            f"{result.placements_considered} placement(s) considered, "
-            f"{sum(result.held_counts.values())} held."
+        return "\n".join(
+            [
+                f"Run queue: nothing to dispatch (computed {result.computed_at}). "
+                f"{result.placements_considered} placement(s) considered, "
+                f"{sum(result.held_counts.values())} held.",
+                *retry_lines,
+            ]
         )
     lines = [
         f"Run queue: {len(result.dispatched)} dispatched, {len(result.refused)} refused, "
@@ -839,6 +862,7 @@ def _brief(result: QueueDispatchResult) -> str:
             f"batch: max_dispatches > 1 allowed by {result.batch_allowed_by}; every "
             "dispatched item still meets its own cluster-boundary gates (D1)."
         )
+    lines += retry_lines
     lines += [
         f"{row.outcome}: {row.item_id} -> {row.cluster} as {row.run_id} — {row.reason}"
         for row in result.dispatched
@@ -952,6 +976,20 @@ def queue_dispatch(
     exp = Path(experiment_dir)
     narrowed = spec.item_ids is not None
     wanted = set(spec.item_ids or ())
+
+    # §7 "failure classes", consumed FIRST: a ledger item whose enqueuer
+    # DECLARED retryable(n) and whose run sits at a mechanical failure
+    # terminal is re-enqueued as a derived-id retry item before the authority
+    # reads the ledger, so the same tick's ordinary machinery places and
+    # starts it — the chain-dispatch wake at a run's retirement is thereby
+    # also the retry's dispatch, with no second path. Absent declarations
+    # (the default) cost one pass over the already-planned fold and write
+    # nothing: today's behavior byte-for-byte. Every decision is a disclosed
+    # ``declared_retries`` row; exhaustion writes nothing and the item parks
+    # for a human exactly as an undeclared failure does.
+    from hpc_agent.ops.queue.retry import produce_declared_retries
+
+    declared_retries, _ = produce_declared_retries(exp, read_intake_items(exp))
 
     # The spec validator already refused a silently-raised batch; what remains
     # is to DISCLOSE which affordance carried it (R4 applies to successes too).
@@ -1116,6 +1154,7 @@ def queue_dispatch(
         reason=reason,
         dispatched=dispatched,
         refused=refused,
+        declared_retries=declared_retries,
         held=held,
         refused_counts=refused_counts,
         held_counts=held_counts,

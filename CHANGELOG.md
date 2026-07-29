@@ -17,6 +17,47 @@ size (2026-07-09 reorg, `docs/internals/audit-2026-07-09.md` R3):
 
 ## [Unreleased] — hpc-copilot fork: human-amplification block architecture
 
+### Added — declared retryable(n) failure classes on queue items (run-queue plan §7, 2026-07-29)
+
+The plan's last unblocked open decision, RESOLVED as proposed: `needs_human`
+vs `retryable(n)` is DECLARED item data consumed by kernel code — never an
+agent's judgment call — with `needs_human` the default and retryable only by
+explicit intake flag.
+
+- **The flag.** `queue-run` gains `retryable` (a positive small int, 1–10,
+  junk refused at the wire; the ceiling's twin is
+  `state/queue_intake.RETRYABLE_CAP`, MIRROR-pinned). Absent means
+  needs_human — a failed run parks for the human, byte-for-byte the prior
+  behavior; the field is recorded verbatim as an arrival fact.
+- **The consumer.** At the top of every `queue-dispatch` tick
+  (`ops/queue/retry.produce_declared_retries`) — so the chain-dispatch wake
+  at a run's retirement is also the retry's dispatch: a run at a MECHANICAL
+  failure terminal (`is_declared_retry_failure`, the one classifier — journal
+  `failed` only; never superseded, human-halted, parked on a decision, or
+  held on an escalation verdict, and `abandoned` deliberately excluded as a
+  class a machine cannot tell apart) is re-enqueued as a NEW intake item with
+  derived id `<root>.retry<k>` that copies the recorded resolved identity
+  VERBATIM (same spec/run_id/cmd_sha — never a re-resolve, §10.S3) and pins
+  the spec's cluster (R5). The same tick's advance/dispatch machinery places
+  and starts it — a mint-over-corpse by the existing adopt table — and every
+  cluster-boundary gate still binds inside the lifecycle (D1): the budget
+  automates re-dispatch, never consent.
+- **Durable, race-safe counting.** `retries_used` is derived from the ledger
+  (max `retry_attempt` over the chain's folded items), never in-memory; the
+  derived id doubles as the append's dedup key, so racing ticks write one
+  line, and a live-failure chain can never compact its spend away.
+- **Disclosure.** `queue-dispatch` reports every decision as a
+  `declared_retries` row (enqueued / replayed / exhausted) and names each a
+  declared-retry on its brief — exhaustion parks the item for a human with
+  the budget named, even on a tick with nothing else to dispatch.
+  `queue-status` items carry `retryable` / `retries_used`, and its notes say
+  when a declared retry is pending, awaiting dispatch, or exhausted.
+
+Pinned by `tests/ops/queue/test_queue_declared_retry.py` (classifier
+fire-paths per guard, same-tick retry loop, dedup race, exhaustion, the
+needs_human byte-identity) and `tests/state/test_queue_intake_retry.py`
+(vocabulary, derived id charset, durable count).
+
 ### Added — the run queue, Phases 1+2 (run-queue plan §6, 2026-07-29)
 
 The missing organ: intake + placement. Experiments queue as they come in and

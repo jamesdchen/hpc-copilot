@@ -16,8 +16,12 @@ asked for*. Concretely, a record carries only
 
 * **arrival facts** — ``item_id`` / ``request_id`` / ``enqueued_at``, the
   resolve spec (or a pointer to it), the typed resource asks, an optional
-  explicit cluster pin, an optional campaign base, and (once resolved) the
-  COMPUTED ``run_id`` (§10.S2: run ids are derived, never minted); and
+  explicit cluster pin, an optional campaign base, an optional DECLARED
+  ``retryable(n)`` failure-class budget (§7 "failure classes"; absent means
+  ``needs_human``, and :func:`item_retryable` is its one tolerant reader) plus
+  the ``retry_root`` / ``retry_attempt`` chain facts a kernel-minted retry
+  item carries, and (once resolved) the COMPUTED ``run_id`` (§10.S2: run ids
+  are derived, never minted); and
 * **lifecycle in ``{queued, placed}``** and nothing wider.
 
 Resolved identity on the enqueue record (Phase 2 / §10.S3)
@@ -148,6 +152,7 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "INTAKE_STATES",
+    "RETRYABLE_CAP",
     "STATE_PLACED",
     "STATE_QUEUED",
     "TOMBSTONE_CAP",
@@ -164,12 +169,19 @@ __all__ = [
     "intake_path_if_exists",
     "is_compaction_tombstone",
     "item_cmd_sha",
+    "item_retry_attempt",
+    "item_retry_root",
+    "item_retryable",
     "item_run_id",
     "items_in_states",
     "placement_request_id",
     "read_intake_items",
     "read_intake_records",
     "read_intake_records_counted",
+    "retries_used",
+    "retry_chains",
+    "retry_request_id",
+    "retry_tip",
 ]
 
 #: Typed as ``Literal`` rather than ``str`` so a caller handing one of them to the
@@ -202,6 +214,25 @@ _KIND_COMPACTED = "compacted"
 #: compared as an ordinary id — a ``:`` or ``/`` would leave the charset the
 #: whole queue wire surface validates against.
 _PLACEMENT_TOKEN_SUFFIX = ".placed"
+
+#: Separator for a DECLARED-RETRY item's derived id: ``<root>.retry<k>``. Same
+#: charset argument as :data:`_PLACEMENT_TOKEN_SUFFIX` (a ``#`` — the obvious
+#: spelling — would leave ``QueueItemId``'s charset and be refused by every
+#: queue wire model). The derived id is BOTH the retry item's ``item_id`` and
+#: the append's ``request_id`` (§10.S2 collapses them at enqueue), which is what
+#: makes the retry race-safe: two dispatch ticks that both decide "attempt k+1
+#: is owed" derive the same token and the in-flock dedup writes ONE line.
+_RETRY_TOKEN_SEPARATOR = ".retry"
+
+#: Ceiling on the DECLARED ``retryable(n)`` budget an intake item may carry
+#: (run-queue plan §7, "Failure classes on parked items" — RESOLVED as
+#: proposed 2026-07-29). Small on purpose: the budget covers a MECHANICAL
+#: failure terminal being re-dispatched, and a run that fails more than this
+#: many times is a health problem a human must see, not a retry problem. The
+#: wire twin is ``QueueRunSpec.retryable``'s ``le=`` bound
+#: (``_wire/actions/queue_run.py``) — mirrored, not imported, the same
+#: twin discipline ``QueueItemState`` / :data:`INTAKE_STATES` use.
+RETRYABLE_CAP = 10
 
 #: Watermark key holding the compaction TOMBSTONES — see
 #: :func:`compaction_tombstones`. Ordered oldest-first so the cap can be applied
@@ -575,6 +606,122 @@ def item_cmd_sha(item: dict[str, Any]) -> str | None:
     agreement from eight hex characters.
     """
     return _nonempty_str(item, "cmd_sha")
+
+
+def retry_request_id(root_item_id: str, attempt: int) -> str:
+    """The DERIVED id of declared-retry *attempt* for *root_item_id*'s chain.
+
+    ``<root>.retry<k>`` — deterministic per ``(root, attempt)``, so the retry
+    inherits the arrival's replay safety (module docstring, "Replay dedup"):
+    two racing dispatch ticks, or one whose turn is replayed, compute the same
+    token and the in-flock dedup probe leaves ONE enqueue record. It is the
+    retry item's ``item_id`` AND the append's ``request_id`` (§10.S2), and it
+    is distinct from the root's own id by construction, so it can never dedup
+    against the root's enqueue record.
+
+    *attempt* counts from 1: attempt 0 IS the root item, which was minted by
+    its own client request_id, not derived.
+    """
+    if not root_item_id or not root_item_id.strip():
+        raise ValueError("root_item_id must be a non-empty string")
+    if attempt < 1:
+        raise ValueError("attempt counts from 1 (attempt 0 is the root item itself)")
+    return f"{root_item_id}{_RETRY_TOKEN_SEPARATOR}{attempt}"
+
+
+def item_retryable(item: dict[str, Any]) -> int | None:
+    """The DECLARED ``retryable(n)`` budget a folded *item* carries, or ``None``.
+
+    ``None`` — the default, and today's behavior byte-for-byte — means
+    ``needs_human``: a failed run parks for a person and nothing re-dispatches
+    it. A budget exists ONLY when the intake record carries an explicit small
+    positive int (run-queue plan §7: retryable is DECLARED item data consumed
+    by plan/kernel code, never an agent's judgment call — the wire refuses junk
+    at enqueue, and this reader refuses the same junk tolerantly for a
+    hand-edited or foreign ledger line: a bool, a float, a string, zero, a
+    negative, or anything past :data:`RETRYABLE_CAP` reads as no declaration).
+    """
+    value = item.get("retryable")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 1 <= value <= RETRYABLE_CAP else None
+
+
+def item_retry_root(item: dict[str, Any]) -> str | None:
+    """The id of the chain *item* belongs to; its own id for a non-retry item.
+
+    Read off the stored ``retry_root`` fact the retry producer stamps at
+    enqueue — never parsed back out of the item id (composed ids are not
+    parsed; the ``compose_campaign_id`` ruling applied here). ``None`` only
+    when the item has no usable ``item_id`` at all.
+    """
+    root = _nonempty_str(item, "retry_root")
+    return root if root is not None else _nonempty_str(item, "item_id")
+
+
+def item_retry_attempt(item: dict[str, Any]) -> int:
+    """Which declared-retry attempt *item* is: 0 for the root, k for ``.retry<k>``.
+
+    Read off the stored ``retry_attempt`` fact, tolerantly: absent or junk
+    reads as 0 (the item is its chain's root). Attempts are stamped by the one
+    producer and deduped by the derived request id, so within a chain each
+    value exists at most once.
+    """
+    value = item.get("retry_attempt")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value if value >= 1 else 0
+
+
+def retry_chains(items: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Folded *items* grouped into declared-retry chains, keyed by root id.
+
+    Every item is in exactly one chain (a non-retry item is a chain of one —
+    its own root). Chain members keep the fold's arrival order. THE grouping
+    both consumers share: the dispatch-side retry producer decides the next
+    attempt over a chain, and ``queue-status`` reports ``retries_used`` per
+    chain — two derivations of "how far along is this chain" would be the R9
+    divergence one predicate module exists to prevent, scaled down.
+    """
+    chains: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        root = item_retry_root(item)
+        if root is None:
+            continue
+        chains.setdefault(root, []).append(item)
+    return chains
+
+
+def retries_used(chain: Sequence[dict[str, Any]]) -> int:
+    """How many declared retries *chain* has spent — durable, from the ledger.
+
+    The MAX ``retry_attempt`` over the chain's folded items, never an
+    in-memory counter (run-queue plan §7: the budget must survive the pass
+    that spent it). Max rather than count so a chain read mid-compaction — or
+    one whose middle record a foreign writer mangled — can only UNDER-report
+    by as much as was actually lost, never re-earn a spent attempt from a
+    miscount. 0 for a chain that is only its root.
+    """
+    return max((item_retry_attempt(item) for item in chain), default=0)
+
+
+def retry_tip(chain: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """The LATEST attempt in *chain* — the one item whose outcome still speaks.
+
+    An earlier attempt's failure was already answered by the retry that
+    followed it, so only the tip is evidence about whether the chain owes
+    another dispatch. Ties (impossible through the deduped producer, possible
+    through a hand-edited ledger) resolve to the LAST in fold order — the most
+    recently written record. ``None`` for an empty chain.
+    """
+    tip: dict[str, Any] | None = None
+    best = -1
+    for item in chain:
+        attempt = item_retry_attempt(item)
+        if attempt >= best:
+            tip = item
+            best = attempt
+    return tip
 
 
 def enqueue_age_sec(enqueued_at: Any, now_dt: datetime) -> int | None:

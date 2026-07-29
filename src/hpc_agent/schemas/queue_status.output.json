@@ -304,6 +304,27 @@
           "description": "The spec pointer as enqueued, when the item used the pointer form. The inline ``spec`` is deliberately NOT echoed here: it can be arbitrarily large and this result is a bounded digest.",
           "title": "Spec Ref"
         },
+        "retryable": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The DECLARED retryable(n) failure-class budget this item carries (run-queue plan §7): re-dispatch a MECHANICAL failure terminal up to n times before parking for a human. Null — the default — means needs_human. A ledger fact, declared by the enqueuer and only ever consumed by kernel code (queue-dispatch's declared-retry producer); a kernel-minted retry item carries the budget it inherited.",
+          "title": "Retryable"
+        },
+        "retries_used": {
+          "default": 0,
+          "description": "How many declared retries this item's chain has spent — the count of kernel-minted ``.retry<k>`` items on the ledger for its root (``state/queue_intake.retries_used``, the same durable derivation the dispatch-side producer charges the budget by). Ledger-derived on every read, never an in-memory counter, so the number survives any pass that spent it. 0 for an item with no declared-retry history; identical across every item of one chain.",
+          "minimum": 0,
+          "title": "Retries Used",
+          "type": "integer"
+        },
         "dispatched": {
           "default": false,
           "description": "PROJECTION: a RunRecord exists for this item's run_id. This is S10's resolution in one field — intake never records 'dispatched', because the submit-once ``submitting`` record already IS the handoff fact and no write spans both stores atomically.",

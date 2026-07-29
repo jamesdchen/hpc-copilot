@@ -165,6 +165,32 @@ class QueueRunSpec(BaseModel):
             "configured cluster satisfies the item."
         ),
     )
+    # The le= bound mirrors state/queue_intake.RETRYABLE_CAP (the twin
+    # discipline QueueItemState / INTAKE_STATES use): the wire refuses junk at
+    # enqueue, the ledger reader refuses the same junk tolerantly.
+    # MIRROR: hpc_agent.state.queue_intake::RETRYABLE_CAP pinned-by tests/state/test_queue_intake_retry.py::test_wire_le_bound_mirrors_retryable_cap  # noqa: E501
+    retryable: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description=(
+            "Optional DECLARED failure-class budget (run-queue plan §7, "
+            "'Failure classes on parked items'): when the run this item becomes "
+            "reaches a MECHANICAL failure terminal (journal status 'failed' — "
+            "never superseded, human-halted, parked on a decision, or held on "
+            "an escalation verdict), queue-dispatch re-enqueues and re-dispatches "
+            "it up to this many times before it parks for a human, each retry "
+            "disclosed as a declared-retry and counted durably on the ledger. "
+            "Null (the default) means needs_human — a failed run parks and "
+            "nothing re-dispatches it, today's behavior byte-for-byte. This is "
+            "DECLARED item data consumed by kernel code, never an agent's "
+            "judgment call: the only way an item is retryable is that its "
+            "enqueuer said so here, and a retry reuses the item's recorded "
+            "resolved identity verbatim (same spec, same run_id/cmd_sha — never "
+            "a re-resolve, which would consume the next optuna proposal). A "
+            "positive small int; junk is refused at this boundary."
+        ),
+    )
 
     @model_validator(mode="after")
     def _exactly_one_spec_source(self) -> QueueRunSpec:

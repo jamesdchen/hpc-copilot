@@ -222,6 +222,12 @@ def queue_run(*, experiment_dir: Path, spec: QueueRunSpec) -> QueueRunResult:
         "cluster_pin": cluster_pin,
         "campaign_base": spec.campaign_base,
         "resources": spec.resources.model_dump(mode="json"),
+        # The DECLARED failure-class budget (§7 "failure classes", RESOLVED
+        # 2026-07-29): recorded verbatim as an arrival fact. None is the
+        # needs_human default and is written as null like every other absent
+        # arrival fact — the tolerant readers treat both identically, so
+        # today's ledgers and this one fold the same way.
+        "retryable": spec.retryable,
     }
     replayed = append_intake_item(experiment_dir, record=record, request_id=spec.request_id)
 

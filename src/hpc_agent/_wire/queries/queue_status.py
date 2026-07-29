@@ -185,6 +185,31 @@ class QueueStatusItem(BaseModel):
             "arbitrarily large and this result is a bounded digest."
         ),
     )
+    retryable: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "The DECLARED retryable(n) failure-class budget this item carries "
+            "(run-queue plan §7): re-dispatch a MECHANICAL failure terminal up "
+            "to n times before parking for a human. Null — the default — means "
+            "needs_human. A ledger fact, declared by the enqueuer and only ever "
+            "consumed by kernel code (queue-dispatch's declared-retry producer); "
+            "a kernel-minted retry item carries the budget it inherited."
+        ),
+    )
+    retries_used: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many declared retries this item's chain has spent — the count "
+            "of kernel-minted ``.retry<k>`` items on the ledger for its root "
+            "(``state/queue_intake.retries_used``, the same durable derivation "
+            "the dispatch-side producer charges the budget by). Ledger-derived "
+            "on every read, never an in-memory counter, so the number survives "
+            "any pass that spent it. 0 for an item with no declared-retry "
+            "history; identical across every item of one chain."
+        ),
+    )
 
     # ── projected facts (recomputed every read — NEVER stored, R1) ────────────
     dispatched: bool = Field(

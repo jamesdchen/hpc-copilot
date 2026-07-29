@@ -53,6 +53,14 @@
       "title": "Refused",
       "type": "array"
     },
+    "declared_retries": {
+      "description": "The declared-retry decisions this tick took BEFORE placement ran (§7 failure classes): retry items enqueued for mechanically-failed runs whose items carry a declared retryable(n) budget, and exhausted budgets whose items now park for a human. Empty when no ledger item declares a budget — the default, and the whole leg's cost in that case. An enqueued retry is placed and dispatched by the SAME machinery as any other queued item, so its start also appears under ``dispatched`` when this tick reached it.",
+      "items": {
+        "$ref": "#/$defs/QueueDeclaredRetry"
+      },
+      "title": "Declared Retries",
+      "type": "array"
+    },
     "held": {
       "description": "``queue-advance``'s own holdbacks, relayed VERBATIM — items that were never placed, so the actor had nothing to act on. Passed through rather than restated so the authority's reason is the one the human reads (R4).",
       "items": {
@@ -373,6 +381,84 @@
         "reason"
       ],
       "title": "queue-advance cluster verdict",
+      "type": "object"
+    },
+    "QueueDeclaredRetry": {
+      "additionalProperties": false,
+      "description": "One declared-retry decision this dispatch tick took — disclosure, never judgment.\n\nThe retryable(n) failure-class leg (run-queue plan §7 \"Failure classes on\nparked items\", RESOLVED as proposed 2026-07-29): a budget exists only\nbecause the item's ENQUEUER declared one, and the kernel consumes it\nmechanically — a run at a mechanical failure terminal is re-enqueued as a\nderived-id retry item (``<root>.retry<k>``) reusing the recorded resolved\nidentity verbatim, up to n times; past n it parks for a human. Every such\ndecision is a row here, successes included, because a retry that did not\nsay it was a declared retry would be indistinguishable from an agent\nquietly resubmitting a failed run.",
+      "properties": {
+        "root_item_id": {
+          "description": "The chain's root — the item whose enqueuer declared the budget.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Root Item Id",
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The retry item this tick minted (or found already minted, on 'replayed') — ``<root>.retry<attempt>``, the derived id that makes racing ticks collapse onto one ledger line. Null on 'exhausted': nothing was enqueued.",
+          "title": "Item Id"
+        },
+        "attempt": {
+          "description": "Which declared retry this row is about: the attempt just enqueued ('enqueued'/'replayed'), or the count already spent ('exhausted').",
+          "minimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "retryable": {
+          "description": "The declared budget n, read off the ledger — never inferred.",
+          "minimum": 1,
+          "title": "Retryable",
+          "type": "integer"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The FAILED run the chain re-dispatches. The retry reuses this recorded identity verbatim (§10.S3: never a re-resolve), so the fresh attempt is minted over the same run id's corpse.",
+          "title": "Run Id"
+        },
+        "outcome": {
+          "description": "'enqueued' — this tick appended the retry item; 'replayed' — the derived id already existed (a racing or replayed tick got there first; nothing was written); 'exhausted' — the declared budget is spent, nothing was enqueued, and the item parks for a human.",
+          "enum": [
+            "enqueued",
+            "replayed",
+            "exhausted"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The disclosed WHY, naming it a declared-retry: which run failed, which attempt of which budget this is, and — on exhaustion — that the item now parks with its budget named.",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_item_id",
+        "attempt",
+        "retryable",
+        "outcome",
+        "reason"
+      ],
+      "title": "queue-dispatch declared retry",
       "type": "object"
     },
     "QueueHoldback": {
