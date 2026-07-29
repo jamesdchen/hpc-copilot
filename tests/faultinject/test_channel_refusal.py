@@ -6,7 +6,7 @@ and MUST raise or degrade to UNKNOWN — never parse-and-trust the truncated byt
 never read absence as a settled "zero rows / all terminal / all present". This is
 the F3 rule and the run-12 finding-24 (NAT idle-drop) defense.
 
-Audit rows drilled (``docs/plans/transport-robustness-2026-07-17/AUDIT.md`` §7):
+Audit rows drilled (``docs/history/plans/transport-robustness-2026-07-17/AUDIT.md`` §7):
   * "rc-0 read but drop the ack line" → ``ssh_status_report`` RAISES
   * "Drop the scheduler-query ack" → ``ssh_batch_scheduler_states`` → SshUnreachable
   * census sever / truncation → ``announce`` readers refuse (§3f, F4)

@@ -1,6 +1,6 @@
 """U4 — the autonomous kill drill (rung-2 proving, plan §4-U4).
 
-WHY THIS EXISTS (``docs/plans/sandbox-proving-run-2026-07-18.md`` §4-U4)
+WHY THIS EXISTS (``docs/history/plans/sandbox-proving-run-2026-07-18.md`` §4-U4)
 ------------------------------------------------------------------------
 The ONE genuinely non-idempotent actuation in the whole pipeline is the
 ``qsub dispatch → job-id window``: the scheduler has ACCEPTED the array but

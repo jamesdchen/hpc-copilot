@@ -36,7 +36,7 @@
 # scheduler is stood up from distro packages, no custom build. What this lane
 # tests is the SGE DIALECT (qsub -t n-m, qstat -u, qacct, -pe shared, the
 # login-shell PATH chain), which is identical across SoGE/UGE/OCS and is
-# spooling-method-agnostic. Per §6 of docs/plans/sandbox-proving-run-2026-07-18.md
+# spooling-method-agnostic. Per §6 of docs/history/plans/sandbox-proving-run-2026-07-18.md
 # it can NEVER cover a specific site's login profile (hoffman2's exact PATH
 # shape) — do not oversell it.
 #

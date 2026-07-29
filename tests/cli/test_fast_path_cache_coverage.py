@@ -1,6 +1,6 @@
 """Behaviour-pinning coverage for :mod:`hpc_agent.cli._fast_path_cache`.
 
-The 2026-07-17 mutation triage-2 (``docs/plans/mutation-triage-2-2026-07-17.md``)
+The 2026-07-17 mutation triage-2 (``docs/history/plans/mutation-triage-2-2026-07-17.md``)
 found fast-path-cache among the curated modules that ran DARK — mutmut aborted
 its baseline because the module's only covering set at the time was the SLOW
 subprocess ``test_fast_dispatch`` battery (mutmut deselects ``slow`` and can't

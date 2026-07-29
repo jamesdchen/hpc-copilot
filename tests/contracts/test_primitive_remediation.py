@@ -103,6 +103,11 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # at the shared dispatch seam.
         "cite-check",
         "settle-aggregate",
+        # tag-session (the devx seam, 2026-07-28 dev-loop/product separation):
+        # a spec-taking mutate append to the session-tag ledger ({} is invalid —
+        # tags requires ≥1 entry), so it appears in the schema-file-parametrized
+        # remediation probes.
+        "tag-session",
         "migrate-remainder",
         "notebook-draft",
         "challenge-status",

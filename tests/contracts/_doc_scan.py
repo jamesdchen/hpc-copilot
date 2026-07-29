@@ -1,7 +1,7 @@
 """Shared masking/scoping seam for the operational-doc contract pins.
 
-Two contract tests scan the operational-truth doc surfaces
-(``docs/internals`` + ``docs/workflows``) for silent rot:
+Two contract tests scan the operational-truth doc surface
+(``docs/internals``) for silent rot:
 :mod:`tests.contracts.test_doc_references` (console-script + module-path
 references that a refactor has since broken) and
 :mod:`tests.contracts.test_doc_frozen_counts` (frozen ``N primitives`` /
@@ -38,7 +38,9 @@ from tests._paths import REPO_ROOT
 
 # Operational-truth doc surfaces. Design/plans narrate history — out of
 # scope (architect memo §6). Both doc pins share this exact tuple.
-SCOPE_DIRS: tuple[str, ...] = ("docs/internals", "docs/workflows")
+# (docs/workflows was folded into docs/internals in the 2026-07-28 docs
+# reorg, so the tuple shrank to one entry; coverage is unchanged.)
+SCOPE_DIRS: tuple[str, ...] = ("docs/internals",)
 
 
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)

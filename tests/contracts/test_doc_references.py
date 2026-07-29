@@ -11,9 +11,10 @@ since moved (e.g. a bug-sweep record pointing at
 until a reader follows the dead reference. This pin turns the two
 regressions into a test.
 
-Scope — ``docs/internals/`` + ``docs/workflows/`` ONLY (the operational
-truth surfaces). ``docs/design/`` + ``docs/plans/`` narrate history by
-design and are deliberately out of scope (architect memo §6). Within
+Scope — ``docs/internals/`` ONLY (the operational truth surface; it also
+carries the former ``docs/workflows/`` guides since the 2026-07-28 reorg).
+``docs/design/`` + ``docs/plans/`` narrate history by design and are
+deliberately out of scope (architect memo §6). Within
 scope, two exclusions keep the pin honest rather than noisy:
 
 * **Fenced code blocks** (```` ``` ````-delimited) are masked. They carry

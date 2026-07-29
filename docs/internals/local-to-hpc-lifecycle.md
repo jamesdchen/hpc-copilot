@@ -15,19 +15,19 @@ truth, not this prose.
 flowchart TB
     subgraph FREE["THE FREE ZONE — local experimentation, zero gates"]
         direction TB
-        CODE["write code, any shape:<br/>notebook (jupytext), script, package"]
-        REG["@register_run on a function<br/>(experiment_kit) — the whole contract"]
+        NEW["greenfield path: draft a notebook or<br/>script with @register_run from line one —<br/>two lines, in-process, nothing on disk"]
         DRY["iterate: run locally, dry-run samples,<br/>optional elision check"]
-        CODE --> REG --> DRY --> CODE
+        EXIST["intake path: existing code —<br/>train.py, package module, hydra/click<br/>main, shell script or binary —<br/>no decorator, no kit involvement yet"]
+        NEW --> DRY --> NEW
     end
 
     subgraph RAMP["THE ON-RAMP — assistive, never guesses"]
         direction TB
-        EP["detect / decorate / wrap the entry point<br/>(your file stays byte-untouched<br/>on the wrapper path)"]
-        TASKS["interview materializes .hpc/tasks.py<br/>+ interview.json — never hand-edited"]
-        HUMAN["the tool demands exactly two things<br/>only you can supply:<br/>goal + task_generator"]
-        EP --> TASKS
-        HUMAN -.-> TASKS
+        EP["intake + entry point: detect, then<br/>decorate (bounded AST splice, body<br/>untouched) or wrap (your file stays<br/>byte-untouched on the wrapper path)"]
+        HUMAN["the two fields only a human<br/>can supply (no safe default<br/>exists): goal + task_generator"]
+        TASKS["the interview merges both feeds into<br/>.hpc/tasks.py + interview.json —<br/>never hand-edited"]
+        EP -->|"WHAT to run<br/>(machine-detected)"| TASKS
+        HUMAN -.->|"WHY / what sweep<br/>(human-supplied)"| TASKS
     end
 
     subgraph BOUNDARY["THE BOUNDARY — shared cluster time; the gated blocks"]
@@ -47,12 +47,26 @@ flowchart TB
     end
 
     FREE ==>|"only when YOU decide<br/>the direction is interesting"| RAMP
+    EXIST -.->|"@register_run arrives HERE,<br/>not before — a dead idea<br/>never meets the framework"| EP
     RAMP ==> BOUNDARY
     BOUNDARY ==> AFTER
-    AFTER -.->|"most directions loop back<br/>cheaply, or die here"| FREE
+    INTERP ==>|"⟲ the conclusion is yours — most directions<br/>loop back to cheap local iteration<br/>(or die, having cost nothing)"| FREE
 
-    OPTIN["OPT-IN RIGOR (bind at the boundary, silent otherwise):<br/>notebook audit · pack receipts · overnight consent · multi-actor policy"]
+    OPTIN["OPT-IN RIGOR (bind at the boundary, silent otherwise):<br/>notebook audit · pack receipts · overnight standing consent<br/>(pre-typed y's with hard caps + armed wake) · multi-actor policy"]
     OPTIN -.-> BOUNDARY
+
+    DRIVE["DRIVING — the stateless block-drive tick: blocks chain<br/>in code, detach for cluster waits, park at code-digested<br/>human briefs. The campaign-run workflow plan relays ticks<br/>so relay traffic stays out of chat; campaign-recon fans out<br/>read-only status sweeps. Both bind HERE and AFTER only —<br/>no workflow ever enters the free zone or the on-ramp"]
+    DRIVE -.-> BOUNDARY
+    DRIVE -.-> AFTER
+```
+
+Legend (kept out of the map — box tint is nesting, no meaning):
+
+```mermaid
+flowchart LR
+    L1["step"] -->|"automatic"| L2["step"]
+    L3["zone"] ==>|"your decision"| L4["zone"]
+    L5["note"] -.->|"binds on, not a step"| L6{{"human 'y' gate"}}
 ```
 
 ## Walkthrough
@@ -68,7 +82,11 @@ no notebook gate, no block gate — and the notebook drafting loop
 (`src/hpc_agent/ops/notebook/dry_run_op.py`) is explicitly trust-neutral:
 dry-run receipts journal as `execution_scope="sampled"` and are filtered
 out of every attention tier and gate. You iterate at the speed of your own
-editor.
+editor. Nor does the decorator have to come first: existing code — a plain
+`train.py`, a package module, a hydra/click main, even a shell script or
+binary — experiments with zero framework involvement, and `@register_run`
+is spliced or wrapped in *at the on-ramp* (next section), so a direction
+that dies locally never meets the framework at all.
 
 **The on-ramp.** When a direction earns cluster time, the tool's job is to
 make the crossing cheap. `detect-entry-point`
@@ -88,6 +106,11 @@ hand-edited. Two inputs are demanded from the human and are refusable —
 and the type system forbids attaching a safe default to them. Everything
 else is detected, scaffolded, or comes back as a question. Where the tool
 cannot decide, it refuses rather than guesses (`ambiguous_entry_point`).
+The map draws two feeds merging into `tasks.py` because materializing it
+genuinely needs both and neither can substitute for the other: the
+machine-detected *what to run* (the entry point) and the human-supplied
+*why and what sweep* (`goal` + `task_generator`) — the interview is the
+join point where they meet.
 
 **The boundary.** The gated blocks are exactly the members of
 `src/hpc_agent/infra/block_chain.py::GATED_BLOCKS` — today `submit-s2`,
@@ -115,6 +138,33 @@ layer discloses and never gates: `cite-check` reports, challenges never
 reshape a core path, `run-story` renders with no LLM anywhere in the render
 path, and `doctor` (`src/hpc_agent/ops/recover/doctor.py`) drafts
 proposals but restarts nothing.
+
+**The dev loop (meta).** Improving the tool sits *outside* the four
+zones: it is not a step any experiment passes through, and — since the
+2026-07-28 erasure of the bespoke handoff-package build protocol — it has
+NO orchestration machinery of its own. Claude Code natively runs dynamic
+workflows; the repo's devx layer augments that experience rather than
+replacing it: friction noticed anywhere in the lifecycle is tagged from
+the session itself (`tag-session`, the one devx seam the product ships),
+the maintainer's ingestion sweeps those ledgers plus the session
+transcripts under `~/.claude/projects/`, and a fix is developed with
+ordinary Claude Code sessions/workflows whose *gates* are the repo's own
+— the lint gauntlet, the regen `--check` steps, the contract tests, and
+the enforcement-mapped principles pages. A live experiment never sees any
+of it; what the researcher sees is that the next session's tool has one
+less rough edge. The main loop, meanwhile, has its own deterministic
+driver: the stateless `block-drive` tick
+(`src/hpc_agent/_kernel/lifecycle/block_drive.py::run_tick`) chains the
+blocks in code, detaches cluster-bound waits into a child process, and
+parks at code-digested briefs — the LLM touches the flow only at those
+parks (`docs/internals/submit-sequence.md`; the LLM-as-executor path was
+deliberately removed). Workflow plans wrap that driver without competing
+with it: `campaign-recon` fans out the read-only status sweep, and
+`campaign-run` relays rule-fixed `block-drive` ticks so the tick/wait
+traffic stays out of chat context — parking at every typed-`y` gate,
+which stays interactive and inline on purpose
+(`docs/design/agent-delegation.md` rule 5,
+`src/hpc_agent/slash_commands/workflows/README.md`).
 
 ## Where every gate binds
 

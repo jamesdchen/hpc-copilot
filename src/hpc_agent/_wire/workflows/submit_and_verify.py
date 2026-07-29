@@ -89,7 +89,7 @@ class SubmitAndVerifySpec(BaseModel):
 class ReducerCheckResult(BaseModel):
     """Rung-2 reducibility-ladder outcome: EXECUTING the run's declared custom
     reducer against the verified canary's ONE real task-0 row, before the main
-    array launches (``docs/plans/amortized-reduction-check-2026-07-17.md``).
+    array launches (``docs/history/plans/amortized-reduction-check-2026-07-17.md``).
 
     Rung 1 (S1) is a STATIC predicate — "is a reducer *declared*?"; this rung is
     a DYNAMIC proof — "does the declared reducer *execute*?" — running the SAME
@@ -240,7 +240,7 @@ class SubmitAndVerifyResult(BaseModel):
     reducer_check: ReducerCheckResult | None = Field(
         default=None,
         description=(
-            "Rung-2 reducibility check (docs/plans/amortized-reduction-check-2026-07-17.md): "
+            "Rung-2 reducibility check (docs/history/plans/amortized-reduction-check-2026-07-17.md): "
             "the outcome of EXECUTING the run's declared custom reducer against the verified "
             "canary's ONE real task-0 row, before the main array launches. None when no canary "
             "ran / the run declares no custom reducer / the check was opted out. A `disclosed` "

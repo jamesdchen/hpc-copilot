@@ -138,7 +138,7 @@ def submit_once_enabled() -> bool:
     Evidence for the flip: the proving-run-15 live-fire — run 15 exercised the
     mint→promote wiring against a real scheduler (submit-once adopted at the
     apex, no re-qsub) and the default-flip criterion in
-    ``docs/plans/proving-run-15-runsheet.md`` §5 was met (see that file's drift
+    ``docs/history/plans/proving-run-15-runsheet.md`` §5 was met (see that file's drift
     log; commits ``7c274291`` — run-15 EXECUTED — and ``80922168`` — the B4
     pull fix live-validated addendum).
 

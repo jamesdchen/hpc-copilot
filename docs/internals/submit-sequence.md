@@ -301,7 +301,7 @@ An autonomous agent invokes `Skill("hpc-submit", {...})` (or drives
 plays the human's role at the rendezvous — reading the brief and
 committing the `y`/nudge — but the driver, blocks, and detach mechanism
 are identical. See
-[`../workflows/code-driven-orchestration.md`](../workflows/code-driven-orchestration.md).
+[`code-driven-orchestration.md`](code-driven-orchestration.md).
 
 ## What's NOT in the sequence
 
@@ -321,7 +321,7 @@ A few things sometimes confused with this flow:
 
 ## See also
 
-- [`../workflows/code-driven-orchestration.md`](../workflows/code-driven-orchestration.md) — driving the same substrate from a plain program
+- [`code-driven-orchestration.md`](code-driven-orchestration.md) — driving the same substrate from a plain program
 - [`../design/human-amplification-blocks.md`](../design/human-amplification-blocks.md) — why the flow is blocks-with-briefs
 - [`../design/block-drive.md`](../design/block-drive.md) — the stateless resumable tick
 - [`parallelization-axes.md`](parallelization-axes.md) — the five axes used during submission

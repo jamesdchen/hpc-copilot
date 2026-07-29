@@ -17,7 +17,7 @@ its exit code LAST, and :func:`~hpc_agent.infra.ssh_validation.split_ack`
 (which ``scheduler_query_ran`` composes) reads the token back — its ABSENCE is
 positive proof the read is UNKNOWN, never a settled "empty". See
 ``docs/design/connection-broker.md`` (sentinel-ack ruling + transport
-inventory) and ``docs/plans/upstream-fixes-2026-07.md`` (spec B3′).
+inventory) and ``docs/history/plans/upstream-fixes-2026-07.md`` (spec B3′).
 
 What it flags
 -------------
@@ -104,7 +104,7 @@ _SKIP_RELPATH = "hpc_agent/infra/ssh_validation.py"
 # read that is a legitimate advisory / affirmative-token / sentinel-clean read.
 # Add an entry only as a reviewed decision citing why the read cannot report a
 # false settled result. Authority: docs/design/connection-broker.md ("Seams
-# left sentinel-clean") + docs/plans/upstream-fixes-2026-07.md spec B3′.
+# left sentinel-clean") + docs/history/plans/upstream-fixes-2026-07.md spec B3′.
 ALLOWLIST: frozenset[str] = frozenset(
     {
         # memo fingerprint (O3, latency rank 17): validates stdout to EXACTLY one
