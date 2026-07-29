@@ -241,7 +241,7 @@ def resolve_via_llm(case: EvalCase, *, register: str = "user") -> dict[str, Any]
 
     NOTE (honest scope, per issue #204): wiring a *fully autonomous* free-text
     → envelope run requires a fixture repo complete enough for the worker to
-    execute the whole ``/submit-hpc`` procedure (discover-runs, build-tasks-py,
+    execute the whole ``/submit-hpc`` procedure (discover --kind runs, build-tasks-py,
     a reachable cluster for plan steps). That is deliberately out of this
     first slice. This function therefore raises :class:`NotImplementedError`
     with a clear message; the LLM-tier test is written and key-gated so the

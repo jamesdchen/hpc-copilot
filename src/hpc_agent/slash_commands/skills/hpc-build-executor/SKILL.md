@@ -85,7 +85,7 @@ The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/
 ## Notes
 
 - This skill writes to the experiment repo only — never to the framework repo's `templates/` dir. Confirm `--output-dir` is the experiment repo before invoking.
-- After scaffolding and customizing, the executor is auto-discovered by [discover-executors](../../../../docs/primitives/discover-executors.md) (which `hpc-submit` invokes) if it lands in `executors/`, `scripts/`, or `src/` and either exports `compute(args)` (new contract) or has an `if __name__ == "__main__":` guard plus a CLI import (old contract; transitional).
+- After scaffolding and customizing, the executor is auto-discovered by [discover](../../../../docs/primitives/discover.md) (`--kind executors`, which `hpc-submit` invokes) if it lands in `executors/`, `scripts/`, or `src/` and either exports `compute(args)` (new contract) or has an `if __name__ == "__main__":` guard plus a CLI import (old contract; transitional).
 - Per-task fan-out (Cartesian product, chunking, date windows, …) AND the new-contract executor's CLI flag list both live in `.hpc/tasks.py`, scaffolded by `/submit-hpc` Step 6 — not via this skill.
 - **One-shot per repo** for axes-init under normal use. If the experiment's parallelism shape changes (axis added, semantics flipped), re-run with `--force`.
 - **Cardinality is not yet recorded** in the v1 axes schema — only `homogeneous_axes` (a list of names). Cardinalities will land when submit-flow integration uses them to build the wave_map.
