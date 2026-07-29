@@ -557,6 +557,12 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("submit_blocks.py", "ops", "monitor"),
         ("submit_blocks.py", "ops", "recover"),
         ("submit_blocks.py", "ops", "submit"),
+        # crash-only-monitoring W1: the run-terminal sentinel job is announce-plane
+        # machinery (it writes the ops/monitor announce vocabulary's wake marker),
+        # so its helper lives in ops/monitor and the submit flow's role-root file
+        # reaches it here — the submit_blocks.py / resolve_submit_inputs.py
+        # precedent (functions, not primitives, so no composes= is resolvable).
+        ("submit_flow.py", "ops", "monitor"),
         ("submit_flow.py", "ops", "validate"),
         ("submit_pipeline.py", "ops", "validate"),
         ("supersession.py", "ops", "monitor"),

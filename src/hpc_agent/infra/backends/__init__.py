@@ -30,6 +30,7 @@ __all__ = [
 ]
 
 import abc
+import copy
 import importlib
 import os
 import re
@@ -68,6 +69,30 @@ _TASK_OFFSET_ENV = "TASK_OFFSET"
 # block the agent indefinitely; we surface ``TimeoutExpired`` so callers
 # can map it to a cluster-category error.
 SUBMIT_TIMEOUT_SEC = 120
+
+# Walltime ask for the run-terminal SENTINEL job (crash-only-monitoring W1,
+# ``docs/design/crash-only-monitoring.md``). The sentinel's whole body is a
+# ``mkdir`` + ``mv`` of one marker file, so the ask is deliberately tiny — small
+# enough to backfill anywhere, large enough to survive a slow shared-filesystem
+# metadata op. Emitted through :meth:`HPCBackend.resource_flags` so each family
+# spells it natively (SLURM ``--time``, SGE ``-l h_rt=``, PBS ``-l walltime=``).
+SENTINEL_WALLTIME_SEC = 600
+
+
+@dataclass(frozen=True)
+class _SentinelResources:
+    """Minimal resource ask for the sentinel job (1 default slot, tiny walltime).
+
+    Duck-types the ``SubmitResources`` surface :meth:`HPCBackend.resource_flags`
+    reads (``walltime_sec`` / ``mem_mb`` / ``cpus`` / ``mpi``): only the walltime
+    is set, so no cpu/mem/PE flags are emitted and the scheduler's 1-core default
+    applies — the sentinel must never compete with compute for resources.
+    """
+
+    walltime_sec: int
+    mem_mb: None = None
+    cpus: None = None
+    mpi: None = None
 
 
 @dataclass(frozen=True)
@@ -604,6 +629,87 @@ class HPCBackend(abc.ABC):
         if not match:
             raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
         return match.group(1)
+
+    def submit_sentinel(
+        self,
+        *,
+        script_path: str,
+        job_name: str,
+        depend_job_ids: list[str],
+        job_env: dict[str, str] | None = None,
+        cwd: Path | None = None,
+        walltime_sec: int = SENTINEL_WALLTIME_SEC,
+    ) -> str:
+        """Submit the run-terminal SENTINEL job behind *depend_job_ids*; return its id.
+
+        Crash-only-monitoring W1 (``docs/design/crash-only-monitoring.md``,
+        inversion #1): a tiny NON-array job that rides a scheduler COMPLETION
+        dependency behind the run's array jobs — SLURM
+        ``--dependency=afterany:<ids>``, SGE ``-hold_jid <ids>``, PBS
+        ``-W depend=afterany:<ids>`` (the existing
+        :meth:`_build_dependency_flag` seam; afterany/hold, never afterok — the
+        sentinel must fire on failure and cancellation too, because its marker
+        is precisely the crash-case wake) — whose sole act is writing the
+        run-terminal WAKE marker. The scheduler's own epilogue knowledge is
+        captured AT the source: the marker appears even when the dispatcher
+        process died mid-task (the case the per-task marker writes miss).
+
+        *script_path* is the staged sentinel script (relative to the backend's
+        remote repo, like ``self.script``); the caller stages it before
+        submitting (``hpc_agent.ops.monitor.sentinel``). The submission reuses
+        the ONE per-batch qsub edge (:meth:`submit_one` — command build, execute,
+        rc check, ``JOB_ID_REGEX`` parse) on a shallow copy of this backend whose
+        ``script`` is swapped for the sentinel script: every family's
+        ``_build_command`` appends ``self.script`` last (the same invariant
+        ``_weave_correlation_flags`` leans on), so the swap is the whole
+        difference. ``self`` is never mutated.
+
+        *job_env* defaults empty — deliberately: with no ``HPC_RUN_ID`` the
+        submit-once jobmap weave and the correlation flag both stay byte-out
+        (the sentinel must never write the run's per-wave jobmap id-files or
+        carry its correlation token; it is not a compute job and its id is
+        accounted OUTSIDE the run's ``job_ids``).
+
+        Raises
+        ------
+        NotImplementedError
+            When this backend has no completion-dependency support
+            (:meth:`_build_dependency_flag` returned ``[]`` — the base default),
+            matching the capability-hook convention. The caller treats the
+            sentinel as opportunistic and proceeds without it.
+        hpc_agent.errors.SpecInvalid
+            On an empty *depend_job_ids* — a sentinel with nothing to ride
+            behind would run immediately and write a premature wake marker
+            storm; refuse loudly instead (a premature wake is harmless by
+            doctrine row 11, but submitting one on purpose is a caller bug).
+        RuntimeError
+            From :meth:`submit_one` when the scheduler rejects the submission
+            or its stdout has no parseable job id.
+        """
+        ids = [str(j) for j in depend_job_ids if str(j).strip()]
+        if not ids:
+            raise errors.SpecInvalid("sentinel job requires at least one dependency job id")
+        dep_flags = self._build_dependency_flag(ids)
+        if not dep_flags:
+            raise NotImplementedError(
+                f"{type(self).__name__} has no completion-dependency support; "
+                "the run-terminal sentinel job cannot be scheduled on it"
+            )
+        flags = self.resource_flags(_SentinelResources(walltime_sec=int(walltime_sec)))
+        flags += dep_flags
+        clone = copy.copy(self)
+        clone.script = script_path  # type: ignore[attr-defined]
+        return clone.submit_one(
+            None,
+            job_name,
+            dict(job_env or {}),
+            extra_flags=flags,
+            cwd=cwd,
+            array=False,
+            # The run's own submission already created the log dir this call;
+            # the mkdir is idempotent anyway, so skip the redundant round-trip.
+            setup_log_dir=False,
+        )
 
     def submit_non_contiguous(
         self,

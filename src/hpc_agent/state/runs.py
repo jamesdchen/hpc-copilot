@@ -1142,6 +1142,45 @@ def update_run_sidecar_job_ids(
     return target
 
 
+def stamp_sentinel_job(experiment_dir: Path, run_id: str, *, job_id: str) -> Path | None:
+    """Record the run-terminal SENTINEL's scheduler job id on the run sidecar.
+
+    Crash-only-monitoring W1 (``docs/design/crash-only-monitoring.md``): the
+    sentinel is NOT a compute job, so its id is stamped as a SEPARATE
+    ``sentinel_job_id`` field — never appended to ``job_ids``. Every status
+    rollup (reconcile alive-checks, monitor batch status, kill) reads
+    ``job_ids``, and the run's compute-job accounting must stay byte-identical
+    whether or not a sentinel rode along; this field exists so a human (or the
+    doctor) can attribute the extra queue entry.
+
+    Best-effort by contract, mirroring :func:`stamp_canary_runtime`: the
+    sentinel is an optimization, never a correctness gate, so an absent sidecar
+    or any write error returns ``None`` and the caller simply proceeds — the
+    run's own accounting is already durable. Rewrites in place under the shared
+    sidecar lock, preserving every other field.
+    """
+    value = str(job_id).strip()
+    if not value:
+        return None
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        return None
+    from hpc_agent.infra.io import atomic_locked_update
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            # Vanished between the existence check and the lock — nothing to stamp.
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        existing["sentinel_job_id"] = value
+        return existing
+
+    try:
+        atomic_locked_update(target, _mutate)
+    except (OSError, FileNotFoundError):
+        return None
+    return target
+
+
 def stamp_canary_runtime(
     experiment_dir: Path, run_id: str, *, elapsed_sec: int, peak_rss_mb: int | None = None
 ) -> Path | None:

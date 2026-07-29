@@ -3567,6 +3567,30 @@ def _submit_one_spec(
             max_auto_recovers=spec.max_auto_recovers,
         )
 
+    # ── W1 run-terminal SENTINEL job (crash-only-monitoring, opt-in) ──────
+    # Gated OFF by default behind HPC_SENTINEL_JOB (the HPC_ANNOUNCE_WAIT /
+    # Wave-2 telemetry-gate precedent): flag off returns immediately with zero
+    # cluster traffic, so the submit stays byte-identical. Flag on, a tiny
+    # dependent job (--dependency=afterany / -hold_jid behind the main array's
+    # ids) is staged + submitted OPPORTUNISTICALLY after the run is fully
+    # recorded — the helper never raises; a failure is disclosed (WARN) and the
+    # run proceeds with the polling census as the authority, exactly as today.
+    # The sentinel's id lands on the sidecar's SEPARATE ``sentinel_job_id``
+    # field, never in ``job_ids`` — the run's compute-job accounting (result
+    # envelope, journal, reconcile alive-checks) stays byte-identical.
+    from hpc_agent.ops.monitor.sentinel import maybe_submit_run_terminal_sentinel
+
+    maybe_submit_run_terminal_sentinel(
+        backend_obj,
+        experiment_dir=experiment_dir,
+        ssh_target=spec.ssh_target,
+        remote_path=spec.remote_path,
+        run_id=spec.run_id,
+        job_name=spec.job_name,
+        depend_job_ids=list(job_ids),
+        cwd=experiment_dir,
+    )
+
     if spec.partial_ok:
         from hpc_agent.state.runs import run_sidecar_path
 
