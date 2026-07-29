@@ -580,7 +580,7 @@ jobs:
 
       - name: Upload the sandbox evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Ruling 2026-07-19 #2: the evidence JSON is a CI ARTIFACT (per-run
           # evidence), never a committed ledger. The kill drill's
