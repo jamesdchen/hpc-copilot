@@ -32,14 +32,17 @@ Read this file top to bottom — it is self-contained. The state of play:
    the computed run_id), and retryable(n) is unblocked (§10.S3 removes the
    S3 coupling). Typed resource asks, no item sharding, and per-repo queue
    remain open.
-5. **One claim in §10 remains proposed-but-unverified**: rsync
-   `--link-dest` hardlink behaviour on the CARC/Hoffman2 filesystems
-   (§10.S4) — verify on the real clusters before eager submit depends on
-   it. The OTHER §10 verification is DONE: the S1 placement leg is BUILT
-   (`state/placement_drift.py` + `standing_consent_status`'s
+5. **§10's verifications: S1 DONE, S4 half-measured.** The S1 placement
+   leg is BUILT (`state/placement_drift.py` + `standing_consent_status`'s
    `placement-changed` leg, 2026-07-29) and the full suite passed with
    zero failures — the conservative absent-disables rule made it purely
-   additive on the consent corpus, as designed.
+   additive on the consent corpus, as designed. The S4 `--link-dest`
+   probe was RUN ON CARC (2026-07-29, table in §10.S4): correctness holds
+   on both filesystems; hardlink dedup works on `/home1` but BeeGFS
+   `/scratch1` silently copies — so snapshots are safe everywhere and the
+   copy fallback is automatic where hardlinks are refused. Hoffman2's
+   probe is still pending (login access); it gates nothing until eager
+   submit targets Hoffman2.
 
 ## 0. What already exists (build on, don't duplicate)
 
@@ -666,16 +669,28 @@ snapshot should be keyed by CONTENT, not by run.**
 | debuggability | "which tree did this run use?" becomes a recorded, rendered fact. Small but real. |
 | transfer cost | **unchanged** — this is the cost usually assumed and it is not paid. |
 
-**PROPOSED, UNVERIFIED — the `--link-dest` refinement.** Uploading into a
-fresh digest-named directory would forfeit the delta (a new empty dir means
-a full transfer). rsync's `--link-dest=<previous digest dir>` is built for
-exactly this: unchanged files become hardlinks (zero bytes shipped, zero
-extra disk), changed files are written fresh. The tree does not currently
-use it. **Verify hardlink semantics on the CARC and Hoffman2 filesystems
-before depending on it** — this claim is derived from the flag's
-documentation, not from an observed run. If it does not hold there, the
-fallback is a plain copy per digest, which costs disk but keeps the
-correctness property intact.
+**The `--link-dest` refinement — MEASURED on CARC (2026-07-29), Hoffman2
+pending.** Uploading into a fresh digest-named directory would forfeit the
+delta (a new empty dir means a full transfer). rsync's
+`--link-dest=<previous digest dir>` is built for exactly this: unchanged
+files become hardlinks (zero bytes shipped, zero extra disk), changed files
+are written fresh. Probe run by the maintainer on discovery2.hpc.usc.edu
+(rsync tree1 → `--link-dest` tree2 → replace file in tree1 → read tree2):
+
+| filesystem | dedup (hardlinked?) | preserve (old tree survives re-push?) |
+|---|---|---|
+| `/home1` (CARC home) | PASS — same inode | PASS |
+| `/scratch1` (CARC BeeGFS scratch) | **FAIL — silently copied** | PASS |
+
+Verdict: the CORRECTNESS property (a snapshot survives a later push) held on
+both filesystems — the design is safe on CARC. The CHEAPNESS property is
+per-filesystem: BeeGFS scratch refuses the hardlink and rsync degrades to a
+full copy on its own, which IS the stated fallback — one tree copy per
+distinct code version, bounded by edit frequency, never by run count. So the
+implementation must NOT assume hardlinks: treat `--link-dest` as an
+opportunistic optimization and (optionally) verify with a one-file inode
+probe per (cluster, filesystem) at setup, recording the answer. Hoffman2
+remains unmeasured — same probe, pending login access.
 
 **Ordering:** the guard is Phase 1-safe and can land immediately. The
 content-addressed trees must land before R3's eager submit ships — with
