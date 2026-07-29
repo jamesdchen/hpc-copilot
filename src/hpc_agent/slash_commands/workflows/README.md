@@ -29,6 +29,39 @@ mutating/workflow verb appears ONLY inside a plan's `COMMANDS` block —
 model-facing `PROMPTS` text stays at recon scope. Render-bearing output
 travels as pointers + counts, never a paraphrase.
 
+## Park-time diagnosis (advisory enrichment, `queue-drain.js`)
+
+After a `queue-drain` pass assembles its FINAL report, each item parked on
+an **anomaly** stage (anomaly terminators only — `canary_failed` /
+`watching_anomaly`, detected mechanically off the kernel's own
+`answer_menu` OVERRIDE projection, never a plain greenlight park) gets ONE
+read-only investigator subagent — bounded to 3 per pass, the clip
+disclosed in the report's `diagnosis` key. The investigator's contract, in
+full:
+
+- it runs the code-composed `diagnosis-request` QUERY (pure read: parked
+  verb/stage/reason, catalog signature matches over evidence the stores
+  already hold, the LOCAL paths worth reading, the CLOSED category
+  vocabulary);
+- it READS ONLY the paths that request names — never a cluster/remote
+  command, never another verb against the run, never a journaled decision,
+  never an answered park;
+- its findings return as a schema object the plan relays VERBATIM through
+  the authored `attach-diagnosis` COMMANDS template. The kernel
+  shape-validates (classification from the closed set or `unmatched`),
+  stamps the `authored_by: "agent"` provenance itself, and stores the
+  dossier as `<run_id>.diagnosis.json` beside the terminal records.
+
+The trust story is byte-identical to a world without the seam: the dossier
+is DISPLAY-ONLY advisory matter. It never enters the decision-brief
+provenance journal, never becomes an answer-menu option (that surface is
+code-authored data only), and no gate reads it — park surfaces (the park
+notification, `doctor`, the morning digest) carry a pointer + count
+(`diagnosis: attached (N proposed action(s), agent-authored, advisory) —
+<path>` / `diagnosis: none`), and the human reads the render from disk
+(run-queue plan §8 S13). Investigator failure is NON-FATAL by design: the
+park stands unenriched, and the report says so per run.
+
 ## The relay table (what a plan actually runs, validated by execution)
 
 Every plan declares `RELAYS` — one row per CLI invocation it issues,

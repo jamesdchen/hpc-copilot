@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**178 operations total**: 146 primitive atoms + 32 workflow atoms.
+**180 operations total**: 148 primitive atoms + 32 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (78)
+## `query` (79)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -48,6 +48,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`decide-partial-handling`](../primitives/decide-partial-handling.md) | ✓ | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` | `_(none)_` | — | — |
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name> [--schema]` | `_(none)_` | — | — |
 | [`detect-entry-point`](../primitives/detect-entry-point.md) | ✓ | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` | `_(none)_` | — | — |
+| [`diagnosis-request`](../primitives/diagnosis-request.md) | ✓ | _none_ | `hpc-agent diagnosis-request --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`dir-digest`](../primitives/dir-digest.md) | ✓ | ssh | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`discover`](../primitives/discover.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--kind <kind>] [--search-dirs <search_dirs>]` | `_(none)_` | — | — |
 | [`doctor`](../primitives/doctor.md) | ✓ | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -122,7 +123,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (36)
+## `mutate` (37)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -131,6 +132,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`alerts-ack`](../primitives/alerts-ack.md) | ✓ | file_write | `hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`append-decision`](../primitives/append-decision.md) | ✗ | file_write | `hpc-agent append-decision --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`archive-dossier`](../primitives/archive-dossier.md) | ✓ | network-upload | `hpc-agent archive-dossier --spec <path>` | `_(none)_` | — | — |
+| [`attach-diagnosis`](../primitives/attach-diagnosis.md) | ✓ | file_write | `hpc-agent attach-diagnosis --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`cluster-reduce`](../primitives/cluster-reduce.md) | ✓ | ssh; sync-pull | `hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]` | `_(none)_` | — | — |
 | [`combine-wave`](../primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave> [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]` | `_(none)_` | — | — |
 | [`conformance-record`](../primitives/conformance-record.md) | ✗ | file_write | `hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

@@ -7,7 +7,7 @@ export const meta = {
   phases: [
     { title: 'Status', detail: 'one queue-status relay per pass; the drivable set is computed from its items[] fields in plan code, never remembered across passes' },
     { title: 'Drive', detail: 'one block-drive loop per drivable RUN (items sharing a computed run_id are deduped, the sibling deferred), chunked wait-detached for detached blocks; a park or a skip is recorded and the loop ends' },
-    { title: 'Report', detail: 'return the outcome buckets (parked / skipped / deferred / held / settled / failed, each with a count) + the last status snapshot when nothing is drivable; 2+ parked briefs are ordered via one relayed attention-queue read (§13 — the ordering stays kernel-side)' },
+    { title: 'Report', detail: 'return the outcome buckets (parked / skipped / deferred / held / settled / failed, each with a count) + the last status snapshot when nothing is drivable; 2+ parked briefs are ordered via one relayed attention-queue read (§13 — the ordering stays kernel-side); AFTER the report is assembled, each ANOMALY park (max 3, disclosed when clipped) gets one read-only investigator whose findings attach as display-only advisory data — investigator failure is non-fatal, the park stands unenriched' },
   ],
 }
 
@@ -94,14 +94,48 @@ const SCHEMAS = {
       output: { type: 'string' },
     },
   },
+  // The investigator's structured findings — the EXACT shape attach-diagnosis
+  // validates (schemas/attach_diagnosis.input.json, minus run_id which the
+  // plan supplies). The plan relays this object verbatim as the attach spec;
+  // it never interprets, trims, or augments it (the content is agent judgment
+  // by design, stored as an opaque provenance-marked proposal).
+  DIAGNOSIS: {
+    type: 'object',
+    required: ['classification', 'evidence_excerpts', 'proposed_actions'],
+    properties: {
+      classification: { type: 'string' },
+      evidence_excerpts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['path', 'lines'],
+          properties: { path: { type: 'string' }, lines: { type: 'string' } },
+        },
+      },
+      proposed_actions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['label', 'rationale', 'suggested_response_text'],
+          properties: {
+            label: { type: 'string' },
+            rationale: { type: 'string' },
+            suggested_response_text: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
 }
 
-// Step vocabulary as in every plan here (see README). All four steps are
-// kind: 'script' — there is deliberately NO agent-judgment step in this plan:
-// draining is code (queue-status projections + block-drive sequencing) plus
-// rule-fixed relays, and anything needing judgment (a gate, a red tick, a
-// stuck wait) is RECORDED and returned to the main session rather than
-// interpreted in-flight.
+// Step vocabulary as in every plan here (see README). Every DRAIN step is
+// kind: 'script' — draining is code (queue-status projections + block-drive
+// sequencing) plus rule-fixed relays, and anything needing judgment (a gate,
+// a red tick, a stuck wait) is RECORDED and returned to the main session
+// rather than interpreted in-flight. The ONE agent step ('investigate') sits
+// OUTSIDE the drain: it enriches anomaly parks AFTER the final report, and
+// its judgment lands only in the display-only advisory dossier
+// (attach-diagnosis) — never in a decision, a gate input, or a drive step.
 const STEPS = [
   {
     id: 'status',
@@ -150,6 +184,37 @@ const STEPS = [
     output: 'SCRIPT_RESULT',
     effort: 'low',
   },
+  // The ONLY agent-judgment step in this plan, and its judgment never enters a
+  // trusted surface: a READ-ONLY investigator per ANOMALY park (anomaly
+  // terminators only — never a plain greenlight park), max 3 per pass. It runs
+  // one QUERY relay (diagnosis-request), reads ONLY the local paths that
+  // request names, and returns structured findings; the plan then relays them
+  // VERBATIM through the attach step below, where the kernel stores them as an
+  // opaque, provenance-marked agent proposal (display-only advisory matter —
+  // never a decision-brief, never an answer-menu option, never a gate input).
+  // Failure is non-fatal by design: the park stands unenriched.
+  {
+    id: 'investigate',
+    phase: 'Report',
+    kind: 'agent',
+    run: 'conditional', // only for anomaly parks, after the final report
+    needs: ['order-parks'],
+    isolation: 'shared-checkout',
+    prompt: 'investigator',
+    output: 'DIAGNOSIS',
+    effort: 'low',
+  },
+  {
+    id: 'attach-diagnosis',
+    phase: 'Report',
+    kind: 'script',
+    run: 'conditional', // only when an investigator returned usable findings
+    needs: ['investigate'],
+    isolation: 'shared-checkout',
+    command: 'attachDiagnosis',
+    output: 'SCRIPT_RESULT',
+    effort: 'low',
+  },
 ]
 const STEP = (id) => STEPS.find((s) => s.id === id)
 
@@ -176,7 +241,9 @@ const RELAYS = {
   "queueStatus": { "verb": "queue-status", "flags": ["spec", "experiment-dir"] },
   "blockDrive": { "verb": "block-drive", "flags": ["spec", "experiment-dir"] },
   "waitDetached": { "verb": "wait-detached", "flags": ["spec"] },
-  "attentionQueue": { "verb": "attention-queue", "flags": ["spec", "experiment-dir"] }
+  "attentionQueue": { "verb": "attention-queue", "flags": ["spec", "experiment-dir"] },
+  "diagnosisRequest": { "verb": "diagnosis-request", "flags": ["spec", "experiment-dir"] },
+  "attachDiagnosis": { "verb": "attach-diagnosis", "flags": ["spec", "experiment-dir"] }
 }
 
 // One renderer per declared flag: the table names WHICH flags a verb takes,
@@ -190,7 +257,12 @@ const FLAG_RENDER = {
 const relayCommand = (key, inputs, spec) => {
   const relay = RELAYS[key]
   const flags = relay.flags.map((flag) => FLAG_RENDER[flag](inputs)).join(' ')
-  return `SPEC=$(mktemp) && printf '%s' '${JSON.stringify(spec)}' > "$SPEC" && hpc-agent ${relay.verb} ${flags}`
+  // Shell-safe single-quoting of the JSON payload: a ' inside the spec (an
+  // investigator's quoted log line, a rationale with an apostrophe) would
+  // otherwise terminate the quote. A no-op for the code-composed specs that
+  // carry none.
+  const payload = JSON.stringify(spec).replace(/'/g, `'"'"'`)
+  return `SPEC=$(mktemp) && printf '%s' '${payload}' > "$SPEC" && hpc-agent ${relay.verb} ${flags}`
 }
 
 const COMMANDS = {
@@ -225,6 +297,13 @@ const COMMANDS = {
   // holds no knob worth passing (class_order would be the plan re-weighting a
   // ranking it is forbidden to own).
   attentionQueue: (inputs) => relayCommand('attentionQueue', inputs, {}),
+  // The investigator seam's two relays. diagnosisRequest is a QUERY (pure
+  // read) whose rendered command is handed INTO the investigator prompt;
+  // attachDiagnosis carries the investigator's findings VERBATIM as the spec
+  // (inputs.diagnosisSpec) — the kernel shape-validates, stamps the agent
+  // provenance itself, and stores the dossier as display-only advisory data.
+  diagnosisRequest: (inputs) => relayCommand('diagnosisRequest', inputs, { run_id: inputs.runId }),
+  attachDiagnosis: (inputs) => relayCommand('attachDiagnosis', inputs, inputs.diagnosisSpec),
 }
 
 const PROMPTS = {
@@ -234,6 +313,39 @@ ${command}
 Return per the schema: exit_code (the command's real exit code), output
 (stdout+stderr verbatim; if enormous, keep the first and last 100 lines).
 Do not fix, retry, re-run, or interpret a failure — relaying it is the job.`,
+  // The park-time INVESTIGATOR (read-only, advisory-only). The only mutating
+  // relay in this seam (the attach) is NOT in this prompt — the plan runs it
+  // as an authored COMMANDS template over the findings returned here.
+  investigator: ({ repo, runId, requestCommand }) =>
+    `You are a READ-ONLY park-time investigator for run ${runId}, which is
+parked on an ANOMALY awaiting a human decision. Your findings will be stored
+as an OPAQUE, provenance-marked agent proposal — display-only advisory matter
+the human MAY read at their sitting. You advise; you never decide.
+
+1. Run EXACTLY this command in ${repo} (a pure read — the code-composed
+   diagnosis request):
+${requestCommand}
+   Its stdout is one JSON envelope; your material is the envelope's data
+   member: the parked block/stage/reason, signature_matches (catalog
+   classifications the stores already hold), categories (the CLOSED
+   classification vocabulary), read_paths and worker_logs (the LOCAL files you
+   may read).
+2. READ ONLY the files named in read_paths and worker_logs, with local file
+   reads. HARD LIMITS: never run any cluster or remote command (no ssh, scp,
+   rsync, qsub, qstat, squeue, sacct); never run any other command against the
+   run; never journal, answer, or advance the parked decision; never edit any
+   file. If a named file is unreadable, note it in a rationale and move on.
+3. Return ONLY the schema object:
+   - classification: EXACTLY one string from the request's categories list, or
+     "unmatched" if nothing fits. Anything else is refused at attach time.
+   - evidence_excerpts: the few log lines that ground your read, each with the
+     path you took them from (verbatim quotes, keep each under ~4000 chars).
+   - proposed_actions: up to 3 drafted recovery options, each {label,
+     rationale, suggested_response_text}. suggested_response_text is text the
+     HUMAN could choose to type as their answer — it is never auto-filled and
+     never becomes a menu option; write it as a proposal, not an instruction.
+Empty arrays are fine when the evidence is thin — a thin honest dossier beats
+a padded one.`,
 }
 
 // ============================================================================
@@ -519,6 +631,22 @@ const passReport = (action, buckets, extra) => {
 // non-in_flight park queue-status's notes disclose) keeps its raw position
 // AFTER every matched one — fail-open toward showing every brief, never
 // dropping one over an ordering gap.
+// ── The anomaly-park predicate: a MECHANICAL FIELD CHECK, not a judgment ────
+// Investigators run for ANOMALY parks only (canary_failed / watching_anomaly —
+// never a plain greenlight park). The kernel already projected that fact into
+// the park brief at park time: at an anomaly terminator the answer menu's
+// advance option carries `override: true` (_kernel/lifecycle/answer_menu.py —
+// "labelled an OVERRIDE"). This helper reads that projection; it never
+// re-derives the terminator set (that vocabulary is the kernel's, and copying
+// the (verb, stage) pairs here would be the second divergent registry). A park
+// with no menu (an old brief, a torn one) reads as NOT anomaly — fail-closed:
+// no investigator is spawned and the park stands unenriched.
+const isAnomalyPark = (record) => {
+  const menu = record && record.brief ? record.brief.answer_menu : null
+  const options = menu && Array.isArray(menu.options) ? menu.options : []
+  return options.some((o) => o && o.override === true)
+}
+
 const orderParkedRecords = (parked, attentionItems) => {
   const rank = new Map() // run_id -> first position in the kernel's order
   for (let i = 0; i < attentionItems.length; i++) {
@@ -589,7 +717,9 @@ const driveItem = async (pass, item) => {
         run_id: runId,
         action: 'awaiting_decision',
         ticks: ticks.length,
+        current_verb: tick.current_verb || null,
         next_verb: tick.next_verb || null,
+        stage_reached: tick.stage_reached || null,
         brief: tick.brief || null,
         reason: tick.reason || null,
       }
@@ -657,6 +787,81 @@ const driveItem = async (pass, item) => {
     log(`drain:p${pass}:${item.item_id}: ${tick.action}${tick.current_verb ? ' @ ' + tick.current_verb : ''}`)
   }
   return { item_id: item.item_id, run_id: runId, action: 'tick_budget_exhausted', ticks: ticks.length }
+}
+
+// ── Park-time diagnosis enrichment (AFTER the final report is assembled) ────
+// For each ANOMALY park (isAnomalyPark — anomaly terminators only), ONE
+// read-only investigator: run the diagnosis-request query, read only the paths
+// it names, return structured findings; the plan relays those findings
+// VERBATIM through the attach-diagnosis template, where the kernel stores them
+// as an opaque agent-authored dossier (display-only — the park surfaces then
+// carry a pointer + count). Bounded to MAX_DIAGNOSES per pass, disclosed when
+// clipped. EVERY failure is non-fatal and recorded: an investigator that dies,
+// returns junk, or is refused at attach leaves the park standing unenriched —
+// enrichment is a bonus on the human's sitting, never a correctness need.
+// Takes the parked records as an argument (never a pass RETURN — the pass's
+// exits all go through passReport, and this helper only feeds its `diagnosis`
+// extra).
+const MAX_DIAGNOSES = 3
+const enrichAnomalyParks = async (parkedRecords) => {
+  try {
+    const anomalies = parkedRecords.filter(isAnomalyPark)
+    if (!anomalies.length) return { anomaly_parks: 0, investigated: 0, clipped: 0, records: [] }
+    const chosen = anomalies.slice(0, MAX_DIAGNOSES)
+    const clipped = anomalies.length - chosen.length
+    if (clipped > 0) {
+      log(`diagnosis: ${anomalies.length} anomaly park(s); investigating the first ${chosen.length}, ${clipped} clipped (MAX_DIAGNOSES ${MAX_DIAGNOSES})`)
+    }
+    const records = await parallel(
+      chosen.map((record) => async () => {
+        const runId = record.run_id
+        const label = `drain:diagnose:${runId}`
+        const unenriched = (reason) => ({ run_id: runId, attached: false, reason: `${reason} — the park stands unenriched` })
+        try {
+          const findings = await runStep(
+            'investigate',
+            { repo, runId, requestCommand: COMMANDS.diagnosisRequest({ repo, runId }) },
+            { label }
+          )
+          if (!findings || typeof findings.classification !== 'string' || !findings.classification) {
+            return unenriched('investigator returned no usable findings')
+          }
+          const attach = await runStep(
+            'attach-diagnosis',
+            {
+              repo,
+              diagnosisSpec: {
+                run_id: runId,
+                classification: findings.classification,
+                evidence_excerpts: Array.isArray(findings.evidence_excerpts) ? findings.evidence_excerpts : [],
+                proposed_actions: Array.isArray(findings.proposed_actions) ? findings.proposed_actions : [],
+              },
+            },
+            { label: `${label}:attach` }
+          )
+          if (!attach || attach.exit_code !== 0) return unenriched('attach relay failed')
+          const env = parseEnvelope(attach.output)
+          if (!env || !env.ok) {
+            return unenriched(env && env.error ? `attach refused (${env.error.error_code}): ${env.error.message}` : 'attach envelope unparseable')
+          }
+          return {
+            run_id: runId,
+            attached: true,
+            classification: findings.classification,
+            proposed_actions: Array.isArray(findings.proposed_actions) ? findings.proposed_actions.length : 0,
+            path: env.data.path || null,
+          }
+        } catch (err) {
+          return unenriched(`investigator failed (${err && err.message ? err.message : 'unknown error'})`)
+        }
+      })
+    )
+    return { anomaly_parks: anomalies.length, investigated: chosen.length, clipped, records }
+  } catch (err) {
+    // The whole enrichment is best-effort: a broken seam must never cost the
+    // pass its report.
+    return { anomaly_parks: 0, investigated: 0, clipped: 0, records: [], error: err && err.message ? err.message : 'diagnosis enrichment failed' }
+  }
 }
 
 // One bucket per outcome CLASS, reported under its own key with a count
@@ -733,7 +938,8 @@ for (let pass = 1; pass <= maxPasses; pass++) {
     phase('Report')
     log(`pass ${pass}: nothing drivable (${items.length} item(s) in the status page)`)
     const parkOrder = await orderParked()
-    return passReport(passes === 1 ? 'nothing_drivable' : 'quiescent', buckets, { passes, status: lastStatus, park_order: parkOrder })
+    const diagnosis = await enrichAnomalyParks(buckets.parked)
+    return passReport(passes === 1 ? 'nothing_drivable' : 'quiescent', buckets, { passes, status: lastStatus, park_order: parkOrder, diagnosis })
   }
 
   // THE LOOP BOUND, in full: min(drivable after run_id dedupe, maxLoops). There
@@ -772,10 +978,12 @@ for (let pass = 1; pass <= maxPasses; pass++) {
 
 phase('Report')
 const parkOrder = await orderParked()
+const diagnosis = await enrichAnomalyParks(buckets.parked)
 return passReport('pass_budget_exhausted', buckets, {
   passes,
   status: lastStatus,
   park_order: parkOrder,
+  diagnosis,
   resume_hint:
     'the pass budget ran out with work still drivable — relaunch this workflow FRESH (same args, new run). ' +
     'NEVER resumeFromRunId: the engine replays cached calls verbatim, so a resumed pass returns these same ' +

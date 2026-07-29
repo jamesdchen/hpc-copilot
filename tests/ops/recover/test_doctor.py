@@ -719,7 +719,10 @@ def test_doctor_notify_pushes_the_parks_answer_line(
     assert len(messages) == 1
     assert "run parked awaiting your decision since 2026-07-29T02:30:00+00:00" in messages[0]
     assert "a bare 'y' advances to submit-s3" in messages[0]
-    assert messages[0].endswith(f"To answer, paste:  {answer_line}")
+    assert f"To answer, paste:  {answer_line}" in messages[0]
+    # The park-time diagnosis POINTER closes the notice (none attached here) —
+    # pointer + count only, never dossier content.
+    assert messages[0].endswith("diagnosis: none")
 
 
 def test_doctor_without_notify_pushes_nothing_for_a_park(tmp_path: Path) -> None:

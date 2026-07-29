@@ -134,6 +134,11 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "aggregate-check",
         "aggregate-run",
         "append-decision",
+        # Park-time diagnosis seam (2026-07-29): the code-composed request
+        # query and the shape-validated opaque attach channel. Both specs
+        # require run_id, so the default empty-{} probe applies.
+        "attach-diagnosis",
+        "diagnosis-request",
         "block-drive",
         "campaign-complete",
         "campaign-greenlight",

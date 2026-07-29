@@ -370,18 +370,23 @@ def test_park_notice_carries_the_summary_and_the_paste_ready_answer_line() -> No
     assert "a bare 'y' advances to submit-s3" in text
     # The paste-ready line, naming the run + the spec pin — what makes a phone
     # answer identify the boundary rather than "whatever was on screen".
-    assert text.endswith("To answer, paste:  y submit-s3 r1 @a1b2c3d4")
+    assert "To answer, paste:  y submit-s3 r1 @a1b2c3d4" in text
+    # The park-time diagnosis POINTER closes every notice (none attached here).
+    assert text.endswith("diagnosis: none")
 
 
 def test_park_notice_degrades_without_a_menu_rather_than_going_silent() -> None:
     """NEGATIVE: a brief from a driver predating the menu (or a torn one) still
     yields a deliverable line — detection without delivery is silence."""
     text = notify.compose_park_notice({"run_id": "r1", "awaiting_since": "2026-07-29T02:00:00Z"})
-    assert text == "hpc-agent: run r1 awaiting your decision since 2026-07-29T02:00:00Z"
+    assert text == (
+        "hpc-agent: run r1 awaiting your decision since 2026-07-29T02:00:00Z"
+        "\ndiagnosis: none"
+    )
     assert "paste" not in text
     # Nothing at all still names the run slot, never an empty push.
     assert notify.compose_park_notice({}) == (
-        "hpc-agent: run ? awaiting your decision since an unknown time"
+        "hpc-agent: run ? awaiting your decision since an unknown time\ndiagnosis: none"
     )
 
 

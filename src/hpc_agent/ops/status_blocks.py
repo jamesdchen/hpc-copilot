@@ -282,6 +282,46 @@ def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] |
     }
 
 
+def _parked_brief_section(experiment_dir: Path, now_iso: str) -> list[dict[str, Any]] | None:
+    """The parked-runs paragraph of the morning digest, or ``None`` when none.
+
+    One row per run parked on a human decision (§5 "parked ≠ stalled"), each
+    carrying the park-time diagnosis POINTER (S13: pointers + counts, never the
+    dossier content — the human reads the render from disk): ``diagnosis`` is
+    the one shared line (:func:`state.diagnosis.diagnosis_pointer_line` —
+    'attached (N proposed action(s), agent-authored, advisory) — <path>' /
+    'none') so this surface, the park notification, and the doctor's parked
+    note cannot drift into three phrasings.
+
+    Additive + fail-open like :func:`_queue_brief_section`: no parked runs, or
+    any read surprise, yields ``None`` and the snapshot is byte-unchanged — an
+    advisory pointer must never blank the digest the human reads first.
+    """
+    try:
+        from hpc_agent.state.diagnosis import diagnosis_pointer, diagnosis_pointer_line
+        from hpc_agent.state.index import find_parked_runs
+
+        rows: list[dict[str, Any]] = []
+        for hit in find_parked_runs(now_iso, experiment_dir=experiment_dir):
+            try:
+                pointer = diagnosis_pointer(experiment_dir, str(hit.get("run_id") or ""))
+            except Exception:  # noqa: BLE001 — advisory read stays fail-open
+                pointer = None
+            rows.append(
+                {
+                    "run_id": hit.get("run_id"),
+                    "block": hit.get("block"),
+                    "workflow": hit.get("workflow"),
+                    "awaiting_since": hit.get("awaiting_since"),
+                    "diagnosis": diagnosis_pointer_line(pointer),
+                    "diagnosis_path": pointer.get("path") if pointer else None,
+                }
+            )
+    except Exception:  # noqa: BLE001 — a parked read must never blank the digest
+        return None
+    return rows or None
+
+
 @primitive(
     name="status-snapshot",
     verb="workflow",
@@ -445,6 +485,11 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     # the queue is empty — byte-stable for every experiment that never enqueues.
     queue_section = _queue_brief_section(experiment_dir, now_iso)
 
+    # Parked paragraph (park-time diagnosis seam): one pointer row per parked
+    # run — never the dossier content. Computed like the queue section so the
+    # key is OMITTED when nothing is parked (byte-stable for park-free fleets).
+    parked_section = _parked_brief_section(experiment_dir, now_iso)
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -465,6 +510,8 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     }
     if queue_section is not None:
         brief["queue"] = queue_section
+    if parked_section is not None:
+        brief["parked"] = parked_section
 
     needs_decision = bool(stalled or anomalies)
     if needs_decision:

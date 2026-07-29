@@ -113,6 +113,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [decide-partial-handling](decide-partial-handling.md) | yes | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` |
 | [describe](describe.md) | yes | _none_ | `hpc-agent describe <name> [--schema]` |
 | [detect-entry-point](detect-entry-point.md) | yes | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` |
+| [diagnosis-request](diagnosis-request.md) | yes | _none_ | `hpc-agent diagnosis-request --spec <path> [--experiment-dir <dir>]` |
 | [dir-digest](dir-digest.md) | yes | ssh: `<cluster>` | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` |
 | [discover](discover.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--kind <kind>] [--search-dirs <search_dirs>]` |
 | [doctor](doctor.md) | yes | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` |
@@ -192,6 +193,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [alerts-ack](alerts-ack.md) | yes | file_write: `~/.claude/hpc/<repo_hash>/doctor.alerts.seen` | `hpc-agent alerts-ack [--spec <path>] [--experiment-dir <dir>]` |
 | [append-decision](append-decision.md) | no | file_write: `<experiment>/.hpc/runs/<run_id>.decisions.jsonl` | `hpc-agent append-decision --spec <path> [--experiment-dir <dir>]` |
 | [archive-dossier](archive-dossier.md) | yes | network-upload: `s3://<bucket>/<key>` | `hpc-agent archive-dossier --spec <path>` |
+| [attach-diagnosis](attach-diagnosis.md) | yes | file_write: `<experiment_dir>/.hpc/runs/<run_id>.diagnosis.json` | `hpc-agent attach-diagnosis --spec <path> [--experiment-dir <dir>]` |
 | [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; sync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]` |
 | [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/<run_id>/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave> [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]` |
 | [conformance-record](conformance-record.md) | no | file_write: `<experiment>/_aggregated/_conformance/<registration_id>.jsonl` | `hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]` |

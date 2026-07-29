@@ -235,7 +235,9 @@ def summarize_proposals(proposals: list[dict[str, Any]]) -> str:
     return text
 
 
-def compose_park_notice(parked: dict[str, Any]) -> str:
+def compose_park_notice(
+    parked: dict[str, Any], *, diagnosis: dict[str, Any] | None = None
+) -> str:
     """Compose the notification payload for ONE run parked on a human decision.
 
     THE disclosure this exists for (run-queue-placement-2026-07-28.md §8 S13): a
@@ -265,8 +267,19 @@ def compose_park_notice(parked: dict[str, Any]) -> str:
     Fail-open on every field: a marker with no menu, no block, or no timestamp
     still yields a deliverable line — a degraded push beats a silent one (the
     proving-run-#3 lesson, "detection without delivery is silence").
+
+    *diagnosis* is the park-time diagnosis POINTER
+    (:func:`hpc_agent.state.diagnosis.diagnosis_pointer`, read by the caller —
+    this composer stays I/O-free): the notice ends with
+    ``diagnosis: attached (N proposed action(s), agent-authored, advisory) —
+    <path>`` or ``diagnosis: none``. A POINTER + COUNT only, rendered by the
+    one shared line (:func:`state.diagnosis.diagnosis_pointer_line`) — the
+    dossier content is display-only advisory matter the human opens from disk;
+    it never rides the notification, and it never touches the brief's own
+    summary/answer lines above (the trust story is byte-identical).
     """
     from hpc_agent.ops.relay_render import answer_menu_of
+    from hpc_agent.state.diagnosis import diagnosis_pointer_line
 
     run_id = str(parked.get("run_id") or "?")
     block = parked.get("block")
@@ -279,6 +292,7 @@ def compose_park_notice(parked: dict[str, Any]) -> str:
     answer_line = menu.get("answer_line")
     if isinstance(answer_line, str) and answer_line:
         text += f"\nTo answer, paste:  {answer_line}"
+    text += f"\ndiagnosis: {diagnosis_pointer_line(diagnosis)}"
     return text
 
 
@@ -504,9 +518,18 @@ def raise_park_notification(
     Returns one ``{mechanism, delivered, text, log_path}`` record per notice (the
     same shape :func:`raise_stall_notification` returns), or ``[]`` for no parks.
     """
+    from hpc_agent.state.diagnosis import diagnosis_pointer
+
     records: list[dict[str, Any]] = []
     for note in parked:
-        text = compose_park_notice(note)
+        # Park-time diagnosis pointer (S13): read fail-open here — the one
+        # place the notice is composed with an experiment_dir in hand — and
+        # hand the composer the pointer only (path + count, never content).
+        try:
+            pointer = diagnosis_pointer(experiment_dir, str(note.get("run_id") or ""))
+        except Exception:  # noqa: BLE001 — an advisory read must never block delivery
+            pointer = None
+        text = compose_park_notice(note, diagnosis=pointer)
         awaiting = note.get("awaiting_since")
         log_path = _append_alert_log(
             text,

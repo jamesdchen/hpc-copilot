@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/diagnosis_request.input.json",
+  "title": "diagnosis-request input spec",
+  "description": "Input spec for the ``diagnosis-request`` verb.",
+  "type": "object",
+  "required": [
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    }
+  }
+}

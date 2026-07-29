@@ -127,6 +127,20 @@ class ParkedRunNote(BaseModel):
             "A parked driver is not stalled — doctor never proposes re-arming it."
         )
     )
+    diagnosis: str = Field(
+        default="none",
+        description=(
+            "POINTER to an attached park-time diagnosis dossier: 'attached "
+            "(N proposed action(s), agent-authored, advisory) — <path>' when an "
+            "investigator attached one (state/diagnosis), 'none' otherwise. A "
+            "pointer + count only — the dossier content is display-only "
+            "advisory matter the human reads from disk, never relayed here."
+        ),
+    )
+    diagnosis_path: str | None = Field(
+        default=None,
+        description="Path of the attached <run_id>.diagnosis.json dossier, or null when none.",
+    )
 
 
 class AdvanceRunProposal(BaseModel):

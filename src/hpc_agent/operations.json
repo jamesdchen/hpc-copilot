@@ -43,6 +43,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent attach-diagnosis --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "attach_diagnosis.input.json",
+    "name": "attach-diagnosis",
+    "output_schema": "attach_diagnosis.output.json",
+    "python": "hpc_agent.ops.recover.diagnosis.attach_diagnosis",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Attach an investigator's diagnosis dossier for one run — stored as an OPAQUE, provenance-marked agent proposal beside the terminal records (<run_id>.diagnosis.json). Shape-validated only: the classification must come from the closed catalog vocabulary (or 'unmatched'); the content is never interpreted, never enters a decision brief, an answer menu, or any gate. UNGATED — advisory data spends nothing. Re-attach overwrites (newest wins).",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]",
     "idempotent": true,
     "input_schema": null,
@@ -853,6 +867,18 @@
     "python": "hpc_agent.ops.detect_entry_point.detect_entry_point",
     "side_effects": [],
     "summary": "Scan an experiment dir for Python entry-point candidates (main.py/train.py/console-scripts/python -m targets/shell scripts), classify each candidate's argv style (argparse / click / typer / hydra / fire / __main__), and locate files carrying @register_run. Collapses the duplicated six-probe shell block in hpc-wrap-entry-point Steps 0 + 1. Also surfaces interview.json's materialized entry-point block (kind shell_command / register_run / python_module) so one call answers submit.md Step 0b's wrapper-honor + mature-repo probe.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent diagnosis-request --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "diagnosis_request.input.json",
+    "name": "diagnosis-request",
+    "output_schema": "diagnosis_request.output.json",
+    "python": "hpc_agent.ops.recover.diagnosis.diagnosis_request",
+    "side_effects": [],
+    "summary": "Compose the code-only diagnosis request for one PARKED run: the parked verb/stage/reason off the pending-decision marker, failure-signature matches over evidence the run's stores already hold (the one catalog classifier), the LOCAL log/artifact paths a read-only investigator should read (paths only), and the closed category vocabulary to classify against. Pure read; refuses for a run that is not parked. The kernel never spawns the investigator and never consumes its judgment — findings come back through attach-diagnosis as display-only advisory data.",
     "verb": "query"
   },
   {
