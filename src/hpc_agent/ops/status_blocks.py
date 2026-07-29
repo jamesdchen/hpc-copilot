@@ -193,41 +193,6 @@ def digest_run(record: Any) -> dict[str, Any]:
 # ── status-snapshot ──────────────────────────────────────────────────────────
 
 
-@primitive(
-    name="status-snapshot",
-    verb="workflow",
-    composes=["reconcile-journal"],
-    side_effects=[SideEffect("ssh", "<cluster> (only when reconcile=True)")],
-    error_codes=[
-        errors.SpecInvalid,
-        errors.SshUnreachable,
-        errors.JournalCorrupt,
-        errors.ClusterUnknown,
-    ],
-    idempotent=True,
-    idempotency_key="run_id",
-    cli=CliShape(
-        help=(
-            "Status block (snapshot): a one-shot, journal-first digest of what is "
-            "running where and what changed since the human last looked. Computes "
-            "the changed-since delta against last_seen_by_human_at, then re-stamps "
-            "the watermark. Sets needs_decision only on evidence — a stalled "
-            "driver or a failed/abandoned run. Optional reconcile re-derives ground "
-            "truth from the cluster first (the only SSH path). Terminates → y/nudge."
-        ),
-        spec_arg=True,
-        spec_model=StatusSnapshotSpec,
-        experiment_dir_arg=True,
-        # Declares an SSH side_effect (the composed reconcile-journal touches the
-        # cluster when spec.reconcile=True). Per the requires-ssh consistency
-        # contract, a declared SSH side_effect ⇒ requires_ssh=True, mirroring
-        # aggregate-check (conditionally-SSH, still declared True). The SSH path
-        # is opt-in via spec.reconcile; the flag marks the capability honestly.
-        requires_ssh=True,
-        schema_ref=SchemaRef(input="status_snapshot", output="status_block"),
-    ),
-    agent_facing=True,
-)
 def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] | None:
     """The run-queue paragraph of the morning digest, or ``None`` when nothing is queued.
 
@@ -265,6 +230,41 @@ def _queue_brief_section(experiment_dir: Path, now_iso: str) -> dict[str, Any] |
     }
 
 
+@primitive(
+    name="status-snapshot",
+    verb="workflow",
+    composes=["reconcile-journal", "queue-advance"],
+    side_effects=[SideEffect("ssh", "<cluster> (only when reconcile=True)")],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.SshUnreachable,
+        errors.JournalCorrupt,
+        errors.ClusterUnknown,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+    cli=CliShape(
+        help=(
+            "Status block (snapshot): a one-shot, journal-first digest of what is "
+            "running where and what changed since the human last looked. Computes "
+            "the changed-since delta against last_seen_by_human_at, then re-stamps "
+            "the watermark. Sets needs_decision only on evidence — a stalled "
+            "driver or a failed/abandoned run. Optional reconcile re-derives ground "
+            "truth from the cluster first (the only SSH path). Terminates → y/nudge."
+        ),
+        spec_arg=True,
+        spec_model=StatusSnapshotSpec,
+        experiment_dir_arg=True,
+        # Declares an SSH side_effect (the composed reconcile-journal touches the
+        # cluster when spec.reconcile=True). Per the requires-ssh consistency
+        # contract, a declared SSH side_effect ⇒ requires_ssh=True, mirroring
+        # aggregate-check (conditionally-SSH, still declared True). The SSH path
+        # is opt-in via spec.reconcile; the flag marks the capability honestly.
+        requires_ssh=True,
+        schema_ref=SchemaRef(input="status_snapshot", output="status_block"),
+    ),
+    agent_facing=True,
+)
 def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> StatusBlockResult:
     """One-shot digest: what is running where + what changed since last looked.
 

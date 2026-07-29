@@ -497,6 +497,12 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         # but string-name composes are unresolvable to this AST pass, so they earn
         # inventory entries (the cite_check.py precedent).
         ("campaign_refill.py", "ops", "queue"),
+        # run-queue §3 + maintainer order 2026-07-29: the morning digest's
+        # ``queue`` paragraph relays queue-advance's rows/text verbatim (one
+        # authority, S13). Declared composes=["queue-advance"] on the
+        # status-snapshot decorator; string-name composes are unresolvable to
+        # this AST pass, so the reach earns its inventory entry.
+        ("status_blocks.py", "ops", "queue"),
         # cite-check composes verify-relay's extraction discipline: the number
         # grammar + faithful-render tolerance + false-positive consumers live in
         # ops/decision/journal/verify_relay (promoted public helpers, reused
