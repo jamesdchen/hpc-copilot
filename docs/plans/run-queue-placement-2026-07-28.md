@@ -1,10 +1,39 @@
 # The run queue + cluster placement — design proposal (2026-07-28)
 
-Status: **BANKED — design discussion with the maintainer, nothing built.**
-Motivating order: "there needs to be a queue that keeps track of multiple
-experiments to run as they come in and it needs to assign the runs to the
-proper clusters / split across clusters so that there's asynchroneity that
-allows things to be seamless."
+Status: **BANKED — design complete through v2 + adversarial sweep; nothing
+built.** Motivating order: "there needs to be a queue that keeps track of
+multiple experiments to run as they come in and it needs to assign the runs
+to the proper clusters / split across clusters so that there's
+asynchroneity that allows things to be seamless."
+
+## PICKUP (for a fresh session, 2026-07-29)
+
+Read this file top to bottom — it is self-contained. The state of play:
+
+1. **The architecture is settled** (§1–§7): ledger-as-index over existing
+   durable state (only INTAKE is a new store), authority/actor split
+   (`queue-advance`/`queue-dispatch`), placement inside the y, scheduler
+   as the capacity queue (submit eagerly), a drain workflow of N
+   campaign-run-shaped loops whose manager is the plan SCRIPT (state in
+   variables + journals, never model context — the tokenomics depend on
+   this), hold-while-alive / poke-when-dead / capture-always residency.
+2. **The fable-sweep verdict (§8) is the pre-build checklist.** Thirteen
+   confirmed clusters. S5/S6 are FIXED in the shipped campaign-run.js.
+   **S1–S4 change the intake record's shape (item_id, placement folded
+   into consent identity, refill intent visible to advance, per-run remote
+   snapshots or run-start sha check) and MUST be resolved in this design
+   doc before any Phase 1 code.** S7–S13 land incrementally with their
+   named resolutions.
+3. **Then build Phase 1** (§6): intake store + `queue-run` +
+   `queue-status` + `queue-advance` with the disclosed-reason policy.
+   Conventions: full verb contract per `docs/internals/adding-a-primitive.md`
+   (the `tag-session` verb, landed 2026-07-28, is the freshest small
+   exemplar of the whole pipeline).
+4. **Open maintainer decisions** (§9) still unanswered: claim-lease
+   recovery (proposed: heartbeat staleness + F43 host/create_time),
+   retryable(n) semantics (proposed: default needs_human — but see S3 of
+   §8 before deciding), typed resource asks, no item sharding, per-repo
+   queue.
 
 ## 0. What already exists (build on, don't duplicate)
 
