@@ -106,7 +106,76 @@ item goes wherever headroom is) instead of manual (human picks the cid).
 3. **Phase 3 — the workflow relay:** N run-loops + queue ticks in one plan;
    merged park queue; park-with-context enrichment.
 
-## 7. Open questions for the maintainer
+## 7. v2 — the ledger loop (2026-07-29, maintainer's synthesis)
+
+The maintainer's restatement: "a ledger... a dynamic workflow that spawns
+agents as this ledger fills and drains... subagents take jobs off one by
+one... return parked stuff to the ledger, which reports to the main session
+for human decision... nudge loops in main until y, then back on the ledger
+for another subagent... optuna trials automatically unpark." Two
+refinements make this buildable without new trust surface:
+
+**R1 — the ledger is an INDEX, not a second journal.** Only INTAKE is a
+new store (§1). "Parked", "drivable", "in-flight", "terminal" are
+PROJECTIONS over state that already exists and is already durable:
+pending-decision markers + resume cursors (`state/journal.py`), committed
+greenlights (decision journal), detached-watch leases, RunRecords. A
+ledger that COPIED park state would drift from the journal the first time
+a y landed; a ledger that projects it cannot. Concretely: "the subagent
+returns the parked item to the ledger" is ALREADY TRUE the moment
+block-drive writes the pending marker — no return step exists to build.
+"After the y it's placed back on the ledger" is ALREADY TRUE the moment
+the y commits — the drivable-runs projection includes it instantly. The
+new verb `queue-status` = intake items ⋈ those projections, one bounded
+JSON (the `status-sweep` composite pattern).
+
+**R2 — subagents RELAY, the kernel DRIVES, the ledger DECIDES nothing.**
+"Subagents drive jobs to completion" must not mean judgment: each worker
+loop is plan code relaying `block-drive` ticks for its claimed item (the
+campaign-run loop, N of them). Intelligence placement is unchanged:
+sequencing in the kernel, decisions at the parks with the human,
+admission/placement in `queue-advance`.
+
+**The loop, end to end:**
+
+1. **Fill** — main session (or campaign refill, see 6) `queue-run`s items.
+2. **Spawn to depth** — the drain workflow launches; loop count =
+   min(drivable items, maxLoops, `queue-advance` capacity). Each loop
+   CLAIMS one item (a claim LEASE — the detached-lease pattern keyed
+   `(run_id, driver_id)`, so two workflows/sessions never double-drive;
+   ticking is race-safe regardless, claims are hygiene not safety).
+3. **Drive** — tick relays; detached waits held inside the loop (chunked
+   `wait-detached timeout_sec` + heartbeat log).
+4. **Park** — a gate/failure ends that loop; the park is durable state
+   (R1). The loop's claim releases. The workflow keeps driving OTHER items.
+5. **Report** — the workflow returns when NOTHING is drivable: merged park
+   queue + `queue-status` snapshot. This return IS "the ledger reports to
+   the main session" (plus `attention-queue` remains readable any time).
+6. **Decide** — nudge loops in main, code never reading a nudge string;
+   the y commits against the resolved spec. Auto-resume relaunches the
+   drain workflow; the freshly-drivable item is claimed by a new loop —
+   the maintainer's "another subagent picks it up", for free.
+7. **Auto-unpark (campaigns)** — two existing mechanisms, no new one:
+   a greenlit async campaign's refill actor ENQUEUES next trials
+   (campaign-refill becomes a ledger producer), and standing/overnight
+   consent lets consented boundaries auto-advance so those items never
+   park at all. "Optuna unparks the ledger" = producer + consent, both
+   shipped.
+
+**Design decisions still open (v2 additions):**
+
+- Claim lease TTL/steal policy: a driver that dies mid-claim — lease
+  expiry by heartbeat staleness (reuse `pid_alive` probe) vs. explicit
+  `queue-release`. Proposed: heartbeat staleness, the detached precedent.
+- Return policy: return-when-nothing-drivable (proposed, batch sittings)
+  vs. return-on-first-park (chattier, lower decision latency). Could be an
+  arg with the batch default.
+- Failure classes on parked items: `needs_human` vs `retryable(n)` as
+  DECLARED item data consumed by plan code — never an agent's judgment
+  call. Proposed: default needs_human; retryable only by explicit intake
+  flag.
+
+## 8. Open questions for the maintainer
 
 - Resource-ask vocabulary on intake items: free-form (opaque, policy reads
   known keys) vs typed (schema'd gpu/cores/walltime)? Typed proposed.
