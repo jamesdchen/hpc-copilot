@@ -97,6 +97,7 @@ __all__ = [
     "aggregate_flow",
     "aggregate_memo_ignored",
     "per_task_fallback_reducible",
+    "prefetch_wave_partials",
     "record_aggregate_failure",
 ]
 
@@ -250,10 +251,21 @@ class _PullOutcome:
     handling is identical whether the pull ran through the legacy ``rsync_pull``
     (which already returns a ``CompletedProcess`` with these attrs) or O2's
     ``tar_ssh_pull`` (which returns a ``PullResult``).
+
+    The three count fields pass ``PullResult``'s delta accounting through so the
+    harvest can DISCLOSE how much of a pull was served from the local cache (the
+    wave-prefetch / prior-aggregate mirror) vs pulled fresh — a silent cache must
+    never masquerade as a fresh pull. The legacy ``rsync_pull``
+    ``CompletedProcess`` carries no such attrs (rsync's delta is internal), so
+    disclosure call sites read them via ``getattr(..., None)`` and stay silent on
+    that path.
     """
 
     returncode: int
     stderr: str
+    files_pulled: int = 0
+    bytes_pulled: int = 0
+    skipped_unchanged: int = 0
 
 
 def _pull(
@@ -300,6 +312,9 @@ def _pull(
     return _PullOutcome(
         returncode=0 if result.ok else 1,
         stderr=(result.stderr_tail or ""),
+        files_pulled=int(getattr(result, "files_pulled", 0) or 0),
+        bytes_pulled=int(getattr(result, "bytes_pulled", 0) or 0),
+        skipped_unchanged=int(getattr(result, "skipped_unchanged", 0) or 0),
     )
 
 
@@ -407,6 +422,99 @@ def _missing_waves(wave_map_keys: list[str], already_combined: list[int]) -> lis
 # Anchored so ``wave_3.runtime.json`` does not slip through.
 _WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_(\d+)\.json$")
 
+#: The ONE wave-partial include filter every ``_combiner/`` pull uses — the
+#: F08/F09 two-glob shape (:func:`_incremental_include_patterns`) AND the
+#: mid-flight prefetch (:func:`prefetch_wave_partials`). Shared by definition so
+#: the prefetched cache is exactly the file set the terminal harvest re-verifies:
+#: a prefetch that pulled a different set would leave the harvest's delta blind
+#: to part of the cache.
+_WAVE_PARTIAL_INCLUDE: tuple[str, str] = ("wave_*.json", "wave_*.runtime.json")
+
+#: Opt-out env flag for the mid-flight wave-partial prefetch (``"0"`` disables).
+#: Mirrors the ``HPC_AGGREGATE_TAR_PULL`` / ``HPC_CLUSTER_FINAL_REDUCE`` knob
+#: idiom: the prefetch is pure optimization, so the off switch exists for ops
+#: debugging and cluster-etiquette emergencies, never for correctness.
+WAVE_PREFETCH_ENV = "HPC_WAVE_PREFETCH"
+
+
+def prefetch_wave_partials(
+    experiment_dir: Path, run_id: str, *, record: Any
+) -> dict[str, Any] | None:
+    """Opportunistically pull the run's combined wave partials MID-FLIGHT.
+
+    Wave-incremental harvest prefetch: the monitor watch calls this right after
+    a combine burst succeeds — the burst's waves are terminally complete and the
+    cluster combiner has atomically ``os.replace()``d their
+    ``_combiner/<run_id>/wave_<N>.json`` partials (partial EXISTENCE is the
+    combined marker) — so the transfer overlaps the still-running later waves
+    and the terminal harvest's ``_combiner/`` pull transfers only the delta.
+
+    STRICTLY an opportunistic cache — the ``--link-dest`` posture:
+
+    * The FINAL harvest remains the AUTHORITY. :func:`_combiner_only_reduce`
+      re-runs the SAME pull (same remote subdir, same
+      :data:`_WAVE_PARTIAL_INCLUDE` filter, same destination); on the
+      content-hash engine (``tar_ssh_pull``) every prefetched file is
+      re-verified against the cluster's sha256 manifest and any mismatch is
+      re-pulled — wave partials are NOT immutable (a force-recombine rewrites
+      one, F08; a graft invalidates one, run-13 finding 13-addendum), so the
+      prefetch never keys correctness on its own copy. On the legacy rsync
+      engine the existing size+mtime delta applies, exactly as it already does
+      for every re-aggregate. Correctness is identical with, without, or with a
+      corrupted prefetch cache.
+    * PULL-ONLY: no remote writes of any kind, so the #352 evidence model (the
+      remote ``_combiner/``'s existence and contents are EVIDENCE the harvest
+      keys its fallback on — the ``seal base-state`` fix) cannot be disturbed;
+      prefetch can never mint the directory state the seal stopped inventing.
+      A wave_map-less run never combines a wave, so this is never called for it.
+    * BEST-EFFORT, disclosed-not-raised: every failure is returned as data
+      (``ok=False`` + a bounded error tail) for the watch's tick-log action row
+      and never raises into the poll loop.
+    * CLUSTER ETIQUETTE: the caller invokes this at most once per combine BURST
+      (never per poll — it is triggered by the wave-completion state the watch
+      already reads), and the pull rides the existing connection-storm lineage
+      (``throttle_connection`` + the per-host breaker inside both engines).
+
+    The destination is the DEFAULT harvest location
+    ``<experiment_dir>/_aggregated/<run_id>/_combiner``. An aggregate later
+    invoked with a custom ``output_dir`` simply never reads this cache — still
+    correct, just no win. When the default cluster-final reduce handles the
+    terminal harvest (no partial pull at all), the prefetched KBs are unused
+    insurance against its local-reduce fallback — the >=1800s-pull class the
+    deterministic-failure memo records.
+
+    Returns the disclosure dict for the tick-log action row, or ``None`` when
+    disabled via ``HPC_WAVE_PREFETCH=0``.
+    """
+    if os.environ.get(WAVE_PREFETCH_ENV) == "0":
+        return None
+    combiner_local = experiment_dir / "_aggregated" / run_id / "_combiner"
+    try:
+        pull = _pull(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            remote_subdir="_combiner",
+            local_dir=str(combiner_local),
+            include=list(_WAVE_PARTIAL_INCLUDE),
+        )
+    except (errors.HpcError, OSError, ValueError) as exc:
+        # TimeoutError is an OSError subclass; a transport fault must never
+        # disturb the watch — return it as disclosed data instead.
+        return {"ok": False, "error": str(exc)[:200], "dir": str(combiner_local)}
+    if pull.returncode != 0:
+        return {
+            "ok": False,
+            "error": (pull.stderr or "").strip()[-200:],
+            "dir": str(combiner_local),
+        }
+    return {
+        "ok": True,
+        "files_pulled": int(getattr(pull, "files_pulled", 0) or 0),
+        "bytes_pulled": int(getattr(pull, "bytes_pulled", 0) or 0),
+        "skipped_unchanged": int(getattr(pull, "skipped_unchanged", 0) or 0),
+        "dir": str(combiner_local),
+    }
+
 
 def _incremental_include_patterns(
     combiner_local: Path, combined_waves: list[int], run_id: str | None = None
@@ -451,7 +559,7 @@ def _incremental_include_patterns(
         return None
     # A prior pull left local wave files: re-check ALL of them via rsync's
     # delta so a force-recombine (F08) or torn file (F09) is repaired.
-    return ["wave_*.json", "wave_*.runtime.json"]
+    return list(_WAVE_PARTIAL_INCLUDE)
 
 
 def _nonempty_failing_task_ids(
@@ -1086,6 +1194,25 @@ def _combiner_only_reduce(
             f"step never ran. rsync_pull stderr: {stderr_tail[:300]}"
         )
     else:
+        # Wave-prefetch disclosure (opportunistic-cache honesty): on the
+        # content-hash engine the pull reports how many files were served from
+        # the local cache — wave partials the watch prefetched mid-flight
+        # (:func:`prefetch_wave_partials`) or a prior aggregate left — vs
+        # pulled fresh, so the prefetch win is visible and a cache hit never
+        # masquerades as a fresh pull. Every served file was content-verified
+        # against the cluster's own hash manifest by ``tar_ssh_pull``'s delta
+        # (a mismatched/corrupt cache entry lands in the fresh count instead).
+        # The legacy rsync ``CompletedProcess`` carries no counts (its delta is
+        # internal), so the line is skipped there — the attrs read as None.
+        served = getattr(pull, "skipped_unchanged", None)
+        fresh = getattr(pull, "files_pulled", None)
+        if served is not None and fresh is not None and (served or fresh):
+            print(
+                f"[aggregate-flow] _combiner harvest pull for run_id {run_id!r}: "
+                f"{served} file(s) served from the local prefetch/delta cache "
+                f"(content-verified unchanged on the cluster), {fresh} pulled "
+                f"fresh ({int(getattr(pull, 'bytes_pulled', 0) or 0)} bytes)."
+            )
         # Reduce locally. Thread run_id so a prior run's leftover wave partials
         # (delete-protected ``_combiner/`` is shared across runs at one remote_path)
         # are skipped instead of contaminating this run's aggregate (F05).

@@ -1172,6 +1172,35 @@ def monitor_flow(
                                 # envelope will surface failed_waves.
                                 state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
 
+                if diff["newly_combined_waves"]:
+                    # Wave-incremental harvest prefetch: the burst's partials are
+                    # sealed on the cluster (combine success == the combiner
+                    # atomically os.replace()d wave_<N>.json), so pull them NOW —
+                    # overlapping the still-running later waves — into the exact
+                    # local dir the terminal harvest pulls, which then transfers
+                    # only the delta. ONE pull per combine BURST, never per poll
+                    # (cluster etiquette: triggered solely by the wave-completion
+                    # state this loop already read; the pull rides the existing
+                    # throttle/breaker lineage). Opportunistic cache only — the
+                    # terminal harvest re-verifies every prefetched file and
+                    # remains the authority; a failure here is disclosed on the
+                    # tick action row and never disturbs the watch. Same alias
+                    # import shape as harvest_guard._default_aggregate (the
+                    # sanctioned spelling for a top-level ops module).
+                    from hpc_agent.ops import aggregate_flow as aggregate_flow_module
+
+                    prefetch = aggregate_flow_module.prefetch_wave_partials(
+                        experiment_dir, run_id, record=record
+                    )
+                    if prefetch is not None:
+                        actions.append(
+                            {
+                                "kind": "prefetch_wave_partials",
+                                "waves": list(diff["newly_combined_waves"]),
+                                **prefetch,
+                            }
+                        )
+
             # Bounded-unknown watchdog (proving run #3, finding f): a run whose
             # remote workdir vanished mid-run can poll "unknown" indefinitely —
             # nothing alive on the scheduler, no results on disk, no failure
