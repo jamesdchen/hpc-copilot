@@ -284,10 +284,25 @@ PlateauMode = Literal["prior_window", "all_time_best"]
 # Intake ledger identifiers — the client-minted ``request_id`` (the append
 # dedup key, run-queue plan §10.S2 / §8 S12) and the ``item_id`` it becomes.
 # Same filesystem-safe character class as RunIdStrict because these ids are
-# quoted into briefs, compared by exact string, and stamped into a scheduler
-# job name on the Phase-2 adopt path; a UUID4 fits unchanged. Semantically
-# distinct from a run id, so it gets its own alias rather than borrowing one.
+# quoted into briefs, compared by exact string, and used to DERIVE a
+# transition's append token (``<item_id>.placed``, state/queue_intake.
+# placement_request_id) and a lock filename; a UUID4 fits unchanged.
+# Semantically distinct from a run id, so it gets its own alias rather than
+# borrowing one. NOTE: an item id is deliberately NOT carried on the scheduler
+# side — the plan's §10.S2.5 sketch (stamp it into the job NAME) is refused by
+# the shipped backend contract, which caps SGE names at 15 chars and consumes
+# job_name byte-for-byte in log paths and canary naming
+# (``infra/backends/_engine.py::build_correlation_flags``). Cluster-side
+# identity rides the correlation token ``<run_id>#<attempt>`` instead.
 QueueItemId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$", min_length=1)]
+
+# The parameter-identity digest a resolve computes, and the pre-image of the
+# COMPUTED run id (``run_id = "<run_name>-<cmd_sha[:8]>"``). Lowercase hex,
+# 8..64 chars, matching the shape ``BuildSubmitSpecInput`` and
+# ``WriteRunSidecarInput`` already pin inline — those two predate this alias and
+# keep their inline pattern; new wire surfaces use the alias so the queue's copy
+# cannot be the one that drifts.
+CmdSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{8,64}$")]
 
 # The COMPLETE lifecycle vocabulary the intake ledger may store (run-queue plan
 # §7 R1, §8 S10): the item ARRIVED, and a cluster was CHOSEN for it. The absent

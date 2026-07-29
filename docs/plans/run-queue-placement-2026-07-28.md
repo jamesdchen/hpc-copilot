@@ -549,13 +549,37 @@ resolved — which under §10.S3 is at ENQUEUE, not at dispatch.
    `advisory_flock` — the same primitive under `append_jsonl_line` and
    `ssh_slots` — held across resolve → sidecar write → spawn, exactly the
    window the refill docstring calls the crash window.
-5. **The scheduler's job name is the real idempotency token.** A claim
-   cannot fix `qsub` non-idempotency: a dispatcher that dies after the
+5. **A scheduler-visible idempotency token, and an adopt on recovery.** A
+   claim cannot fix `qsub` non-idempotency: a dispatcher that dies after the
    scheduler accepts but before the record write leaves a live job no local
-   store knows about. Stamp the item_id into the submitted JOB NAME, and on
-   any claim recovery query the scheduler for a job carrying it and ADOPT
-   rather than resubmit. The scheduler is the only store both racers can
-   see. This leg is mandatory, and it is independent of the claim.
+   store knows about. On any claim recovery, ADOPT such a job rather than
+   resubmit. This leg is mandatory, and it is independent of the claim.
+
+   **AMENDED AT BUILD TIME (Phase 2) — the carrier is NOT the job name.**
+   This sketch originally said "stamp the item_id into the submitted JOB
+   NAME". The shipped backend contract refuses that, and had already refused
+   it: `infra/backends/_engine.py::build_correlation_flags` records that the
+   correlation token rides a length-unconstrained scheduler CONTEXT/COMMENT
+   field (Slurm `--comment`, SGE/UGE `-ac HPC_TOKEN=`) and is "NEVER put in
+   `job_name` — SGE caps names at 15 chars and `job_name` is consumed
+   byte-for-byte by log paths + canary naming (the whole reason OPEN-1(iii)
+   was rejected)". Stamping an item_id there would silently break stderr log
+   discovery (`_engine.py::stderr_log_path` interpolates `job_name`
+   verbatim) on every SGE cluster. Phase 2 therefore left `job_name`
+   untouched.
+
+   What Phase 2 built instead: cluster-side identity keeps riding the
+   existing correlation token `<run_id>#<attempt>`, and the ADOPT key is the
+   LOCAL runs store — `ops/queue/dispatch.py::_adopted_status` checks for an
+   existing `submitting` / `in_flight` / `complete` RunRecord under the
+   COMPUTED run_id before starting anything, and reports `outcome="adopted"`
+   with the status it found. This works because D2 makes run_id computed and
+   deterministic, so two racers derive the same key without needing to ask
+   the scheduler. The residual gap this sketch worried about — a job the
+   scheduler accepted but no local store knows about — is covered by the
+   pre-existing cluster-durable jobmap MARKER (`infra.jobmap`), which
+   `build_correlation_flags` already names as "the authoritative id binding".
+   No new scheduler query was added.
 
 **Consequence for §9:** the open "claim lease TTL/steal policy" question is
 answered by not existing — there is no new lease to write a policy for.

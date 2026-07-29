@@ -13,6 +13,10 @@ either pass ``current_placement`` explicitly or sit on the allowlist below
 with a stated reason. Adding a new call site without deciding the placement
 question fails this test — which is the point: the decision must be made,
 in either direction, on purpose.
+
+Since Phase 2 (§10.S1.4) the allowlist is EMPTY — the two campaign sites that
+held it open now pass the campaign's cluster key — so this census is the live
+enforcement of the whole leg's caller side, not a ledger of exceptions.
 """
 
 from __future__ import annotations
@@ -36,16 +40,15 @@ CONSENT_ENTRY_POINTS = frozenset(
 
 #: (relative path, enclosing function) -> why this site does not pass placement.
 #: Every entry must name a real reason; "forgot" is not one.
-ALLOWLIST: dict[tuple[str, str], str] = {
-    (
-        "meta/campaign/blocks.py",
-        "campaign_watch",
-    ): "campaign scope: placement_scope is Phase 2 (§10.S1.4) — leg off by design",
-    (
-        "ops/overnight.py",
-        "self_heal_campaign",
-    ): "campaign scope: placement_scope is Phase 2 (§10.S1.4) — leg off by design",
-}
+#:
+#: EMPTY since Phase 2 (§10.S1.4, D7): the two campaign sites that used to sit
+#: here — ``campaign_watch`` and ``self_heal_campaign`` — now pass the campaign's
+#: cluster key (``overnight.campaign_current_placement``), so every consent-
+#: consuming call site in ``src/`` decides the placement question by wiring it.
+#: The emptiness is the point: the census below is now a pure enforcement, with
+#: no pre-approved hole a future omission could hide in. Re-adding an entry is
+#: legitimate but must state a real reason, exactly as before.
+ALLOWLIST: dict[tuple[str, str], str] = {}
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -120,6 +123,27 @@ def test_census_still_sees_the_known_callers() -> None:
         ("ops/overnight.py", "self_heal_campaign"),
     ]:
         assert expected in seen, f"census no longer finds {expected} — did a refactor move it?"
+
+
+def test_the_campaign_sites_pass_placement() -> None:
+    """The Phase-2 wiring (§10.S1.4, D7), pinned POSITIVELY.
+
+    ``test_every_consent_consuming_call_site_decides_the_placement_question``
+    would also pass if these two sites were re-allowlisted, and the whole point
+    of D7 is that they are not: a campaign consent binds a cluster SET and both
+    campaign boundaries must compare against it. Pin the kwarg's presence at the
+    two sites by name so re-allowlisting them (or dropping the kwarg in a
+    refactor) fails here, not silently.
+    """
+    passing = {(rel, enclosing) for rel, enclosing, _, passes in _census() if passes}
+    for expected in [
+        ("meta/campaign/blocks.py", "campaign_watch"),
+        ("ops/overnight.py", "self_heal_campaign"),
+    ]:
+        assert expected in passing, (
+            f"{expected} no longer passes current_placement — the campaign half of "
+            "the S1 placement leg (§10.S1.4) is the wiring this test exists to hold."
+        )
 
 
 def test_allowlist_entries_are_live() -> None:

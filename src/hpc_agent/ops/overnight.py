@@ -75,6 +75,9 @@ __all__ = [
     "assert_consent_hard_caps",
     "compose_consent_defaults",
     "arm_consent_wake",
+    "campaign_placement_scope",
+    "campaign_current_placement",
+    "compose_consent_placement",
     "compose_overnight_consent",
     "consumption_identity",
     "assert_consent_identity_binds",
@@ -246,6 +249,31 @@ def assert_wake_armed(
 # ── hard caps (item 8 pin c) + spec-identity binding (pin b) ──────────────────
 
 
+def _known_cluster_keys() -> set[str]:
+    """Cluster keys the ACTIVE ``clusters.yaml`` defines, or an empty set.
+
+    THE one read behind both halves of the placement leg's key check — the
+    record-time refusal below and the composer that must not hand it a value it
+    would refuse (:func:`compose_consent_placement`). One helper because the two
+    have to agree exactly: a composer working off a different notion of "known"
+    than the gate would either compose a value that cannot be recorded or drop
+    one that could.
+
+    Empty on ANY read failure, and the callers read that as "no evidence" rather
+    than "no clusters": the gate skips key validation, the composer composes.
+    An unreadable config is not proof a key is wrong.
+    """
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        clusters = load_clusters_config()
+    except Exception:  # noqa: BLE001 — unreadable config is not evidence of a bad key
+        return set()
+    if not isinstance(clusters, dict):
+        return set()
+    return {k for k in clusters if isinstance(k, str) and k}
+
+
 def _assert_placement_wellformed(placement_raw: Any) -> None:
     """Refuse a placement-bound consent whose binding cannot actually bind (S1).
 
@@ -280,15 +308,7 @@ def _assert_placement_wellformed(placement_raw: Any) -> None:
             "is not what a present-but-broken binding means. Fix the shape or "
             "drop the field."
         )
-    try:
-        from hpc_agent.infra.clusters import load_clusters_config
-
-        clusters = load_clusters_config()
-    except Exception:  # noqa: BLE001 — unreadable config is not evidence of a bad key
-        return
-    known = (
-        {k for k in clusters if isinstance(k, str) and k} if isinstance(clusters, dict) else set()
-    )
+    known = _known_cluster_keys()
     if not known:
         return
     unknown = [c for c in placement if c not in known]
@@ -530,6 +550,151 @@ def arm_consent_wake(
     return out
 
 
+def _campaign_run_placements(experiment_dir: Path, campaign_id: str) -> list[tuple[str, str]]:
+    """``(submitted_at, cluster_key)`` for every run of *campaign_id*, oldest-first.
+
+    THE one read behind both campaign placement derivations below (§10.S1.4) —
+    one helper, one home, so the set a consent RECORDS and the key consumption
+    COMPARES can never disagree about where a campaign runs.
+
+    The cluster key comes off the run record's ``cluster`` stamp (the same field
+    :func:`state.queue_occupancy.occupancy_detail` reads), never from splitting
+    the campaign id apart: :func:`state.queue_occupancy.compose_campaign_id`
+    composes ``<base>_<cluster>`` and states outright that the composition is
+    COMPOSED and never parsed — campaign bases routinely contain underscores, so
+    a split would hand back a fragment of the base as a "cluster key" and the
+    record-time gate would refuse it as an unknown cluster (or, worse, a real
+    key that happens to match would bind the consent to the wrong machine).
+
+    Fail-open in the placement leg's own direction: any read surprise yields
+    ``[]``, so both derivations report "unknown" and the absent-disables rule
+    (:func:`state.placement_drift.detect_placement_drift`) keeps the leg OFF.
+    Never raises into a consent record or a consumption boundary.
+    """
+    try:
+        from hpc_agent.state.index import find_runs_by_campaign
+
+        records = find_runs_by_campaign(experiment_dir, campaign_id)
+    except Exception:  # noqa: BLE001 — a journal read must never wedge consent
+        return []
+    out: list[tuple[str, str]] = []
+    for record in records:
+        cluster = record.cluster
+        if isinstance(cluster, str) and cluster:
+            submitted = record.submitted_at
+            out.append((submitted if isinstance(submitted, str) else "", cluster))
+    return out
+
+
+def campaign_placement_scope(experiment_dir: Path, campaign_id: str) -> list[str]:
+    """The cluster keys a campaign SPANS — its recorded ``placement_scope`` (S1.4).
+
+    The campaign-scope analog of a run's single ``cluster`` stamp: a campaign may
+    legitimately span several clusters (dynamic split is the point of §4), and
+    :func:`state.placement_drift.detect_placement_drift` compares by MEMBERSHIP
+    over a set precisely so a multi-cluster campaign does not park on every
+    placement swing. Sorted + deduped (the shape
+    :func:`state.placement_drift.normalize_recorded_placement` normalizes to
+    anyway, so the recorded value reads the same as the compared one).
+
+    Empty when the campaign has no runs yet (or none carry a cluster stamp) —
+    nothing to bind, so the composer records no placement and the consent stays
+    placement-blind rather than binding a guess.
+    """
+    return sorted(
+        {cluster for _submitted, cluster in _campaign_run_placements(experiment_dir, campaign_id)}
+    )
+
+
+def campaign_current_placement(experiment_dir: Path, campaign_id: str) -> str | None:
+    """The cluster a campaign is placing on NOW — the consumption-side key (S1.4).
+
+    THE derivation both campaign consent-consuming call sites feed to
+    ``current_placement`` (``meta.campaign.blocks.campaign_watch`` and
+    :func:`self_heal_campaign`), so the two boundaries cannot disagree. The
+    campaign's NEWEST run answers it: a campaign id is per-cluster by
+    construction (``compose_campaign_id``), so in normal operation the set is a
+    singleton and "newest" is moot — but when a campaign HAS moved, the newest
+    run is the placement the consent must be judged against, which is exactly
+    the drift the S1 leg exists to catch. Ordered by ``submitted_at`` with the
+    journal's own oldest-first order as the tiebreak (a record's mtime moves on
+    every status update; its submission time does not).
+
+    ``None`` when no run of the campaign carries a cluster stamp — the
+    absent-disables half of the leg's symmetric rule: an unprovable placement
+    keeps the leg off rather than false-killing a live consent at 3am.
+    """
+    placements = _campaign_run_placements(experiment_dir, campaign_id)
+    if not placements:
+        return None
+    return max(enumerate(placements), key=lambda pair: (pair[1][0], pair[0]))[1][1]
+
+
+def compose_consent_placement(
+    experiment_dir: Path, *, scope_kind: str, scope_id: str, resolved: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Compose a CAMPAIGN consent's ``placement`` from the clusters it spans (S1.4).
+
+    The Phase-2 half of the placement leg (run-queue plan §10.S1.4, D7): a
+    campaign consent must record its cluster SET, or the consumption leg the two
+    campaign boundaries now feed has nothing to compare against and stays
+    silently off — the fail-open failure mode §10.S1 names. Composing it here
+    (rather than asking the human to type cluster keys) mirrors every other
+    poka-yoke in this seat, and the composed value is disclosed in
+    ``composed_defaults`` like the rest — a value code filled must never
+    masquerade as one the human typed.
+
+    Deliberately NARROW:
+
+    * **campaign scope only.** A run scope's placement is the caller's own
+      sidecar read (``state.runs.read_run_cluster``) at the boundary; composing
+      one here would newly force every run consent's chat grant to name a
+      cluster (the §10.S1.5 authorship leg keys off a bound placement), a
+      widening this phase did not decide.
+    * **absent only.** A placement the caller supplied is left EXACTLY as given,
+      malformed included, so :func:`_assert_placement_wellformed` still refuses
+      the human's broken value at record time instead of it being silently
+      overwritten with a derived one.
+    * **provable only.** A campaign with no cluster-stamped run composes
+      nothing: binding a guess would be the false-kill direction, and a
+      placement-blind consent is the documented pre-migration shape.
+    * **recordable only.** A campaign whose runs name a cluster key the ACTIVE
+      ``clusters.yaml`` does not define composes nothing either. This is the
+      composer refusing to hand its own gate a value the gate must refuse:
+      :func:`_assert_placement_wellformed` validates composed keys exactly as it
+      validates typed ones, so without this a campaign carrying a retired or
+      renamed key (``ebm_all_buckets_carc`` on a host whose config no longer
+      defines ``carc``) becomes IMPOSSIBLE to grant overnight consent for — with
+      a refusal pointing at a field the human never typed and cannot edit, whose
+      stated remedy ("fix the shape or drop the field") is unactionable.
+      ALL-OR-NOTHING rather than filtered to the survivors: a campaign whose
+      NEWEST run sits on the unknown key would then be judged against a recorded
+      set that cannot contain it, and consumption would park at 3am — the
+      false-kill this leg forbids. Composing nothing leaves the consent
+      placement-blind, which the absent-disables rule turns into "leg off", the
+      safe direction.
+
+    Note the composed set makes the S1.5 authorship leg bite for campaign
+    consents: a chat grant must now name the cluster(s). That is the intended
+    discipline ("the human says WHERE out loud") and the refusal renders a
+    paste-ready grant line carrying the keys.
+    """
+    out: dict[str, Any] = dict(resolved) if isinstance(resolved, dict) else {}
+    if scope_kind != "campaign":
+        return out
+    if out.get("placement") is not None:
+        return out
+    scope = campaign_placement_scope(experiment_dir, scope_id)
+    if not scope:
+        return out
+    known = _known_cluster_keys()
+    if known and any(cluster not in known for cluster in scope):
+        return out
+    out["placement"] = scope
+    _mark_composed(out, "placement")
+    return out
+
+
 def consumption_identity(experiment_dir: Path, scope_kind: str, scope_id: str) -> str | None:
     """The identity token CONSUMPTION compares a consent's ``cmd_sha`` against (F15).
 
@@ -609,15 +774,26 @@ def compose_overnight_consent(
 
     The single entry the consent write path (``ops/decision/journal.py``
     ``append_decision``) calls BEFORE the authorship + caps + wake gates: fill the
-    cap defaults (:func:`compose_consent_defaults`) and compose/arm the wake
-    (:func:`arm_consent_wake`). Everything composed is disclosed in
-    ``composed_defaults``. ``cmd_sha`` is untouched — the one field a default cannot
-    stand in for, so a consent that omits it still refuses at the caps gate — but a
-    SUPPLIED ``cmd_sha`` bound to the wrong derivation is refused HERE
-    (:func:`assert_consent_identity_binds`, F15) rather than silently refusing all night.
+    cap defaults (:func:`compose_consent_defaults`), compose/arm the wake
+    (:func:`arm_consent_wake`), and — for a CAMPAIGN scope — compose the placement
+    scope the S1 leg compares against (:func:`compose_consent_placement`, §10.S1.4).
+    Everything composed is disclosed in ``composed_defaults``. ``cmd_sha`` is
+    untouched — the one field a default cannot stand in for, so a consent that omits
+    it still refuses at the caps gate — but a SUPPLIED ``cmd_sha`` bound to the wrong
+    derivation is refused HERE (:func:`assert_consent_identity_binds`, F15) rather
+    than silently refusing all night.
+
+    Placement is composed BEFORE the identity binding (and, upstream, before the
+    authorship + caps gates) so the composed set is the value the §10.S1.5
+    authorship leg renders and matches on, and the value
+    :func:`_assert_placement_wellformed` validates — a composed binding no gate
+    sees would be a binding nothing enforces.
     """
     out = compose_consent_defaults(resolved, now_utc=now_utc)
     out = arm_consent_wake(experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out)
+    out = compose_consent_placement(
+        experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out
+    )
     assert_consent_identity_binds(
         experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out
     )
@@ -1595,6 +1771,13 @@ def self_heal_campaign(
         scope_kind="campaign",
         scope_id=campaign_id,
         current_cmd_sha=identity,
+        # S1 (§10.S1.4): a heal is an unattended respawn, so it must ask the same
+        # placement question the watch boundary asks — a campaign re-placed onto a
+        # cluster the consent never named must not be self-healed there. Derived by
+        # THE one campaign derivation (:func:`campaign_current_placement`, a local
+        # journal read — this function promises zero SSH), and absent-disables keeps
+        # every placement-blind consent untouched.
+        current_placement=campaign_current_placement(experiment_dir, campaign_id),
         now_iso=now,
         spent_budget=metered_budget,
         spent_walltime=metered_walltime,

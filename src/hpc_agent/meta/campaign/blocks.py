@@ -449,7 +449,10 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
         # liveness that the record-time skip left open is now closed by the
         # overnight self-heal (`overnight.campaign_chain_status` / the doctor
         # `self_heal` seat — see notebook-audit.md item 8).
-        from hpc_agent.ops.overnight import consume_boundary_under_consent
+        from hpc_agent.ops.overnight import (
+            campaign_current_placement,
+            consume_boundary_under_consent,
+        )
 
         # F16: meter the caps against the campaign's REALISED spend (campaign-budget's
         # ``spent``) — passed EXPLICITLY so the over-budget/over-walltime cap legs can
@@ -463,6 +466,15 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
             scope_id=cid,
             boundary_block="campaign-watch",
             current_cmd_sha=campaign_spec_identity(manifest),
+            # S1 (run-queue plan §10.S1.4): placement is the third identity
+            # dimension. A consent granted while the campaign ran on hoffman2 must
+            # not auto-advance an anomaly the campaign now hits on carc — the human
+            # named a machine, not just a spec. Derived by THE one campaign
+            # derivation (``overnight.campaign_current_placement``, the newest
+            # campaign run's cluster stamp), never by splitting the cid apart; a
+            # campaign with no cluster-stamped run yields None and the leg stays off
+            # (the symmetric absent-disables rule).
+            current_placement=campaign_current_placement(experiment_dir, cid),
             event_kind="anomaly",
             detail={"anomaly": decision, "reason": adv.get("reason")},
             spent_budget=spent_budget,

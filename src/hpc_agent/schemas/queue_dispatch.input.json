@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_dispatch.input.json",
+  "title": "queue-dispatch input spec",
+  "description": "Inputs to ``queue-dispatch`` — scope and bound, never a placement.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "campaign_base": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict this call to items enqueued under this logical campaign base, forwarded to ``queue-advance`` unchanged. Null considers every queued item — the fleet-wide drain read.",
+      "title": "Campaign Base"
+    },
+    "item_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Act on ONLY these items. The refill path's field (§10.S3): a slot enqueues one item and then dispatches THAT item in the same critical section, so it must be able to name it rather than trust arrival order to hand it back. This NARROWS what the call acts on; it never places anything — ``queue-advance`` remains the sole authority, so an item named here that advance HELD is reported held, with advance's own reason, and is not dispatched. Null (default) acts on whatever advance placed, in the order it placed them.",
+      "title": "Item Ids"
+    },
+    "max_dispatches": {
+      "default": 1,
+      "description": "Most items to start in this call. Defaults to ONE for the same reason ``queue-advance.max_placements`` does: a human signs one decision at a time, and a larger batch belongs to the consented/unattended tier. Items beyond the bound stay queued and are reported held with advance's ``batch_limit_reached`` — never dropped (R4).",
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Max Dispatches",
+      "type": "integer"
+    },
+    "clusters": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional restriction of the candidate cluster set, forwarded to ``queue-advance``. NARROWS the candidates; never overrides an item's pin (R5) and never places an item the hard constraints reject.",
+      "title": "Clusters"
+    },
+    "now": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 UTC 'now' override for deterministic testing (the doctor / attention-queue precedent). Sets ``computed_at`` and is forwarded to ``queue-advance``; never an agent-facing knob for reshaping what gets dispatched.",
+      "title": "Now"
+    }
+  }
+}

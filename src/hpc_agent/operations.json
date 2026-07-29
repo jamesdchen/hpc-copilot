@@ -2068,10 +2068,11 @@
     "output_schema": "campaign_refill.output.json",
     "python": "hpc_agent.ops.campaign_refill.campaign_refill",
     "side_effects": [
+      "file_write",
       "scheduler-submit",
       "writes-campaign-state"
     ],
-    "summary": "RFC #362 refill actor: top a greenlit async campaign's pool back up this tick. Calls campaign-advance authoritatively; if it decides refill, resolves + submits refill_count iterations SEQUENTIALLY (each a detached campaign-run). Refuses an un-greenlit campaign (greenlight is the standing consent). Stages: refilled / no_refill_needed / refill_blocked. No new state file, no cursor — partial ticks self-correct via next tick's shrunk refill_count.",
+    "summary": "RFC #362 refill actor: top a greenlit async campaign's pool back up this tick. Calls campaign-advance authoritatively; if it decides refill, resolves refill_count iterations SEQUENTIALLY and, per slot, ENQUEUES the resolved trial on the intake ledger (queue-run) and hands it to the one dispatcher (queue-dispatch) — durable-first, so a crash between the two leaves a visible queued item that shrinks the next tick's pool room instead of an invisible orphan. Refuses an un-greenlit campaign (greenlight is the standing consent). Re-actuates this campaign's STRANDED placements first - items it placed and never started, which queue-advance never re-offers and which hold pool slots until they run. Stages: refilled / no_refill_needed / refill_blocked. No new state file, no cursor - partial ticks self-correct via the recovery leg plus next tick's shrunk refill_count.",
     "verb": "workflow"
   },
   {
@@ -2130,6 +2131,21 @@
       "writes-journal"
     ],
     "summary": "Workflow atom: poll a run to terminal lifecycle (or wall-clock budget); auto-combine waves as they finish; write the same .monitor.jsonl tick log /monitor-hpc writes. Pairs with submit-flow for the campaign loop composition. MVP does not auto-resubmit failed tasks.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent queue-dispatch [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "queue_dispatch.input.json",
+    "name": "queue-dispatch",
+    "output_schema": "queue_dispatch.output.json",
+    "python": "hpc_agent.ops.queue.dispatch.queue_dispatch",
+    "side_effects": [
+      "file_write",
+      "scheduler-submit"
+    ],
+    "summary": "The run queue's ACTOR: consume queue-advance's placement decisions and start each placed item's normal run lifecycle. It COMPOSES and never submits on its own - no second submit path, no gate of its own, no consent machinery of its own; the greenlight / standing consent bind at the cluster boundary inside the machinery this starts. Per item: derive the COMPUTED run id, adopt an existing submitting/in_flight/complete run instead of resubmitting, take the durable per-campaign dispatch lock, record the placement on the intake ledger, then start a detached campaign-run whose single-lease guard IS the claim - so two dispatchers racing one item derive the same id and the loser reports 'claim_held' rather than duplicating the array. Adds NO intake state: 'dispatched' stays a projection queue-status computes over the run stores. Nothing is dropped - every item comes back dispatched, refused with a closed reason_code, or held with queue-advance's own reason.",
     "verb": "workflow"
   },
   {

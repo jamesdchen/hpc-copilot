@@ -20,6 +20,27 @@ asked for*. Concretely, a record carries only
   COMPUTED ``run_id`` (§10.S2: run ids are derived, never minted); and
 * **lifecycle in ``{queued, placed}``** and nothing wider.
 
+Resolved identity on the enqueue record (Phase 2 / §10.S3)
+----------------------------------------------------------
+An item whose caller ALREADY resolved it may arrive carrying ``run_id`` and
+``cmd_sha`` (:func:`item_run_id` / :func:`item_cmd_sha`). That is the
+campaign-refill path (§10.S3 D5): a refill slot must consume the optuna
+sidecar index exactly once, so it resolves FIRST and enqueues the resolved
+identity, and the enqueue is what closes the crash window between "this trial
+was chosen" and "this trial is a run".
+
+Those are still arrival facts, not lifecycle: ``run_id`` is COMPUTED
+(``"<run_name>-<cmd_sha[:8]>"``, a pure query), so recording it asserts only
+*which run this item will be*, never that a run exists. Carrying it is a
+CORRECTNESS precondition rather than a convenience — ``state/queue_occupancy``
+collapses an item and the run it becomes onto one slot only when the item
+knows its ``run_id``; without it the enqueue→dispatch handoff counts one
+committed slot twice and every refill tick inside that window under-refills.
+
+Neither key is pinned by the fold, so a later placement record's optional
+``run_id`` overlays cleanly (rule 3) — an item that arrives unresolved and is
+resolved later reads the same way as one that arrived resolved.
+
 ``dispatched`` / ``parked`` / ``in-flight`` / ``terminal`` are **PROJECTIONS**
 computed at read time over stores that already exist and are already durable
 (``state/index.py`` RunRecords, ``state/journal.py`` pending-decision markers,
@@ -72,6 +93,14 @@ needs its own append token or its dedup probe would match the enqueue record
 and silently no-op the transition. So: ``item_id`` is the item's identity for
 the fold; ``request_id`` is the idempotency token of ONE append.
 
+A transition's token is DERIVED, not random (:func:`placement_request_id`).
+Two dispatchers racing one item — or one dispatcher whose turn is replayed —
+must leave ONE placement record on the ledger; a fresh uuid4 per attempt would
+dedup against nothing and append a second placement line every time, which the
+fold would happily overlay and ``record_count`` would then report as a torn
+item. Deterministic per (item, transition) is what makes the transition as
+replay-safe as the arrival it follows.
+
 Reading is tolerant — a torn tail, a foreign line, or a shape the fold cannot
 place is SKIPPED, never fatal (the ``state/devx_tags.py`` and decision-journal
 posture). A queue read is on the "what needs me" path; a single bad byte must
@@ -99,10 +128,14 @@ __all__ = [
     "STATE_QUEUED",
     "append_intake_item",
     "append_intake_placement",
+    "find_intake_item",
     "fold_intake_records",
     "intake_path",
     "intake_path_if_exists",
+    "item_cmd_sha",
+    "item_run_id",
     "items_in_states",
+    "placement_request_id",
     "read_intake_items",
     "read_intake_records",
     "read_intake_records_counted",
@@ -121,6 +154,13 @@ _PINNED_KEYS: frozenset[str] = frozenset({"item_id", "request_id", "kind", "enqu
 
 _KIND_ENQUEUE = "enqueue"
 _KIND_PLACEMENT = "placement"
+
+#: Suffix appended to an ``item_id`` to derive the PLACEMENT transition's append
+#: token. A ``.`` because ``item_id`` (wire alias ``QueueItemId``) is
+#: ``^[A-Za-z0-9._\-]+$`` and the derived token is quoted into briefs and
+#: compared as an ordinary id — a ``:`` or ``/`` would leave the charset the
+#: whole queue wire surface validates against.
+_PLACEMENT_TOKEN_SUFFIX = ".placed"
 
 
 def intake_path(experiment_dir: Path) -> Path:
@@ -156,12 +196,16 @@ def append_intake_item(
     """Append one ENQUEUE record; return ``None`` on write, the original on replay.
 
     *record* carries the caller's arrival facts (resolve spec / spec pointer,
-    resource asks, cluster pin, campaign base, computed ``run_id``, ...). This
-    seam stamps the four fields the fold owns — ``kind``, ``item_id``,
-    ``request_id``, ``enqueued_at``/``ts`` — and forces ``state`` to
-    ``"queued"``: an item cannot ARRIVE placed, and letting a caller assert
-    otherwise would put a placement on the ledger that ``queue-advance`` never
-    decided (R3/R5).
+    resource asks, cluster pin, campaign base, and — when the caller resolved
+    the item before enqueueing it, the §10.S3 refill path — the computed
+    ``run_id`` and ``cmd_sha``). This seam stamps the four fields the fold owns
+    — ``kind``, ``item_id``, ``request_id``, ``enqueued_at``/``ts`` — and forces
+    ``state`` to ``"queued"``: an item cannot ARRIVE placed, and letting a
+    caller assert otherwise would put a placement on the ledger that
+    ``queue-advance`` never decided (R3/R5). The identity keys are deliberately
+    NOT forced or validated here — they are ordinary arrival facts, the wire
+    model owns their shape, and the readers below treat an absent or
+    ill-shaped one as simply unknown.
 
     ``item_id`` is set to *request_id* (§10.S2: the client's minting token IS
     the item's identity). The append passes ``dedup_key=("request_id", …)``, so
@@ -189,6 +233,24 @@ def append_intake_item(
     )
 
 
+def placement_request_id(item_id: str) -> str:
+    """The DERIVED append token for *item_id*'s placement transition.
+
+    ``<item_id>.placed`` — deterministic, so the transition inherits the same
+    replay safety the arrival has (module docstring, "Replay dedup"). A
+    dispatcher that crashes after appending and is re-run, and two dispatchers
+    racing the same item, all compute this same token; the in-flock dedup probe
+    then finds the existing placement and no second line is written.
+
+    Distinct from *item_id* by construction, which
+    :func:`append_intake_placement` requires — a token equal to the item's own
+    would dedup against the ENQUEUE record and drop the transition silently.
+    """
+    if not item_id or not item_id.strip():
+        raise ValueError("item_id must be a non-empty string")
+    return f"{item_id}{_PLACEMENT_TOKEN_SUFFIX}"
+
+
 def append_intake_placement(
     experiment_dir: Path,
     *,
@@ -211,11 +273,13 @@ def append_intake_placement(
     item's — a transition reusing ``item_id`` as its dedup key would match the
     enqueue record and silently no-op.
 
-    Phase 1 ships no writer for this: ``queue-advance`` is pure (R3) and
-    ``queue-dispatch`` is Phase 2. It exists because the ``{queued, placed}``
-    vocabulary R1 fixes is not expressible without it, and because putting the
-    transition anywhere but this module would re-open the two-store bookkeeping
-    S10 closed.
+    ``queue-dispatch`` is the ONE writer (``queue-advance`` is pure, R3): it
+    records the cluster it is about to start the item's lifecycle on, and the
+    item leaves ``queue-advance``'s scope the moment it does — advance reads
+    only ``queued`` items, so the placement append is the handoff. Pass
+    :func:`placement_request_id` as *request_id* unless you have a reason not
+    to; a derived token is what makes a retried or raced dispatch leave one
+    placement record instead of one per attempt.
     """
     if not item_id or not item_id.strip():
         raise ValueError("item_id must be a non-empty string")
@@ -379,3 +443,55 @@ def items_in_states(
     """
     wanted = frozenset(states)
     return [item for item in items if item.get("state") in wanted]
+
+
+def _nonempty_str(item: dict[str, Any], key: str) -> str | None:
+    """*item*[*key*] when it is a non-empty string, else ``None``.
+
+    The ledger is read tolerantly (module docstring): a key may be absent, may
+    be ``None`` because the enqueue spec left it unset, or may be a shape a
+    foreign writer put there. All three mean the same thing to a reader — the
+    fact is not known — and collapsing them here keeps every consumer from
+    re-inlining the same ``isinstance`` dance and drifting on one of the cases.
+    """
+    value = item.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def item_run_id(item: dict[str, Any]) -> str | None:
+    """The COMPUTED run id a folded *item* carries, or ``None`` when unknown.
+
+    Set by an enqueue that resolved first (§10.S3 D5) or overlaid by a
+    placement record that learned it. THE accessor for that fact: the occupancy
+    predicate collapses an item onto its run by this value, ``queue-advance``
+    discloses it, ``queue-status`` joins the run stores on it, and a dispatcher
+    claims on it — four readers of one key, which is three too many to each
+    decide for themselves what a non-string ``run_id`` means.
+    """
+    return _nonempty_str(item, "run_id")
+
+
+def item_cmd_sha(item: dict[str, Any]) -> str | None:
+    """The resolved parameter identity a folded *item* carries, or ``None``.
+
+    The pre-image half of ``run_id = "<run_name>-<cmd_sha[:8]>"``. Recorded
+    because the truncation is lossy: a dispatcher that adopts an existing run
+    can state which cmd_sha the ledger committed to, rather than inferring
+    agreement from eight hex characters.
+    """
+    return _nonempty_str(item, "cmd_sha")
+
+
+def find_intake_item(
+    items: Sequence[dict[str, Any]],
+    item_id: str,
+) -> dict[str, Any] | None:
+    """The folded item with this *item_id*, or ``None`` if the ledger has none.
+
+    Pure lookup over an ALREADY-folded list, deliberately not a reader: every
+    caller that wants one item also wants the ledger-wide numbers from the same
+    scan (the queued depth it echoes, the occupancy it reports), and a
+    convenience reader here would invite a second, separately-timed read of the
+    file behind those two answers.
+    """
+    return next((item for item in items if item.get("item_id") == item_id), None)

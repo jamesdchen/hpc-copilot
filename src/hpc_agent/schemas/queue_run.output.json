@@ -58,8 +58,22 @@
         }
       ],
       "default": null,
-      "description": "The item's COMPUTED run id when it could be derived at enqueue (§10.S2: '<run_name>-<cmd_sha[:8]>', a pure query, never minted); null otherwise. Two items with identical resolved params and the same run_name compute the SAME run_id — that collision is real and ``queue-status`` names it rather than silently collapsing the rows.",
+      "description": "The item's COMPUTED run id as the LEDGER holds it (§10.S2: '<run_name>-<cmd_sha[:8]>', a pure query, never minted); null for an item that arrived unresolved and has learned nothing since. Read back from the fold, so a replay reports the ORIGINAL item's id — including one a later placement record supplied. Two items with identical resolved params and the same run_name compute the SAME run_id; that collision is real and ``queue-status`` names it rather than silently collapsing the rows.",
       "title": "Run Id"
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{8,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The item's resolved parameter identity as the LEDGER holds it; null for an unresolved item. Read back rather than echoed from the spec, which is the whole point on a replay: it reports what the original item committed to, so a caller re-sending a request_id with a different resolution sees the mismatch instead of assuming its own.",
+      "title": "Cmd Sha"
     },
     "enqueued_at": {
       "description": "ISO-8601 UTC arrival stamp of the item (of the ORIGINAL item on a replay). §10.S3's accepted cost — trial params are chosen at enqueue — is why enqueue age is a fact worth surfacing.",

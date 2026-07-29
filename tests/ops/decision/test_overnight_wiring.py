@@ -487,6 +487,106 @@ def test_campaign_anomaly_parks_without_a_live_consent(
     assert result.brief["overnight_refusal"] == "no-consent"
 
 
+# ── S1 placement leg at the campaign-watch boundary (§10.S1.4, D7) ────────────
+
+
+def _mk_campaign_run(
+    exp: Path,
+    run_id: str,
+    cluster: str,
+    *,
+    submitted_at: str = "2026-07-28T00:00:00+00:00",
+) -> None:
+    """A journal record for a campaign iteration placed on *cluster*."""
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        exp,
+        RunRecord(
+            run_id=run_id,
+            profile="widget",
+            cluster=cluster,
+            ssh_target="u@h",
+            remote_path="/scratch/widget",
+            job_name="widget",
+            job_ids=["1"],
+            total_tasks=4,
+            submitted_at=submitted_at,
+            experiment_dir=str(exp),
+            campaign_id=_CAMPAIGN_ID,
+            status="in_flight",
+        ),
+    )
+
+
+def test_campaign_anomaly_parks_when_placement_left_the_consented_set(
+    experiment_dir: Path, campaign_anomaly: None
+) -> None:
+    """THE D7 fire path: a consent granted while the campaign ran on hoffman2 must
+    NOT auto-advance an anomaly the campaign now hits on carc. The human named a
+    machine, not just a spec (§10.S1.4) — the boundary parks for a y/nudge, and the
+    refusal leg is disclosed in the brief."""
+    from hpc_agent._wire.workflows.campaign_blocks import CampaignWatchSpec
+    from hpc_agent.meta.campaign.blocks import campaign_watch
+
+    _seed_consent(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved=_resolved(cmd_sha=_campaign_identity(), placement=["hoffman2"]),
+    )
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "carc")
+    result = campaign_watch(experiment_dir, spec=CampaignWatchSpec(campaign_id=_CAMPAIGN_ID))
+    assert result.needs_decision is True
+    assert result.brief["overnight_refusal"] == "placement-changed"
+    # Nothing was auto-advanced, so nothing was ledgered.
+    assert overnight.read_consumption_ledger(experiment_dir, "campaign", _CAMPAIGN_ID) == []
+
+
+def test_campaign_anomaly_consumes_inside_the_consented_placement_set(
+    experiment_dir: Path, campaign_anomaly: None
+) -> None:
+    """The positive twin — a multi-cluster campaign whose consent names BOTH keys
+    consumes on either one (membership, not equality: dynamic split is the point
+    of §4, so equality would park on every placement swing)."""
+    from hpc_agent._wire.workflows.campaign_blocks import CampaignWatchSpec
+    from hpc_agent.meta.campaign.blocks import campaign_watch
+
+    _seed_consent(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved=_resolved(cmd_sha=_campaign_identity(), placement=["carc", "hoffman2"]),
+    )
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "carc")
+    result = campaign_watch(experiment_dir, spec=CampaignWatchSpec(campaign_id=_CAMPAIGN_ID))
+    assert result.needs_decision is False
+    assert "overnight_refusal" not in result.brief
+    ledger = overnight.read_consumption_ledger(experiment_dir, "campaign", _CAMPAIGN_ID)
+    assert len(ledger) == 1
+
+
+def test_campaign_placement_blind_consent_still_consumes(
+    experiment_dir: Path, campaign_anomaly: None
+) -> None:
+    """Additive-on-upgrade: a consent recorded before ``placement_scope`` existed
+    keeps consuming even though the watch now KNOWS the campaign's cluster."""
+    from hpc_agent._wire.workflows.campaign_blocks import CampaignWatchSpec
+    from hpc_agent.meta.campaign.blocks import campaign_watch
+
+    _seed_consent(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved=_resolved(cmd_sha=_campaign_identity()),  # no placement key
+    )
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "carc")
+    result = campaign_watch(experiment_dir, spec=CampaignWatchSpec(campaign_id=_CAMPAIGN_ID))
+    assert result.needs_decision is False
+    assert len(overnight.read_consumption_ledger(experiment_dir, "campaign", _CAMPAIGN_ID)) == 1
+
+
 # ── WP-H fire paths (F11 / F12 / F15 / F16) ────────────────────────────────────
 
 

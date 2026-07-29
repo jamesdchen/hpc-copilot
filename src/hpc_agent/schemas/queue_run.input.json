@@ -27,7 +27,7 @@
         }
       ],
       "default": null,
-      "description": "The resolve spec, recorded VERBATIM on the ledger. Exactly one of ``spec`` / ``spec_ref`` must be given (§1: 'the resolve spec, or a pointer to it'). Inline is right for a machine-produced item — a campaign refill enqueuing a trial — because the item then carries everything a later dispatch needs with no second file to keep alive. Opaque here: queue-run validates that it EXISTS, never what is in it; the resolver owns that invariant.",
+      "description": "The spec, recorded VERBATIM on the ledger. Exactly one of ``spec`` / ``spec_ref`` must be given (§1: 'the resolve spec, or a pointer to it'). Inline is right for a machine-produced item — a campaign refill enqueuing a trial — because the item then carries everything a later dispatch needs with no second file to keep alive. Opaque here: queue-run validates that it EXISTS, never what is in it; the resolver owns that invariant. WHICH spec depends on ``run_id``: an item carrying a resolved identity (``run_id`` + ``cmd_sha``) must record the RESOLVED submit-flow spec (``ResolveSubmitInputsResult.submit_spec``), because queue-dispatch composes the shipped lifecycle and never re-resolves — a second resolve would write another sidecar, consume the NEXT optuna proposal, and derive a run_id disagreeing with the one on the ledger (run-queue plan §10.S3/E4/D5). An item with no resolved identity may record an unresolved resolve spec; dispatch refuses it as ``item_unresolved`` rather than resolving on its behalf.",
       "title": "Spec"
     },
     "spec_ref": {
@@ -55,6 +55,34 @@
       "default": null,
       "description": "Optional logical run name. Load-bearing for §10.S2: run ids are COMPUTED, not minted — ``run_id = '<run_name>-<cmd_sha[:8]>'`` — so supplying it is what lets the item carry a run_id while it is still on the ledger, which is in turn what lets the occupancy predicate collapse the item and the run it becomes onto ONE slot. Omit it and the item simply holds its own slot until it resolves.",
       "title": "Run Name"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The item's COMPUTED run id, supplied by a caller that ALREADY resolved it (§10.S3: campaign-refill resolves first, then enqueues, because resolving consumes the optuna sidecar index exactly once). Never REQUIRED and never derived here — an unresolved hand enqueue stays legal and simply carries no identity yet. Recording it is a correctness precondition rather than a convenience: the occupancy predicate collapses an item and the run it becomes onto ONE slot only when the item knows its run_id, so without it the enqueue-then-dispatch handoff counts one committed slot twice. It asserts nothing about a run EXISTING — the id is a pure function of run_name and cmd_sha; whether a run is live is the run stores' fact (R1).",
+      "title": "Run Id"
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{8,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The resolved parameter identity behind ``run_id`` — its pre-image, since ``run_id`` keeps only the first 8 hex characters. Supplied with ``run_id`` by a caller that resolved first; null otherwise. Carried so a later dispatcher that finds an existing run for this id can state WHICH cmd_sha the ledger committed to instead of inferring agreement from a truncation.",
+      "title": "Cmd Sha"
     },
     "cluster": {
       "anyOf": [

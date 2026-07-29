@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
     CampaignId,
+    CmdSha,
     QueueItemId,
     QueueItemState,
     QueueResourceAsk,
@@ -59,13 +60,22 @@ class QueueRunSpec(BaseModel):
     spec: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "The resolve spec, recorded VERBATIM on the ledger. Exactly one of "
+            "The spec, recorded VERBATIM on the ledger. Exactly one of "
             "``spec`` / ``spec_ref`` must be given (§1: 'the resolve spec, or a "
             "pointer to it'). Inline is right for a machine-produced item — a "
             "campaign refill enqueuing a trial — because the item then carries "
             "everything a later dispatch needs with no second file to keep "
             "alive. Opaque here: queue-run validates that it EXISTS, never what "
-            "is in it; the resolver owns that invariant."
+            "is in it; the resolver owns that invariant. WHICH spec depends on "
+            "``run_id``: an item carrying a resolved identity (``run_id`` + "
+            "``cmd_sha``) must record the RESOLVED submit-flow spec "
+            "(``ResolveSubmitInputsResult.submit_spec``), because queue-dispatch "
+            "composes the shipped lifecycle and never re-resolves — a second "
+            "resolve would write another sidecar, consume the NEXT optuna "
+            "proposal, and derive a run_id disagreeing with the one on the "
+            "ledger (run-queue plan §10.S3/E4/D5). An item with no resolved "
+            "identity may record an unresolved resolve spec; dispatch refuses it "
+            "as ``item_unresolved`` rather than resolving on its behalf."
         ),
     )
     spec_ref: str | None = Field(
@@ -87,6 +97,34 @@ class QueueRunSpec(BaseModel):
             "on the ledger, which is in turn what lets the occupancy predicate "
             "collapse the item and the run it becomes onto ONE slot. Omit it and "
             "the item simply holds its own slot until it resolves."
+        ),
+    )
+    run_id: RunIdStrict | None = Field(
+        default=None,
+        description=(
+            "The item's COMPUTED run id, supplied by a caller that ALREADY "
+            "resolved it (§10.S3: campaign-refill resolves first, then enqueues, "
+            "because resolving consumes the optuna sidecar index exactly once). "
+            "Never REQUIRED and never derived here — an unresolved hand enqueue "
+            "stays legal and simply carries no identity yet. Recording it is a "
+            "correctness precondition rather than a convenience: the occupancy "
+            "predicate collapses an item and the run it becomes onto ONE slot "
+            "only when the item knows its run_id, so without it the "
+            "enqueue-then-dispatch handoff counts one committed slot twice. It "
+            "asserts nothing about a run EXISTING — the id is a pure function of "
+            "run_name and cmd_sha; whether a run is live is the run stores' fact "
+            "(R1)."
+        ),
+    )
+    cmd_sha: CmdSha | None = Field(
+        default=None,
+        description=(
+            "The resolved parameter identity behind ``run_id`` — its pre-image, "
+            "since ``run_id`` keeps only the first 8 hex characters. Supplied "
+            "with ``run_id`` by a caller that resolved first; null otherwise. "
+            "Carried so a later dispatcher that finds an existing run for this id "
+            "can state WHICH cmd_sha the ledger committed to instead of inferring "
+            "agreement from a truncation."
         ),
     )
     cluster: str | None = Field(
@@ -148,6 +186,35 @@ class QueueRunSpec(BaseModel):
             raise ValueError("spec must be a non-empty object")
         return self
 
+    @model_validator(mode="after")
+    def _resolved_identity_is_whole(self) -> QueueRunSpec:
+        """Refuse half a resolved identity.
+
+        ``run_id`` is ``"<run_name>-<cmd_sha[:8]>"`` — three facts that are one
+        fact. A record carrying the id without its pre-image cannot say which
+        parameters it committed to, and one carrying a cmd_sha with no id
+        commits to nothing an occupancy scan or a dispatcher can key on. Both
+        would be enqueued happily and only fail hours later, at the point where
+        someone tries to join on the missing half; a primitive owns its
+        invariants, so the seam refuses instead.
+
+        Absent entirely stays legal and is the common case (a hand enqueue is
+        unresolved by construction, and R2 says arrival spends nothing —
+        including the cost of resolving).
+        """
+        if (self.run_id is None) != (self.cmd_sha is None):
+            raise ValueError(
+                "run_id and cmd_sha are one fact (run_id = '<run_name>-<cmd_sha[:8]>'): "
+                "give both or neither"
+            )
+        if self.run_id is not None and not (self.run_name and self.run_name.strip()):
+            raise ValueError(
+                "run_id was supplied without run_name — the id is DERIVED from the "
+                "run name, so a record carrying one without the other cannot be "
+                "recomputed or checked"
+            )
+        return self
+
 
 class QueueRunResult(BaseModel):
     """What the ledger holds after the enqueue — including on a replay."""
@@ -185,11 +252,24 @@ class QueueRunResult(BaseModel):
     run_id: RunIdStrict | None = Field(
         default=None,
         description=(
-            "The item's COMPUTED run id when it could be derived at enqueue "
-            "(§10.S2: '<run_name>-<cmd_sha[:8]>', a pure query, never minted); "
-            "null otherwise. Two items with identical resolved params and the "
-            "same run_name compute the SAME run_id — that collision is real and "
-            "``queue-status`` names it rather than silently collapsing the rows."
+            "The item's COMPUTED run id as the LEDGER holds it (§10.S2: "
+            "'<run_name>-<cmd_sha[:8]>', a pure query, never minted); null for an "
+            "item that arrived unresolved and has learned nothing since. Read "
+            "back from the fold, so a replay reports the ORIGINAL item's id — "
+            "including one a later placement record supplied. Two items with "
+            "identical resolved params and the same run_name compute the SAME "
+            "run_id; that collision is real and ``queue-status`` names it rather "
+            "than silently collapsing the rows."
+        ),
+    )
+    cmd_sha: CmdSha | None = Field(
+        default=None,
+        description=(
+            "The item's resolved parameter identity as the LEDGER holds it; null "
+            "for an unresolved item. Read back rather than echoed from the spec, "
+            "which is the whole point on a replay: it reports what the original "
+            "item committed to, so a caller re-sending a request_id with a "
+            "different resolution sees the mismatch instead of assuming its own."
         ),
     )
     enqueued_at: str = Field(

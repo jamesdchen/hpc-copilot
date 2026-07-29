@@ -69,6 +69,11 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "OutputsMissing",
         "PreconditionFailed",
         "Preempted",
+        # QueueDispatchLockHeld (run queue Phase 2, 2026-07-29): a peer holds a
+        # campaign's dispatch lock — the durable form of the E4
+        # sidecar-between-slots rule; precondition_failed-coded and retry_safe,
+        # the exit is to wait for the peer and re-run.
+        "QueueDispatchLockHeld",
         "RemoteCommandFailed",
         "SchedulerThrottled",
         "SchemaIncompat",

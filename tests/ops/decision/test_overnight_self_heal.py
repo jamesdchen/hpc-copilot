@@ -543,3 +543,77 @@ def test_no_consent_is_a_noop(experiment_dir: Path, spawn_recorder: list[dict[st
     outcome = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
     assert outcome.status == "no-consent"
     assert spawn_recorder == []
+
+
+# ── S1 placement leg at the heal boundary (§10.S1.4, D7) ──────────────────────
+
+
+def _mk_campaign_run(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    cluster: str,
+    submitted_at: str = "2026-07-28T00:00:00+00:00",
+) -> None:
+    """A journal record for a campaign iteration placed on *cluster*."""
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        experiment_dir,
+        RunRecord(
+            run_id=run_id,
+            profile="widget",
+            cluster=cluster,
+            ssh_target="u@h",
+            remote_path="/scratch/widget",
+            job_name="widget",
+            job_ids=["1"],
+            total_tasks=4,
+            submitted_at=submitted_at,
+            experiment_dir=str(experiment_dir),
+            campaign_id=_CAMPAIGN_ID,
+            status="in_flight",
+        ),
+    )
+
+
+def test_heal_refuses_a_campaign_re_placed_off_the_consented_cluster(
+    experiment_dir: Path, spawn_recorder: list[dict[str, Any]]
+) -> None:
+    """A heal is an unattended respawn: a campaign now running on a cluster the
+    consent never named must NOT be healed there (§10.S1.4). The refusal names
+    the placement leg, so the morning brief says why nothing was healed."""
+    _seed_campaign_consent(experiment_dir, _resolved(placement=["hoffman2"]))
+    _seed_dead_chain(experiment_dir)
+    _mk_campaign_run(experiment_dir, run_id=_RUN_ID, cluster="carc")
+    outcome = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    assert outcome.status == "consent-not-live"
+    assert outcome.reason == "placement-changed"
+    assert spawn_recorder == []  # no respawn on a cluster the human never named
+
+
+def test_heal_proceeds_on_the_consented_cluster(
+    experiment_dir: Path, spawn_recorder: list[dict[str, Any]]
+) -> None:
+    """The positive twin: same consent, campaign still on hoffman2 ⇒ heal runs."""
+    _seed_campaign_consent(experiment_dir, _resolved(placement=["hoffman2"]))
+    _seed_dead_chain(experiment_dir)
+    _mk_campaign_run(experiment_dir, run_id=_RUN_ID, cluster="hoffman2")
+    outcome = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    assert outcome.status == "respawned"
+    assert len(spawn_recorder) == 1
+
+
+def test_heal_unaffected_when_the_campaign_has_no_cluster_stamped_run(
+    experiment_dir: Path, spawn_recorder: list[dict[str, Any]]
+) -> None:
+    """Absent-disables at the heal boundary: a placement-bound consent whose
+    campaign has no readable placement must still heal — an unprovable current
+    placement is not evidence of drift (the false-kill direction §10.S1 forbids)."""
+    _seed_campaign_consent(experiment_dir, _resolved(placement=["hoffman2"]))
+    _seed_dead_chain(experiment_dir)  # leases only; no run record ⇒ no cluster stamp
+    assert overnight.campaign_current_placement(experiment_dir, _CAMPAIGN_ID) is None
+    outcome = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    assert outcome.status == "respawned"
+    assert len(spawn_recorder) == 1

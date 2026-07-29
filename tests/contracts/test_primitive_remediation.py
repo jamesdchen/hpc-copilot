@@ -304,6 +304,12 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "queue-run",
         "queue-status",
         "queue-advance",
+        # run queue phase 2 (§6 Phase 2 / §10): queue-dispatch, the actor. Its
+        # spec is all-optional like queue-advance's, but {} EXECUTES a verb that
+        # STARTS runs, so it takes the bogus-key probe below (the doctor-install
+        # reasoning, one ring further out: an all-optional spec is not a safe
+        # probe when the verb has side effects).
+        "queue-dispatch",
         "aggregate-flow",
         "apply-safe-defaults",
         "build-submit-spec",
@@ -436,6 +442,11 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # bogus key so the extra="forbid" wire model rejects it.
     "queue-status": _BOGUS_KEY_SPEC,
     "queue-advance": _BOGUS_KEY_SPEC,
+    # queue-dispatch's spec is all-optional too, but unlike its two siblings it
+    # STARTS work — a {} probe would dispatch whatever the fixture tree happens
+    # to have queued. Bogus key, so the extra="forbid" wire model refuses before
+    # anything is actuated.
+    "queue-dispatch": _BOGUS_KEY_SPEC,
     "status-snapshot": _BOGUS_KEY_SPEC,
     "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
 }

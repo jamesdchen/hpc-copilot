@@ -490,6 +490,13 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("audit_preflight.py", "ops", "recover"),
         ("auto_resume_flow.py", "ops", "recover"),
         ("campaign_refill.py", "meta", "campaign"),
+        # run-queue §10.S3 (D5): campaign-refill became a LEDGER PRODUCER — each
+        # slot enqueues its resolved trial (ops/queue/run) and hands that item to
+        # the one dispatcher (ops/queue/dispatch) instead of submitting directly.
+        # Both reaches ARE declared as composes=["queue-run", "queue-dispatch"],
+        # but string-name composes are unresolvable to this AST pass, so they earn
+        # inventory entries (the cite_check.py precedent).
+        ("campaign_refill.py", "ops", "queue"),
         # cite-check composes verify-relay's extraction discipline: the number
         # grammar + faithful-render tolerance + false-positive consumers live in
         # ops/decision/journal/verify_relay (promoted public helpers, reused

@@ -717,3 +717,263 @@ def test_placement_blind_consent_still_records(
     _arm_wake(_RUN_ID)
     _seed_bound(experiment_dir)
     assert _append(experiment_dir).count == 1
+
+
+# ── S1.4 campaign placement_scope: composed from the campaign's own runs ──────
+
+_CAMPAIGN_ID = "widget_sweep_over_time_hoffman2"
+
+
+def _mk_campaign_run(
+    exp: Path,
+    run_id: str,
+    cluster: str,
+    *,
+    campaign_id: str = _CAMPAIGN_ID,
+    submitted_at: str = "2026-07-28T00:00:00+00:00",
+) -> None:
+    """A journal record for a campaign iteration placed on *cluster*."""
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        exp,
+        RunRecord(
+            run_id=run_id,
+            profile="widget",
+            cluster=cluster,
+            ssh_target="u@h",
+            remote_path="/scratch/widget",
+            job_name="widget",
+            job_ids=["1"],
+            total_tasks=4,
+            submitted_at=submitted_at,
+            experiment_dir=str(exp),
+            campaign_id=campaign_id,
+            status="in_flight",
+        ),
+    )
+
+
+def test_campaign_consent_composes_placement_and_discloses_it(experiment_dir: Path) -> None:
+    """A campaign consent must record the cluster set the S1 leg compares against
+    (§10.S1.4) — composed, not typed, and disclosed AS composed."""
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "hoffman2")
+    out = overnight.compose_overnight_consent(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved={},
+    )
+    assert out["placement"] == ["hoffman2"]
+    assert "placement" in out["composed_defaults"]
+
+
+def test_multi_cluster_campaign_scope_covers_every_cluster_it_spans(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A campaign spanning two clusters records BOTH — membership over a set is
+    what keeps a dynamic split from parking on every placement swing.
+
+    Pins the vocabulary the campaign actually spans: the composer will not
+    compose a key the ACTIVE config does not define (that would hand the
+    record-time gate a value it must refuse — see
+    ``test_composer_declines_a_placement_its_own_gate_would_refuse``), and
+    ``carc`` is not in the packaged default.
+    """
+    _pin_clusters(tmp_path, monkeypatch, "carc", "hoffman2")
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "hoffman2")
+    _mk_campaign_run(experiment_dir, "widget-iter-2", "carc")
+    assert overnight.campaign_placement_scope(experiment_dir, _CAMPAIGN_ID) == [
+        "carc",
+        "hoffman2",
+    ]
+    out = overnight.compose_overnight_consent(
+        experiment_dir, scope_kind="campaign", scope_id=_CAMPAIGN_ID, resolved={}
+    )
+    assert out["placement"] == ["carc", "hoffman2"]
+
+
+def test_composer_declines_a_placement_its_own_gate_would_refuse(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A campaign on a cluster key the ACTIVE config no longer defines must stay
+    grantable — placement-blind, not un-recordable.
+
+    ``_assert_placement_wellformed`` validates COMPOSED keys exactly as it
+    validates typed ones, so a composer that emits a retired or renamed key
+    makes the consent impossible to record at all: ``SpecInvalid`` naming a
+    field the human never typed and cannot edit, whose stated remedy ("fix the
+    shape or drop the field") is unactionable. Reproduced against the shipped
+    code with ``ebm_all_buckets_carc`` on a host whose config defines only
+    hoffman2/discovery.
+
+    ALL-OR-NOTHING rather than filtered to the survivors: recording only the
+    known half would judge a campaign whose newest run sits on the unknown key
+    against a set that cannot contain it, and consumption would park at 3am —
+    the false-kill this leg forbids. Composing nothing leaves the leg off, which
+    is the safe direction and the documented pre-migration shape.
+    """
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "carc")
+    assert overnight.campaign_placement_scope(experiment_dir, _CAMPAIGN_ID) == ["carc"]
+
+    out = overnight.compose_overnight_consent(
+        experiment_dir, scope_kind="campaign", scope_id=_CAMPAIGN_ID, resolved={}
+    )
+    assert "placement" not in out
+    assert "placement" not in out.get("composed_defaults", [])
+    # And the record-time gate — the thing that used to refuse — now passes it.
+    overnight._assert_placement_wellformed(out.get("placement"))
+
+
+def test_a_typed_placement_naming_an_unknown_key_is_still_refused(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composer's narrowing must not soften the gate for a value a HUMAN typed.
+
+    Composed-and-declined is "we could not prove where this runs"; typed-and-wrong
+    is a typo the human is awake to fix, and it keeps failing loudly.
+    """
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2")
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "carc")
+    out = overnight.compose_overnight_consent(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved={"placement": ["carc"]},
+    )
+    assert out["placement"] == ["carc"]
+    assert "placement" not in out.get("composed_defaults", [])
+    with pytest.raises(errors.SpecInvalid, match="absent from clusters.yaml"):
+        overnight._assert_placement_wellformed(out["placement"])
+
+
+def test_campaign_placement_is_never_derived_by_splitting_the_campaign_id(
+    experiment_dir: Path,
+) -> None:
+    """``compose_campaign_id`` composes ``<base>_<cluster>`` and is NEVER parsed:
+    bases contain underscores, so a split is a guess. Here the id's suffix says
+    hoffman2 while the campaign's runs are on carc — the runs win."""
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "carc")
+    assert overnight.campaign_placement_scope(experiment_dir, _CAMPAIGN_ID) == ["carc"]
+    assert overnight.campaign_current_placement(experiment_dir, _CAMPAIGN_ID) == "carc"
+
+
+def test_current_placement_follows_the_newest_iteration(experiment_dir: Path) -> None:
+    """A campaign that MOVED reports the cluster it runs on NOW — the drift the
+    consumption leg exists to catch."""
+    _mk_campaign_run(
+        experiment_dir, "widget-iter-1", "hoffman2", submitted_at="2026-07-01T00:00:00+00:00"
+    )
+    _mk_campaign_run(
+        experiment_dir, "widget-iter-2", "carc", submitted_at="2026-07-28T00:00:00+00:00"
+    )
+    assert overnight.campaign_current_placement(experiment_dir, _CAMPAIGN_ID) == "carc"
+
+
+def test_compose_leaves_a_supplied_campaign_placement_untouched(experiment_dir: Path) -> None:
+    """A supplied placement is the human's binding, right or wrong: composition
+    must not overwrite it (a malformed one must still reach the record-time gate)."""
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "hoffman2")
+    out = overnight.compose_consent_placement(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        resolved={"placement": {"cluster": "carc"}},
+    )
+    assert out["placement"] == {"cluster": "carc"}  # untouched, gate's business
+    assert "composed_defaults" not in out
+
+
+def test_compose_never_composes_placement_for_a_run_scope(experiment_dir: Path) -> None:
+    """D7 is the CAMPAIGN half. A run scope's placement is the boundary caller's
+    sidecar read; composing one here would newly force every run consent's chat
+    grant to name a cluster — a widening this phase did not decide."""
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "hoffman2")
+    out = overnight.compose_consent_placement(
+        experiment_dir, scope_kind="run", scope_id=_RUN_ID, resolved={}
+    )
+    assert "placement" not in out
+
+
+def test_compose_composes_nothing_when_the_campaign_has_no_placed_run(
+    experiment_dir: Path,
+) -> None:
+    """Nothing to prove ⇒ nothing bound: a guessed binding is the false-kill
+    direction, and a placement-blind consent is the documented shape."""
+    out = overnight.compose_consent_placement(
+        experiment_dir, scope_kind="campaign", scope_id=_CAMPAIGN_ID, resolved={}
+    )
+    assert "placement" not in out
+    assert overnight.campaign_current_placement(experiment_dir, _CAMPAIGN_ID) is None
+
+
+def test_composed_campaign_placement_makes_the_chat_grant_name_the_cluster(
+    experiment_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composed set is not decoration: §10.S1.5's authorship leg now bites for
+    campaign consents — the human must say WHERE out loud. The refusal renders the
+    cluster and the paste-ready grant line carrying it grants."""
+    from hpc_agent.meta.campaign.blocks import campaign_spec_identity
+    from hpc_agent.meta.campaign.manifest import read_manifest
+
+    cid = "widget-sweep-2"
+    _pin_clusters(tmp_path, monkeypatch, "hoffman2", "carc")
+    _mk_campaign_run(experiment_dir, "widget-iter-1", "hoffman2", campaign_id=cid)
+    identity = campaign_spec_identity(read_manifest(experiment_dir, campaign_id=cid))
+    resolved = {
+        "expires_at": _iso(utcnow() + timedelta(hours=8)),
+        "budget_cap": 50.0,
+        "cmd_sha": identity,
+    }
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    # Names the boundary and the sha prefix — but not the cluster the campaign runs on.
+    append_utterance(
+        experiment_dir,
+        f"I grant overnight consent for campaign {cid} under spec {identity[:12]}",
+    )
+    with pytest.raises(errors.SpecInvalid, match="cluster set") as exc:
+        _append(experiment_dir, scope_kind="campaign", scope_id=cid, resolved=dict(resolved))
+    paste_line = str(exc.value).splitlines()[-1].strip()
+    assert "hoffman2" in paste_line
+
+    append_utterance(experiment_dir, paste_line)
+    result = _append(experiment_dir, scope_kind="campaign", scope_id=cid, resolved=dict(resolved))
+    assert result.count == 1
+    records = sdj.read_decisions(experiment_dir, "campaign", cid)
+    # The binding the consumption leg compares is ON the record, marked composed.
+    assert records[-1]["resolved"]["placement"] == ["hoffman2"]
+    assert "placement" in records[-1]["resolved"]["composed_defaults"]
+
+
+def test_campaign_scope_consent_refuses_a_boundary_off_its_cluster_set(
+    experiment_dir: Path,
+) -> None:
+    """The consumption half at CAMPAIGN scope: bound to hoffman2, boundary on carc
+    ⇒ placement-changed (the same predicate the run scope already fires on)."""
+    sdj.append_decision(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        block=overnight.OVERNIGHT_CONSENT_BLOCK,
+        response="let the widget campaign self-chain overnight, cap 50 dollars",
+        resolved=_resolved(placement=["hoffman2"]),
+    )
+    refused = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert refused.live is False
+    assert refused.reason == "placement-changed"
+    live = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="hoffman2",
+    )
+    assert live.live is True

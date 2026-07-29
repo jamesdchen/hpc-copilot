@@ -2,8 +2,9 @@
 name: campaign-refill
 verb: workflow
 side_effects:
-- scheduler-submit: <cluster> (per refilled slot)
+- scheduler-submit: <cluster> (per refilled slot, via queue-dispatch)
 - writes-campaign-state: <experiment_dir>/.hpc/runs/<run_id>.json (per refilled slot)
+- file_write: <experiment_dir>/.hpc/queue/intake.jsonl (per refilled slot)
 idempotent: true
 idempotency_key: spec.campaign_id
 error_codes:

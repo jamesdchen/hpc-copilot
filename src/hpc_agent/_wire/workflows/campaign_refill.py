@@ -115,9 +115,12 @@ class CampaignRefillResult(BaseModel):
     ] = Field(description="Which refill outcome this tick reached.")
     needs_decision: bool = Field(
         description=(
-            "True only for refill_blocked (a slot hit a live-prior / scaffold "
-            "escalation the human must resolve); False for refilled and the "
-            "no_refill_needed typed no-op."
+            "True only for refill_blocked, and not for every refill_blocked: a "
+            "slot that hit a live-prior / scaffold escalation needs a human, but "
+            "a slot blocked as 'claim_held' (a peer dispatcher holds the per-cid "
+            "E4 lock or the run's detached lease, run-queue plan §10.S2/D3) is a "
+            "healthy race the next tick retries, so it reports False. Always "
+            "False for refilled and the no_refill_needed typed no-op."
         ),
     )
     reason: str = Field(description="Human-readable summary of the tick's outcome.")
@@ -136,7 +139,11 @@ class CampaignRefillResult(BaseModel):
         default=None,
         description=(
             "The pool-slots-to-fill count advance requested this tick "
-            "(max(0, min(K - in_flight, remaining_max_jobs))); 0 on no_refill_needed."
+            "(max(0, min(K - occupied, remaining_max_jobs))); 0 on no_refill_needed. "
+            "'occupied' is the shared occupancy predicate (state.queue_occupancy."
+            "occupied_slots, run-queue plan §10.S3/D6) — journal in_flight/submitting "
+            "UNION queued/placed queue-intake items, deduped by run id — NOT the raw "
+            "status.in_flight this field once named."
         ),
     )
     submitted: list[SubmittedIteration] = Field(

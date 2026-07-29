@@ -67,7 +67,10 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state.queue_intake import (
     STATE_QUEUED,
     append_intake_item,
+    find_intake_item,
     intake_path,
+    item_cmd_sha,
+    item_run_id,
     items_in_states,
     read_intake_items,
 )
@@ -192,10 +195,20 @@ def queue_run(*, experiment_dir: Path, spec: QueueRunSpec) -> QueueRunResult:
     # ``cluster_pin``, NOT as ``cluster``: a placement transition overlays
     # ``cluster``, and writing the pin there would make an operator's REQUEST
     # indistinguishable from queue-advance's disclosed DECISION after one fold.
+    #
+    # ``run_id`` / ``cmd_sha`` are arrival facts too, not lifecycle: they say
+    # WHICH run this item will be (the id is a pure function of run_name and
+    # cmd_sha), never that a run exists. Passed through verbatim and never
+    # derived here — this verb resolves nothing (R2: arrival spends nothing,
+    # including the cost of a resolve), so the only way an item carries its
+    # identity is that the caller resolved first, which is exactly what the
+    # §10.S3 refill path does.
     record: dict[str, Any] = {
         "spec": spec.spec,
         "spec_ref": spec.spec_ref,
         "run_name": spec.run_name,
+        "run_id": spec.run_id,
+        "cmd_sha": spec.cmd_sha,
         "cluster_pin": cluster_pin,
         "campaign_base": spec.campaign_base,
         "resources": spec.resources.model_dump(mode="json"),
@@ -207,7 +220,7 @@ def queue_run(*, experiment_dir: Path, spec: QueueRunSpec) -> QueueRunResult:
     # placed), and on a fresh append the fold is what every projection will
     # see. One read also yields the queued depth queue-advance will consider.
     items = read_intake_items(experiment_dir)
-    item = next((it for it in items if it.get("item_id") == spec.request_id), None)
+    item = find_intake_item(items, spec.request_id)
     if item is None:
         raise errors.JournalCorrupt(
             f"queue-run: appended item_id={spec.request_id!r} to "
@@ -216,7 +229,6 @@ def queue_run(*, experiment_dir: Path, spec: QueueRunSpec) -> QueueRunResult:
             "reader can see would report an enqueue that never happened."
         )
 
-    run_id = item.get("run_id")
     return QueueRunResult(
         path=str(intake_path(experiment_dir)),
         item_id=spec.request_id,
@@ -225,11 +237,13 @@ def queue_run(*, experiment_dir: Path, spec: QueueRunSpec) -> QueueRunResult:
         # state is outside the vocabulary R1 fixes.
         state=str(item.get("state") or STATE_QUEUED),  # type: ignore[arg-type]
         replayed=replayed is not None,
-        # Never derived here in Phase 1: run_id = "<run_name>-<cmd_sha[:8]>" and
-        # cmd_sha only exists once the item's spec is RESOLVED (§10.S2/S3's
-        # resolve-at-enqueue is a later change). Surfaced when a transition put
-        # one on the ledger, so a replay of a since-resolved item reports it.
-        run_id=run_id if isinstance(run_id, str) and run_id else None,
+        # Read off the FOLD, never echoed from the spec. On a replay the ledger's
+        # identity is the authority: a caller re-sending a request_id with a
+        # different resolution must see what the original item committed to
+        # rather than its own input handed back. Null for an item that arrived
+        # unresolved and has learned nothing since.
+        run_id=item_run_id(item),
+        cmd_sha=item_cmd_sha(item),
         enqueued_at=str(item.get("enqueued_at") or ""),
         queued_count=len(items_in_states(items, [STATE_QUEUED])),
         record=item,

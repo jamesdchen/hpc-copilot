@@ -112,6 +112,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'program-verify': ('program-verify', 'hpc_agent.ops.program_verify'),
     'provenance-manifest': ('provenance-manifest', 'hpc_agent.ops.provenance_manifest'),
     'queue-advance': ('queue-advance', 'hpc_agent.ops.queue.advance'),
+    'queue-dispatch': ('queue-dispatch', 'hpc_agent.ops.queue.dispatch'),
     'queue-run': ('queue-run', 'hpc_agent.ops.queue.run'),
     'queue-status': ('queue-status', 'hpc_agent.ops.queue.status'),
     'read-decisions': ('read-decisions', 'hpc_agent.ops.decision.journal'),
