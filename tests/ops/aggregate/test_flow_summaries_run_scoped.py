@@ -12,6 +12,7 @@ finding-19 whole-root pull on this surface.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -77,7 +78,18 @@ def test_pull_summaries_pull_is_run_scoped(journal_home, experiment, monkeypatch
 
     def _stub(*_a, remote_subdir: str, local_dir: str, include=None, **_kw):
         seen_subdirs.append(remote_subdir)
-        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        dest = Path(local_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        if remote_subdir.startswith("results"):
+            # A wave_map-less run reduces via the per-task fallback, so the
+            # results pull must actually deliver a sidecar — otherwise the
+            # harness models a run that produced nothing and the reduce
+            # (correctly) refuses before this test reaches its assertion.
+            task = dest / "task-0"
+            task.mkdir(parents=True, exist_ok=True)
+            (task / "metrics.json").write_text(
+                json.dumps({"score": 1.0, "n_samples": 1}), encoding="utf-8"
+            )
         return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(af_module, "rsync_pull", _stub)

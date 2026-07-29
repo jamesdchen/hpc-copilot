@@ -1965,14 +1965,23 @@ def seal_code_tree(
     """Link the run-mutable paths back to the base, then write the seal.
 
     One ssh leg, ``&&``-chained so nothing partial commits. For each entry of
-    :data:`~hpc_agent.infra.code_tree.TREE_SHARED_PATHS` it ensures the BASE dir
-    exists, replaces any stale entry in the tree, symlinks it, and then
-    **verifies the result really is a symlink** (``[ -L … ]``). That check can
-    fire: if a code snapshot ever did materialise a real directory at one of
-    those paths, ``ln -s`` would quietly drop the link INSIDE it and the run's
-    results would land in the tree — invisible to the pull path and reapable by
-    the GC. Refusing the seal makes that outcome a fallback to the legacy base
-    tree (un-pinned, but nothing lost) instead of silent data loss.
+    :data:`~hpc_agent.infra.code_tree.TREE_SHARED_PATHS` it replaces any stale
+    entry in the tree, symlinks it at the base, and then **verifies the result
+    really is a symlink** (``[ -L … ]``). That check can fire: if a code snapshot
+    ever did materialise a real directory at one of those paths, ``ln -s`` would
+    quietly drop the link INSIDE it and the run's results would land in the tree
+    — invisible to the pull path and reapable by the GC. Refusing the seal makes
+    that outcome a fallback to the legacy base tree (un-pinned, but nothing lost)
+    instead of silent data loss.
+
+    The BASE target is pre-created for
+    :data:`~hpc_agent.infra.code_tree.TREE_BASE_MATERIALIZED_PATHS` ONLY — the
+    paths a JOB writes THROUGH the link, which a dangling symlink would break.
+    Sealing must not manufacture run-state at the base for anything else: an
+    empty ``<base>/_combiner/`` created here reads downstream as "the combiner
+    ran and produced nothing", which is how the 2026-07-29 sandbox-proving run
+    harvested an empty results table and called it a success. See that constant
+    for the full argument.
 
     The seal file goes LAST, after the symlinks and after the caller's
     ``deploy_runtime`` has put the framework files in the tree. Presence of the
@@ -1983,7 +1992,12 @@ def seal_code_tree(
 
     Raises :class:`RuntimeError` on failure.
     """
-    from hpc_agent.infra.code_tree import TREE_SEAL_REL, TREE_SHARED_PATHS, tree_path_for
+    from hpc_agent.infra.code_tree import (
+        TREE_BASE_MATERIALIZED_PATHS,
+        TREE_SEAL_REL,
+        TREE_SHARED_PATHS,
+        tree_path_for,
+    )
 
     tree = tree_path_for(remote_path, digest)
     validate_remote_path(tree)
@@ -1993,7 +2007,8 @@ def seal_code_tree(
     for rel in TREE_SHARED_PATHS:
         target = shlex.quote(f"{base}/{rel}")
         link = shlex.quote(f"{tree}/{rel}")
-        parts.append(f"mkdir -p {target}")
+        if rel in TREE_BASE_MATERIALIZED_PATHS:
+            parts.append(f"mkdir -p {target}")
         # ``rm -f`` clears a stale symlink or file but REFUSES a directory, so a
         # real dir survives to be caught by the ``[ -L ]`` verification below
         # rather than being deleted with whatever it holds.

@@ -11,6 +11,9 @@ wiring: pinning, no-op re-deploy, GC seat, legacy fallback).
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -109,9 +112,54 @@ def test_cluster_written_output_dirs_are_all_shared_back_to_the_base() -> None:
     shared = set(code_tree.TREE_SHARED_PATHS)
     for pat in cluster_written:
         assert pat.rstrip("/") in shared, f"{pat} is cluster-written but not shared into the tree"
-    # The two the preamble/dispatcher resolve relative to $REPO_DIR by name.
+    # The three the preamble/dispatcher resolve relative to $REPO_DIR by name.
     assert ".hpc_failed" in shared
     assert ".hpc/runs" in shared
+    assert ".hpc/announce" in shared
+
+
+def test_the_dispatchers_announce_dir_is_shared_back_to_the_base() -> None:
+    """Lockstep pin with ``ops.monitor.announce.ANNOUNCE_SUBPATH``.
+
+    The standalone dispatcher writes its per-task census markers to
+    ``<its own .hpc dir>/announce/<run_id>/`` — i.e. ``$REPO_DIR/.hpc/announce``
+    — while EVERY reader (the monitor poll census, ``aggregate/arm_census``,
+    reconcile, ``migrate/census``) looks under ``<remote_path>/.hpc/announce``.
+    With ``$REPO_DIR`` on a code tree and no symlink, a tree-pinned run
+    announces into the tree and every census reads ``present=False``: the
+    monitor silently degrades to the 20-25 min reporter walk and the streaming
+    harvest's ``census_arms`` REFUSES outright.
+    """
+    from hpc_agent.ops.monitor.announce import ANNOUNCE_SUBPATH
+
+    assert ANNOUNCE_SUBPATH == ".hpc/announce"
+    assert ANNOUNCE_SUBPATH in code_tree.TREE_SHARED_PATHS
+    # ...and, being per-RUN bookkeeping, it must never perturb a CODE digest.
+    assert f"{ANNOUNCE_SUBPATH}/" in code_tree.CODE_SNAPSHOT_EXTRA_EXCLUDES
+
+
+def test_only_job_written_shared_paths_get_a_materialised_base_dir() -> None:
+    """The seal may LINK anything, but it may CREATE only what a job writes through.
+
+    A base directory's mere EXISTENCE is read as evidence elsewhere, so sealing
+    a code tree must not manufacture run-state at the base. The canonical
+    casualty: ``aggregate_flow`` treated an absent ``<base>/_combiner/`` as "no
+    combiner ever ran" and fell back to the per-task ``metrics.json`` reduce
+    (#352); a seal that pre-created an empty one turned the fallback off and the
+    2026-07-29 sandbox-proving run harvested an EMPTY results table while
+    reporting success (``s4.table``).
+
+    ``_combiner`` / ``_aggregated`` are written by the LOGIN NODE with ``cd
+    <remote_path>`` — never through the tree — so they are linked and left
+    dangling until their real writer creates them.
+    """
+    materialised = set(code_tree.TREE_BASE_MATERIALIZED_PATHS)
+    shared = set(code_tree.TREE_SHARED_PATHS)
+    assert materialised <= shared, "a materialised path must be a shared path"
+    assert shared - materialised == {"_combiner", "_aggregated"}
+    # Every path a JOB writes THROUGH the link must be materialised — a dangling
+    # symlink makes os.makedirs raise and the preamble's `|| true` mkdir vanish.
+    assert {"results", ".hpc_failed", ".hpc/announce"} <= materialised
 
 
 def test_the_trees_root_is_protected_from_the_base_push_delete() -> None:
@@ -297,6 +345,67 @@ def test_seal_links_every_shared_path_verifies_it_and_writes_the_marker() -> Non
     # The completion marker is LAST — a torn deploy leaves an unsealed dir the
     # next submit rebuilds, never a tree a queued job executes half of.
     assert cmd.index(".hpc-tree-sealed") > cmd.index("ln -s")
+
+
+def test_seal_creates_no_base_dir_the_job_does_not_write_through() -> None:
+    """The seal must not manufacture run-state at the base (s4.table, 2026-07-29).
+
+    ``mkdir -p <base>/_combiner`` was emitted for every shared path so ``ln -s``
+    would have a live target. But nothing writes ``_combiner`` through the tree
+    (the wave combiner and the cluster final reduce both run on the login node
+    with ``cd <remote_path>``), and its EXISTENCE at the base is evidence: the
+    harvest read an absent ``_combiner/`` as "no combiner ran" and fell back to
+    the per-task reduce. Sealing a tree therefore made every no-combiner run
+    reduce over zero partials — a successful harvest with an empty table.
+    """
+    with _ssh() as ssh:
+        transport.seal_code_tree(ssh_target="u@c", remote_path="/p", digest=_D1)
+    cmd = ssh.call_args[0][1]
+    for rel in ("_combiner", "_aggregated"):
+        assert f"ln -s /p/{rel} " in cmd, f"{rel} is still LINKED..."
+        assert f"mkdir -p /p/{rel}" not in cmd, f"...but the seal must not CREATE /p/{rel}"
+    for rel in code_tree.TREE_BASE_MATERIALIZED_PATHS:
+        assert f"mkdir -p /p/{rel}" in cmd, f"{rel} is written through the link; it must exist"
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None or os.name == "nt",
+    reason="executes the emitted POSIX seal string; the cluster shell is not the dev box's",
+)
+def test_seal_command_really_links_every_shared_path_in_a_real_shell(tmp_path: Path) -> None:
+    """Execute the emitted seal string against a real filesystem.
+
+    Every other dial test stops at the engine mock, which is exactly the layer
+    that hid the s4.table break: the string was asserted, never RUN. Here the
+    shell actually executes it over a tree laid out the way ``materialize`` +
+    ``deploy_runtime`` leave one, and the assertions are on the resulting inodes.
+    """
+    base = tmp_path / "remote" / "exp"
+    tree = base / code_tree.TREES_REL / _D1
+    (tree / ".hpc").mkdir(parents=True)
+    with _ssh() as ssh:
+        transport.seal_code_tree(ssh_target="u@c", remote_path=str(base), digest=_D1)
+    proc = subprocess.run(
+        ["bash", "-c", ssh.call_args[0][1]],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    for rel in code_tree.TREE_SHARED_PATHS:
+        link = tree / rel
+        assert link.is_symlink(), f"{rel} must be a symlink inside the tree, not a real dir"
+        assert os.readlink(link) == str(base / rel)
+    assert (tree / code_tree.TREE_SEAL_REL).is_file()
+    # The job writes results/markers/announcements THROUGH the link, so those
+    # base dirs must be live...
+    for rel in code_tree.TREE_BASE_MATERIALIZED_PATHS:
+        assert (base / rel).is_dir(), f"{rel} must resolve for a job whose cwd is the tree"
+    # ...and the login-node-written ones must NOT have been invented.
+    for rel in ("_combiner", "_aggregated"):
+        assert not (base / rel).exists(), f"the seal must not create <base>/{rel}"
 
 
 def test_seal_failure_raises_so_the_caller_can_degrade() -> None:

@@ -30,6 +30,7 @@ The layout, and why
         _aggregated -> <base>/_aggregated
         .hpc_failed -> <base>/.hpc_failed
         .hpc/runs -> <base>/.hpc/runs   symlink
+        .hpc/announce -> <base>/.hpc/announce
         .hpc-tree-sealed                written LAST — the "complete" proof
       results/ logs/ .hpc/runs/ ...     the shared run-mutable state
 
@@ -59,6 +60,14 @@ tree carries a symlink for each run-mutable path (:data:`TREE_SHARED_PATHS`) and
 the code snapshot deliberately EXCLUDES those paths, so nothing ever
 materialises a real directory over one. The invariant is small enough to state
 in one line: *a tree contains code and symlinks, never a run's bytes.*
+
+There is a MIRROR invariant, learned the expensive way (the 2026-07-29
+sandbox-proving ``s4.table`` failure): *sealing a tree must not manufacture
+run-state at the BASE either.* The seal creates a base target only for the paths
+a job writes THROUGH the link (:data:`TREE_BASE_MATERIALIZED_PATHS`), because a
+directory's mere existence at the base is read as evidence elsewhere — an empty
+``<base>/_combiner/`` told the harvest "a combiner ran and produced nothing" and
+turned a real results table into an empty one.
 
 Snapshot identity
 -----------------
@@ -93,6 +102,7 @@ __all__ = [
     "DIGEST_CHARS",
     "GC_KEEP_NEWEST",
     "TREES_REL",
+    "TREE_BASE_MATERIALIZED_PATHS",
     "TREE_SEAL_REL",
     "TREE_SHARED_PATHS",
     "CodeTreeProbe",
@@ -161,6 +171,12 @@ GC_KEEP_NEWEST = 3
 #:   ``<dispatcher dir>/runs/<run_id>.json``, i.e. ``$REPO_DIR/.hpc/runs``;
 #:   sidecars are per-RUN data (they must not perturb a CODE digest) and both
 #:   ``rsync_push`` and ``push_run_sidecar`` write them at the base.
+#: * ``.hpc/announce`` — the dispatcher writes its per-task census markers to
+#:   ``<dispatcher dir>/announce/<run_id>/`` (``dispatch._ANNOUNCE_DIRNAME``),
+#:   i.e. ``$REPO_DIR/.hpc/announce``, while every reader
+#:   (``ops.monitor.announce.ANNOUNCE_SUBPATH``, the arm census, reconcile)
+#:   looks at ``<remote_path>/.hpc/announce``. Without the link a tree-pinned
+#:   run announces into the tree and every census reads ``present=False``.
 #:
 #: The first four are the cluster-written members of
 #: ``transport.PROTECTED_OUTPUT_DIRS``, so a new run-output dir there cannot be
@@ -168,6 +184,8 @@ GC_KEEP_NEWEST = 3
 #:
 #: MIRROR: hpc_agent.infra.transport.PROTECTED_OUTPUT_DIRS pinned-by
 #: tests/infra/test_code_tree.py::test_cluster_written_output_dirs_are_all_shared_back_to_the_base
+#: MIRROR: hpc_agent.ops.monitor.announce.ANNOUNCE_SUBPATH pinned-by
+#: tests/infra/test_code_tree.py::test_the_dispatchers_announce_dir_is_shared_back_to_the_base
 TREE_SHARED_PATHS: tuple[str, ...] = (
     "results",
     "_combiner",
@@ -175,6 +193,41 @@ TREE_SHARED_PATHS: tuple[str, ...] = (
     "logs",
     ".hpc_failed",
     ".hpc/runs",
+    ".hpc/announce",
+)
+
+#: The subset of :data:`TREE_SHARED_PATHS` whose BASE target the seal creates.
+#:
+#: A symlink resolves to nothing when its target is absent, and the cluster-side
+#: writers that go THROUGH the link cannot recover from that: ``os.makedirs``
+#: raises on a dangling ``results``; ``hpc_preamble.sh``'s ``mkdir -p "$fail_dir"
+#: 2>/dev/null || true`` swallows the error and the terminal marker vanishes;
+#: the dispatcher's eager announce ``mkdir`` is best-effort and the whole census
+#: degrades. So for every path the JOB writes through the tree, the seal must
+#: ``mkdir -p`` the base target first.
+#:
+#: The complement — ``_combiner`` and ``_aggregated`` — is deliberately LINKED
+#: BUT NOT MATERIALISED. Nothing writes them through the tree (the wave combiner
+#: and the cluster final reduce both run on the login node with ``cd
+#: <remote_path>``, so they create their own dirs at the base), and creating them
+#: here would fabricate EVIDENCE: ``ops/aggregate_flow._combiner_only_reduce``
+#: reads "``<base>/_combiner`` is absent" as "no combiner ever ran" and falls back
+#: to the per-task ``metrics.json`` reduce (#352 — the ``@register_run`` sweep
+#: shape). A seal that pre-created an empty ``_combiner/`` turned that fallback
+#: off and the harvest reduced over zero wave partials to an EMPTY results table
+#: — reported as a successful harvest (the 2026-07-29 sandbox-proving ``s4.table``
+#: failure). Sealing a code tree must never manufacture run-state at the base.
+#:
+#: (``aggregate_flow`` no longer leans on that absence either — a wave_map-less
+#: run whose ``_combiner/`` pull lands empty takes the same fallback — but the
+#: two fixes are independent, and this one is the general rule: a seal does not
+#: get to invent base state, whoever happens to read it.)
+TREE_BASE_MATERIALIZED_PATHS: tuple[str, ...] = (
+    "results",
+    "logs",
+    ".hpc_failed",
+    ".hpc/runs",
+    ".hpc/announce",
 )
 
 #: Excludes the CODE snapshot adds on top of the push's own effective excludes.
@@ -184,6 +237,7 @@ TREE_SHARED_PATHS: tuple[str, ...] = (
 #: ``.hpc/trees/`` excludes itself so a tree can never nest a tree.
 CODE_SNAPSHOT_EXTRA_EXCLUDES: tuple[str, ...] = (
     ".hpc/runs/",
+    ".hpc/announce/",
     ".hpc_failed/",
     f"{TREES_REL}/",
 )

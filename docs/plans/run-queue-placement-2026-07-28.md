@@ -858,6 +858,41 @@ assumed, and the code cannot tell a hardlink from BeeGFS's silent copy. The
 run-start code-identity check is untouched — defense in depth. Kill-switch:
 `HPC_NO_CODE_TREES=1` restores the pre-S4 shape.
 
+##### CORRECTION (2026-07-29, first END-TO-END proving run)
+
+The sandbox-proving lane executed this path for real — every prior gate was
+mocked at the engine — and refused it: `[FAIL] s4.table … brief.results_table is
+empty — nothing harvested`. Two defects in ruling 1's symlink layer, both fixed;
+the design is unchanged.
+
+1. **The seal manufactured run-state at the BASE.** `seal_code_tree` ran `mkdir
+   -p <base>/<rel>` for EVERY shared path so `ln -s` would have a live target.
+   But `_combiner/` is written by the LOGIN NODE (`cd <remote_path>`), never
+   through the tree, and its EXISTENCE is evidence: `aggregate_flow` reads an
+   absent `<base>/_combiner/` as "no combiner ever ran" and falls back to the
+   per-task `metrics.json` reduce (#352 — the `@register_run`-sweep shape the
+   proving fixture submits). Pre-creating it switched that fallback off, so the
+   harvest reduced over zero wave partials and reported a SUCCESSFUL, EMPTY
+   table. Ruling 1's mirror: *a tree contains code and symlinks, never a run's
+   bytes — and sealing one must not invent run-state at the base.* The seal now
+   materialises a base target only for `TREE_BASE_MATERIALIZED_PATHS`, the paths
+   a job writes THROUGH the link; `_combiner` / `_aggregated` are linked and left
+   for their real writer.
+2. **`.hpc/announce` was missing from the shared set.** The dispatcher writes its
+   per-task census markers to `$REPO_DIR/.hpc/announce/<run_id>/`, while every
+   reader looks at `<remote_path>/.hpc/announce` — so a tree-pinned run announced
+   into the tree, the monitor census read `present=False` and silently degraded
+   to the reporter walk, and the streaming harvest's `census_arms` would have
+   refused outright. Now symlinked (and excluded from the snapshot, like the
+   other per-run bookkeeping).
+
+Independently, the harvest no longer depends on that directory being absent at
+all: the #352 fallback fires on "no wave partial for this run" for a wave_map-less
+run, which also closes the pre-existing F05 shape (a `--delete`-protected
+`_combiner/` outliving the run that filled it). Pinned by
+`tests/ops/aggregate/test_flow_empty_combiner_dir.py` and the real-shell seal
+test in `tests/infra/test_code_tree.py`.
+
 ### What S1–S4 have in common
 
 S1, S2, and S3 are one change wearing three hats: **write a few more facts
