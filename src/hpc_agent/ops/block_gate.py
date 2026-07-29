@@ -172,6 +172,7 @@ def assert_greenlit_or_consented(
     current_placement: str | None = None,
     scope_kind: str = "run",
     scope_id: str | None = None,
+    clean_predecessor: bool = False,
 ) -> ConsumptionOutcome | None:
     """Pass *verb* on a journaled greenlight OR a live standing consent (overnight).
 
@@ -208,6 +209,12 @@ def assert_greenlit_or_consented(
             boundary_block=verb,
             current_cmd_sha=current_cmd_sha,
             current_placement=current_placement,
+            # Tier-3 (2026-07-29): code-derived clean-terminal evidence for the
+            # OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE boundaries; irrelevant to the
+            # unconditional ones (submit-s3). The CALLER derives it (recorded
+            # predecessor terminal / prior ledgered consumption) — this seam
+            # only threads it.
+            clean_predecessor=clean_predecessor,
         )
         if outcome.consumed:
             return outcome

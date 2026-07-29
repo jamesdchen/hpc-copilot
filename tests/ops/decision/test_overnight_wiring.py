@@ -691,3 +691,239 @@ def test_walltime_cap_fires_against_explicit_boundary_cost(experiment_dir: Path)
     assert outcome.consumed is False
     assert outcome.decision.reason == "over-walltime-cap"
     assert overnight.read_consumption_ledger(experiment_dir, "run", _RUN_ID) == []
+
+
+# ── Tier-3 (2026-07-29 ruling): clean-terminal-conditional boundaries ─────────
+
+
+def test_s4_without_clean_evidence_refuses_predecessor_not_clean(
+    experiment_dir: Path,
+) -> None:
+    """submit-s4 is consumable ONLY behind clean-terminal evidence; absent the
+    flag it refuses with the specific reason (not the generic not-consumable),
+    and nothing is ledgered."""
+    _seed_consent(experiment_dir)
+    outcome = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s4",
+        current_cmd_sha=_CMD_SHA,
+    )
+    assert outcome.consumed is False
+    assert outcome.decision.reason == "predecessor-not-clean"
+    assert overnight.read_consumption_ledger(experiment_dir, "run", _RUN_ID) == []
+
+
+def test_s4_with_clean_evidence_consumes_and_ledgers(experiment_dir: Path) -> None:
+    _seed_consent(experiment_dir)
+    outcome = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s4",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=True,
+    )
+    assert outcome.consumed is True
+    ledger = overnight.read_consumption_ledger(experiment_dir, "run", _RUN_ID)
+    assert len(ledger) == 1
+    assert ledger[0]["consumed_block"] == "submit-s4"
+
+
+def test_aggregate_run_is_clean_conditional_too(experiment_dir: Path) -> None:
+    _seed_consent(experiment_dir)
+    refused = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="aggregate-run",
+        current_cmd_sha=_CMD_SHA,
+    )
+    assert refused.consumed is False
+    assert refused.decision.reason == "predecessor-not-clean"
+    consumed = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="aggregate-run",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=True,
+    )
+    assert consumed.consumed is True
+
+
+def test_s2_never_consumes_even_with_the_clean_flag(experiment_dir: Path) -> None:
+    """The canary IS the human's look — no evidence flag makes it consumable."""
+    _seed_consent(experiment_dir)
+    outcome = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s2",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=True,
+    )
+    assert outcome.consumed is False
+    assert outcome.decision.reason == "boundary-not-consumable"
+
+
+def test_clean_flag_does_not_bypass_liveness(experiment_dir: Path) -> None:
+    """The evidence flag widens the SET, never the liveness legs — an expired
+    consent still refuses a clean-terminal boundary."""
+    _seed_consent(experiment_dir, resolved=_resolved(expires_at=_iso(utcnow() - timedelta(minutes=5))))
+    outcome = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s4",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=True,
+    )
+    assert outcome.consumed is False
+    assert outcome.decision.reason == "expired"
+
+
+def test_predecessor_terminal_clean_reads_the_recorded_terminal(
+    experiment_dir: Path,
+) -> None:
+    """The gate-site evidence source: a recorded needs_decision=False terminal
+    on the SAME tree reads clean; a decision terminal, a moved tree, and an
+    absent record all read dirty."""
+    from hpc_agent.state.block_terminal import record_terminal, terminal_block_key
+
+    assert (
+        overnight.predecessor_terminal_clean(
+            experiment_dir, _RUN_ID, "submit-s3", current_cmd_sha=_CMD_SHA
+        )
+        is False
+    ), "absent record must read dirty"
+    record_terminal(
+        experiment_dir,
+        run_id=_RUN_ID,
+        block=terminal_block_key("submit-s3"),
+        cmd_sha=_CMD_SHA,
+        result_dump={"needs_decision": False, "stage_reached": "watching_terminal"},
+    )
+    assert (
+        overnight.predecessor_terminal_clean(
+            experiment_dir, _RUN_ID, "submit-s3", current_cmd_sha=_CMD_SHA
+        )
+        is True
+    )
+    assert (
+        overnight.predecessor_terminal_clean(
+            experiment_dir, _RUN_ID, "submit-s3", current_cmd_sha="deadbeef99887766"
+        )
+        is False
+    ), "a terminal recorded for a moved tree is not evidence about today's spec"
+    record_terminal(
+        experiment_dir,
+        run_id=_RUN_ID,
+        block=terminal_block_key("submit-s3"),
+        cmd_sha=_CMD_SHA,
+        result_dump={"needs_decision": True, "stage_reached": "watching_anomaly"},
+    )
+    assert (
+        overnight.predecessor_terminal_clean(
+            experiment_dir, _RUN_ID, "submit-s3", current_cmd_sha=_CMD_SHA
+        )
+        is False
+    ), "a decision terminal is dirty by definition"
+
+
+def test_boundary_already_ledgered_carries_evidence_across_reentry(
+    experiment_dir: Path,
+) -> None:
+    """The driver seat consumes with in-hand evidence; the block's own gate
+    re-enters with clean_predecessor derived from the ledger line — consumed
+    again (idempotent), no second line."""
+    _seed_consent(experiment_dir)
+    first = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s4",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=True,
+    )
+    assert first.consumed is True
+    assert overnight.boundary_already_ledgered(
+        experiment_dir, "run", _RUN_ID, "submit-s4", _CMD_SHA
+    )
+    reentry = overnight.consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        boundary_block="submit-s4",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=overnight.boundary_already_ledgered(
+            experiment_dir, "run", _RUN_ID, "submit-s4", _CMD_SHA
+        ),
+    )
+    assert reentry.consumed is True
+    assert reentry.line is None  # idempotent — no second audit line
+    assert len(overnight.read_consumption_ledger(experiment_dir, "run", _RUN_ID)) == 1
+
+
+def test_gate_passes_s4_under_consent_only_with_clean_evidence(
+    experiment_dir: Path,
+) -> None:
+    """assert_greenlit_or_consented: the Tier-3 boundary needs BOTH a live
+    consent and the clean flag; without the flag it raises naming the leg."""
+    _seed_consent(experiment_dir)
+    with pytest.raises(errors.SpecInvalid, match="predecessor-not-clean"):
+        block_gate.assert_greenlit_or_consented(
+            experiment_dir,
+            run_id=_RUN_ID,
+            verb="submit-s4",
+            predecessor="S3",
+            current_cmd_sha=_CMD_SHA,
+        )
+    outcome = block_gate.assert_greenlit_or_consented(
+        experiment_dir,
+        run_id=_RUN_ID,
+        verb="submit-s4",
+        predecessor="S3",
+        current_cmd_sha=_CMD_SHA,
+        clean_predecessor=True,
+    )
+    assert outcome is not None and outcome.consumed is True
+
+
+def test_park_marker_records_parked_needs_decision(
+    experiment_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The resume path's evidence: park() stamps whether the parked result
+    itself demanded a decision — False only for gated-successor parks off a
+    clean terminal."""
+    from hpc_agent.state.journal import read_pending_decision
+
+    monkeypatch.chdir(experiment_dir)
+    _mk_run_record(experiment_dir, _RUN_ID)
+    bd.park(
+        experiment_dir,
+        run_id=_RUN_ID,
+        workflow="submit",
+        verb="submit-s3",
+        stage="watching_terminal",
+        successor="submit-s4",
+        spec={},
+        result={"needs_decision": False, "brief": {"run_id": _RUN_ID}},
+    )
+    pending = read_pending_decision(_RUN_ID, experiment_dir=experiment_dir)
+    cursor = (pending or {}).get("resume_cursor") or {}
+    assert cursor.get("parked_needs_decision") is False
+    bd.park(
+        experiment_dir,
+        run_id=_RUN_ID,
+        workflow="submit",
+        verb="submit-s3",
+        stage="watching_anomaly",
+        successor=None,
+        spec={},
+        result={"needs_decision": True, "brief": {"run_id": _RUN_ID}},
+    )
+    pending = read_pending_decision(_RUN_ID, experiment_dir=experiment_dir)
+    cursor = (pending or {}).get("resume_cursor") or {}
+    assert cursor.get("parked_needs_decision") is True

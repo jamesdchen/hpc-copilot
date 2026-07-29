@@ -1520,7 +1520,17 @@ def _chain(
         # not-live / not-named boundary parks exactly as today, carrying the refusal
         # reason so the park brief says WHY the overnight consent did not carry.
         if block_chain.is_gated(successor):
-            overnight = _consume_overnight(experiment_dir, run_id, successor)
+            # This seat is reached only when the in-hand result parked NO decision
+            # (needs_decision returned at the rendezvous above), so the predecessor
+            # terminal is CLEAN by the same evidence the census pins — passed as
+            # the flag rather than assumed inside the substrate, so the evidence
+            # stays derived from real in-hand state if this code ever moves.
+            overnight = _consume_overnight(
+                experiment_dir,
+                run_id,
+                successor,
+                clean_predecessor=not bool(result.get("needs_decision")),
+            )
             if overnight is not None and overnight.consumed:
                 _log.info(
                     "overnight consent for %s consumed the %s greenlight — auto-advancing",
@@ -1590,7 +1600,7 @@ def _chain(
 
 
 def _consume_overnight(
-    experiment_dir: Path, run_id: str, successor: str
+    experiment_dir: Path, run_id: str, successor: str, *, clean_predecessor: bool = False
 ) -> ConsumptionOutcome | None:
     """Consult the run's standing consent at a gated boundary (item 8 seam 1).
 
@@ -1636,6 +1646,10 @@ def _consume_overnight(
         # the auto-advance (the mandatory cap the ledger-fed meter, which nothing writes,
         # could never fire). ``None`` when unavailable ⇒ the ledger auto-meter (0 today).
         spent_walltime=spent_walltime,
+        # Tier-3 (2026-07-29): code-derived evidence the predecessor terminal was
+        # clean, threaded verbatim from the caller's seat (the in-hand
+        # needs_decision=False result, or the marker's parked_needs_decision).
+        clean_predecessor=clean_predecessor,
     )
 
 
@@ -1697,7 +1711,16 @@ def _consume_parked_boundary_under_consent(
         awaiting_since=pending.get("awaiting_since"),
     ):
         return None  # the human is redrafting this boundary — do not steamroll (F13)
-    overnight = _consume_overnight(experiment_dir, run_id, gated_next)
+    # Tier-3 clean evidence on the resume path: the marker records whether the
+    # parked result itself demanded a decision. Only a gated-successor park off
+    # a clean terminal reads False; a decision park (canary_verified → submit-s3,
+    # the consumable-by-design case; every anomaly/integrity park, which never
+    # carries a gated next_verb) reads True; a pre-ruling marker (key absent)
+    # reads True — dirty, the conservative default.
+    parked_clean = cursor.get("parked_needs_decision") is False
+    overnight = _consume_overnight(
+        experiment_dir, run_id, gated_next, clean_predecessor=parked_clean
+    )
     if overnight is None or not overnight.consumed:
         return None
     # S8 COMPARE-AND-SWAP (same seat as the greenlight resume): a standing consent
@@ -1940,6 +1963,13 @@ def park(
         "next_spec_hint": (
             materialized.spec if materialized.spec is not None else _next_spec_hint(result)
         ),
+        # Tier-3 clean-terminal evidence (2026-07-29 ruling): whether the PARKED
+        # result itself demanded a decision. False = a gated-successor park off a
+        # CLEAN terminal (watching_terminal → submit-s4, ready → aggregate-run) —
+        # the only park kind the clean-terminal-conditional consent boundaries
+        # may consume on the resume path. Absent on pre-ruling markers ⇒ read as
+        # True (dirty) — conservative until the boundary re-parks.
+        "parked_needs_decision": bool(result.get("needs_decision")),
     }
     if materialized.sha is not None:
         # Row 16: sha-stamped at park; consumption (R3) recomputes + refuses on drift.

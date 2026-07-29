@@ -67,6 +67,7 @@ __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
     "CONSENT_SCOPE_KINDS",
     "OVERNIGHT_CONSUMABLE_BLOCKS",
+    "OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE",
     "WAKE_KIND",
     "ConsentDecision",
     "ConsumptionOutcome",
@@ -85,6 +86,8 @@ __all__ = [
     "standing_consent_status",
     "assert_standing_consent",
     "is_consumable_boundary",
+    "predecessor_terminal_clean",
+    "boundary_already_ledgered",
     "consume_boundary_under_consent",
     "overnight_ledger_path",
     "record_consumption",
@@ -124,16 +127,37 @@ OVERNIGHT_CONSUMED_BLOCK = "overnight-consumed"
 CONSENT_SCOPE_KINDS = frozenset({"run", "campaign"})
 
 # The block boundaries a standing consent of each scope kind may auto-advance
-# overnight (item 8 seam 1). A boundary NOT named here is NEVER consumed under a
-# consent, no matter how live — the two designated overnight boundaries are the
-# run's main-array launch (``submit-s3``, after the S2 canary verified) and the
-# campaign's anomaly halt (``campaign-watch``'s loud-fail terminator). Every
-# other gated boundary (``submit-s2`` stage/canary, ``submit-s4`` harvest,
-# ``aggregate-run`` reduce) always parks for a live human — a pre-consent cannot
-# launch a canary the human never saw or reduce results they never reviewed.
+# overnight (item 8 seam 1), UNCONDITIONALLY. A boundary named in neither this
+# set nor :data:`OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE` is NEVER consumed under a
+# consent, no matter how live. The two unconditional boundaries are the run's
+# main-array launch (``submit-s3``, after the S2 canary verified) and the
+# campaign's anomaly halt (``campaign-watch``'s loud-fail terminator).
+# ``submit-s2`` (stage/canary) always parks for a live human — the canary IS the
+# human's look, and it is the run's first cluster spend; no consent shape covers
+# it.
 OVERNIGHT_CONSUMABLE_BLOCKS: dict[str, frozenset[str]] = {
     "run": frozenset({"submit-s3"}),
     "campaign": frozenset({"campaign-watch"}),
+}
+
+# The boundaries a standing consent may auto-advance ONLY behind code-derived
+# evidence that the predecessor terminal was CLEAN (maintainer ruling
+# 2026-07-29, the Tier-3 rubber-stamp remover): the harvest (``submit-s4``)
+# after a main array that completed with no anomaly/timeout, and the reduce
+# (``aggregate-run``) after an ``aggregate-check`` that found nothing to
+# review. The pre-ruling posture ("a pre-consent cannot reduce results the
+# human never reviewed") survives in the CONDITION: every dirty path — a
+# partial, an anomaly, an integrity finding — emits a ``needs_decision`` park
+# BEFORE these boundaries are ever offered as successors, so what the consent
+# skips is exactly the rubber-stamp y on a clean terminal, never a review.
+# Interpretation still always parks: ``harvested`` / ``harvest_partial`` are
+# terminal decisions, not gated successors, and no consent consumes them.
+# ``clean_predecessor`` is CALLER-DERIVED CODE EVIDENCE (the in-hand
+# ``needs_decision=False`` result at the driver seat, the recorded predecessor
+# terminal, or a prior ledgered consumption of this same identity) — never an
+# agent-authored input; it defaults False, so absent evidence reads dirty.
+OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE: dict[str, frozenset[str]] = {
+    "run": frozenset({"submit-s4", "aggregate-run"}),
 }
 
 # The ONLY sanctioned cluster watch (the watch-rule amendment): a harness-tracked
@@ -1243,15 +1267,75 @@ class ConsumptionOutcome:
     line: dict[str, Any] | None
 
 
-def is_consumable_boundary(scope_kind: str, boundary_block: str) -> bool:
+def is_consumable_boundary(
+    scope_kind: str, boundary_block: str, *, clean_predecessor: bool = False
+) -> bool:
     """True when *boundary_block* is a consent-auto-advanceable boundary for the scope.
 
     The SoT for "NEVER auto-advance a boundary whose block isn't named in the
-    consent's scope" (item 8 seam 1): the two designated overnight boundaries are
-    :data:`OVERNIGHT_CONSUMABLE_BLOCKS`. Every other boundary parks for a live human
+    consent's scope" (item 8 seam 1): the unconditional boundaries are
+    :data:`OVERNIGHT_CONSUMABLE_BLOCKS`; with *clean_predecessor* (code-derived
+    evidence the predecessor terminal was clean — the caller's burden, default
+    False) the :data:`OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE` boundaries join them
+    (the 2026-07-29 Tier-3 ruling). Every other boundary parks for a live human
     regardless of any consent.
     """
-    return boundary_block in OVERNIGHT_CONSUMABLE_BLOCKS.get(scope_kind, frozenset())
+    if boundary_block in OVERNIGHT_CONSUMABLE_BLOCKS.get(scope_kind, frozenset()):
+        return True
+    return clean_predecessor and boundary_block in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(
+        scope_kind, frozenset()
+    )
+
+
+def predecessor_terminal_clean(
+    experiment_dir: Path, run_id: str, predecessor_verb: str, *, current_cmd_sha: str
+) -> bool:
+    """Code-derived CLEAN evidence from the predecessor's recorded terminal.
+
+    One of the two evidence sources a gate site may feed
+    :func:`consume_boundary_under_consent`'s ``clean_predecessor`` (the other is
+    :func:`boundary_already_ledgered` — a driver seat that already verified the
+    in-hand result consumed first, and the block's own gate re-verifies against
+    that durable line). True only when the ``(run_id, predecessor)`` terminal
+    record exists, its result parked NO decision (``needs_decision`` false — the
+    clean terminal; every anomaly/timeout/partial/integrity path parks true),
+    and its recorded ``cmd_sha`` matches *current_cmd_sha* (both known) — a
+    terminal recorded for a tree that has since moved is not evidence about
+    today's spec, the same rule the replay path applies. Fail-safe: absent,
+    corrupt, or mismatched reads False (dirty), never raises.
+    """
+    from hpc_agent.state.block_terminal import read_terminal_with_fallback
+
+    try:
+        record = read_terminal_with_fallback(experiment_dir, run_id, predecessor_verb)
+    except Exception:  # noqa: BLE001 — evidence reads fail dirty, never raise into a gate
+        return False
+    if not isinstance(record, dict):
+        return False
+    result = record.get("result")
+    if not isinstance(result, dict) or bool(result.get("needs_decision")):
+        return False
+    recorded_sha = str(record.get("cmd_sha") or "")
+    if recorded_sha and current_cmd_sha and recorded_sha != current_cmd_sha:
+        return False
+    return True
+
+
+def boundary_already_ledgered(
+    experiment_dir: Path, scope_kind: str, scope_id: str, boundary_block: str, cmd_sha: str
+) -> bool:
+    """True when this boundary was already consumed under this spec identity.
+
+    The second CLEAN evidence source for a gate site: the driver's gated-successor
+    seat verified the in-hand ``needs_decision=False`` result and ledgered the
+    consumption; the block's own consent-aware gate then re-enters the substrate,
+    and THIS durable line is what carries the evidence across the process
+    boundary (liveness is still re-verified — an expired consent refuses even
+    with the line present). Wraps the consumption ledger's own idempotency
+    reader; anomaly-keyed lines do not count (these boundaries consume with no
+    anomaly key).
+    """
+    return _already_consumed(experiment_dir, scope_kind, scope_id, boundary_block, cmd_sha, None)
 
 
 def _already_consumed(
@@ -1305,6 +1389,7 @@ def consume_boundary_under_consent(
     now_iso: str | None = None,
     spent_budget: float | None = None,
     spent_walltime: float | None = None,
+    clean_predecessor: bool = False,
 ) -> ConsumptionOutcome:
     """Consult a scope's standing consent at *boundary_block*; ledger the auto-advance.
 
@@ -1315,7 +1400,10 @@ def consume_boundary_under_consent(
 
     * boundary NOT named for the scope → ``consumed=False``,
       ``reason="boundary-not-consumable"`` — the caller PARKS (a live consent for a
-      DIFFERENT boundary never launches this one).
+      DIFFERENT boundary never launches this one). A clean-terminal-conditional
+      boundary (:data:`OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE`) consulted WITHOUT the
+      *clean_predecessor* evidence refuses with the more specific
+      ``reason="predecessor-not-clean"`` so the park brief says which leg failed.
     * no live consent (expired / over-cap / spec-changed / no consent) →
       ``consumed=False`` carrying the failing leg — the caller PARKS with the reason
       in the brief.
@@ -1333,10 +1421,15 @@ def consume_boundary_under_consent(
     1), so the budget/walltime caps are enforced against real consumption; a caller
     that already knows the total passes it explicitly.
     """
-    if not is_consumable_boundary(scope_kind, boundary_block):
-        return ConsumptionOutcome(
-            False, ConsentDecision(False, "boundary-not-consumable", None), None
+    if not is_consumable_boundary(
+        scope_kind, boundary_block, clean_predecessor=clean_predecessor
+    ):
+        reason = (
+            "predecessor-not-clean"
+            if boundary_block in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(scope_kind, frozenset())
+            else "boundary-not-consumable"
         )
+        return ConsumptionOutcome(False, ConsentDecision(False, reason, None), None)
     if spent_budget is None or spent_walltime is None:
         metered_budget, metered_walltime = consumed_spend(experiment_dir, scope_kind, scope_id)
         spent_budget = metered_budget if spent_budget is None else spent_budget

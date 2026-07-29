@@ -50,13 +50,19 @@ from hpc_agent.ops.aggregate_flow import (
     record_aggregate_failure,
 )
 from hpc_agent.ops.aggregate_preflight import aggregate_preflight
-from hpc_agent.ops.block_gate import assert_greenlit_target
+from hpc_agent.ops.block_gate import assert_greenlit_or_consented
+from hpc_agent.ops.overnight import boundary_already_ledgered, predecessor_terminal_clean
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
 from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
-from hpc_agent.state.runs import read_run_cmd_sha, read_run_sidecar, resolved_summary_artifact
+from hpc_agent.state.runs import (
+    read_run_cluster,
+    read_run_cmd_sha,
+    read_run_sidecar,
+    resolved_summary_artifact,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -684,11 +690,32 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
     journal on completion. A re-invoke after the worker finished REPLAYS the
     recorded terminal (no re-combine, no SSH).
     """
-    assert_greenlit_target(
+    # Greenlight gate with the CLEAN-TERMINAL consent fallback (Tier-3 ruling,
+    # 2026-07-29, same shape as submit-s4): a live standing consent consumes the
+    # aggregate-check→aggregate-run greenlight ONLY behind code-derived evidence
+    # the check found nothing to review — aggregate-check's clean `ready`
+    # terminal is the ONLY path that offers aggregate-run as a successor, and
+    # the driver's gated-successor seat ledgers that evidence durably
+    # (boundary_already_ledgered) for this gate to re-verify. not_ready and
+    # integrity_review park for a live human exactly as before, and the
+    # interpretation boundary after the reduce still always parks.
+    agg_run_id = spec.aggregate.run_id
+    agg_cmd_sha = read_run_cmd_sha(experiment_dir, agg_run_id)
+    assert_greenlit_or_consented(
         experiment_dir,
-        run_id=spec.aggregate.run_id,
+        run_id=agg_run_id,
         verb="aggregate-run",
         predecessor="aggregate-check",
+        current_cmd_sha=agg_cmd_sha,
+        current_placement=read_run_cluster(experiment_dir, agg_run_id),
+        clean_predecessor=(
+            predecessor_terminal_clean(
+                experiment_dir, agg_run_id, "aggregate-check", current_cmd_sha=agg_cmd_sha
+            )
+            or boundary_already_ledgered(
+                experiment_dir, "run", agg_run_id, "aggregate-run", agg_cmd_sha
+            )
+        ),
     )
     # Scope gate (rigor-primitives T3), gate → detach ordering PROOF (same shape as
     # submit-s4): a locked evidence-scope refuses SYNCHRONOUSLY in the parent, never
