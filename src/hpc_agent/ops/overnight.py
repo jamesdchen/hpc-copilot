@@ -61,6 +61,7 @@ from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.decision_journal import read_decisions
+from hpc_agent.state.placement_drift import detect_placement_drift
 
 __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
@@ -582,6 +583,7 @@ def standing_consent_status(
     scope_kind: str,
     scope_id: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     now_iso: str | None = None,
     spent_budget: float = 0.0,
     spent_walltime: float = 0.0,
@@ -598,11 +600,20 @@ def standing_consent_status(
     * **spec changed** — ``current_cmd_sha`` != the consent's bound ``cmd_sha`` →
       not live (``reason="spec-changed"``). THE reuse of the pre-y cmd_sha gate:
       consent dies on spec change (item 8 pin b).
+    * **placement changed** — ``current_placement`` outside the consent's bound
+      cluster set → not live (``reason="placement-changed"``). The S1 leg
+      (run-queue plan §10.S1): once placement is a machine decision, a consent
+      blind to it would stay live across a re-placement the human never named.
+      Membership over ``resolved["placement"]`` (a key or a key list) via
+      :func:`state.placement_drift.detect_placement_drift` — absent on EITHER
+      side disables the leg, so every pre-migration consent and every caller
+      that does not yet know its cluster is untouched.
     * **over cap** — ``spent_budget`` / ``spent_walltime`` exceeds a declared cap
       → not live (``reason="over-budget-cap"`` / ``"over-walltime-cap"``).
 
     The caller supplies ``current_cmd_sha`` (from the block's input-spec identity
-    — ``block_drive._spec_sha`` — or the run sidecar), mirroring how
+    — ``block_drive._spec_sha`` — or the run sidecar) and ``current_placement``
+    (the sidecar's ``cluster`` stamp, where known), mirroring how
     ``block_gate.assert_greenlit_target`` takes the ``verb`` it checks: the gate
     stays pure and the caller owns identity derivation.
     """
@@ -631,6 +642,16 @@ def standing_consent_status(
     if not (isinstance(bound_sha, str) and bound_sha) or current_cmd_sha != bound_sha:
         return ConsentDecision(False, "spec-changed", consent)
 
+    # S1: the placement leg. Unlike the sha leg above (absent bound sha ⇒ dead),
+    # an absent bound placement keeps the leg OFF — the field postdates every
+    # consent granted before the run queue, and killing those on upgrade is the
+    # exact blast radius §10.S1 forbids. detect_placement_drift owns the
+    # symmetric absent-disables rule; this call just names the reason.
+    if detect_placement_drift(
+        recorded=resolved.get("placement"), current=current_placement
+    ).changed:
+        return ConsentDecision(False, "placement-changed", consent)
+
     budget_cap = resolved.get("budget_cap")
     if _is_positive_number(budget_cap) and spent_budget > float(cast("float", budget_cap)):
         return ConsentDecision(False, "over-budget-cap", consent)
@@ -647,6 +668,7 @@ def assert_standing_consent(
     scope_kind: str,
     scope_id: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     now_iso: str | None = None,
     spent_budget: float = 0.0,
     spent_walltime: float = 0.0,
@@ -663,6 +685,7 @@ def assert_standing_consent(
         scope_kind=scope_kind,
         scope_id=scope_id,
         current_cmd_sha=current_cmd_sha,
+        current_placement=current_placement,
         now_iso=now_iso,
         spent_budget=spent_budget,
         spent_walltime=spent_walltime,
@@ -939,6 +962,7 @@ def consume_boundary_under_consent(
     scope_id: str,
     boundary_block: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     event_kind: str = "auto-advance",
     failed_at: str | None = None,
     detail: dict[str, Any] | None = None,
@@ -965,8 +989,10 @@ def consume_boundary_under_consent(
       is idempotent per spec identity (:func:`_already_consumed`).
 
     The caller supplies ``current_cmd_sha`` (the run sidecar fingerprint / the campaign
-    spec identity), mirroring how :func:`standing_consent_status` delegates identity
-    derivation. ``spent_budget`` / ``spent_walltime`` default to ``None`` → the SPEND
+    spec identity) and ``current_placement`` (the sidecar's ``cluster`` stamp where the
+    caller knows it; ``None`` keeps the S1 leg off), mirroring how
+    :func:`standing_consent_status` delegates identity derivation.
+    ``spent_budget`` / ``spent_walltime`` default to ``None`` → the SPEND
     METER (:func:`consumed_spend`) supplies the running total from the ledger (§8 item
     1), so the budget/walltime caps are enforced against real consumption; a caller
     that already knows the total passes it explicitly.
@@ -984,6 +1010,7 @@ def consume_boundary_under_consent(
         scope_kind=scope_kind,
         scope_id=scope_id,
         current_cmd_sha=current_cmd_sha,
+        current_placement=current_placement,
         now_iso=now_iso,
         spent_budget=spent_budget,
         spent_walltime=spent_walltime,

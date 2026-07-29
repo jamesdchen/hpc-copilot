@@ -57,7 +57,7 @@ from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.ops.submit_and_verify import launch_main_array, submit_and_verify
 from hpc_agent.ops.submit_preflight import submit_preflight
 from hpc_agent.ops.walk_submit_ambiguities import walk_submit_ambiguities
-from hpc_agent.state.runs import read_run_cmd_sha
+from hpc_agent.state.runs import read_run_cluster, read_run_cmd_sha
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1300,6 +1300,9 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         verb="submit-s3",
         predecessor="S2",
         current_cmd_sha=read_run_cmd_sha(experiment_dir, spec.submit.submit.run_id),
+        # S1: the sidecar's cluster stamp — a consent bound to a cluster set dies
+        # here if the run has been re-placed outside it (placement-changed).
+        current_placement=read_run_cluster(experiment_dir, spec.submit.submit.run_id),
     )
     # Idempotent re-invoke (run #7): replay a prior worker's recorded terminal for
     # the current tree BEFORE the canary-TTL re-check — the run already ran, so

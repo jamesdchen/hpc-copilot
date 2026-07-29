@@ -165,6 +165,13 @@ def _assert_overnight_consent_authorship(
         else set()
     )
     bound_cmd_sha = res.get("cmd_sha") if isinstance(res.get("cmd_sha"), str) else None
+    # S1 (run-queue plan §10.S1.5): a consent that binds a placement must have the
+    # human name its cluster set out loud — the same discipline the sha prefix
+    # enforces for spec identity. Absent/unusable placement ⇒ no requirement
+    # (every pre-placement consent), mirroring the consumption leg's posture.
+    from hpc_agent.state.placement_drift import normalize_recorded_placement
+
+    bound_placement = normalize_recorded_placement(res.get("placement"))
     now = utcnow()
 
     covered = False
@@ -182,6 +189,13 @@ def _assert_overnight_consent_authorship(
         # consent binds to a spec; both-absent falls through to the caps refusal).
         subj_sha = subject.get("cmd_sha") if isinstance(subject.get("cmd_sha"), str) else None
         if subj_sha != bound_cmd_sha:
+            continue
+        # Placement identity: symmetric both-present compare (S1). A bound record
+        # captured before placement existed carries none and still covers a
+        # placement-bound consent — the conservative direction; the consumption
+        # leg still refuses a placement the consent set does not contain.
+        subj_placement = normalize_recorded_placement(subject.get("placement"))
+        if bound_placement and subj_placement and set(subj_placement) != set(bound_placement):
             continue
         # Repair-class coverage: the human's bound consent must cover at least the
         # classes this consent declares (it can cover more — a superset is fine).
@@ -219,6 +233,10 @@ def _assert_overnight_consent_authorship(
                 continue
             if bound_cmd_sha is not None and not _names_target_sha_prefix(text, bound_cmd_sha):
                 continue
+            # S1: a placement-bound consent's chat grant must name every cluster
+            # in the set — the human says WHERE out loud, not just what.
+            if bound_placement and not all(_names_slug(text, c) for c in bound_placement):
+                continue
             covered = True
             break
 
@@ -247,6 +265,8 @@ def _assert_overnight_consent_authorship(
             coverage_lines.append("  hard caps on the fallout: " + ", ".join(caps))
         if bound_cmd_sha:
             coverage_lines.append(f"  spec identity (cmd_sha): {bound_cmd_sha}")
+        if bound_placement:
+            coverage_lines.append(f"  placement (cluster): {', '.join(bound_placement)}")
         _refuse_missing_authorship(
             "overnight-consent authorship gate: a standing consent accepts the "
             "fallout of unattended overnight advances. No bound consent record "
@@ -264,6 +284,7 @@ def _assert_overnight_consent_authorship(
                 if bound_cmd_sha
                 else ""
             )
+            + (f", and the cluster set ({', '.join(bound_placement)})" if bound_placement else "")
             + ". A bare 'y', a clicked option, or an agent-relayed response "
             "cannot stand in for it."
         )

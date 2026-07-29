@@ -40,6 +40,7 @@ __all__ = [
     "prune_old_runs",
     "prune_orphan_sidecars",
     "read_job_task_spans",
+    "read_run_cluster",
     "read_run_cmd_sha",
     "read_run_sidecar",
     "resolve_node_sha",
@@ -658,6 +659,25 @@ def read_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
     except (OSError, ValueError, errors.HpcError):
         return ""
     return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def read_run_cluster(experiment_dir: Path, run_id: str) -> str | None:
+    """The run's placement identity (the sidecar's ``cluster`` key), or ``None``.
+
+    The third-identity-dimension read (run-queue plan §10.S1): consent-consuming
+    boundaries feed this to ``standing_consent_status``'s placement leg. ``None``
+    — not ``""`` — on an unreadable/absent sidecar or a pre-stamp record, because
+    the leg's contract is symmetric absent-disables
+    (:func:`state.placement_drift.detect_placement_drift`): an unprovable
+    placement keeps the leg OFF, exactly as an unprovable ``cmd_sha`` above
+    refuses a replay rather than faking one.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return None
+    cluster = (sidecar or {}).get("cluster")
+    return cluster if isinstance(cluster, str) and cluster else None
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:

@@ -169,6 +169,7 @@ def assert_greenlit_or_consented(
     verb: str,
     predecessor: str,
     current_cmd_sha: str,
+    current_placement: str | None = None,
     scope_kind: str = "run",
     scope_id: str | None = None,
 ) -> ConsumptionOutcome | None:
@@ -206,6 +207,7 @@ def assert_greenlit_or_consented(
             scope_id=scope_id or run_id,
             boundary_block=verb,
             current_cmd_sha=current_cmd_sha,
+            current_placement=current_placement,
         )
         if outcome.consumed:
             return outcome

@@ -32,11 +32,14 @@ Read this file top to bottom — it is self-contained. The state of play:
    the computed run_id), and retryable(n) is unblocked (§10.S3 removes the
    S3 coupling). Typed resource asks, no item sharding, and per-repo queue
    remain open.
-5. **Two claims in §10 are proposed-but-unverified** and are called out
-   inline: rsync `--link-dest` hardlink behaviour on the CARC/Hoffman2
-   filesystems (§10.S4), and the blast radius of adding a placement leg to
-   `standing_consent_status` across the live consent test corpus
-   (§10.S1). Verify both before the code that depends on them lands.
+5. **One claim in §10 remains proposed-but-unverified**: rsync
+   `--link-dest` hardlink behaviour on the CARC/Hoffman2 filesystems
+   (§10.S4) — verify on the real clusters before eager submit depends on
+   it. The OTHER §10 verification is DONE: the S1 placement leg is BUILT
+   (`state/placement_drift.py` + `standing_consent_status`'s
+   `placement-changed` leg, 2026-07-29) and the full suite passed with
+   zero failures — the conservative absent-disables rule made it purely
+   additive on the consent corpus, as designed.
 
 ## 0. What already exists (build on, don't duplicate)
 
@@ -483,10 +486,29 @@ Placement is the third dimension of that same kind.
    (`_names_target_sha_prefix`). An overnight consent must likewise name
    its cluster set out loud.
 
-**UNVERIFIED, verify before landing:** the blast radius of adding a
-placement leg across the existing consent test corpus. The conservative
-absent-is-not-drift rule should make it additive, but that is a prediction,
-not a measurement.
+**BUILT + VERIFIED (2026-07-29).** The leg is shipped:
+`state/placement_drift.py` (the one-home predicate, `code_drift`'s sibling),
+a `placement-changed` leg in `standing_consent_status` ordered after
+`spec-changed`, passthroughs in `consume_boundary_under_consent` /
+`assert_standing_consent` / `block_gate.assert_greenlit_or_consented`, the
+sidecar-fed `current_placement` at the run-scope consumption sites
+(`submit_blocks` via `state/runs.read_run_cluster`, `block_drive`'s
+successor-consume), and the §10.S1.5 disclosure in the overnight-consent
+authorship gate (a placement-bound consent's chat grant must name every
+cluster in the set; the coverage render shows the set). The blast-radius
+question is MEASURED, not predicted: full suite green, zero failures — the
+conservative rule held.
+
+One refinement over the sketch above, decided at build time: the bound
+identity is the CLUSTER-KEY SET compared by membership, not a
+`placement_sha` over the full `{cluster_key, ssh_target, remote_path,
+scheduler}` block. (a) a failing leg's reason must be legible in a park
+brief ("consent bound to hoffman2, run now on carc") — a sha hides which
+cluster; (b) `remote_path` legitimately varies WITHIN a cluster once S4's
+content-addressed trees land, and a consent must not die because code was
+re-uploaded to the cluster the human approved. The membership form also IS
+the campaign `placement_scope` (point 4) — one predicate, both scopes,
+already shipped; Phase 2 only has to start writing the list.
 
 ### S2 — the premise is false: run_id is COMPUTED, so the shipped lease already works
 

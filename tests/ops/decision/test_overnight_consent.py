@@ -562,3 +562,76 @@ def test_compose_wake_token_for_campaign_scope_no_arm(
     )
     assert out["wake"] == {"kind": "status-watch", "campaign_id": "widget-campaign"}
     assert "wake" in out["composed_defaults"]
+
+
+# ── S1: the placement leg (run-queue plan §10.S1) ────────────────────────────
+
+
+def test_placement_outside_the_bound_set_kills_consent(experiment_dir: Path) -> None:
+    """A consent bound to hoffman2 must refuse a boundary re-placed to carc."""
+    _seed_consent_raw(experiment_dir, _resolved(placement="hoffman2"))
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is False
+    assert decision.reason == "placement-changed"
+
+
+def test_placement_inside_the_bound_set_stays_live(experiment_dir: Path) -> None:
+    _seed_consent_raw(experiment_dir, _resolved(placement=["carc", "hoffman2"]))
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is True
+    assert decision.reason == "live"
+
+
+def test_placement_blind_consent_survives_a_placed_boundary(experiment_dir: Path) -> None:
+    """The additive-on-upgrade guarantee: a pre-migration consent (no
+    ``placement`` in its resolved dict) must stay live even when the caller
+    KNOWS the boundary's cluster — absent recorded disables the leg."""
+    _seed_consent_raw(experiment_dir, _resolved())  # no placement key
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+        current_placement="carc",
+    )
+    assert decision.live is True
+
+
+def test_placement_bound_consent_survives_an_unknown_current(experiment_dir: Path) -> None:
+    """A pre-stamp sidecar (caller passes None) must not kill a bound consent —
+    the symmetric half of absent-disables."""
+    _seed_consent_raw(experiment_dir, _resolved(placement="hoffman2"))
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha=_CMD_SHA,
+    )
+    assert decision.live is True
+
+
+def test_placement_leg_orders_after_spec_leg(experiment_dir: Path) -> None:
+    """When BOTH spec and placement moved, the reason names the spec — the
+    first failing leg wins, matching the documented leg order."""
+    _seed_consent_raw(experiment_dir, _resolved(placement="hoffman2"))
+    decision = overnight.standing_consent_status(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        current_cmd_sha="deadbeef99887766",
+        current_placement="carc",
+    )
+    assert decision.live is False
+    assert decision.reason == "spec-changed"

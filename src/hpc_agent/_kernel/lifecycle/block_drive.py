@@ -1477,10 +1477,13 @@ def _consume_overnight(
     from hpc_agent.state.runs import read_run_sidecar
 
     current_cmd_sha = ""
+    current_placement: str | None = None
     spent_walltime: float | None = None
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
         current_cmd_sha = str((sidecar or {}).get("cmd_sha") or "")
+        raw_cluster = (sidecar or {}).get("cluster")
+        current_placement = raw_cluster if isinstance(raw_cluster, str) and raw_cluster else None
         spent_walltime = _run_requested_walltime(sidecar)
     except Exception:  # noqa: BLE001 — a bad sidecar must not crash the tick; park instead
         current_cmd_sha = ""
@@ -1490,6 +1493,9 @@ def _consume_overnight(
         scope_id=run_id,
         boundary_block=successor,
         current_cmd_sha=current_cmd_sha,
+        # S1 (run-queue plan §10.S1): the sidecar's cluster stamp feeds the
+        # placement leg; None (pre-stamp sidecar, bad read) keeps the leg off.
+        current_placement=current_placement,
         # F16: meter the walltime cap against the fallout THIS boundary authorizes —
         # the main array's requested wall-seconds (walltime_sec × task_count) — passed
         # explicitly so a consent whose walltime_cap is below the launch's cost REFUSES
