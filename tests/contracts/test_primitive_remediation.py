@@ -295,6 +295,15 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # retarget-run (proving-run-5 wave 5.2): the cluster-retarget recovery arm —
         # supersede + re-resolve(new run_name) + re-canary. Spec-taking composite.
         "retarget-run",
+        # run queue phase 1 (run-queue-placement-2026-07-28 §6): the intake
+        # ledger's three verbs. queue-run is a spec-taking mutate ({} is invalid
+        # — request_id is required, so its {} probe reaches the spec gate);
+        # queue-status / queue-advance are all-optional read-only queries, so
+        # {} is VALID for them and they take the bogus-key probe below.
+        # failure_features attaches at the shared dispatch seam for all three.
+        "queue-run",
+        "queue-status",
+        "queue-advance",
         "aggregate-flow",
         "apply-safe-defaults",
         "build-submit-spec",
@@ -422,6 +431,11 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # scope-status's spec is all-optional ({} is a valid all-tags read) —
     # probe with the bogus key so the wire model rejects it.
     "scope-status": _BOGUS_KEY_SPEC,
+    # queue-status / queue-advance specs are all-optional ({} is a valid
+    # whole-ledger read / whole-ledger placement decision) — probe with the
+    # bogus key so the extra="forbid" wire model rejects it.
+    "queue-status": _BOGUS_KEY_SPEC,
+    "queue-advance": _BOGUS_KEY_SPEC,
     "status-snapshot": _BOGUS_KEY_SPEC,
     "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
 }

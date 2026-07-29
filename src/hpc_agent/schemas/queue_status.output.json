@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_status.output.json",
+  "title": "queue-status output data",
+  "description": "The bounded projection — one JSON the session relays (the status-sweep shape).",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The single instant the whole projection was computed against (ISO-8601 UTC). One stamp for the read, so a digest looked at an hour later is visibly an hour-old projection.",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "path": {
+      "description": "Absolute path of the intake ledger. Reported even when it does not exist yet — the read is non-creating (a query must never scaffold the tree it reports on).",
+      "title": "Path",
+      "type": "string"
+    },
+    "items": {
+      "description": "Matching items in ARRIVAL order (the ledger's own durable order), clipped to ``limit``. Arrival order, not a priority order: ordering the human's attention is attention-queue's job and re-deriving it here would be a second, divergent ranking.",
+      "items": {
+        "$ref": "#/$defs/QueueStatusItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Counts over ALL matching items before the limit clip — ledger states ('queued', 'placed') and projected classes ('dispatched', 'in_flight', 'parked', 'greenlight_unadvanced', 'terminal'). The numbers a brief quotes, computed over the whole ledger rather than the returned page.",
+      "title": "Counts",
+      "type": "object"
+    },
+    "occupancy": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "campaign_id -> occupied pool slots, from the ONE shared predicate ``state/queue_occupancy.occupied_slots`` (R9). Surfaced here so the number a refill decision rests on is inspectable from the same read that shows the items, and so a second, subtly different occupancy count has no reason to be written.",
+      "title": "Occupancy",
+      "type": "object"
+    },
+    "total_items": {
+      "default": 0,
+      "description": "How many items matched the filters before ``limit`` was applied.",
+      "title": "Total Items",
+      "type": "integer"
+    },
+    "truncated": {
+      "default": false,
+      "description": "True when ``limit`` clipped ``items`` — a partial read is never silent.",
+      "title": "Truncated",
+      "type": "boolean"
+    },
+    "skipped_records": {
+      "default": 0,
+      "description": "Ledger lines skipped as torn / foreign / unfoldable. A tolerant reader must never wedge a 'what needs me' path, but it must also not hide that it dropped something: a non-zero count here is the signal to go look at the file.",
+      "title": "Skipped Records",
+      "type": "integer"
+    },
+    "notes": {
+      "description": "Deterministic, code-computed disclosure lines about the read itself (a run_id collision, a stale spec_ref, a campaign whose runs were pruned out from under its items). Never authored prose — each line restates a fact already in ``items``.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "QueueResourceAsk": {
+      "additionalProperties": false,
+      "description": "The TYPED resource ask carried by one queued item (run-queue plan §9).\n\n§9 weighed free-form (opaque; policy reads known keys) against typed\n(schema'd) and ruled TYPED: placement filters items against cluster caps,\nand a filter over free-form keys silently drops an item whose author spelled\nthe key differently — the exact failure R4 forbids (never drop an item,\nalways disclose). Typed makes an unsupported ask a boundary refusal instead.\n\nEvery field is optional: \"no ask\" is a legitimate, common item, and it means\n*every* cluster satisfies the hard-constraint leg. These are ASKS, not\nguarantees — the scheduler remains the capacity authority (§7 R3), so\nnothing here is inferred scheduler headroom.\n\nShared by all three queue verbs (the ask on the way in, the ask echoed by\nthe projection, the ask matched by placement), so it lives here rather than\nin one verb's module — this file's stated job.",
+      "properties": {
+        "gpu": {
+          "default": false,
+          "description": "True when the item needs a GPU at all. The coarse hard-constraint leg: a cluster with no GPU partition cannot host it, and placement must say so out loud rather than place and let the job die.",
+          "title": "Gpu",
+          "type": "boolean"
+        },
+        "gpu_type": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional specific GPU label the item requires (e.g. 'A100'). Matched against a cluster's ``gpu_types``, which clusters.yaml documents as INFORMATIONAL — treating it as a hard filter is a deliberate promotion of the field, so any placement that used it discloses that in its reason.",
+          "title": "Gpu Type"
+        },
+        "cores": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional per-task core count the item needs. Null = unstated.",
+          "title": "Cores"
+        },
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional wall-clock the item needs, in seconds. Compared against a cluster's walltime ceiling — clusters.yaml carries TWO that disagree by 8-16x (top-level ``max_walltime_sec`` vs ``constraints.max_walltime``, S11), so a placement that used this must name WHICH ceiling it compared against.",
+          "title": "Walltime Sec"
+        },
+        "est_core_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional estimated total core-hours. Advisory: it feeds consent budget accounting and the disclosed ordering, never a capacity inference about the scheduler's queue (§7 R3).",
+          "title": "Est Core Hours"
+        }
+      },
+      "title": "queue item resource ask",
+      "type": "object"
+    },
+    "QueueStatusItem": {
+      "additionalProperties": false,
+      "description": "One intake item, folded, joined to its projected run facts.\n\nThe two halves are kept visibly separate below: LEDGER FACTS come from the\nfold over the item's intake records; PROJECTED FACTS are recomputed on\nevery read and are never written back (R1). If a projected field ever\nstarts arriving from intake instead, this docstring is the thing that was\nviolated.",
+      "properties": {
+        "item_id": {
+          "description": "The item's identity on the ledger (= its request_id).",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "state": {
+          "description": "Folded ledger state — 'queued' or 'placed', the only two intake stores.",
+          "enum": [
+            "queued",
+            "placed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "enqueued_at": {
+          "description": "ISO-8601 UTC arrival stamp, pinned to the enqueue record by the fold.",
+          "title": "Enqueued At",
+          "type": "string"
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO-8601 UTC stamp of the LAST record folded into this item; null if unknown.",
+          "title": "Updated At"
+        },
+        "age_sec": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds since ``enqueued_at``, measured against ``computed_at``. Surfaced because §10.S3 accepts a real cost — a campaign item's trial params are chosen at ENQUEUE, so a long-held item reflects the strategy's knowledge then, not now. Age is how a human sees that the item has gone stale.",
+          "title": "Age Sec"
+        },
+        "run_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Logical run name as enqueued; null when unstated.",
+          "title": "Run Name"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The item's COMPUTED run id when known (§10.S2). This is the join key into the run stores AND the occupancy slot key; null means the item is not yet resolved and holds a slot of its own.",
+          "title": "Run Id"
+        },
+        "campaign_base": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Logical campaign base as enqueued; null for an open-loop item.",
+          "title": "Campaign Base"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The concrete ``<base>_<clusterkey>`` campaign id, present only once the item is PLACED — the cluster is half of the name, so an unplaced item genuinely does not have one yet.",
+          "title": "Campaign Id"
+        },
+        "cluster_pin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The explicit cluster pin from the enqueue, if any (R5); null otherwise.",
+          "title": "Cluster Pin"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The cluster actually chosen, present only once the item is PLACED.",
+          "title": "Cluster"
+        },
+        "placement_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The disclosed WHY recorded with the placement (R4/§3): every placed item carries the reason its cluster was chosen, on the durable record, so the brief that quoted it and the ledger cannot diverge.",
+          "title": "Placement Reason"
+        },
+        "resources": {
+          "$ref": "#/$defs/QueueResourceAsk",
+          "description": "The typed resource asks as enqueued — echoed so a hold-back reason is checkable."
+        },
+        "spec_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The spec pointer as enqueued, when the item used the pointer form. The inline ``spec`` is deliberately NOT echoed here: it can be arbitrarily large and this result is a bounded digest.",
+          "title": "Spec Ref"
+        },
+        "dispatched": {
+          "default": false,
+          "description": "PROJECTION: a RunRecord exists for this item's run_id. This is S10's resolution in one field — intake never records 'dispatched', because the submit-once ``submitting`` record already IS the handoff fact and no write spans both stores atomically.",
+          "title": "Dispatched",
+          "type": "boolean"
+        },
+        "run_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PROJECTION: the joined RunRecord's journal status (submitting / in_flight / complete / failed / abandoned), or null when no run exists yet. Read live from the run store on every call.",
+          "title": "Run Status"
+        },
+        "in_flight": {
+          "default": false,
+          "description": "PROJECTION: the joined run is being monitored (status 'in_flight').",
+          "title": "In Flight",
+          "type": "boolean"
+        },
+        "terminal": {
+          "default": false,
+          "description": "PROJECTION: the joined run reached a terminal status. Terminal items are hidden by default (``include_settled``) but always counted.",
+          "title": "Terminal",
+          "type": "boolean"
+        },
+        "parked": {
+          "default": false,
+          "description": "PROJECTION: the joined run carries a pending-decision marker — it is waiting on a human at a boundary. 'The subagent returns the parked item to the ledger' is ALREADY TRUE the moment block-drive writes that marker (§7 R1); there is no return step. Escalation holds (``pending_verdict``) are a SEPARATE axis and are not this field.",
+          "title": "Parked",
+          "type": "boolean"
+        },
+        "park_block": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PROJECTION: the block slug the run is parked at; null if unparked.",
+          "title": "Park Block"
+        },
+        "awaiting_since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PROJECTION: ISO-8601 stamp the park began, straight from the marker.",
+          "title": "Awaiting Since"
+        },
+        "greenlight_committed": {
+          "default": false,
+          "description": "PROJECTION, and the R7 field: True when a committed greenlight exists FOR THIS BOUNDARY, decided by ``decision_journal.is_committed_greenlight_for_boundary`` — the same predicate attention-queue routes through, so the two 'what needs me' surfaces cannot disagree. Never the unscoped latest-greenlight read, under which a consumed y stays latest forever.",
+          "title": "Greenlight Committed",
+          "type": "boolean"
+        },
+        "greenlight_unadvanced": {
+          "default": false,
+          "description": "PROJECTION: parked AND greenlit — the human already said yes and the work has not moved. attention-queue's highest-leverage class, and the item a drain pass should claim first.",
+          "title": "Greenlight Unadvanced",
+          "type": "boolean"
+        },
+        "collides_with": {
+          "description": "Other item_ids on this ledger that resolve to the SAME run_id. §10.S2 requires this be SAID rather than silently collapsed: two items with identical resolved params and run_name compute one run id, which for a hand-enqueued pair is arguably correct (it IS the same experiment) and for anything else is a duplicate the human must see.",
+          "items": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "title": "Collides With",
+          "type": "array"
+        }
+      },
+      "required": [
+        "item_id",
+        "state",
+        "enqueued_at"
+      ],
+      "title": "queue-status item",
+      "type": "object"
+    }
+  }
+}

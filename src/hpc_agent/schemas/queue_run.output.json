@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_run.output.json",
+  "title": "queue-run output data",
+  "description": "What the ledger holds after the enqueue — including on a replay.",
+  "type": "object",
+  "required": [
+    "path",
+    "item_id",
+    "request_id",
+    "state",
+    "enqueued_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "Absolute path of the intake ledger the item lives on.",
+      "title": "Path",
+      "type": "string"
+    },
+    "item_id": {
+      "description": "The item's identity on the ledger — equal to the request_id (§10.S2). Every later transition record keys on this, and the current state of the item is the fold over its records.",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Item Id",
+      "type": "string"
+    },
+    "request_id": {
+      "description": "Echo of the client's idempotency token, so a relay can confirm the match.",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "state": {
+      "description": "The item's state as written: always 'queued' on arrival. An item cannot ARRIVE placed — placement is a separate, disclosed decision.",
+      "enum": [
+        "queued",
+        "placed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "replayed": {
+      "default": false,
+      "description": "True when this request_id was already on the ledger: NO line was written and ``record`` is the ORIGINAL item. The honest signal a relay needs — 'you already asked for this' is a different fact from 'I enqueued it', even though both are success.",
+      "title": "Replayed",
+      "type": "boolean"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The item's COMPUTED run id when it could be derived at enqueue (§10.S2: '<run_name>-<cmd_sha[:8]>', a pure query, never minted); null otherwise. Two items with identical resolved params and the same run_name compute the SAME run_id — that collision is real and ``queue-status`` names it rather than silently collapsing the rows.",
+      "title": "Run Id"
+    },
+    "enqueued_at": {
+      "description": "ISO-8601 UTC arrival stamp of the item (of the ORIGINAL item on a replay). §10.S3's accepted cost — trial params are chosen at enqueue — is why enqueue age is a fact worth surfacing.",
+      "title": "Enqueued At",
+      "type": "string"
+    },
+    "queued_count": {
+      "default": 0,
+      "description": "How many items on this ledger are currently in state 'queued' (after the append). The one number a relay can act on without a second call: it is the depth the next queue-advance will consider.",
+      "title": "Queued Count",
+      "type": "integer"
+    },
+    "record": {
+      "additionalProperties": true,
+      "description": "The intake record as written (or as found, on a replay) — echoed so the session can relay exactly what the ledger now holds rather than a restatement of it.",
+      "title": "Record",
+      "type": "object"
+    }
+  }
+}

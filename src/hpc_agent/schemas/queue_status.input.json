@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_status.input.json",
+  "title": "queue-status input spec",
+  "description": "Input spec for ``queue-status`` — filters and the bound, nothing else.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "state": {
+      "anyOf": [
+        {
+          "enum": [
+            "queued",
+            "placed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict to items in this LEDGER state ('queued' or 'placed'). Null (default) returns both. Note this filters the stored state, never a projected one — 'show me the parked items' is a filter over computed facts and would encourage callers to treat a projection as storage, which is the R1 error.",
+      "title": "State"
+    },
+    "campaign_base": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict to items enqueued under this logical campaign base.",
+      "title": "Campaign Base"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict to items pinned to, or already placed on, this clusters.yaml key. The 'what is queued for carc' read the placement brief needs.",
+      "title": "Cluster"
+    },
+    "include_settled": {
+      "default": false,
+      "description": "When False (default), items whose projected run is TERMINAL are omitted from ``items`` (they are still counted). A settled item is ledger history, and carrying history into every read is the O(history) startup cost S12 flags against the relaunch-cheapness invariant. True is the audit read — 'what has this queue ever done'.",
+      "title": "Include Settled",
+      "type": "boolean"
+    },
+    "limit": {
+      "default": 50,
+      "description": "Maximum items returned. The projection is a relayed digest, not a database cursor; ``truncated`` + ``total_items`` tell the caller when the bound bit, so a clipped read is visible rather than quietly partial.",
+      "maximum": 500,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "now": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 UTC 'now' override for deterministic testing (the doctor / attention-queue precedent). Sets ``computed_at`` and the instant ages are measured against — never an agent-facing knob for reshaping ages.",
+      "title": "Now"
+    }
+  }
+}

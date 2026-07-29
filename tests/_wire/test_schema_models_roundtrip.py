@@ -342,6 +342,9 @@ _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     # synthesizer sets none (all fields optional), so supply one valid mode.
     "ChallengeStatusSpec": {"challenge_id": "x"},
     "VerifyRegistrationSpec": {"registration_id": "x"},
+    # QueueRunSpec requires EXACTLY ONE of spec / spec_ref (both optional); the
+    # per-field synthesizer sets neither, so supply the pointer form.
+    "QueueRunSpec": {"spec_ref": "x"},
     "UpdateRunConstraintsSpec": {"add_features": ["a"]},
     # ConformanceStatusSpec's validator requires a window selection (one of
     # since/last_n); the per-field synthesizer skips the optional fields, so

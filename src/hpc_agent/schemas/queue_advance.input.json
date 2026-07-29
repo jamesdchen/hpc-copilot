@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/queue_advance.input.json",
+  "title": "queue-advance input spec",
+  "description": "Input spec for ``queue-advance`` — scope and bound, never a placement.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "campaign_base": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict the decision to items enqueued under this logical campaign base. Null (default) considers every queued item — the fleet read a drain pass wants.",
+      "title": "Campaign Base"
+    },
+    "max_placements": {
+      "default": 1,
+      "description": "Most placements to decide in this call. Defaults to ONE because placement is disclosed inside a y and a human signs one decision at a time; a larger batch is for the consented/unattended tier. Items beyond the bound are reported as held with reason 'batch_limit_reached', never dropped (R4).",
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Max Placements",
+      "type": "integer"
+    },
+    "clusters": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional restriction of the candidate set to these clusters.yaml keys. Null (default) considers every configured cluster. This NARROWS the candidates; it can never place an item on a cluster the hard constraints reject, and it never overrides an item's pin (R5).",
+      "title": "Clusters"
+    },
+    "now": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 UTC 'now' override for deterministic testing (the doctor / attention-queue precedent). Sets ``computed_at``; never an agent-facing knob for reshaping the decision.",
+      "title": "Now"
+    }
+  }
+}
