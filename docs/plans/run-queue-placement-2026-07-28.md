@@ -39,8 +39,12 @@ Read this file top to bottom — it is self-contained. The state of play:
    ANSWERED by §10.S2 (no new lease — the shipped detached lease keyed on
    the computed run_id), and retryable(n) — unblocked by §10.S3 — is now
    BUILT (2026-07-29, RESOLVED as proposed; see §7's failure-classes
-   bullet for the shipped shape). Typed resource asks, no item sharding,
-   and per-repo queue remain open.
+   bullet for the shipped shape). Typed resource asks SHIPPED with
+   Phase 1 (`QueueResourceAsk` on the `queue-run` wire — gpu / gpu_type /
+   cores / walltime_sec / est_core_hours; §9's open half was the
+   vocabulary's EXTENT, which stands answered by that closed field set
+   until a real ask arrives that it cannot express). No item sharding
+   and per-repo queue remain open (both proposed NO).
 5. **§10's verifications are ALL DONE — nothing in this plan is
    unverified.** The S1 placement leg is BUILT
    (`state/placement_drift.py` + `standing_consent_status`'s
