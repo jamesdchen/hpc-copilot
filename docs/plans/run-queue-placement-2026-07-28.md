@@ -2,10 +2,11 @@
 
 Status: **PHASES 1+2 SHIPPED (2026-07-29) — §6's store, authority, and actor
 are live; the S1 consent leg is wired through both scopes. Per-cluster
-consent caps (the `{cluster: cap}` vocabulary, §3) and the brief-UX bundle
-(answer menus + park notifications): BUILT (2026-07-29).** Remaining: the
-Phase-3 drain loop (maintainer-ordered), content-addressed trees + eager
-submit (probe-cleared, §10.S4).
+consent caps (the `{cluster: cap}` vocabulary, §3), the brief-UX bundle
+(answer menus + park notifications), the Phase-3 drain loop (§6.3, product
+side + chain-dispatch §5), and the content-addressed trees (§10.S4):
+BUILT (2026-07-29).** Remaining: R3's eager submit itself — its §10.S4
+precondition is met, the behavior is not yet built.
 Design complete through v2 + adversarial sweep. Motivating order: "there
 needs to be a queue that keeps track of multiple experiments to run as they
 come in and it needs to assign the runs to the proper clusters / split
