@@ -46,7 +46,7 @@ jobs:
           # checkout still resolves HEAD, but 0 is the unconditionally-safe
           # choice and future-proofs any describe/tag lookup the stamp may grow.
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install the build frontend
