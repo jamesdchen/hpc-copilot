@@ -61,6 +61,24 @@ gate binding exactly where it always did.
   text VERBATIM (one authority, byte-equal — pinned) so a stuck item
   surfaces without being asked about; absent when the queue is empty,
   fail-open on any read surprise.
+- **The Claude Science producer seam.** A coordinating agent (Claude
+  Science, `docs/design/claude-science-integration.md`) can now enqueue
+  experiments and observe, but never cross a gate — it plays the same
+  queue-PRODUCER role `campaign-refill` does. A new `science` MCP catalog
+  (`hpc-agent mcp-serve --catalog science --allow-mutations`) advertises
+  EXACTLY `queue-run` + `queue-status` + `queue-advance` and is DISJOINT by
+  construction from every gate-crossing verb — no `queue-dispatch`, no
+  `submit-*`, no `append-decision`, no `block-drive` (the catalog IS the
+  boundary; `tests/test_mcp_science.py` pins the disjointness in both
+  mutation-flag states). It is a SEPARATE, narrower catalog than `curated`,
+  not an edit to curated's membership — the two answer different "who is
+  asking" trust questions. A boundary-free packaged skill
+  (`slash_commands/skills/hpc-science-queue`) teaches the enqueue→observe
+  loop and holds NO dispatch/approve logic; it declares `mcp-catalog:
+  science` in frontmatter so `lint_skill_mcp_reachability` checks its
+  MCP-direct verbs against the science surface, not curated. The human
+  still approves dispatch at the cluster boundary exactly as when a human
+  enqueues.
 
 Intended default, ruled 2026-07-29: a standing consent composes NO
 core-hours `budget_cap` — the composed caps are the morning-boundary expiry

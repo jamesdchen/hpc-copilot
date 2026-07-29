@@ -1,8 +1,15 @@
 # Claude Science integration — the producer seam (2026-07-29)
 
-Status: **DESIGNED — maintainer decisions taken; build scoped.** Maintainer
-chose the **producer** capability boundary and **both** delivery mechanisms
-(MCP connector + packaged skill) on 2026-07-29.
+Status: **BUILT — producer seam shipped 2026-07-29.** Maintainer chose the
+**producer** capability boundary and **both** delivery mechanisms (MCP
+connector + packaged skill) on 2026-07-29; the `science` catalog, the
+boundary-free skill, and the disjointness contract test landed the same day.
+The connector Claude Science registers is
+`hpc-agent mcp-serve --catalog science --allow-mutations` (queue-run is a
+`mutate`, so mutations are on; only the three producer verbs are reachable, so
+enabling them crosses no gate). The disjointness — no `queue-dispatch`, no
+`submit-*`, no `append-decision`, no `block-drive` — is pinned by
+`tests/test_mcp_science.py` in both mutation-flag states.
 
 ## The fit
 

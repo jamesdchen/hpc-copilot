@@ -255,6 +255,41 @@ _CURATED_EXTRA_VERBS = frozenset(
 # loop never needs. Recorded here so the parity is deliberate and auditable rather
 # than incidental: if one is ever curated, curate the others and say why.
 
+# The ``science`` catalog: the run-queue PRODUCER subset a coordinating agent
+# (Claude Science — docs/design/claude-science-integration.md) is handed. It is a
+# FIXED, hand-authored allowlist of EXACTLY three verbs, DISJOINT by construction
+# from every gate-crossing verb — this disjointness is the whole safety property
+# (the catalog IS the boundary; a skill instruction cannot widen it):
+#
+#   * ``queue-run``     — enqueue ONE run request. A ``mutate``, but UNGATED:
+#     enqueueing spends nothing and touches no cluster (ops/queue/run.py — "gates
+#     bind later at the cluster boundary of the run the item becomes"). The item
+#     lands 'queued'; the human still approves at dispatch exactly as when a human
+#     enqueues.
+#   * ``queue-status``  — pure read: the queue's bounded projection.
+#   * ``queue-advance`` — pure read: the placement AUTHORITY's decision + reasoning
+#     (writes NOTHING — the actor consumes the decision).
+#
+# This is a SEPARATE, NARROWER catalog than ``curated`` — NOT an edit to curated's
+# membership. The two answer different "who is asking" trust questions: curated's
+# consumer is the human-amplification agent that DOES take the human's ``y`` (so it
+# includes gate-crossing verbs — ``block-drive``, ``append-decision``,
+# ``queue-dispatch`` derives in via its ``next_block``); science's consumer is an
+# autonomous agent that must NEVER see a gate. So ``queue-dispatch`` (the ACTOR
+# that submits — ``verb=workflow``, declares ``next_block``), every ``submit-*``,
+# ``append-decision`` and ``block-drive`` are all structurally absent here.
+#
+# Membership is INTERSECTED with the read/act mutation policy (:func:`allowed_primitives`),
+# UNLIKE curated (which is its own allowlist, ungated by ``--allow-mutations``):
+# ``queue-status`` / ``queue-advance`` (``verb=query``) are always reachable, but
+# ``queue-run`` (``verb=mutate``) is reachable ONLY under ``--allow-mutations``. So
+# the invocation Claude Science registers is ``hpc-agent mcp-serve --catalog science
+# --allow-mutations``. Turning mutations ON is SAFE here precisely because the
+# membership is fixed to these three ungated/pure producer verbs — no gate-crossing
+# verb can ride the flag in (the intersection can only ever REMOVE queue-run, never
+# ADD anything). ``tests/test_mcp_science.py`` pins the disjointness both ways.
+_SCIENCE_VERBS = frozenset({"queue-run", "queue-status", "queue-advance"})
+
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.
 _RESOURCES: dict[str, tuple[tuple[str, ...], str]] = {
@@ -969,8 +1004,10 @@ class McpServer:
         catalog: str = "full",
         runner: CliRunner | None = None,
     ) -> None:
-        if catalog not in ("full", "tiered", "curated"):
-            raise ValueError(f"catalog must be 'full', 'tiered', or 'curated', got {catalog!r}")
+        if catalog not in ("full", "tiered", "curated", "science"):
+            raise ValueError(
+                f"catalog must be 'full', 'tiered', 'curated', or 'science', got {catalog!r}"
+            )
         self._registry = registry
         self._allow_mutations = allow_mutations
         self._catalog = catalog
@@ -1023,6 +1060,28 @@ class McpServer:
         """The curated catalog's verb set (keys of :meth:`_curated_metas`)."""
         return list(self._curated_metas())
 
+    def _science_metas(self) -> dict[str, PrimitiveMeta]:
+        """The ``science`` catalog's verb→meta map: the fixed producer subset
+        (:data:`_SCIENCE_VERBS`) INTERSECTED with the read/act mutation policy.
+
+        Unlike :meth:`_curated_metas` (its own allowlist, ungated), science is
+        intersected with :meth:`_allowed` so ``queue-run`` (a ``mutate``) is
+        listed/invocable ONLY under ``--allow-mutations``, while ``queue-status``
+        / ``queue-advance`` (``query``) are always reachable. The intersection can
+        only ever REMOVE ``queue-run`` from the fixed three — it can NEVER add a
+        fourth verb — so the disjointness from every gate-crossing verb holds in
+        both flag states (design "Mechanism — the boundary in exactly one place").
+        The documented Claude Science invocation therefore carries
+        ``--allow-mutations``; enabling it is safe because only these three
+        ungated/pure producer verbs are reachable (see :data:`_SCIENCE_VERBS`).
+        """
+        allowed = self._allowed()
+        return {name: allowed[name] for name in sorted(_SCIENCE_VERBS) if name in allowed}
+
+    def _science_names(self) -> list[str]:
+        """The science catalog's verb set (keys of :meth:`_science_metas`)."""
+        return list(self._science_metas())
+
     def _invocable(self) -> dict[str, PrimitiveMeta]:
         """Primitives this server may INVOKE, per the active catalog's boundary.
 
@@ -1035,6 +1094,8 @@ class McpServer:
         """
         if self._catalog == "curated":
             return self._curated_metas()
+        if self._catalog == "science":
+            return self._science_metas()
         return self._allowed()
 
     def list_tools(self) -> list[dict[str, Any]]:
@@ -1046,6 +1107,15 @@ class McpServer:
             # ``allow_mutations`` (design §7 — curated is itself the allowlist).
             curated = self._curated_metas()
             return [_tool_definition(name, meta) for name, meta in curated.items()]
+        if self._catalog == "science":
+            # The run-queue PRODUCER subset (queue-run / queue-status /
+            # queue-advance), each as its own typed tool. A FIXED allowlist
+            # intersected with the mutation policy — queue-run (mutate) appears
+            # only under --allow-mutations; the two reads always. Disjoint from
+            # every gate-crossing verb by construction (design "producer, not
+            # driver"; :data:`_SCIENCE_VERBS`).
+            science = self._science_metas()
+            return [_tool_definition(name, meta) for name, meta in science.items()]
         if self._catalog == "tiered":
             # Mirror the CLI's find → describe → invoke discovery: advertise
             # only the explorers plus a generic invoker, keeping every
@@ -1258,6 +1328,16 @@ class McpServer:
                 "are exposed as typed tools. Drive the submit/aggregate/campaign "
                 "loops via `block-drive` and commit each `y` via `append-decision` "
                 "— do not hand-author specs on the CLI."
+            )
+        elif self._catalog == "science":
+            catalog_note = (
+                "Science (producer) catalog: exactly the run-queue producer verbs "
+                "— `queue-run` (enqueue ONE run request; ungated, spends nothing), "
+                "`queue-status` (read the queue's projection), `queue-advance` "
+                "(read the placement decision + reasoning). Enqueue an experiment "
+                "with `queue-run` and observe with `queue-status`/`queue-advance`; "
+                "the human approves dispatch — no dispatch/submit/consent verb is "
+                "reachable here by construction."
             )
         else:
             catalog_note = "Each read-only primitive is exposed as its own typed tool."

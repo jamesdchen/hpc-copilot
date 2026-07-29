@@ -102,6 +102,15 @@ SKILL_ONLY_OK: set[str] = {
     # this shipped-surface pairing check, but still repo-tracked and still
     # scanned by the agent-prose lints (see
     # scripts/_agent_prose_targets.py::MAINTAINER_SKILL_GLOB).
+    #
+    # Claude Science producer skill (docs/design/claude-science-integration.md):
+    # agent-only by design — its consumer is an autonomous COORDINATING agent
+    # (Claude Science) that enqueues experiments onto the run queue via the
+    # `science` MCP catalog, never a human typing a slash. No paired user-typed
+    # slash exists or should: the producer surface is the MCP connector, not an
+    # interactive interview. It targets the `science` catalog (not `curated`),
+    # declared in its frontmatter `mcp-catalog:` field.
+    "hpc-science-queue",
 }
 
 # Slash-command files allowed to have no skill counterpart. Empty
