@@ -466,7 +466,7 @@ def _tier(classification: str, flags_count: int, assertions_green: bool) -> str:
 # before typing and the refusal they hit after cannot disagree again.
 
 #: Identifier-shaped tokens: the substrate for the raised human-required bar
-#: and the diff-token pool. Mirrors T5's assertion/diff vocabulary.
+#: and the diff-token pool — the same idiom as T5's assertion/diff vocabulary.
 _SIGNOFF_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 

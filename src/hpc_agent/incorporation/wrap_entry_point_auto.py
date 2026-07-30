@@ -962,7 +962,7 @@ def _needs_intent(
         "needs_intent": True,
         "missing_fields": list(missing),
         # Every field this verb escalates here is caller-owned by contract,
-        # so never_invented mirrors missing_fields exactly. It is a SEPARATE
+        # so never_invented equals missing_fields exactly. It is a SEPARATE
         # field on purpose: a future "just default it" change has to delete a
         # named pin rather than quietly widen a code path.
         "never_invented": list(missing),
