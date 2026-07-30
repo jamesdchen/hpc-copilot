@@ -313,6 +313,12 @@ _INCORPORATION_TO_OPS_META = DirectionalRule(
     allow=frozenset(
         {
             ("incorporation/classify_axis_auto.py", "hpc_agent.ops.classify_axis_preflight"),
+            # The same call-time posture, one composite over: the onboarding
+            # auto-collapse invokes the detect-entry-point VERB at call time
+            # (import nested in the function body, not import-time) so the
+            # detection scan and the pathway table can never be hand-sequenced
+            # apart. Not the eager cycle the rule exists to block.
+            ("incorporation/wrap_entry_point_auto.py", "hpc_agent.ops.detect_entry_point"),
             # Lazy call-time read of the campaign manifest for campaign-shaped
             # submits (nested in a function try-block; a non-campaign submit
             # never reaches it) — the same sanctioned posture as the two edges

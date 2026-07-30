@@ -326,6 +326,16 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "campaign-run",
         "classify-axis",
         "classify-axis-auto",
+        # wrap-entry-point-auto (prelude mechanization P1.a): the onboarding
+        # chain's auto-collapse — detect -> pathway table -> decorate ->
+        # frozen-YAML scan -> fixed-params partition. Spec-taking composite;
+        # failure_features attaches at the shared dispatch seam (so it stays
+        # OUT of XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (wrap_entry_point_auto.input.json) is baked by the orchestrator at
+        # wave integration — until then it is absent, so the verb does not
+        # appear in the schema-file-parametrized remediation tests
+        # (_verb_targets), only in this inventory-vs-CLI drift check.
+        "wrap-entry-point-auto",
         "decide-monitor-arm",
         "interview",
         "monitor-flow",
@@ -457,6 +467,11 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # anything is actuated.
     "queue-dispatch": _BOGUS_KEY_SPEC,
     "status-snapshot": _BOGUS_KEY_SPEC,
+    # wrap-entry-point-auto's spec is all-optional ({} is a valid bare call
+    # that escalates on the first judgment point), but the verb CAN write —
+    # the direct-decoration pathway splices @register_run into a source file.
+    # Bogus key, so the extra="forbid" wire model refuses before the scan.
+    "wrap-entry-point-auto": _BOGUS_KEY_SPEC,
     "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
 }
 
