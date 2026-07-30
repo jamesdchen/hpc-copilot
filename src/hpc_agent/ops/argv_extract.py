@@ -26,17 +26,39 @@ cluster, so the LLM keeps that leg (the determinism-boundary rule cuts
 both ways: mechanize what is rule-fixed, and refuse to mechanize what is
 not).
 
-**Honesty bails** — extraction reports ``unsupported`` rather than a
-partial list whenever the file's declaration is not a flat, complete,
-locally-readable surface:
+**Two honesty levels, one rule** ("``extracted`` is never a guess"). The
+level is chosen by the SCOPE of what is unknowable, and nothing is ever
+silently dropped:
 
-* argparse with no ``ArgumentParser(...)`` construction in *this* file
-  (the parser is built elsewhere — the flags we can see are not the
-  whole surface);
-* argparse with ``add_subparsers(...)`` (subcommand-scoped flags do not
-  flatten into one parameter list);
-* click where more than one function carries option/argument decorators
-  (a group's several commands, likewise not one flat surface).
+1. **Verdict degradation** — reserved for a *whole-surface* unknown, where
+   even the parameter COUNT would be a claim we cannot make. The verdict
+   becomes ``unsupported`` and ``argv_params`` is ``None``:
+
+   * argparse with no ``ArgumentParser(...)`` construction in *this* file
+     (the parser is built elsewhere — the flags we can see are not the
+     whole surface);
+   * argparse with ``add_subparsers(...)`` (subcommand-scoped flags do not
+     flatten into one parameter list);
+   * click with no ``@click.command`` / ``@click.group`` in this file, or
+     with more than one function carrying parameter decorators (a group's
+     several commands, likewise not one flat surface);
+   * an unparseable file, or a non-extractable ``argv_kind``.
+
+2. **Per-param ``unextracted`` marker** — for a *single parameter* whose
+   names are readable but one written argument is not modeled (a custom
+   ``action=`` class, a non-literal ``nargs=`` / ``choices=``, click's
+   repeat-``count=``, a ``dest`` that does not sanitize to an attribute
+   name). The param is still emitted — its names, dest and the arguments
+   that ARE literal are real information — and ``unextracted`` NAMES every
+   argument the consumer must read out of the source itself. The verdict
+   stays ``extracted``: the parameter list is complete in count and names,
+   and the one gap is labelled rather than papered over.
+
+   This is deliberately the ``compose_audit_template`` posture (a
+   candidate whose manifest fails to load is NAMED in the disclosure's
+   ``skipped`` key, never silently dropped) applied one level down. A
+   consumer that composes an argv MUST treat a param carrying
+   ``unextracted`` as an LLM leg.
 
 Pure AST: :func:`ast.parse` + literal reads only. Nothing in this module
 imports, executes, or evaluates user code, so a repo with unavailable
@@ -150,6 +172,14 @@ def _extract_argparse(tree: ast.Module) -> list[dict[str, Any]] | None:
     return params
 
 
+#: argparse actions that consume NO value (the wrapper appends the flag alone).
+_ARGPARSE_VALUELESS_ACTIONS = frozenset({"store_true", "store_false", "count"})
+#: argparse actions whose arity/repeat semantics this module fully models.
+#: Anything else (``append``, ``extend``, ``store_const``, ``version``, a
+#: custom Action class) is recorded verbatim AND marked ``unextracted``.
+_ARGPARSE_MODELED_ACTIONS = _ARGPARSE_VALUELESS_ACTIONS | {"store"}
+
+
 def _argparse_param(call: ast.Call) -> dict[str, Any] | None:
     """One ``add_argument(...)`` call → a parameter dict (``None`` if unreadable)."""
     names = [
@@ -158,37 +188,58 @@ def _argparse_param(call: ast.Call) -> dict[str, Any] | None:
     if not names:
         return None
     kwargs = {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+    unextracted: list[str] = []
     positional = not names[0].startswith("-")
 
     explicit_dest = _literal_str(kwargs["dest"]) if "dest" in kwargs else None
+    if "dest" in kwargs and explicit_dest is None:
+        # ``dest=`` written as an expression — the derived fallback below is
+        # NOT what argparse will bind, so say so.
+        unextracted.append("dest")
     param: dict[str, Any] = {
         "names": names,
-        "dest": explicit_dest or _argparse_dest(names),
+        "dest": explicit_dest or _option_dest(names).replace("-", "_"),
         "positional": positional,
     }
     if "type" in kwargs:
         param["type"] = _unparse(kwargs["type"])
     _apply_default(param, kwargs.get("default"))
-    required = _literal_bool(kwargs.get("required"))
-    if required is not None:
-        param["required"] = required
-    action = _literal_str(kwargs.get("action")) if "action" in kwargs else None
-    if action in ("store_true", "store_false", "count"):
-        # A value-less flag: the wrapper argv appends the flag itself, never
-        # ``<flag> <value>``. Reported uniformly with click's ``is_flag``.
-        param["is_flag"] = True
+    _apply_required(param, kwargs, unextracted)
+    if "action" in kwargs:
+        action = _literal_str(kwargs["action"])
+        if action is None:
+            # A custom Action class / expression: arity unknowable.
+            unextracted.append("action")
+        else:
+            param["action"] = action
+            if action in _ARGPARSE_VALUELESS_ACTIONS:
+                # Value-less: the wrapper argv appends the flag itself, never
+                # ``<flag> <value>``. Reported uniformly with click's is_flag.
+                param["is_flag"] = True
+            if action not in _ARGPARSE_MODELED_ACTIONS:
+                unextracted.append("action")
+    _apply_nargs(param, kwargs, unextracted)
+    _apply_choices(param, kwargs, unextracted)
+    _finish_param(param, unextracted)
     return param
 
 
-def _argparse_dest(names: list[str]) -> str:
-    """argparse's own dest rule: first long option, else first short, else the name."""
-    for name in names:
-        if name.startswith("--"):
-            return name[2:].replace("-", "_")
-    for name in names:
-        if name.startswith("-"):
-            return name[1:].replace("-", "_")
-    return names[0].replace("-", "_")
+def _option_dest(opts: list[str]) -> str:
+    """First long option, else first short, else the bare name — dashes intact.
+
+    argparse and click agree on this selection: argparse takes the first
+    long option string, and click's ``max(possible_names, key=len(prefix))``
+    resolves to the same one (a ``--`` prefix outranks ``-``, and ``max``
+    keeps the first of equals). Callers apply their own post-processing —
+    argparse converts dashes to underscores, click also lowercases.
+    """
+    for opt in opts:
+        if opt.startswith("--"):
+            return opt[2:]
+    for opt in opts:
+        if opt.startswith("-"):
+            return opt[1:]
+    return opts[0]
 
 
 # ─── click ─────────────────────────────────────────────────────────────────
@@ -248,33 +299,102 @@ def _declares_click_command(tree: ast.Module) -> bool:
 
 
 def _click_param(call: ast.Call, *, is_argument: bool) -> dict[str, Any] | None:
-    """One ``@click.option`` / ``@click.argument`` decorator → a parameter dict."""
-    names = [
+    """One ``@click.option`` / ``@click.argument`` decorator → a parameter dict.
+
+    click's own ``_parse_decls`` rules are reproduced rather than approximated:
+
+    * a declaration NOT starting with ``-`` is the EXPLICIT parameter name and
+      outranks every derivation (``@click.option("--a-very-long-flag", "x")``
+      binds ``x``) — the analogue of argparse's ``dest=``;
+    * a declaration containing ``/`` is a boolean on/off PAIR
+      (``"--shout/--no-shout"``): the left side is the primary option, the
+      right the secondary, the parameter consumes NO value, and the name comes
+      from the primary. Reading such a decl as one opaque name is what
+      produced the ``seed/__no_seed`` non-identifier;
+    * otherwise the name is the first long option, else the first short one,
+      lowercased with dashes converted (an argument lowercases too).
+    """
+    decls = [
         value for value in (_literal_str(arg) for arg in call.args) if value is not None and value
     ]
-    if not names:
+    if not decls:
         return None
+    explicit_name, opts, secondary, saw_pair = _click_decls(decls)
+    if opts:
+        names = opts
+    elif explicit_name is not None:
+        names = [explicit_name]
+    else:
+        return None
+
     kwargs = {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+    unextracted: list[str] = []
+    if explicit_name is not None:
+        # Arguments lowercase + underscore their single decl; an option's
+        # explicit name is taken verbatim.
+        dest = explicit_name.replace("-", "_").lower() if is_argument else explicit_name
+    else:
+        dest = _option_dest(opts).replace("-", "_").lower()
     param: dict[str, Any] = {
         "names": names,
-        "dest": _click_dest(names),
+        "dest": dest,
         "positional": is_argument,
     }
+    if secondary:
+        param["secondary_names"] = secondary
+    if saw_pair:
+        # A boolean pair is implicitly a flag in click — without this a
+        # consumer would emit ``--shout/--no-shout <value>``.
+        param["is_flag"] = True
     if "type" in kwargs:
         param["type"] = _unparse(kwargs["type"])
     _apply_default(param, kwargs.get("default"))
-    required = _literal_bool(kwargs.get("required"))
-    if required is not None:
-        param["required"] = required
-    if _literal_bool(kwargs.get("is_flag")) is True:
-        param["is_flag"] = True
+    _apply_required(param, kwargs, unextracted)
+    if "is_flag" in kwargs:
+        is_flag = _literal_bool(kwargs["is_flag"])
+        if is_flag is None:
+            unextracted.append("is_flag")
+        elif is_flag:
+            param["is_flag"] = True
+    if "multiple" in kwargs:
+        multiple = _literal_bool(kwargs["multiple"])
+        if multiple is None:
+            unextracted.append("multiple")
+        elif multiple:
+            param["multiple"] = True
+    if "count" in kwargs:
+        # A counting option is value-less AND repeatable; the repeat-to-integer
+        # collection is not modeled, so the flag half is reported and the
+        # counting half is NAMED.
+        if _literal_bool(kwargs["count"]) is True:
+            param["is_flag"] = True
+        unextracted.append("count")
+    _apply_nargs(param, kwargs, unextracted)
+    _apply_choices(param, kwargs, unextracted)
+    _finish_param(param, unextracted)
     return param
 
 
-def _click_dest(names: list[str]) -> str:
-    """click's own name rule: the LONGEST declared name, dashes stripped."""
-    longest = max(names, key=len)
-    return longest.lstrip("-").replace("-", "_")
+def _click_decls(decls: list[str]) -> tuple[str | None, list[str], list[str], bool]:
+    """Split click declaration strings into ``(name, opts, secondary, saw_pair)``."""
+    explicit_name: str | None = None
+    opts: list[str] = []
+    secondary: list[str] = []
+    saw_pair = False
+    for decl in decls:
+        if not decl.startswith("-"):
+            explicit_name = decl
+            continue
+        if "/" in decl:
+            saw_pair = True
+            primary, _, off = decl.partition("/")
+            if primary:
+                opts.append(primary)
+            if off:
+                secondary.append(off)
+            continue
+        opts.append(decl)
+    return explicit_name, opts, secondary, saw_pair
 
 
 # ─── shared literal reads ──────────────────────────────────────────────────
@@ -301,6 +421,84 @@ def _literal_bool(node: ast.expr | None) -> bool | None:
     return None
 
 
+def _apply_required(
+    param: dict[str, Any], kwargs: dict[str, ast.expr], unextracted: list[str]
+) -> None:
+    """Record a written ``required=`` bool; mark it when it is an expression."""
+    if "required" not in kwargs:
+        return
+    required = _literal_bool(kwargs["required"])
+    if required is None:
+        unextracted.append("required")
+        return
+    param["required"] = required
+
+
+def _apply_nargs(
+    param: dict[str, Any], kwargs: dict[str, ast.expr], unextracted: list[str]
+) -> None:
+    """Record a written ``nargs=`` literal — an int (incl. click's ``-1``) or a
+    ``"+"`` / ``"*"`` / ``"?"`` string.
+
+    ``nargs`` changes a parameter's ARITY, so dropping it silently would let a
+    consumer emit ``--tags <one-value>`` for a flag that consumes many. A
+    literal is represented verbatim; anything else is marked.
+    """
+    if "nargs" not in kwargs:
+        return
+    value = _literal_value(kwargs["nargs"])
+    if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)):
+        param["nargs"] = value
+        return
+    unextracted.append("nargs")
+
+
+def _apply_choices(
+    param: dict[str, Any], kwargs: dict[str, ast.expr], unextracted: list[str]
+) -> None:
+    """Record a written ``choices=`` literal sequence; mark anything else.
+
+    ``choices`` bounds the value DOMAIN — a sweep that steps outside it fails
+    at parse time on the cluster, so the set is worth carrying when it is
+    literal (and worth naming when it is a ``range`` / a module constant).
+    """
+    if "choices" not in kwargs:
+        return
+    value = _literal_value(kwargs["choices"])
+    if isinstance(value, list | tuple):
+        jsonable = _as_jsonable(list(value))
+        if jsonable is not _UNJSONABLE:
+            param["choices"] = jsonable
+            return
+    unextracted.append("choices")
+
+
+def _finish_param(param: dict[str, Any], unextracted: list[str]) -> None:
+    """Attach the ``unextracted`` marker (de-duplicated, stable order), if any.
+
+    Also the last-resort net for the ``dest`` contract: a derived dest that is
+    not a usable attribute name means this module misread the declaration, so
+    it is NAMED rather than emitted as if authoritative (the class the click
+    ``--x/--no-x`` pair fell into before the pair split existed).
+    """
+    dest = param.get("dest")
+    if not (isinstance(dest, str) and dest.isidentifier()):
+        unextracted.append("dest")
+    if unextracted:
+        param["unextracted"] = sorted(set(unextracted))
+
+
+_MISSING = object()
+
+
+def _literal_value(node: ast.expr) -> Any:
+    """``ast.literal_eval(node)`` or :data:`_MISSING` — never raises, never executes."""
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        return _MISSING
+
+
 def _unparse(node: ast.expr) -> str:
     """Source text of a non-literal argument (e.g. ``type=pathlib.Path``).
 
@@ -323,9 +521,8 @@ def _apply_default(param: dict[str, Any], node: ast.expr | None) -> None:
     """
     if node is None:
         return
-    try:
-        value = ast.literal_eval(node)
-    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+    value = _literal_value(node)
+    if value is _MISSING:
         param["default_source"] = _unparse(node)
         return
     jsonable = _as_jsonable(value)

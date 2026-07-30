@@ -98,7 +98,7 @@
       "additionalProperties": false,
       "title": "ArgvParam",
       "type": "object",
-      "description": "One CLI parameter read MECHANICALLY off the candidate's AST (argparse ``add_argument`` / click ``@click.option`` + ``@click.argument``). Nothing here is inferred: every field is present only because the source states it as a literal, so the wrapper path can compose ``entry_point.argv`` + ``signature`` without the LLM re-typing flag names from an eyeballed read.",
+      "description": "One CLI parameter read MECHANICALLY off the candidate's AST (argparse ``add_argument`` / click ``@click.option`` + ``@click.argument``). Nothing here is inferred: every field is present only because the source states it as a literal, so the wrapper path can compose ``entry_point.argv`` + ``signature`` without the LLM re-typing flag names from an eyeballed read. When ONE written argument of this parameter is not modeled, the parameter is still emitted and ``unextracted`` NAMES it — a consumer composing an argv must treat any param carrying ``unextracted`` as an LLM leg (the verdict stays ``extracted`` because the parameter list is still complete in count and names).",
       "required": [
         "names",
         "dest",
@@ -146,7 +146,51 @@
         "is_flag": {
           "type": "boolean",
           "title": "Is Flag",
-          "description": "``true`` when the parameter takes NO value (argparse ``action=\"store_true\"``/``\"store_false\"``/``\"count\"``, click ``is_flag=True``) — the wrapper argv appends the flag alone, never ``<flag> <value>``. Absent otherwise."
+          "description": "``true`` when the parameter takes NO value (argparse ``action=\"store_true\"``/``\"store_false\"``/``\"count\"``, click ``is_flag=True``, click ``count=True``, or a click boolean on/off pair like ``\"--shout/--no-shout\"``) — the wrapper argv appends the flag alone, never ``<flag> <value>``. Absent otherwise."
+        },
+        "secondary_names": {
+          "type": "array",
+          "title": "Secondary Names",
+          "description": "The OFF side of a click boolean pair (``\"--shout/--no-shout\"`` → ``[\"--no-shout\"]``). Present only for a pair, which is why it disambiguates a pair from plain aliases (``\"--verbose\", \"-v\"``) — both of which can carry ``is_flag``.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nargs": {
+          "title": "Nargs",
+          "description": "The written ``nargs=`` literal — an integer (including click's ``-1`` variadic argument) or one of argparse's ``\"+\"`` / ``\"*\"`` / ``\"?\"``. Absent when not written; NAMED in ``unextracted`` when written as a non-literal expression (it changes the parameter's arity, so it is never dropped silently).",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "choices": {
+          "type": "array",
+          "title": "Choices",
+          "description": "The written ``choices=`` literal sequence — the bounded value domain (a swept value outside it fails at parse time on the cluster). Absent when not written; NAMED in ``unextracted`` when written as a ``range`` / constant / other non-literal.",
+          "items": {}
+        },
+        "multiple": {
+          "type": "boolean",
+          "title": "Multiple",
+          "description": "``true`` for click ``multiple=True`` — the option is repeatable and its values collect into a tuple, so one argv occurrence per value. Absent otherwise."
+        },
+        "action": {
+          "type": "string",
+          "title": "Action",
+          "description": "The written argparse ``action=`` string, verbatim. ``store`` / ``store_true`` / ``store_false`` / ``count`` are fully modeled (the last three set ``is_flag``); any other literal action (``append``, ``extend``, ``store_const``, ``version``, …) is recorded here AND named in ``unextracted`` because its arity/repeat semantics are not modeled. A non-literal action (a custom Action class) yields no ``action`` field, only the ``unextracted`` entry."
+        },
+        "unextracted": {
+          "type": "array",
+          "title": "Unextracted",
+          "description": "Names of the written arguments this extractor did NOT model for this parameter (e.g. ``[\"action\"]``, ``[\"nargs\"]``, ``[\"count\"]``, ``[\"dest\"]``). Sorted, de-duplicated, and ABSENT when nothing was left unread. Present means: the parameter's names are real, but a consumer must read the source for the named argument(s) rather than compose blind — the ``compose_audit_template`` ``skipped`` posture (named, never silently dropped) applied per parameter.",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

@@ -620,6 +620,203 @@ class TestArgvParamExtraction:
         assert candidate["argv_extraction"] == "unsupported"
         assert candidate["argv_params"] is None
 
+    # ── the never-a-guess rule at PARAM level ──────────────────────────────
+    #
+    # A single unreadable ARGUMENT does not degrade the candidate's verdict
+    # (the param list is still complete in count and names) — the param is
+    # emitted with an ``unextracted`` marker NAMING what the consumer must
+    # read from the source. Verdict degradation stays reserved for a
+    # whole-surface unknown (the structural bails above).
+
+    def test_click_boolean_pair_extracted_correctly(self, tmp_path: Path) -> None:
+        # ``--shout/--no-shout`` is ONE boolean param, not a name containing a
+        # slash: the primary opt names it, the secondary is surfaced, and it
+        # takes NO value (a consumer must never emit ``--shout/--no-shout 1``).
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--shout/--no-shout', default=True)\n"
+            "def run(shout):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert candidate["argv_extraction"] == "extracted"
+        shout = _param(candidate, "shout")
+        assert shout["names"] == ["--shout"]
+        assert shout["secondary_names"] == ["--no-shout"]
+        assert shout["is_flag"] is True
+        assert shout["default"] is True
+        # The dest is a usable attribute name, and nothing was left unread.
+        assert shout["dest"].isidentifier()
+        assert "unextracted" not in shout
+
+    def test_click_pair_mixed_with_plain_aliases(self, tmp_path: Path) -> None:
+        # The mixed case: a pair and a plain alias pair in one command. Only
+        # the boolean pair carries ``secondary_names``, which is exactly what
+        # distinguishes it from ``('--verbose', '-v')``.
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--upper/--lower', default=False)\n"
+            "@click.option('--verbose', '-v', is_flag=True)\n"
+            "@click.option('--seed', type=int, default=0)\n"
+            "def run(upper, verbose, seed):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert candidate["argv_extraction"] == "extracted"
+        assert [p["dest"] for p in candidate["argv_params"]] == ["upper", "verbose", "seed"]
+        assert _param(candidate, "upper")["secondary_names"] == ["--lower"]
+        verbose = _param(candidate, "verbose")
+        assert verbose["is_flag"] is True
+        assert "secondary_names" not in verbose
+        assert "is_flag" not in _param(candidate, "seed")
+
+    def test_click_explicit_name_declaration_wins(self, tmp_path: Path) -> None:
+        # click's authoritative rule: a decl not starting with ``-`` IS the
+        # parameter name and outranks any derivation from the option strings
+        # (the analogue of argparse's ``dest=``).
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--a-very-long-flag-name', 'x', type=int)\n"
+            "@click.option('-n', '--iterations')\n"
+            "def run(x, iterations):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        explicit = _param(candidate, "x")
+        assert explicit["names"] == ["--a-very-long-flag-name"]
+        assert "unextracted" not in explicit
+        # No explicit name → click's first-LONG-option rule (not longest name).
+        derived = _param(candidate, "iterations")
+        assert derived["names"] == ["-n", "--iterations"]
+
+    def test_argparse_nargs_and_choices_represented(self, tmp_path: Path) -> None:
+        # Arity and value domain are literals in the source, so they are
+        # carried rather than dropped — a consumer emitting ``--tags <one>``
+        # for an ``nargs='+'`` flag would build the wrong argv.
+        (tmp_path / "train.py").write_text(
+            "import argparse\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--tags', nargs='+')\n"
+            "p.add_argument('--mode', choices=['fast', 'slow'])\n"
+            "p.add_argument('--pair', nargs=2, type=int)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "train.py")
+        assert candidate["argv_extraction"] == "extracted"
+        assert _param(candidate, "tags")["nargs"] == "+"
+        assert _param(candidate, "pair")["nargs"] == 2
+        assert _param(candidate, "mode")["choices"] == ["fast", "slow"]
+        for dest in ("tags", "mode", "pair"):
+            assert "unextracted" not in _param(candidate, dest)
+
+    def test_argparse_unmodeled_action_is_named_not_dropped(self, tmp_path: Path) -> None:
+        # ``append`` is a literal (so it is recorded) whose repeat semantics are
+        # NOT modeled → named in ``unextracted``. A custom Action class is not
+        # even a literal → named, with no ``action`` field to mislead.
+        (tmp_path / "main.py").write_text(
+            "import argparse\n"
+            "class MyAction(argparse.Action):\n"
+            "    pass\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--extra', action='append')\n"
+            "p.add_argument('--custom', action=MyAction)\n"
+            "p.add_argument('--plain', action='store', type=int)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        # Verdict is NOT degraded — the param list is complete in count/names.
+        assert candidate["argv_extraction"] == "extracted"
+        extra = _param(candidate, "extra")
+        assert extra["action"] == "append"
+        assert extra["unextracted"] == ["action"]
+        custom = _param(candidate, "custom")
+        assert "action" not in custom
+        assert custom["unextracted"] == ["action"]
+        plain = _param(candidate, "plain")
+        assert plain["action"] == "store"
+        assert "unextracted" not in plain
+
+    def test_non_literal_nargs_and_choices_are_named(self, tmp_path: Path) -> None:
+        (tmp_path / "run.py").write_text(
+            "import argparse\n"
+            "N = 3\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--a', nargs=N)\n"
+            "p.add_argument('--b', choices=range(3))\n"
+            "p.add_argument('--c', required=SOME_FLAG)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "run.py")
+        assert _param(candidate, "a")["unextracted"] == ["nargs"]
+        assert "nargs" not in _param(candidate, "a")
+        assert _param(candidate, "b")["unextracted"] == ["choices"]
+        assert _param(candidate, "c")["unextracted"] == ["required"]
+        assert "required" not in _param(candidate, "c")
+
+    def test_argparse_non_literal_dest_is_named(self, tmp_path: Path) -> None:
+        # The derived fallback is not what argparse will bind, so say so.
+        (tmp_path / "main.py").write_text(
+            "import argparse\n"
+            "KEY = 'k'\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--x', dest=KEY)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert _param(candidate, "x")["unextracted"] == ["dest"]
+
+    def test_click_multiple_and_count(self, tmp_path: Path) -> None:
+        # ``multiple=True`` is fully modeled (one argv occurrence per value);
+        # ``count=True`` is value-less but its repeat-to-integer collection is
+        # not modeled, so the flag half is reported and the rest is NAMED.
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--tag', multiple=True)\n"
+            "@click.option('-v', '--verbose', count=True)\n"
+            "def run(tag, verbose):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        tag = _param(candidate, "tag")
+        assert tag["multiple"] is True
+        assert "unextracted" not in tag
+        verbose = _param(candidate, "verbose")
+        assert verbose["is_flag"] is True
+        assert verbose["unextracted"] == ["count"]
+
+    def test_click_variadic_argument_nargs(self, tmp_path: Path) -> None:
+        # click's ``nargs=-1`` variadic argument, and the argument name's
+        # dash→underscore lowering.
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.argument('IN-FILES', nargs=-1)\n"
+            "def run(in_files):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        param = _param(candidate, "in_files")
+        assert param["positional"] is True
+        assert param["nargs"] == -1
+        assert "unextracted" not in param
+
+    def test_every_extracted_dest_is_an_identifier_or_named(self, tmp_path: Path) -> None:
+        # The invariant the ``--shout/--no-shout`` bug violated, pinned over a
+        # mixed file: a dest that is not a usable attribute name may never be
+        # emitted as if authoritative.
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--a/--no-a')\n"
+            "@click.option('--b-c', '-b')\n"
+            "@click.argument('D-E')\n"
+            "def run(a, b_c, d_e):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        for param in candidate["argv_params"]:
+            assert param["dest"].isidentifier() or "dest" in param.get("unextracted", []), param
+
     def test_extraction_never_imports_user_code(self, tmp_path: Path) -> None:
         # Pure AST: a candidate importing a module that does not exist (and
         # whose body would raise on execution) still extracts.

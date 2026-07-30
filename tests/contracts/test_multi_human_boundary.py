@@ -51,6 +51,12 @@ _ACTOR_MODULES = (
     "state/notebook_audit.py",
     "state/attestation.py",
     "_wire/actions/interview.py",
+    # 2026-07-30 (prelude mechanization P1.c): the interview COMPOSES
+    # ``produced_by.operator`` from ``git config user.name`` and stamps it into
+    # the persisted record, so the module that touches the attribution moved
+    # from the wire model down into this one — the honesty scan follows it, or
+    # it would be vacuous exactly where the composition now happens.
+    "ops/memory/interview.py",
     "_wire/actions/notebook_draft.py",
     "_kernel/hooks/utterance_capture.py",
     "_kernel/hooks/answer_capture.py",
