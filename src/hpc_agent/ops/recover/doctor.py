@@ -27,6 +27,7 @@ from hpc_agent import errors
 from hpc_agent._build_info import full_version, git_output, runtime_sha
 from hpc_agent._kernel.lifecycle.detached import pid_alive
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire._shared import ReadinessDigest
 from hpc_agent._wire.queries.doctor import (
     AdvanceRunProposal,
     AlertRecord,
@@ -416,6 +417,42 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     return findings
 
 
+def _readiness_section(now: str) -> list[ReadinessDigest]:
+    """The standing readiness ledger, one row per host that HAS one. Read-only.
+
+    Pillar 1 of ``docs/design/s2-readiness.md`` ends in a render mandate, and
+    ``doctor`` is where an operator looks when something is already wrong — so
+    it carries the whole ledger rather than one cluster's line: every known
+    host's verdict, its AGE, the sensor that is not green, and any
+    ``last_corruption`` note left when a write rebuilt over an unreadable file
+    (a disclosure that would otherwise vanish with the file it describes).
+
+    Three properties this section must keep:
+
+    * **No probe.** ``doctor``'s contract is "no SSH, no scheduler"; the digest
+      reads ``<journal home>/_readiness/<host>.json`` and ``clusters.yaml`` and
+      nothing else. Pinned by the no-network tripwire in the doctor tests.
+    * **No attention flip.** A stale or degraded ledger means nothing has looked
+      lately, or something the system already touched was unhappy — neither is a
+      driver that died, and folding it into ``needs_attention`` would make the
+      watchdog's one load-bearing bit fire on weather. It is disclosure.
+    * **Hosts, not config.** Scope is
+      :func:`hpc_agent.state.readiness.known_hosts` — what the machine has
+      actually observed. ``cluster-readiness`` is the verb that unions in
+      configured-but-never-contacted clusters for a human who asked.
+
+    Fail-open: any trouble yields ``[]`` — a readiness read must never be the
+    thing that breaks the watchdog scan.
+    """
+    from hpc_agent.ops.readiness_digest import known_host_digests
+
+    try:
+        stamp = parse_iso_utc_or_none(now)
+        return [ReadinessDigest.model_validate(row) for row in known_host_digests(now=stamp)]
+    except Exception:  # noqa: BLE001 — disclosure must never break detection
+        return []
+
+
 def _attention_summary(
     *,
     stalled: int,
@@ -644,6 +681,14 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     ``needs_attention``, and joins the summary line so no agent concludes a
     network cause without seeing it (run ``net-triage`` for the differential).
 
+    ``readiness`` carries the standing per-cluster readiness ledger
+    (``docs/design/s2-readiness.md`` pillar 1) as one line per host that HAS a
+    ledger on this machine: overall verdict, the AGE of the freshest atom, the
+    sensor that is not green, and any ``last_corruption`` disclosure. A READ
+    SURFACE — consulted from disk, never probed (doctor still opens no SSH) —
+    and deliberately NOT an input to ``needs_attention``: a stale ledger means
+    nothing has looked lately, which is not a driver that died.
+
     Additionally surfaces ``version_skew`` when the running CLI's embedded
     build sha differs from the HEAD of the hpc-agent *source repo* that
     *experiment_dir* belongs to (stale install — reinstall). Fail-open: no
@@ -845,6 +890,10 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         awaiting_advance_count=len(advance_proposals),
         awaiting_advance=advance_proposals,
         version_skew=_detect_version_skew(experiment_dir),
+        # s2-readiness pillar 1's render mandate, on the surface an operator
+        # already reads when something is wrong. Disclosure only: it is composed
+        # AFTER needs_attention above and deliberately does not feed it.
+        readiness=_readiness_section(now),
         active_env_overrides=active_env_overrides(),
     )
     dumped: dict[str, Any] = result.model_dump(mode="json")

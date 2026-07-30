@@ -73,6 +73,9 @@ the journaled y.
 - Pillar 6: **BUILT** (2026-07-30) — `state/s2_slo.py`, a pure reducer over
   records that already exist, surfaced as one `slo:` line in
   `monitor-summary`'s body.
+- Pillar 1's RENDER MANDATE + pillar 6's brief line: **WIRED** (2026-07-30) —
+  see "The render mandate as built" below. Four surfaces now carry the ledger
+  where humans already look, and two more carry the SLO.
 
 ## Pillar 1 as built: two tiers, one vocabulary
 
@@ -126,6 +129,51 @@ All three are declared `cumulative` in `ops/monitor/summary.FIELD_KIND` and
 render through `_render_scalar`, so `scripts/lint_telemetry_labels.py` covers
 them: a total elapsed time can never acquire the `+` delta marker.
 
+## The render mandate as built (2026-07-30)
+
+Pillar 1 does not end at a substrate: the ledger is "rendered with age in the S1
+brief and `suggest-*` surfaces". A ledger nobody reads before the y changes
+nothing — S2 still discovers at fire time. One composer,
+`ops/readiness_digest.py`, renders ONE line per cluster and four surfaces call
+it (the 2026-07-30 user choice of where humans look):
+
+| surface | scope | field |
+|---|---|---|
+| `suggest-prelude-action` | the cluster the suggested action would involve — only the terminal `submit-s1` rung (`CLUSTER_ACTIONS`) | `readiness[]` |
+| `status-snapshot` | the clusters of the digested runs | `brief["readiness"]` |
+| overnight morning brief | the run's own cluster | `readiness` |
+| `doctor` | every host that HAS a ledger, + `last_corruption` | `readiness[]` |
+
+Line shape: `<cluster> (<host>): <verdict> · <age> · <note> (ledger read, not
+probed)`. The verdict is `state/readiness.overall_verdict`'s, the age is
+`ledger_age_sec`'s, the age PHRASE and the atom subject are
+`cluster_readiness_render`'s — the digest adds exactly one thing of its own, the
+`note` naming which sensor is not green, and that note explains a verdict rather
+than computing one.
+
+**Consult-only, mechanized.** No surface probes: composing a digest reads
+`_readiness/<host>.json` and `clusters.yaml` and nothing else. Pinned by
+`tests/ops/test_readiness_surfaces.py` under `tests/_no_network`'s
+`BaseException` tripwire (an `assert`-based guard is eaten by these layers'
+fail-open walls — the review proved it). Absence is rendered, never omitted:
+"unknown · age unknown · no readiness ledger on this machine"; a corrupt file
+says so instead of claiming nothing was observed; a file whose atoms were all
+dropped as foreign says THAT (`the ledger holds no usable observation`) rather
+than pretending no writer exists.
+
+**Advisory everywhere.** The prelude ladder's rung is never changed by a
+verdict (that would make a total ladder weather-dependent), and `doctor`'s
+`needs_attention` never flips on one (a stale ledger means nothing has looked
+lately, not that a driver died).
+
+Pillar 6's line rides `status-snapshot` (per finished run) and the morning brief
+through `ops/monitor/summary.format_slo` — PROMOTED from `_format_slo` for this,
+because the underscore was the only thing making a copy easier than a call.
+
+Not wired, deliberately: `submit_blocks.py`'s S1 brief line is the P2.c sibling's
+(same digest, different owner), and the sensor layer stays untouched — this wave
+only reads.
+
 ## Drift log
 
 - 2026-07-30: created from the user direction; nothing built against
@@ -153,3 +201,20 @@ them: a total elapsed time can never acquire the `+` delta marker.
   `submit/runner.promote_submitting_record` feeding
   `s2_slo.compute_slo(accepted_at=…)`, which today reads `submitted_at` (an
   under-estimate by the dispatch duration on the submit-once path).
+- 2026-07-30 (render mandate): the ledger and the SLO reached the surfaces
+  humans read — see "The render mandate as built". Three decisions worth
+  recording because each had a tempting alternative:
+  (a) `suggest-prelude-action` carries a line on the `submit-s1` rung ONLY. A
+  line beside a rung that cannot use it is noise, and a field that is usually
+  noise trains readers to skip the one time it mattered.
+  (b) `status-snapshot`'s SLO paragraph is scoped to TERMINAL runs, so it rides
+  a run-scoped snapshot (a fleet digest gathers `find_in_flight_runs` by
+  definition). Widening that gather would change what `running_where` /
+  `changed_since_seen` mean — a different edit than surfacing a scorecard.
+  (c) `doctor`'s scope is hosts with a ledger, not `clusters.yaml`. A watchdog
+  line should mean something was observed; `cluster-readiness` is the verb that
+  unions the config in for a human who asked.
+  Regen was PAID in-branch (`regen_all.py --write`, 9/9): `doctor.output.json`,
+  `suggest_prelude_action.output.json`, `operations.json`. The shared
+  `operations.json` may still need the wave's serial rebake if a sibling
+  branch touched the registry.

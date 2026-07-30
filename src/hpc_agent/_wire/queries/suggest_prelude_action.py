@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from hpc_agent._wire._shared import ReadinessDigest
+
 #: The closed action vocabulary — each member names the verb (or the file edit)
 #: the ladder's rung recommends. Ordered by rung, lowest first.
 PreludeAction = Literal[
@@ -221,4 +223,21 @@ class SuggestPreludeActionResult(BaseModel):
     )
     substrates: PreludeSubstrates = Field(
         description="The disclosed evidence vector the ladder decided over.",
+    )
+    readiness: list[ReadinessDigest] = Field(
+        default_factory=list,
+        description=(
+            "The standing readiness ledger's one-liner for every cluster the "
+            "suggested action would involve — pillar 1's render mandate "
+            "(docs/design/s2-readiness.md): a verdict, its AGE, and the sensor "
+            "that is not green. Non-empty ONLY for an action that hands off to a "
+            "cluster (the terminal 'submit-s1' rung); the notebook / pack / axes "
+            "rungs touch no cluster and carry no line, because a readiness line "
+            "beside a rung that cannot use it is noise that trains readers to skip "
+            "the field. CONSULT-ONLY: this verb opens no connection and runs no "
+            "probe — every line is a reading of the durable ledger, ends in "
+            "'(ledger read, not probed)', and is absent-and-honest ('unknown - age "
+            "unknown - no readiness ledger on this machine') when nothing has ever "
+            "been observed. Advisory: the ladder's rung is NEVER changed by it."
+        ),
     )

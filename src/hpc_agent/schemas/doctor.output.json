@@ -96,6 +96,14 @@
       "default": null,
       "description": "Set when the running CLI's build sha differs from the HEAD of the hpc-agent source repo that experiment_dir belongs to — the installed tool is stale; reinstall. Null when the shas agree or either side is unresolvable (no git, no embedded sha, not that repo — fail-open)."
     },
+    "readiness": {
+      "description": "The standing readiness ledger, one line per host that HAS one on this machine — pillar 1's render mandate (docs/design/s2-readiness.md): verdict + AGE + the sensor that is not green, plus any last_corruption note left when a write rebuilt over an unreadable file. A READ SURFACE ONLY: it opens no connection and runs no probe (doctor's no-SSH contract is unchanged), and it never flips needs_attention — a stale ledger means nothing has looked lately, which is not by itself a driver that died. Scope is hosts with a ledger, not clusters.yaml: doctor reports what the machine knows, and a line here means something was actually observed. Empty when no host has ever been observed (fail-open on an unreadable ledger dir).",
+      "items": {
+        "$ref": "#/$defs/ReadinessDigest"
+      },
+      "title": "Readiness",
+      "type": "array"
+    },
     "active_env_overrides": {
       "additionalProperties": {
         "type": "string"
@@ -286,6 +294,108 @@
         "note"
       ],
       "title": "doctor parked-run note",
+      "type": "object"
+    },
+    "ReadinessDigest": {
+      "additionalProperties": false,
+      "description": "One cluster's readiness one-liner — pillar 1's render mandate, on the wire.\n\n``docs/design/s2-readiness.md`` pillar 1 does not stop at a substrate; it\nends in a render mandate: the standing ledger is \"rendered with age in the S1\nbrief and ``suggest-*`` surfaces\". This is the shape those surfaces carry. It\nis composed ONCE, by ``ops/readiness_digest.digest_for_host``, and declared\nONCE here so the two schema'd consumers (``doctor``,\n``suggest-prelude-action``) and the two free-form brief consumers\n(``status-snapshot``, the overnight morning brief) describe the same fields\nwith the same words.\n\n**A reading, never a probe.** Every field comes from\n``<journal home>/_readiness/<host>.json`` — the durable tier of the ledger,\nfed opportunistically by traffic the system was already making. Composing a\ndigest opens no connection, resolves no name and spawns no process: a surface\nthat sensed on read would put the fire-time discovery pillar 1 removes onto\nthe busiest surfaces in the product. ``line`` therefore ends in \"(ledger\nread, not probed)\", so a quoted line cannot be mistaken for a live check.\n\nA helper shape (no ``*Spec``/``*Result`` suffix), so it is inlined into each\nconsumer's schema rather than emitted as a verb schema of its own.",
+      "properties": {
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The clusters.yaml key naming this host, when one does. Null for a host that has a ledger but no config entry — reached outside the config, and hidden by nothing.",
+          "title": "Cluster"
+        },
+        "host": {
+          "description": "The ssh host the ledger is keyed under (the bare host — the SAME normalization the circuit breaker, the throttle and the sensor layer use, so every substrate agrees on what 'a host' is).",
+          "title": "Host",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "The overall verdict from {ready, stale, degraded, unknown}, computed by state/readiness.overall_verdict — the ONE definition every surface routes through. 'stale' is not a milder 'degraded': it means no fresh failure but the evidence does not support ready (the host may have healed and nothing has looked since). 'unknown' means nothing has ever been observed here, or the ledger could not be read.",
+          "title": "Verdict",
+          "type": "string"
+        },
+        "age_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Age of the freshest atom in the ledger, in whole seconds. Null when there is no dateable atom — honest, never zero. A verdict without an age is the failure mode the ledger exists to remove.",
+          "title": "Age Seconds"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why the verdict is not 'ready', named as a sensor rather than as advice: 'connect/effective -> host: down', 'connect: no observation recorded', 'ledger file could not be read: not valid JSON', or 'no readiness ledger on this machine'. Null when the verdict is 'ready'.",
+          "title": "Note"
+        },
+        "ledger_corrupt": {
+          "default": false,
+          "description": "True when the ledger FILE exists but this read could not use it (unreadable, malformed, or a schema_version this build does not understand). An ABSENT file is not corrupt: 'never looked' and 'cannot read what looked' are different facts.",
+          "title": "Ledger Corrupt",
+          "type": "boolean"
+        },
+        "ledger_corruption_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which corruption it was; null when the read was clean.",
+          "title": "Ledger Corruption Reason"
+        },
+        "last_corruption": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A persisted {at, reason} note left when an earlier write rebuilt over a corrupt file. Carried so the operator learns ONCE that something was lost, rather than having it vanish with the file. Null when no rebuild ever discarded one.",
+          "title": "Last Corruption"
+        },
+        "line": {
+          "description": "The composed one-liner: '<cluster> (<host>): <verdict> - <age> - <note> (ledger read, not probed)'. Rendered from this entry's own fields by ops/readiness_digest.digest_line, so the same digest always prints the same bytes on every surface.",
+          "title": "Line",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "verdict",
+        "line"
+      ],
+      "title": "cluster readiness digest",
       "type": "object"
     },
     "StalledRunProposal": {

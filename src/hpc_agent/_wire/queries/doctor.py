@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdStrict
+from hpc_agent._wire._shared import ReadinessDigest, RunIdStrict
 
 
 class DoctorSpec(BaseModel):
@@ -310,6 +310,22 @@ class DoctorResult(BaseModel):
             "hpc-agent source repo that experiment_dir belongs to — the installed "
             "tool is stale; reinstall. Null when the shas agree or either side is "
             "unresolvable (no git, no embedded sha, not that repo — fail-open)."
+        ),
+    )
+    readiness: list[ReadinessDigest] = Field(
+        default_factory=list,
+        description=(
+            "The standing readiness ledger, one line per host that HAS one on this "
+            "machine — pillar 1's render mandate (docs/design/s2-readiness.md): "
+            "verdict + AGE + the sensor that is not green, plus any "
+            "last_corruption note left when a write rebuilt over an unreadable "
+            "file. A READ SURFACE ONLY: it opens no connection and runs no probe "
+            "(doctor's no-SSH contract is unchanged), and it never flips "
+            "needs_attention — a stale ledger means nothing has looked lately, "
+            "which is not by itself a driver that died. Scope is hosts with a "
+            "ledger, not clusters.yaml: doctor reports what the machine knows, "
+            "and a line here means something was actually observed. Empty when no "
+            "host has ever been observed (fail-open on an unreadable ledger dir)."
         ),
     )
     active_env_overrides: dict[str, str] = Field(

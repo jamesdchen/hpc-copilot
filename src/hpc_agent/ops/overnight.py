@@ -2302,6 +2302,63 @@ def self_heal_scan(
 # ── the morning brief (item 8 pin d + amendment b) ────────────────────────────
 
 
+def _run_readiness_and_slo(
+    experiment_dir: Path, scope_kind: str, scope_id: str, surfaced_at: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """``(readiness digest, slo line)`` for a RUN scope — both ``None`` when absent.
+
+    The overnight brief is the surface a human meets before anything else, half
+    asleep, after a night they did not watch. ``docs/design/s2-readiness.md``
+    names it twice: pillar 1's ledger is "rendered with age" where humans look,
+    and pillar 6's scorecard "rides run telemetry and the morning brief".
+
+    * **readiness** — the standing ledger's one-liner for the run's own cluster
+      (its ``ssh_target`` keys the ledger; the cluster name is resolved through
+      ``clusters.yaml`` when the record carries no target). It answers the first
+      question of the morning: is the place this ran still reachable, and how
+      long ago did anything check? CONSULT-ONLY — the brief is a pure local read
+      and gains no network call here.
+    * **slo** — the S2 scorecard for a FINISHED run, through the SAME reducer and
+      the SAME renderer ``monitor-summary`` uses (``state/s2_slo.slo_for_run`` +
+      ``ops/monitor/summary.format_slo``). Never re-composed: a scorecard with
+      two renderers has two definitions the moment either gains a field.
+
+    Only for ``scope_kind == "run"`` — a campaign scope has no single run record
+    to date a scorecard against, and inventing one would be a second definition
+    of "the run this brief is about". Totally fail-open: any surprise yields
+    ``(None, None)`` and the brief is byte-unchanged.
+    """
+    if scope_kind != "run":
+        return None, None
+    try:
+        from hpc_agent.ops.monitor.summary import format_slo
+        from hpc_agent.ops.readiness_digest import digest_for_host, host_for_cluster
+        from hpc_agent.state.journal import load_run
+        from hpc_agent.state.run_record import TERMINAL_STATUSES
+        from hpc_agent.state.s2_slo import slo_for_run
+
+        record = load_run(experiment_dir, scope_id)
+        if record is None:
+            return None, None
+        cluster = str(getattr(record, "cluster", "") or "") or None
+        host = str(getattr(record, "ssh_target", "") or "") or (
+            host_for_cluster(cluster) if cluster else ""
+        )
+        readiness = (
+            digest_for_host(host, cluster=cluster, now=parse_iso_utc_or_none(surfaced_at))
+            if host
+            else None
+        )
+        slo = (
+            format_slo(slo_for_run(experiment_dir, scope_id, record))
+            if record.status in TERMINAL_STATUSES
+            else None
+        )
+    except Exception:  # noqa: BLE001 — disclosure must never break the morning read
+        return None, None
+    return readiness, slo
+
+
 def overnight_morning_brief(
     experiment_dir: Path,
     *,
@@ -2326,8 +2383,16 @@ def overnight_morning_brief(
     ``surfaced_at`` latency — the human wakes to a loud, structured failure. That
     section survives consent expiry exactly as the consumption disclosure does.
 
-    Pure read — never mutates the ledger or the consent. Returns an opaque dict
-    the caller relays verbatim (the code-digested-evidence posture).
+    Two s2-readiness fields ride the brief for a RUN scope, both ``None`` when
+    they cannot be composed: ``readiness`` — the standing readiness ledger's
+    one-liner for the run's cluster (verdict + AGE + the sensor that is not
+    green), consulted from disk and never probed — and ``slo`` — the S2
+    scorecard for a finished run, rendered by ``monitor-summary``'s own
+    ``format_slo``. Disclosure only; neither changes any other field.
+
+    Pure read — never mutates the ledger or the consent, and opens no
+    connection. Returns an opaque dict the caller relays verbatim (the
+    code-digested-evidence posture).
     """
     surfaced_at = now_iso or utcnow_iso()
     surfaced_dt = parse_iso_utc_or_none(surfaced_at)
@@ -2429,6 +2494,14 @@ def overnight_morning_brief(
         else None
     )
 
+    # s2-readiness pillars 1 + 6 on the surface a human meets before anything
+    # else: where this ran and whether the machine still believes it can get
+    # there (with the AGE of that belief), and what the submit cost. Both are
+    # local reads, both fail-open to None, and neither changes any other field.
+    readiness_digest, slo_line = _run_readiness_and_slo(
+        experiment_dir, scope_kind, scope_id, surfaced_at
+    )
+
     return {
         # LEADS with the fail-loud disclosure when the chain died unrecoverably.
         "heal_failure": heal_failed,
@@ -2456,6 +2529,15 @@ def overnight_morning_brief(
         # Non-None only when the consent died on spec change: the OPTIONAL
         # paste-ready re-grant line for the current identity (never auto-answered).
         "regrant_offer": regrant,
+        # s2-readiness pillar 1: the standing readiness ledger's one-liner for
+        # this run's cluster — verdict + AGE + the sensor that is not green,
+        # CONSULTED from disk and never probed. None for a non-run scope, a run
+        # with no journal record, or a run naming no host.
+        "readiness": readiness_digest,
+        # s2-readiness pillar 6: the S2 scorecard line for a FINISHED run,
+        # rendered by monitor-summary's own format_slo over state/s2_slo's
+        # reducer (one definition, three surfaces). None while in flight.
+        "slo": slo_line,
     }
 
 
