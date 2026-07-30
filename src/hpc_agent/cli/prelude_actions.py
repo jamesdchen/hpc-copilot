@@ -74,10 +74,36 @@ _DIR_PROBE = "_dir_probe"
 # is told to replace them via ``unresolved_fields`` (the scaffold-spec posture).
 _PH_SOURCE = "PLACEHOLDER-source.py"
 _PH_TEMPLATE = "PLACEHOLDER-template.py"
-_PH_MANIFEST = "PLACEHOLDER-packs/<pack>/pack.json"
 _PH_SLUG = "PLACEHOLDER-section-slug"
 _PH_SIGNATURE_SHA = "PLACEHOLDER-run-signature-sha"
 _PH_RUN_NAME = "placeholder_run"
+
+# The filenames a pack manifest conventionally carries. Used ONLY to narrow the
+# candidate walk for :func:`_resolve_pack_manifest`; a candidate is accepted on
+# its parsed ``name`` (and sha, when the bind carries one), never on its path.
+_MANIFEST_FILENAMES: tuple[str, ...] = ("pack.json", "manifest.json")
+
+# Directories the manifest walk never descends into — dependency / VCS trees that
+# can hold thousands of files and never hold the experiment's own pack.
+_WALK_SKIP_DIRS: frozenset[str] = frozenset(
+    {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache"}
+)
+
+# Cap on manifest candidates inspected. A pack tree is small; a repo where this
+# trips is pathological and the honest answer there is the disclosed placeholder.
+_MANIFEST_WALK_CAP = 200
+
+
+def _ph_manifest(pack: str) -> str:
+    """The manifest-relpath placeholder for *pack* — the CONVENTIONAL location.
+
+    Substituted with the real pack name (never a literal ``<pack>``) so the
+    fragment is copy-pasteable the moment the guess happens to be right, and kept
+    in ``unresolved_fields`` because it IS a guess: only
+    :func:`_resolve_pack_manifest` produces a verified relpath.
+    """
+    return f"PLACEHOLDER-packs/{pack}/pack.json"
+
 
 # The fail-safe axis kind the classify-axis scaffold pre-fills: 'sequential' is
 # the classifier's own conservative default, so a caller who invokes the
@@ -266,12 +292,109 @@ def _read_interview(ev: _Prelude) -> None:
                 corrupt=True,
             )
             continue
-        for raw in block:
+        # A malformed ENTRY is the same failure class as a malformed block: the
+        # pack it meant to opt in is silently absent, so every gate over it
+        # passes. Skipping it quietly would recreate the exact fumble this verb
+        # exists to surface, so each one is a corrupt-substrate finding (→ the
+        # rung-0 doctor routing) rather than a bare ``continue``.
+        for index, raw in enumerate(block):
             if not isinstance(raw, dict):
+                ev.note(
+                    "pack",
+                    (f"interview.json 'packs'[{index}] is a {type(raw).__name__}, not an object"),
+                    remedy=(
+                        f"repair packs[{index}] (an entry is {{pack, manifest, receipt_bindings}})"
+                    ),
+                    corrupt=True,
+                )
                 continue
             name = raw.get("pack")
-            if isinstance(name, str) and name and name not in ev.packs_opted_in:
+            if not isinstance(name, str) or not name:
+                ev.note(
+                    "pack",
+                    (
+                        f"interview.json 'packs'[{index}] declares no string 'pack' "
+                        f"name (got {name!r}) — the entry opts in nothing"
+                    ),
+                    remedy=f"give packs[{index}] a string 'pack' name",
+                    corrupt=True,
+                )
+                continue
+            if name not in ev.packs_opted_in:
                 ev.packs_opted_in[name] = raw
+
+
+def _manifest_candidates(experiment_dir: Path) -> list[Path]:
+    """Every conventionally-named manifest file under *experiment_dir*, sorted.
+
+    A bounded, dependency-tree-skipping walk: paths are only CANDIDATES — the
+    accept decision is made on the parsed manifest ``name`` and (when the bind
+    carries one) the recomputed raw-bytes sha, never on the path.
+    """
+    out: list[Path] = []
+    stack = [experiment_dir]
+    while stack and len(out) < _MANIFEST_WALK_CAP:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_dir():
+                if entry.name not in _WALK_SKIP_DIRS:
+                    stack.append(entry)
+            elif entry.name in _MANIFEST_FILENAMES:
+                out.append(entry)
+                if len(out) >= _MANIFEST_WALK_CAP:
+                    break
+    return sorted(out)
+
+
+def _resolve_pack_manifest(ev: _Prelude, pack: str, manifest_sha: str | None) -> str | None:
+    """A VERIFIED experiment-relative manifest relpath for *pack*, or ``None``.
+
+    The bound-but-not-opted-in remedy is only copy-pasteable if the ``manifest``
+    relpath it emits is real, so it is DERIVED rather than guessed: every
+    conventionally-named manifest under the experiment dir is parsed through the
+    ONE loader (:func:`hpc_agent.state.pack.load_manifest`) and accepted when its
+    declared ``name`` equals *pack*. When the bind record carries a
+    *manifest_sha* the raw-bytes sha is recomputed too, which makes the match an
+    IDENTITY rather than a name coincidence (two copies of a pack — lab vs.
+    upstream — differ by sha, and only the bound one is the right answer).
+
+    ``None`` on no match or an ambiguity that the sha could not break; the caller
+    then falls back to the disclosed placeholder. Ambiguity is disclosed rather
+    than resolved by picking — a wrong manifest relpath binds the wrong pack.
+    """
+    from hpc_agent import errors as _errors
+    from hpc_agent.state.pack import load_manifest, sha256_file
+
+    named: list[Path] = []
+    for path in _manifest_candidates(ev.experiment_dir):
+        try:
+            if load_manifest(path).name == pack:
+                named.append(path)
+        except _errors.HpcError:
+            continue  # an unparseable candidate is simply not this pack's manifest
+    if manifest_sha:
+        exact = []
+        for path in named:
+            try:
+                if sha256_file(path) == manifest_sha:
+                    exact.append(path)
+            except OSError:  # pragma: no cover — parsed above, so readable
+                continue
+        if exact:
+            named = exact
+    if not named:
+        return None
+    if len(named) > 1:
+        ev.disclosures.append(
+            f"{len(named)} manifests declare pack {pack!r} and the bind sha did not "
+            "single one out; the packs-entry manifest relpath stays a placeholder"
+        )
+        return None
+    return named[0].relative_to(ev.experiment_dir).as_posix()
 
 
 def _read_packs(ev: _Prelude) -> None:
@@ -288,13 +411,16 @@ def _read_packs(ev: _Prelude) -> None:
             corrupt=True,
         )
     bound: list[str] = []
+    bind_shas: dict[str, str | None] = {}
     for name in journal_ids:
         try:
             records = read_decisions(ev.experiment_dir, PACK_SUBJECT_KIND, name)
         except errors.HpcError:  # pragma: no cover — _journal_ids already filtered
             continue
-        if current_bind(records, pack=name) is not None:
+        bind = current_bind(records, pack=name)
+        if bind is not None:
             bound.append(name)
+            bind_shas[name] = bind.manifest_sha or None
     ev.packs_bound = sorted(bound)
 
     # THE INTEGRITY PAIR. A bind and an opt-in are two independent records and
@@ -304,7 +430,15 @@ def _read_packs(ev: _Prelude) -> None:
     for name in ev.packs_bound:
         if name in ev.packs_opted_in:
             continue
-        ev.pack_repairs.append(_PackRepair(pack=name, kind="bound_not_opted_in"))
+        ev.pack_repairs.append(
+            _PackRepair(
+                pack=name,
+                kind="bound_not_opted_in",
+                # The manifest the bind actually points at, DERIVED (name + sha
+                # identity) so the packs-entry fragment is copy-pasteable.
+                manifest=_resolve_pack_manifest(ev, name, bind_shas.get(name)),
+            )
+        )
         ev.note(
             "pack",
             f"pack {name!r} has a current bind but no interview.json 'packs' entry",
@@ -552,15 +686,28 @@ def _rule_pack_optin(ev: _Prelude) -> CandidateAction | None:
         )
         scaffold = _edit_scaffold(
             "interview.json",
-            {"packs": [{"pack": repair.pack, "manifest": _PH_MANIFEST, "receipt_bindings": []}]},
-            unresolved=["packs[0].manifest"],
+            {
+                "packs": [
+                    {
+                        "pack": repair.pack,
+                        "manifest": repair.manifest or _ph_manifest(repair.pack),
+                        "receipt_bindings": [],
+                    }
+                ]
+            },
+            # Symmetric with the opted_in_not_bound branch below: a DERIVED
+            # relpath is resolved, a guessed one stays disclosed.
+            unresolved=[] if repair.manifest else ["packs[0].manifest"],
         )
     else:
         why = (
             f"pack {repair.pack!r} is opted in on interview.json but has no current "
             "bind — the gate refuses until it is bound"
         )
-        spec: dict[str, Any] = {"manifest": repair.manifest or _PH_MANIFEST, "pack": repair.pack}
+        spec: dict[str, Any] = {
+            "manifest": repair.manifest or _ph_manifest(repair.pack),
+            "pack": repair.pack,
+        }
         scaffold = _scaffold(
             ev.experiment_dir,
             "pack-bind",
@@ -660,7 +807,10 @@ def _rule_audit_handoff(ev: _Prelude) -> CandidateAction | None:
     that condition CANNOT FIRE and so must not be written: the only durable seat
     naming an audit's source/template is interview.json's ``audited_source``
     block, and without it ``passed`` is not computable at all (rung 3 catches that
-    case first). A passed audit therefore always has an interview.json.
+    case first). A passed audit is therefore never observable HERE without an
+    interview.json — the reduction itself passes fine on caller-supplied paths
+    (that is what ``notebook-status`` does), but this verb has no caller to supply
+    them, so the state never reaches this rung.
 
     The real gap the shorthand meant is INTENT: the ``audited_source``-only shell
     carries no ``goal`` and nothing was materialized, so the human-owned intent
@@ -832,8 +982,8 @@ def suggest_prelude_action(experiment_dir: Path) -> SuggestPreludeActionResult:
     * **5 — ``audit-handoff``**: the audit passed and no interview INTENT is
       recorded (no ``goal``, nothing materialized) — project the audit records
       into a draft InterviewSpec. NOT "no interview.json": that condition cannot
-      fire, because the seat naming the audit's source/template lives ON
-      interview.json (see :func:`_rule_audit_handoff`).
+      fire HERE, because the only seat naming the audit's source/template lives
+      ON interview.json (see :func:`_rule_audit_handoff`).
     * **6 — ``interview``**: ``interview.json`` exists but carries no
       ``_materialized`` block; the scaffold points at ``scaffold-spec --verb
       interview`` (the spec is the documented hand-authoring failure mode).

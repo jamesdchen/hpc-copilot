@@ -365,10 +365,79 @@ def test_rung_1_bound_but_not_opted_in_is_a_named_remedy(tmp_path: Path) -> None
     assert out.scaffold.cli is None
     assert out.scaffold.spec is not None
     assert out.scaffold.spec["packs"][0]["pack"] == "rv"
-    assert out.scaffold.unresolved_fields == ["packs[0].manifest"]
+    # The manifest relpath is DERIVED (name + bind-sha identity), so the fragment
+    # is copy-pasteable and nothing is left unresolved.
+    assert out.scaffold.spec["packs"][0]["manifest"] == "packs/rv/pack.json"
+    assert out.scaffold.unresolved_fields == []
     # And the named remedy rides the finding too.
     remedies = [f.remedy for f in out.findings if f.substrate == "pack"]
     assert any(r and "bound but not opted in — add the packs entry" in r for r in remedies)
+
+
+def test_bound_not_opted_in_manifest_placeholder_names_the_pack(tmp_path: Path) -> None:
+    """No resolvable manifest → a placeholder that still SUBSTITUTES the pack name.
+
+    A guess stays disclosed in ``unresolved_fields``, but it is a useful guess:
+    the conventional location with the real pack name, not a literal ``<pack>``.
+    """
+    _bind_pack(tmp_path, "rv")
+    (tmp_path / "packs" / "rv" / "pack.json").unlink()  # the bind outlives the file
+    out = suggest_prelude_action(tmp_path)
+    assert out.rung == 1
+    assert out.scaffold.spec is not None
+    assert out.scaffold.spec["packs"][0]["manifest"] == "PLACEHOLDER-packs/rv/pack.json"
+    assert out.scaffold.unresolved_fields == ["packs[0].manifest"]
+
+
+def test_bound_not_opted_in_manifest_resolves_by_bind_sha_not_by_name(tmp_path: Path) -> None:
+    """Two manifests declare the same pack; the BOUND one wins on sha identity.
+
+    A lab-vs-upstream copy differs by sha but not by name, so a name-only match
+    would emit the wrong relpath half the time. The bind's ``manifest_sha`` makes
+    the match an identity.
+    """
+    _bind_pack(tmp_path, "rv")  # binds packs/rv/pack.json
+    decoy = tmp_path / "vendor" / "rv"
+    decoy.mkdir(parents=True)
+    seam = decoy / "readers.json"
+    seam.write_text('["widgets.other_reader"]', encoding="utf-8")
+    decoy_seam_sha = hashlib.sha256(seam.read_bytes()).hexdigest()
+    (decoy / "pack.json").write_text(
+        json.dumps(
+            {
+                "name": "rv",  # SAME name…
+                "version": "9.9.9",  # …different bytes → different sha
+                "files": [{"path": "readers.json", "sha256": decoy_seam_sha}],
+                "seams": {"reader_calls": "readers.json"},
+                "fills_slots": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = suggest_prelude_action(tmp_path)
+    assert out.rung == 1
+    assert out.scaffold.spec is not None
+    assert out.scaffold.spec["packs"][0]["manifest"] == "packs/rv/pack.json"
+    assert out.scaffold.unresolved_fields == []
+
+
+def test_ambiguous_manifests_stay_a_disclosed_placeholder(tmp_path: Path) -> None:
+    """Two byte-identical manifests: the sha cannot single one out → disclose.
+
+    Picking one would be a coin flip that binds a possibly-wrong pack root, so the
+    ladder discloses the ambiguity and keeps the placeholder.
+    """
+    _bind_pack(tmp_path, "rv")
+    twin = tmp_path / "vendor" / "rv"
+    twin.mkdir(parents=True)
+    for name in ("pack.json", "readers.json"):
+        (twin / name).write_bytes((tmp_path / "packs" / "rv" / name).read_bytes())
+    out = suggest_prelude_action(tmp_path)
+    assert out.rung == 1
+    assert out.scaffold.spec is not None
+    assert out.scaffold.spec["packs"][0]["manifest"] == "PLACEHOLDER-packs/rv/pack.json"
+    assert out.scaffold.unresolved_fields == ["packs[0].manifest"]
+    assert any("manifests declare pack 'rv'" in d for d in out.disclosures)
 
 
 def test_rung_1_opted_in_but_not_bound_scaffolds_pack_bind(tmp_path: Path) -> None:
@@ -471,6 +540,49 @@ def test_rung_0_malformed_packs_block(tmp_path: Path) -> None:
     out = suggest_prelude_action(tmp_path)
     assert out.rung == 0
     assert any("'packs' opt-in block is not a list" in f.detail for f in out.findings)
+
+
+def test_rung_0_packs_entry_that_is_not_an_object(tmp_path: Path) -> None:
+    """A malformed ENTRY is the same failure class as a malformed block.
+
+    It silently opts in nothing, so every gate over that pack passes — the exact
+    fumble class this verb exists to surface. A bare skip would recreate it.
+    """
+    _write_interview(tmp_path, packs=["rv"])
+    out = suggest_prelude_action(tmp_path)
+    assert out.rung == 0
+    assert out.action == "doctor"
+    assert any("'packs'[0] is a str, not an object" in f.detail for f in out.findings)
+
+
+def test_rung_0_packs_entry_without_a_string_pack_name(tmp_path: Path) -> None:
+    _write_interview(tmp_path, packs=[{"pack": 5, "manifest": "packs/rv/pack.json"}])
+    out = suggest_prelude_action(tmp_path)
+    assert out.rung == 0
+    assert any("declares no string 'pack' name (got 5)" in f.detail for f in out.findings)
+    assert out.substrates.packs_opted_in == []
+
+
+def test_doctor_pre_empts_the_pack_repair(tmp_path: Path) -> None:
+    """Rung 0 MUST out-rank rung 1, and the ordering is load-bearing.
+
+    Mutation this test kills: move ``_rule_doctor`` below ``_rule_pack_optin``.
+    With a bound pack AND a malformed (dict-shaped) ``packs`` block, the mutant
+    answers "bound but not opted in — add the packs entry", which is actively
+    wrong: a ``packs`` block DOES exist, it is malformed, and following the advice
+    would author a duplicate. Deciding over unknown state must always lose to
+    reporting that the state is unknown.
+    """
+    _bind_pack(tmp_path, "rv")
+    _write_interview(tmp_path, packs={"rv": "packs/rv/pack.json"})  # a dict, not a list
+    out = suggest_prelude_action(tmp_path)
+    assert out.rung == 0
+    assert out.action == "doctor"
+    assert "add the packs entry" not in out.why
+    # BOTH facts are still disclosed — the pre-empted repair is never dropped.
+    details = " | ".join(f.detail for f in out.findings)
+    assert "'packs' opt-in block is not a list" in details
+    assert "has a current bind but no interview.json 'packs' entry" in details
 
 
 def test_rung_0_audited_source_naming_an_unparseable_module(tmp_path: Path) -> None:
