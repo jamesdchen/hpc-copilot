@@ -75,6 +75,19 @@ the ban risk. Failures are still recorded while overridden.
 Fail-open posture: a broken state dir / lock must never block SSH — every
 read/write error here degrades to "breaker inactive", loudly where useful.
 The breaker is a protection layer, not a correctness gate.
+
+Readiness feed (s2-readiness pillar 1): the two recorders below ALSO feed the
+DURABLE readiness ledger (:mod:`hpc_agent.state.readiness`), in the vocabulary
+``infra/readiness_sensors.py`` defines — a ``connect`` atom over the
+``effective`` route from the outcome they already classify, plus a ``preamble``
+atom when this module's own degradation classifier
+(:func:`is_preamble_degraded`) already holds that verdict. This adds NO network
+call and no probe: it harvests what the breaker learned anyway, which is the
+ledger's whole contract (the SENSING path is the sensor layer's, and it never
+runs from here). The feed is total-fail-open and coalesced (an unchanged atom
+under ``readiness.MIN_REWRITE_SEC`` writes nothing), so the hot success path
+stays one lock-free read; and it runs OUTSIDE this module's state lock so the
+two files are never held together.
 """
 
 from __future__ import annotations
@@ -1009,11 +1022,88 @@ def liveness_probe(
     return _probe
 
 
+def _elapsed_ms(started_monotonic: float) -> int:
+    """Whole milliseconds elapsed since *started_monotonic*, clamped at 0.
+
+    A duration, so it rides :func:`time.monotonic` — never the injectable wall
+    ``clock`` the breaker's deadlines use (a wall clock can step backwards and a
+    negative latency is not a thing that can be rendered or compared).
+    """
+    return max(0, int((time.monotonic() - started_monotonic) * 1000))
+
+
+#: Substrings that mark a recorded failure detail as a TIMEOUT rather than a
+#: refusal/reset, so the fed atom picks the right member of the sensor layer's
+#: verdict vocabulary. Both sources of the detail string are covered: the wrapper
+#: ``TimeoutError`` message ("ssh to … timed out after 60s: …") and the
+#: connection markers that are themselves timeouts
+#: (:data:`_CONNECTION_FAILURE_MARKERS`). No new classification is invented —
+#: this only READS evidence the breaker already recorded.
+_TIMEOUT_DETAIL_MARKERS: tuple[str, ...] = ("timed out", "timeout")
+
+
+def _readiness_failure_verdict(detail: str) -> str:
+    """``"timeout"`` or ``"down"`` for a recorded failure *detail*.
+
+    The sensor layer's vocabulary distinguishes the two because they have
+    different remediations (a hung tunnel vs a refused port), and the breaker's
+    own detail string already says which happened.
+    """
+    blob = detail.lower()
+    return "timeout" if any(m in blob for m in _TIMEOUT_DETAIL_MARKERS) else "down"
+
+
+def _feed_readiness(
+    host: str,
+    sensor: str,
+    verdict: str,
+    *,
+    now_epoch: float,
+    latency_ms: float | None = None,
+    detail: str = "",
+) -> None:
+    """Feed one atom to the durable readiness ledger — harvest only, never probe.
+
+    The ONE seam between the breaker and :mod:`hpc_agent.state.readiness`. It
+    passes on an outcome this module has ALREADY classified; it opens no
+    connection and measures nothing new (sensing belongs to
+    ``infra/readiness_sensors.py``, and nothing here calls it). Every atom is
+    recorded over the ``effective`` route — the breaker dials whatever ``ssh``
+    resolves, hops included — which is exactly the route axis that lets a
+    ``direct`` sensor reading later discriminate a dead ``ProxyJump`` from a dead
+    target.
+
+    *now_epoch* comes from the caller's injected ``clock`` so the feed is as
+    deterministic as the breaker itself.
+
+    Total fail-open: ``record_observation`` never raises, and this wrapper is
+    belt-and-braces on top of that. A readiness ledger that cannot be written
+    must never perturb the ban-risk protection path that feeds it.
+    """
+    try:
+        from hpc_agent.state import readiness
+
+        readiness.record_observation(
+            host,
+            sensor,
+            verdict,
+            source="ssh-circuit",
+            target=host,
+            route="effective",
+            latency_ms=latency_ms,
+            detail=detail,
+            now=datetime.fromtimestamp(now_epoch, tz=timezone.utc),
+        )
+    except Exception:  # noqa: BLE001 — the ledger is never a gate on SSH
+        return
+
+
 def record_connection_failure(
     ssh_target: str,
     *,
     detail: str = "",
     clock: Callable[[], float] = time.time,
+    latency_ms: int | None = None,
 ) -> None:
     """Record one connection-level failure; open / re-open the circuit as due.
 
@@ -1031,6 +1121,14 @@ def record_connection_failure(
     cooldown lane (:func:`_select_cooldown`) — a self-storm holds the short
     cycle-1 lane while it correlates. Disclosure only: the failure/verdict rules
     are untouched.
+
+    Readiness feed: this is a ``route.target = failed`` observation, plus a
+    ``preamble_class = failed`` one whenever the post-write doc already satisfies
+    :func:`is_preamble_degraded` (the run-13 livelock: probe-OK, preamble times
+    out — a verdict this function already computed for its own disclosure line).
+    Fed AFTER the state lock is released, so the breaker file and the readiness
+    file are never held together. *latency_ms* is the caller's own measured
+    attempt duration when it has one; it is never estimated here.
     """
     host = _host(ssh_target)
     if not host:
@@ -1040,6 +1138,8 @@ def record_connection_failure(
     cooldown = BASE_COOLDOWN_SEC
     failures = 0
     degradation = ""
+    now_epoch = clock()
+    preamble_degraded = False
     try:
         from hpc_agent.infra.io import advisory_flock, atomic_write_json
 
@@ -1081,9 +1181,30 @@ def record_connection_failure(
             if opened or reopened:
                 advice = degradation_advice(host, doc, now=now)
                 degradation = f" {advice}" if advice else ""
+            preamble_degraded = is_preamble_degraded(doc, now=now)
             atomic_write_json(path, doc)
     except OSError:
         return
+    # Readiness feed — outside the state lock, from verdicts already in hand.
+    _feed_readiness(
+        host,
+        "connect",
+        _readiness_failure_verdict(detail),
+        now_epoch=now_epoch,
+        latency_ms=latency_ms,
+        detail=detail,
+    )
+    if preamble_degraded:
+        # The run-13 livelock IS a timeout: the connection probe keeps closing
+        # the circuit while the process-spawning preamble hangs. Naming it
+        # ``down`` would claim a refusal nothing observed.
+        _feed_readiness(
+            host,
+            "preamble",
+            "timeout",
+            now_epoch=now_epoch,
+            detail=hanging_stage(_read_doc(path)) or "remote command preamble",
+        )
     if opened or reopened:
         verb = "re-OPENED (half-open probe failed)" if reopened else "OPENED"
         print(
@@ -1095,17 +1216,35 @@ def record_connection_failure(
         )
 
 
-def record_connection_success(ssh_target: str) -> None:
+def record_connection_success(
+    ssh_target: str,
+    *,
+    clock: Callable[[], float] = time.time,
+    latency_ms: int | None = None,
+) -> None:
     """Reset the breaker after a connection that reached the host.
 
     Hot-path cheap: a lock-free read decides whether anything needs to
     change; the (locked) write happens only when the counter is nonzero or
     the circuit is open — the steady healthy state costs one file read and
     zero lock traffic.
+
+    Readiness feed: this is a ``connect``/``effective`` = ``ok`` observation and
+    is fed FIRST, before every early return — the steady healthy state is exactly
+    the evidence the standing ledger exists to accumulate, and it is the case
+    that returns earliest here. The feed's own coalescing window
+    (``readiness.MIN_REWRITE_SEC``) keeps the added cost at one lock-free read
+    rather than a locked write, so the hot path stays a read-only path.
+
+    It deliberately feeds ONLY ``connect``, never ``auth``: this seam's SUCCESS
+    verdict folds "auth rejected but the host answered" into "reached the host"
+    (:class:`ConnectionOutcome`), so an ``auth`` atom fed from here would assert
+    something the evidence does not support.
     """
     host = _host(ssh_target)
     if not host:
         return
+    _feed_readiness(host, "connect", "ok", now_epoch=clock(), latency_ms=latency_ms)
     path = circuit_state_path(host)
     doc = _read_doc(path)
     if doc is None:
@@ -1198,18 +1337,35 @@ def guarded_call(
     check_circuit(ssh_target, clock=clock, probe_fn=probe_fn)
     ssh_pacing.pace_establishment(ssh_target, clock=clock, sleep=sleep)
     with ssh_slots.connection_slot(ssh_target, clock=clock, sleep=sleep):
+        # The attempt's own wall duration — the ONE thing this seam measures that
+        # the breaker itself does not use. It is a by-product of a call already
+        # being made (no probe, no extra connection) and is the ``latency_ms``
+        # the readiness ledger records; ``time.monotonic`` because a duration must
+        # not ride the injectable wall clock the breaker's deadlines use.
+        started = time.monotonic()
         try:
             cp = fn()
         except TimeoutError as exc:
-            record_connection_failure(ssh_target, detail=str(exc), clock=clock)
+            record_connection_failure(
+                ssh_target,
+                detail=str(exc),
+                clock=clock,
+                latency_ms=_elapsed_ms(started),
+            )
             raise
+        latency_ms = _elapsed_ms(started)
         outcome = classify_connection_outcome(cp)
         if outcome is ConnectionOutcome.FAILURE:
             marker = classify_connection_failure(cp) or "connection failure"
             stderr_snip = (cp.stderr or "").strip()[:200]
-            record_connection_failure(ssh_target, detail=f"{marker}: {stderr_snip}", clock=clock)
+            record_connection_failure(
+                ssh_target,
+                detail=f"{marker}: {stderr_snip}",
+                clock=clock,
+                latency_ms=latency_ms,
+            )
         elif outcome is ConnectionOutcome.SUCCESS:
-            record_connection_success(ssh_target)
+            record_connection_success(ssh_target, clock=clock, latency_ms=latency_ms)
         # INCONCLUSIVE (rc≠255 non-zero): not transport evidence either way —
         # a direct leg's remote-command status or a wrapper leg's (rsync, scp)
         # LOCAL status against an unreachable host. Record NEITHER: no failure
