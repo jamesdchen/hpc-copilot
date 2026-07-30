@@ -530,9 +530,13 @@ def _hook_entry_indices(entries: list[Any], needle: str) -> list[int]:
 def _find_hook_entry_index(entries: list[Any], needle: str) -> int | None:
     """The index of the FIRST entry matching *needle*, or ``None``.
 
-    The single-match view of :func:`_hook_entry_indices`, kept for the Stop
-    merge (which does its own list rebuild and so cannot carry a duplicate
-    through).
+    The single-match view of :func:`_hook_entry_indices`, kept for the READ-ONLY
+    capability probe (``ops/harness_capabilities._needle_installed``), which only
+    asks *whether* a needle is installed and so is indifferent to duplicates.
+
+    Both MERGE paths use :func:`_hook_entry_indices` instead and collapse to one
+    entry: a first-match-only merge reports a seeded duplicate as
+    ``already-present`` and leaves both copies live.
     """
     indices = _hook_entry_indices(entries, needle)
     return indices[0] if indices else None
@@ -728,12 +732,15 @@ def _merge_stop_multiplex_hook(
     never leave a duplicate Stop guard behind. Every other ``Stop`` entry (a
     user's own hook) and every other key is preserved verbatim.
 
-    Idempotent: with the fused entry already present byte-equal and no legacy left,
+    Idempotent: with EXACTLY ONE fused entry present byte-equal and no legacy left,
     it is ``already-present``. Self-healing: a stale fused entry (moved venv) is
     ``updated`` in place; a leftover legacy entry is removed and reported under
-    ``removed_legacy``.
+    ``removed_legacy``; and a DUPLICATED fused entry — not a legacy entry, so the
+    legacy sweep never touched it — is collapsed to one and counted under
+    ``removed_duplicates``.
 
-    Returns ``{settings_path, action, removed_legacy, wrote}`` where ``action`` is
+    Returns ``{settings_path, action, removed_legacy, removed_duplicates, wrote}``
+    where ``action`` is
     ``"added"`` (fused entry newly appended) / ``"updated"`` (healed in place or a
     legacy entry removed) / ``"already-present"`` / ``"skipped-unparseable"`` /
     ``"dry-run-would-add"`` / ``"dry-run-would-update"``, and ``removed_legacy``
@@ -759,25 +766,34 @@ def _merge_stop_multiplex_hook(
             }
         )
 
-        existing_idx = _find_hook_entry_index(kept, _STOP_MULTIPLEX_NEEDLE)
-        multiplex_present_equal = existing_idx is not None and kept[existing_idx] == entry
+        # Collapse to EXACTLY ONE fused entry, same discipline as
+        # :func:`_merge_hook_entry`. Matching only the FIRST fused entry left a
+        # seeded duplicate alive as ``already-present`` — two Stop dispatchers
+        # running every guard twice per turn, silently. The legacy-removal above
+        # never covered this: a DUPLICATED FUSED entry is not a legacy entry.
+        fused = _hook_entry_indices(kept, _STOP_MULTIPLEX_NEEDLE)
+        duplicate_positions = set(fused[1:])
+        multiplex_present_equal = len(fused) == 1 and kept[fused[0]] == entry
 
         if multiplex_present_equal and not removed:
-            return _MergeOutcome(False, settings, "", "", {}, {"removed_legacy": []})
+            return _MergeOutcome(
+                False, settings, "", "", {}, {"removed_legacy": [], "removed_duplicates": 0}
+            )
 
-        new_stop = list(kept)
-        if existing_idx is None:
+        new_stop: list[Any] = []
+        placed = False
+        for i, existing_entry in enumerate(kept):
+            if i in duplicate_positions:
+                continue
+            if fused and i == fused[0]:
+                new_stop.append(entry)
+                placed = True
+            else:
+                new_stop.append(existing_entry)
+        if not placed:
             new_stop.append(entry)
-            write_action = "added"
-            dryrun_action = "dry-run-would-add"
-        else:
-            new_stop[existing_idx] = entry
-            write_action = "updated"
-            dryrun_action = "dry-run-would-update"
-        # A removal-only change (fused entry already correct) is an update.
-        if multiplex_present_equal and removed:
-            write_action = "updated"
-            dryrun_action = "dry-run-would-update"
+        write_action = "updated" if fused else "added"
+        dryrun_action = "dry-run-would-update" if fused else "dry-run-would-add"
 
         hooks["Stop"] = new_stop
         settings["hooks"] = hooks
@@ -786,14 +802,14 @@ def _merge_stop_multiplex_hook(
             settings,
             write_action,
             dryrun_action,
-            {"removed_legacy": removed_needles},
-            {"removed_legacy": []},
+            {"removed_legacy": removed_needles, "removed_duplicates": len(duplicate_positions)},
+            {"removed_legacy": [], "removed_duplicates": 0},
         )
 
     return _merge_json(
         claude_dir / "settings.json",
         path_key="settings_path",
-        unparseable_extra={"removed_legacy": []},
+        unparseable_extra={"removed_legacy": [], "removed_duplicates": 0},
         plan=plan,
         dry_run=dry_run,
     )

@@ -125,6 +125,13 @@ class AuthorizationProbe:
     * ``reason`` — the failing leg when not authorized (the consent substrate's
       own vocabulary: ``no-consent`` / ``expired`` / ``spec-changed`` /
       ``boundary-not-consumable`` / …), or a short affirmative note when it is.
+      One reason is the PROBE's own, with no gate counterpart:
+      ``predecessor-evidence-not-visible-to-probe`` — the boundary IS
+      consumable behind clean-terminal evidence, but only the caller derives
+      that evidence, so this read-only probe must decline (see the
+      under-approximation note on :func:`probe_authorization`). It is
+      deliberately NOT reported as ``boundary-not-consumable``, which would
+      state the false claim that no consent can ever cover the boundary.
     * ``block`` / ``ts`` — the journaled record's own block name and timestamp,
       so a consumer can NAME the record it is forwarding rather than assert a
       conclusion of its own.
@@ -175,6 +182,7 @@ def probe_authorization(
     one audit line on a permission check the agent might never follow through.
     """
     from hpc_agent.ops.overnight import (
+        OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE,
         boundary_already_ledgered,
         consumed_spend,
         is_consumable_boundary,
@@ -199,10 +207,21 @@ def probe_authorization(
     cmd_sha = read_run_cmd_sha(experiment_dir, run_id)
     ledgered = boundary_already_ledgered(experiment_dir, scope_kind, sid, verb, cmd_sha)
     if not is_consumable_boundary(scope_kind, verb, clean_predecessor=ledgered):
+        # Name the ACTUAL state. A boundary no consent may ever auto-advance
+        # ("boundary-not-consumable") is a different fact from one that IS
+        # consumable behind clean-predecessor evidence this read-only probe
+        # cannot see (the caller derives it — see the under-approximation note
+        # above). Reporting the former for the latter would tell a human their
+        # overnight consent can never cover ``submit-s4``, which is false.
+        conditional = verb in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(scope_kind, frozenset())
         return AuthorizationProbe(
             authorized=False,
             basis="none",
-            reason="boundary-not-consumable",
+            reason=(
+                "predecessor-evidence-not-visible-to-probe"
+                if conditional
+                else "boundary-not-consumable"
+            ),
             block="",
             ts="",
             scope=scope,

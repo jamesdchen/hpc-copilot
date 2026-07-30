@@ -462,6 +462,37 @@ def test_legacy_three_standalone_stop_entries_migrate_to_one_multiplex(tmp_path:
     assert second["settings_stop_multiplex_hook"]["removed_legacy"] == []
 
 
+def test_duplicate_fused_stop_entries_are_collapsed(tmp_path: Path) -> None:
+    """A DUPLICATED fused Stop entry heals to one (the same 539c1cdc class).
+
+    The legacy sweep only removes pre-fusion STANDALONE guards, so a duplicated
+    FUSED entry slipped past it, and the merge matched only the first — which
+    was byte-equal, so the install reported ``already-present`` and left BOTH
+    copies live. Every Stop event then ran all three guards twice.
+    """
+    install_agent_assets(claude_dir=tmp_path)
+    settings_path = tmp_path / "settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    fused = settings["hooks"]["Stop"][0]
+    other = {"hooks": [{"type": "command", "command": "echo bye"}]}
+    settings["hooks"]["Stop"] = [fused, other, json.loads(json.dumps(fused))]
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_stop_multiplex_hook"]["removed_duplicates"] == 1
+
+    stop = _settings(tmp_path)["hooks"]["Stop"]
+    assert len(_entries_with_module(stop, _STOP_MODULE)) == 1
+    # A user's own Stop hook is preserved, and ours keeps the first position.
+    assert other in stop
+    assert stop.index(fused) < stop.index(other)
+
+    # …and the collapsed state is now a stable no-op.
+    again = install_agent_assets(claude_dir=tmp_path)
+    assert again["settings_stop_multiplex_hook"]["action"] == "already-present"
+    assert again["settings_stop_multiplex_hook"]["removed_duplicates"] == 0
+
+
 def test_stale_multiplex_command_is_healed_in_place(tmp_path: Path) -> None:
     """A fused entry from a moved venv (stale interpreter path) is updated in
     place, not duplicated."""

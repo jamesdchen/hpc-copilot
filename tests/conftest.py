@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -204,6 +205,66 @@ def _isolated_journal_home(tmp_path: Path) -> Iterator[None]:
             os.environ["HPC_JOURNAL_DIR"] = saved_env
         else:
             os.environ.pop("HPC_JOURNAL_DIR", None)
+
+
+@pytest.fixture(scope="session")
+def _claude_config_sandbox(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The session's stand-in for ``~/.claude`` — created OUTSIDE any test's tmp_path.
+
+    Deliberately NOT ``tmp_path / "..."``: a config dir nested inside the test's
+    own temp dir is visible to every test that ENUMERATES that dir, and two do
+    exactly that (``ops/test_dir_digest`` counts subdirectories;
+    ``execution/mapreduce/test_metrics_io`` asserts its dir is clean). An
+    isolation guard must not be observable by the code it isolates.
+    """
+    return tmp_path_factory.mktemp("claude_config_home")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_claude_config_dir(_claude_config_sandbox: Path) -> Iterator[None]:
+    """Redirect the harness CONFIG dir away from the real ``~/.claude`` for EVERY test.
+
+    The sibling of ``_isolated_journal_home`` on the OTHER axis. Everything that
+    resolves through :func:`hpc_agent.agent_assets.resolve_claude_dir` — the
+    installed ``settings.json``, the capability probe's read side, and
+    ``doctor``'s consent-forwarding-hook drift check — otherwise lands on the
+    DEVELOPER's real ``~/.claude``.
+
+    That makes verdicts depend on the workstation: ``doctor``'s envelope grows a
+    real alert whenever the developer's own install is mid-upgrade, so
+    ``assert out["alerts"] == []`` passes in clean CI and fails locally. Two
+    call sites already read the config dir from an un-isolated ``doctor()``
+    (``tests/ops/recover/*``, ``tests/ops/decision/test_overnight_self_heal.py``),
+    and any future one inherits the guard for free — which is the point of
+    putting it here rather than in one package's conftest.
+
+    Lowest precedence, setup-time, env-only, saved/restored by hand rather than
+    via ``monkeypatch`` — the same finalizer-order-neutrality rationale as
+    ``_hermetic_cluster_binaries`` and ``_default_native_ssh_engine`` below. A
+    test that exercises the resolver sets its own ``CLAUDE_CONFIG_DIR`` via
+    ``monkeypatch.setenv`` (``tests/cli/test_install_config_dir.py``,
+    ``tests/ops/test_harness_capabilities.py``), which lands after this fixture
+    and therefore wins for the test body.
+    """
+    saved = os.environ.get("CLAUDE_CONFIG_DIR")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(_claude_config_sandbox)
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = saved
+        # The sandbox is SESSION-scoped, so anything a test wrote into it would
+        # leak forward (a later test's `doctor` would see an installed harness).
+        # Nothing in-tree writes here — every test that installs sets its own
+        # CLAUDE_CONFIG_DIR — so this is a cheap scandir on an empty dir that
+        # keeps the guard true even if one ever does.
+        for leftover in _claude_config_sandbox.iterdir():
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+            else:
+                leftover.unlink(missing_ok=True)
 
 
 @pytest.fixture

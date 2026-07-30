@@ -60,6 +60,11 @@ to ``ask``:
 * unparseable stdin, or a payload that is not a JSON object → ``ask``;
 * a tool shape this hook cannot read (no ``tool_name``, no resolvable
   ``experiment_dir``, zero or ambiguous ``run_id``) → ``ask``;
+* a tool that is definitively NOT ours (no ``mcp__hpc-agent__`` prefix) → NO
+  decision. This is the one unknown that is not an ask: "not our call" is a
+  confident classification, not a failure to classify, and volunteering an
+  ``ask`` on another server's tools would be an overreach. Nothing is forwarded
+  on that path either way;
 * a missing, empty, or corrupt journal → ``ask`` (``read_decisions`` skips
   corrupt lines, so a corrupt greenlight simply is not found);
 * ANY exception anywhere in the decision path → ``ask``.
@@ -71,6 +76,25 @@ refusing a mis-sequenced verb is the GATE's job at execution
 (``ops/block_gate.assert_greenlit_or_consented``), where the refusal message can
 name the predecessor brief and remediate itself. A ``deny`` here would replace a
 self-remediating refusal with an opaque harness block.
+
+What this hook FORWARDS — and what it therefore relies on
+==========================================================
+
+This hook adds no trust: it forwards trust the journal already carries. That
+makes the JOURNAL's integrity the thing the ``allow`` rests on, and the journal
+is agent-writable — an agent with ``Write``/``Bash`` can append a greenlight
+record around ``append-decision``'s authorship gates rather than through them.
+The harness permission prompt this hook suppresses was, incidentally,
+defense-in-depth against exactly that: a human eyeball on the call even when a
+"greenlight" was on file. Suppressing it removes that incidental backstop for
+the gated verbs.
+
+Stated here deliberately, not fixed here: closing it means journal INTEGRITY
+(e.g. attestation-signed greenlights, or a tamper-evident record chain), which
+is a ruling about the journal's trust model, not a property of a permission
+hook. Note that this hook's own design already keeps the blast radius bounded —
+``append-decision`` (the verb that mints consent) and ``kill`` always ask, and
+the ``allow`` only ever covers a verb whose own gate re-reads the same record.
 
 The decision table
 ==================
@@ -123,10 +147,29 @@ __all__ = [
 #: ``append-decision`` commits consent; ``kill`` destroys work.
 ALWAYS_ASK_VERBS: frozenset[str] = frozenset({"append-decision", "kill"})
 
-#: The MCP tool-name prefix Claude Code gives a projected server's tools
-#: (``mcp__<server>__<verb>``). The verb is the LAST ``__``-separated segment,
-#: so a renamed server still resolves — the verb names are ours either way.
-_MCP_PREFIX = "mcp__"
+#: The EXACT MCP tool-name prefix Claude Code gives OUR projected server's tools
+#: (``mcp__hpc-agent__<verb>``). A tool name must carry this prefix verbatim
+#: before any consent is forwarded for it.
+#:
+#: Checking the server segment — not just ``mcp__`` + a trailing verb — is
+#: defense in depth. The installed matcher (``mcp__hpc-agent__.*``) already
+#: means only our server's tools reach this hook, but a hook that trusted the
+#: LAST ``__`` segment alone would forward hpc-agent's journal consent to
+#: ``mcp__evil-server__submit-s3`` if it were ever invoked by hand, by a
+#: broadened matcher, or by a future harness that routes differently. A
+#: permission surface must not depend on its own matcher for correctness.
+#:
+#: ONE DEFINITION: this is the profile's ``ToolClass.OWN_TOOLS`` matcher minus
+#: its trailing ``.*`` regex. It is restated here rather than imported because
+#: :mod:`hpc_agent.harness_profile` is deliberately unreadable from the trust
+#: path (``tests/contracts/test_harness_profile_boundary.py`` — no gate/verify/
+#: journal module may read the activation profile), and this hook decides
+#: permissions. The equality is a FIRED PIN instead:
+#: ``tests/_kernel/hooks/test_consent_forward.py::
+#: test_own_tool_prefix_matches_the_installed_matcher``, which derives the
+#: matcher from ``ClaudeCodeProfile.matcher_string(ToolClass.OWN_TOOLS)`` and
+#: goes red the moment the two drift.
+_OWN_TOOL_PREFIX = "mcp__hpc-agent__"
 
 _EVENT = "PreToolUse"
 
@@ -148,15 +191,18 @@ def verb_from_tool_name(tool_name: str) -> str | None:
     """The hpc-agent verb an MCP *tool_name* invokes, or ``None``.
 
     ``mcp__hpc-agent__submit-s2`` → ``submit-s2``. Returns ``None`` for anything
-    that is not an MCP tool name (a Bash call, a bare tool) — the caller then
-    emits no decision rather than guessing.
+    that is not a tool of OUR server — a Bash call, a bare tool, another
+    server's tool (``mcp__evil-server__submit-s3``), or a malformed name with an
+    empty server segment (``mcp____submit-s3``). The caller emits no decision in
+    that case, so a foreign tool that merely ENDS in one of our verb names can
+    never collect hpc-agent's journaled consent.
     """
-    if not isinstance(tool_name, str) or not tool_name.startswith(_MCP_PREFIX):
+    if not isinstance(tool_name, str) or not tool_name.startswith(_OWN_TOOL_PREFIX):
         return None
-    parts = tool_name.split("__")
-    if len(parts) < 3:
-        return None
-    return parts[-1] or None
+    verb = tool_name[len(_OWN_TOOL_PREFIX) :]
+    # A verb segment must be a single leaf: no further ``__`` nesting, which
+    # would mean the name was not shaped by our server's projection.
+    return verb if verb and "__" not in verb else None
 
 
 def _ask(reason: str) -> dict[str, Any]:
@@ -222,15 +268,26 @@ def _experiment_dir(payload: dict[str, Any], tool_input: dict[str, Any]) -> str 
 def _decide(payload: dict[str, Any]) -> dict[str, Any] | None:
     """The decision core (no exception handling — see :func:`build_hook_output`)."""
     tool_name = payload.get("tool_name")
-    verb = verb_from_tool_name(tool_name if isinstance(tool_name, str) else "")
-    if verb is None:
-        # Not an MCP tool call we can read a verb from. The matcher should not
-        # have routed it here at all; an unknown shape asks (never allows).
+    if not isinstance(tool_name, str) or not tool_name:
+        # We cannot even tell WHICH call this is. That is an unreadable payload,
+        # not a foreign tool, so it takes the fail-closed branch.
         return _ask(
-            "consent-forward: this hook could not read an hpc-agent verb from "
-            f"tool_name={tool_name!r}. Failing CLOSED to the normal prompt — a hook "
-            "that cannot identify the call must never authorize it."
+            "consent-forward: the payload carries no readable tool_name "
+            f"({tool_name!r}), so the call cannot be identified. Failing CLOSED to "
+            "the normal prompt — a hook that cannot identify a call must never "
+            "authorize it."
         )
+    verb = verb_from_tool_name(tool_name)
+    if verb is None:
+        # A tool that is definitively NOT ours (a Bash call, another MCP
+        # server's tool, a malformed name). No opinion: emitting nothing leaves
+        # the harness's own permission flow untouched. Asking here would be an
+        # overreach — this hook has no standing over another server's tools, and
+        # a hook that volunteered "ask" on every foreign call would inject
+        # itself into permission flows it knows nothing about. It is not a
+        # weakening either: no journaled consent is ever forwarded on this path,
+        # which is the only thing this hook could get wrong.
+        return None
 
     if verb in ALWAYS_ASK_VERBS:
         why = (
@@ -287,6 +344,19 @@ def _decide(payload: dict[str, Any]) -> dict[str, Any] | None:
             "re-reads the SAME record at execution, so this is a disclosure of an "
             "existing decision, not a new grant."
         )
+    if probe.reason == "predecessor-evidence-not-visible-to-probe":
+        # Honest about WHICH refusal this is: not "your consent can never cover
+        # this boundary" but "this read-only probe cannot see the clean-terminal
+        # evidence the gate would accept", so the gate may well pass on the call
+        # the human is about to approve.
+        return _ask(
+            f"consent-forward: `{verb}` is auto-advanceable under a standing consent "
+            "ONLY behind evidence that its predecessor finished clean, and that "
+            "evidence is derived at execution — this pre-flight probe cannot see it. "
+            "Not a refusal: the verb's own gate may still pass. Asking because "
+            "forwarding consent this hook cannot verify is the one thing it must "
+            "never do."
+        )
     return _ask(
         f"consent-forward: no journaled greenlight or live standing consent covers "
         f"`{verb}` for {probe.scope} (failing leg: {probe.reason}). The human has not "
@@ -336,11 +406,24 @@ def main() -> int:
         raw = ""
     try:
         payload: Any = json.loads(raw or "{}")
-    except (json.JSONDecodeError, ValueError):
-        payload = None  # not a dict → build_hook_output asks
-    output = build_hook_output(payload)
+    except Exception:  # noqa: BLE001 — see below; NOT just JSONDecodeError/ValueError
+        # A deeply-nested payload makes ``json.loads`` itself raise
+        # RecursionError, which is neither of those — it escaped as a traceback
+        # and a non-zero exit, contradicting both "unparseable stdin still emits
+        # ask" and "always exits 0". Any parse failure whatsoever is now an ask.
+        payload = None
+    try:
+        output = build_hook_output(payload)
+    except Exception:  # noqa: BLE001 — build_hook_output is total; belt and braces
+        output = _ask(
+            "consent-forward: the decision path failed unexpectedly. Failing CLOSED "
+            "to the normal prompt."
+        )
     if output is not None:
-        sys.stdout.write(json.dumps(output))
+        try:
+            sys.stdout.write(json.dumps(output))
+        except Exception:  # noqa: BLE001 — an unwritable stdout is still not an allow
+            return 0
     return 0
 
 

@@ -187,12 +187,43 @@ def test_consent_that_died_on_spec_change_asks(experiment_dir: Path) -> None:
 
 
 def test_consent_never_carries_a_boundary_it_does_not_name(experiment_dir: Path) -> None:
-    """A live run consent covers submit-s3 only — submit-s2 still asks."""
+    """A live run consent covers submit-s3 only — submit-s2 still asks.
+
+    ``submit-s2`` is consumable under NO consent, so the flat refusal is the
+    honest one.
+    """
     _sidecar(experiment_dir)
     _consent(experiment_dir)
     out = hook.build_hook_output(_payload("submit-s2", experiment_dir))
     assert _decision(out) == "ask"
     assert "boundary-not-consumable" in _reason(out)
+
+
+@pytest.mark.parametrize("verb", ["submit-s4", "aggregate-run"])
+def test_conditionally_consumable_boundary_names_the_real_state(
+    experiment_dir: Path, verb: str
+) -> None:
+    """A clean-terminal-conditional boundary must NOT be called un-consumable.
+
+    ``submit-s4`` / ``aggregate-run`` DO auto-advance under a standing consent —
+    behind clean-predecessor evidence the caller derives and this read-only
+    probe cannot see. Reporting them as ``boundary-not-consumable`` would tell
+    the human their overnight consent can never cover the harvest, which is
+    false; the ask must say the evidence is invisible HERE, not absent.
+    """
+    from hpc_agent.ops.block_gate import probe_authorization
+
+    _sidecar(experiment_dir)
+    _consent(experiment_dir)
+
+    probe = probe_authorization(experiment_dir, run_id=_RUN_ID, verb=verb)
+    assert probe.authorized is False
+    assert probe.reason == "predecessor-evidence-not-visible-to-probe"
+
+    reason = _reason(hook.build_hook_output(_payload(verb, experiment_dir)))
+    assert "predecessor finished clean" in reason
+    assert "Not a refusal" in reason
+    assert "boundary-not-consumable" not in reason
 
 
 def test_the_probe_never_ledgers_a_consumption(experiment_dir: Path) -> None:
@@ -297,14 +328,25 @@ def test_hook_never_emits_deny(experiment_dir: Path) -> None:
         [],
         {},
         {"tool_name": None},
-        {"tool_name": "Bash", "tool_input": {"command": "hpc-agent submit-s2"}},
+        {"tool_name": ""},
+        {"tool_name": 42},
         {"tool_name": "mcp__hpc-agent__submit-s2"},  # no tool_input at all
         {"tool_name": "mcp__hpc-agent__submit-s2", "tool_input": "junk"},
     ],
 )
 def test_unknown_shapes_fail_closed_to_ask(payload: Any) -> None:
-    """Every unreadable shape asks — a dead hook must never mean a silent allow."""
+    """Every UNREADABLE shape asks — a dead hook must never mean a silent allow."""
     assert _decision(hook.build_hook_output(payload)) == "ask"
+
+
+def test_a_non_mcp_tool_gets_no_decision() -> None:
+    """A Bash call is not unreadable — it is confidently NOT ours, so: no opinion.
+
+    Bash is not matched by the installed hook, and if it ever were, injecting an
+    ``ask`` into every shell call would be an overreach rather than a safeguard.
+    """
+    payload = {"tool_name": "Bash", "tool_input": {"command": "hpc-agent submit-s2 --spec s"}}
+    assert hook.build_hook_output(payload) is None
 
 
 def test_missing_run_id_asks(experiment_dir: Path) -> None:
@@ -382,7 +424,7 @@ def test_main_emits_the_allow_envelope_on_stdout(
     assert emitted["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-@pytest.mark.parametrize("raw", ["", "{not json", "null", "[]"])
+@pytest.mark.parametrize("raw", ["", "{not json", "null", "[]", '{"tool_input": }'])
 def test_malformed_stdin_emits_ask(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], raw: str
 ) -> None:
@@ -393,9 +435,76 @@ def test_malformed_stdin_emits_ask(
     assert emitted["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
+def test_deeply_nested_payload_emits_ask_and_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A ~20k-deep payload makes ``json.loads`` raise RecursionError — still ask.
+
+    RecursionError is neither ``JSONDecodeError`` nor ``ValueError``, so a
+    narrower catch let it escape as a traceback and a non-zero exit: the outcome
+    was still a prompt (the harness ignores a crashed hook), but the module's
+    two stated guarantees — "unparseable stdin still emits ask" and "always
+    exits 0" — were both false, and a fail-CLOSED hook whose docstring lies
+    about its failure mode is the kind of guard nobody re-checks.
+    """
+    depth = 20_000
+    raw = ('{"a":' * depth) + "1" + ("}" * depth)
+    monkeypatch.setattr("sys.stdin", io.StringIO(raw))
+
+    assert hook.main() == 0
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
 def test_verb_from_tool_name_shapes() -> None:
     assert hook.verb_from_tool_name("mcp__hpc-agent__submit-s2") == "submit-s2"
-    # A renamed server still resolves — the verb names are ours either way.
-    assert hook.verb_from_tool_name("mcp__my-hpc__aggregate-run") == "aggregate-run"
-    for bad in ("Bash", "", "mcp__hpc-agent", "mcp__hpc-agent__"):
+    for bad in ("Bash", "", "mcp__hpc-agent", "mcp__hpc-agent__", "mcp__"):
         assert hook.verb_from_tool_name(bad) is None
+
+
+@pytest.mark.parametrize(
+    "spoof",
+    [
+        "mcp__evil-server__submit-s3",  # another server, our verb name
+        "mcp____submit-s3",  # empty server segment
+        "mcp__hpc-agent-evil__submit-s3",  # prefix-adjacent server name
+        "mcp__hpc-agent__nested__submit-s3",  # extra __ nesting
+    ],
+)
+def test_a_foreign_server_never_collects_our_consent(experiment_dir: Path, spoof: str) -> None:
+    """Only OUR server's tools may be forwarded consent (defense in depth).
+
+    Unreachable under the installed matcher (``mcp__hpc-agent__.*``), which is
+    exactly why it is pinned: a permission surface must not depend on its own
+    matcher for correctness. A hook that took the last ``__`` segment would hand
+    hpc-agent's journaled greenlight to any tool whose name merely ENDS in one
+    of our verbs.
+    """
+    _greenlight(experiment_dir, "submit-s3")  # a REAL, live greenlight on file
+    assert hook.verb_from_tool_name(spoof) is None
+
+    payload = {
+        "tool_name": spoof,
+        "tool_input": {
+            "experiment_dir": str(experiment_dir),
+            "spec": {"submit": {"submit": {"run_id": _RUN_ID}}},
+        },
+    }
+    # NO decision at all: never an allow (the thing that matters), and never a
+    # claim of authority over a tool that is not ours.
+    assert hook.build_hook_output(payload) is None
+
+
+def test_own_tool_prefix_matches_the_installed_matcher() -> None:
+    """ONE DEFINITION, enforced: the prefix IS the profile's rendered matcher.
+
+    The hook restates the prefix rather than importing
+    :mod:`hpc_agent.harness_profile` (which the trust path may not read — see
+    ``tests/contracts/test_harness_profile_boundary.py``), so the equality is
+    pinned HERE. If the profile's ``OWN_TOOLS`` matcher ever changes, this goes
+    red rather than the hook silently checking a prefix nothing installs.
+    """
+    from hpc_agent.harness_profile import ClaudeCodeProfile, ToolClass
+
+    matcher = ClaudeCodeProfile.matcher_string(ToolClass.OWN_TOOLS)
+    assert matcher == f"{hook._OWN_TOOL_PREFIX}.*"
