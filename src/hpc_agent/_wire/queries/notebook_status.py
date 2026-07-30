@@ -53,6 +53,22 @@ class NotebookStatusSpec(BaseModel):
             "the REQUIRED inventory the rollup verdict is computed over."
         ),
     )
+    review: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "OPAQUE render pointers chained from the `notebook-audit-view` span "
+            "that ran immediately before this one in the `audit` block chain "
+            "(`{view_sha, sections: [{slug, view_sha, render_path}]}`), composed "
+            "in code by `block_chain`, never authored by a caller worth trusting. "
+            "PURE DISCLOSURE: it is copied into the sign-off park's brief so the "
+            "human is pointed at the exact renders they would be signing, and it "
+            "feeds NOTHING else — not `passed`, not a status, not a sha this verb "
+            "computes. The T8 sign-off gate independently recomputes `view_sha` "
+            "and re-checks the render file, so a stale or forged pointer here can "
+            "only mis-address a human's reading, never satisfy a gate. Absent "
+            "(the default, and every standalone call) → byte-identical."
+        ),
+    )
 
 
 class NotebookSectionStatus(BaseModel):
@@ -186,5 +202,18 @@ class NotebookStatusResult(BaseModel):
             "— or null at the sign-off park / when the caller supplied no "
             "`source`/`template` seat. On a PASS it names `audit-handoff`, the "
             "audit→onboard seam."
+        ),
+    )
+    brief: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The code-digested evidence the SIGN-OFF RENDEZVOUS is decided on — "
+            "what the driver parks with at `sections_pending`. Names each section "
+            "still owed a human review, its current sha, and (when the chain "
+            "carried them from the view span) the content-addressed render the "
+            "human should read before signing, plus the copy-ready sign line. "
+            "Empty on a PASS: nothing is being asked. This is DISCLOSURE composed "
+            "from this verb's own reduction — the T8 gate is unchanged and still "
+            "recomputes everything it locks on."
         ),
     )

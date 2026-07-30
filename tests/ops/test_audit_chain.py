@@ -482,15 +482,149 @@ def test_end_to_end_stops_at_the_agent_park_when_no_draft_exists(
     assert "draft_ask" in brief
 
 
+# ── the two HUMAN parks, driven THROUGH block-drive ───────────────────────────
+#
+# Calling the ops directly (above) proves the terminators; it does NOT prove the
+# human ever SEES them. The driver kept a brief only when it was a dict, and the
+# audit family renders its brief as markdown TEXT (audit-preflight) or computes
+# one only at the rendezvous (notebook-status) — so both human parks reached the
+# human carrying `brief: None`: the NO-GO park silently dropped its blockers and
+# their pre-drafted remedies, and the sign-off park asked for a signature on a
+# view the chain had built one hop earlier and thrown away. These two tests drive
+# the REAL tick and assert on what comes back out of it.
+
+
+def test_no_go_park_carries_the_preflight_brief_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The NO-GO park hands the human the blockers AND their pre-drafted remedies.
+
+    A decision brief whose whole content is "NO-GO" is not decision-ready — the
+    remedies are the reason the verb exists. The preflight renders them as
+    markdown for verbatim relay, so the driver must carry that text through
+    rather than drop it for not being a dict.
+    """
+    source, template = _seed_audit(tmp_path)
+    # Dirty the committed template: an uncommitted template is an "unsigned
+    # template" NO-GO with a remedy the brief pre-drafts.
+    (tmp_path / template).write_text(_TEMPLATE + "\n# %%\n# hpc-audit-section: extra\nz = 3\n")
+    result = _drive(
+        tmp_path,
+        monkeypatch,
+        audit_id=_AUDIT_ID,
+        source=source,
+        template=template,
+        source_roots=[],
+        input_roots=[],
+    )
+    assert result.action == "awaiting_decision"
+    assert result.stage_reached == "preflight_blocked"
+    assert result.brief is not None, "the NO-GO park reached the human with no brief at all"
+    text = result.brief["text"]
+    # VERBATIM: the code-rendered brief, not a driver paraphrase of it.
+    assert text.startswith("# audit-preflight — NO-GO")
+    assert "remedy:" in text, "the park dropped the pre-drafted remedies"
+    # Bound to the verb's OWN remedy constant, so a reworded remedy updates in
+    # one place instead of leaving a stale literal here that still "passes".
+    from hpc_agent.ops.audit_preflight import _UNSIGNED_REMEDY
+
+    assert _UNSIGNED_REMEDY in text
+    # And it is a HUMAN park — the consent affordances the agent branch suppresses
+    # are present here, so the suppression is genuinely actor-scoped.
+    assert "draft_ask" not in result.brief
+
+
+def test_signoff_park_carries_the_renders_the_human_must_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sign-off park names each pending section AND the render addressed to it.
+
+    The chain writes the content-addressed trusted-display renders in the
+    ``notebook-audit-view`` span; the sign-off rendezvous is one hop later and its
+    own verb computes none. Without the pointers threaded forward, the human is
+    asked to sign a view they have no way to reach — which is precisely the
+    "a link is not a relay" failure inverted.
+    """
+    source, template = _seed_audit(tmp_path)
+    # Modify one section so it becomes human_required (a byte-identical source
+    # auto-clears entirely and the chain would run straight to passed).
+    (tmp_path / source).write_text(
+        _TEMPLATE.replace("y = 2", "y = 2 + 40  # a change only a human may clear"),
+        encoding="utf-8",
+    )
+    result = _drive(
+        tmp_path,
+        monkeypatch,
+        audit_id=_AUDIT_ID,
+        source=source,
+        template=template,
+        source_roots=[],
+        input_roots=[],
+    )
+    assert result.action == "awaiting_decision"
+    assert result.current_verb == "notebook-status"
+    assert result.stage_reached == "sections_pending"
+    assert result.brief is not None, "the sign-off park reached the human with no brief at all"
+
+    pending = result.brief["pending_sections"]
+    assert pending, "the park named no pending section"
+    changed = next(item for item in pending if item["slug"] == "compute")
+    # The pointer the human needs, and the file it addresses must actually exist.
+    assert "render_path" in changed, "the sign-off park carried no render pointer"
+    assert (tmp_path / changed["render_path"]).is_file()
+    assert changed["view_sha12"] and changed["view_sha12"] in changed["render_path"]
+    # The bar is NOT restated here — it has exactly one renderer (the view's
+    # next-actions footer), and a second copy is how it drifted before.
+    assert "append-decision" in result.brief["sign_via"]
+    assert "notebook-sign-off" in result.brief["sign_via"]
+    # A sign-off is never a chained successor: no verb may stand in for the human.
+    assert result.next_verb is None
+
+
+def test_signoff_brief_is_empty_on_a_pass(tmp_path: Path) -> None:
+    """Nothing is being asked on a PASS, so the brief asserts nothing."""
+    source, template = _seed_audit(tmp_path)
+    from hpc_agent._wire.actions.notebook_auto_clear import NotebookAutoClearSpec
+    from hpc_agent.ops.notebook.auto_clear_op import notebook_auto_clear
+
+    notebook_auto_clear(
+        experiment_dir=tmp_path,
+        spec=NotebookAutoClearSpec(audit_id=_AUDIT_ID, source=source, template=template),
+    )
+    result = notebook_status(
+        experiment_dir=tmp_path,
+        spec=NotebookStatusSpec(audit_id=_AUDIT_ID, source=source, template=template),
+    )
+    assert result.passed is True
+    assert result.brief == {}
+
+
+def test_status_brief_is_absent_without_the_chain_and_says_so(tmp_path: Path) -> None:
+    """A standalone status still briefs the human — and is HONEST about the gap.
+
+    Called outside the chain there are no render pointers to carry, so the brief
+    names the pending sections but says plainly that no renders were carried,
+    rather than emitting a plausible-looking path nobody wrote.
+    """
+    source, template = _seed_audit(tmp_path)
+    result = notebook_status(
+        experiment_dir=tmp_path,
+        spec=NotebookStatusSpec(audit_id=_AUDIT_ID, source=source, template=template),
+    )
+    assert result.brief["pending_sections"]
+    assert all("render_path" not in item for item in result.brief["pending_sections"])
+    assert "no render pointers" in result.brief["renders"]
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
         "REGEN DEBT, declared in docs/internals/regen-debt-ledger.md: the CLI "
-        "--spec seam pre-validates against the CHECKED-IN JSON schemas, and the 8 "
+        "--spec seam pre-validates against the CHECKED-IN JSON schemas, and the 9 "
         "schema files this wave moved are deliberately not rebaked on this branch "
         "(regen runs serially, once, at integration). Strict on purpose — the "
-        "moment `build_schemas --write` runs, this XPASSes and turns hard-red, "
-        "which is the prompt to delete the marker and the ledger row together."
+        "moment `regen_all --write` runs, this XPASSes and turns hard-red, which "
+        "is the prompt to delete the marker and the ledger row together."
     ),
 )
 def test_end_to_end_through_the_real_cli_spec_seam(

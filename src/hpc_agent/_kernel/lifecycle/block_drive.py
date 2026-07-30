@@ -663,6 +663,38 @@ def _next_verb_of(result: dict[str, Any]) -> str | None:
     return None
 
 
+def _brief_dict(value: Any) -> dict[str, Any] | None:
+    """Coerce a block Result's ``brief`` into a mapping, or ``None`` if there is none.
+
+    Most block families carry a STRUCTURED brief (a dict of code-digested
+    evidence). The audit family instead renders its brief as MARKDOWN TEXT for
+    verbatim relay — a legitimate second shape, but every consumer in the driver
+    tested ``isinstance(..., dict)`` and silently dropped it, so an audit park
+    reached the human carrying nothing at all.
+
+    The rendered text is preserved VERBATIM under ``text`` — never summarized,
+    never truncated, never parsed. A dict passes through unchanged (so every
+    pre-existing family is byte-identical), and anything else is ``None``.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        return {"text": value}
+    return None
+
+
+def _normalize_result_brief(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize *result*'s ``brief`` to a mapping IN PLACE; return it.
+
+    Called once per span in :func:`_chain` so the park's disclosure composition
+    and the returned :class:`BlockDriveResult` read the same normalized shape.
+    """
+    brief = _brief_dict(result.get("brief"))
+    if brief is not None:
+        result["brief"] = brief
+    return brief
+
+
 def _next_spec_hint(result: dict[str, Any]) -> dict[str, Any]:
     """The minimal next-spec skeleton the block attached to its ``next_block``."""
     nb = result.get("next_block")
@@ -1561,6 +1593,15 @@ def _chain(
 
         first_span = False
         last_result = result
+        # A block whose brief is code-rendered MARKDOWN TEXT rather than a
+        # structured dict (the audit family relays its brief verbatim) is
+        # normalized ONCE, here, so every downstream reader — the park's
+        # disclosure composition AND the BlockDriveResult the caller returns —
+        # sees a mapping. Without it a string brief silently became ``None`` at
+        # every one of those sites: the NO-GO park dropped its blockers and their
+        # pre-drafted remedies, and the human was asked to decide on nothing. A
+        # dict brief is untouched, so every pre-existing family is byte-identical.
+        _normalize_result_brief(result)
         stage = result.get("stage_reached")
         successor = _next_verb_of(result)
 
@@ -2204,12 +2245,7 @@ def _attach_draft_ask(result: dict[str, Any], *, verb: str, stage: Any, run_id: 
     draft_ask = compose_draft_ask(block=verb, stage=str(stage), run_id=run_id)
     if draft_ask is None:
         return
-    brief = result.get("brief")
-    if isinstance(brief, str) and brief:
-        brief = {"text": brief}
-    elif not isinstance(brief, dict):
-        brief = {}
-    result["brief"] = {**brief, "draft_ask": draft_ask}
+    result["brief"] = {**(_brief_dict(result.get("brief")) or {}), "draft_ask": draft_ask}
 
 
 def park(
@@ -2295,7 +2331,11 @@ def park(
     if materialized.sha is not None:
         # Row 16: sha-stamped at park; consumption (R3) recomputes + refuses on drift.
         resume_cursor["next_spec_sha"] = materialized.sha
-    brief = result.get("brief")
+    # Normalized (a markdown-text brief becomes ``{"text": ...}``) so a block that
+    # renders its brief for verbatim relay still gets every disclosure below AND
+    # still reaches the human — ``_chain`` normalizes too, but ``park`` is called
+    # directly (tests, future drivers) and must not depend on that.
+    brief = _normalize_result_brief(result)
     # Disclose the materialized successor spec in the brief the human/agent reads
     # (run-14 #4: "the brief carries it") — a driver-copy disclosure only, NEVER
     # written into the persisted decision-brief (like ``relay``), so it cannot

@@ -76,12 +76,32 @@ def _mint_record(experiment_dir: Path, run_id: str = _RUN_ID) -> None:
     )
 
 
+def _park_agent_brief() -> dict[str, Any]:
+    """The agent park's fixture brief — deliberately menu-RENDERABLE.
+
+    The ``recommendation`` is the load-bearing part. Without it,
+    ``compose_answer_menu`` returns ``None`` for this boundary anyway (no
+    greenlight target ⇒ no ``y`` line, no structured recommendation ⇒ no options
+    at all), so "no answer menu was composed" would hold whether or not the
+    ``actor != "agent"`` guard existed — and the suppression assertions would
+    pass against a driver that happily composed consent affordances for agent
+    parks. A structured recommendation is the ONE input that makes the composer
+    render a menu at a target-less boundary, so it is what gives the guard
+    something to actually prevent.
+    """
+    return {
+        "verdict": "GO",
+        "source_present": False,
+        "recommendation": {"action": "draft-the-source", "then": "notebook-lint"},
+    }
+
+
 def _park_agent(experiment_dir: Path, *, spec: dict[str, Any] | None = None) -> dict[str, Any]:
     """Park the agent boundary and return the driver's copy of the result brief."""
     result: dict[str, Any] = {
         "stage_reached": _AGENT_STAGE,
         "needs_decision": True,
-        "brief": {"verdict": "GO", "source_present": False},
+        "brief": _park_agent_brief(),
     }
     park(
         experiment_dir,
@@ -138,8 +158,31 @@ def test_agent_park_resolves_no_greenlight_target() -> None:
     assert greenlight_target(_AGENT_VERB, None, stage="preflight_blocked") == "notebook-lint"
 
 
+def test_the_fixture_brief_would_render_a_menu_without_the_guard() -> None:
+    """Guard-the-guard: prove the suppression under test is not vacuous.
+
+    ``test_agent_park_composes_no_consent_affordances`` only means something if
+    the composer WOULD have produced a menu here. Call it directly on the same
+    brief the agent-park fixture uses: it must return a real menu with a
+    pasteable line. That is exactly what the ``actor != "agent"`` branch in
+    ``park`` prevents from reaching the LLM.
+    """
+    from hpc_agent._kernel.lifecycle.answer_menu import compose_answer_menu
+
+    menu = compose_answer_menu(
+        brief=_park_agent_brief(), block=_AGENT_VERB, run_id=_RUN_ID, target=None
+    )
+    assert menu is not None, "the fixture brief renders no menu — the suppression test is vacuous"
+    assert menu["options"][0]["paste"] == "draft-the-source, then notebook-lint"
+
+
 def test_agent_park_composes_no_consent_affordances(tmp_path: Path) -> None:
-    """Leg 2: none of the four consent affordances rides an agent park's brief."""
+    """Leg 2: none of the four consent affordances rides an agent park's brief.
+
+    Load-bearing because the composer demonstrably WOULD render a menu for this
+    brief (the guard-the-guard test above): the absence below is the driver
+    suppressing it, not the composer declining.
+    """
     _mint_record(tmp_path)
     result = _park_agent(tmp_path)
     brief = result["brief"]

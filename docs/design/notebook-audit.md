@@ -303,8 +303,26 @@ Deviations from the plan above, each with its recorded reason:
   unaffected — nothing here moves where the sign-off utterance travels.
 
   Enforcement: the agent-park invariant is pinned by the row added to
-  `docs/internals/principles/determinism-boundary.md`. Regen debt (8 schema
-  files) is declared in `docs/internals/regen-debt-ledger.md`, not paid here.
+  `docs/internals/principles/determinism-boundary.md`. Regen debt (9 schema
+  files + the principles index, which that new row moved) is declared in
+  `docs/internals/regen-debt-ledger.md`, not paid here.
+
+  **Follow-up (same day, adversarial-verification findings).** Two gaps the
+  first pass left, both now closed. (1) BOTH human parks on this chain returned
+  `brief: None`: the driver kept a brief only when it was a `dict`, and this
+  family renders its brief as markdown TEXT (`audit-preflight`) or computed none
+  at all (`notebook-status`) — so the NO-GO park dropped its blockers and their
+  pre-drafted remedies, and the sign-off park asked for a signature on a view
+  the chain had built one hop earlier and discarded. The driver now normalizes a
+  string brief to `{"text": …}` once per span (verbatim, never summarized), and
+  `notebook-status` composes a sign-off brief naming each pending section plus
+  the render the human must read — threaded forward from the view span through
+  an opaque, disclosure-only `review` field. The bar itself is NOT restated
+  there: the audit view's next-actions footer stays its one renderer. (2) The
+  agent park's consent suppression had no test that could fire (the fixture
+  brief carried no `recommendation`, so the menu composer returned `None`
+  regardless); the fixture now renders a menu, and a guard-the-guard test proves
+  it, so removing the `actor != "agent"` branch turns the battery red.
 
 - **`notebook-auto-clear` is a NEW mutate verb the plan lacked.** D-attention
   says auto-cleared sections are "journaled as auto_cleared" but no planned

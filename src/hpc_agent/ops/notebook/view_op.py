@@ -207,6 +207,18 @@ def _to_result(
             audit_id=audit_id,
             source=source,
             template=template,
+            # Carry the RENDER POINTERS forward. The sign-off rendezvous is two
+            # hops away and its own verb computes no renders, so without this
+            # the chain would build the content-addressed renders the human is
+            # meant to READ and then discard the only pointers to them.
+            # Disclosure only — the T8 gate recomputes every sha it locks on.
+            review={
+                "view_sha": view.view_sha,
+                "sections": [
+                    {"slug": s.slug, "view_sha": s.view_sha, "render_path": s.render_path}
+                    for s in sections
+                ],
+            },
         )
         if (source and template)
         else None

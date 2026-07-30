@@ -714,8 +714,8 @@ def _compose_notebook_lint_spec(
     return composed
 
 
-def _compose_audit_seat_only_spec(successor: str) -> Any:
-    """A composer emitting EXACTLY the ``(audit_id, source, template)`` seat.
+def _compose_audit_seat_only_spec(successor: str, *, carry: tuple[str, ...] = ()) -> Any:
+    """A composer emitting the ``(audit_id, source, template)`` seat, plus *carry*.
 
     The shape ``notebook-auto-clear`` / ``notebook-audit-view`` / ``notebook-status``
     / ``audit-handoff`` all take. Passing roots to any of them would be WRONG, not
@@ -723,13 +723,28 @@ def _compose_audit_seat_only_spec(successor: str) -> Any:
     laundering guard) and the view treats explicit roots as a PREVIEW override
     whose ``view_sha`` the T8 sign-off gate then refuses. So the composer drops
     them — the recorded config is the one declaration each reads.
+
+    *carry* names the OPTIONAL extra fields a successor accepts as a chained
+    product of its predecessor (``notebook-status.review`` — the view span's
+    render pointers, so the sign-off park can point the human at the exact
+    renders they would be signing). Carried only when present, so a hop composed
+    without them is byte-identical.
     """
 
     def _compose(
         spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
     ) -> dict[str, Any]:
         audit_id, source, template = _audit_seat(successor, spec_hint)
-        return {"audit_id": audit_id, "source": source, "template": template}
+        composed: dict[str, Any] = {
+            "audit_id": audit_id,
+            "source": source,
+            "template": template,
+        }
+        for field in carry:
+            value = spec_hint.get(field)
+            if value is not None:
+                composed[field] = value
+        return composed
 
     return _compose
 
@@ -738,7 +753,10 @@ _AUDIT_SPEC_COMPOSERS: dict[str, Any] = {
     "notebook-lint": _compose_notebook_lint_spec,
     "notebook-auto-clear": _compose_audit_seat_only_spec("notebook-auto-clear"),
     "notebook-audit-view": _compose_audit_seat_only_spec("notebook-audit-view"),
-    "notebook-status": _compose_audit_seat_only_spec("notebook-status"),
+    # ``review`` carries the view span's render pointers forward so the SIGN-OFF
+    # park can name the exact renders the human is being asked to sign — the
+    # chain produced them one hop earlier and would otherwise discard them.
+    "notebook-status": _compose_audit_seat_only_spec("notebook-status", carry=("review",)),
     "audit-handoff": _compose_audit_seat_only_spec("audit-handoff"),
 }
 
