@@ -701,6 +701,13 @@ def _capture_windows(
         text=True,
         encoding="utf-8",
         errors="replace",
+        # CONSOLE ISOLATION (2026-07-30): a DETACHED_PROCESS worker has no
+        # console, so a console-app child (ssh.exe) spawned here makes Windows
+        # ALLOCATE A FRESH VISIBLE CONSOLE — one popup per poll from every
+        # detached watch loop, stealing the operator's focus all night. This
+        # seam is non-interactive by construction (stdin=DEVNULL, captured
+        # pipes), so the child never needs a console at all.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     try:
         out, err = proc.communicate(timeout=timeout)
