@@ -31,6 +31,20 @@ call, or a bare ``if __name__ == "__main__":`` block. A package
 ``__main__.py`` whose surface is unclassifiable falls back to
 ``__main__``.
 
+Beyond classifying the surface, every candidate also carries a
+``argv_extraction`` verdict + an ``argv_params`` list: for the two
+frameworks that declare their parameters MECHANICALLY (argparse
+``add_argument`` calls, click ``@click.option`` / ``@click.argument``
+decorators) the params are read straight off the AST — names, ``type=``,
+``default=``, ``required=`` — so the wrapper path stops hand-authoring
+``entry_point.argv`` + ``signature`` from an eyeballed read of the file.
+Every other surface (typer / hydra / fire / ``__main__`` / console
+script / shell) reports ``argv_extraction == "unsupported"`` with
+``argv_params: null`` — an honest "not mechanically knowable", never a
+guess: the LLM keeps that leg. The extraction lives in
+``ops/argv_extract.py`` (pure AST; nothing imports or runs user code)
+and its bail conditions are documented there.
+
 ``kind`` is ``"greenfield"`` when NO entry-point candidate exists at
 all, else ``"detected"`` — exactly the branch ``hpc-wrap-entry-point``
 takes on the probe output.
@@ -66,9 +80,14 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.experiment_kit.solver_adapters import detect_petsc_solver
+from hpc_agent.ops.argv_extract import (
+    EXTRACTION_UNSUPPORTED,
+    extract_argv_params,
+)
 
 __all__ = [
     "detect_entry_point",
+    "entry_point_candidates",
 ]
 
 # Conventional Python entry-point filenames probed at the repo root,
@@ -141,7 +160,19 @@ def _read_text(path: Path) -> str:
         return ""
 
 
-def _scan_python_candidates(root: Path) -> list[dict[str, str]]:
+def _unextractable() -> dict[str, Any]:
+    """The honest no-extraction pair, for a candidate with no Python source.
+
+    A ``[project.scripts]`` console script (its target module is opaque to a
+    filesystem scan) and a shell / binary entry point have no Python CLI
+    declaration to read, so they report the same ``unsupported`` verdict a
+    typer / hydra file does — uniform across every candidate, so a consumer
+    never has to read an ABSENT field as "unknown".
+    """
+    return {"argv_extraction": EXTRACTION_UNSUPPORTED, "argv_params": None}
+
+
+def _scan_python_candidates(root: Path) -> list[dict[str, Any]]:
     """Find conventional Python entry-point files + package ``__main__.py``.
 
     Reproduces probes 1–3: the two ``ls`` conventional-name probes plus
@@ -150,7 +181,7 @@ def _scan_python_candidates(root: Path) -> list[dict[str, str]]:
     relative to *root* (matching the shell probes' relative output) and
     de-duplicated while preserving discovery order.
     """
-    candidates: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     def _add(rel: str, *, is_package_main: bool) -> None:
@@ -158,9 +189,16 @@ def _scan_python_candidates(root: Path) -> list[dict[str, str]]:
             return
         seen.add(rel)
         source = _read_text(root / rel)
-        candidate = {
+        argv_kind = _classify_python_argv(source, is_package_main=is_package_main)
+        extraction, params = extract_argv_params(source, argv_kind=argv_kind)
+        candidate: dict[str, Any] = {
             "path": rel,
-            "argv_kind": _classify_python_argv(source, is_package_main=is_package_main),
+            "argv_kind": argv_kind,
+            # The mechanical-parameter leg (P1.d): read off the AST for
+            # argparse / click, honestly ``unsupported`` + ``null`` for every
+            # surface whose parameters are not declared as literals.
+            "argv_extraction": extraction,
+            "argv_params": params,
         }
         # Solver-library detection (petsc4py TS/SNES): surfaced so the
         # onboarding agent can offer the checkpoint-instrumented wrapper
@@ -248,7 +286,7 @@ def _scan_scripts_table_lines(text: str) -> list[str]:
     return names
 
 
-def _scan_console_scripts(root: Path) -> list[dict[str, str]]:
+def _scan_console_scripts(root: Path) -> list[dict[str, Any]]:
     """Reproduce ``grep -A1 '[project.scripts]' pyproject.toml``.
 
     Each declared console script is an installed-command entry point.
@@ -263,16 +301,36 @@ def _scan_console_scripts(root: Path) -> list[dict[str, str]]:
     text = _read_text(pyproject)
     if not text:
         return []
-    return [{"path": name, "argv_kind": "console_script"} for name in _project_script_names(text)]
+    return [
+        {"path": name, "argv_kind": "console_script", **_unextractable()}
+        for name in _project_script_names(text)
+    ]
 
 
-def _scan_shell_candidates(root: Path) -> list[dict[str, str]]:
+def _scan_shell_candidates(root: Path) -> list[dict[str, Any]]:
     """Reproduce ``ls run.sh launch.sh ./simulator`` — non-Python entry points."""
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for name in _SHELL_CANDIDATES:
         if (root / name).is_file():
-            out.append({"path": name, "argv_kind": "shell"})
+            out.append({"path": name, "argv_kind": "shell", **_unextractable()})
     return out
+
+
+def entry_point_candidates(root: Path) -> list[dict[str, Any]]:
+    """Every entry-point candidate under *root*, in probe order.
+
+    The candidate scan WITHOUT the ``interview.json`` / decoration legs — the
+    public seam in-process callers use when they need only "what does detect
+    name here?". The ``interview`` primitive's ``entry_point.run_name``
+    composer reads it (a composed default must derive from the SAME candidate
+    set the agent-facing verb reports, or the two could disagree about which
+    file the wrapper is named after).
+    """
+    candidates: list[dict[str, Any]] = []
+    candidates.extend(_scan_python_candidates(root))
+    candidates.extend(_scan_console_scripts(root))
+    candidates.extend(_scan_shell_candidates(root))
+    return candidates
 
 
 def _scan_decoration(root: Path) -> list[str]:
@@ -456,10 +514,7 @@ def detect_entry_point(*, experiment_dir: str | Path) -> dict[str, Any]:
     """
     root = experiment_dir if isinstance(experiment_dir, Path) else Path(experiment_dir)
 
-    candidates: list[dict[str, str]] = []
-    candidates.extend(_scan_python_candidates(root))
-    candidates.extend(_scan_console_scripts(root))
-    candidates.extend(_scan_shell_candidates(root))
+    candidates = entry_point_candidates(root)
 
     decoration_found = _scan_decoration(root)
 

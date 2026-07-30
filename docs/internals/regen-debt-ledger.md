@@ -27,13 +27,9 @@ cannot pass silently.
 
 ## Outstanding regen debt
 
-*(No outstanding debt — every prior row was verified paid on `main` and moved to
-the "Checked" section below on 2026-07-15. The table header is kept so the gate
-parses the empty-but-well-formed table; a new deferral adds a row in exactly
-this format.)*
-
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
+| `interview` `_ShellCommandEntry.run_name` became OPTIONAL (prelude mechanization P1.c — the interview composes the wrapper name from the detected entry-point candidate the argv invokes, so the caller must be able to legally omit it) | `docs/plans/prelude-chain-2026-07-30.md` (Wave P1, unit P1.c) | `python scripts/build_schemas.py --write` to re-emit `hpc_agent/schemas/interview.input.json` (the field moves out of `_ShellCommandEntry.required` and gains the nullable `anyOf`). Nothing else regenerates: the `_Provenance` change is a `model_validator` body only (invisible to JSON Schema), and the `detect-entry-point` output schema is hand-authored (no model, so `build_schemas` never emits it), and no `CliShape`/`@primitive` metadata changed, so `operations.json` is untouched | `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in` **RED** | Wave P1 integration (regen deferred to the ONE serial rebake per the plan's integration checklist) |
 
 Row format (binds every future row):
 

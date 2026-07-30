@@ -357,12 +357,22 @@ class TestMaterializedEntryPoint:
             dep.detect_entry_point(experiment_dir=tmp_path)
 
     def test_repo_scan_unchanged_when_interview_absent(self, tmp_path: Path) -> None:
-        # The existing repo-scan output is byte-identical with no interview.json.
+        # The whole repo-scan output, key for key, with no interview.json: no
+        # ``materialized`` key, and every candidate carries the argv-extraction
+        # pair (a click command declaring no options extracts to an EMPTY list —
+        # "no flags", which is different from "not knowable").
         (tmp_path / "main.py").write_text("import click\n@click.command()\ndef r():\n    ...\n")
         result = dep.detect_entry_point(experiment_dir=tmp_path)
         assert result == {
             "kind": "detected",
-            "candidates": [{"path": "main.py", "argv_kind": "click"}],
+            "candidates": [
+                {
+                    "path": "main.py",
+                    "argv_kind": "click",
+                    "argv_extraction": "extracted",
+                    "argv_params": [],
+                }
+            ],
             "decoration_found": [],
         }
 
@@ -376,6 +386,253 @@ class TestMaterializedEntryPoint:
         result = dep.detect_entry_point(experiment_dir=tmp_path)
         assert result["materialized"]["kind"] == "register_run"
         assert _argv_kind_for(result["candidates"], "main.py") == "argparse"
+
+
+def _candidate(result: dict, path: str) -> dict:
+    """The candidate whose ``path`` == *path* (unpack-loud if absent)."""
+    (found,) = [c for c in result["candidates"] if c["path"] == path]
+    assert isinstance(found, dict)
+    return found
+
+
+def _param(candidate: dict, dest: str) -> dict:
+    """The extracted param whose ``dest`` == *dest*."""
+    (found,) = [p for p in candidate["argv_params"] if p["dest"] == dest]
+    assert isinstance(found, dict)
+    return found
+
+
+class TestArgvParamExtraction:
+    """P1.d: argparse + click params are read MECHANICALLY off the AST; every
+    other surface reports an honest ``unsupported`` + ``argv_params: None``
+    so the LLM keeps that leg instead of the framework guessing."""
+
+    def test_argparse_names_types_defaults_required(self, tmp_path: Path) -> None:
+        (tmp_path / "train.py").write_text(
+            "import argparse\n"
+            "def main():\n"
+            "    p = argparse.ArgumentParser()\n"
+            "    p.add_argument('--seed', '-s', type=int, default=0)\n"
+            "    p.add_argument('--config', type=str, required=True)\n"
+            "    p.add_argument('--verbose', action='store_true')\n"
+            "    p.add_argument('outdir')\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "train.py")
+        assert candidate["argv_kind"] == "argparse"
+        assert candidate["argv_extraction"] == "extracted"
+        # Declaration order is preserved (it is the order argparse binds them).
+        assert [p["dest"] for p in candidate["argv_params"]] == [
+            "seed",
+            "config",
+            "verbose",
+            "outdir",
+        ]
+        seed = _param(candidate, "seed")
+        assert seed["names"] == ["--seed", "-s"]
+        assert seed["type"] == "int"
+        assert seed["default"] == 0
+        assert seed["positional"] is False
+        assert "required" not in seed  # not written → not claimed
+        config = _param(candidate, "config")
+        assert config["required"] is True
+        assert config["type"] == "str"
+        # action=store_true is a value-less flag: the wrapper appends the flag
+        # alone, never ``--verbose <value>``.
+        assert _param(candidate, "verbose")["is_flag"] is True
+        outdir = _param(candidate, "outdir")
+        assert outdir["positional"] is True
+        assert outdir["names"] == ["outdir"]
+
+    def test_argparse_dest_and_group_receivers(self, tmp_path: Path) -> None:
+        # An explicit dest= wins over the derived name; a dashed long option
+        # derives argparse's own dest; add_argument on an argument GROUP counts
+        # (a receiver-name filter would silently drop group-scoped flags).
+        (tmp_path / "main.py").write_text(
+            "import argparse\n"
+            "p = argparse.ArgumentParser()\n"
+            "g = p.add_argument_group('grp')\n"
+            "g.add_argument('--learning-rate', type=float)\n"
+            "p.add_argument('-n', dest='n_iters', type=int)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert _param(candidate, "learning_rate")["names"] == ["--learning-rate"]
+        assert _param(candidate, "n_iters")["names"] == ["-n"]
+
+    def test_argparse_non_literal_default_reported_as_source(self, tmp_path: Path) -> None:
+        # A default the AST cannot evaluate is NOT invented: ``default_source``
+        # carries the expression verbatim so the caller sees a default exists.
+        (tmp_path / "run.py").write_text(
+            "import argparse, os\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--workers', type=int, default=os.cpu_count())\n"
+        )
+        workers = _param(
+            _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "run.py"), "workers"
+        )
+        assert "default" not in workers
+        assert workers["default_source"] == "os.cpu_count()"
+
+    def test_argparse_parser_built_elsewhere_is_unsupported(self, tmp_path: Path) -> None:
+        # No ArgumentParser() in THIS file: the add_argument calls we can see
+        # are not provably the whole surface → honest unsupported, not a
+        # partial list.
+        (tmp_path / "train.py").write_text(
+            "import argparse\n"
+            "from .cli import build_parser\n"
+            "p = build_parser()\n"
+            "p.add_argument('--extra', type=int)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "train.py")
+        assert candidate["argv_kind"] == "argparse"
+        assert candidate["argv_extraction"] == "unsupported"
+        assert candidate["argv_params"] is None
+
+    def test_argparse_subparsers_is_unsupported(self, tmp_path: Path) -> None:
+        # Subcommand-scoped flags do not flatten into one parameter list.
+        (tmp_path / "main.py").write_text(
+            "import argparse\n"
+            "p = argparse.ArgumentParser()\n"
+            "sub = p.add_subparsers()\n"
+            "one = sub.add_parser('one')\n"
+            "one.add_argument('--seed', type=int)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert candidate["argv_extraction"] == "unsupported"
+        assert candidate["argv_params"] is None
+
+    def test_click_options_and_arguments(self, tmp_path: Path) -> None:
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--seed', '-s', type=int, default=7)\n"
+            "@click.option('--dry-run', is_flag=True)\n"
+            "@click.argument('infile', required=True)\n"
+            "def run(seed, dry_run, infile):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert candidate["argv_kind"] == "click"
+        assert candidate["argv_extraction"] == "extracted"
+        # Source order == click's final parameter order.
+        assert [p["dest"] for p in candidate["argv_params"]] == ["seed", "dry_run", "infile"]
+        seed = _param(candidate, "seed")
+        assert seed["names"] == ["--seed", "-s"]
+        assert seed["type"] == "int"
+        assert seed["default"] == 7
+        assert _param(candidate, "dry_run")["is_flag"] is True
+        infile = _param(candidate, "infile")
+        assert infile["positional"] is True
+        assert infile["required"] is True
+
+    def test_click_bare_decorator_name_form(self, tmp_path: Path) -> None:
+        # The bare-name decorator form (``from click import option``) reads the
+        # same as the ``@click.option`` attribute form. ``import click`` stays
+        # on the file because that is what the *classifier* keys on — this test
+        # pins the EXTRACTOR's spelling tolerance, not the classifier's.
+        (tmp_path / "run.py").write_text(
+            "import click\n"
+            "from click import command, option\n"
+            "@command()\n"
+            "@option('--epochs', type=int, default=3)\n"
+            "def main(epochs):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "run.py")
+        assert candidate["argv_extraction"] == "extracted"
+        assert _param(candidate, "epochs")["default"] == 3
+
+    def test_click_group_of_several_commands_is_unsupported(self, tmp_path: Path) -> None:
+        # Two commands' parameters are not one flat surface.
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.group()\n"
+            "def cli():\n"
+            "    ...\n"
+            "@cli.command()\n"
+            "@click.option('--a', type=int)\n"
+            "def one(a):\n"
+            "    ...\n"
+            "@cli.command()\n"
+            "@click.option('--b', type=int)\n"
+            "def two(b):\n"
+            "    ...\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert candidate["argv_extraction"] == "unsupported"
+        assert candidate["argv_params"] is None
+
+    def test_click_without_command_declaration_is_unsupported(self, tmp_path: Path) -> None:
+        # ``import click`` alone classifies as click, but with no command
+        # declared here an EMPTY param list would read as "takes no flags" —
+        # a claim the file does not support.
+        (tmp_path / "train.py").write_text("import click\nCLI = None\n")
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "train.py")
+        assert candidate["argv_kind"] == "click"
+        assert candidate["argv_extraction"] == "unsupported"
+        assert candidate["argv_params"] is None
+
+    @pytest.mark.parametrize(
+        ("filename", "source", "expected_kind"),
+        [
+            (
+                "train.py",
+                "import typer\napp = typer.Typer()\n@app.command()\ndef r(seed: int):\n    ...\n",
+                "typer",
+            ),
+            (
+                "main.py",
+                'import hydra\n@hydra.main(config_path="conf")\ndef m(cfg):\n    ...\n',
+                "hydra",
+            ),
+            ("run.py", "import fire\ndef r(seed=0):\n    ...\nfire.Fire(r)\n", "fire"),
+            ("experiment.py", 'if __name__ == "__main__":\n    print(1)\n', "__main__"),
+        ],
+    )
+    def test_unsupported_frameworks_are_honest(
+        self, tmp_path: Path, filename: str, source: str, expected_kind: str
+    ) -> None:
+        # typer derives its CLI from type hints, hydra from a composed YAML
+        # tree, fire from a live signature, ``__main__`` declares nothing —
+        # none is mechanically extractable, so NONE is guessed.
+        (tmp_path / filename).write_text(source)
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), filename)
+        assert candidate["argv_kind"] == expected_kind
+        assert candidate["argv_extraction"] == "unsupported"
+        assert candidate["argv_params"] is None
+
+    def test_console_script_and_shell_candidates_are_unsupported(self, tmp_path: Path) -> None:
+        # No Python source to read: uniform ``unsupported`` rather than an
+        # ABSENT field a consumer would have to interpret.
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\n[project.scripts]\nmytool = "demo.cli:main"\n'
+        )
+        (tmp_path / "run.sh").write_text("#!/bin/sh\necho hi\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        for path in ("mytool", "run.sh"):
+            candidate = _candidate(result, path)
+            assert candidate["argv_extraction"] == "unsupported"
+            assert candidate["argv_params"] is None
+
+    def test_unparseable_python_candidate_is_unsupported(self, tmp_path: Path) -> None:
+        # A syntax error must not crash the scan; the candidate still stands.
+        (tmp_path / "train.py").write_text("import argparse\ndef broken(:\n")
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "train.py")
+        assert candidate["argv_extraction"] == "unsupported"
+        assert candidate["argv_params"] is None
+
+    def test_extraction_never_imports_user_code(self, tmp_path: Path) -> None:
+        # Pure AST: a candidate importing a module that does not exist (and
+        # whose body would raise on execution) still extracts.
+        (tmp_path / "main.py").write_text(
+            "import argparse\n"
+            "import definitely_not_installed_xyz\n"
+            "raise SystemExit('never runs')\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--seed', type=int)\n"
+        )
+        candidate = _candidate(dep.detect_entry_point(experiment_dir=tmp_path), "main.py")
+        assert candidate["argv_extraction"] == "extracted"
+        assert _param(candidate, "seed")["type"] == "int"
 
 
 class TestSolverDetection:

@@ -154,6 +154,172 @@ def _compose_audit_template_default(
     return compose_audit_template(packs, campaign_dir)
 
 
+def _compose_operator_default(intent: dict[str, Any], campaign_dir: Path) -> dict[str, str] | None:
+    """Compose ``produced_by.operator`` from ``git config user.name`` (P1.c).
+
+    Same posture as :func:`_compose_audit_template_default`: a field the
+    SKILL used to tell the agent to hand-author ("shell out to git config")
+    is composed IN CODE and DISCLOSED in the persisted record's
+    ``_materialized.composed_defaults`` — the prelude-mechanization ruling
+    (``docs/plans/prelude-chain-2026-07-30.md``: "mechanize all parts of the
+    chain that don't need a decision"). Who the operator is *is* a human
+    intent field, but *transcribing* their configured name is not a
+    judgment; leaving it to the agent invited a typo, a guess, or a
+    placeholder in the one provenance field ``recall`` indexes.
+
+    Precedence, unchanged from every other composed default:
+
+    * ``kind != 'human'`` → nothing to compose (``operator`` is a
+      human-kind field) → ``None``;
+    * the caller supplied ``operator`` → UNTOUCHED → ``None``;
+    * git has no answer (no binary, no configured name, timeout, empty) →
+      ``None``, and the caller's refusal STANDS at the call site (a missing
+      human operator is never silently empty).
+
+    On success the value is stamped into the persisted intent (so
+    ``recall``'s ``produced_by.operator`` index is populated and re-feeding
+    interview.json is idempotent) AND disclosed, so a reader can always tell
+    a composed name from a typed one.
+
+    Reads through the ONE bounded, fail-open
+    :func:`~hpc_agent._build_info.git_output` (tree-killed 2 s timeout,
+    ``stdin=DEVNULL``) — never an ad-hoc shell-out. ``git -C <campaign_dir>
+    config user.name`` deliberately does NOT require the experiment dir to
+    be a repo: git's own resolution falls back to the operator's global
+    config, which is exactly the name a repo-less experiment dir should
+    report.
+
+    ATTRIBUTED ≠ VERIFIED (multi-human, the attribution-honesty pin): a
+    ``git config`` value is a string the operator wrote into a config file.
+    Composing it verifies NOTHING — no OS-identity probe, no credential, no
+    signature — and this path reaches no such API. The tier is unchanged
+    from a typed operator; only the typing is mechanized.
+    """
+    produced_by = intent.get("produced_by")
+    if not isinstance(produced_by, dict):
+        return None
+    if produced_by.get("kind") != "human":
+        return None
+    if produced_by.get("operator") is not None:
+        return None
+
+    from hpc_agent._build_info import git_output
+
+    name = git_output(["config", "user.name"], cwd=campaign_dir)
+    if not name:
+        return None
+    produced_by["operator"] = name
+    return {
+        "field": "produced_by.operator",
+        "value": name,
+        "source": "git_config_user_name",
+        "rule": "git_config",
+    }
+
+
+def _strip_dot_slash(token: str) -> str:
+    """An argv token as ``detect-entry-point`` spells its candidate paths.
+
+    POSIX separators, and the explicit-relative ``./`` prefix removed (an
+    argv of ``["./simulator", …]`` must match the ``simulator`` candidate the
+    shell probe reports). Only that exact prefix is dropped — a
+    ``.hpc/…`` path keeps its leading dot.
+    """
+    normalized = token.replace("\\", "/")
+    return normalized[2:] if normalized.startswith("./") else normalized
+
+
+def _assert_human_operator(intent: Mapping[str, Any]) -> None:
+    """A human-kind provenance always names an operator — composed or typed.
+
+    The refusal the wire model used to raise
+    (``provenance kind='human' requires 'operator'``), MOVED here so the
+    composed default (:func:`_compose_operator_default`) is reachable at
+    all: the wire boundary cannot shell out to git, so a spec that legally
+    omits the field must be re-checked after composition. Not softened —
+    an omission git could not answer still refuses LOUDLY, naming the two
+    remedies, rather than persisting an empty operator into the one
+    provenance field ``recall`` indexes.
+    """
+    produced_by = intent.get("produced_by")
+    if not isinstance(produced_by, dict):
+        return
+    if produced_by.get("kind") != "human" or produced_by.get("operator") is not None:
+        return
+    raise errors.SpecInvalid(
+        "produced_by.kind='human' requires 'operator', and it could not be "
+        "composed: `git config user.name` returned nothing runnable in "
+        "campaign_dir (no git binary, no configured user.name, or the call "
+        'timed out). Either set `git config --global user.name "<name>"` and '
+        "re-run, or supply produced_by.operator explicitly. A human-produced "
+        "intent is never recorded with an empty operator."
+    )
+
+
+def _compose_run_name_default(ep: dict[str, Any], campaign_dir: Path) -> dict[str, str] | None:
+    """Compose ``entry_point.run_name`` from the detected candidate's stem (P1.c).
+
+    The wrapper path's ``run_name`` names the materialized
+    ``.hpc/wrappers/<run_name>.py`` and the ``@register_run`` function
+    inside it. ``detect-entry-point`` ALREADY names the file the wrapper
+    wraps, so hand-authoring the name was pure transcription.
+
+    The selection carries no heuristic (the ``compose_audit_template`` law):
+    the winning candidate is the one whose ``path`` the declared ``argv``
+    actually invokes — argv is the caller's own statement of what runs, so
+    there is nothing to tie-break. Zero or several matches do NOT fall back
+    to a guess; the caller refuses at the call site naming every candidate
+    and the ``entry_point.run_name`` remedy.
+
+    Returns the disclosure dict, or ``None`` when the caller supplied a
+    ``run_name`` (UNTOUCHED, as everywhere else) — the composed value is
+    written into ``ep`` in place so the rest of the materialization reads
+    one field.
+    """
+    if ep.get("run_name") is not None:
+        return None
+
+    from hpc_agent.ops.detect_entry_point import entry_point_candidates
+
+    # argv tokens as detect spells its candidate paths: POSIX separators, no
+    # ``./`` prefix (``["./simulator", ...]`` must match the ``simulator``
+    # candidate the shell probe reports).
+    tokens = {_strip_dot_slash(token) for token in (ep.get("argv") or []) if isinstance(token, str)}
+    candidates = entry_point_candidates(campaign_dir)
+    invoked = [c for c in candidates if str(c.get("path", "")) in tokens]
+    if len(invoked) != 1:
+        listed = ", ".join(str(c.get("path")) for c in candidates) or "(none found)"
+        raise errors.SpecInvalid(
+            f"shell_command.run_name is required and could not be composed: the "
+            f"declared argv invokes {len(invoked)} of the entry-point candidates "
+            f"detect-entry-point found under {campaign_dir} — candidates: {listed}. "
+            f"A composed default must be unambiguous, so no name is invented. "
+            f"Set entry_point.run_name explicitly (a valid Python identifier; it "
+            f"names .hpc/wrappers/<run_name>.py and the @register_run function "
+            f"inside it)."
+        )
+
+    from hpc_agent.ops.argv_extract import sanitize_identifier
+
+    path = str(invoked[0]["path"])
+    stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    run_name = sanitize_identifier(stem)
+    if run_name is None:
+        raise errors.SpecInvalid(
+            f"shell_command.run_name could not be composed: the detected candidate "
+            f"{path!r} has no stem that sanitizes to a valid Python identifier. "
+            f"Set entry_point.run_name explicitly."
+        )
+    ep["run_name"] = run_name
+    return {
+        "field": "entry_point.run_name",
+        "value": run_name,
+        "source": "detect_entry_point_candidate_stem",
+        "rule": "argv_invoked_candidate",
+        "candidates": path,
+    }
+
+
 @primitive(
     name="interview",
     verb="scaffold",
@@ -210,6 +376,21 @@ def record_interview(
        agent must have already written tasks.py into ``campaign_dir``;
        this primitive validates the cross-checks.
 
+    **Composed defaults.** Three fields the caller MAY omit are filled in
+    code and disclosed together in
+    ``interview.json._materialized.composed_defaults`` — never brought to
+    human attention, never passed off as caller-authored: the
+    ``audited_source`` template from a bound pack's seam
+    (:func:`_compose_audit_template_default`), ``produced_by.operator`` from
+    ``git config user.name`` (:func:`_compose_operator_default`), and a
+    wrapper's ``entry_point.run_name`` from the detected entry-point
+    candidate the ``argv`` invokes (:func:`_compose_run_name_default`). A
+    caller-supplied value ALWAYS wins, and a default that cannot be composed
+    unambiguously REFUSES (naming the remedy) rather than being invented —
+    the prelude-mechanization ruling
+    (``docs/plans/prelude-chain-2026-07-30.md``) mechanizes transcription,
+    not judgment.
+
     Returns the envelope ``data`` block from ``schemas/interview.output.json``.
 
     Raises ``ValueError`` (mapped by the CLI adapter to spec_invalid):
@@ -223,6 +404,16 @@ def record_interview(
     intent: dict[str, Any] = spec.model_dump(exclude_none=True, mode="json")
     declared = int(intent["task_count"])
     artifacts: list[str] = []
+
+    # ── composed defaults (P1.c): fields code derives, the agent never types ──
+    # Both are stamped into ``intent`` in place (so the persisted record is
+    # complete and re-feeding it is idempotent) and disclosed in
+    # ``_materialized.composed_defaults`` below. A caller-supplied value is
+    # always left UNTOUCHED. The operator refusal is re-asserted immediately
+    # after composition — moved out of the wire model, not softened.
+    composed_operator = _compose_operator_default(intent, campaign_dir)
+    _assert_human_operator(intent)
+    composed_run_name: dict[str, str] | None = None
 
     # Validate the entry_point (if present) and materialize the wrapper
     # (if shell_command). All entry-point validation happens BEFORE any
@@ -251,6 +442,11 @@ def record_interview(
                 "your own tasks.resolve() return dict."
             )
         if kind == "shell_command":
+            # ``run_name`` names the materialized wrapper + its @register_run
+            # function, so it must be resolved BEFORE materialization. Composed
+            # from the detect candidate the argv invokes when omitted (P1.c);
+            # a caller-supplied name wins.
+            composed_run_name = _compose_run_name_default(ep, campaign_dir)
             # Reject ``frozen_configs`` without ``task_generator``. The framework
             # threads ``<stem>_sha`` into kwargs only on materialized tasks.py;
             # for a hand-written tasks.py we can't safely edit the user's file,
@@ -468,8 +664,17 @@ def record_interview(
     # ``audit_template`` seam IN CODE — silently, disclosed here, never brought to
     # human attention (supersedes the on-ramp's pack-status confirm-default).
     composed_default = _compose_audit_template_default(intent, campaign_dir)
-    if composed_default is not None:
-        materialized["composed_defaults"] = [composed_default]
+    # One disclosure list for every field code filled. Order is the historical
+    # one — audit_template first (CONVERSION 2), then the P1.c prelude
+    # composers — so an existing reader indexing ``[0]`` still finds the
+    # template. Absent entirely when nothing was composed (no empty key).
+    composed_defaults = [
+        disclosure
+        for disclosure in (composed_default, composed_operator, composed_run_name)
+        if disclosure is not None
+    ]
+    if composed_defaults:
+        materialized["composed_defaults"] = composed_defaults
     interview_doc = {
         **dict(intent),
         "_materialized": materialized,

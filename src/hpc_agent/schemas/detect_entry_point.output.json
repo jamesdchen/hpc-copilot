@@ -94,14 +94,72 @@
         }
       }
     },
+    "ArgvParam": {
+      "additionalProperties": false,
+      "title": "ArgvParam",
+      "type": "object",
+      "description": "One CLI parameter read MECHANICALLY off the candidate's AST (argparse ``add_argument`` / click ``@click.option`` + ``@click.argument``). Nothing here is inferred: every field is present only because the source states it as a literal, so the wrapper path can compose ``entry_point.argv`` + ``signature`` without the LLM re-typing flag names from an eyeballed read.",
+      "required": [
+        "names",
+        "dest",
+        "positional"
+      ],
+      "properties": {
+        "names": {
+          "type": "array",
+          "title": "Names",
+          "description": "The declared name strings, in source order: option strings for a flag (``[\"--seed\", \"-s\"]``) or the single name for a positional.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dest": {
+          "type": "string",
+          "title": "Dest",
+          "description": "The attribute name the framework binds the value to — the explicit ``dest=`` when written, else the framework's own rule (argparse: first long option; click: the longest declared name), dashes converted to underscores.",
+          "minLength": 1
+        },
+        "positional": {
+          "type": "boolean",
+          "title": "Positional",
+          "description": "``true`` for a positional argument (an argparse name not starting with ``-``, or a ``@click.argument``); ``false`` for an option/flag."
+        },
+        "type": {
+          "type": "string",
+          "title": "Type",
+          "description": "Source text of the written ``type=`` argument (``int``, ``float``, ``pathlib.Path``, a custom converter name). A STRING, never resolved — the framework does not import the user's module to learn what it names. Absent when no ``type=`` was written."
+        },
+        "default": {
+          "title": "Default",
+          "description": "The written ``default=`` value when it is a JSON-round-trippable literal. Absent when no default was written, or when the default is an expression (see ``default_source``)."
+        },
+        "default_source": {
+          "type": "string",
+          "title": "Default Source",
+          "description": "Source text of a written ``default=`` that is NOT a literal (``os.cpu_count()``, a module constant, …). Present instead of ``default`` so the caller sees that a default EXISTS without the framework pretending to know its value."
+        },
+        "required": {
+          "type": "boolean",
+          "title": "Required",
+          "description": "The written ``required=`` literal. Absent when the source does not state it — the framework does not re-derive each library's implicit requiredness rules."
+        },
+        "is_flag": {
+          "type": "boolean",
+          "title": "Is Flag",
+          "description": "``true`` when the parameter takes NO value (argparse ``action=\"store_true\"``/``\"store_false\"``/``\"count\"``, click ``is_flag=True``) — the wrapper argv appends the flag alone, never ``<flag> <value>``. Absent otherwise."
+        }
+      }
+    },
     "Candidate": {
       "additionalProperties": false,
       "title": "Candidate",
       "type": "object",
-      "description": "One entry-point candidate: its path (relative to the experiment dir, or the registered command name for a console script) plus the classified argv style, plus — when a known solver library was recognized in the source — the solver adapter that can checkpoint-instrument it.",
+      "description": "One entry-point candidate: its path (relative to the experiment dir, or the registered command name for a console script) plus the classified argv style, the mechanical parameter-extraction verdict, plus — when a known solver library was recognized in the source — the solver adapter that can checkpoint-instrument it.",
       "required": [
         "path",
-        "argv_kind"
+        "argv_kind",
+        "argv_extraction",
+        "argv_params"
       ],
       "properties": {
         "path": {
@@ -123,6 +181,30 @@
           "type": "string",
           "title": "Argv Kind",
           "description": "The candidate's CLI surface. Python files: ``argparse`` / ``click`` / ``typer`` / ``hydra`` / ``fire`` (by import + decorator), or ``__main__`` for a bare ``if __name__`` block or a package ``__main__.py`` with no recognized library. ``console_script`` for a ``[project.scripts]`` entry; ``shell`` for a non-Python ``run.sh`` / ``launch.sh`` / binary."
+        },
+        "argv_extraction": {
+          "enum": [
+            "extracted",
+            "unsupported"
+          ],
+          "type": "string",
+          "title": "Argv Extraction",
+          "description": "Whether this candidate's CLI parameters were read mechanically. ``extracted``: ``argv_params`` is the AST-read list (argparse / click — possibly EMPTY when the parser declares no flags). ``unsupported``: ``argv_params`` is ``null`` and the surface is not mechanically knowable — typer (params come from Python type hints), hydra (a composed YAML tree), fire (a live signature), a bare ``__main__``, a console script (opaque target), a shell/binary entry point, an unparseable file, or an argparse/click declaration that is not one flat local surface (parser built elsewhere, ``add_subparsers``, a click group of several commands). Keep the LLM leg for those; never guess."
+        },
+        "argv_params": {
+          "title": "Argv Params",
+          "description": "The mechanically extracted CLI parameters when ``argv_extraction == \"extracted\"``, else ``null``. Ordered as declared in the source (argparse ``add_argument`` order; click decorator source order, which is the order click binds them).",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArgvParam"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "solver": {
           "enum": [

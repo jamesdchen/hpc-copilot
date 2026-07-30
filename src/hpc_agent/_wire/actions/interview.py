@@ -36,8 +36,18 @@ class _Provenance(BaseModel):
         # boundary rather than leaking through to consumers.
         if self.kind == "agent" and self.session_sha is None:
             raise ValueError("provenance kind='agent' requires 'session_sha'")
-        if self.kind == "human" and self.operator is None:
-            raise ValueError("provenance kind='human' requires 'operator'")
+        # kind='human' still REQUIRES an operator — but the requirement is
+        # asserted one layer in, at ``record_interview``, because the
+        # interview COMPOSES the operator from ``git config user.name`` when
+        # the caller omits it (prelude mechanization P1.c: an agent must not
+        # hand-author what code can derive). Refusing here would make the
+        # composed default unreachable — the caller could never legally omit
+        # the field. The refusal is not softened, only moved: an omitted
+        # operator that git cannot supply is a loud SpecInvalid from
+        # ``hpc_agent.ops.memory.interview``, never a silently empty
+        # provenance. NOTE (multi-human, attributed ≠ verified): whether
+        # typed or composed, ``operator`` stays a HARNESS/CONFIG-asserted
+        # string — nothing in this path verifies an identity.
         return self
 
 
@@ -519,13 +529,22 @@ class _ShellCommandEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["shell_command"]
-    run_name: str = Field(
+    # OPTIONAL since prelude mechanization P1.c: when omitted, the interview
+    # COMPOSES the name from the detect-entry-point candidate the argv
+    # invokes (sanitized to an identifier) and discloses it in
+    # ``interview.json._materialized.composed_defaults``. A caller-supplied
+    # name always wins; an omission detect cannot resolve to exactly one
+    # candidate is a loud SpecInvalid at intake, never a silent default.
+    run_name: str | None = Field(
+        default=None,
         min_length=1,
         pattern=_PARAM_NAME,
         description=(
             "Name for the generated wrapper file (``.hpc/wrappers/<run_name>.py``) "
             "and the ``@register_run``-decorated function inside it. Must be a "
-            "valid Python identifier."
+            "valid Python identifier. Optional: when omitted the interview "
+            "composes it from the detected entry-point candidate the argv "
+            "invokes and discloses the composed default in interview.json."
         ),
     )
     argv: list[str] = Field(
