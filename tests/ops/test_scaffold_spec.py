@@ -19,6 +19,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent._wire.actions.classify_axis import ClassifyAxisInput
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent._wire.workflows.campaign_run import CampaignRunSpec
 from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsSpec
@@ -36,10 +37,24 @@ from hpc_agent.ops.scaffold_spec import (
 _SUPPORTED = [
     "build-submit-spec",
     "campaign-run",
+    "classify-axis",
     "interview",
     "resolve-submit-inputs",
     "validate-campaign",
 ]
+
+# A minimal ``@register_run`` the AST scan (``discover-runs``) finds, so the
+# classify-axis scaffolder can DERIVE ``run_signature_sha`` rather than
+# placeholder it.
+_REGISTER_RUN_SRC = """\
+from __future__ import annotations
+from hpc_agent.experiment_kit import register_run
+
+
+@register_run
+def train(seed: int, lr: float) -> dict:
+    return {"seed": seed, "lr": lr}
+"""
 
 
 def _warm_ctx(**overrides: Any) -> _Context:
@@ -260,3 +275,63 @@ class TestInterviewScaffold:
     def test_supported_verbs_list_includes_interview(self, tmp_path: Any) -> None:
         res = scaffold_spec(experiment_dir=tmp_path, verb="build-submit-spec")
         assert sorted(res.supported_verbs) == _SUPPORTED
+
+
+class TestClassifyAxisScaffold:
+    """Coverage for the ``classify-axis`` verb — the second PRELUDE spec (P1.b).
+
+    ``suggest-prelude-action``'s rung 7 hands this spec back to the caller, so it
+    must be composable from context. The sharp field is ``run_signature_sha``: it
+    is the exact key ``axes.yaml`` uses to invalidate a stale classification, so a
+    hand-typed one silently binds the wrong signature — the scaffolder derives it
+    from the ``discover-runs`` AST scan instead.
+    """
+
+    def test_cold_start_skeleton_validates_with_placeholders(self, tmp_path: Any) -> None:
+        res = scaffold_spec(experiment_dir=tmp_path, verb="classify-axis")
+        assert res.verb == "classify-axis"
+        assert "classify-axis" in res.supported_verbs
+        # The #287 guarantee: the emitted spec passes the target verb's own model.
+        ClassifyAxisInput.model_validate(res.spec)
+        # Nothing is derivable on a bare dir — both identity fields are flagged.
+        assert "run_name" in res.unresolved_fields
+        assert "run_signature_sha" in res.unresolved_fields
+        for path in res.unresolved_fields:
+            assert "placeholder" in res.sources[path]
+
+    def test_data_axis_is_always_unresolved_and_fail_safe(self, tmp_path: Any) -> None:
+        """The classification is a JUDGMENT point — never presented as resolved."""
+        (tmp_path / "train.py").write_text(_REGISTER_RUN_SRC, encoding="utf-8")
+        res = scaffold_spec(experiment_dir=tmp_path, verb="classify-axis", run_name="train")
+        assert "data_axis" in res.unresolved_fields
+        # 'sequential' is the classifier's own fail-safe: a caller who invokes the
+        # skeleton unedited under-parallelizes rather than returning wrong numbers.
+        assert res.spec["data_axis"] == {"kind": "sequential"}
+        assert "judgment point" in res.sources["data_axis"]
+
+    def test_run_signature_sha_is_derived_from_the_ast_scan(self, tmp_path: Any) -> None:
+        from hpc_agent.state.discover import discover_runs
+
+        (tmp_path / "train.py").write_text(_REGISTER_RUN_SRC, encoding="utf-8")
+        expected = next(i.run_signature_sha for i in discover_runs(tmp_path) if i.name == "train")
+        res = scaffold_spec(experiment_dir=tmp_path, verb="classify-axis", run_name="train")
+        assert res.spec["run_name"] == "train"
+        assert res.spec["run_signature_sha"] == expected
+        # Derived, not placeholdered.
+        assert "run_signature_sha" not in res.unresolved_fields
+        assert "discover-runs AST scan" in res.sources["run_signature_sha"]
+        ClassifyAxisInput.model_validate(res.spec)
+
+    def test_unknown_run_name_degrades_to_a_placeholder_with_a_warning(self, tmp_path: Any) -> None:
+        (tmp_path / "train.py").write_text(_REGISTER_RUN_SRC, encoding="utf-8")
+        res = scaffold_spec(experiment_dir=tmp_path, verb="classify-axis", run_name="absent_run")
+        assert res.spec["run_name"] == "absent_run"
+        assert "run_signature_sha" in res.unresolved_fields
+        assert any("no @register_run named 'absent_run'" in w for w in res.warnings)
+        ClassifyAxisInput.model_validate(res.spec)
+
+    def test_classified_by_defaults_to_agent_and_is_disclosed(self, tmp_path: Any) -> None:
+        res = scaffold_spec(experiment_dir=tmp_path, verb="classify-axis")
+        assert res.spec["classified_by"] == "agent"
+        assert "classified_by" not in res.unresolved_fields
+        assert "override to 'interview'" in res.sources["classified_by"]

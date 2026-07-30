@@ -31,6 +31,14 @@ structure is the biggest win. ``interview`` is the entry verb for
 ``hpc-wrap-entry-point`` and is the spec the orchestrator hand-builds
 every onboarding.
 
+The PRELUDE pair (``interview`` + ``classify-axis``) is the coverage the
+prelude-mechanization wave (P1.b, ``docs/plans/prelude-chain-2026-07-30.md``)
+needs: they are the two specs ``suggest-prelude-action``'s rungs 6 and 7 hand
+back to the caller, so both must be composable from context rather than
+hand-divined. ``classify-axis`` is the sharper case — its ``run_signature_sha``
+is the exact key ``axes.yaml`` uses to invalidate a stale classification, and
+hand-typing it is how a re-classification silently binds the wrong signature.
+
 I/O contracts:
 
 * Input: flags only (``--verb`` / ``--cluster`` / ``--run-name`` /
@@ -50,6 +58,7 @@ import pydantic
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent._wire.actions.classify_axis import ClassifyAxisInput
 from hpc_agent._wire.actions.interview import _PARAM_NAME, InterviewSpec
 from hpc_agent._wire.queries.scaffold_spec import ScaffoldSpecResult
 from hpc_agent._wire.workflows.campaign_run import CampaignRunSpec
@@ -94,6 +103,9 @@ _PH_GOAL = "PLACEHOLDER goal — replace with the campaign's one-sentence intent
 _PH_RUN_NAME = "placeholder_run"
 _PH_SESSION_SHA = "PLACEHOLDER-session-sha"
 _PH_ARGV = ["python3", "main.py"]
+# classify-axis: ``run_signature_sha`` only needs to be non-empty (min_length=1),
+# so the placeholder is self-describing rather than hash-shaped.
+_PH_SIGNATURE_SHA = "PLACEHOLDER-run-signature-sha"
 
 
 @dataclasses.dataclass
@@ -773,6 +785,96 @@ def _scaffold_interview(ctx: _Context, acc: _Acc) -> dict[str, Any]:
     return spec
 
 
+# The fail-safe axis kind the classify-axis skeleton pre-fills. ``sequential`` is
+# the classifier's OWN conservative default (``_DataAxisConfig.kind``: "unbounded /
+# order-dependent state, not splittable; the fail-safe default"), so a caller who
+# invokes the skeleton unedited under-parallelizes rather than returning
+# plausible-but-wrong numbers. It is always flagged unresolved.
+_PH_AXIS_KIND = "sequential"
+
+
+def _run_signature_sha(experiment_dir: Path | None, run_name: str | None, acc: _Acc) -> str | None:
+    """The named ``@register_run``'s current ``run_signature_sha``, or ``None``.
+
+    ``discover_runs`` is a pure AST walk (no user-code import), so it is safe on
+    the read-only scaffold path. Any failure — no experiment dir, an unscannable
+    tree, no run by that name — degrades to ``None`` + a warning, exactly like
+    every other source in :func:`_gather_context`.
+    """
+    if experiment_dir is None or not run_name:
+        return None
+    from hpc_agent.state.discover import discover_runs
+
+    try:
+        runs = discover_runs(experiment_dir)
+    except Exception as exc:  # noqa: BLE001 — degrade, don't fail a scaffold
+        acc.warnings.append(f"discover-runs failed; run_signature_sha is a placeholder: {exc}")
+        return None
+    for info in runs:
+        if info.name == run_name:
+            sha = getattr(info, "run_signature_sha", None)
+            return str(sha) if sha else None
+    acc.warnings.append(
+        f"no @register_run named {run_name!r} found by the AST scan; "
+        "run_signature_sha is a placeholder"
+    )
+    return None
+
+
+def _scaffold_classify_axis(ctx: _Context, acc: _Acc) -> dict[str, Any]:
+    """Populate a ``ClassifyAxisInput`` skeleton — the axis-recording verb.
+
+    ``classify-axis`` persists a RESOLVED classification into ``axes.yaml``'s
+    ``executors`` block; the classification itself is a judgment point (the
+    hpc-classify-axis skill's decision tree, or ``classify-axis-auto``'s
+    ``needs_llm_tree`` escalation). So this scaffolder fills what context CAN
+    supply and refuses to invent the one thing it cannot:
+
+    * ``run_name`` — the same context source every other scaffolder uses
+      (``--run-name`` / ``load-context latest_run.profile`` / the sole executor);
+    * ``run_signature_sha`` — DERIVED by the ``discover-runs`` AST scan, which is
+      also the key ``axes.yaml`` documents as the classification's invalidation
+      trigger, so a scaffold built here re-classifies exactly the signature on
+      disk;
+    * ``data_axis`` — the fail-safe ``sequential`` placeholder, ALWAYS flagged
+      unresolved (a wrong axis returns plausible-but-wrong numbers, so this field
+      is never auto-resolved);
+    * ``classified_by`` — ``"agent"``, the honest provenance for a scaffolded
+      autonomous classification (the caller overrides to ``"interview"`` when a
+      human was in the loop).
+    """
+    spec: dict[str, Any] = {}
+    acc.req(
+        spec,
+        "run_name",
+        ctx.run_name,
+        "load-context latest_run.profile / --run-name",
+        _PH_RUN_NAME,
+    )
+    acc.req(
+        spec,
+        "run_signature_sha",
+        _run_signature_sha(ctx.experiment_dir, ctx.run_name, acc),
+        f"discover-runs AST scan ({ctx.run_name})",
+        _PH_SIGNATURE_SHA,
+    )
+    # The judgment point: pre-filled with the classifier's own fail-safe so the
+    # skeleton validates, never presented as resolved.
+    spec["data_axis"] = {"kind": _PH_AXIS_KIND}
+    acc.sources["data_axis"] = (
+        "placeholder — the classification is a judgment point (hpc-classify-axis "
+        f"decision tree / classify-axis-auto escalation); {_PH_AXIS_KIND!r} is the "
+        "fail-safe default"
+    )
+    acc.unresolved.append("data_axis")
+    spec["classified_by"] = "agent"
+    acc.sources["classified_by"] = (
+        "default — 'agent' (a scaffolded autonomous classification); override to "
+        "'interview' when a human was in the loop"
+    )
+    return spec
+
+
 # verb -> (scaffolder, target input model). The model double-checks the
 # emitted skeleton before it leaves (the #287 "refuses to emit a spec the
 # verb would itself reject" guarantee).
@@ -782,6 +884,7 @@ _SCAFFOLDERS: dict[str, Callable[[_Context, _Acc], dict[str, Any]]] = {
     "resolve-submit-inputs": _scaffold_resolve_submit_inputs,
     "campaign-run": _scaffold_campaign_run,
     "interview": _scaffold_interview,
+    "classify-axis": _scaffold_classify_axis,
 }
 _TARGET_MODELS: dict[str, type[pydantic.BaseModel]] = {
     "build-submit-spec": BuildSubmitSpecInput,
@@ -789,6 +892,7 @@ _TARGET_MODELS: dict[str, type[pydantic.BaseModel]] = {
     "resolve-submit-inputs": ResolveSubmitInputsSpec,
     "campaign-run": CampaignRunSpec,
     "interview": InterviewSpec,
+    "classify-axis": ClassifyAxisInput,
 }
 
 
@@ -802,8 +906,9 @@ _TARGET_MODELS: dict[str, type[pydantic.BaseModel]] = {
         help=(
             "Emit a populated, schema-valid --spec skeleton for another verb "
             "(build-submit-spec / resolve-submit-inputs / validate-campaign / "
-            "campaign-run / interview), pulling cluster / run_id / context values "
-            "from clusters.yaml, compute-run-id, and load-context so the agent "
+            "campaign-run / interview / classify-axis), pulling cluster / run_id / "
+            "run_signature_sha / context values from clusters.yaml, compute-run-id, "
+            "discover-runs, and load-context so the agent "
             "stops divining the schema one spec_invalid at a time (#287). Read "
             "the returned spec, fill its unresolved_fields, then invoke the "
             "target verb."
