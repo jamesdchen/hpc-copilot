@@ -29,6 +29,8 @@ cannot pass silently.
 
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
+| `wrap-entry-point-auto` input grew `data_axis_hint` + `solver` (the two wrapper-only interview fields, #260/G2+G5) | `docs/plans/prelude-chain-2026-07-30.md` (Wave P1, unit P1.a — skill-rewiring seam pass) | `scripts/build_schemas.py --write` re-emits `schemas/wrap_entry_point_auto.input.json` (two new optional fields + the `_DataAxisHint` / `_HaloHint` / `_PetscSolverHint` `$defs` reused verbatim from `interview.input.json`) | **RED** `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in[wrap_entry_point_auto.input.json]`; also red until the rebake: `test_minimal_instance_validates_against_emitted_schema` (the stale `additionalProperties: false` schema rejects the model's own minimal dump) | P1.a seam-gap pass / Wave P1 |
+| `wrap-entry-point-auto` `needs_wrapper_argv` grew `argv_extraction` + `argv_params` (the carried extraction, G1) | `docs/plans/prelude-chain-2026-07-30.md` (Wave P1, unit P1.a — skill-rewiring seam pass) | `scripts/build_schemas.py --write` re-emits `schemas/wrap_entry_point_auto.output.json` (two new fields on the `_NeedsWrapperArgvResult` branch of the four-shape `anyOf`) | **RED** `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in[wrap_entry_point_auto.output.json]` | P1.a seam-gap pass / Wave P1 |
 
 Row format (binds every future row):
 

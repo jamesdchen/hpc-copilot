@@ -72,8 +72,12 @@ contract-taught-by-refusal posture, never a generic refusal:
   framework's parser to derive them. It DOES compose the deterministic
   ``argv_head`` (``["python3", "train.py"]`` / ``["python3", "-m",
   "pkg"]`` / ``["mytool"]`` / ``["./run.sh"]``) so the caller only
-  supplies the flags — and it NAMES the ``python_module`` alternative
-  (see below) when one is importable.
+  supplies the flags; it CARRIES the ``argv_extraction`` verdict +
+  ``argv_params`` the step-1 scan already produced (for argparse / click
+  the flag names, types and defaults are read straight off the AST, so
+  the caller composes the template from them instead of paying for a
+  second ``detect-entry-point`` call); and it NAMES the ``python_module``
+  alternative (see below) when one is importable.
 
 All three ``InterviewSpec`` entry-point kinds are REPRESENTABLE
 -------------------------------------------------------------
@@ -92,10 +96,27 @@ offers it as the second option for row 2, so ``needs_wrapper_argv``
 DISCLOSES the derived ``{module, function}`` target whenever one is
 importable from the campaign dir; the gap is named, never silent.
 
+The two wrapper-ONLY interview fields
+-------------------------------------
+
+``data_axis_hint`` (#260) and ``solver`` live on ``interview``'s
+``_ShellCommandEntry`` and on neither introspectable shape. Both are
+accepted as optional inputs and copied VERBATIM onto the composed
+``shell_command`` entry block; ``solver`` additionally falls back to the
+adapter ``detect-entry-point`` recognized in the source. Supplying either
+on the ``decorate`` / ``module`` pathway is a NAMED ``SpecInvalid``
+(``_refuse_wrapper_only_fields``), not a silent drop: a wrapper body is a
+``subprocess.check_call`` ``classify-axis`` cannot introspect — which is
+precisely why the hint is load-bearing there and a caller error anywhere
+else.
+
 What this verb deliberately does NOT do: it never calls the
 ``interview`` primitive (it emits the ready-to-hand ``interview_spec``
-fragment instead), never stamps ``produced_by``, never walks the
-data-axis tree (that is ``classify-axis-auto``'s seat), and never
+fragment instead), never walks the data-axis tree (that is
+``classify-axis-auto``'s seat — this verb only carries a hint the caller
+already holds), never names an OPERATOR (the fragment's ``produced_by``
+is the bare ``{kind: "human"}`` the interview schema requires; the
+interview's own composer fills ``.operator`` from git config), and never
 materializes the wrapper file (the ``interview`` verb owns that write).
 """
 
@@ -109,7 +130,10 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent._wire.actions.wrap_entry_point_auto import WrapEntryPointAutoInput
+from hpc_agent._wire.actions.wrap_entry_point_auto import (
+    PetscSolverHint,
+    WrapEntryPointAutoInput,
+)
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 if TYPE_CHECKING:
@@ -181,7 +205,13 @@ _INTENT_FIELDS: tuple[str, ...] = ("goal", "task_generator", "task_count")
 
 @dataclass(frozen=True)
 class _EntryPoint:
-    """The resolved entry point: which file, which function, how classified."""
+    """The resolved entry point: which file, which function, how classified.
+
+    ``argv_extraction`` / ``argv_params`` / ``detected_solver`` are carried
+    from the SAME ``detect-entry-point`` block every other step reads. The
+    composite already paid for that scan, so re-deriving (or dropping) any of
+    the three would re-open the produce→consume seam this verb exists to close.
+    """
 
     path: str
     argv_kind: str
@@ -189,6 +219,9 @@ class _EntryPoint:
     function: str | None
     func_node: ast.FunctionDef | ast.AsyncFunctionDef | None
     already_decorated: bool
+    argv_extraction: str
+    argv_params: list[dict[str, Any]] | None
+    detected_solver: str | None
 
 
 @dataclass(frozen=True)
@@ -220,6 +253,40 @@ def _candidate_row(candidates: Sequence[dict[str, Any]], path: str) -> dict[str,
         if row.get("path") == path:
             return row
     return None
+
+
+def _candidate_surface(
+    detected: dict[str, Any], path: str
+) -> tuple[str, list[dict[str, Any]] | None, str | None]:
+    """The scanned surface for *path*: ``(argv_extraction, argv_params, solver)``.
+
+    Read off the SAME ``detect-entry-point`` block step 1 produced — the whole
+    point of running that scan in-process. Three carries, one lookup:
+
+    * ``argv_extraction`` / ``argv_params`` — the mechanical parameter read
+      (``ops/argv_extract.py``). Carrying them onto ``needs_wrapper_argv`` is
+      what lets the caller compose the argv template WITHOUT a second
+      ``detect-entry-point`` call.
+    * ``solver`` — the detected checkpoint adapter (``"petsc"``), which the
+      wrapper pathway turns into an ``entry_point.solver`` hint.
+
+    A path the scan never surfaced (the caller named it) has no classified
+    surface, so it reports ``unsupported`` / ``None`` — the same honest verdict
+    the extractor gives a typer file, never an absent field the consumer has to
+    read as "unknown". An ``extracted`` verdict with no list is normalized to
+    ``unsupported`` for the same reason.
+    """
+    # Deferred like the ``detect_entry_point`` import below it, and for the
+    # same reason: ``incorporation`` is a substrate role that must not import
+    # UP into ``ops`` at module level (scripts/lint_subject_imports.py).
+    from hpc_agent.ops.argv_extract import EXTRACTION_EXTRACTED, EXTRACTION_UNSUPPORTED
+
+    row = _candidate_row(list(detected.get("candidates") or []), path) or {}
+    solver = row.get("solver")
+    params = row.get("argv_params")
+    if row.get("argv_extraction") != EXTRACTION_EXTRACTED or params is None:
+        return EXTRACTION_UNSUPPORTED, None, solver
+    return EXTRACTION_EXTRACTED, list(params), solver
 
 
 def _resolve_entry_file(
@@ -507,6 +574,57 @@ def _refuse_unsafe_forced_register_run(entry: _EntryPoint) -> None:
                 "entry_point_kind='shell_command'. This verb refuses rather than "
                 "rerouting, because silently overriding your override is worse "
                 "than asking."
+            ),
+        )
+
+
+def _refuse_wrapper_only_fields(spec: WrapEntryPointAutoInput, pathway: str) -> None:
+    """Refuse ``data_axis_hint`` / ``solver`` outside the wrapper pathway.
+
+    Both fields exist on ``interview``'s ``_ShellCommandEntry`` and on NEITHER
+    of the two introspectable shapes (``_RegisterRunEntry`` /
+    ``_PythonModuleEntry`` declare them nowhere and are ``extra="forbid"``), so
+    a hint supplied on the ``decorate`` / ``module`` pathway could only be
+    silently dropped on the way to the fragment. That is the exact class this
+    module already refuses for ``fixed_params`` on ``python_module``: a dropped
+    caller value changes nothing visibly and everything semantically.
+
+    ``data_axis_hint`` is the load-bearing case (#260). A wrapper body is a
+    ``subprocess.check_call`` ``classify-axis`` cannot introspect, so on the
+    wrapper pathway the hint is the ONLY way the classification reaches
+    ``axes.yaml`` without an interactive tree. On an introspectable pathway
+    ``classify-axis`` reads the real function — so the hint is not a missing
+    input there, it is a caller error, and it is NAMED as one.
+    """
+    if pathway == "wrapper":
+        return
+    kind = "register_run" if pathway == "decorate" else "python_module"
+    if spec.data_axis_hint is not None:
+        raise errors.SpecInvalid(
+            f"data_axis_hint is not representable on the {pathway!r} pathway "
+            f"(entry_point.kind={kind!r}): the interview accepts it only on a "
+            "shell_command entry point (#260)",
+            remediation=(
+                "The hint exists because a wrapper's subprocess body is "
+                "uninspectable — classify-axis cannot read a "
+                "subprocess.check_call, so the experimenter declares the axis. "
+                f"A {kind} entry point IS introspectable: classify-axis reads "
+                "the real function, so drop data_axis_hint and let it classify "
+                "(or run classify-axis-auto, whose seat that is). If the entry "
+                "point genuinely must be shelled out to, say so with "
+                "entry_point_kind='shell_command' and the hint becomes valid."
+            ),
+        )
+    if spec.solver is not None:
+        raise errors.SpecInvalid(
+            f"solver is not representable on the {pathway!r} pathway "
+            f"(entry_point.kind={kind!r}); the wire shape carries no solver field",
+            remediation=(
+                "The solver hint instruments a MATERIALIZED wrapper (it injects "
+                "the library's checkpoint hooks around the argv), and only the "
+                "shell_command entry point has one. Drop solver, or route "
+                "through the wrapper with entry_point_kind='shell_command' if "
+                "the solve loop needs checkpoint instrumentation."
             ),
         )
 
@@ -1013,6 +1131,19 @@ def _needs_wrapper_argv(
             "file. Code does not choose it for you — whether the file may be "
             "edited is caller judgment, not a repo fact."
         )
+    # ``_candidate_surface`` already normalized the pair, so a non-None list IS
+    # the ``extracted`` verdict — no second read of the verdict string (and no
+    # module-level reach up into ``ops`` for its constant) is needed here.
+    if entry.argv_params is not None:
+        named = ", ".join(str(param.get("dest")) for param in entry.argv_params)
+        ask += (
+            f" The CLI parameters were ALREADY read mechanically off the AST "
+            f"({len(entry.argv_params)}: {named or 'none declared'}) and are "
+            "carried on argv_params below — compose the template from those "
+            "rather than re-running detect-entry-point or re-reading the file. "
+            "A param carrying an 'unextracted' marker still needs a source read "
+            "for the argument it names."
+        )
     if missing_intent:
         ask += (
             " Also still missing (gather in the same exchange): " + ", ".join(missing_intent) + "."
@@ -1024,6 +1155,10 @@ def _needs_wrapper_argv(
         "entry_point_path": entry.path,
         "run_name": run_name,
         "argv_head": head,
+        # The extraction the in-process detect ALREADY produced. Dropping it
+        # here is what forced the caller into a second detect-entry-point call.
+        "argv_extraction": entry.argv_extraction,
+        "argv_params": entry.argv_params,
         "missing_fields": list(missing),
         "missing_intent_fields": list(missing_intent),
         "python_module_alternative": python_module_alternative,
@@ -1143,6 +1278,11 @@ def wrap_entry_point_auto(
         func_node, func_rule, already_decorated = func
         entry_rule = f"{entry_rule}+{func_rule}"
 
+    # The mechanical-parameter verdict + the detected solver adapter, read off
+    # the SAME detect block — carried onto the escalation / the fragment so no
+    # consumer has to run detect-entry-point a second time.
+    argv_extraction, argv_params, detected_solver = _candidate_surface(detected, path)
+
     entry = _EntryPoint(
         path=path,
         argv_kind=argv_kind,
@@ -1150,12 +1290,20 @@ def wrap_entry_point_auto(
         function=func_node.name if func_node is not None else None,
         func_node=func_node,
         already_decorated=already_decorated,
+        argv_extraction=argv_extraction,
+        argv_params=argv_params,
+        detected_solver=detected_solver,
     )
 
     # 4. the pathway decision table.
     pathway, pathway_rule = _decide_pathway(
         entry=entry, caller_entry_point_kind=spec.entry_point_kind
     )
+
+    # 4a. the two wrapper-ONLY interview fields. Refused here — before the
+    #     wrapper escalation and long before the decoration write — so a hint
+    #     aimed at an introspectable pathway is named rather than dropped.
+    _refuse_wrapper_only_fields(spec, pathway)
 
     run_name = (
         spec.run_name
@@ -1296,6 +1444,23 @@ def wrap_entry_point_auto(
             entry_block["argv"] = list(spec.argv or [])
             entry_block["signature"] = dict(spec.signature or {})
             entry_block["frozen_configs"] = frozen_configs
+            # The two wrapper-only hints. `data_axis_hint` is copied through
+            # VERBATIM — it is the experimenter's classification of an
+            # uninspectable subprocess body, so nothing here re-derives or
+            # normalizes it (step 4a already refused it on the other pathways).
+            if spec.data_axis_hint is not None:
+                entry_block["data_axis_hint"] = spec.data_axis_hint.model_dump(
+                    exclude_none=True, mode="json"
+                )
+            # `solver`: the caller's override wins; otherwise the DETECTED
+            # adapter becomes that adapter's default hint. Detection reported
+            # the library and the wrapper can instrument it, so dropping it
+            # here would silently cost a long solve its preemption-safety.
+            solver_hint = spec.solver
+            if solver_hint is None and detected_solver == "petsc":
+                solver_hint = PetscSolverHint(kind="petsc")
+            if solver_hint is not None:
+                entry_block["solver"] = solver_hint.model_dump(exclude_none=True, mode="json")
         if fixed_params:
             entry_block["fixed_params"] = fixed_params
 
@@ -1315,13 +1480,20 @@ def wrap_entry_point_auto(
         "frozen_sha_params": sha_params,
         "fixed_params": fixed_params,
         "partition": partition.as_dict(),
-        # The InterviewSpec FRAGMENT, not a complete spec: produced_by is
-        # deliberately absent (stamping the operator is the interview verb's
-        # own composer), as is data_axis_hint (classify-axis-auto's seat).
+        # The InterviewSpec fragment — SUBMITTABLE as-is. ``produced_by`` is
+        # REQUIRED by interview.input.json, so a fragment omitting it could
+        # never be handed on unedited; what is emitted is the minimal
+        # who-CLASS SUGGESTION ({kind: "human"}), and the interview's own
+        # P1.c composer fills ``.operator`` from git config and discloses it
+        # as a composed default. Attribution requiredness is untouched: this
+        # verb declares that a human owns the intent (it just refused to
+        # invent goal / task_generator / task_count on their behalf), never
+        # who that human is.
         "interview_spec": {
             "goal": goal,
             "task_count": task_count,
             "task_generator": task_generator.model_dump(exclude_none=True, mode="json"),
             "entry_point": entry_block,
+            "produced_by": {"kind": "human"},
         },
     }

@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 from hpc_agent import errors
+from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent._wire.actions.wrap_entry_point_auto import (
     WrapEntryPointAutoInput,
     WrapEntryPointAutoResult,
@@ -35,6 +36,16 @@ from hpc_agent._wire.actions.wrap_entry_point_auto import (
 from hpc_agent.incorporation import wrap_entry_point_auto as wep
 
 _GOAL = "measure pi convergence against sample count"
+
+# The detect-entry-point surface carries for an entry point the scan classified
+# but could not read parameters off (and recognized no solver library in). Used
+# by the pathway-table unit tests, which build ``_EntryPoint`` directly — the
+# table decides on the AST, never on the extraction verdict.
+_NO_SURFACE: dict[str, Any] = {
+    "argv_extraction": "unsupported",
+    "argv_params": None,
+    "detected_solver": None,
+}
 
 
 # ── fixture builders ─────────────────────────────────────────────────────
@@ -150,8 +161,29 @@ def test_onboarded_emits_a_ready_interview_spec_fragment(tmp_path: Path) -> None
     assert frag["task_count"] == 3
     assert frag["task_generator"]["kind"] == "items_x_seeds"
     assert frag["entry_point"] == {"kind": "register_run", "run_name": "train"}
-    # produced_by is the interview verb's own composer, NOT stamped here.
-    assert "produced_by" not in frag
+    # produced_by is REQUIRED by interview.input.json, so the fragment carries
+    # the minimal who-CLASS suggestion. The OPERATOR is deliberately absent:
+    # the interview's own composer fills it from git config and discloses it.
+    assert frag["produced_by"] == {"kind": "human"}
+
+
+def test_the_fragment_is_submittable_to_the_interview_verb(tmp_path: Path) -> None:
+    """The fragment validates against the interview's OWN input model.
+
+    The point of emitting a fragment rather than a sketch: the caller hands it
+    on unedited. ``produced_by`` is one of interview.input.json's three
+    required fields, so a fragment omitting it was never submittable — this
+    pin fails the moment the key is dropped again.
+    """
+    _write(tmp_path, "train.py", _decorated_train())
+
+    frag = _run(tmp_path, _spec())["interview_spec"]
+
+    assert "produced_by" in set(InterviewSpec.model_json_schema()["required"])
+    spec = InterviewSpec.model_validate(frag)
+    # Composed one layer in (P1.c), never hand-authored here.
+    assert spec.produced_by.kind == "human"
+    assert spec.produced_by.operator is None
 
 
 def test_second_call_is_idempotent(tmp_path: Path) -> None:
@@ -624,6 +656,7 @@ def test_pathway_table_rows(
         function=node.name if node is not None else None,
         func_node=node,
         already_decorated=already,
+        **_NO_SURFACE,
     )
 
     pathway, rule = wep._decide_pathway(entry=entry, caller_entry_point_kind=None)
@@ -708,6 +741,7 @@ def test_non_python_row_routes_to_the_wrapper() -> None:
             function=None,
             func_node=None,
             already_decorated=False,
+            **_NO_SURFACE,
         )
         assert wep._decide_pathway(entry=entry, caller_entry_point_kind=None) == (
             "wrapper",
@@ -878,6 +912,218 @@ def test_no_python_module_alternative_when_none_is_importable(tmp_path: Path) ->
     assert out["needs_wrapper_argv"] is True
     assert out["python_module_alternative"] is None
     assert "python_module" not in out["ask"]
+
+
+# ── the carried argv extraction (no second detect-entry-point call) ──────
+
+
+_ARGPARSE_MAIN = (
+    "import argparse\n\n\n"
+    "def main() -> None:\n"
+    "    p = argparse.ArgumentParser()\n"
+    "    p.add_argument('--seed', type=int, default=0)\n"
+    "    p.add_argument('--lr', type=float)\n"
+    "    args = p.parse_args()\n"
+    "    print(args)\n"
+)
+
+
+def test_needs_wrapper_argv_carries_the_extracted_params(tmp_path: Path) -> None:
+    """The composite ran detect in-process — the extraction rides the escalation.
+
+    Dropping it forced the caller to run ``detect-entry-point`` a SECOND time
+    to compose the argv template, re-opening the produce→consume seam this
+    composite exists to close.
+    """
+    _write(tmp_path, "main.py", _ARGPARSE_MAIN)
+
+    out = _run(tmp_path, _spec())
+
+    assert out["needs_wrapper_argv"] is True
+    assert out["argv_kind"] == "argparse"
+    assert out["argv_extraction"] == "extracted"
+    params = out["argv_params"]
+    assert [p["dest"] for p in params] == ["seed", "lr"]
+    assert [p["names"] for p in params] == [["--seed"], ["--lr"]]
+    assert params[0]["type"] == "int"
+    assert params[0]["default"] == 0
+    # The ask points at the carried params rather than at another scan.
+    assert "argv_params" in out["ask"]
+    assert "seed, lr" in out["ask"]
+
+
+def test_needs_wrapper_argv_is_honest_when_extraction_is_unsupported(tmp_path: Path) -> None:
+    """A framework whose flags are not declared as literals reports it plainly."""
+    _write(
+        tmp_path,
+        "main.py",
+        "import hydra\n\n\n@hydra.main(config_path='conf')\ndef main(cfg) -> None:\n    pass\n",
+    )
+
+    out = _run(tmp_path, _spec())
+
+    assert out["needs_wrapper_argv"] is True
+    assert out["argv_extraction"] == "unsupported"
+    assert out["argv_params"] is None
+    # No phantom claim about parameters we never read.
+    assert "argv_params" not in out["ask"]
+
+
+def test_a_caller_named_path_the_scan_never_saw_reports_unsupported(tmp_path: Path) -> None:
+    """No classified surface → the same honest verdict, never an absent field."""
+    _write(tmp_path, "tools/launch.py", _ARGPARSE_MAIN)
+
+    out = _run(tmp_path, _spec(entry_point_path="tools/launch.py"))
+
+    assert out["needs_wrapper_argv"] is True
+    assert out["argv_extraction"] == "unsupported"
+    assert out["argv_params"] is None
+
+
+# ── the two wrapper-ONLY interview fields (#260) ─────────────────────────
+
+
+_HALO_HINT: dict[str, Any] = {"kind": "bounded_halo", "halo": {"expr": "train_window * 48"}}
+
+
+def _wrapper_spec(**kwargs: Any) -> WrapEntryPointAutoInput:
+    """A spec that clears the needs_wrapper_argv escalation."""
+    return _spec(argv=["./run.sh", "--seed", "{seed}"], signature={"seed": "int"}, **kwargs)
+
+
+def test_data_axis_hint_rides_the_wrapper_fragment_verbatim(tmp_path: Path) -> None:
+    """The hint is load-bearing HERE: a subprocess body is uninspectable."""
+    _write(tmp_path, "run.sh", "#!/bin/sh\n")
+
+    out = _run(tmp_path, _wrapper_spec(data_axis_hint=_HALO_HINT))
+
+    assert out["onboarded"] is True
+    entry = out["interview_spec"]["entry_point"]
+    assert entry["data_axis_hint"] == _HALO_HINT
+    # And the whole fragment still satisfies the interview's own model.
+    InterviewSpec.model_validate(out["interview_spec"])
+
+
+def test_wrapper_fragment_omits_the_hint_when_none_was_given(tmp_path: Path) -> None:
+    _write(tmp_path, "run.sh", "#!/bin/sh\n")
+
+    out = _run(tmp_path, _wrapper_spec())
+
+    assert "data_axis_hint" not in out["interview_spec"]["entry_point"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "spec_kwargs", "expected_kind"),
+    [
+        ("data_axis_hint", _HALO_HINT, {}, "register_run"),
+        ("data_axis_hint", _HALO_HINT, {"entry_point_kind": "python_module"}, "python_module"),
+        ("solver", {"kind": "petsc"}, {}, "register_run"),
+        ("solver", {"kind": "petsc"}, {"entry_point_kind": "python_module"}, "python_module"),
+    ],
+)
+def test_wrapper_only_fields_are_refused_on_an_introspectable_pathway(
+    tmp_path: Path,
+    field: str,
+    value: dict[str, Any],
+    spec_kwargs: dict[str, Any],
+    expected_kind: str,
+) -> None:
+    """#260: neither field exists on register_run / python_module.
+
+    Both wire shapes are ``extra="forbid"`` and declare neither field, so a
+    caller value could only be silently DROPPED on the way to the fragment.
+    That is the class this verb already refuses for fixed_params — and the
+    refusal names why the field is wrapper-only rather than merely rejecting.
+    """
+    _write(tmp_path, "train.py", _plain_train())
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(errors.SpecInvalid) as exc:
+        _run(tmp_path, _spec(**{field: value}, **spec_kwargs))
+
+    assert field in str(exc.value)
+    assert expected_kind in str(exc.value)
+    remediation = exc.value.remediation or ""
+    assert "shell_command" in remediation
+    # Refused BEFORE the decoration write — the repo is byte-identical.
+    assert _tree_snapshot(tmp_path) == before
+
+
+def test_the_wrapper_only_refusal_names_why_the_hint_exists(tmp_path: Path) -> None:
+    """Contract-taught-by-refusal: the ask explains the introspection asymmetry."""
+    _write(tmp_path, "train.py", _plain_train())
+
+    with pytest.raises(errors.SpecInvalid) as exc:
+        _run(tmp_path, _spec(data_axis_hint=_HALO_HINT))
+
+    assert "#260" in str(exc.value)
+    assert "subprocess" in (exc.value.remediation or "")
+
+
+# ── the solver hint (detected, or caller-overridden) ─────────────────────
+
+
+_PETSC_MAIN = (
+    "import argparse\n"
+    "from petsc4py import PETSc\n\n\n"
+    "def main() -> None:\n"
+    "    ts = PETSc.TS().create()\n"
+    "    ts.setFromOptions()\n"
+    "    ts.solve(u)\n"
+)
+
+
+def test_detected_solver_rides_the_wrapper_fragment(tmp_path: Path) -> None:
+    """detect-entry-point recognized the library; the fragment carries it.
+
+    Dropping it costs a long solve its preemption-safety silently — the
+    wrapper simply never gets the checkpoint hooks.
+    """
+    _write(tmp_path, "main.py", _PETSC_MAIN)
+
+    out = _run(
+        tmp_path,
+        _spec(
+            entry_point_kind="shell_command",
+            argv=["python3", "main.py", "--seed", "{seed}"],
+            signature={"seed": "int"},
+        ),
+    )
+
+    assert out["onboarded"] is True
+    assert out["interview_spec"]["entry_point"]["solver"] == {
+        "kind": "petsc",
+        "solver_object": "ts",
+    }
+    InterviewSpec.model_validate(out["interview_spec"])
+
+
+def test_caller_solver_override_wins_over_the_detected_adapter(tmp_path: Path) -> None:
+    _write(tmp_path, "main.py", _PETSC_MAIN)
+
+    out = _run(
+        tmp_path,
+        _spec(
+            entry_point_kind="shell_command",
+            argv=["python3", "main.py", "--seed", "{seed}"],
+            signature={"seed": "int"},
+            solver={"kind": "petsc", "solver_object": "snes", "resume_flag": "-restart_file"},
+        ),
+    )
+
+    assert out["interview_spec"]["entry_point"]["solver"] == {
+        "kind": "petsc",
+        "solver_object": "snes",
+        "resume_flag": "-restart_file",
+    }
+
+
+def test_no_solver_field_when_none_detected_and_none_supplied(tmp_path: Path) -> None:
+    _write(tmp_path, "run.sh", "#!/bin/sh\n")
+
+    out = _run(tmp_path, _wrapper_spec())
+
+    assert "solver" not in out["interview_spec"]["entry_point"]
 
 
 # ── structural refusals ──────────────────────────────────────────────────

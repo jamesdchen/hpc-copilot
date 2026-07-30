@@ -130,6 +130,46 @@ def test_fetch_no_clear_keeps_file(tmp_path: Path) -> None:
     assert (tmp_path / ".hpc" / "_returns" / f"{skill}.json").exists()
 
 
+# ─── entry_point_kind: all THREE onboarding shapes must be reportable ──────
+
+
+@pytest.mark.parametrize("kind", ["register_run", "shell_command", "python_module"])
+def test_wrap_entry_point_accepts_every_reachable_entry_point_kind(
+    tmp_path: Path, kind: str
+) -> None:
+    """Every kind ``wrap-entry-point-auto`` can settle on must emit cleanly.
+
+    All three ``InterviewSpec`` entry-point kinds are reachable — ``python_module``
+    by explicit ``entry_point_kind`` override (whether the file may be edited is
+    caller judgment, not a repo fact). Pinning the enum to the first two left a
+    python_module onboarding unable to report SUCCESS at all: the skill would
+    finish the work and then fail its own return envelope.
+    """
+    skill = "hpc-wrap-entry-point"
+    payload = {**_VALID_PAYLOADS[skill], "entry_point_kind": kind}
+    if kind == "shell_command":
+        payload["wrapper_path"] = "/exp/.hpc/wrappers/forecast.py"
+    _stage(tmp_path, skill, payload)
+
+    rc, out, _ = run_cli("emit-skill-return", "--skill", skill, "--experiment-dir", str(tmp_path))
+
+    assert rc == 0, out
+    assert parse_envelope(out)["data"]["validated"] is True
+
+
+def test_wrap_entry_point_still_rejects_an_unknown_entry_point_kind(tmp_path: Path) -> None:
+    """The widened enum is still an enum — the guard can fire."""
+    skill = "hpc-wrap-entry-point"
+    _stage(tmp_path, skill, {**_VALID_PAYLOADS[skill], "entry_point_kind": "notebook"})
+
+    rc, out, _ = run_cli("emit-skill-return", "--skill", skill, "--experiment-dir", str(tmp_path))
+
+    assert rc == 1
+    env = parse_envelope(out)
+    assert env["error_code"] == "spec_invalid"
+    assert "hpc-wrap-entry-point.json" in env["remediation"]
+
+
 # ─── schema validation on the emit side ────────────────────────────────────
 
 
