@@ -1,44 +1,42 @@
 ---
 name: hpc-wrap-entry-point
-description: "Onboard a repo for hpc-agent submission, autonomously. Given a partial `InterviewSpec` (goal + task_generator are required from the caller; everything else is detected from the repo), the skill: (a) detects an existing entry point or scaffolds one via `build-template --shape {script,notebook}` for greenfield repos, (b) prefers `@register_run` direct decoration on the user's existing function and falls back to materializing a wrapper at `.hpc/wrappers/<run_name>.py` only when direct decoration is structurally blocked (non-Python entry point, `@hydra.main` signature rewrite, vendor code), (c) detects frozen YAML configs by convention, (d) walks the data-axis decision tree, (e) invokes the `interview` primitive to persist `tasks.py` + `interview.json`. No `[Y/n]` prompts — every choice point has a deterministic resolution. Human-driven callers (`/submit-hpc`'s interview phase) gather intent from the user *first* and pass a fully-resolved spec; the skill records what it was given."
+description: "Onboard a repo for hpc-agent submission, autonomously. The deterministic head is ONE call to `wrap-entry-point-auto` (detect → pathway table → decorate → frozen-YAML scan → fixed-params partition, in code); the skill supplies the caller-owned intent (`goal` + `task_generator`), resolves whichever of the three named escalations comes back — `needs_pick` (an entry-point tie), `needs_intent` (a human-owned field), `needs_wrapper_argv` (an argv template for a non-introspectable CLI surface) — and then invokes the `interview` primitive to persist `tasks.py` + `interview.json`. No `[Y/n]` prompts; every deterministic choice point is resolved by the verb, and every genuine judgment point is escalated by name. Human-driven callers (`/submit-hpc`'s interview phase) gather intent from the user *first* and pass a fully-resolved spec; the skill records what it was given."
 allowed-tools: Bash Read Write Glob
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[interview](../../../../docs/primitives/interview.md) primitive**. Autonomous mode fills a partial `InterviewSpec` from repo inspection; the slash consumer (`/submit-hpc`'s interview phase) passes a fully-resolved spec and the skill just records.
+Agent-facing composition over two primitives: **[wrap-entry-point-auto](../../../../docs/primitives/wrap-entry-point-auto.md)** (the deterministic head — one call) and the **[interview](../../../../docs/primitives/interview.md) primitive** (the persist). Autonomous mode lets the verb fill everything a repo scan can decide; the slash consumer (`/submit-hpc`'s interview phase) passes a fully-resolved spec and the skill just records.
 
 The skill persists, in either pathway:
 - A `tasks.py` (from the supplied `task_generator`) whose kwargs include `<stem>_sha` for every frozen YAML, so `cmd_sha` distinguishes `exp_42.yaml` from `exp_43.yaml` and catches in-place edits.
-- An `interview.json` recording the entry-point shape (`register_run` pointer for 3a; `shell_command` block with the wrapper for 3b).
-- **Only in the fallback path**: a `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's entry point with kwargs substituted. Downstream primitives (`classify-axis`, `validate-executor-signatures`) introspect the wrapper's typed signature; the underlying entry point stays untouched.
+- An `interview.json` recording the entry-point shape (`register_run` pointer for the decorate pathway; `shell_command` block with the wrapper for the wrapper pathway).
+- **Only in the wrapper pathway**: a `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's entry point with kwargs substituted. Downstream primitives (`classify-axis`, `validate-executor-signatures`) introspect the wrapper's typed signature; the underlying entry point stays untouched.
+
+**"Where am I / what's next" is a query, not a recollection.** `hpc-agent suggest-prelude-action --experiment-dir <dir>` answers it mechanically off the five durable prelude substrates (notebook journal, audit-config seat, pack journal + opt-in integrity, `axes.yaml`, `interview.json`) and returns `{rung, action, why, scaffold}`. Run it when you are unsure whether this skill is even the next step — rung 5 (`audit-handoff`) and rung 6 (`interview`) are the two that route here. Contract: `docs/primitives/suggest-prelude-action.md`.
 
 ## Execution style
 
 - **Batch independent tool calls into one assistant message.** "Parallel" means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. NOT shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — that trips the permission classifier as a compound command.
 - **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
-- **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json`. The final step of this skill (Step 8 below) writes that envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-wrap-entry-point.json` and is enforced by the emit verb.
+- **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json`. The final step of this skill (Step 6 below) writes that envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-wrap-entry-point.json` and is enforced by the emit verb.
 
 ## Inputs
 
-Caller-supplied (the skill refuses with `spec_invalid` if these are absent):
+Caller-supplied (the skill refuses with `spec_invalid` if these are absent; the verb escalates them as `needs_intent`):
 
 | Field | Why the caller has to supply it |
 |---|---|
 | `goal` | One-line free-text intent — the skill cannot invent it. |
 | `task_generator` | The shape of the scale-up axis (`items_x_seeds`, `cartesian_product`, `enumerated`, `numeric_linspace`/`logspace`) plus its params. Cannot be inferred from the repo. |
 
-Caller may pre-resolve to skip detection:
+Everything else is an OVERRIDE of something `wrap-entry-point-auto` decides — pass it through in that verb's spec, never re-derive it here. The authoritative field list is `hpc_agent/schemas/wrap_entry_point_auto.input.json`: `entry_point_path`, `run_name`, `entry_point_kind`, `argv`, `signature`, `goal`, `task_generator`, `task_count`, `frozen_configs`, `fixed_params`. A bare call (no `--spec`) is valid: it runs to the first genuine judgment point and names it.
 
-| Field | Skill's default if absent |
-|---|---|
-| `entry_point.kind` (`register_run` \| `shell_command`) | Detected by Step 1 + decided by Step 2 |
-| `entry_point.path` / `run_name` | Highest-likelihood candidate from Step 1's probes |
-| `shape` (`script` \| `notebook`, greenfield only) | `script` (the dominant case at scale-up time) |
-| `argv` template + `signature` (wrapper path only) | Derived from the entry point's CLI surface |
-| `frozen_configs` | All `configs/*.yaml` / `configs/*.yml` / `conf/*.yaml` detected by Step 4 |
-| `data_axis_hint` | Walked from the decision tree (Step 6); ambiguous → omitted (the framework re-asks at submit). **Valid only on `entry_point.kind: shell_command`** — omit it on `register_run` (#260) |
+Two fields the verb deliberately does NOT own, and that are therefore NOT in its spec:
+
+- `produced_by` — the `interview` primitive's own composer stamps `produced_by.operator` from `git config user.name` and discloses it in `interview.json._materialized.composed_defaults`. Pass `{"kind": "human"}` and let it compose; a caller-supplied `operator` is left untouched.
+- `data_axis_hint` — `classify-axis-auto`'s seat (Step 5).
 
 ## When to run
 
@@ -48,119 +46,9 @@ Caller may pre-resolve to skip detection:
 
 ## Steps
 
-### 0. Detect or scaffold an entry point (greenfield branch)
+### 1. Assemble the caller-owned intent
 
-Run the entry-point detection verb once — it collapses the entry-point probes (conventional `main.py`/`train.py`/`run.py`/`experiment.py` at the root and under `src/`, package `__main__.py` `python -m` targets, `[project.scripts]` console scripts, `run.sh`/`launch.sh`/binary entry points, and `@register_run` decoration on disk) into one deterministic scan:
-
-```bash
-hpc-agent detect-entry-point --experiment-dir <experiment_dir>
-```
-
-Branch on `data.kind`:
-
-**`detected`** — at least one entry-point candidate exists (`data.candidates` is non-empty) or a `@register_run` is already on disk (`data.decoration_found` is non-empty). Skip to Step 1, reusing this same `data` block (no need to re-scan).
-
-**`greenfield`** — no candidate of any kind and no decoration. This is a greenfield repo. Use the caller-supplied `shape` (or default to `script`) and scaffold:
-
-```bash
-hpc-agent build-template --repo-dir . --shape script    # or --shape notebook
-```
-
-The primitive injects the chosen seed file (`train.py` at repo root or `notebooks/experiment.py`, jupytext percent format) alongside the framework-owned `.hpc/` assets. Then re-run `detect-entry-point --experiment-dir <experiment_dir>` against the freshly scaffolded file and proceed through Step 1 onwards.
-
-### 1. Detect the entry point
-
-Use the `data` block from the Step 0 `detect-entry-point` call (re-run it if you scaffolded a greenfield seed in Step 0):
-
-```bash
-hpc-agent detect-entry-point --experiment-dir <experiment_dir>
-```
-
-`data.candidates` lists every entry-point candidate in by-likelihood probe order (used only for stable diagnostic output — not as a tie-break, since ties refuse). Each candidate carries its classified `argv_kind` — the CLI surface read off the file's imports + decorators: `argparse` (`argparse.ArgumentParser` / `import argparse`), `click` (`@click.command` / `@click.group`), `typer` (`@app.command`), `fire` (`fire.Fire(...)`), `hydra` (`@hydra.main`), or `__main__` for a bare `if __name__ == "__main__":` block or a package `__main__.py` (invoked as `python3 -m <pkg>`). A `[project.scripts]` console script is `console_script` (its `path` is the registered command name); a `run.sh`/`launch.sh`/binary is `shell`.
-
-**Autonomous resolution**:
-
-- If the caller supplied `entry_point.path`, use it (overrides detection).
-- Else if exactly one candidate matched (`len(data.candidates) == 1`), use it.
-- Else (multiple entry points, no caller pick) **return `spec_invalid` with `error_code: ambiguous_entry_point`** listing the candidates. The skill does not silently pick across `main.py` / `train.py` / `run.py` when more than one exists — the wrong choice is non-recoverable without the user noticing.
-
-Record the picked entry point — the path (or `-m` invocation), and which CLI library it uses (the candidate's `argv_kind`).
-
-### 2. Decide the pathway: direct decoration (default) vs. wrapper materialization (fallback)
-
-**The default pathway is `@register_run` direct decoration on the user's existing function.** Fall through to wrapper materialization only when direct decoration is structurally blocked.
-
-Deterministic decision table:
-
-| Condition | Pathway |
-|---|---|
-| Python function whose params are already real kwargs (body does NOT parse `sys.argv`) | **Step 3a** (direct decoration via the `decorate-entry-point` verb) |
-| Python function whose body parses `sys.argv` (an argparse `main()`) | **Step 3b** / `python_module` — the verb decorates an existing kwarg'd function; it does NOT refactor a `main()` |
-| Non-Python entry point (shell script, compiled binary) | **Step 3b** (wrapper fallback) |
-| `@hydra.main` on the entry point (rewrites the signature; `@register_run` cannot see through it) | **Step 3b** (wrapper fallback) |
-| `@click.command` / `@app.command` that consumes the function (typer/click decorator forms that swap the callable) | **Step 3b** (wrapper fallback) |
-| Caller's spec sets `entry_point.kind = "shell_command"` explicitly | **Step 3b** (wrapper fallback) |
-
-`@click.command` / `@app.command` / `@hydra.main` are auto-detected by the `decorate-entry-point` verb (it reads the decorator stack). The verb conservatively refuses every `*.command` / `*.group` / `hydra.main` form with `spec_invalid` and routes it to 3b — over-refusal is safe because the 3b wrapper always works, whereas decorating through a signature-rewriting decorator silently produces an executor the framework can't introspect.
-
-### 3a. `@register_run` direct decoration (the default path)
-
-Decoration is a **deterministic verb** — do NOT edit the file by hand. (An
-`Edit`-tool decoration once rewrote a scaffold's whole body into experiment
-logic; that affordance is removed — the skill no longer carries `Edit`.) Invoke:
-
-```bash
-hpc-agent decorate-entry-point --path <file> --function-name <run_name>
-```
-
-The verb is a bounded AST line-splice: it inserts `from hpc_agent import register_run`
-(when absent) and `@register_run` onto the named function, leaving the body
-**byte-identical**. The decorator lands on the function the framework ultimately
-calls — never the `if __name__ == "__main__":` block.
-
-**Scope: the verb decorates a function whose parameters are already real kwargs.**
-It does NOT refactor. If the envelope is `spec_invalid` (function not found, or a
-signature-rewriting decorator like `@hydra.main` / a consuming `@click.command`),
-route to **Step 3b** (wrapper fallback) or the `python_module` path — never
-hand-edit a `main()` that parses `sys.argv` into an inner function.
-
-On success, record the picked `run_name` (the function name) and proceed to
-Step 4. Step 7's interview carries `entry_point.kind = "register_run"`.
-
-### 3b. Wrapper materialization (fallback path)
-
-The rescue boat. The existing wrapper machinery (`entry_point.kind = "shell_command"`) materializes a thin `@register_run` wrapper at `.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the entry-point argv with kwargs substituted in.
-
-**3b.i: Derive the argv template + signature autonomously.** From the detected entry point's CLI surface:
-
-- `argv` template — the shell command with `{placeholder}` for each kwarg. First element by entry-point shape:
-  - File-based Python script → `["python3", "train.py", ...]`
-  - Package module → `["python3", "-m", "mypkg.cli", ...]`
-  - Installed console script → `["mytool", ...]`
-  - Shell script / binary → `["./run.sh", ...]` or `["./simulator", ...]`
-- `signature` — `{placeholder: type}` derived from argparse `type=int`, click `IntType`, typer annotations, etc. Default to `str` when the source declares no type.
-
-When the caller supplied `argv` / `signature` in the spec, use those instead of deriving (this is how the slash command passes through user-confirmed overrides).
-
-The wrapper's typed signature is what downstream `validate-executor-signatures` checks; the underlying entry point stays opaque to the framework. The submit workflow's Step 0b picks up `_materialized.entry_point` (with `kind == "shell_command"`) and uses `executor_cmd` as the job's `EXECUTOR`.
-
-### 4. Detect frozen YAML configs
-
-Scan for YAMLs by convention:
-
-```bash
-ls configs/*.yaml configs/*.yml conf/*.yaml 2>/dev/null
-```
-
-Every match is added to `frozen_configs`. The convention is *one YAML = one frozen experiment* — the framework hashes each file's bytes and threads `<stem>_sha` into every task's kwargs so `cmd_sha` covers the YAML's content. Two submits of the same YAML dedup; an in-place edit makes `cmd_sha` differ.
-
-When the caller supplied `frozen_configs` in the spec, use those instead — slash callers can drop a config the user said is not the experiment's identity.
-
-> **Constraint**: `frozen_configs` requires a `task_generator` (caller-supplied; Step 5). If the experimenter wants a hand-written `tasks.py`, they have to include the shas themselves; `frozen_configs` is rejected at intake otherwise.
-
-### 5. `task_generator` is caller-supplied (no autonomous derivation)
-
-The entry point handles *one task*. The `task_generator` enumerates the **N tasks** to fan out. Common shapes:
+`goal` and `task_generator` come from the caller or the human; nothing else in this skill needs gathering up front. The entry point handles *one task* — the `task_generator` enumerates the **N tasks** to fan out. Common shapes:
 
 | Shape | When to use | Params |
 |---|---|---|
@@ -169,7 +57,7 @@ The entry point handles *one task*. The `task_generator` enumerates the **N task
 | `enumerated` | Hand-supplied list of N task dicts | `items=[{...}, {...}, ...]` |
 | `numeric_linspace` / `numeric_logspace` | Sweep one numeric hyperparameter | `param="lr", low, high, n` |
 
-The skill does **not** invent a `task_generator` — refuse with `spec_invalid` if absent. (The slash command elicits this from the user; MARs supplies it explicitly.)
+The skill does **not** invent a `task_generator` — refuse with `spec_invalid` if absent and the human is unreachable. (The slash command elicits this from the user; MARs supplies it explicitly.)
 
 **Elicit `goal` and `task_generator` as FREE-TEXT the human TYPES — never a pre-filled option they click.** These two are the `REQUIRED_CALLER_FIELDS` (`ops/submit/field_partition.py`), and the downstream `_assert_human_authorship` gate verifies every value token against the human's own utterance log; a click on a value YOU pre-filled (an `AskUserQuestion` option whose text you wrote) carries no authorship, so it is refused at `append-decision` and forces a re-type — the awkward loop where the tool asks a multiple-choice question and then rejects the answer. Ask an OPEN question ("How many seeds, and what `n_samples` per task?") and let the human type "20 seeds, n_samples=1000000"; counts and ranges are fine ("20 seeds", "0 through 19"). Reserve buttons for fields enumerated from GROUND TRUTH (cluster from `clusters.yaml`, `data_axis` kind, entry-point shape) — never for the sweep magnitudes the gate locks. You MAY echo your PARSE back for a yes/no confirm ("reading that as 20 tasks, seeds 0–19, 1e6 samples each — right?"): the value still originated from the human's typing, so it passes.
 
@@ -177,93 +65,99 @@ The skill does **not** invent a `task_generator` — refuse with `spec_invalid` 
 
 **Fixed enumeration vs. adaptive sweep.** The shapes above enumerate a *fixed* task set up front. If the sweep is **adaptive** — each batch's hyperparameters depend on prior results (Bayesian optimization / Optuna ask-tell, PBT, Hyperband) — it is NOT a `task_generator`: route to **`hpc-campaign`** and materialize the strategy with **`hpc-agent scaffold-strategy --name {optuna,pbt}`**. The framework drives the submit→monitor→aggregate→decide loop and owns the ask/tell contract (see the hpc-campaign strategy-authoring contract). Do NOT hand-roll a campaign controller or reverse-engineer the strategy from source.
 
-### 5b. Cover non-axis required params (fixed_params)
+### 2. Call `wrap-entry-point-auto` ONCE
 
-The entry point's signature may require params the `task_generator` does NOT vary — e.g. `monte_carlo_pi(seed, samples)` where only `seed` is swept. If nothing supplies `samples`, the executor crashes on every task (#195).
+Write the spec (every field optional; include the intent from Step 1 plus any caller overrides) and invoke:
 
-Partition the signature params:
-
-- **Axis params** — names the `task_generator` produces. Handled per-task; leave them out of `fixed_params`.
-- **Covered-by-default params** — params with a default in the entry point's CLI surface (argparse `default=`, Python default). Safe to omit; you MAY pin one for reproducibility.
-- **Uncovered required params** — required (no default) AND not an axis. MUST be resolved or every task fails. For each, set a constant in `entry_point.fixed_params`:
-  - Use the entry point's argparse/CLI **default** if pinning one.
-  - Else the caller-supplied value (the slash's `uncovered_param` dialog).
-  - Never invent silently — no default + no caller value = ambiguity to surface.
-
-`fixed_params` is baked into every `resolve(i)` dict; a swept axis of the same name wins. Requires `task_generator`. Submit-time `validate-executor-signatures` refuses `uncovered_required_param` — covering it here keeps that gate green.
-
-### 6. Pre-declare the DataAxis hint (autonomous tree walk)
-
-In the **direct-decoration path (3a)**, `classify-axis` can introspect the decorated function directly later — pre-declaring is optional, since the framework will infer the axis from the function body at submit time. The skill can still pre-fill the hint to short-circuit one round-trip.
-
-In the **wrapper path (3b)**, the wrapper body is `subprocess.check_call`, so `classify-axis` cannot introspect it later. The hint here is load-bearing.
-
-Apply the same decision tree as `hpc-classify-axis` Step 4 (autonomous; no confirmation):
-
-- *Does each row's result depend on rows computed before it?* No → **`independent`** (DOALL).
-- *Is the carried state a fixed-size summary combinable in any order?* Yes → **`associative`** (pick `sum` / `moments`).
-- *Is the dependence a bounded look-back (e.g. trailing N rows)?* Yes → **`bounded_halo`** with `halo.expr` over parameter names.
-- Otherwise / ambiguous → **`sequential`** (fail-safe default; serial is slow, not wrong).
-
-When the tree resolves to ambiguous, **omit** `data_axis_hint` from the spec — `classify-axis` will surface the boundary at submit time and the caller can resolve it then. (Sequential as a default is correct for `hpc-classify-axis` recording; here we leave the field absent so the framework still has a chance to interview.)
-
-**`data_axis_hint` is valid only on `entry_point.kind: shell_command` (#260).** When the entry_point is `register_run`, omit it unconditionally — the schema (`interview.input.json`) only accepts the field on the `shell_command` shape (a `register_run` carries its classification through the decorated function's `@register_run` arguments / type hints), so emitting it on a `register_run` spec fails schema validation and costs an avoidable validate-fail / retry round-trip.
-
-### 7. Build the spec and invoke the `interview` primitive
-
-Assemble the `InterviewSpec` JSON. The `entry_point` block differs by pathway:
-
-**Direct-decoration path (3a):**
-
-```json
-{
-  "goal": "<caller-supplied>",
-  "task_count": <N from the resolved task_generator>,
-  "produced_by": {"kind": "human", "operator": "<git user.name>"},
-  "task_generator": { "kind": "...", "params": { ... } },
-  "entry_point": {
-    "kind": "register_run",
-    "run_name": "<the function name decorated in Step 3a>",
-    "fixed_params": { "<uncovered required param>": <value from Step 5b>, ... }
-  }
-}
+```bash
+hpc-agent wrap-entry-point-auto --spec /tmp/wrap_spec.json --experiment-dir <experiment_dir>
 ```
 
-(`fixed_params` omitted when every signature param is an axis or has a default — Step 5b.)
+This ONE call is the whole deterministic head — entry-point detection, the entry-point/entry-function ladders, the pathway decision table, `decorate-entry-point`, the frozen-YAML convention scan, and the fixed-params partition. Do **not** hand-walk those; do not re-run `detect-entry-point` to "check" them. The contract (ladders, rule ids, which globs are scanned, what counts as covered) lives in `docs/primitives/wrap-entry-point-auto.md` — read it there rather than from prose here.
 
-**Wrapper path (3b):**
+Two properties worth holding onto while you branch:
 
-```json
-{
-  "goal": "<caller-supplied>",
-  "task_count": <N from the resolved task_generator>,
-  "produced_by": {"kind": "human", "operator": "<git user.name>"},
-  "task_generator": { "kind": "...", "params": { ... } },
-  "entry_point": {
-    "kind": "shell_command",
-    "run_name": "<chosen, valid Python identifier — e.g. 'forecast' or 'train'>",
-    "argv": [ ... from Step 3b.i ... ],
-    "signature": { ... from Step 3b.i ... },
-    "frozen_configs": [ ... from Step 4 ... ],
-    "fixed_params": { ... uncovered required params from Step 5b, else omit ... },
-    "data_axis_hint": { ... from Step 6 if resolved, else omit — shell_command ONLY; never emit on a register_run entry_point (#260) ... }
-  }
-}
+- **Every escalation leaves the repo byte-identical.** Decoration is the last step, after all three escalation branches are ruled out.
+- **Idempotent** on `experiment_dir`. A second call finds the decoration on disk and writes nothing.
+
+Branch on the discriminated return: `onboarded` → Step 4; `needs_pick` / `needs_intent` / `needs_wrapper_argv` → Step 3; `spec_invalid` → Step 3e.
+
+### 3. Resolve the escalation, then re-call
+
+Each escalation names the exact field it needs and why code must not produce it (`ask`). Resolve it, add the field to the spec, and re-invoke `hpc-agent wrap-entry-point-auto` — the verb is the only writer, so resolution is always "supply the field and re-call", never "do the step by hand".
+
+**3a. `needs_pick`** — an entry-point-FILE tie (`reason: entry_point_tie`) or an entry-FUNCTION tie (`entry_function_tie`). `candidates` lists every tied candidate and `resolve_with` names the field that breaks it (`entry_point_path` / `run_name`).
+
+- If the caller's instruction already names one explicitly, apply it.
+- Otherwise **relay the candidates to the human** and let them pick. Do not silently choose across `main.py` / `train.py` / `run.py`: a wrong pick is not recoverable without the user noticing.
+
+**3b. `needs_intent`** — `goal` / `task_generator` / `task_count`, or a specific uncovered required param of the entry point's signature (`entry_point.fixed_params.<param>`). `never_invented` pins the subset code must never fabricate; `partition` carries the computed param classes when the escalation is an uncovered param rather than an absent generator.
+
+- **Gather these from the human. NEVER invent one** — not under a "safe default" rationale, not from a plausible-looking constant in the source. This is unchanged doctrine: the `REQUIRED_CALLER_FIELDS` class has no safe default, and an uncovered required param means every task would fail (#195).
+- An uncovered param has exactly two honest remedies: the human supplies the value (`fixed_params`), or the entry point gains a signature default. A value read out of a comment or a README is not a default.
+
+**3c. `needs_wrapper_argv`** — direct decoration is structurally blocked and the entry point's CLI surface is not introspectable by the composite, so `argv` + `signature` must come from the caller. The escalation carries `argv_kind` (why), `pathway_rule`, `argv_head` (the leading argv elements code CAN compose), `missing_fields`, `missing_intent_fields`, and `python_module_alternative`.
+
+First ask whether the surface was mechanically extracted — `detect-entry-point` reads argparse and click parameter declarations by AST:
+
+```bash
+hpc-agent detect-entry-point --experiment-dir <experiment_dir>
 ```
 
-Write to `/tmp/interview_spec.json` and invoke:
+Read the candidate row whose `path` equals the escalation's `entry_point_path`, then branch on its `argv_extraction`:
+
+- **`extracted`** — `argv_params` is the mechanically read parameter list (in declaration order, which is the order the framework binds). Compose from it, not by eye: `argv` = `argv_head` + one `names[0]` / `{dest}` pair per option (positionals contribute the placeholder alone); `signature` = `{dest: type}` mapped into the interview's four accepted types (`str` / `int` / `float` / `bool` — `type` is *source text*, so a `pathlib.Path` converter maps to `str`). A param carrying `is_flag` takes NO value: append the flag alone, and its signature type is `bool`. A param carrying `secondary_names` is a click on/off pair — the OFF spelling is the secondary name, so the wrapper emits one or the other, never both. `multiple` means one argv occurrence per value; `choices` bounds the domain a swept value must stay inside.
+- **A param carrying `unextracted`** — its names are real but the listed argument(s) were not modeled. Read those out of the source and hand-derive **only that param**.
+- **`unsupported`** — `argv_params` is `null` and the whole surface is not mechanically knowable (typer derives its CLI from type hints, hydra from a composed YAML tree, fire from a live signature, a shell script has no Python surface at all). Hand-derive the flags from the source, on top of `argv_head`.
+
+Hand-derivation is now the *remainder* — the unextracted arguments and the unsupported frameworks — and that remainder is the honest boundary. Never guess a flag name for an `extracted` param; never treat an `unsupported` verdict as license to skip reading the source.
+
+**3d. `python_module_alternative`** — present on `needs_wrapper_argv` whenever the entry point is importable as a dotted `{module, function}` from the campaign dir. It is a DISCLOSURE, not a recommendation: it targets the same function with **no file edit**, so it is the answer when editing the file is undesirable — vendor code, a read-only checkout, a submodule the lab does not own. That is caller judgment, not a repo fact, which is why code never selects it. Offer it to the human alongside the argv ask, and pass `entry_point_kind: "python_module"` if they take it. Note the two constraints: no `fixed_params` (that kind's wire shape cannot carry them — cover the param with a signature default instead), and a `src`-layout package yields no importable dotted name, so the field is simply absent there.
+
+**3e. `spec_invalid`** — a structural refusal, each naming its remedy in `remediation`:
+
+- **`greenfield_repo`** — nothing to onboard. Scaffold a seed first, using the caller-supplied `shape` (default `script`), then re-run the composite:
+
+  ```bash
+  hpc-agent build-template --repo-dir . --shape script    # or --shape notebook
+  ```
+
+- **A contradictory `entry_point_kind`** — most often a forced `register_run` on a signature-rewriting decorator / a non-Python entry point / a file with no module-level `def`. The refusal is deliberate: rerouting it silently would break override-first, and letting it through would ship an executor the framework cannot introspect. Take one of the two remedies it states — drop the override, or say `shell_command` explicitly.
+- **Unparseable / underivable** — the Python entry point does not parse, a caller `run_name` is not a module-level `def`, or a wrapper `run_name` does not sanitize to a Python identifier. Surface it to the caller; the skill does not loop on its own.
+
+### 4. Persist: invoke the `interview` primitive
+
+The `onboarded` return carries `interview_spec` — the composed fragment (`goal` / `task_count` / `task_generator` / `entry_point`, with `frozen_configs`, `fixed_params` and the pathway's entry-point block already filled). Add the one field the verb deliberately leaves out and write the result to `/tmp/interview_spec.json`:
+
+```json
+{ "produced_by": {"kind": "human"} }
+```
+
+`produced_by.operator` is composed server-side from `git config user.name` and disclosed in `interview.json._materialized.composed_defaults`; a caller-supplied operator is left untouched. Do not shell out to `git config` yourself.
+
+If the caller pre-resolved the series axis AND the pathway is `wrapper`, add `entry_point.data_axis_hint` here — it is valid **only** on `entry_point.kind: shell_command` (#260); emitting it on a `register_run` spec fails schema validation and costs a retry round-trip. Otherwise omit it and let Step 5 own the axis.
 
 ```bash
 hpc-agent interview --spec /tmp/interview_spec.json --campaign-dir .
 ```
 
-On `ok=True`: the envelope reports the materialized artifacts (`tasks.py`, `interview.json`, plus `.hpc/wrappers/<run_name>.py` only on the wrapper path), `total_tasks`, and `cmd_sha`. On `error_code=spec_invalid`: surface the message to the caller — most often a typo (argv placeholder not in signature) or a missing frozen config. The skill does not loop on its own; the caller (slash or MARs) decides whether to re-supply.
+On `ok=True`: the envelope reports the materialized artifacts (`tasks.py`, `interview.json`, plus `.hpc/wrappers/<run_name>.py` only on the wrapper pathway), `total_tasks`, and `cmd_sha`. On `error_code=spec_invalid`: surface the message to the caller — most often a typo (argv placeholder not in signature) or a missing frozen config. The skill does not loop on its own; the caller (slash or MARs) decides whether to re-supply.
 
-### 8. Emit the return envelope (final tool call)
+### 5. The data axis belongs to `classify-axis-auto`
+
+Do not walk the axis decision tree here. `classify-axis-auto` is the deterministic head for it (preflight → the AST fast-path matcher → the `axes.yaml` recorder, in one call), and it escalates `needs_llm_tree` — with the `source_path` to read and the `run_signature_sha` to echo — exactly when the matcher abstains and the LLM tree is genuinely needed:
+
+```bash
+hpc-agent classify-axis-auto --experiment-dir <experiment_dir>
+```
+
+On the wrapper pathway the wrapper body is a `subprocess.check_call`, so the matcher has nothing to introspect and the tree (or a caller-supplied `data_axis`) is load-bearing — see the `hpc-classify-axis` skill, which owns that dialog.
+
+### 6. Emit the return envelope (final tool call)
 
 The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json`. Stage it, then emit:
 
-1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-wrap-entry-point"`, `entry_point_kind` (`"register_run"` or `"shell_command"`), `run_name`, `tasks_py_path`, `interview_json_path`, `total_tasks` (from `interview`'s envelope), `cmd_sha` (from `interview`'s envelope). Optional: `wrapper_path` (set on the 3b wrapper path; null/omit on the 3a direct-decoration path), `files_edited` (the list of source files Step 3a edited; empty `[]` on the 3b path). On a fatal error, write the standard `ErrorEnvelope` shape.
+1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-wrap-entry-point"`, `entry_point_kind` (`"register_run"` or `"shell_command"`), `run_name`, `tasks_py_path`, `interview_json_path`, `total_tasks` (from `interview`'s envelope), `cmd_sha` (from `interview`'s envelope). Optional: `wrapper_path` (set on the wrapper pathway; null/omit on the direct-decoration pathway), `files_edited` (the entry-point file when `wrap-entry-point-auto` reported `decorated: true`; empty `[]` otherwise). On a fatal error, write the standard `ErrorEnvelope` shape.
 
 2. Invoke as your FINAL tool call:
 
@@ -273,14 +167,16 @@ The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/
 
    The verb validates against `hpc_agent/schemas/skill_returns/hpc-wrap-entry-point.json` and atomically renames `.staged.json` → `.json`. Then **hand control back to the parent without ending your turn** — emit no summary or closing message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-wrap-entry-point`.
 
-The submit workflow's Step 0b picks up `_materialized.entry_point` and threads `executor_cmd` into the submit-flow spec (wrapper path) or runs its normal `@register_run` discovery (direct-decoration path) — no further setup needed.
+The submit workflow's Step 0b picks up `_materialized.entry_point` and threads `executor_cmd` into the submit-flow spec (wrapper pathway) or runs its normal `@register_run` discovery (direct-decoration pathway) — no further setup needed.
 
 ## Notes
 
-- **Two on-ramps, one contract.** Greenfield repos scaffold an entry point via `build-template --shape {script,notebook}` (Step 0); mature repos onboard the existing one (Steps 1+). Both paths end in the same place: a `@register_run`-decorated function on disk plus a materialized `tasks.py` + `interview.json`. The canonical description of the contract is `docs/internals/experiment-contract.md`.
-- **Direct decoration is the default; the wrapper is a rescue boat.** A two-line code edit beats a subprocess shim whenever it's possible. The wrapper is for non-Python entry points, decorator conflicts, and read-only vendor code.
-- **Idempotent.** Re-running with the same intent overwrites `interview.json` (and, on the wrapper path, the wrapper file) byte-equivalently (modulo `_materialized.at`). Editing the underlying entry point's flags requires re-running this skill.
-- **Signature drift safety (wrapper path).** The wrapper's typed signature is what `validate-executor-signatures` checks at submit time. If the entry point's actual flags drift from the declared signature, the canary catches the argparse / CLI error (one task, not a hundred).
-- **The wrapper IS the contract (wrapper path).** The framework reads the wrapper's signature, not the entry point's. Keep the wrapper in sync.
-- **One frozen experiment per YAML.** Each `configs/exp_NN.yaml` is its own experiment with its own `cmd_sha`. To run a different frozen experiment, re-run this skill against the new YAML.
-- **Ambiguity escalates, never auto-resolves silently.** Multiple Python entry points without a caller pick → `ambiguous_entry_point`. The skill refuses to guess across `main.py` / `train.py` / `run.py` when more than one matched.
+- **One call, then only judgment.** The deterministic head is `wrap-entry-point-auto`; this skill's remaining job is the three named escalations plus the caller-owned intent. If you find yourself reconstructing which pathway applies, which YAMLs are frozen, or which params are uncovered, you are re-deriving something the verb already decided — read its return instead.
+- **Two on-ramps, one contract.** Greenfield repos scaffold an entry point via `build-template --shape {script,notebook}` (the `greenfield_repo` refusal); mature repos onboard the existing one. Both paths end in the same place: a `@register_run`-decorated function on disk plus a materialized `tasks.py` + `interview.json`. The canonical description of the contract is `docs/internals/experiment-contract.md`.
+- **Direct decoration is the default; the wrapper is a rescue boat.** A two-line code edit beats a subprocess shim whenever it's possible. The wrapper is for non-Python entry points, decorator conflicts, and read-only vendor code — and `python_module` is the third option for that last case, when the file must not be edited at all.
+- **Decoration is a verb, never an edit.** This skill carries no `Edit` tool: an `Edit`-tool decoration once rewrote a scaffold's whole body into experiment logic, and that affordance is removed. `wrap-entry-point-auto` performs the bounded AST line-splice (`from hpc_agent import register_run` + `@register_run`, body byte-identical) as its last step.
+- **Idempotent.** Re-running with the same intent overwrites `interview.json` (and, on the wrapper pathway, the wrapper file) byte-equivalently (modulo `_materialized.at`). Editing the underlying entry point's flags requires re-running this skill.
+- **Signature drift safety (wrapper pathway).** The wrapper's typed signature is what `validate-executor-signatures` checks at submit time. If the entry point's actual flags drift from the declared signature, the canary catches the argparse / CLI error (one task, not a hundred).
+- **The wrapper IS the contract (wrapper pathway).** The framework reads the wrapper's signature, not the entry point's. Keep the wrapper in sync.
+- **One frozen experiment per YAML.** Each `configs/exp_NN.yaml` is its own experiment with its own `cmd_sha`. Two submits of the same YAML dedup; an in-place edit makes `cmd_sha` differ. To run a different frozen experiment, re-run this skill against the new YAML. `frozen_configs` requires a `task_generator` — a hand-written `tasks.py` has to include the shas itself.
+- **Ambiguity escalates, never auto-resolves silently.** Multiple entry points without a caller pick, a missing intent field, an uncovered required param, a non-introspectable CLI surface — each is a named escalation with the exact field that resolves it, and each leaves the repo untouched.
