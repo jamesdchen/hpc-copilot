@@ -86,11 +86,17 @@ class ToolClass(Enum):
     ``NONE`` — the event has no tool to match (session/prompt/turn events).
     ``SHELL`` — a shell/command tool (Claude Code: ``Bash``).
     ``QUESTION`` — a structured user-question tool (Claude Code: ``AskUserQuestion``).
+    ``OWN_TOOLS`` — the harness's projection of hpc-agent's OWN verb surface,
+    whatever that harness calls it (Claude Code: the MCP tools
+    ``mcp__hpc-agent__*``). The intent is "our verbs, invoked as tools" — a
+    foreign harness with a different projection maps it to that projection's
+    matcher.
     """
 
     NONE = "none"
     SHELL = "shell"
     QUESTION = "question"
+    OWN_TOOLS = "own-tools"
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,13 @@ class ClaudeCodeProfile:
         ToolClass.NONE: None,
         ToolClass.SHELL: "Bash",
         ToolClass.QUESTION: "AskUserQuestion",
+        # Claude Code names a projected MCP server's tools
+        # ``mcp__<server>__<tool>`` and accepts a regex matcher; this one covers
+        # every verb the ``hpc-agent`` server projects. The server id matches
+        # :data:`hpc_agent.agent_assets.CLAUDE_CODE_PROFILE`'s
+        # ``McpServerDescriptor.name`` — the same renderer writes both, and the
+        # golden pins them together.
+        ToolClass.OWN_TOOLS: "mcp__hpc-agent__.*",
     }
 
     @classmethod

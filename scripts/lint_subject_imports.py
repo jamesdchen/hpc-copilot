@@ -356,6 +356,18 @@ _KERNEL_TO_OPS = DirectionalRule(
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.queue.chain"),
             # Stop-hook / alert guards probe ops capability + notify helpers.
             ("_kernel/hooks/alert_count.py", "hpc_agent.ops.recover.notify"),
+            # The consent-forwarding PreToolUse hook reads the SAME gate the
+            # forwarded consent will be re-checked against
+            # (``block_gate.probe_authorization``, the read-only twin of
+            # ``assert_greenlit_or_consented``). This edge is the POINT of the
+            # hook, not an accident of layering: the alternative — a copy of the
+            # greenlight/consent scan living under state/ so the kernel could
+            # reach it "legally" — is a second definition of "the human
+            # authorized this", and a permission surface that drifts from its
+            # gate forwards consent the gate would refuse. Same sanctioned shape
+            # as ``block_drive.py → ops.block_gate`` above. Lazy-imported inside
+            # ``_decide``; the hook fails CLOSED to "ask" if the import fails.
+            ("_kernel/hooks/consent_forward.py", "hpc_agent.ops.block_gate"),
             (
                 "_kernel/hooks/decision_rendezvous_stop_guard.py",
                 "hpc_agent.ops.harness_capabilities",

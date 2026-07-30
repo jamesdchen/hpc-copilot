@@ -33,6 +33,10 @@ _STOP_MODULE = "hpc_agent._kernel.hooks.stop_multiplex"
 _SKILL_RETURN_STOP_MODULE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
 _RENDEZVOUS_STOP_MODULE = "hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
 _RELAY_AUDIT_MODULE = "hpc_agent._kernel.hooks.relay_audit_stop"
+# The consent-forwarding PreToolUse hook (attended-latency plan): matcher
+# ``mcp__hpc-agent__.*``, pre-filtered on the gated + always-ask verbs.
+_CONSENT_FORWARD_MODULE = "hpc_agent._kernel.hooks.consent_forward"
+_CONSENT_FORWARD_MATCHER = "mcp__hpc-agent__.*"
 
 
 def _settings(claude_dir: Path) -> dict:
@@ -232,11 +236,13 @@ def test_preserves_existing_settings_and_hooks(tmp_path: Path) -> None:
     assert "Bash(ssh:*)" not in settings["permissions"]["deny"]
     assert settings["customKey"] == {"nested": [1, 2, 3]}
     # The pre-existing PreToolUse entry survives; the scheduler write-fence
-    # (conduct rule 7) is appended after it.
+    # (conduct rule 7) and the consent-forwarding hook are appended after it, in
+    # descriptor order.
     ptu_pre = settings["hooks"]["PreToolUse"]
     assert ptu_pre[0] == {"matcher": "Bash", "hooks": []}
-    assert len(ptu_pre) == 2
+    assert len(ptu_pre) == 3
     assert "scheduler_write_fence" in ptu_pre[1]["hooks"][0]["command"]
+    assert _CONSENT_FORWARD_MODULE in ptu_pre[2]["hooks"][0]["command"]
 
     # The pre-existing PostToolUse entry survives, and ours is appended after it.
     ptu = _post_tool_use(settings)
@@ -257,10 +263,11 @@ def test_creates_event_arrays_when_hooks_exist_without_them(tmp_path: Path) -> N
     install_agent_assets(claude_dir=tmp_path)
     settings = _settings(tmp_path)
 
-    # The empty PreToolUse array gains exactly the write-fence entry.
+    # The empty PreToolUse array gains exactly the two PreToolUse hooks.
     ptu = settings["hooks"]["PreToolUse"]
-    assert len(ptu) == 1
+    assert len(ptu) == 2
     assert "scheduler_write_fence" in ptu[0]["hooks"][0]["command"]
+    assert _CONSENT_FORWARD_MODULE in ptu[1]["hooks"][0]["command"]
     assert len(_autofetch_entries(settings)) == 1
     assert len(_stop_entries(settings)) == 1
 

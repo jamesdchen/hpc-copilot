@@ -44,6 +44,7 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from hpc_agent._kernel.hooks.consent_forward import ALWAYS_ASK_VERBS
 from hpc_agent.harness_profile import (
     ClaudeCodeProfile,
     HarnessProfile,
@@ -53,12 +54,14 @@ from hpc_agent.harness_profile import (
     StopMultiplexDescriptor,
     ToolClass,
 )
+from hpc_agent.infra.block_chain import GATED_BLOCKS
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.io import atomic_write_text
 
 __all__ = [
     "CLAUDE_CODE_PROFILE",
     "DEFAULT_CLAUDE_DIR",
+    "consent_forward_hook_status",
     "install_agent_assets",
     "resolve_claude_dir",
 ]
@@ -84,6 +87,31 @@ _ALERT_COUNT_NEEDLE = _HOOK_MODULE_PREFIX + "alert_count"
 # importable name so both the profile and the negotiation probe reuse the ONE
 # canonical matcher, never a re-derived scan.
 _SCHEDULER_WRITE_FENCE_NEEDLE = _HOOK_MODULE_PREFIX + "scheduler_write_fence"
+# The consent-forwarding ``PreToolUse(mcp__hpc-agent__.*)`` hook (attended-latency
+# plan): forwards a journaled greenlight/standing consent to the harness
+# permission layer so an already-answered question is not asked twice. Importable
+# for the same reason as the fence needle above — the installer, the install
+# status probe (:func:`consent_forward_hook_status`) and the ``doctor`` check all
+# resolve the ONE canonical needle.
+_CONSENT_FORWARD_NEEDLE = _HOOK_MODULE_PREFIX + "consent_forward"
+
+# The pre-filter for the consent-forwarding hook: the verbs it can have an
+# opinion about. DERIVED from the chain's gated-block census unioned with the
+# hook's hard-coded always-ask verbs — never a hand list, so a newly gated block
+# starts paying the interpreter start (and getting its consent forwarded) with no
+# edit here. Sorted for byte-stable rendering.
+_CONSENT_FORWARD_PREFILTER: tuple[str, ...] = tuple(sorted(GATED_BLOCKS | ALWAYS_ASK_VERBS))
+
+# Bound as a NAME (not inlined in the profile tuple below) because
+# :func:`consent_forward_hook_status` re-renders this exact descriptor to answer
+# "is the installed entry CURRENT?" — one descriptor, one rendered entry, so the
+# installer and the doctor check can never disagree about what current means.
+_CONSENT_FORWARD_DESCRIPTOR = HookDescriptor(
+    _CONSENT_FORWARD_NEEDLE,
+    HookEvent.PRE_TOOL,
+    ToolClass.OWN_TOOLS,
+    _CONSENT_FORWARD_PREFILTER,
+)
 
 # ── Fused Stop hook (stop_multiplex) ─────────────────────────────────────────
 # The three legacy standalone ``Stop`` guards are fused into ONE interpreter start
@@ -130,6 +158,11 @@ _STOP_MULTIPLEX_GUARDS: tuple[str, ...] = (
 #   (qsub/sbatch/qdel/scancel/qmod/qalter, ssh transport included) while
 #   read-only probes stay allowed (conduct rule 7; command-position analysis so
 #   ``grep qsub log`` passes).
+# * consent_forward — pre-tool/own-tools: forwards a journaled greenlight or live
+#   standing consent to the harness permission layer, so a decision the human
+#   already typed in-band is not re-asked by the auto-mode classifier (the
+#   attended-latency exhibit). Fails CLOSED to "ask"; never emits "deny"
+#   (refusing a mis-sequenced verb is the gate's own job at execution).
 # * alert_count — session-start: prints the unacknowledged watchdog-alert count
 #   into session context (proving run #3: detection without delivery is silence).
 # * utterance_capture — on-prompt: appends each human prompt to the repo's
@@ -173,6 +206,7 @@ CLAUDE_CODE_PROFILE: HarnessProfile = HarnessProfile(
             ToolClass.SHELL,
             ("qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"),
         ),
+        _CONSENT_FORWARD_DESCRIPTOR,
         HookDescriptor(_ALERT_COUNT_NEEDLE, HookEvent.SESSION_START, ToolClass.NONE, ()),
         HookDescriptor(_UTTERANCE_CAPTURE_NEEDLE, HookEvent.ON_PROMPT, ToolClass.NONE, ()),
         HookDescriptor(_ANSWER_CAPTURE_NEEDLE, HookEvent.POST_TOOL, ToolClass.QUESTION, ()),
@@ -194,6 +228,7 @@ _HOOK_REPORT_KEYS: dict[str, str] = {
     _HOOK_MODULE_PREFIX + "skill_return_autofetch": "settings_hook",
     _HOOK_MODULE_PREFIX + "decision_rendezvous_autofetch": "settings_rendezvous_hook",
     _HOOK_MODULE_PREFIX + "scheduler_write_fence": "settings_write_fence_hook",
+    _CONSENT_FORWARD_NEEDLE: "settings_consent_forward_hook",
     _ALERT_COUNT_NEEDLE: "settings_alert_count_hook",
     _UTTERANCE_CAPTURE_NEEDLE: "settings_utterance_hook",
     _ANSWER_CAPTURE_NEEDLE: "settings_answer_capture_hook",
@@ -458,16 +493,22 @@ def resolve_claude_dir() -> Path:
     return DEFAULT_CLAUDE_DIR()
 
 
-def _find_hook_entry_index(entries: list[Any], needle: str) -> int | None:
-    """Return the index of the existing entry matching *needle*, or ``None``.
+def _hook_entry_indices(entries: list[Any], needle: str) -> list[int]:
+    """Every index in *entries* whose entry runs a ``command`` hook mentioning *needle*.
 
-    Match key: any hook entry whose ``hooks`` list contains a ``command`` hook
+    Match key: a hook entry whose ``hooks`` list contains a ``command`` hook
     whose command mentions *needle* (a hook module path). We match on the
     module path (not the full command string) so a re-run from a different
     ``sys.executable`` — moved venv, **an upgrade that fixes the command
     encoding**, or one that changes the matcher/pre-filter shape — still finds
     the existing entry instead of appending a duplicate.
+
+    Returns ALL matches, not the first: a settings.json written by a buggy
+    upgrade can carry the same hook twice (the 539c1cdc shape), and a merge that
+    only ever looked at the first would heal one and leave the other live —
+    two entries deciding the same event forever.
     """
+    found: list[int] = []
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
@@ -481,8 +522,20 @@ def _find_hook_entry_index(entries: list[Any], needle: str) -> int | None:
                 and isinstance(hook.get("command"), str)
                 and needle in hook["command"]
             ):
-                return i
-    return None
+                found.append(i)
+                break
+    return found
+
+
+def _find_hook_entry_index(entries: list[Any], needle: str) -> int | None:
+    """The index of the FIRST entry matching *needle*, or ``None``.
+
+    The single-match view of :func:`_hook_entry_indices`, kept for the Stop
+    merge (which does its own list rebuild and so cannot carry a duplicate
+    through).
+    """
+    indices = _hook_entry_indices(entries, needle)
+    return indices[0] if indices else None
 
 
 def _merge_hook_entry(
@@ -497,7 +550,9 @@ def _merge_hook_entry(
     newline). Every other key and every other entry under *event* is preserved
     verbatim — the merge only ever *adds* (or in-place heals) our one entry.
 
-    Returns a small report ``{settings_path, action, wrote}`` where ``action``
+    Returns a small report ``{settings_path, action, removed_duplicates, wrote}``
+    where ``removed_duplicates`` counts extra needle-bearing entries dropped so
+    exactly one survives (the 539c1cdc exact-match removal rule), and ``action``
     is one of ``"added"`` (appended), ``"updated"`` (a stale entry from an
     earlier install — e.g. a moved venv, the pre-0.10.10 backslash-encoded
     Windows path that bash mis-interpreted as escapes, or the pre-0.10.58
@@ -523,35 +578,109 @@ def _merge_hook_entry(
         if not isinstance(event_entries, list):
             event_entries = []
 
-        existing_idx = _find_hook_entry_index(event_entries, needle)
-        if existing_idx is not None and event_entries[existing_idx] == entry:
-            return _MergeOutcome(False, settings, "", "", {}, {})
+        existing = _hook_entry_indices(event_entries, needle)
+        if len(existing) == 1 and event_entries[existing[0]] == entry:
+            return _MergeOutcome(False, settings, "", "", {"removed_duplicates": 0}, {})
 
-        event_entries = list(event_entries)
-        if existing_idx is not None:
-            event_entries[existing_idx] = entry
-            write_action = "updated"
-        else:
-            event_entries.append(entry)
-            write_action = "added"
-        hooks[event] = event_entries
+        # Rebuild the array with EXACTLY ONE entry for our needle, in the
+        # position the first prior one held (order under an event is
+        # load-bearing). Any further needle-bearing entry is dropped — the
+        # exact-match removal discipline: an upgrade must never leave two live
+        # hooks racing on one event (539c1cdc).
+        duplicate_positions = set(existing[1:])
+        rebuilt: list[Any] = []
+        placed = False
+        for i, existing_entry in enumerate(event_entries):
+            if i in duplicate_positions:
+                continue
+            if existing and i == existing[0]:
+                rebuilt.append(entry)
+                placed = True
+            else:
+                rebuilt.append(existing_entry)
+        if not placed:
+            rebuilt.append(entry)
+        write_action = "updated" if existing else "added"
+        hooks[event] = rebuilt
         settings["hooks"] = hooks
         return _MergeOutcome(
             True,
             settings,
             write_action,
-            "dry-run-would-update" if existing_idx is not None else "dry-run-would-add",
-            {},
-            {},
+            "dry-run-would-update" if existing else "dry-run-would-add",
+            {"removed_duplicates": len(duplicate_positions)},
+            {"removed_duplicates": 0},
         )
 
     return _merge_json(
         claude_dir / "settings.json",
         path_key="settings_path",
-        unparseable_extra={},
+        unparseable_extra={"removed_duplicates": 0},
         plan=plan,
         dry_run=dry_run,
     )
+
+
+def consent_forward_hook_status(
+    *, claude_dir: Path | None = None, executable: str | None = None
+) -> dict[str, Any]:
+    """Read-only: is the consent-forwarding PreToolUse entry installed and CURRENT?
+
+    The ``doctor`` check's substrate (never a second copy of the install shape):
+    it re-renders :data:`_CONSENT_FORWARD_DESCRIPTOR` through the SAME
+    :class:`ClaudeCodeProfile` the installer uses and compares the installed
+    entry to it, so "current" means byte-equal to what a fresh
+    ``install-commands`` would write — a moved venv, a changed matcher, or a
+    pre-filter that no longer covers a newly gated block all read as stale.
+
+    Returns ``{settings_path, hpc_hooks_present, installed, current, duplicates}``:
+
+    * ``hpc_hooks_present`` — this settings.json carries ANY hpc-agent hook, i.e.
+      it is a config we installed into. False for an absent/unparseable/foreign
+      settings.json, which is what keeps the doctor check silent on a machine
+      where hpc-agent was never installed rather than nagging about it.
+    * ``installed`` / ``current`` — our entry is present / byte-equal to the
+      freshly rendered one.
+    * ``duplicates`` — extra entries mentioning our needle beyond the first (the
+      539c1cdc failure shape: an upgrade that appends instead of healing in
+      place leaves two live hooks racing on the same event).
+
+    Never writes, never raises: every read error degrades to "not present".
+    """
+    target = (claude_dir or resolve_claude_dir()).expanduser()
+    path = target / "settings.json"
+    status: dict[str, Any] = {
+        "settings_path": str(path),
+        "hpc_hooks_present": False,
+        "installed": False,
+        "current": False,
+        "duplicates": 0,
+    }
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return status
+    if not isinstance(settings, dict):
+        return status
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return status
+    all_entries = [e for entries in hooks.values() if isinstance(entries, list) for e in entries]
+    status["hpc_hooks_present"] = any(
+        _entry_mentions(entry, _HOOK_MODULE_PREFIX) for entry in all_entries
+    )
+    pre_tool = hooks.get(ClaudeCodeProfile.event_string(HookEvent.PRE_TOOL))
+    entries = pre_tool if isinstance(pre_tool, list) else []
+    matching = [e for e in entries if _entry_mentions(e, _CONSENT_FORWARD_NEEDLE)]
+    status["duplicates"] = max(0, len(matching) - 1)
+    if not matching:
+        return status
+    status["installed"] = True
+    expected = ClaudeCodeProfile.render_hook_entry(
+        _CONSENT_FORWARD_DESCRIPTOR, executable or sys.executable
+    )
+    status["current"] = any(entry == expected for entry in matching)
+    return status
 
 
 def _entry_mentions(entry: Any, needle: str) -> bool:
@@ -1443,6 +1572,16 @@ def install_agent_assets(
     ``"skipped-unparseable"`` / ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
     The full set of non-Stop hooks wired (in order) is the profile's
     ``hook_descriptors`` (:data:`CLAUDE_CODE_PROFILE`).
+
+    ``settings_consent_forward_hook`` reports the same merge for the
+    consent-forwarding ``PreToolUse(mcp__hpc-agent__.*)`` hook — the entry that
+    forwards a journaled greenlight to the harness permission layer. Its
+    self-heal path is load-bearing beyond a moved venv: the entry's pre-filter is
+    derived from ``GATED_BLOCKS``, so a release that gates a new block writes a
+    NEW command, and the needle re-find replaces the stale entry IN PLACE rather
+    than leaving two entries racing on the same event (the 539c1cdc shape).
+    :func:`consent_forward_hook_status` reads that same expectation back, and
+    ``doctor`` surfaces a drift as an alert.
 
     ``settings_stop_multiplex_hook`` reports the fused ``Stop`` hook merge — the
     single ``stop_multiplex`` entry that dispatches all three Stop guards in one
