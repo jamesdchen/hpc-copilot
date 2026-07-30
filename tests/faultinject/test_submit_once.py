@@ -26,7 +26,7 @@ from hpc_agent.ops.monitor import reconcile as R
 from hpc_agent.ops.submit.runner import mint_submitting_record
 from hpc_agent.state import run_record
 from hpc_agent.state.index import find_submitting_runs, prune_terminal_runs
-from hpc_agent.state.journal import load_run, upsert_run
+from hpc_agent.state.journal import load_run, stamp_dispatch_actuated, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
@@ -138,6 +138,13 @@ def test_dispatch_id_window_sever_then_reconcile_adopts_no_reqsub(
         total_tasks=10,
     )
     assert minted and rec.status == "submitting" and rec.job_ids == []
+    # 1b. the submit leg stamps the acceptance-evidence class immediately before it
+    # actuates — the same write ``_submit_one_spec`` / ``_fire_canary`` perform.
+    # This drill's premise is that the scheduler ACCEPTED the array and only the
+    # response channel was severed, so the record must say a dispatch went out;
+    # without it the record would (correctly) read "never actuated" and rung 0
+    # would settle it offline, contradicting the marker planted below.
+    stamp_dispatch_actuated(exp, "run-x")
     # 2. the drop happened (promote never ran). Recovery reads the cluster marker.
     tr = _Transport(
         jobmap=_proc(

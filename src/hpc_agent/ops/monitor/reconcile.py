@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.contract.vocabulary import (
+    NEVER_ACTUATED_RECOVERY_NOTE,
     NEVER_DISPATCHED_VERDICT_REASON,
     JournalStatus,
     LifecycleState,
@@ -27,6 +28,7 @@ from hpc_agent.ops.monitor.classify import all_tasks_complete, settle
 from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal, harvest_receipt_exists
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import (
+    dispatch_never_actuated,
     is_kill_confirmed,
     load_run,
     mark_run,
@@ -695,6 +697,13 @@ def reconcile(
 # read re-derives truth from the cluster-durable jobmap MARKER (the id the
 # dispatching shell persisted) + the U3-c correlation-key query, landing every
 # rung on POSITIVE evidence — an acked read, never absence (SUBMIT-ONCE-DESIGN §4).
+#
+# Ahead of all of those sits rung 0 (2026-07-30), the one rung that needs no
+# cluster at all: the record's own ``dispatch_evidence``. It splits a jobless
+# ``submitting`` record into the two evidence classes the cluster-reading rungs
+# cannot tell apart when the cluster is unreachable — "no qsub was ever issued"
+# (terminal, provable offline) vs "a qsub may have landed" (ambiguous, stays
+# submitting forever). See ``_recover_submitting``'s docstring.
 
 
 def _adoptable_wave_ids(parsed: Any, backend_cls: Any) -> dict[str, str]:
@@ -751,6 +760,13 @@ def _recover_submitting(
 
     Every rung lands on POSITIVE evidence; absence is NEVER trusted:
 
+    * **rung 0 (never actuated)** — the record's OWN durable dispatch evidence
+      reads ``pending`` (:func:`hpc_agent.state.journal.dispatch_never_actuated`):
+      the remote dispatch exec was never issued for this attempt, so no job id
+      was minted, no jobmap marker written, no announce dir created. There is
+      nothing on the cluster to read and nothing that could be duplicated →
+      SAFE RE-SUBMIT, decided entirely OFFLINE (no SSH at all). See the
+      evidence-class note below for why this rung has to come first.
     * **rung 3 (severed)** — the jobmap read's SSH transport failed (rc≠0), or the
       ack sentinel was absent (:attr:`JobmapRead.present` False under a rc-0 read
       is a ``cd`` that failed) with no cross-evidence: UNKNOWN → leave
@@ -774,9 +790,45 @@ def _recover_submitting(
     — a stale marker can never adopt onto it. Returns the (possibly transitioned)
     record; the ``bool`` alive-check-failed the caller expects is always ``False``
     here (recovery owns its own UNKNOWN posture).
+
+    **The evidence-class distinction rung 0 makes explicit (2026-07-30).** Rungs
+    1-3 all key on what the CLUSTER says, and the ladder read a severed cluster
+    as "not visible YET" — the right reading for a submit that may have landed,
+    the wrong one for a submit that provably never left the control plane. Those
+    two are indistinguishable in ``job_ids`` (both ``[]``), and the fault that
+    produces the second — the network dying mid-submit — is usually the SAME
+    fault that severs every rung that could resolve it. So the ladder had no
+    terminating rung for its own most common orphan: reconcile re-asserted
+    ``submitting`` on every pass (``_stay_submitting``), ``_resolve_layer1``
+    kept reading that as "a live prior attempt is in flight", every subsequent
+    submit was refused, and the operator had to hand-abandon a record that
+    provably never queued a job. Live case: ``har_base_sweep-…-canary2``, a
+    canary whose worker was killed by a network failure before it ever dialled
+    the cluster, then re-asserted ``submitting`` across four submit attempts.
+
+    The fix is NOT elapsed time (a queued array can be silent for days without
+    being dead) and NOT absence of a cluster answer (that is the ambiguity, not
+    its resolution). It is whether ACCEPTANCE EVIDENCE COULD EVER HAVE EXISTED,
+    recorded at the only moment that knows — the submit leg brackets its own
+    actuation with ``pending`` at mint and ``actuated`` immediately before the
+    dispatch exec. So:
+
+    * ``pending`` → nothing was ever sent; TERMINAL is provable offline (rung 0);
+    * ``actuated`` → something may be live; every cluster rung applies unchanged
+      and a severed read stays ``submitting`` FOREVER rather than kill a job the
+      scheduler simply has not surfaced;
+    * ``{}`` (pre-fix / flag-off record) → UNKNOWN; byte-identical to the old
+      ladder, because a missing stamp is an absence and absence proves nothing.
     """
     from hpc_agent.infra.backends import get_backend_class
     from hpc_agent.infra.jobmap import build_read_shell, jobmap_token, parse_jobmap_read
+
+    # rung 0 — the record proves its own dispatch never actuated. Checked BEFORE
+    # any SSH: the whole point is that this verdict must be reachable with the
+    # cluster unreachable, and a cluster read here could only ever confirm the
+    # absence we already have positive evidence for.
+    if dispatch_never_actuated(record):
+        return _never_actuated_abandon(experiment_dir, run_id, record=record)
 
     ssh_target = resolve_ssh_target(record)
     attempt = int(record.attempt)
@@ -828,6 +880,73 @@ def _recover_submitting(
     # would read absent here yet the array be live. Require the announce dir ALSO
     # absent before a safe re-submit.
     return _rung2_never_dispatched(experiment_dir, run_id, record=record, ssh_target=ssh_target)
+
+
+def _never_actuated_abandon(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: RunRecord,
+) -> RunRecord:
+    """rung 0: the record proves no dispatch was ever issued → abandoned, OFFLINE.
+
+    The evidence-class terminal (2026-07-30). ``dispatch_evidence`` still reads
+    ``pending``, and the submit leg writes ``actuated`` BEFORE it actuates, so
+    that surviving ``pending`` is positive proof the control plane died before
+    sending anything: no ``qsub`` was issued for this attempt, therefore no job
+    id was minted, no ``.hpc/submit/`` marker was written, and no
+    ``.hpc/announce/`` dir was created. This is the ONE ``submitting`` shape
+    whose verdict does not depend on the cluster answering.
+
+    **Zero SSH, deliberately.** Not an optimisation — a correctness requirement.
+    The orphan this rung exists for is normally produced by a network fault that
+    is still in force when reconcile runs (the operator's VPN was down for the
+    live case), so any rung that has to reach the cluster would fall through to
+    ``_stay_submitting`` and re-assert the zombie. It also skips ``_clear_jobmap``
+    for the same reason it can skip the read: a dispatch that never ran cannot
+    have written a marker, so there is nothing to clear and no stale marker that
+    could be adopted onto the ``attempt+1`` re-submit.
+
+    **Why this is conservative, not aggressive.** The rule keys on POSITIVE
+    local evidence of NON-ACTUATION, never on elapsed time and never on the
+    cluster's silence. A record that got as far as ``actuated`` — a real qsub
+    whose answer was lost, or an array the scheduler simply has not surfaced yet
+    — does NOT reach this rung and can never be auto-abandoned by it, no matter
+    how long it stays unknown. Nothing here can kill a live job, because a live
+    job could not have been created without the stamp this rung requires to be
+    absent.
+
+    Verdict + reason are the SAME ``abandoned`` /
+    :data:`NEVER_DISPATCHED_VERDICT_REASON` pair ``_safe_resubmit`` stamps — one
+    class, one verdict, so every existing reader (notably the campaign circuit
+    breaker's never-dispatched streak, which must not count this as an
+    experiment failure) classifies it correctly with no change. Only the
+    ``recovery_note`` differs, naming WHICH evidence closed it.
+    """
+    _log.warning(
+        "reconcile: run %s never actuated its dispatch (dispatch_evidence still "
+        "'pending' — the submit died before any qsub was issued, so no job id, "
+        "jobmap marker or announce dir can exist) — transitioning "
+        "submitting→abandoned (safe to re-submit as attempt %d); no cluster "
+        "round-trip was needed or taken.",
+        run_id,
+        int(record.attempt) + 1,
+    )
+    update_run_status(
+        experiment_dir,
+        run_id,
+        last_status={
+            "verdict": "abandoned",
+            "verdict_reason": NEVER_DISPATCHED_VERDICT_REASON,
+            "recovery_note": NEVER_ACTUATED_RECOVERY_NOTE,
+            # The discriminator itself, carried out to the envelope so the
+            # operator can see WHY a terminal verdict was reachable with the
+            # cluster unreadable — the disclosure discipline.
+            "acceptance_evidence": "never_actuated",
+            "dispatch_evidence": dict(record.dispatch_evidence or {}),
+        },
+    )
+    return mark_run(experiment_dir, run_id, status=str(JournalStatus.ABANDONED))
 
 
 def _stay_submitting(experiment_dir: Path, run_id: str, *, reason: str) -> RunRecord:

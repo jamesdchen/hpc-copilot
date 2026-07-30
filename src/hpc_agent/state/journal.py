@@ -50,6 +50,8 @@ __all__ = [
     "is_awaiting_decision",
     "is_resubmittable_terminal",
     "is_kill_confirmed",
+    "stamp_dispatch_actuated",
+    "dispatch_never_actuated",
     "stamp_drive_attempt",
     "stamp_tick",
     "stamp_watchdog_tick",
@@ -909,6 +911,67 @@ def is_kill_confirmed(record: RunRecord) -> bool:
     if not record.job_ids:
         return False
     return set(record.job_ids) <= set(record.kill_confirmed_job_ids)
+
+
+def stamp_dispatch_actuated(experiment_dir: Path, run_id: str) -> RunRecord:
+    """Stamp ``dispatch_evidence = {"state": "actuated", ...}`` on *run_id*.
+
+    Called by the submit leg **immediately before** it issues the remote dispatch
+    exec, and NEVER after. That ordering is the whole contract: the stamp must be
+    a strict OVER-approximation of "a ``qsub``/``sbatch`` may have been issued",
+    so that the complementary state (:attr:`DispatchState.PENDING`, written at
+    mint) is POSITIVE proof that none was. A crash inside the stamp→exec window
+    therefore reads ``actuated`` and keeps the conservative posture (reconcile
+    will ask the cluster); a crash BEFORE the stamp leaves ``pending`` and is
+    provably resolvable offline.
+
+    Deliberately NOT best-effort at the call sites: a swallowed failure here
+    would leave ``pending`` on a record whose array then landed, and reconcile
+    would abandon a live run and authorise a duplicate submit. Failing to write
+    the journal is exactly when a dispatch must NOT go out, so the exception
+    propagates and the submit aborts before actuating anything.
+
+    Locked RMW via :func:`update_run_record`; raises :class:`FileNotFoundError`
+    if no record exists for *run_id*.
+    """
+    from hpc_agent._kernel.contract.vocabulary import DispatchState
+    from hpc_agent.infra.time import utcnow_iso
+
+    def _mutate(record: RunRecord) -> None:
+        record.dispatch_evidence = {
+            "state": str(DispatchState.ACTUATED),
+            "at": utcnow_iso(),
+        }
+
+    return update_run_record(experiment_dir, run_id, _mutate)
+
+
+def dispatch_never_actuated(record: RunRecord) -> bool:
+    """True when *record* PROVES its dispatch exec was never issued.
+
+    The evidence-class discriminator (2026-07-30 zombie-resurrection fix). True
+    for exactly one value — ``dispatch_evidence["state"] == "pending"``, the
+    stamp :func:`hpc_agent.ops.submit.runner.mint_submitting_record` writes at
+    mint and :func:`stamp_dispatch_actuated` overwrites before any actuation.
+    Because the ``actuated`` stamp is written BEFORE the exec, a surviving
+    ``pending`` can only mean the control plane died before it sent anything: no
+    job id was minted, no cluster jobmap marker was written, no announce dir was
+    created. Nothing to adopt, nothing to duplicate.
+
+    Explicitly False — never "probably" — for:
+
+    * ``{}`` (no evidence at all): a pre-fix record, or one from the flag-off
+      submit path. UNKNOWN, so the cluster-reading rungs decide, exactly as
+      before this field existed. Absence of the stamp is NOT evidence.
+    * ``{"state": "actuated"}``: a dispatch WAS issued and its outcome is
+      genuinely unknown. Ambiguous by construction — this is the record that
+      must never be auto-abandoned no matter how long the scheduler stays
+      silent, because a live array may be sitting behind that silence.
+    """
+    from hpc_agent._kernel.contract.vocabulary import DispatchState
+
+    evidence = record.dispatch_evidence or {}
+    return evidence.get("state") == str(DispatchState.PENDING)
 
 
 def _refresh_index_entry(

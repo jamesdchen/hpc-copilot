@@ -3289,6 +3289,7 @@ def _fire_canary(
     # Flag OFF: none of this runs, byte-identical to today.
     from hpc_agent.infra.jobmap import CANARY_WAVE_KEY, submit_once_enabled
     from hpc_agent.ops.submit.runner import mint_submitting_record, promote_submitting_record
+    from hpc_agent.state.journal import stamp_dispatch_actuated
 
     _canary_once = submit_once_enabled()
     _canary_minted = False
@@ -3307,6 +3308,14 @@ def _fire_canary(
         if _canary_minted:
             canary_env["HPC_SUBMIT_ATTEMPT"] = str(_c_rec.attempt)
             canary_env["HPC_SUBMIT_WAVE_KEY"] = CANARY_WAVE_KEY
+            # Acceptance-evidence stamp, the LAST thing before the canary
+            # actuates (2026-07-30 zombie-resurrection fix). Everything above is
+            # local bookkeeping that cannot queue a job; the call below can. NOT
+            # suppressed: if the journal cannot record that a dispatch is about
+            # to go out, the dispatch must not go out — a swallowed failure here
+            # would leave ``pending`` on a record whose canary then landed, and
+            # reconcile would abandon a live job and authorise a duplicate.
+            stamp_dispatch_actuated(experiment_dir, canary_run_id)
         # ``_canary_minted`` False here means an existing live/complete canary
         # record stood — the caller's replay branch should have caught it; proceed
         # as flag-off would (record via submit_and_record below) so a rare race
@@ -3627,6 +3636,7 @@ def _submit_one_spec(
     # command strings, journal-write timing — is byte-identical to today.
     from hpc_agent.infra.jobmap import submit_once_enabled
     from hpc_agent.ops.submit.runner import mint_submitting_record, promote_submitting_record
+    from hpc_agent.state.journal import stamp_dispatch_actuated
 
     _submit_once = submit_once_enabled()
     _main_minted = False
@@ -3675,6 +3685,14 @@ def _submit_one_spec(
             "HPC_RUN_ID": spec.run_id,
             "HPC_SUBMIT_ATTEMPT": str(_minted_rec.attempt),
         }
+        # Acceptance-evidence stamp, the LAST write before the main array
+        # actuates (2026-07-30 zombie-resurrection fix — same contract as the
+        # canary leg): everything between the mint and here is local
+        # bookkeeping that cannot queue anything, ``_submit_main_array`` below
+        # can. NOT suppressed — a journal that cannot record the imminent
+        # dispatch must abort it rather than let a landed array keep a
+        # ``pending`` stamp reconcile would read as "never sent".
+        stamp_dispatch_actuated(experiment_dir, spec.run_id)
 
     try:
         job_ids, job_task_spans = _submit_main_array(
