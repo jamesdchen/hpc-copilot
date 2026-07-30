@@ -19,10 +19,23 @@ is visible in one place. This test mechanizes it (precedent:
    ("debt paid — remove the row"). A ``no live gate`` row may NOT be
    ``**RED**`` (nothing to xfail — hard format error).
 
-The pure helpers ``parse_ledger`` / ``check_row_format`` / ``check_red_row``
-operate on strings so the fires-AND-passes pairs run on synthetic ledger text
-with no pytest-in-pytest in the steady state (after reconciliation the live
-table carries zero ``**RED**`` rows).
+EVERY ROW IS EVALUATED INDEPENDENTLY (collect-then-assert). The obvious
+per-row loop is WRONG here and was the shape this file shipped with: raising
+``pytest.xfail`` inside the loop ends the whole test at the FIRST outstanding
+row, so a later row's "debt paid — remove the row" hard failure could never
+fire while any earlier row was still red — the punch list silently stopped
+checking after its first entry. :func:`evaluate_ledger_rows` therefore walks
+ALL rows, collecting each one's verdict (format error / outstanding / paid)
+without ever short-circuiting; :func:`assert_debt_ledger_clean` hard-fails on
+the collected format errors and paid rows; and only then, with nothing left to
+mask, does the live test ``xfail`` for the genuinely-outstanding remainder.
+
+The pure helpers ``parse_ledger`` / ``check_row_format`` / ``check_red_row`` /
+``evaluate_ledger_rows`` / ``assert_debt_ledger_clean`` operate on strings +
+an injected ``run_gate`` so the fires-AND-passes pairs run on synthetic ledger
+text with no pytest-in-pytest in the steady state (after reconciliation the
+live table carries zero ``**RED**`` rows) — including the two-row fixture that
+proves the independence property above.
 """
 
 from __future__ import annotations
@@ -30,6 +43,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,6 +72,17 @@ _GATE_REF_RE = re.compile(r"`([^`]+)`")
 
 class LedgerFormatError(AssertionError):
     """Raised on any deviation from the strict ledger table contract."""
+
+
+class DebtPaidError(LedgerFormatError):
+    """A ``**RED**`` row's named gate now PASSES — the row must be removed.
+
+    A distinct type (not a bare :class:`LedgerFormatError`) so
+    :func:`evaluate_ledger_rows` can tell "this row's debt is paid" apart from
+    "this row is malformed" without matching on message text. It SUBCLASSES
+    ``LedgerFormatError`` so every existing ``pytest.raises(LedgerFormatError)``
+    caller keeps catching it.
+    """
 
 
 # ── data model ─────────────────────────────────────────────────────────────
@@ -225,9 +250,94 @@ def check_red_row(row: LedgerRow, run_gate) -> None:
     if target is None:
         raise LedgerFormatError(f"{row.item!r}: **RED** row has no runnable gate")
     if run_gate(target):
-        raise LedgerFormatError(
+        raise DebtPaidError(
             f"{row.item!r}: named gate {target!r} now PASSES — debt paid, "
             "remove the row from the outstanding table"
+        )
+
+
+@dataclass(frozen=True)
+class LedgerVerdict:
+    """The outcome of evaluating EVERY row — nothing short-circuited.
+
+    ``errors`` are per-row contract violations (bad ``Live gate today`` cell, a
+    gate reference that no longer resolves, a ``**RED**`` row naming no runnable
+    target); ``paid`` names the rows whose gate now passes (hard failure — the
+    row must be deleted); ``outstanding`` names the rows whose gate is still red
+    (real debt — the live test ``xfail``s on these, and ONLY these).
+    """
+
+    errors: tuple[str, ...]
+    outstanding: tuple[str, ...]
+    paid: tuple[str, ...]
+
+
+def evaluate_ledger_rows(
+    rows: Sequence[LedgerRow],
+    run_gate: Callable[[str], bool],
+    *,
+    ref_resolves: Callable[[str], bool] = gate_ref_resolves,
+) -> LedgerVerdict:
+    """Evaluate every row's gate INDEPENDENTLY; never short-circuit.
+
+    ``run_gate(target) -> bool`` reports whether a named gate PASSES (the live
+    caller passes :func:`_run_gate_subprocess`; the fixtures pass a stub).
+
+    One row's outcome must never decide another's: a malformed row is recorded
+    and the walk continues, and an outstanding (still-red) row is recorded
+    WITHOUT raising, so a later row's paid debt is still reached. That is the
+    whole point of this function — the loop it replaces ``xfail``ed in place and
+    stopped the test dead at the first red row.
+
+    A row that fails its format/resolution check is NOT then run as a gate: a
+    row whose cell is broken has no trustworthy target, and running one anyway
+    would report a second, derived failure for the same defect.
+    """
+    errors: list[str] = []
+    outstanding: list[str] = []
+    paid: list[str] = []
+    for row in rows:
+        try:
+            check_row_format(row)
+        except LedgerFormatError as exc:
+            errors.append(str(exc))
+            continue
+        unresolved = [ref for ref in row.gate_refs if not ref_resolves(ref)]
+        if unresolved:
+            errors.append(
+                f"{row.item!r}: gate reference(s) {', '.join(repr(r) for r in unresolved)} "
+                "do not resolve under tests/"
+            )
+            continue
+        if not row.is_red:
+            continue
+        try:
+            check_red_row(row, run_gate)
+        except DebtPaidError:
+            paid.append(row.item)
+        except LedgerFormatError as exc:
+            errors.append(str(exc))
+        else:
+            outstanding.append(row.item)
+    return LedgerVerdict(tuple(errors), tuple(outstanding), tuple(paid))
+
+
+def assert_debt_ledger_clean(verdict: LedgerVerdict) -> None:
+    """Hard-fail on any collected format error or any PAID row.
+
+    The ONE assertion the live gate makes, factored out so the two-row fixture
+    can prove it fires on the SECOND row while the first is still red. Both
+    lists are reported whole — a ledger with three paid rows names three, not
+    the first one it tripped over.
+    """
+    if verdict.errors:
+        raise AssertionError(
+            "regen-debt ledger row contract violations:\n  - " + "\n  - ".join(verdict.errors)
+        )
+    if verdict.paid:
+        raise AssertionError(
+            "debt paid — remove these rows from the outstanding table: "
+            + ", ".join(repr(item) for item in verdict.paid)
         )
 
 
@@ -250,18 +360,19 @@ def _run_gate_subprocess(target: str) -> bool:
 
 def test_live_ledger_is_well_formed_and_paid() -> None:
     """The real ledger parses, every row is contract-shaped, its named gates
-    resolve, and every **RED** row is evaluated (strict-xpass)."""
+    resolve, and EVERY **RED** row is evaluated (strict-xpass).
+
+    Collect-then-assert: all rows are evaluated first, the hard failures are
+    asserted next, and the ``xfail`` for outstanding debt comes LAST — so an
+    outstanding row can no longer end the test before a later row's paid debt
+    is checked.
+    """
     text = _LEDGER_PATH.read_text(encoding="utf-8")
     rows = parse_ledger(text)  # asserts heading + 5-column header even at zero rows
-    for row in rows:
-        check_row_format(row)
-        for ref in row.gate_refs:
-            assert gate_ref_resolves(ref), (
-                f"{row.item!r}: gate reference {ref!r} does not resolve under tests/"
-            )
-        if row.is_red:
-            check_red_row(row, _run_gate_subprocess)  # raises if debt is paid
-            pytest.xfail(f"{row.item}: regen debt outstanding (gate still red)")
+    verdict = evaluate_ledger_rows(rows, _run_gate_subprocess)
+    assert_debt_ledger_clean(verdict)
+    if verdict.outstanding:
+        pytest.xfail("regen debt outstanding (gates still red): " + ", ".join(verdict.outstanding))
 
 
 # ── fires-AND-passes pairs on synthetic ledger text ─────────────────────────
@@ -340,6 +451,90 @@ def test_outstanding_red_row_stays_green() -> None:
         _table("| X | d.md | owed | `test_spec_verb_inventory_matches_cli` **RED** | w |")
     )
     check_red_row(rows[0], run_gate=lambda _target: False)  # still failing -> no raise
+
+
+# ── the independence property (the two-row fixture) ─────────────────────────
+#
+# The regression this file's restructure closes: a per-row loop that ``xfail``ed
+# in place stopped at the FIRST red row, so no later row's "debt paid" hard
+# failure could ever fire. These fixtures pin the property directly.
+
+_RED_GATE = "test_spec_verb_inventory_matches_cli"  # a real, runnable function
+_PAID_GATE = "test_gate_ref_resolution_function_stem_and_path"  # ditto
+
+
+def _two_rows(first_gate: str, second_gate: str):
+    return parse_ledger(
+        _table(
+            f"| first | d.md | owed | `{first_gate}` **RED** | w |",
+            f"| second | d.md | owed | `{second_gate}` **RED** | w |",
+        )
+    )
+
+
+def test_red_first_row_does_not_mask_a_paid_second_row() -> None:
+    """Row 1 still red + row 2 paid → row 2 is REACHED and reported paid."""
+    rows = _two_rows(_RED_GATE, _PAID_GATE)
+    verdict = evaluate_ledger_rows(rows, run_gate=lambda target: target == _PAID_GATE)
+    assert verdict.outstanding == ("first",)
+    assert verdict.paid == ("second",)
+    assert verdict.errors == ()
+
+
+def test_paid_second_row_hard_fails_behind_a_red_first_row() -> None:
+    """…and the live gate's own assertion HARD FAILS on it (not an xfail)."""
+    rows = _two_rows(_RED_GATE, _PAID_GATE)
+    verdict = evaluate_ledger_rows(rows, run_gate=lambda target: target == _PAID_GATE)
+    with pytest.raises(AssertionError, match="'second'"):
+        assert_debt_ledger_clean(verdict)
+
+
+def test_two_outstanding_rows_stay_green_and_are_both_reported() -> None:
+    """The passing half of the pair: nothing paid → no raise, both rows named."""
+    rows = _two_rows(_RED_GATE, _PAID_GATE)
+    verdict = evaluate_ledger_rows(rows, run_gate=lambda _target: False)
+    assert verdict.outstanding == ("first", "second")
+    assert verdict.paid == ()
+    assert_debt_ledger_clean(verdict)  # no raise
+
+
+def test_a_malformed_first_row_does_not_mask_a_paid_second_row() -> None:
+    """A format error on row 1 also must not short-circuit row 2's gate."""
+    rows = parse_ledger(
+        _table(
+            "| first | d.md | owed | readers tolerant | w |",  # no gate ref at all
+            f"| second | d.md | owed | `{_PAID_GATE}` **RED** | w |",
+        )
+    )
+    verdict = evaluate_ledger_rows(rows, run_gate=lambda _target: True)
+    assert len(verdict.errors) == 1
+    assert "'first'" in verdict.errors[0]
+    assert verdict.paid == ("second",)
+
+
+def test_unresolvable_gate_ref_is_collected_not_raised() -> None:
+    """A vanished gate is a per-row error, and the walk continues past it."""
+    rows = parse_ledger(
+        _table(
+            "| first | d.md | owed | `test_this_gate_does_not_exist_anywhere` | w |",
+            f"| second | d.md | owed | `{_PAID_GATE}` **RED** | w |",
+        )
+    )
+    verdict = evaluate_ledger_rows(rows, run_gate=lambda _target: True)
+    assert len(verdict.errors) == 1
+    assert "does not resolve" in verdict.errors[0] or "do not resolve" in verdict.errors[0]
+    assert verdict.paid == ("second",)
+
+
+def test_clean_ledger_verdict_is_empty_on_all_three_axes() -> None:
+    rows = parse_ledger(_table(f"| X | d.md | owed | `{_RED_GATE}` | w |"))
+    verdict = evaluate_ledger_rows(rows, run_gate=_never_called)
+    assert verdict == LedgerVerdict((), (), ())
+    assert_debt_ledger_clean(verdict)
+
+
+def _never_called(target: str) -> bool:
+    raise AssertionError(f"a non-RED row must never run its gate (ran {target!r})")
 
 
 def test_gate_ref_resolution_function_stem_and_path() -> None:

@@ -153,6 +153,17 @@ def rsync_binary() -> str:
     binary whose ssh pairing the framework cannot validate. The env override
     is the explicit opt-in; without it, bare-PATH resolution is unchanged and
     a PATH without rsync activates the scp/tar fallback exactly as before.
+
+    WSL's rsync is NOT the missing default either, and that was MEASURED, not
+    assumed (2026-07-30; numbers in ``docs/internals/fallback-inventory.md`` §9).
+    ``rsync 3.2.7`` and the keys are present inside WSL — but a Windows-resident
+    tree is reached over ``/mnt/c``, so every ``stat`` in rsync's metadata walk
+    crosses the 9p boundary: walking 45,410 files took 2m47s and a transfer-free
+    ``rsync -an`` dry-run took 8m41s, against SECONDS for the native cached-manifest
+    content-hash delta (``infra/transport._delta``) that is the live rsync-less
+    path. The route only becomes viable if the working tree MOVES into WSL ext4 —
+    a human workflow change the transport may not assume. Recorded so the
+    "just use WSL rsync" folklore is not re-proposed.
     A ``.cmd``/``.bat`` override gets the same one-time shim warning as the
     ssh-family overrides (rsync's own argv is small, but the shim still adds a
     ``cmd.exe`` layer between the transport and the transfer).
