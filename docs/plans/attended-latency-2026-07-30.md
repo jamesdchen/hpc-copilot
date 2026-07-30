@@ -77,6 +77,46 @@ ignored.
    pack-bind/opt-in fumble is the same class (unchained prelude step
    discovered by refusal).
 
+6. **Double-consent boundary (harness classifier × hpc-agent gates).** Live
+   2026-07-30: the human's journaled greenlight authorized submit-s2, then
+   Claude Code's auto-mode classifier blocked the MCP call anyway — in-band
+   consent is invisible to the harness permission layer, so the human pays
+   the same boundary twice (and the classifier also blocks the agent from
+   fixing the allowlist, correctly). Fix candidates: `doctor-install` /
+   agent-assets ships a RECOMMENDED permissions fragment for the experiment
+   repo's `.claude/settings.local.json` covering exactly the verbs whose
+   spend hpc-agent's own typed-consent machinery gates (human pastes or
+   approves it once — the fewer-permission-prompts pattern); the fragment's
+   rationale line names the gate that makes each verb safe to standing-allow.
+   Keep the third-party-launcher fence (kimi/qwen deny-list) separate and
+   unchanged. HARD REQUIREMENTS (live 2026-07-30, an agent composed a
+   settings snippet that violated all three): (a) the fragment MERGES into
+   existing settings — never an overwrite; (b) `append-decision` and `kill`
+   are NEVER in the allow set — append-decision is the consent-commit verb,
+   and standing-allowing it converts "no prompts" into "consent journaled
+   without harness visibility" (the eligibility criterion is mechanical:
+   allow only verbs that REFUSE without a prior journaled greenlight/consent
+   — the gate census, not a hand list); (c) the fragment carries ONLY
+   hpc-agent verbs — no unrelated Bash rules may ride along.
+
+7. **Route-blind triage (live 2026-07-30, the S2 night).** Two compounding
+   blind spots: (a) `net-triage` probes bare hostnames, not the
+   config-resolved SSH path — it reported "hoffman2: reachable" while the
+   configured `ProxyJump usc-discovery` hop was dead, blessing a failover
+   INTO the dead hop; (b) the breaker's degradation classifier read
+   "probe-OK + preamble-timeout" as node-local degradation ("NOT a
+   transport fault") when a flapping VPN tunnel dropping mid-command
+   produces the identical signature, and its remediation steered toward
+   `host-retarget` to a sibling reached through the same dead hop. The
+   discriminating test that settled it live: run the SAME command class
+   that failed (the conda preamble) over an ALTERNATE route (direct,
+   no-jump) — PREAMBLE_OK ⇒ transport, hang ⇒ node. Mechanize: net-triage
+   resolves each host's effective chain (`ssh -G`), probes hop and target
+   separately, and when a jump exists also probes the direct alternative;
+   the breaker's degradation disclosure names the tunnel-drop alternative
+   whenever the path has a ProxyJump and offers the alternate-route
+   preamble probe as the discriminator before recommending host-retarget.
+
 ## Deferred (hours-scale async tail, separate thread)
 
 07-27 canary `reporter_unreachable` rc=255 regression (blocks results
