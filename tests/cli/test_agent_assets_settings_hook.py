@@ -33,6 +33,10 @@ _STOP_MODULE = "hpc_agent._kernel.hooks.stop_multiplex"
 _SKILL_RETURN_STOP_MODULE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
 _RENDEZVOUS_STOP_MODULE = "hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
 _RELAY_AUDIT_MODULE = "hpc_agent._kernel.hooks.relay_audit_stop"
+# The consent-forwarding PreToolUse hook (attended-latency plan): matcher
+# ``mcp__hpc-agent__.*``, pre-filtered on the gated + always-ask verbs.
+_CONSENT_FORWARD_MODULE = "hpc_agent._kernel.hooks.consent_forward"
+_CONSENT_FORWARD_MATCHER = "mcp__hpc-agent__.*"
 
 
 def _settings(claude_dir: Path) -> dict:
@@ -232,11 +236,13 @@ def test_preserves_existing_settings_and_hooks(tmp_path: Path) -> None:
     assert "Bash(ssh:*)" not in settings["permissions"]["deny"]
     assert settings["customKey"] == {"nested": [1, 2, 3]}
     # The pre-existing PreToolUse entry survives; the scheduler write-fence
-    # (conduct rule 7) is appended after it.
+    # (conduct rule 7) and the consent-forwarding hook are appended after it, in
+    # descriptor order.
     ptu_pre = settings["hooks"]["PreToolUse"]
     assert ptu_pre[0] == {"matcher": "Bash", "hooks": []}
-    assert len(ptu_pre) == 2
+    assert len(ptu_pre) == 3
     assert "scheduler_write_fence" in ptu_pre[1]["hooks"][0]["command"]
+    assert _CONSENT_FORWARD_MODULE in ptu_pre[2]["hooks"][0]["command"]
 
     # The pre-existing PostToolUse entry survives, and ours is appended after it.
     ptu = _post_tool_use(settings)
@@ -257,10 +263,11 @@ def test_creates_event_arrays_when_hooks_exist_without_them(tmp_path: Path) -> N
     install_agent_assets(claude_dir=tmp_path)
     settings = _settings(tmp_path)
 
-    # The empty PreToolUse array gains exactly the write-fence entry.
+    # The empty PreToolUse array gains exactly the two PreToolUse hooks.
     ptu = settings["hooks"]["PreToolUse"]
-    assert len(ptu) == 1
+    assert len(ptu) == 2
     assert "scheduler_write_fence" in ptu[0]["hooks"][0]["command"]
+    assert _CONSENT_FORWARD_MODULE in ptu[1]["hooks"][0]["command"]
     assert len(_autofetch_entries(settings)) == 1
     assert len(_stop_entries(settings)) == 1
 
@@ -453,6 +460,37 @@ def test_legacy_three_standalone_stop_entries_migrate_to_one_multiplex(tmp_path:
     second = install_agent_assets(claude_dir=tmp_path)
     assert second["settings_stop_multiplex_hook"]["action"] == "already-present"
     assert second["settings_stop_multiplex_hook"]["removed_legacy"] == []
+
+
+def test_duplicate_fused_stop_entries_are_collapsed(tmp_path: Path) -> None:
+    """A DUPLICATED fused Stop entry heals to one (the same 539c1cdc class).
+
+    The legacy sweep only removes pre-fusion STANDALONE guards, so a duplicated
+    FUSED entry slipped past it, and the merge matched only the first — which
+    was byte-equal, so the install reported ``already-present`` and left BOTH
+    copies live. Every Stop event then ran all three guards twice.
+    """
+    install_agent_assets(claude_dir=tmp_path)
+    settings_path = tmp_path / "settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    fused = settings["hooks"]["Stop"][0]
+    other = {"hooks": [{"type": "command", "command": "echo bye"}]}
+    settings["hooks"]["Stop"] = [fused, other, json.loads(json.dumps(fused))]
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_stop_multiplex_hook"]["removed_duplicates"] == 1
+
+    stop = _settings(tmp_path)["hooks"]["Stop"]
+    assert len(_entries_with_module(stop, _STOP_MODULE)) == 1
+    # A user's own Stop hook is preserved, and ours keeps the first position.
+    assert other in stop
+    assert stop.index(fused) < stop.index(other)
+
+    # …and the collapsed state is now a stable no-op.
+    again = install_agent_assets(claude_dir=tmp_path)
+    assert again["settings_stop_multiplex_hook"]["action"] == "already-present"
+    assert again["settings_stop_multiplex_hook"]["removed_duplicates"] == 0
 
 
 def test_stale_multiplex_command_is_healed_in_place(tmp_path: Path) -> None:

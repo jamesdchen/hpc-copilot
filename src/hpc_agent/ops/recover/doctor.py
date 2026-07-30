@@ -499,6 +499,68 @@ def _jsonschema_importable_probe(now: str) -> list[AlertRecord]:
     return []
 
 
+def _consent_forward_hook_probe(now: str) -> list[AlertRecord]:
+    """Is the consent-forwarding PreToolUse hook installed and CURRENT (local, no SSH).
+
+    The install-drift surface for the hook that forwards a journaled greenlight
+    to the harness permission layer. Its failure is SILENT by nature: when the
+    entry is missing or stale, nothing breaks — the human is just asked again
+    for consent they already typed, which reads as normal friction rather than a
+    defect. That is exactly the class ``doctor`` exists to make visible.
+
+    Three drifts are reported, all read-only from ``settings.json``:
+    absent (never installed / a config-dir move), stale (the entry no longer
+    matches what a fresh install would write — a moved venv, or a release that
+    gated a new block and widened the pre-filter), and DUPLICATED (>1 entry on
+    the same needle — the 539c1cdc regression shape, two hooks racing on one
+    event).
+
+    Scoped to configs we own: silent unless the settings.json carries at least
+    one hpc-agent hook. On a machine where hpc-agent was never installed into
+    the harness (or the config dir is unreadable) there is no drift to report,
+    and inventing one would make every unrelated ``doctor`` run noisy. Like the
+    jsonschema probe, it rides the ``alerts`` list and does NOT flip
+    ``needs_attention`` — a re-ask is friction, not a stalled driver. Fail-open:
+    any error yields no alert.
+    """
+    try:
+        from hpc_agent.agent_assets import consent_forward_hook_status
+
+        status = consent_forward_hook_status()
+    except Exception:  # noqa: BLE001 — an install probe must never break the scan
+        return []
+    if not status.get("hpc_hooks_present"):
+        return []
+    duplicates = int(status.get("duplicates") or 0)
+    if status.get("installed") and status.get("current") and not duplicates:
+        return []
+    if duplicates:
+        drift = (
+            f"{duplicates + 1} entries share its needle (duplicate hooks race on the same event)"
+        )
+    elif not status.get("installed"):
+        drift = "the entry is ABSENT"
+    else:
+        drift = (
+            "the installed entry is STALE (it does not match what a fresh install "
+            "would write — a moved interpreter, or a release that gated a new block "
+            "and widened the hook's pre-filter)"
+        )
+    return [
+        AlertRecord(
+            ts=now,
+            message=(
+                "consent-forwarding PreToolUse hook drift in "
+                f"{status.get('settings_path')}: {drift}. Without it, a greenlight the "
+                "human already journaled stays invisible to the harness permission "
+                "layer and the auto-mode classifier re-asks for consent that is "
+                "already on file. Re-run `hpc-agent install-commands` to heal the "
+                "entry in place."
+            ),
+        )
+    ]
+
+
 def _transport_drift_routing(now: str) -> list[AlertRecord]:
     """Route live transport-env drift to its heal class (detection + routing ONLY).
 
@@ -743,11 +805,18 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # needs_attention (a missing dep is a preflight advisory, not a stalled run).
     jsonschema_alerts = _jsonschema_importable_probe(now)
 
+    # Harness install drift (attended-latency plan): the consent-forwarding
+    # PreToolUse hook fails SILENTLY — a missing/stale/duplicated entry just
+    # means the human gets re-asked for consent already in the journal. Local,
+    # read-only, fail-open, and scoped to configs that already carry hpc-agent
+    # hooks; rides `alerts` without flipping needs_attention.
+    hook_drift_alerts = _consent_forward_hook_probe(now)
+
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the
     # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
     # not log lines), while the dead workers get their own attention part.
-    alerts = log_alerts + dead_worker_alerts + heal_alerts + jsonschema_alerts
+    alerts = log_alerts + dead_worker_alerts + heal_alerts + jsonschema_alerts + hook_drift_alerts
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,

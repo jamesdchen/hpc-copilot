@@ -47,7 +47,8 @@ Scope notes (verified 2026-07-03):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent.state.decision_journal import read_decisions
@@ -81,6 +82,173 @@ def _journaled_target(resolved: object) -> str | None:
     if isinstance(target, dict):
         target = target.get("verb")
     return target if isinstance(target, str) else None
+
+
+def _greenlight_naming(records: list[dict[str, Any]], verb: str) -> dict[str, Any] | None:
+    """The newest journaled greenlight (``response == "y"``) naming *verb*, or ``None``.
+
+    THE definition of "the human greenlit this verb" — the newest-to-oldest scan
+    the module docstring describes, factored out of :func:`assert_greenlit_target`
+    so the imperative gate and the read-only probe
+    (:func:`probe_authorization`) share ONE implementation. A second copy of this
+    loop is how a permission-forwarding surface drifts from the gate it forwards.
+    """
+    for record in reversed(records):
+        if str(record.get("response") or "") != _GREENLIGHT:
+            continue
+        if _journaled_target(record.get("resolved")) == verb:
+            return record
+    return None
+
+
+def greenlit_record(experiment_dir: Path, *, run_id: str, verb: str) -> dict[str, Any] | None:
+    """The run-scoped decision record that greenlit *verb*, or ``None``.
+
+    The QUERY form of :func:`assert_greenlit_target`: same journal, same scan,
+    same match rule — it just returns the record instead of raising. Exists
+    because the assert was the only entry point, and a read-only consumer (the
+    consent-forwarding PreToolUse hook,
+    :mod:`hpc_agent._kernel.hooks.consent_forward`) must be able to ASK whether
+    the gate would pass without paying the refusal.
+
+    Pure read; never writes, never records a consumption.
+    """
+    return _greenlight_naming(read_decisions(experiment_dir, "run", run_id), verb)
+
+
+@dataclass(frozen=True)
+class AuthorizationProbe:
+    """Whether a journaled record ALREADY authorizes a gated verb (read-only).
+
+    * ``authorized`` — a live greenlight or standing consent covers the verb.
+    * ``basis`` — ``"greenlight"`` / ``"standing-consent"`` / ``"none"``.
+    * ``reason`` — the failing leg when not authorized (the consent substrate's
+      own vocabulary: ``no-consent`` / ``expired`` / ``spec-changed`` /
+      ``boundary-not-consumable`` / …), or a short affirmative note when it is.
+      One reason is the PROBE's own, with no gate counterpart:
+      ``predecessor-evidence-not-visible-to-probe`` — the boundary IS
+      consumable behind clean-terminal evidence, but only the caller derives
+      that evidence, so this read-only probe must decline (see the
+      under-approximation note on :func:`probe_authorization`). It is
+      deliberately NOT reported as ``boundary-not-consumable``, which would
+      state the false claim that no consent can ever cover the boundary.
+    * ``block`` / ``ts`` — the journaled record's own block name and timestamp,
+      so a consumer can NAME the record it is forwarding rather than assert a
+      conclusion of its own.
+    * ``scope`` — the ``"<scope_kind>:<scope_id>"`` the record was read from.
+    """
+
+    authorized: bool
+    basis: str
+    reason: str
+    block: str
+    ts: str
+    scope: str
+
+
+def probe_authorization(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    verb: str,
+    scope_kind: str = "run",
+    scope_id: str | None = None,
+) -> AuthorizationProbe:
+    """Read-only: would :func:`assert_greenlit_or_consented` pass *verb* right now?
+
+    The query twin of the consent-aware gate, composed from the SAME substrate
+    the assert consults and nothing else — :func:`greenlit_record` (the shared
+    greenlight scan above), ``overnight.standing_consent_status`` (the ONE
+    definition of "live consent"), ``overnight.is_consumable_boundary`` (the SoT
+    for which boundaries a consent may auto-advance) and
+    ``overnight.boundary_already_ledgered`` (durable clean-terminal evidence).
+    No leg is re-derived here.
+
+    **A deliberate UNDER-approximation, never an over-approximation.** The gate's
+    consent leg accepts ``clean_predecessor`` evidence its CALLER derives (the
+    recorded predecessor terminal — ``ops/submit_blocks`` and
+    ``ops/aggregate_blocks`` own that derivation, and re-deriving it here would
+    be exactly the duplicated-gate-logic this function exists to avoid). This
+    probe only sees the DURABLE half (``boundary_already_ledgered``), so for the
+    clean-terminal-conditional boundaries it can answer "not authorized" where
+    the gate would in fact pass. That direction is safe by construction for the
+    permission-forwarding consumer: a false "not authorized" costs one human
+    prompt (the status quo); a false "authorized" would forward consent nobody
+    gave. Never invert this asymmetry.
+
+    This function NEVER records a consumption — unlike
+    :func:`assert_greenlit_or_consented`, which ledgers the auto-advance in the
+    same breath as passing it. A probe that ledgered would burn the boundary's
+    one audit line on a permission check the agent might never follow through.
+    """
+    from hpc_agent.ops.overnight import (
+        OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE,
+        boundary_already_ledgered,
+        consumed_spend,
+        is_consumable_boundary,
+        standing_consent_status,
+    )
+    from hpc_agent.state.runs import read_run_cluster, read_run_cmd_sha
+
+    sid = scope_id or run_id
+    scope = f"{scope_kind}:{sid}"
+
+    record = greenlit_record(experiment_dir, run_id=run_id, verb=verb)
+    if record is not None:
+        return AuthorizationProbe(
+            authorized=True,
+            basis="greenlight",
+            reason=f"journaled `y` names {verb}",
+            block=str(record.get("block") or ""),
+            ts=str(record.get("ts") or ""),
+            scope=scope,
+        )
+
+    cmd_sha = read_run_cmd_sha(experiment_dir, run_id)
+    ledgered = boundary_already_ledgered(experiment_dir, scope_kind, sid, verb, cmd_sha)
+    if not is_consumable_boundary(scope_kind, verb, clean_predecessor=ledgered):
+        # Name the ACTUAL state. A boundary no consent may ever auto-advance
+        # ("boundary-not-consumable") is a different fact from one that IS
+        # consumable behind clean-predecessor evidence this read-only probe
+        # cannot see (the caller derives it — see the under-approximation note
+        # above). Reporting the former for the latter would tell a human their
+        # overnight consent can never cover ``submit-s4``, which is false.
+        conditional = verb in OVERNIGHT_CLEAN_TERMINAL_CONSUMABLE.get(scope_kind, frozenset())
+        return AuthorizationProbe(
+            authorized=False,
+            basis="none",
+            reason=(
+                "predecessor-evidence-not-visible-to-probe"
+                if conditional
+                else "boundary-not-consumable"
+            ),
+            block="",
+            ts="",
+            scope=scope,
+        )
+    # Meter the real spend from the consumption ledger exactly as
+    # ``consume_boundary_under_consent`` does — the ``spent_*`` defaults of 0.0
+    # would read an over-cap consent as LIVE, the one over-approximation this
+    # probe must never make.
+    spent_budget, spent_walltime = consumed_spend(experiment_dir, scope_kind, sid)
+    decision = standing_consent_status(
+        experiment_dir,
+        scope_kind=scope_kind,
+        scope_id=sid,
+        current_cmd_sha=cmd_sha,
+        current_placement=read_run_cluster(experiment_dir, run_id),
+        spent_budget=spent_budget,
+        spent_walltime=spent_walltime,
+    )
+    consent = decision.consent or {}
+    return AuthorizationProbe(
+        authorized=decision.live,
+        basis="standing-consent" if decision.live else "none",
+        reason=decision.reason,
+        block=str(consent.get("block") or ""),
+        ts=str(consent.get("ts") or ""),
+        scope=scope,
+    )
 
 
 def assert_greenlit_target(
@@ -134,11 +302,8 @@ def assert_greenlit_target(
     check ahead of the gate (a ``submit_blocks`` change outside this seam).
     """
     records = read_decisions(experiment_dir, "run", run_id)
-    for record in reversed(records):
-        if str(record.get("response") or "") != _GREENLIGHT:
-            continue
-        if _journaled_target(record.get("resolved")) == verb:
-            return
+    if _greenlight_naming(records, verb) is not None:
+        return
     # No greenlight names *verb* anywhere in the journal — diagnose from the tail.
     if not records:
         raise errors.SpecInvalid(
