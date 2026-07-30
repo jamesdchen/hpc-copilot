@@ -29,6 +29,7 @@ cannot pass silently.
 
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
+| `cluster-readiness` verb (new `query` primitive + its two wire models) | `docs/design/s2-readiness.md` (Drift log, 2026-07-30 — pillar 1) | Full serial rebake: `schemas/cluster_readiness.{input,output}.json` emit, `operations.json` re-bake, `docs/primitives/cluster-readiness.md` frontmatter, `docs/primitives/README.md` + `docs/generated/operations.md` indices, and `cli/_verb_module_map.py`. Six of the nine `regen_all` steps are stale on this branch by construction — the wave lands the code and defers the bake so concurrent S2 waves don't race the same generated artifacts. `scripts/lint_wire_suffix.py` is red for the same one reason (both models resolve to a schema file that is not emitted yet) and goes green with the bake; every other gauntlet lint PASSES. | **RED** `tests/_wire/test_schema_models_roundtrip.py` (4 params fail: `test_emitted_schema_matches_checked_in` / `test_minimal_instance_validates_against_emitted_schema` for both `cluster_readiness.*.json`). GREEN already, and pinning the rest: `test_spec_verb_inventory_matches_cli`, `tests/cli/test_cli_completeness.py` | s2-readiness pillars 1+6 |
 
 Row format (binds every future row):
 

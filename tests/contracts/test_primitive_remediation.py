@@ -89,6 +89,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
     {
         "aggregate-stream",
         "alerts-ack",
+        # cluster-readiness (s2-readiness pillar 1): the read surface over the
+        # standing readiness ledger. Spec-taking ({} is valid — every field is an
+        # optional filter), read-only, no SSH.
+        "cluster-readiness",
         "extract-recipe",
         "notebook-dry-run",
         # program-verify (program-level reproduction, phase 1): a read-only query

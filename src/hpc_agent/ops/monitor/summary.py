@@ -62,6 +62,18 @@ FIELD_KIND: dict[str, FieldKind] = {
     "pending": "cumulative",
     "failed": "cumulative",
     "total": "cumulative",
+    # cumulative S2 SLO fields (s2-readiness pillar 6, reduced by
+    # ``state/s2_slo.py``). All three are CUMULATIVE: each is a total measured
+    # over the whole attended stretch of one run — elapsed seconds from the
+    # journaled y to array-accepted, the human decision records that stretch
+    # cost, and the readiness ledger's age at fire. None is a per-tick change,
+    # so none may ever acquire the ``+`` delta marker: a "+41 seconds" reading
+    # of a total elapsed time is exactly the ``told 0 · complete 39/40``
+    # confusion class this registry exists to prevent. The names are the
+    # ``state/s2_slo.SLO_FIELDS`` tuple — one list, two consumers.
+    "y_to_array_accepted_seconds": "cumulative",
+    "interventions_count": "cumulative",
+    "readiness_age_at_fire_seconds": "cumulative",
     # cumulative kill counts — the §5 first-class kill telemetry, rendered from
     # the run record's kill ledger (``kill_requested_job_ids`` /
     # ``kill_confirmed_job_ids``). Both are running totals ("N requested, M
@@ -142,6 +154,35 @@ def _format_kill_count(field: str, value: int) -> str:
             "cumulative running totals — declare it cumulative in FIELD_KIND"
         )
     return f"{value} {_KILL_PHRASE[field]}"
+
+
+def _format_slo(slo: Any) -> str | None:
+    """Render the S2 SLO line for a run, or ``None`` when nothing was measurable.
+
+    One line, composed from the ``state/s2_slo.S2Slo`` reducer's fields — every
+    one routed through :func:`_render_scalar` so the cumulative-vs-delta contract
+    (and its lint) covers the SLO exactly as it covers the counts. A field the
+    reducer could not measure is OMITTED rather than printed as ``0``: an
+    unmeasured latency and a zero latency are different facts, and the whole
+    point of pillar 6 is that the scorecard is honest.
+    """
+    if not slo.measured:
+        return None
+    # Spelled out field by field rather than looped over ``SLO_FIELDS``: the
+    # lint's render scan matches a STRING LITERAL first argument, so a loop over
+    # names would silently drop these three out of static coverage. Same reason
+    # ``_format_kill_count`` is called with literals below.
+    parts: list[str] = []
+    if slo.y_to_array_accepted_seconds is not None:
+        parts.append(_render_scalar("y_to_array_accepted_seconds", slo.y_to_array_accepted_seconds))
+    # A count of zero is a real measurement ("no human stops"), not an absence —
+    # rendered whenever the line renders at all.
+    parts.append(_render_scalar("interventions_count", slo.interventions_count))
+    if slo.readiness_age_at_fire_seconds is not None:
+        parts.append(
+            _render_scalar("readiness_age_at_fire_seconds", slo.readiness_age_at_fire_seconds)
+        )
+    return ", ".join(parts)
 
 
 def _read_last_tick(jsonl_path: Path) -> dict[str, Any] | None:
@@ -339,6 +380,15 @@ def monitor_summary(
             f"kill: {_format_kill_count('kill_requested', n_req)}, "
             f"{_format_kill_count('kill_confirmed', n_conf)}"
         )
+    # s2-readiness pillar 6: the S2 SLO as ONE line, reduced from records that
+    # already exist (the decision journal's y + this record's accept stamp +
+    # the readiness ledger's own atom stamps). Absent when nothing was
+    # measurable — an unmeasured SLO prints nothing rather than zeros.
+    from hpc_agent.state.s2_slo import slo_for_run
+
+    slo_line = _format_slo(slo_for_run(experiment_dir, run_id, record))
+    if slo_line:
+        body_lines.append(f"slo: {slo_line}")
 
     armed_hint = (
         None

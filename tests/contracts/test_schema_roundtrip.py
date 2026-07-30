@@ -78,6 +78,12 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # once attention_queue.input.json is baked it round-trips as a hard
         # assertion (no fixture / xfail needed).
         "attention-queue",
+        # cluster-readiness (s2-readiness pillar 1): read-only standing readiness
+        # ledger. `{}` is a valid spec and the runtime consumes it without
+        # cluster/journal state (no SSH, no probe), so once
+        # cluster_readiness.input.json is baked it round-trips as a hard
+        # assertion (no fixture / xfail needed).
+        "cluster-readiness",
         # harness-capabilities (harness-contract capability negotiation): read-only
         # detection verb. `{}` is a valid spec and the runtime consumes it without
         # cluster/journal state, so once harness_capabilities.input.json is baked by
