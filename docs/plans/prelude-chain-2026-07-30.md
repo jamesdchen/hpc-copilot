@@ -101,3 +101,11 @@ principles enforcement rows for the reversal + new park actor.
   dispatched (worktrees; regen deferred to integration). Wave P2 held for
   the morning sitting (kernel + doctrine reversal should not land while the
   maintainer sleeps).
+- 2026-07-30 (later): Wave P1 INTEGRATED on main — three branches built,
+  independently verified, all findings fixed (P1.a 072423c0, P1.b 2f8cb843,
+  P1.c+d 1369f7ec), merged + ONE `regen_all --write` (9/9 PASS; both ledger
+  rows paid). Loose ends carried: hpc-wrap-entry-point SKILL.md:79/141/222/240
+  prose now redundant (composers/extraction own those steps — retire the
+  prose when the SKILL is rewired to call `wrap-entry-point-auto`);
+  `argv_params` has no consumer yet (P2's chain composes argv from it);
+  `conf/*.yml` glob gap preserved verbatim (contract change, needs ruling).

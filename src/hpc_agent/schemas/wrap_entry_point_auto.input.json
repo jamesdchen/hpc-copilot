@@ -1,0 +1,499 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/wrap_entry_point_auto.input.json",
+  "title": "wrap-entry-point-auto input",
+  "description": "Inputs to the ``wrap-entry-point-auto`` composite verb.\n\nEvery field is optional: a bare call against a repo with exactly one\nentry point and one candidate function gets as far as the first\ngenuine judgment point and names it. Caller-supplied fields are\nOVERRIDES — they short-circuit the matching detection step, they never\nmerely hint at it.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "entry_point_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The entry-point file, relative to experiment_dir. Overrides detection. When omitted the composite resolves it from detect-entry-point: an existing @register_run wins, else the single candidate; two or more candidates return needs_pick.",
+      "title": "Entry Point Path"
+    },
+    "run_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The entry FUNCTION to decorate (direct-decoration pathway) or to name the wrapper after (wrapper pathway). Overrides the entry-function ladder. On the decoration pathway it must be a module-level def in the resolved entry-point file.",
+      "title": "Run Name"
+    },
+    "entry_point_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "register_run",
+            "shell_command",
+            "python_module"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Force the pathway — all THREE InterviewSpec entry-point kinds are reachable. 'shell_command' is the last row of the pathway decision table: an explicit caller choice always routes to wrapper materialization, even when direct decoration would have been structurally possible. 'python_module' targets the function by dotted path WITHOUT editing the file (SKILL.md:98's second option for row 2) — code never selects it on its own, because 'may we edit this file' is caller judgment, not a repo fact. 'register_run' is already the default; forcing it is refused when the function carries a signature-rewriting decorator (decorating through one produces an executor the framework cannot introspect).",
+      "title": "Entry Point Kind"
+    },
+    "argv": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The wrapper's argv template with {placeholder} per kwarg. Supply it (with signature) to clear the needs_wrapper_argv escalation; this verb never derives it (framework-specific CLI extraction is a separate unit, and a wrong argv fails every task).",
+      "title": "Argv"
+    },
+    "signature": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "enum": [
+              "str",
+              "int",
+              "float",
+              "bool"
+            ],
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The wrapper's typed signature, {placeholder: type-name}. Types are the same narrow set the interview's shell_command entry accepts, so a bad type fails here rather than one verb later. Supply it with argv. Doubles as the param inventory the fixed-params partition reads on the wrapper pathway (no introspectable Python signature exists there).",
+      "title": "Signature"
+    },
+    "goal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "One-line free-text intent. A REQUIRED_CALLER_FIELDS member: its absence is an escalation (needs_intent), never an auto-fill.",
+      "title": "Goal"
+    },
+    "task_generator": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "cartesian_product": "#/$defs/_CartesianProduct",
+              "chunked_series": "#/$defs/_ChunkedSeries",
+              "enumerated": "#/$defs/_Enumerated",
+              "items_x_seeds": "#/$defs/_ItemsXSeeds",
+              "numeric_linspace": "#/$defs/_NumericLinspace",
+              "numeric_logspace": "#/$defs/_NumericLogspace"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/_Enumerated"
+            },
+            {
+              "$ref": "#/$defs/_CartesianProduct"
+            },
+            {
+              "$ref": "#/$defs/_ItemsXSeeds"
+            },
+            {
+              "$ref": "#/$defs/_NumericLogspace"
+            },
+            {
+              "$ref": "#/$defs/_NumericLinspace"
+            },
+            {
+              "$ref": "#/$defs/_ChunkedSeries"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The sweep recipe. A REQUIRED_CALLER_FIELDS member the framework cannot fabricate. Also the source of the axis-param set the fixed-params partition subtracts, so its absence blocks the partition too.",
+      "title": "Task Generator"
+    },
+    "task_count": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Expected number of tasks — the interview's off-by-one guard. Human-owned magnitude; absence is an escalation.",
+      "title": "Task Count"
+    },
+    "frozen_configs": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override the convention YAML scan (configs/*.yaml, configs/*.yml, conf/*.yaml). An explicit empty list means 'no YAML is part of this experiment's identity' and is honored as such.",
+      "title": "Frozen Configs"
+    },
+    "fixed_params": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Constants for entry-point params the task_generator does not vary. Keys here CLEAR the matching uncovered-required-param escalation; the composite copies them through verbatim and never invents one.",
+      "title": "Fixed Params"
+    }
+  },
+  "$defs": {
+    "_CartesianProduct": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "cartesian_product",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_CartesianProductParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_CartesianProduct",
+      "type": "object"
+    },
+    "_CartesianProductParams": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "additionalProperties": {
+            "items": {},
+            "type": "array"
+          },
+          "description": "Named axes; tasks = full Cartesian product. resolve(i) returns a dict with one key per axis.",
+          "minProperties": 1,
+          "title": "Axes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "axes"
+      ],
+      "title": "_CartesianProductParams",
+      "type": "object"
+    },
+    "_ChunkedSeries": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "chunked_series",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_ChunkedSeriesParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_ChunkedSeries",
+      "type": "object"
+    },
+    "_ChunkedSeriesParams": {
+      "additionalProperties": false,
+      "description": "Tile a series ``[start + halo, series_length)`` into contiguous chunks.\n\nMaterializes one task per chunk (crossed with ``extra_axes``), each\ncarrying its ``chunk_start`` / ``chunk_end`` / ``halo`` bounds. The\nscoring space is tiled into ``chunks`` contiguous chunks; the LAST chunk\nabsorbs the remainder so the final ``chunk_end`` equals ``series_length``\nexactly (no gaps, no overlaps). A run-#11-style executor replays ``halo``\nbars before each ``chunk_start`` (reading from ``chunk_start - halo``,\nwhich stays >= ``start``). Adds a code seat for the bounds arithmetic that\na hand-written ``enumerated`` list only ever cross-checked by COUNT — the\noff-by-one in halo / last-chunk-end otherwise sails through.",
+      "properties": {
+        "series_length": {
+          "description": "Length of the full series; the tiled space is [start + halo, series_length).",
+          "minimum": 1,
+          "title": "Series Length",
+          "type": "integer"
+        },
+        "chunks": {
+          "description": "Number of contiguous chunks; the last absorbs the remainder.",
+          "minimum": 1,
+          "title": "Chunks",
+          "type": "integer"
+        },
+        "halo": {
+          "description": "Bars each task replays before its chunk_start (so it reads from chunk_start - halo).",
+          "minimum": 0,
+          "title": "Halo",
+          "type": "integer"
+        },
+        "start": {
+          "default": 0,
+          "description": "First index of the series (default 0).",
+          "title": "Start",
+          "type": "integer"
+        },
+        "extra_axes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {},
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional named axes multiplied against the chunk grid (bucket x chunk). Each must have >=1 value.",
+          "title": "Extra Axes"
+        }
+      },
+      "required": [
+        "series_length",
+        "chunks",
+        "halo"
+      ],
+      "title": "_ChunkedSeriesParams",
+      "type": "object"
+    },
+    "_Enumerated": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "enumerated",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_EnumeratedParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_Enumerated",
+      "type": "object"
+    },
+    "_EnumeratedParams": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "description": "List of task-kwargs dicts. Most agnostic shape — just stores the list verbatim and resolve(i) returns items[i].",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "_EnumeratedParams",
+      "type": "object"
+    },
+    "_ItemsXSeeds": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "items_x_seeds",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_ItemsXSeedsParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_ItemsXSeeds",
+      "type": "object"
+    },
+    "_ItemsXSeedsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "seeds": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Seeds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "seeds"
+      ],
+      "title": "_ItemsXSeedsParams",
+      "type": "object"
+    },
+    "_NumericLinspace": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "numeric_linspace",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_NumericLinspaceParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_NumericLinspace",
+      "type": "object"
+    },
+    "_NumericLinspaceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "param": {
+          "minLength": 1,
+          "title": "Param",
+          "type": "string"
+        },
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 2,
+          "title": "N",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "param",
+        "low",
+        "high",
+        "n"
+      ],
+      "title": "_NumericLinspaceParams",
+      "type": "object"
+    },
+    "_NumericLogspace": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "numeric_logspace",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_NumericLogspaceParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_NumericLogspace",
+      "type": "object"
+    },
+    "_NumericLogspaceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "param": {
+          "minLength": 1,
+          "title": "Param",
+          "type": "string"
+        },
+        "low": {
+          "exclusiveMinimum": 0,
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "exclusiveMinimum": 0,
+          "title": "High",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 2,
+          "title": "N",
+          "type": "integer"
+        },
+        "base": {
+          "default": 10.0,
+          "exclusiveMinimum": 1,
+          "title": "Base",
+          "type": "number"
+        }
+      },
+      "required": [
+        "param",
+        "low",
+        "high",
+        "n"
+      ],
+      "title": "_NumericLogspaceParams",
+      "type": "object"
+    }
+  }
+}

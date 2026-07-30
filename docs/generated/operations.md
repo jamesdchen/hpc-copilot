@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**180 operations total**: 148 primitive atoms + 32 workflow atoms.
+**182 operations total**: 149 primitive atoms + 33 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (79)
+## `query` (80)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -87,6 +87,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`scaffold-spec`](../primitives/scaffold-spec.md) | ✓ | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` | `_(none)_` | — | — |
 | [`scope-status`](../primitives/scope-status.md) | ✓ | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`stray-sweep`](../primitives/stray-sweep.md) | ✓ | ssh | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` | `_(none)_` | — | — |
+| [`suggest-prelude-action`](../primitives/suggest-prelude-action.md) | ✓ | _none_ | `hpc-agent suggest-prelude-action [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`suggest-setup-action`](../primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`summarize-submit-plan`](../primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `_(none)_` | — | — |
 | [`trace`](../primitives/trace.md) | ✓ | _none_ | `hpc-agent trace [--spec <path>] [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` | `_(none)_` | — | — |
@@ -197,7 +198,7 @@ Creates new files (e.g. starter executor templates).
 | [`scaffold-strategy`](../primitives/scaffold-strategy.md) | ✓ | writes-file | `hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]` | `_(none)_` | — | — |
 | [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` | `_(none)_` | — | — |
 
-## `workflow` (32)
+## `workflow` (33)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -235,4 +236,5 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`submit-speculate`](../primitives/submit-speculate.md) | ✓ | scheduler-submit; ssh | `hpc-agent submit-speculate --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`validate-campaign`](../primitives/validate-campaign.md) | ✓ | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-canary`](../primitives/verify-canary.md) | ✓ | ssh | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--verify-checkpoint] [--checkpoint-result-dir <checkpoint_result_dir>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` | `_(none)_` | — | — |
+| [`wrap-entry-point-auto`](../primitives/wrap-entry-point-auto.md) | ✓ | filesystem | `hpc-agent wrap-entry-point-auto [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 

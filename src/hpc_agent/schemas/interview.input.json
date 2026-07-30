@@ -1067,11 +1067,19 @@
           "type": "string"
         },
         "run_name": {
-          "description": "Name for the generated wrapper file (``.hpc/wrappers/<run_name>.py``) and the ``@register_run``-decorated function inside it. Must be a valid Python identifier.",
-          "minLength": 1,
-          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
-          "title": "Run Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name for the generated wrapper file (``.hpc/wrappers/<run_name>.py``) and the ``@register_run``-decorated function inside it. Must be a valid Python identifier. Optional: when omitted the interview composes it from the detected entry-point candidate the argv invokes and discloses the composed default in interview.json.",
+          "title": "Run Name"
         },
         "argv": {
           "description": "Argv template. ``{param}`` placeholders are substituted from the wrapper's kwargs at call time. Example: [\"python3\", \"main.py\", \"--config\", \"{config}\", \"--seed\", \"{seed}\"].",
@@ -1137,7 +1145,6 @@
       },
       "required": [
         "kind",
-        "run_name",
         "argv"
       ],
       "title": "_ShellCommandEntry",

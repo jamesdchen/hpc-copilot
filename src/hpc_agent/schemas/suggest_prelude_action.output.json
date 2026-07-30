@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/suggest_prelude_action.output.json",
+  "title": "suggest-prelude-action output data",
+  "description": "The ONE next prelude step, its ``why``, and the call to make.\n\nA TOTAL ladder: every state of the five substrates maps to exactly one\n``action``. ``rung`` is the priority the match came from (0 = a corrupt /\nunreadable substrate, which is always disclosed rather than crashed on; the\nlast rung is the catch-all \"the prelude is settled\"). ``substrates`` is the\nevidence vector the decision was made over.",
+  "type": "object",
+  "required": [
+    "rung",
+    "action",
+    "why",
+    "scaffold",
+    "substrates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "rung": {
+      "description": "The priority tier that matched — lower fires first. The ladder is total, so a rung always resolves (no escalation).",
+      "minimum": 0,
+      "title": "Rung",
+      "type": "integer"
+    },
+    "action": {
+      "description": "The single next prelude step to take.",
+      "enum": [
+        "doctor",
+        "pack-optin-repair",
+        "notebook-record-config",
+        "notebook-status",
+        "notebook-audit-view",
+        "audit-handoff",
+        "interview",
+        "classify-axis",
+        "notebook-scaffold-template",
+        "submit-s1"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "why": {
+      "description": "One line naming the substrate fact this action follows from.",
+      "title": "Why",
+      "type": "string"
+    },
+    "scaffold": {
+      "$ref": "#/$defs/PreludeScaffold",
+      "description": "The exact call the action is made with."
+    },
+    "findings": {
+      "description": "Every named substrate observation, including the ones a lower rung pre-empted — so nothing read is silently dropped.",
+      "items": {
+        "$ref": "#/$defs/PreludeFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "disclosures": {
+      "description": "Honest notes about what could not be determined (a source the parser refused, a run the AST scan did not find, additional audits not reported). Advisory; never blocks.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Disclosures",
+      "type": "array"
+    },
+    "substrates": {
+      "$ref": "#/$defs/PreludeSubstrates",
+      "description": "The disclosed evidence vector the ladder decided over."
+    }
+  },
+  "$defs": {
+    "PreludeFinding": {
+      "additionalProperties": false,
+      "description": "One named substrate observation — the evidence a rung fired on.\n\nA finding is never a judgement: ``substrate`` names WHICH of the five was\nread, ``detail`` states the mechanical fact, and ``remedy`` (when there is a\nnamed one) states the repair in the repo's own vocabulary — e.g. the\n2026-07-30 live fumble, \"bound but not opted in — add the packs entry\".",
+      "properties": {
+        "substrate": {
+          "description": "Which of the five prelude substrates this observation came from.",
+          "enum": [
+            "notebook-journal",
+            "audit-config",
+            "pack",
+            "axes",
+            "interview"
+          ],
+          "title": "Substrate",
+          "type": "string"
+        },
+        "detail": {
+          "description": "The mechanical fact observed (never an interpretation).",
+          "title": "Detail",
+          "type": "string"
+        },
+        "remedy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The named repair, when the finding has one (e.g. 'bound but not opted in — add the packs entry'). Null for a finding that is only disclosure.",
+          "title": "Remedy"
+        }
+      },
+      "required": [
+        "substrate",
+        "detail"
+      ],
+      "title": "prelude substrate finding",
+      "type": "object"
+    },
+    "PreludeScaffold": {
+      "additionalProperties": false,
+      "description": "The exact call the suggested action is made with.\n\nEither a VERB invocation (``cli`` carries the exact command line, ``spec``\nthe ``--spec`` skeleton) or a FILE EDIT (``verb`` names the file, ``cli`` is\nnull and ``spec`` carries the JSON fragment to add) — the pack opt-in remedy\nis the latter. ``unresolved_fields`` flags the placeholder paths the caller\nmust fill, the ``scaffold-spec`` convention.",
+      "properties": {
+        "verb": {
+          "description": "The target verb to invoke, or the file to edit (e.g. `interview.json`) when the remedy is not a verb call.",
+          "title": "Verb",
+          "type": "string"
+        },
+        "cli": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The exact CLI invocation, with every derivable value filled. Null when the remedy is a file edit rather than a verb call.",
+          "title": "Cli"
+        },
+        "spec": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The `--spec` skeleton for the target verb, or the JSON fragment to add to the named file. Null when the verb takes no spec.",
+          "title": "Spec"
+        },
+        "unresolved_fields": {
+          "description": "Dotted paths inside `spec` whose values are PLACEHOLDERS the ladder could not derive from a durable record — the caller fills them before invoking (never guessed).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "verb"
+      ],
+      "title": "prelude action scaffold",
+      "type": "object"
+    },
+    "PreludeSubstrates": {
+      "additionalProperties": false,
+      "description": "The disclosed evidence vector the ladder decided over.\n\nEvery field is presence, a count, or an identity list over opaque content —\npublished so a caller can see WHY a rung fired without re-reading the five\nsubstrates itself.",
+      "properties": {
+        "audit_ids": {
+          "description": "Every audit_id with a notebook decision journal on disk, sorted.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Audit Ids",
+          "type": "array"
+        },
+        "audit_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The audit the ladder is reporting on (the first, sorted, that a notebook rung fired for), or null when no notebook rung fired.",
+          "title": "Audit Id"
+        },
+        "audit_config_recorded": {
+          "default": false,
+          "description": "True when the reported audit has a config seat — either interview.json's `audited_source` block or a journaled `notebook-audit-config` record.",
+          "title": "Audit Config Recorded",
+          "type": "boolean"
+        },
+        "audited_source_seat": {
+          "default": false,
+          "description": "True when interview.json's `audited_source` block names the reported audit's source + template (the only durable seat that does).",
+          "title": "Audited Source Seat",
+          "type": "boolean"
+        },
+        "notebook_passed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "notebook-status's `passed` predicate for the reported audit, recomputed through the SAME reduction (never a second definition). Null when the source/template are not resolvable from a durable seat.",
+          "title": "Notebook Passed"
+        },
+        "sections_awaiting": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How many REQUIRED sections are not current (awaiting sign-off) for the reported audit. Null when `notebook_passed` is null.",
+          "title": "Sections Awaiting"
+        },
+        "packs_opted_in": {
+          "description": "Pack names carried by interview.json's `packs` opt-in block, sorted.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Packs Opted In",
+          "type": "array"
+        },
+        "packs_bound": {
+          "description": "Pack names with a CURRENT bind on their pack journal, sorted.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Packs Bound",
+          "type": "array"
+        },
+        "axes_yaml": {
+          "default": false,
+          "description": "Whether `.hpc/axes.yaml` exists.",
+          "title": "Axes Yaml",
+          "type": "boolean"
+        },
+        "interview_json": {
+          "default": false,
+          "description": "Whether an `interview.json` exists at either probed location.",
+          "title": "Interview Json",
+          "type": "boolean"
+        },
+        "materialized": {
+          "default": false,
+          "description": "Whether an interview.json carries a `_materialized` block.",
+          "title": "Materialized",
+          "type": "boolean"
+        },
+        "entry_point_run_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The materialized entry point's `run_name`, when one was recorded — the key the axes.yaml `executors` staleness check is made against.",
+          "title": "Entry Point Run Name"
+        }
+      },
+      "title": "prelude substrate evidence",
+      "type": "object"
+    }
+  }
+}

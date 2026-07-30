@@ -152,6 +152,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [scaffold-spec](scaffold-spec.md) | yes | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` |
 | [scope-status](scope-status.md) | yes | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` |
 | [stray-sweep](stray-sweep.md) | yes | ssh: `<login-node>` | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` |
+| [suggest-prelude-action](suggest-prelude-action.md) | yes | _none_ | `hpc-agent suggest-prelude-action [--experiment-dir <dir>]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [trace](trace.md) | yes | _none_ | `hpc-agent trace [--spec <path>] [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |
@@ -290,6 +291,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [submit-speculate](submit-speculate.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>` | `hpc-agent submit-speculate --spec <path> [--experiment-dir <dir>]` |
 | [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` |
 | [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--verify-checkpoint] [--checkpoint-result-dir <checkpoint_result_dir>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` |
+| [wrap-entry-point-auto](wrap-entry-point-auto.md) | yes | filesystem: `<entry` | `hpc-agent wrap-entry-point-auto [--spec <path>] [--experiment-dir <dir>]` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives

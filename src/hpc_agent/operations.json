@@ -1329,7 +1329,7 @@
     "output_schema": "scaffold_spec.output.json",
     "python": "hpc_agent.ops.scaffold_spec.scaffold_spec",
     "side_effects": [],
-    "summary": "Emit a populated, schema-valid --spec skeleton for another verb (build-submit-spec / resolve-submit-inputs / validate-campaign / campaign-run / interview), pulling cluster / run_id / context values from clusters.yaml, compute-run-id, and load-context so the agent stops divining the schema one spec_invalid at a time (#287). Read the returned spec, fill its unresolved_fields, then invoke the target verb.",
+    "summary": "Emit a populated, schema-valid --spec skeleton for another verb (build-submit-spec / resolve-submit-inputs / validate-campaign / campaign-run / interview / classify-axis), pulling cluster / run_id / run_signature_sha / context values from clusters.yaml, compute-run-id, discover-runs, and load-context so the agent stops divining the schema one spec_invalid at a time (#287). Read the returned spec, fill its unresolved_fields, then invoke the target verb.",
     "verb": "query"
   },
   {
@@ -1356,6 +1356,18 @@
       "ssh"
     ],
     "summary": "Login-node process-hygiene probe (run-12 finding 20). One fork-minimal `ps -u $USER` over ssh: counts total processes, identifies MARKED framework processes (HPC_AGENT_OP) older than the max legitimate deadline as strays, and — only with --reap — kills exactly those PIDs (never an unmarked process). Surfaces the stray count the quota-wedge incident lacked.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent suggest-prelude-action [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "suggest-prelude-action",
+    "output_schema": "suggest_prelude_action.output.json",
+    "python": "hpc_agent.cli.prelude_actions.suggest_prelude_action",
+    "side_effects": [],
+    "summary": "Run the prelude priority ladder over the five prelude substrates (notebook decision journal + notebook-status's passed predicate, the audit-config seat, the pack journal / interview.json packs opt-in and the INTEGRITY of that pair, .hpc/axes.yaml presence+staleness, interview.json presence/_materialized) and recommend ONE next step: {rung, action, why, scaffold, findings, substrates}. Total — every state maps to exactly one suggestion; a corrupt/unreadable substrate is a disclosed 'run doctor' rung, never a crash. Read-only, no SSH.",
     "verb": "query"
   },
   {
@@ -2391,6 +2403,20 @@
       "ssh"
     ],
     "summary": "Wait + grep + output-check for a 1-task canary submission. Polls until terminal, scans stderr for known failure markers, optionally checks expect_output exists. Returns {ok, failure_kind, details, stderr_tail}.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent wrap-entry-point-auto [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "wrap_entry_point_auto.input.json",
+    "name": "wrap-entry-point-auto",
+    "output_schema": "wrap_entry_point_auto.output.json",
+    "python": "hpc_agent.incorporation.wrap_entry_point_auto.wrap_entry_point_auto",
+    "side_effects": [
+      "filesystem"
+    ],
+    "summary": "Composite head of hpc-wrap-entry-point: detect-entry-point -> the pathway decision table -> decorate-entry-point -> the frozen-YAML convention scan -> the fixed-params partition, in ONE call. Resolves the entry-point file and function off named ladders, then returns one of four discriminated shapes: {onboarded} with the composed interview_spec fragment; {needs_pick} on an entry-point / entry-function tie; {needs_intent} when goal / task_generator / task_count or a specific uncovered required param is missing (code never invents these); {needs_wrapper_argv} when the wrapper pathway needs an argv template this verb will not guess. Every escalation names the exact field and why it is caller-owned, and leaves the repo byte-identical — decoration is the last step.",
     "verb": "workflow"
   }
 ]

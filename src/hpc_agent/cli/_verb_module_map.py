@@ -144,6 +144,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'submit-s3': ('submit-s3', 'hpc_agent.ops.submit_blocks'),
     'submit-s4': ('submit-s4', 'hpc_agent.ops.submit_blocks'),
     'submit-speculate': ('submit-speculate', 'hpc_agent.ops.submit_speculate'),
+    'suggest-prelude-action': ('suggest-prelude-action', 'hpc_agent.cli.prelude_actions'),
     'suggest-setup-action': ('suggest-setup-action', 'hpc_agent.cli.setup_actions'),
     'summarize-submit-plan': ('summarize-submit-plan', 'hpc_agent.ops.submit.plan_summary'),
     'tag-session': ('tag-session', 'hpc_agent.ops.devx_tag'),
@@ -161,5 +162,6 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'walk-submit-ambiguities': ('walk-submit-ambiguities', 'hpc_agent.ops.walk_submit_ambiguities'),
     'watcher-install': ('watcher-install', 'hpc_agent.ops.monitor.watcher_install'),
     'worker-log-digest': ('worker-log-digest', 'hpc_agent.ops.worker_log_digest'),
+    'wrap-entry-point-auto': ('wrap-entry-point-auto', 'hpc_agent.incorporation.wrap_entry_point_auto'),
     'write-run-sidecar': ('write-run-sidecar', 'hpc_agent.ops.write_run_sidecar'),
 }

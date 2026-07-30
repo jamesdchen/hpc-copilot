@@ -1,0 +1,504 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/wrap_entry_point_auto.output.json",
+  "title": "WrapEntryPointAutoResult",
+  "description": "Discriminated result: onboarded, or one of three named escalations.",
+  "$defs": {
+    "_EntryCandidate": {
+      "additionalProperties": false,
+      "description": "One entry-point (or entry-function) candidate in a needs_pick tie.",
+      "properties": {
+        "path": {
+          "description": "Entry-point path relative to experiment_dir.",
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "argv_kind": {
+          "description": "The candidate's classified CLI surface as detect-entry-point read it: argparse / click / typer / hydra / fire / __main__ / console_script / shell — or 'caller_supplied' for a path the detection scan never surfaced (the caller named it), which carries no file-level classification.",
+          "title": "Argv Kind",
+          "type": "string"
+        },
+        "function": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The module-level function name, set only on an entry-FUNCTION tie (several candidate defs inside one resolved file).",
+          "title": "Function"
+        }
+      },
+      "required": [
+        "path",
+        "argv_kind"
+      ],
+      "title": "_EntryCandidate",
+      "type": "object"
+    },
+    "_NeedsIntentResult": {
+      "additionalProperties": false,
+      "description": "Terminal escalation: a human-owned field is missing.",
+      "properties": {
+        "needs_intent": {
+          "const": true,
+          "description": "Discriminator: one or more human-owned fields are absent. The deterministic context below is composed and echoed so the caller does not re-scan, but no intent value is invented.",
+          "title": "Needs Intent",
+          "type": "boolean"
+        },
+        "missing_fields": {
+          "description": "The absent fields, dotted as the caller supplies them: 'goal', 'task_generator', 'task_count', 'entry_point.fixed_params.<param>'.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Missing Fields",
+          "type": "array"
+        },
+        "never_invented": {
+          "description": "The subset of missing_fields that code must NEVER fabricate under any 'safe default' rationale (the REQUIRED_CALLER_FIELDS class plus every uncovered entry-point param). Pinned so a future auto-fill has to delete this field to happen.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Never Invented",
+          "type": "array"
+        },
+        "ask": {
+          "description": "The precise, named ask — every missing field and why it is caller-owned.",
+          "minLength": 1,
+          "title": "Ask",
+          "type": "string"
+        },
+        "pathway": {
+          "description": "The already-decided pathway, echoed so the caller need not re-derive it.",
+          "enum": [
+            "decorate",
+            "wrapper",
+            "module"
+          ],
+          "title": "Pathway",
+          "type": "string"
+        },
+        "entry_point_path": {
+          "description": "The resolved entry-point path.",
+          "minLength": 1,
+          "title": "Entry Point Path",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "The resolved entry function / wrapper name.",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        },
+        "argv_kind": {
+          "description": "The resolved entry point's classified CLI surface.",
+          "title": "Argv Kind",
+          "type": "string"
+        },
+        "partition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_ParamPartition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The fixed-params partition, present only when it could be computed — i.e. the escalation is an uncovered required param rather than an absent task_generator."
+        }
+      },
+      "required": [
+        "needs_intent",
+        "missing_fields",
+        "never_invented",
+        "ask",
+        "pathway",
+        "entry_point_path",
+        "run_name",
+        "argv_kind"
+      ],
+      "title": "_NeedsIntentResult",
+      "type": "object"
+    },
+    "_NeedsPickResult": {
+      "additionalProperties": false,
+      "description": "Terminal escalation: an entry-point or entry-function tie.",
+      "properties": {
+        "needs_pick": {
+          "const": true,
+          "description": "Discriminator: two or more candidates matched with no caller pick. NOTHING was written. The skill refuses to silently pick across main.py / train.py / run.py — a wrong pick is non-recoverable without the user noticing.",
+          "title": "Needs Pick",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "'entry_point_tie' = several entry-point FILES matched. 'entry_function_tie' = one file, several candidate module-level defs and no convention (@register_run / `main`) to break it.",
+          "enum": [
+            "entry_point_tie",
+            "entry_function_tie"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "candidates": {
+          "description": "Every tied candidate, in detect-entry-point's probe order.",
+          "items": {
+            "$ref": "#/$defs/_EntryCandidate"
+          },
+          "minItems": 2,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "resolve_with": {
+          "description": "The exact input field that resolves the tie (e.g. 'entry_point_path').",
+          "minLength": 1,
+          "title": "Resolve With",
+          "type": "string"
+        },
+        "ask": {
+          "description": "The precise, named ask: which value is needed and why code must not pick it.",
+          "minLength": 1,
+          "title": "Ask",
+          "type": "string"
+        },
+        "entry_point_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The already-resolved entry-point file, set on an entry_function_tie.",
+          "title": "Entry Point Path"
+        }
+      },
+      "required": [
+        "needs_pick",
+        "reason",
+        "candidates",
+        "resolve_with",
+        "ask"
+      ],
+      "title": "_NeedsPickResult",
+      "type": "object"
+    },
+    "_NeedsWrapperArgvResult": {
+      "additionalProperties": false,
+      "description": "Terminal escalation: the wrapper pathway needs a caller argv + signature.",
+      "properties": {
+        "needs_wrapper_argv": {
+          "const": true,
+          "description": "Discriminator: direct decoration is structurally blocked and the entry point's CLI surface is not introspectable by this verb, so the argv template + typed signature must come from the caller. NOTHING was written.",
+          "title": "Needs Wrapper Argv",
+          "type": "boolean"
+        },
+        "argv_kind": {
+          "description": "Why the surface is not introspectable, named: shell / console_script (no Python signature at all), hydra / click / typer (a decorator rewrote the signature), argparse / __main__ (the flags live in a parser this verb does not read).",
+          "minLength": 1,
+          "title": "Argv Kind",
+          "type": "string"
+        },
+        "pathway_rule": {
+          "description": "The pathway-table row id that routed here (auditable).",
+          "minLength": 1,
+          "title": "Pathway Rule",
+          "type": "string"
+        },
+        "entry_point_path": {
+          "description": "The resolved entry-point path.",
+          "minLength": 1,
+          "title": "Entry Point Path",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "The name the wrapper will be materialized as.",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        },
+        "argv_head": {
+          "description": "The leading argv elements code CAN compose from the entry-point shape (['python3', 'train.py'] / ['python3', '-m', 'pkg'] / ['mytool'] / ['./run.sh']). The caller appends the {placeholder} flags.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Argv Head",
+          "type": "array"
+        },
+        "missing_fields": {
+          "description": "The absent wrapper fields: 'argv' and/or 'signature'.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Missing Fields",
+          "type": "array"
+        },
+        "missing_intent_fields": {
+          "description": "Human-owned fields ALSO still absent — disclosed here so one round trip gathers everything instead of two sequential escalations.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Intent Fields",
+          "type": "array"
+        },
+        "python_module_alternative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_PythonModuleTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "DISCLOSURE, not a recommendation: SKILL.md:98 offers python_module as the OTHER option for this row, and when the entry point is an importable module the derived {module, function} is named here so the caller can pass entry_point_kind='python_module' instead of an argv template. Code does not choose it, because the discriminator is 'may we edit / must we not edit this file' — caller judgment, not a repo fact. Absent when no dotted path is importable from the campaign dir (a src-layout package, or a non-Python entry point)."
+        },
+        "ask": {
+          "description": "The precise, named ask: the argv shape needed and why it is not derivable.",
+          "minLength": 1,
+          "title": "Ask",
+          "type": "string"
+        }
+      },
+      "required": [
+        "needs_wrapper_argv",
+        "argv_kind",
+        "pathway_rule",
+        "entry_point_path",
+        "run_name",
+        "argv_head",
+        "missing_fields",
+        "missing_intent_fields",
+        "ask"
+      ],
+      "title": "_NeedsWrapperArgvResult",
+      "type": "object"
+    },
+    "_OnboardedResult": {
+      "additionalProperties": false,
+      "description": "Terminal success: every deterministic step composed.",
+      "properties": {
+        "onboarded": {
+          "const": true,
+          "description": "Discriminator: the entry point is resolved, the pathway decided, decoration applied (direct-decoration pathway), the frozen YAMLs scanned and the params partitioned. interview_spec is ready.",
+          "title": "Onboarded",
+          "type": "boolean"
+        },
+        "pathway": {
+          "description": "'decorate' = @register_run spliced onto the user's function (SKILL Step 3a, the default). 'wrapper' = the .hpc/wrappers shell_command shim (Step 3b, the rescue boat). 'module' = the python_module dotted-path target, reachable ONLY by explicit caller override (SKILL.md:98's second option for row 2) — it writes nothing at all.",
+          "enum": [
+            "decorate",
+            "wrapper",
+            "module"
+          ],
+          "title": "Pathway",
+          "type": "string"
+        },
+        "pathway_rule": {
+          "description": "The pathway-table row id that decided the pathway (auditable).",
+          "minLength": 1,
+          "title": "Pathway Rule",
+          "type": "string"
+        },
+        "entry_point_kind": {
+          "description": "The interview entry_point.kind implied by the pathway.",
+          "enum": [
+            "register_run",
+            "shell_command",
+            "python_module"
+          ],
+          "title": "Entry Point Kind",
+          "type": "string"
+        },
+        "entry_point_path": {
+          "description": "Resolved entry-point path relative to experiment_dir.",
+          "minLength": 1,
+          "title": "Entry Point Path",
+          "type": "string"
+        },
+        "entry_point_rule": {
+          "description": "Which rung of the entry-point/function ladder resolved the pick.",
+          "minLength": 1,
+          "title": "Entry Point Rule",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "The decorated function / the wrapper's name.",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        },
+        "argv_kind": {
+          "description": "The resolved entry point's classified CLI surface.",
+          "title": "Argv Kind",
+          "type": "string"
+        },
+        "decorated": {
+          "description": "True when this call spliced @register_run onto the function.",
+          "title": "Decorated",
+          "type": "boolean"
+        },
+        "already_decorated": {
+          "description": "True when the function already carried @register_run (no write).",
+          "title": "Already Decorated",
+          "type": "boolean"
+        },
+        "import_added": {
+          "description": "True when the `from hpc_agent import register_run` import was inserted.",
+          "title": "Import Added",
+          "type": "boolean"
+        },
+        "frozen_configs": {
+          "description": "Frozen YAMLs (caller override, else the convention scan).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Frozen Configs",
+          "type": "array"
+        },
+        "frozen_sha_params": {
+          "description": "The <stem>_sha kwarg names the framework threads for each frozen YAML — counted as covered in the partition.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Frozen Sha Params",
+          "type": "array"
+        },
+        "fixed_params": {
+          "additionalProperties": true,
+          "description": "Copied VERBATIM from the caller. Empty when the caller supplied none — this verb never synthesizes a constant for an entry-point param.",
+          "title": "Fixed Params",
+          "type": "object"
+        },
+        "partition": {
+          "$ref": "#/$defs/_ParamPartition",
+          "description": "The fixed-params partition (SKILL Step 5b)."
+        },
+        "interview_spec": {
+          "additionalProperties": true,
+          "description": "The composed InterviewSpec fragment — goal / task_count / task_generator / entry_point — ready to hand to the `interview` primitive. produced_by is NOT stamped here (that composer is the interview verb's own).",
+          "title": "Interview Spec",
+          "type": "object"
+        }
+      },
+      "required": [
+        "onboarded",
+        "pathway",
+        "pathway_rule",
+        "entry_point_kind",
+        "entry_point_path",
+        "entry_point_rule",
+        "run_name",
+        "argv_kind",
+        "decorated",
+        "already_decorated",
+        "import_added",
+        "frozen_configs",
+        "frozen_sha_params",
+        "fixed_params",
+        "partition",
+        "interview_spec"
+      ],
+      "title": "_OnboardedResult",
+      "type": "object"
+    },
+    "_ParamPartition": {
+      "additionalProperties": false,
+      "description": "The fixed-params partition over the entry point's declared params.",
+      "properties": {
+        "all_params": {
+          "description": "Every param the entry point declares, in declaration order.",
+          "items": {
+            "type": "string"
+          },
+          "title": "All Params",
+          "type": "array"
+        },
+        "axis_params": {
+          "description": "Params the task_generator produces per task (plus the <stem>_sha kwargs the framework threads for each frozen YAML). Handled per-task — deliberately absent from fixed_params.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Axis Params",
+          "type": "array"
+        },
+        "defaulted_params": {
+          "description": "Params carrying a default in the entry point's own signature. Safe to omit; a caller MAY still pin one for reproducibility.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Defaulted Params",
+          "type": "array"
+        },
+        "uncovered_params": {
+          "description": "Required (no default), not an axis, and not covered by the caller's fixed_params. Every task would fail on these, so a non-empty list is a needs_intent escalation, never a guess.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Uncovered Params",
+          "type": "array"
+        },
+        "accepts_var_keyword": {
+          "description": "True when the entry point declares **kwargs, which absorbs any unmatched kwarg — no param can then be 'uncovered'.",
+          "title": "Accepts Var Keyword",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "all_params",
+        "axis_params",
+        "defaulted_params",
+        "uncovered_params",
+        "accepts_var_keyword"
+      ],
+      "title": "_ParamPartition",
+      "type": "object"
+    },
+    "_PythonModuleTarget": {
+      "additionalProperties": false,
+      "description": "A ``python_module`` entry point: an importable dotted module + function.",
+      "properties": {
+        "module": {
+          "description": "Dotted module path importable with the campaign dir on sys.path — derived from the file's location, and only ever offered when every parent directory carries an __init__.py (or the file sits at the repo root). A src-layout package is NOT importable from the repo root, so no dotted path is offered for one.",
+          "minLength": 1,
+          "title": "Module",
+          "type": "string"
+        },
+        "function": {
+          "description": "The function inside `module` to treat as the entry point.",
+          "minLength": 1,
+          "title": "Function",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module",
+        "function"
+      ],
+      "title": "_PythonModuleTarget",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/_OnboardedResult"
+    },
+    {
+      "$ref": "#/$defs/_NeedsPickResult"
+    },
+    {
+      "$ref": "#/$defs/_NeedsIntentResult"
+    },
+    {
+      "$ref": "#/$defs/_NeedsWrapperArgvResult"
+    }
+  ]
+}

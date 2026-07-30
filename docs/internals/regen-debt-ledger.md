@@ -29,8 +29,6 @@ cannot pass silently.
 
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
-| `interview` `_ShellCommandEntry.run_name` became OPTIONAL (prelude mechanization P1.c — the interview composes the wrapper name from the detected entry-point candidate the argv invokes, so the caller must be able to legally omit it) | `docs/plans/prelude-chain-2026-07-30.md` (Wave P1, unit P1.c) | `python scripts/build_schemas.py --write` to re-emit `hpc_agent/schemas/interview.input.json` (the field moves out of `_ShellCommandEntry.required` and gains the nullable `anyOf`). Nothing else regenerates: the `_Provenance` change is a `model_validator` body only (invisible to JSON Schema), and the `detect-entry-point` output schema is hand-authored (no model, so `build_schemas` never emits it), and no `CliShape`/`@primitive` metadata changed, so `operations.json` is untouched | `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in` **RED** | Wave P1 integration (regen deferred to the ONE serial rebake per the plan's integration checklist) |
-| `principles/multi-human.md` grew the P1.c actor-module extension + its drift log, so its generated size hook in the section index moved (`~2.1k` → `~2.5k` tokens) | `docs/internals/principles/multi-human.md` (Drift log, 2026-07-30) | `python scripts/build_principles_index.py --write` (or the `regen_all` pass) to re-emit the GENERATED section-index block in `docs/internals/engineering-principles.md`. Content-only: no frontmatter (`slug`/`order`/`title`/`scope`) changed, so only the size column moves. TWO tests in the named file are red: `test_real_tree_index_is_up_to_date` directly, and `test_check_fires_red_on_header_change_then_write_heals` collaterally (its fire path clones the real tree and asserts the clone starts in sync) | `tests/scripts/test_build_principles_index.py` **RED** | Wave P1 integration (same serial rebake) |
 
 Row format (binds every future row):
 
@@ -44,6 +42,16 @@ Row format (binds every future row):
   `**RED**` (there is nothing to xfail — it is a hard format error).
 
 ## Checked — no outstanding debt (recorded so nobody re-opens them)
+
+Paid down 2026-07-30 (Wave P1 integration's one serial rebake —
+`regen_all.py --write`, all 9 steps PASS):
+
+- `docs/plans/prelude-chain-2026-07-30.md` (Wave P1, unit P1.c) — `interview`
+  `_ShellCommandEntry.run_name` optional → `schemas/interview.input.json`
+  re-emitted. Gate `test_schema_models_roundtrip[interview.input.json]` GREEN.
+- `docs/internals/principles/multi-human.md` (Drift log, 2026-07-30) — section
+  grew the P1.c actor-module extension; principles section index re-emitted.
+  Gate `tests/scripts/test_build_principles_index.py` GREEN.
 
 Paid down 2026-07-15 (verified on `main`: all six regen `--check` gates GREEN,
 `build_verb_module_map --check` GREEN, and each item's named live gate GREEN —
