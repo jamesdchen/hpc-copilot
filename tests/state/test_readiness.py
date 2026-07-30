@@ -71,14 +71,29 @@ class TestVocabularyLockstep:
         assert get_args(route_type), "route annotation did not resolve to a Literal"
         assert set(readiness.ROUTES) == set(get_args(route_type))
 
-    def test_the_extension_is_the_union_in_one_flat_vocabulary(self) -> None:
-        assert (
-            *readiness.SENSOR_KINDS_FROM_SENSOR_LAYER,
+    def test_the_extension_collapsed_into_one_mirrored_vocabulary(self) -> None:
+        """Pillar 3 built the four invariants' sensors, so the storage-side
+        EXTENSION became a plain mirror: one definition, in the sensor layer.
+
+        The four still appear LAST, in this order — ``cluster-readiness`` renders
+        atoms by position in :data:`SENSOR_KINDS`, so the digest reads transport
+        first and invariants after, which is the order a human diagnoses in.
+        """
+        assert readiness.SENSOR_KINDS == readiness.SENSOR_KINDS_FROM_SENSOR_LAYER
+        assert readiness.SENSOR_KINDS[-4:] == (
             readiness.AUTH,
             readiness.SCRATCH,
             readiness.SCHEDULER,
             readiness.ENV,
-        ) == readiness.SENSOR_KINDS
+        )
+        # ...and the transport five still lead, unmoved.
+        assert readiness.SENSOR_KINDS[:5] == (
+            readiness.HOP,
+            readiness.DIRECT,
+            readiness.PATH,
+            readiness.CONNECT,
+            readiness.PREAMBLE,
+        )
 
     def test_a_verdict_atom_dataclass_round_trips_through_the_store(self) -> None:
         """The write path accepts the sensor layer's own objects, duck-typed."""

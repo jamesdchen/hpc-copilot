@@ -951,6 +951,8 @@ def promote_submitting_record(
     experiment_dir: Path,
     run_id: str,
     job_ids: list[str],
+    *,
+    accepted_at: str | None = None,
 ) -> RunRecord:
     """Promote a ``submitting`` record to ``in_flight`` once the id is in hand (§3.3 step 3).
 
@@ -960,10 +962,28 @@ def promote_submitting_record(
     already carries ``job_ids`` — still recoverable (reconcile adopts the id),
     strictly better than losing it. Raises :class:`FileNotFoundError` if no record
     exists for *run_id*.
+
+    THE TRUE SCHEDULER-ACCEPT STAMP (``docs/design/s2-readiness.md`` pillar 6,
+    drift-log seam b). This function is the one place in the submit-once path
+    that runs with the scheduler's job ids parsed and in hand — which is exactly
+    what "the array was accepted" means — so this is where ``accepted_at`` is
+    stamped. It rides the SAME whitelisted write as ``job_ids`` deliberately: the
+    stamp and the evidence it dates land together or not at all, so no crash can
+    produce a record that carries ids with no accept instant (which would silently
+    fall back to the pre-dispatch ``submitted_at`` and under-report the latency it
+    exists to measure).
+
+    *accepted_at* is injectable so tests need no wall clock; it defaults to now.
     """
+    from hpc_agent.infra.time import utcnow_iso
     from hpc_agent.state.journal import mark_run, update_run_status
 
-    update_run_status(experiment_dir, run_id, job_ids=list(job_ids))
+    update_run_status(
+        experiment_dir,
+        run_id,
+        job_ids=list(job_ids),
+        accepted_at=accepted_at or utcnow_iso(),
+    )
     return mark_run(experiment_dir, run_id, status=str(JournalStatus.IN_FLIGHT))
 
 

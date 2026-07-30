@@ -187,12 +187,28 @@ class ReadinessAtom(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="net-triage readiness atom")
 
-    sensor: Literal["hop", "direct", "path", "connect", "preamble"] = Field(
+    sensor: Literal[
+        "hop",
+        "direct",
+        "path",
+        "connect",
+        "preamble",
+        "auth",
+        "scratch",
+        "scheduler",
+        "env",
+    ] = Field(
         description=(
             "Which leg this reading speaks for: 'hop' a ProxyJump waypoint, "
             "'direct' the target's own hostname with the jump BYPASSED, 'path' "
-            "the derived end-to-end verdict for the effective chain, and "
-            "'connect'/'preamble' the two command classes of the preamble rung."
+            "the derived end-to-end verdict for the effective chain, "
+            "'connect'/'preamble' the two command classes of the preamble rung, "
+            "and the four named invariants — 'auth' (credentials accepted, "
+            "DERIVED from the connect reading's own exit/stderr signature and "
+            "costing no probe), 'scratch' (the scratch dir exists and its "
+            "filesystem answers), 'scheduler' (the backend family's CLI "
+            "answered), 'env' (the remote hpc-agent fingerprint). The last three "
+            "appear only when the caller opted into their rungs."
         )
     )
     target: str = Field(description="What was probed (a hostname or an ssh destination).")

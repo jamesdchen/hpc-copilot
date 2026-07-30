@@ -34,8 +34,12 @@ def test_name_resolution_fires() -> None:
 
 def test_spawning_a_subprocess_fires() -> None:
     """An ``ssh``/``rsync`` child is a network call wearing a different hat."""
+    # ``timeout=`` is required by tests/contracts/test_subprocess_timeout_discipline.py
+    # and is inert here — the tripwire replaces ``subprocess.run`` outright, so the
+    # call raises before any child exists. Carrying it anyway keeps this file from
+    # being the one exception that teaches the discipline is optional.
     with pytest.raises(NetworkAttempted):
-        subprocess.run(["ssh", "h", "true"], check=False)
+        subprocess.run(["ssh", "h", "true"], check=False, timeout=5)
     with pytest.raises(NetworkAttempted):
         subprocess.Popen(["rsync", "-a", "x", "y"])
 

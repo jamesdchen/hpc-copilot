@@ -300,13 +300,17 @@
       "description": "One readiness SENSOR reading — what was probed, the verdict, when.\n\nThe unit of record of the standing per-cluster readiness ledger\n(``docs/design/s2-readiness.md`` pillar 1); ``net-triage`` is a thin composer\nover the same atoms the ledger will store, so a rendered reading and a stored\none can never disagree about what was seen.",
       "properties": {
         "sensor": {
-          "description": "Which leg this reading speaks for: 'hop' a ProxyJump waypoint, 'direct' the target's own hostname with the jump BYPASSED, 'path' the derived end-to-end verdict for the effective chain, and 'connect'/'preamble' the two command classes of the preamble rung.",
+          "description": "Which leg this reading speaks for: 'hop' a ProxyJump waypoint, 'direct' the target's own hostname with the jump BYPASSED, 'path' the derived end-to-end verdict for the effective chain, 'connect'/'preamble' the two command classes of the preamble rung, and the four named invariants — 'auth' (credentials accepted, DERIVED from the connect reading's own exit/stderr signature and costing no probe), 'scratch' (the scratch dir exists and its filesystem answers), 'scheduler' (the backend family's CLI answered), 'env' (the remote hpc-agent fingerprint). The last three appear only when the caller opted into their rungs.",
           "enum": [
             "hop",
             "direct",
             "path",
             "connect",
-            "preamble"
+            "preamble",
+            "auth",
+            "scratch",
+            "scheduler",
+            "env"
           ],
           "title": "Sensor",
           "type": "string"
