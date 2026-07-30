@@ -1819,12 +1819,22 @@ def _multibatch_delta_ssh_cmds(tmp_path: Path, *, n_files: int) -> list[str]:
     The empty remote hash manifest routes every file into the delta ``to_ship``
     set; the small per-batch cap forces N batches, exercising Option 2's per-batch
     checkpoint fold. Same smart-mock discipline as :func:`_warm_delta_push_ssh_cmds`
-    — no leg is patched out, so the dial count is the TRUE one."""
+    — no leg is patched out, so the dial count is the TRUE one.
+
+    The pushed tree is a DEDICATED ``tmp_path/tree`` subdirectory, never
+    ``tmp_path`` itself: the autouse journal-home isolation points
+    ``HPC_JOURNAL_DIR`` inside ``tmp_path``, so pushing ``tmp_path`` would
+    enumerate the journal home — and any substrate that writes there while the
+    push is planning its batches (the readiness ledger's opportunistic feed is
+    one) would add files to ``to_ship`` and perturb this leg count. The batch
+    arithmetic must measure the transport, not whatever else the box journaled."""
     import json as _json
     import os as _os
 
+    local = tmp_path / "tree"
+    local.mkdir()
     for i in range(n_files):
-        (tmp_path / f"f{i}.txt").write_text(f"body-{i}")
+        (local / f"f{i}.txt").write_text(f"body-{i}")
     # Empty remote -> ship every file. Option 1: folded prior paths ride the JSON.
     remote_files = {"files": [], "paths": [], "hashed": 0, "cached": 0}
     cmds: list[str] = []
@@ -1851,7 +1861,7 @@ def _multibatch_delta_ssh_cmds(tmp_path: Path, *, n_files: int) -> list[str]:
         tar_proc.returncode = 0
         tar_proc.wait.return_value = 0
         result = transport.rsync_push(
-            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+            ssh_target="u@h", remote_path="/r", local_path=local, exclude=[], delete=True
         )
     assert result.returncode == 0
     return [c for c in cmds if c != "-V"]

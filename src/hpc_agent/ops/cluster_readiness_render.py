@@ -37,6 +37,13 @@ _VERDICT_GLOSS: dict[str, str] = {
     "unknown": "nothing has ever been observed here",
 }
 
+#: The ``unknown`` gloss when the ledger EXISTED but could not be read. The
+#: default gloss would say "nothing has ever been observed here" two lines above
+#: a disclosure saying the file is corrupt — two contradictory claims in one
+#: entry, and the reassuring one comes first (2026-07-30 review, F7). Whatever
+#: was observed is unrecoverable, which is a different fact from never looking.
+_CORRUPT_GLOSS = "the ledger exists but could not be read, so nothing is known from it"
+
 #: Why an atom is unknown — the render says which, so "unfed" and "never
 #: observed for this host" are not confused with each other.
 _UNKNOWN_REASON = "no observation recorded"
@@ -57,18 +64,27 @@ def _age_phrase(age_seconds: int | None) -> str:
 
 
 def _subject(atom: dict[str, Any]) -> str:
-    """``connect/effective`` — the sensor and the route it was read over.
+    """``connect/effective → login.example.edu`` — the atom's full subject.
 
-    The route is part of the SUBJECT, not the evidence: ``preamble`` failing on
-    the effective route while passing on the direct one is a different fact from
-    ``preamble`` failing on both, and collapsing them is exactly the 2026-07-30
-    misread this substrate exists to prevent.
+    An atom's identity in the ledger is ``(sensor, route, target)``, and the
+    render must show ALL THREE or two distinct atoms print the same line. The
+    route is part of the subject, not the evidence: ``preamble`` failing on the
+    effective route while passing on the direct one is a different fact from
+    failing on both, and collapsing them is exactly the 2026-07-30 misread this
+    substrate exists to prevent. ``target`` is part of it for the same reason —
+    it was previously shown only for ``hop`` / ``direct``, so two ``scratch``
+    atoms on different paths rendered byte-identically (2026-07-30 review, F6).
+
+    Shown UNCONDITIONALLY when present, even where it merely repeats the entry's
+    own host: a redundant token is cheap, and a conditional that decides when the
+    target "adds nothing" is exactly the kind of rule that later hides a
+    difference. Only an unfed placeholder — which has no target — omits it.
     """
     sensor = str(atom.get("sensor") or "?")
     route = str(atom.get("route") or "")
     base = f"{sensor}/{route}" if route and route != "n/a" else sensor
     target = str(atom.get("target") or "")
-    return f"{base} → {target}" if target and sensor in ("hop", "direct") else base
+    return f"{base} → {target}" if target else base
 
 
 def _atom_line(atom: dict[str, Any]) -> str:
@@ -127,12 +143,32 @@ def render_readiness(
         host = str(entry.get("host") or "?")
         title = f"{cluster} ({host})" if cluster else host
         verdict = str(entry.get("verdict") or "unknown")
-        gloss = _VERDICT_GLOSS.get(verdict, "")
+        corrupt = bool(entry.get("ledger_corrupt"))
+        # A corrupt ledger IS 'unknown', but not for the default reason — say
+        # which, in the headline, so the entry does not open with a reassuring
+        # claim it contradicts two lines later (F7).
+        if corrupt and verdict == "unknown":
+            gloss = _CORRUPT_GLOSS
+        else:
+            gloss = _VERDICT_GLOSS.get(verdict, "")
         lines.append(f"- {title}: {verdict}" + (f" — {gloss}" if gloss else ""))
-        if entry.get("ledger_corrupt"):
+        if corrupt:
+            reason = str(entry.get("ledger_corruption_reason") or "")
+            because = f": {reason}" if reason else ""
             lines.append(
-                "  - ledger file could not be parsed; reporting an EMPTY ledger "
+                f"  - ledger file could not be read{because}; reporting an EMPTY ledger "
                 "(the next observation rewrites it)"
+            )
+        last = entry.get("ledger_last_corruption")
+        if isinstance(last, dict) and not corrupt:
+            # A rebuild discarded a corrupt file at some point. The atoms below
+            # are real, but the operator should learn ONCE that something was
+            # lost rather than have it vanish with the file.
+            when = str(last.get("at") or "?")
+            why = str(last.get("reason") or "unknown reason")
+            lines.append(
+                f"  - note: a previous ledger file was discarded as unreadable "
+                f"at {when} ({why}); atoms below were recorded after that"
             )
         atoms = entry.get("atoms")
         for atom in atoms if isinstance(atoms, list) else []:

@@ -19,6 +19,7 @@ import pytest
 
 from hpc_agent.infra import ssh_circuit
 from hpc_agent.state import readiness
+from tests._no_network import no_network  # noqa: F401 — autouse zero-network tripwire
 
 HOST = "feed.example.edu"
 TARGET = f"someone@{HOST}"

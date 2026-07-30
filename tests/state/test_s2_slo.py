@@ -19,14 +19,20 @@ from hpc_agent.state import readiness, s2_slo
 from hpc_agent.state.decision_journal import append_decision, read_decisions
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
+from tests._no_network import no_network  # noqa: F401 — autouse zero-network tripwire
 
 RUN_ID = "run-slo-1"
 HOST = "slo.example.edu"
 T0 = datetime(2026, 7, 30, 20, 0, 0, tzinfo=timezone.utc)
 
 
+def _dt(offset_sec: float) -> datetime:
+    """``T0`` shifted by *offset_sec* — the only clock these tests have."""
+    return T0 + timedelta(seconds=offset_sec)
+
+
 def _ts(offset_sec: float) -> str:
-    return (T0 + timedelta(seconds=offset_sec)).isoformat(timespec="seconds")
+    return _dt(offset_sec).isoformat(timespec="seconds")
 
 
 @pytest.fixture
@@ -66,6 +72,125 @@ def _tonights_shape(experiment: Path) -> None:
     _decide(experiment, block="submit-s1", next_block=None, response="which cluster?", offset_sec=0)
     _decide(experiment, block="submit-s1", next_block="submit-s2", response="y", offset_sec=60)
     _decide(experiment, block="submit-s2", next_block="submit-s3", response="y", offset_sec=300)
+
+
+def _redriven_shape(experiment: Path) -> None:
+    """The re-drive shape the 2026-07-30 review measured on a real journal.
+
+    Nine attempts spread over ~11 hours: each re-entry into S2 journals a fresh
+    ``submit-s2`` y, and only the LAST one produced the array. Measured from the
+    first, the "latency" is dominated by how long the human was asleep between
+    attempts — a number no S2 engineering can move.
+    """
+    _decide(experiment, block="submit-s1", next_block="submit-s2", response="y", offset_sec=0)
+    for attempt in range(1, 9):
+        _decide(
+            experiment,
+            block="submit-s2",
+            next_block="submit-s2",
+            response="retry",
+            offset_sec=attempt * 4000,
+        )
+        _decide(
+            experiment,
+            block="submit-s1",
+            next_block="submit-s2",
+            response="y",
+            offset_sec=attempt * 4000 + 10,
+        )
+    # The attempt that worked: its S2-entry y at +36010, its S3 y, then the array.
+    _decide(experiment, block="submit-s1", next_block="submit-s2", response="y", offset_sec=36010)
+    _decide(experiment, block="submit-s2", next_block="submit-s3", response="y", offset_sec=38000)
+
+
+class TestReDriveScoping:
+    """F5 (2026-07-30 review): the primary latency is LAST-ATTEMPT scoped."""
+
+    def test_the_primary_measures_the_attempt_that_produced_the_array(
+        self, experiment: Path
+    ) -> None:
+        _redriven_shape(experiment)
+        slo = s2_slo.compute_slo(read_decisions(experiment, "run", RUN_ID), accepted_at=_ts(39174))
+        # Last submit-s2 y is at +36010 -> 3164s, NOT the 39174s from the first.
+        assert slo.y_to_array_accepted_seconds == 3164
+
+    def test_the_day_scale_field_keeps_the_whole_span(self, experiment: Path) -> None:
+        _redriven_shape(experiment)
+        slo = s2_slo.compute_slo(read_decisions(experiment, "run", RUN_ID), accepted_at=_ts(39174))
+        assert slo.first_y_to_array_accepted_seconds == 39174
+        assert slo.redriven is True
+
+    def test_a_run_never_redriven_reports_the_same_number_twice(self, experiment: Path) -> None:
+        _tonights_shape(experiment)
+        slo = s2_slo.compute_slo(read_decisions(experiment, "run", RUN_ID), accepted_at=_ts(412))
+        assert slo.y_to_array_accepted_seconds == 352
+        assert slo.first_y_to_array_accepted_seconds == 352
+        assert slo.redriven is False
+
+    def test_a_redrive_AFTER_the_accept_does_not_become_the_attempt(self, experiment: Path) -> None:
+        """The accept bound is what stops a later re-drive from being mistaken for
+        the attempt that produced this array."""
+        _tonights_shape(experiment)
+        _decide(
+            experiment, block="submit-s1", next_block="submit-s2", response="y", offset_sec=9000
+        )
+        slo = s2_slo.compute_slo(read_decisions(experiment, "run", RUN_ID), accepted_at=_ts(412))
+        assert slo.y_to_array_accepted_seconds == 352
+
+    def test_a_run_resumed_straight_into_s3_still_reports_a_latency(self, experiment: Path) -> None:
+        """No submit-s2 y was ever journaled; the primary falls back rather than
+        going silently null for a run that really was attended."""
+        _decide(experiment, block="submit-s2", next_block="submit-s3", response="y", offset_sec=0)
+        slo = s2_slo.compute_slo(read_decisions(experiment, "run", RUN_ID), accepted_at=_ts(120))
+        assert slo.y_to_array_accepted_seconds == 120
+
+    def test_the_readiness_age_is_dated_against_the_LAST_fire(self, experiment: Path) -> None:
+        _redriven_shape(experiment)
+        readiness.record_observation(
+            HOST, readiness.CONNECT, "ok", source="s", route="effective", now=_dt(35000)
+        )
+        slo = s2_slo.compute_slo(
+            read_decisions(experiment, "run", RUN_ID), accepted_at=_ts(39174), host=HOST
+        )
+        # Fire at +36010, atom at +35000 -> 1010s. Dated against the first y
+        # (+0) it would have been None (no atom predates it).
+        assert slo.readiness_age_at_fire_seconds == 1010
+
+
+class TestInterventionsIncludeRecoveryStops:
+    """F5: a scorecard that undercounts its own cost is worse than none."""
+
+    def test_host_retarget_counts_as_a_human_stop(self, experiment: Path) -> None:
+        _tonights_shape(experiment)  # 3 submit-chain records
+        append_decision(
+            experiment,
+            scope_kind="run",
+            scope_id=RUN_ID,
+            block="host-retarget",
+            response="y",
+            resolved={"cluster": "discovery2"},
+            ts=_ts(200),
+        )
+        assert s2_slo.interventions_count(read_decisions(experiment, "run", RUN_ID)) == 4
+
+    def test_the_counted_recovery_set_is_explicit(self) -> None:
+        """Extending it must be a reviewed edit, not an incidental one."""
+        assert "host-retarget" in s2_slo.RECOVERY_INTERVENTION_BLOCKS
+
+    def test_an_unrelated_workflow_in_the_same_scope_is_still_excluded(
+        self, experiment: Path
+    ) -> None:
+        _tonights_shape(experiment)
+        append_decision(
+            experiment,
+            scope_kind="run",
+            scope_id=RUN_ID,
+            block="aggregate-run",
+            response="y",
+            resolved={},
+            ts=_ts(9000),
+        )
+        assert s2_slo.interventions_count(read_decisions(experiment, "run", RUN_ID)) == 3
 
 
 class TestGreenlightBoundary:

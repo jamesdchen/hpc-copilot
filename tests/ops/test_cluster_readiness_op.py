@@ -20,6 +20,7 @@ from hpc_agent import errors
 from hpc_agent._wire.queries.cluster_readiness import ClusterReadinessSpec
 from hpc_agent.ops.cluster_readiness_op import cluster_readiness
 from hpc_agent.state import readiness
+from tests._no_network import no_network  # noqa: F401 — autouse zero-network tripwire
 
 HOST = "verb.example.edu"
 T0 = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
@@ -66,7 +67,7 @@ class TestVerdictRender:
         assert result.counts["ready"] == 1
         assert "ready — every recorded invariant is green and fresh" in result.render
         # Sensor AND route: the route is part of the subject, not the evidence.
-        assert "connect/effective: ok (30s ago · 41ms · via ssh-circuit)" in result.render
+        assert f"connect/effective → {HOST}: ok (30s ago · 41ms · via ssh-circuit)" in result.render
 
     def test_stale(self, experiment: Path) -> None:
         readiness.record_observation(HOST, readiness.CONNECT, "ok", source="ssh-circuit", now=T0)
@@ -88,7 +89,7 @@ class TestVerdictRender:
         )
         result = _run(experiment, host=HOST, offset_sec=10)
         assert result.clusters[0].verdict == "degraded"
-        assert "preamble/effective: timeout" in result.render
+        assert f"preamble/effective → {HOST}: timeout" in result.render
         assert "the conda activation" in result.render
 
     def test_every_verdict_word_comes_from_the_declared_vocabulary(self, experiment: Path) -> None:
@@ -143,7 +144,7 @@ class TestRenderContract:
         assert result.clusters[0].verdict == "degraded"
         assert "hop/effective → usc-discovery: down" in result.render
         assert "direct/direct → verb.example.edu: ok" in result.render
-        assert "path/effective: down" in result.render
+        assert f"path/effective → {HOST}: down" in result.render
 
     def test_the_render_is_byte_identical_for_the_same_inputs(self, experiment: Path) -> None:
         readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
@@ -178,7 +179,7 @@ class TestFailOpen:
         assert entry.ledger_corrupt is True
         assert entry.verdict == "unknown"
         assert all(atom.verdict == "unknown" for atom in entry.atoms)
-        assert "ledger file could not be parsed" in result.render
+        assert "ledger file could not be read" in result.render
 
     def test_a_corrupt_ledger_for_a_CONFIGURED_cluster_is_named(
         self, experiment: Path, monkeypatch: pytest.MonkeyPatch
@@ -194,7 +195,7 @@ class TestFailOpen:
         assert entry.cluster == "hoffman2"
         assert entry.ledger_corrupt is True
         assert entry.verdict == "unknown"
-        assert "ledger file could not be parsed" in result.render
+        assert "ledger file could not be read" in result.render
 
     def test_a_configured_but_never_contacted_cluster_shows_as_unknown(
         self, experiment: Path, monkeypatch: pytest.MonkeyPatch
@@ -219,6 +220,99 @@ class TestFailOpen:
     def test_a_bad_now_override_is_spec_invalid(self, experiment: Path) -> None:
         with pytest.raises(errors.SpecInvalid):
             cluster_readiness(experiment_dir=experiment, spec=ClusterReadinessSpec(now="yesterday"))
+
+
+class TestReviewFindings:
+    """The 2026-07-30 adversarial-review regressions, each pinned."""
+
+    def test_two_atoms_of_one_sensor_never_render_identically(self, experiment: Path) -> None:
+        """F6: ``target`` was shown only for hop/direct, so two ``scratch``
+        readings on different paths printed byte-identical lines — two distinct
+        facts collapsed into one indistinguishable row."""
+        readiness.record_atoms(
+            HOST,
+            [
+                {"sensor": "scratch", "target": "/scratch/alpha", "verdict": "ok"},
+                {"sensor": "scratch", "target": "/scratch/beta", "verdict": "down"},
+            ],
+            source="preflight",
+            now=T0,
+        )
+        result = _run(experiment, host=HOST, offset_sec=10)
+        lines = [ln for ln in result.render.splitlines() if "scratch" in ln]
+        assert len(lines) == 2
+        assert len(set(lines)) == 2, f"two distinct atoms rendered identically: {lines}"
+        assert any("/scratch/alpha" in ln for ln in lines)
+        assert any("/scratch/beta" in ln for ln in lines)
+
+    def test_every_recorded_atom_line_carries_its_target(self, experiment: Path) -> None:
+        readiness.record_atoms(
+            HOST,
+            [
+                {"sensor": sensor, "target": f"t-{sensor}", "verdict": "ok"}
+                for sensor in readiness.SENSOR_KINDS
+            ],
+            source="s",
+            now=T0,
+        )
+        result = _run(experiment, host=HOST, offset_sec=10)
+        for atom in result.clusters[0].atoms:
+            assert atom.target == f"t-{atom.sensor}"
+            assert f"→ t-{atom.sensor}:" in result.render
+
+    def test_a_corrupt_ledger_headline_does_not_claim_nothing_was_observed(
+        self, experiment: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F7: the entry opened with "nothing has ever been observed here" two
+        lines above a disclosure saying the file is corrupt — and the reassuring
+        claim came first."""
+        import hpc_agent.ops.cluster_readiness_op as op
+
+        monkeypatch.setattr(op, "_configured_hosts", lambda: {"h2": HOST})
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{torn", encoding="utf-8")
+        result = _run(experiment, offset_sec=10)
+        headline = result.render.splitlines()[4]
+        assert "unknown" in headline
+        assert "nothing has ever been observed" not in headline
+        assert "could not be read" in headline
+
+    def test_the_corruption_reason_is_named(
+        self, experiment: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hpc_agent.ops.cluster_readiness_op as op
+
+        monkeypatch.setattr(op, "_configured_hosts", lambda: {"h2": HOST})
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{torn", encoding="utf-8")
+        result = _run(experiment, offset_sec=10)
+        assert result.clusters[0].ledger_corruption_reason == "not valid JSON"
+        assert "not valid JSON" in result.render
+
+    def test_a_past_corruption_is_surfaced_after_the_rebuild(self, experiment: Path) -> None:
+        """F4/F7 pair: the disclosure must not vanish with the file."""
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{torn", encoding="utf-8")
+        readiness.record_observation(
+            HOST, readiness.CONNECT, "ok", source="s", route="effective", now=T0
+        )
+        result = _run(experiment, host=HOST, offset_sec=10)
+        entry = result.clusters[0]
+        assert entry.ledger_corrupt is False
+        assert entry.verdict == "ready"
+        assert entry.ledger_last_corruption is not None
+        assert "a previous ledger file was discarded as unreadable" in result.render
+
+    def test_an_untouched_ledger_carries_no_past_corruption_note(self, experiment: Path) -> None:
+        readiness.record_observation(
+            HOST, readiness.CONNECT, "ok", source="s", route="effective", now=T0
+        )
+        result = _run(experiment, host=HOST, offset_sec=10)
+        assert result.clusters[0].ledger_last_corruption is None
+        assert "discarded as unreadable" not in result.render
 
 
 class TestOrderingAndScope:

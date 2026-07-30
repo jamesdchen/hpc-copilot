@@ -119,6 +119,29 @@ Writes go through ``infra.io.atomic_locked_update`` (advisory flock + temp file
 + fsync + ``os.replace``), so a crash mid-write leaves the previous doc or the
 new doc, never a partial one. Reads are lock-free.
 
+The write leaves a ``<name>.json.lock`` sentinel beside the doc. That is the
+repo-wide contract, not this module's litter: ``infra.io.advisory_flock``
+DELIBERATELY re-touches the sentinel on release (filelock's Windows backend
+deletes it) to preserve the lingering-sentinel behaviour that run-dir loaders
+depend on, pinned by
+``tests/state/test_session.py::test_lock_file_skipped_by_loader``. Deleting it
+here would contradict a checked contract, deviate from every sibling substrate
+(``_ssh_circuit/`` leaves them too), and race a process mid-acquire on the same
+path. It stays.
+
+Deploy-tree hazard (2026-07-30, found by adversarial verification). This feed
+made the breaker's HEALTHY path a journal-home WRITER for the first time — the
+success recorder used to be read-only. Anything that enumerates a directory
+tree while a feed is running will see ``_readiness/<host>.json`` and its
+sentinel appear mid-walk. In production that is harmless because the journal
+home is ``~/.claude/hpc/<repo_hash>/`` and deploy trees are experiment
+directories — disjoint by construction, and pinned as a checked assumption by
+``tests/state/test_readiness.py::TestTheLedgerStaysOutOfDeployTrees``. It is
+NOT harmless in tests that redirect ``HPC_JOURNAL_DIR`` inside a ``tmp_path``
+they then push: ``tests/infra/test_remote_rsync_fallback.py`` pushed
+``tmp_path`` itself and its batch-count pin went 4 → 6. Such a test must push a
+dedicated subtree, never the tmp root.
+
 **Corruption is disclosed, never fatal.** :func:`read_ledger` always returns a
 well-shaped document; an absent, unreadable or malformed file yields an EMPTY
 ledger with ``corrupt=True`` (an ABSENT file reads ``corrupt=False`` — nothing
@@ -160,6 +183,7 @@ __all__ = [
     "DEFAULT_STALE_AFTER_SEC",
     "DIRECT",
     "ENV",
+    "FUTURE_SKEW_TOLERANCE_SEC",
     "HOP",
     "MIN_REWRITE_SEC",
     "OVERALL_VERDICTS",
@@ -176,6 +200,7 @@ __all__ = [
     "STALE_AFTER_SEC",
     "OverallVerdict",
     "atom_age_sec",
+    "atom_future_skew_sec",
     "atom_identity",
     "atom_is_stale",
     "atom_mapping",
@@ -301,6 +326,14 @@ CONSULT_WINDOW_SEC = 120.0
 #: module docstring's write-coalescing note.
 MIN_REWRITE_SEC = 60.0
 
+#: How far into the future an ``at`` stamp may sit and still be believed
+#: (seconds). The ledger is written by every process on the box and read by
+#: every other, so a couple of minutes of ordinary clock skew must not turn a
+#: healthy atom stale. Beyond it the stamp is not skew but a value we cannot
+#: believe, and :func:`atom_is_stale` treats it as undateable — without this, a
+#: far-future stamp clamps to age 0 and pins the host at ``ready`` forever.
+FUTURE_SKEW_TOLERANCE_SEC = 300.0
+
 
 def _host(ssh_target: str) -> str:
     """Host key for *ssh_target* (``user@host`` or a bare alias).
@@ -331,7 +364,19 @@ def _fresh_doc(host: str) -> dict[str, Any]:
 
 
 def _parse_at(value: Any) -> datetime | None:
-    """Parse an atom's ``at`` stamp, or ``None`` when absent / unparseable."""
+    """Parse an atom's ``at`` stamp, or ``None`` when absent / unparseable.
+
+    ``at`` — the ISO string — is THE freshness ingredient at this tier, and
+    ``at_epoch`` is carried verbatim but never consulted here. One definition of
+    freshness per tier: the sensor layer ages atoms by ``at_epoch`` (its
+    ``fresh_atoms`` / ``consult_readiness`` window), this tier ages them by
+    ``at``. The two CAN disagree — the sensor layer stamps ``at=utcnow_iso()``
+    from the wall clock while ``at_epoch`` takes its injected ``now``, so under a
+    test clock they diverge by however far the injection sits from real time.
+    Consulting both, or picking whichever is present, would make an atom's age
+    depend on which reader asked. Pinned by
+    ``tests/state/test_readiness.py::TestFreshnessHasOneDefinitionPerTier``.
+    """
     from hpc_agent.infra.time import parse_iso_utc_or_none
 
     return parse_iso_utc_or_none(value if isinstance(value, str) else None)
@@ -402,39 +447,69 @@ def _clean_atoms(raw: Any) -> list[dict[str, Any]]:
 def read_ledger(host: str) -> dict[str, Any]:
     """Read *host*'s ledger; ALWAYS returns a well-shaped doc, never raises.
 
-    Carries ``schema_version`` / ``host`` / ``atoms`` (a list) plus a read-side
-    ``corrupt`` flag:
+    Carries ``schema_version`` / ``host`` / ``atoms`` (a list) plus two read-side
+    annotations:
 
-    * absent file → empty ledger, ``corrupt=False`` (nothing has been observed)
-    * unreadable / malformed / non-dict → EMPTY ledger, ``corrupt=True``
+    * ``corrupt`` — this read could not use the file:
 
-    ``corrupt`` is never persisted: every write rebuilds the document from
-    ``{schema_version, host, atoms}``.
+      - absent file → empty ledger, ``corrupt=False`` (nothing has been observed;
+        "never looked" and "cannot read" are different facts)
+      - unreadable / malformed / non-dict / ``atoms`` not a list → EMPTY ledger,
+        ``corrupt=True``
+      - ``schema_version`` absent, non-integer, or newer than
+        :data:`SCHEMA_VERSION` → EMPTY ledger, ``corrupt=True``. A version this
+        build does not understand is not a doc to interpret optimistically: the
+        atom shape is exactly what a future version would change, and reading a
+        future doc under today's rules is how a stale verdict is asserted as
+        current.
+
+    * ``corruption_reason`` — which of those it was (``""`` when clean).
+
+    ``corrupt`` / ``corruption_reason`` are never persisted; every write rebuilds
+    the document. The write path DOES carry the corruption forward once, as a
+    persisted ``last_corruption`` note, so the disclosure survives the rebuild
+    (see :func:`_write_atoms`).
     """
     import json
 
     key = _host(host)
     doc = _fresh_doc(key)
     doc["corrupt"] = False
+    doc["corruption_reason"] = ""
+
+    def _corrupt(reason: str) -> dict[str, Any]:
+        doc["corrupt"] = True
+        doc["corruption_reason"] = reason
+        return doc
+
     try:
         raw = readiness_path(key).read_text(encoding="utf-8")
     except FileNotFoundError:
         return doc
-    except (OSError, UnicodeDecodeError):
-        doc["corrupt"] = True
-        return doc
+    except (OSError, UnicodeDecodeError) as exc:
+        return _corrupt(f"unreadable ({type(exc).__name__})")
     try:
         parsed = json.loads(raw)
     except ValueError:
-        doc["corrupt"] = True
-        return doc
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("atoms"), list):
-        doc["corrupt"] = True
-        return doc
+        return _corrupt("not valid JSON")
+    if not isinstance(parsed, dict):
+        return _corrupt("not a JSON object")
+    version = parsed.get("schema_version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        return _corrupt("no usable schema_version")
+    if version > SCHEMA_VERSION:
+        return _corrupt(f"schema_version {version} is newer than this build's {SCHEMA_VERSION}")
+    if not isinstance(parsed.get("atoms"), list):
+        return _corrupt("atoms is not a list")
     doc["atoms"] = _clean_atoms(parsed.get("atoms"))
     stored_host = parsed.get("host")
     if isinstance(stored_host, str) and stored_host:
         doc["host"] = stored_host
+    # A note left by the write that rebuilt over a corrupt file — carried so the
+    # operator sees the corruption ONCE rather than having it vanish silently.
+    last = parsed.get("last_corruption")
+    if isinstance(last, dict):
+        doc["last_corruption"] = last
     return doc
 
 
@@ -452,10 +527,15 @@ def stale_after_sec(sensor: str) -> float:
 
 
 def atom_age_sec(atom: Any, *, now: datetime) -> float | None:
-    """Age of *atom* in seconds at *now*, or ``None`` when its stamp is unusable.
+    """RENDERING age of *atom* in seconds at *now*; ``None`` when undateable.
 
-    A stamp in the FUTURE (skew between the writing and reading machines) clamps
-    to ``0.0`` — a negative age is never meaningful to render or compare.
+    A stamp slightly in the future (ordinary skew between the writing and the
+    reading machine) clamps to ``0.0``, because a negative age is not a thing
+    that can be rendered. **This clamp is for display only** — do not build
+    freshness on it: :func:`atom_is_stale` deliberately does NOT go through the
+    clamp, because clamping made a year-9999 stamp read as age 0 and therefore
+    permanently ``ready`` (a doc that names itself fresh forever is the exact
+    failure the ledger exists to prevent). See :func:`atom_future_skew_sec`.
     """
     if not isinstance(atom, dict):
         return None
@@ -465,17 +545,44 @@ def atom_age_sec(atom: Any, *, now: datetime) -> float | None:
     return max(0.0, (now - at).total_seconds())
 
 
-def atom_is_stale(atom: Any, *, now: datetime) -> bool:
-    """True when *atom* is past its sensor's :func:`stale_after_sec` horizon.
+def atom_future_skew_sec(atom: Any, *, now: datetime) -> float:
+    """How far *atom*'s stamp lies in the FUTURE of *now* (``0.0`` when it does not).
 
-    An atom with an unusable stamp is stale: undateable evidence cannot be
-    asserted as current (fail toward "we do not know").
+    Separated from :func:`atom_age_sec` so the render's clamp and the freshness
+    decision cannot share a definition: the renderer wants "0s ago", the verdict
+    wants to know the stamp is unbelievable.
     """
+    if not isinstance(atom, dict):
+        return 0.0
+    at = _parse_at(atom.get("at"))
+    if at is None:
+        return 0.0
+    return max(0.0, (at - now).total_seconds())
+
+
+def atom_is_stale(atom: Any, *, now: datetime) -> bool:
+    """True when *atom*'s evidence cannot be asserted as current at *now*.
+
+    Three ways to be stale, all forms of "we do not know":
+
+    1. **Undateable** — no usable ``at`` stamp. Evidence that cannot be dated
+       cannot be claimed to be current.
+    2. **Implausibly future-dated** — the stamp sits more than
+       :data:`FUTURE_SKEW_TOLERANCE_SEC` ahead of *now*. Ordinary clock skew
+       between the writing and reading machine is absorbed by the tolerance; a
+       stamp beyond it is not skew, it is a stamp we cannot believe, and
+       believing it would make the atom read fresh forever (a year-9999 ``at``
+       would otherwise clamp to age 0 and pin the host at ``ready``).
+    3. **Past its horizon** — older than :func:`stale_after_sec` for its sensor.
+    """
+    if not isinstance(atom, dict):
+        return True
+    if atom_future_skew_sec(atom, now=now) > FUTURE_SKEW_TOLERANCE_SEC:
+        return True
     age = atom_age_sec(atom, now=now)
     if age is None:
         return True
-    sensor = str(atom.get("sensor") or "") if isinstance(atom, dict) else ""
-    return age > stale_after_sec(sensor)
+    return age > stale_after_sec(str(atom.get("sensor") or ""))
 
 
 def overall_verdict(doc: dict[str, Any] | None, *, now: datetime) -> OverallVerdict:
@@ -562,22 +669,69 @@ def consult_atoms(
     ]
 
 
-def _write_atoms(host: str, incoming: list[dict[str, Any]]) -> bool:
-    """Upsert *incoming* atoms into *host*'s ledger by identity. Never raises."""
+def _doc_is_usable(doc: Any) -> bool:
+    """Whether a parsed doc may be merged into — the WRITE-side twin of
+    :func:`read_ledger`'s validation, so the two agree on what "usable" means.
+
+    A doc whose ``schema_version`` this build does not understand is NOT usable:
+    merging into it would silently down-convert a future shape and then write it
+    back as if it were current.
+    """
+    if not isinstance(doc, dict) or not isinstance(doc.get("atoms"), list):
+        return False
+    version = doc.get("schema_version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version <= SCHEMA_VERSION
+
+
+def _write_atoms(
+    host: str,
+    incoming: list[dict[str, Any]],
+    *,
+    corruption: str = "",
+    now: datetime | None = None,
+) -> bool:
+    """Upsert *incoming* atoms into *host*'s ledger by identity. Never raises.
+
+    *corruption* is the reason the caller's pre-read found the file unusable
+    (``""`` when it was clean). A rebuild that discards a corrupt file must not
+    also discard the FACT of the corruption — otherwise the operator's only
+    signal disappears the instant any traffic touches the host, and a ledger
+    that silently ate a file looks identical to one that was always fine. The
+    reason is persisted once as ``last_corruption`` and carried forward
+    thereafter.
+    """
     try:
         from hpc_agent.infra.io import atomic_locked_update
 
+        stamp = now if now is not None else datetime.now(timezone.utc)
+
         def _mutate(doc: dict[str, Any] | None) -> dict[str, Any]:
-            # A corrupt / absent doc rebuilds empty — the corrupt-file honesty
-            # contract applies on the WRITE side too: never merge into a document
-            # that could not be parsed.
+            # An absent / corrupt / future-versioned doc rebuilds empty — the
+            # corrupt-file honesty contract applies on the WRITE side too: never
+            # merge into a document that could not be trusted.
             fresh = _fresh_doc(host)
             kept: dict[tuple[str, str, str], dict[str, Any]] = {}
-            if isinstance(doc, dict):
+            usable = _doc_is_usable(doc)
+            if usable and isinstance(doc, dict):
                 for atom in _clean_atoms(doc.get("atoms")):
                     kept[atom_identity(atom)] = atom
+                prior = doc.get("last_corruption")
+                if isinstance(prior, dict):
+                    fresh["last_corruption"] = prior
             for atom in incoming:
                 kept[atom_identity(atom)] = atom
+            # Re-detect here as well as trusting the caller's pre-read: a doc
+            # that parses but carries an unknown schema_version never reaches
+            # the caller's ``corruption`` string (its read returned early), and
+            # the file can also be torn between that read and this lock.
+            reason = corruption or ("" if usable or doc is None else "unusable document")
+            if reason:
+                fresh["last_corruption"] = {
+                    "at": stamp.astimezone(timezone.utc).isoformat(timespec="seconds"),
+                    "reason": reason,
+                }
             # Sorted by identity so the file is stable under reordering — a
             # byte-diff of two ledgers reflects verdicts, never write order.
             fresh["atoms"] = [kept[key] for key in sorted(kept)]
@@ -628,7 +782,8 @@ def record_atoms(
             prepared.append(mapping)
         if not prepared:
             return 0
-        return len(prepared) if _write_atoms(key, prepared) else 0
+        corruption = str(read_ledger(key).get("corruption_reason") or "")
+        return len(prepared) if _write_atoms(key, prepared, corruption=corruption, now=stamp) else 0
     except Exception:  # noqa: BLE001 — total fail-open; see the module docstring
         return 0
 
@@ -696,7 +851,8 @@ def record_observation(
         # corrupt doc reads with NO atoms, so it never coalesces — the next
         # observation rebuilds the file rather than skipping the write.)
         identity = atom_identity(atom)
-        for existing in read_ledger(key)["atoms"]:
+        prior = read_ledger(key)
+        for existing in prior["atoms"]:
             if atom_identity(existing) != identity:
                 continue
             age = atom_age_sec(existing, now=stamp)
@@ -709,7 +865,12 @@ def record_observation(
                 return False
             break
 
-        return _write_atoms(key, [atom])
+        return _write_atoms(
+            key,
+            [atom],
+            corruption=str(prior.get("corruption_reason") or ""),
+            now=stamp,
+        )
     except Exception:  # noqa: BLE001 — total fail-open; see the module docstring
         return False
 

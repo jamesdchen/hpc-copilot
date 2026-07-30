@@ -190,6 +190,7 @@ def cluster_readiness(
         doc = readiness.read_ledger(host)
         verdict = readiness.overall_verdict(doc, now=now_dt)
         counts[verdict] = counts.get(verdict, 0) + 1
+        last = doc.get("last_corruption")
         entries.append(
             ClusterReadinessEntry(
                 cluster=cluster,
@@ -197,6 +198,10 @@ def cluster_readiness(
                 verdict=verdict,
                 atoms=_atoms_for(doc, now=now_dt),
                 ledger_corrupt=bool(doc.get("corrupt")),
+                ledger_corruption_reason=str(doc.get("corruption_reason") or "") or None,
+                ledger_last_corruption=(
+                    {str(k): str(v) for k, v in last.items()} if isinstance(last, dict) else None
+                ),
             )
         )
 

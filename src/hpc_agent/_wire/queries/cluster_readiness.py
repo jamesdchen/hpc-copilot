@@ -176,9 +176,26 @@ class ClusterReadinessEntry(BaseModel):
     ledger_corrupt: bool = Field(
         default=False,
         description=(
-            "True when the ledger file existed but could not be parsed. The entry "
+            "True when the ledger file existed but could not be read. The entry "
             "then reports an EMPTY ledger (verdict 'unknown') and says so — a "
             "corrupt file is disclosed, never a crash and never silently green."
+        ),
+    )
+    ledger_corruption_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why this read could not use the file (unreadable / not valid JSON / "
+            "not a JSON object / no usable schema_version / schema_version newer "
+            "than this build / atoms is not a list); null when it read cleanly."
+        ),
+    )
+    ledger_last_corruption: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "{at, reason} for a PREVIOUS ledger file that a write discarded as "
+            "unreadable. Persisted through the rebuild so the operator learns "
+            "once that something was lost, instead of the disclosure vanishing "
+            "with the file the moment any traffic touches the host."
         ),
     )
 

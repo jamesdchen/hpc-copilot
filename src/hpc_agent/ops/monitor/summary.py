@@ -72,6 +72,7 @@ FIELD_KIND: dict[str, FieldKind] = {
     # confusion class this registry exists to prevent. The names are the
     # ``state/s2_slo.SLO_FIELDS`` tuple — one list, two consumers.
     "y_to_array_accepted_seconds": "cumulative",
+    "first_y_to_array_accepted_seconds": "cumulative",
     "interventions_count": "cumulative",
     "readiness_age_at_fire_seconds": "cumulative",
     # cumulative kill counts — the §5 first-class kill telemetry, rendered from
@@ -170,17 +171,31 @@ def _format_slo(slo: Any) -> str | None:
         return None
     # Spelled out field by field rather than looped over ``SLO_FIELDS``: the
     # lint's render scan matches a STRING LITERAL first argument, so a loop over
-    # names would silently drop these three out of static coverage. Same reason
+    # names would silently drop these out of static coverage. Same reason
     # ``_format_kill_count`` is called with literals below.
     parts: list[str] = []
     if slo.y_to_array_accepted_seconds is not None:
         parts.append(_render_scalar("y_to_array_accepted_seconds", slo.y_to_array_accepted_seconds))
+    # Only when it DIFFERS: for a run that was never re-driven the two latencies
+    # are equal, and printing both would imply a distinction that is not there.
+    if slo.redriven:
+        parts.append(
+            _render_scalar(
+                "first_y_to_array_accepted_seconds", slo.first_y_to_array_accepted_seconds
+            )
+            + " (incl. re-drives)"
+        )
     # A count of zero is a real measurement ("no human stops"), not an absence —
     # rendered whenever the line renders at all.
     parts.append(_render_scalar("interventions_count", slo.interventions_count))
     if slo.readiness_age_at_fire_seconds is not None:
+        # Marked because it is NOT a stamp taken at fire time: the ledger keeps
+        # only the latest atom per identity, so this is reconstructed after the
+        # fact and can be older than what the fire actually consulted. A number
+        # that looks measured but was inferred is worse than one that says so.
         parts.append(
             _render_scalar("readiness_age_at_fire_seconds", slo.readiness_age_at_fire_seconds)
+            + " (reconstructed)"
         )
     return ", ".join(parts)
 

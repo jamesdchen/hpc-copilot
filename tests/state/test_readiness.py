@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from hpc_agent.state import readiness
+from tests._no_network import no_network  # noqa: F401 — autouse zero-network tripwire
 
 HOST = "login.example.edu"
 T0 = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
@@ -52,7 +53,7 @@ class TestVocabularyLockstep:
         """
         sensors = pytest.importorskip("hpc_agent.infra.readiness_sensors")
         from dataclasses import fields
-        from typing import get_args
+        from typing import get_args, get_type_hints
 
         assert get_args(sensors.SensorKind) == readiness.SENSOR_KINDS_FROM_SENSOR_LAYER
         assert get_args(sensors.SensorVerdict) == readiness.SENSOR_VERDICTS
@@ -61,8 +62,14 @@ class TestVocabularyLockstep:
         # tier's own additive metadata and is deliberately NOT one of them.
         assert tuple(f.name for f in fields(sensors.VerdictAtom)) == readiness.ATOM_FIELDS
         assert "source" not in readiness.ATOM_FIELDS
-        route_field = next(f for f in fields(sensors.VerdictAtom) if f.name == "route")
-        assert set(readiness.ROUTES) == set(get_args(route_field.type))
+        # RESOLVE the annotations rather than reading ``Field.type``: the sensor
+        # module has ``from __future__ import annotations``, so every ``.type`` is
+        # the STRING "Literal['effective', ...]" and ``get_args`` on a string
+        # returns () — which would have made this assertion vacuously pass on an
+        # empty set and pinned nothing at all (2026-07-30 review, B2).
+        route_type = get_type_hints(sensors.VerdictAtom)["route"]
+        assert get_args(route_type), "route annotation did not resolve to a Literal"
+        assert set(readiness.ROUTES) == set(get_args(route_type))
 
     def test_the_extension_is_the_union_in_one_flat_vocabulary(self) -> None:
         assert (
@@ -500,6 +507,243 @@ class TestOverallVerdict:
         for doc in cases:
             for now in (T0, _at(10_000), _at(200_000)):
                 assert readiness.overall_verdict(doc, now=now) in readiness.OVERALL_VERDICTS
+
+
+class TestFutureStampsCannotReadForeverFresh:
+    """F2 (2026-07-30 review): the render's clamp-to-zero must not feed staleness.
+
+    Clamping a future stamp to age 0 is right for a renderer and catastrophic for
+    a verdict — it made a year-9999 atom read ``ready`` forever, i.e. a document
+    that certifies its own freshness in perpetuity.
+    """
+
+    def test_ordinary_skew_is_absorbed_and_still_reads_ready(self) -> None:
+        skew = readiness.FUTURE_SKEW_TOLERANCE_SEC / 2
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=_at(skew))
+        doc = readiness.read_ledger(HOST)
+        assert readiness.overall_verdict(doc, now=T0) == "ready"
+
+    def test_a_stamp_beyond_the_tolerance_is_stale_not_forever_ready(self) -> None:
+        readiness.record_observation(
+            HOST,
+            readiness.CONNECT,
+            "ok",
+            source="s",
+            now=_at(readiness.FUTURE_SKEW_TOLERANCE_SEC + 60),
+        )
+        doc = readiness.read_ledger(HOST)
+        assert readiness.overall_verdict(doc, now=T0) == "stale"
+
+    def test_a_year_9999_atom_is_stale(self) -> None:
+        """The reviewer's exhibit, pinned."""
+        far = datetime(9999, 1, 1, tzinfo=timezone.utc)
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=far)
+        doc = readiness.read_ledger(HOST)
+        assert readiness.overall_verdict(doc, now=T0) == "stale"
+        assert readiness.atom_is_stale(doc["atoms"][0], now=T0) is True
+
+    def test_the_render_clamp_survives_for_rendering(self) -> None:
+        """Staleness got stricter; the display age did NOT go negative."""
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=_at(60))
+        assert readiness.atom_age_sec(_atoms()[0], now=T0) == 0.0
+        assert readiness.atom_future_skew_sec(_atoms()[0], now=T0) == 60.0
+
+
+class TestSchemaVersionIsValidatedOnRead:
+    """F3: a version this build does not understand is not a doc to interpret."""
+
+    def test_a_newer_schema_version_reads_corrupt_and_empty(self) -> None:
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": readiness.SCHEMA_VERSION + 1,
+                    "host": HOST,
+                    "atoms": [
+                        {
+                            "sensor": "connect",
+                            "verdict": "ok",
+                            "at": T0.isoformat(timespec="seconds"),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        doc = readiness.read_ledger(HOST)
+        assert doc["corrupt"] is True
+        assert doc["atoms"] == []
+        assert "newer than" in doc["corruption_reason"]
+        assert readiness.overall_verdict(doc, now=T0) == "unknown"
+
+    def test_a_missing_schema_version_reads_corrupt(self) -> None:
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"host": HOST, "atoms": []}), encoding="utf-8")
+        doc = readiness.read_ledger(HOST)
+        assert doc["corrupt"] is True
+        assert doc["corruption_reason"] == "no usable schema_version"
+
+    def test_a_write_never_merges_into_a_future_versioned_doc(self) -> None:
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": readiness.SCHEMA_VERSION + 1,
+                    "host": HOST,
+                    "atoms": [
+                        {"sensor": "preamble", "verdict": "ok", "at": "2026-01-01T00:00:00Z"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
+        atoms = _atoms()
+        assert [a["sensor"] for a in atoms] == [readiness.CONNECT]
+
+    def test_every_read_reports_a_reason_or_none(self) -> None:
+        assert readiness.read_ledger(HOST)["corruption_reason"] == ""
+
+
+class TestCorruptionSurvivesTheRebuild:
+    """F4: a rebuild that discards a corrupt file must not discard the FACT."""
+
+    def test_the_reason_is_persisted_and_readable_after_the_rebuild(self) -> None:
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{torn", encoding="utf-8")
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
+        doc = readiness.read_ledger(HOST)
+        # The file is usable again ...
+        assert doc["corrupt"] is False
+        assert len(doc["atoms"]) == 1
+        # ... but the operator can still learn that something was lost.
+        last = doc["last_corruption"]
+        assert last["reason"] == "not valid JSON"
+        assert last["at"] == T0.isoformat(timespec="seconds")
+
+    def test_the_note_is_carried_forward_by_later_clean_writes(self) -> None:
+        path = readiness.readiness_path(HOST)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{torn", encoding="utf-8")
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
+        readiness.record_observation(HOST, readiness.PREAMBLE, "ok", source="s", now=_at(600))
+        assert readiness.read_ledger(HOST)["last_corruption"]["reason"] == "not valid JSON"
+
+    def test_a_ledger_that_was_never_corrupt_carries_no_note(self) -> None:
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
+        assert "last_corruption" not in readiness.read_ledger(HOST)
+
+
+class TestFreshnessHasOneDefinitionPerTier:
+    """``at`` is THE freshness ingredient here; ``at_epoch`` is carried, not read.
+
+    The two can legitimately disagree — the sensor layer stamps ``at`` from the
+    wall clock while ``at_epoch`` takes its injected ``now`` — so a reader that
+    consulted whichever was handy would make an atom's age depend on who asked.
+    """
+
+    def test_age_follows_at_even_when_at_epoch_contradicts_it(self) -> None:
+        readiness.record_atoms(
+            HOST,
+            [
+                {
+                    "sensor": "connect",
+                    "target": HOST,
+                    "verdict": "ok",
+                    "route": "effective",
+                    "at": T0.isoformat(timespec="seconds"),
+                    # A wildly different epoch: if anything read this instead,
+                    # the age below would not be 100.
+                    "at_epoch": _at(-99999).timestamp(),
+                }
+            ],
+            now=T0,
+        )
+        assert readiness.atom_age_sec(_atoms()[0], now=_at(100)) == 100.0
+
+    def test_at_epoch_is_stored_verbatim_for_the_sensor_tier(self) -> None:
+        """Carried, not rewritten — the sensor layer ages by it."""
+        weird = _at(-99999).timestamp()
+        readiness.record_atoms(
+            HOST,
+            [
+                {
+                    "sensor": "connect",
+                    "verdict": "ok",
+                    "at": T0.isoformat(timespec="seconds"),
+                    "at_epoch": weird,
+                }
+            ],
+            now=T0,
+        )
+        assert _atoms()[0]["at_epoch"] == weird
+
+    def test_record_observation_stamps_both_from_one_instant(self) -> None:
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
+        atom = _atoms()[0]
+        assert atom["at"] == T0.isoformat(timespec="seconds")
+        assert atom["at_epoch"] == T0.timestamp()
+
+
+class TestTheLedgerStaysOutOfDeployTrees:
+    """The checked assumption behind the 2026-07-30 rsync coupling (B1).
+
+    This feed made the breaker's HEALTHY path a journal-home writer, so anything
+    enumerating a tree that CONTAINS the journal home can see ledger files appear
+    mid-walk. In production the two are disjoint by construction; the hazard is
+    only reachable by a test that redirects the journal home into a directory it
+    then pushes.
+    """
+
+    def test_the_ledger_lives_under_the_journal_home_not_an_experiment_dir(
+        self, tmp_path: Any
+    ) -> None:
+        from hpc_agent.state.run_record import current_homedir
+
+        experiment = tmp_path / "some-experiment"
+        experiment.mkdir()
+        ledger = readiness.readiness_path(HOST)
+        assert current_homedir() in ledger.parents
+        assert experiment not in ledger.parents
+
+    def test_the_default_journal_home_is_not_inside_a_repo_tree(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """With no redirection the home is ``~/.claude/hpc`` — never a checkout,
+        so a deploy push can never enumerate it."""
+        import hpc_agent.state.run_record as rr
+
+        monkeypatch.delenv("HPC_JOURNAL_DIR", raising=False)
+        monkeypatch.setattr(rr, "HPC_HOMEDIR", None, raising=False)
+        home = rr.current_homedir()
+        assert home.parts[-2:] == (".claude", "hpc")
+        assert tmp_path not in home.parents
+
+    def test_a_feed_writes_only_under_the_ledger_dir(self) -> None:
+        """Pins the blast radius: one doc + its lock sentinel, nowhere else.
+
+        The sentinel is deliberate repo-wide substrate (``infra.io.advisory_flock``
+        re-touches it on release; ``test_lock_file_skipped_by_loader`` pins the
+        behaviour), so it is asserted as EXPECTED here rather than treated as
+        litter to remove.
+        """
+        from hpc_agent.state.run_record import current_homedir
+
+        before = {p for p in current_homedir().rglob("*") if p.is_file()}
+        readiness.record_observation(HOST, readiness.CONNECT, "ok", source="s", now=T0)
+        after = {p for p in current_homedir().rglob("*") if p.is_file()}
+        new = after - before
+        ledger_dir = readiness.readiness_path(HOST).parent
+        assert new, "the feed wrote nothing"
+        assert all(p.parent == ledger_dir for p in new), f"wrote outside the ledger dir: {new}"
+        assert {p.name for p in new} <= {
+            readiness.readiness_path(HOST).name,
+            readiness.readiness_path(HOST).name + ".lock",
+        }
 
 
 class TestKnownHosts:
