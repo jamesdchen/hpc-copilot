@@ -64,6 +64,7 @@ __all__ = [
     "_ssh_crypto_opts",
     "_ssh_multiplex_opts",
     "_windows_openssh_named_pipe_supported",
+    "RSYNC_PROTOCOL_ERROR_EXIT",
     "mark_named_pipe_broken",
     "reset_named_pipe_runtime_verdict",
     "run_with_named_pipe_retry",
@@ -1086,7 +1087,13 @@ _CONNECT_FAILURE_MARKERS: Final[tuple[str, ...]] = (
 #: transient dial). Not connect-retry-safe: re-dialing does not fix a broken
 #: protocol negotiation, and the transport's own resumable-delta re-derives what
 #: landed on the next call.
-_RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = 12
+#:
+#: PUBLIC because the staging flap-retry (``ops/submit_flow``) classifies on it
+#: too: a bounded retry must know which failures re-dialing cannot fix, and that
+#: rule has exactly one definition. ``_RSYNC_PROTOCOL_ERROR_EXIT`` is retained
+#: below as a back-compat alias for this module's own long-standing callers.
+RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = 12
+_RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = RSYNC_PROTOCOL_ERROR_EXIT
 
 
 #: The two kinds of ssh leg the retry classifier distinguishes

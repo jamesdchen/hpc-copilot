@@ -1131,9 +1131,14 @@ def test_no_rsync_disclosure_warns_full_reship(
             ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=False
         )
     err = capsys.readouterr().err
-    assert "[transport] WARN no rsync on PATH" in err
-    assert "NO DELTA" in err
-    assert "re-ships even if the remote is identical" in err
+    # The old text asserted "NO DELTA" and told the operator to install WSL/MSYS
+    # rsync. Both had rotted: the content-hash delta IS the live rsync-less path,
+    # and that rsync advice is the documented msys-2.0.dll trap. The line now
+    # names the MODE it actually took and why.
+    assert "[transport] WARN push MODE=full-tar" in err
+    assert "additive push (delete=False)" in err
+    assert "NO DELTA" not in err
+    assert "WSL" not in err
 
 
 def test_rsync_present_emits_no_fallback_disclosure_or_progress(
@@ -1424,8 +1429,9 @@ def test_manifest_unavailable_falls_back_to_full_tar_with_disclosure(
     tar_cmd = popen_mock.call_args[0][0]
     assert tar_cmd[-1] == "."  # whole tree, not a delta file list
     err = capsys.readouterr().err
-    assert "NO DELTA" in err
+    assert "MODE=full-tar" in err
     assert "remote content-hash manifest unavailable" in err
+    assert "NO DELTA" not in err, "the delta engine is the live path — never assert its absence"
 
 
 def test_delta_kill_switch_forces_full_tar(

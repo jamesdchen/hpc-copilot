@@ -54,10 +54,17 @@ from hpc_agent._wire.queries.net_triage import (
     HostTriage,
     NetTriageResult,
     NetTriageSpec,
+    ReadinessAtom,
+    RouteChainModel,
     TriageVerdict,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.env_flags import active_env_overrides
+from hpc_agent.infra.readiness_sensors import (
+    PathReadiness,
+    path_remediation,
+    read_path_readiness,
+)
 from hpc_agent.infra.ssh_circuit import (
     OVERRIDE_ENV,
     circuit_state_path,
@@ -267,6 +274,31 @@ def _configured_hosts() -> list[tuple[str, str | None]]:
     return out
 
 
+def _cluster_activation(cluster: str | None) -> tuple[str | None, str | None]:
+    """``(activation_prefix, ssh_target)`` for *cluster*, or ``(None, None)``.
+
+    The preamble rung runs the cluster's OWN activation — the same ``module load
+    … && source …/conda.sh && conda activate …`` the control plane uses — so the
+    probe exercises the real command class, not a synthetic stand-in. Fail-open:
+    any config problem yields ``(None, None)`` and the rung simply does not run.
+    """
+    if not cluster:
+        return None, None
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config, remote_activation_prefix
+
+        cfg = load_clusters_config().get(cluster)
+        if not isinstance(cfg, dict):
+            return None, None
+        prefix = remote_activation_prefix(cfg)
+        user = str(cfg.get("user") or "").strip()
+        host = str(cfg.get("host") or "").strip()
+        target = f"{user}@{host}" if user and host else host or None
+    except Exception:
+        return None, None
+    return prefix, target
+
+
 # ── the differential ─────────────────────────────────────────────────────────
 
 
@@ -374,11 +406,21 @@ def _triage_host(
     control_ok: bool,
     spec: NetTriageSpec,
 ) -> HostTriage:
-    """Run the per-host differential: breaker read → bounded DNS → one TCP connect."""
+    """Run the per-host differential: breaker read → bounded DNS → route-aware legs.
+
+    Composer, not prober (``docs/design/s2-readiness.md`` pillar 1): every
+    reading comes from :mod:`hpc_agent.infra.readiness_sensors`, and this
+    function only sequences them and renders the result. The single TCP connect
+    this verb has always made is now the sensors' ``direct`` leg — the SAME one
+    dial, through the same injected connector — so an un-jumped host costs
+    exactly what it did before, while a JUMPED host additionally gets one dial
+    per hop and an honest, separately-labelled path verdict.
+    """
     breaker = read_breaker_state(host)
 
     dns_ok, dns_detail = _dns_resolve(host, spec.dns_timeout_sec)
 
+    readiness: PathReadiness | None = None
     tcp_ok: bool | None
     if breaker.state == "open":
         # NEVER probe through a genuinely-cooling breaker: the connection would
@@ -397,7 +439,22 @@ def _triage_host(
     elif dns_ok is False:
         tcp_ok, tcp_detail = None, "skipped: dns resolution already failed"
     else:
-        tcp_ok, tcp_detail = _tcp_connect(host, SSH_PORT, spec.tcp_timeout_sec)
+        activation, cluster_target = (None, None)
+        if spec.probe_preamble:
+            activation, cluster_target = _cluster_activation(cluster)
+            if spec.activation is not None:
+                activation = spec.activation
+        readiness = read_path_readiness(
+            host,
+            ssh_target=cluster_target or host,
+            activation=activation,
+            connect=_tcp_connect,
+            connect_timeout_sec=spec.tcp_timeout_sec,
+            preamble_timeout_sec=spec.preamble_timeout_sec,
+        )
+        direct = readiness.atom("direct")
+        tcp_ok = direct.ok if direct is not None else None
+        tcp_detail = direct.detail if direct is not None else "no direct reading"
 
     verdict = _verdict(breaker=breaker, control_ok=control_ok, dns_ok=dns_ok, tcp_ok=tcp_ok)
     remediation = _remediation(verdict, host, breaker)
@@ -409,6 +466,18 @@ def _triage_host(
     advice = degradation_advice(host, _read_doc(circuit_state_path(host)), now=time.time())
     if advice:
         remediation += f" DEGRADATION: {advice}"
+    # The 2026-07-30 fix: when the route read contradicts the bare-hostname
+    # verdict (a dead hop while the target itself answers), the ROUTE speaks and
+    # its remediation leads. Additive for every un-jumped host — an empty
+    # sentence leaves `remediation` byte-identical to what it always was.
+    path_summary: str | None = None
+    path_cause: str | None = None
+    if readiness is not None:
+        path_cause = readiness.cause
+        path_summary = readiness.sentence or None
+        if not readiness.ok:
+            remediation = f"{path_remediation(readiness)} {remediation}"
+
     return HostTriage(
         host=host,
         cluster=cluster,
@@ -419,7 +488,74 @@ def _triage_host(
         tcp_detail=tcp_detail,
         verdict=verdict,
         remediation=remediation,
+        route=_route_model(readiness),
+        readiness=_atom_models(readiness),
+        path_cause=path_cause,
+        path_summary=path_summary,
     )
+
+
+def _host_summary(host: HostTriage) -> str:
+    """This host's slice of the one-line digest — route-aware, honest by shape.
+
+    An un-jumped host renders exactly ``"<host>: <verdict>"``, byte-identical to
+    every release before the route layer existed. A JUMPED host renders its route
+    sentence instead, because the verdict alone is the thing that lied on
+    2026-07-30::
+
+        hoffman2: path dead (hop usc-discovery down); direct alternative OK
+        hoffman2: reachable (via hop usc-discovery)
+
+    A preamble-rung tail (``[effective route: connect OK, preamble TIMEOUT]``)
+    rides whichever form applies, since it is orthogonal to the route verdict.
+    """
+    if not host.path_summary:
+        return f"{host.host}: {host.verdict}"
+    # ``path_summary`` is "<route sentence>[ <preamble bracket(s)>]"; the bracket
+    # tail is orthogonal to the route verdict, so split once and re-compose.
+    head, sep, tail = host.path_summary.partition(" [")
+    tail = f"[{tail}" if sep else ""
+    hops = list(host.route.proxy_jump) if host.route is not None else []
+    if head.startswith("hop ") and hops:
+        # Every hop answered: the bare verdict is trustworthy again, so lead with
+        # it and name the path it actually rode.
+        head = f"{host.verdict} (via hop {', '.join(hops)})"
+    elif not head:
+        head = host.verdict
+    return " ".join(part for part in (f"{host.host}: {head}", tail) if part).strip()
+
+
+def _route_model(readiness: PathReadiness | None) -> RouteChainModel | None:
+    """Project the sensed chain onto the wire (``None`` when nothing was read)."""
+    if readiness is None:
+        return None
+    route = readiness.route
+    return RouteChainModel(
+        resolved=route.resolved,
+        hostname=route.hostname,
+        user=route.user,
+        port=route.port,
+        proxy_jump=list(route.proxy_jump),
+        detail=route.detail,
+    )
+
+
+def _atom_models(readiness: PathReadiness | None) -> list[ReadinessAtom]:
+    """Project every verdict atom onto the wire, in sensing order."""
+    if readiness is None:
+        return []
+    return [
+        ReadinessAtom(
+            sensor=a.sensor,
+            target=a.target,
+            verdict=a.verdict,
+            detail=a.detail,
+            latency_ms=a.latency_ms,
+            at=a.at,
+            route=a.route,
+        )
+        for a in readiness.atoms
+    ]
 
 
 @primitive(
@@ -483,11 +619,26 @@ def net_triage(*, spec: NetTriageSpec | None = None) -> NetTriageResult:
         _triage_host(host, cluster, control_ok=control_ok, spec=spec) for host, cluster in targets
     ]
 
-    all_reachable = bool(hosts) and all(h.verdict == "reachable" for h in hosts)
+    # A host is reachable only when the bare verdict AND the effective path agree.
+    # Before 2026-07-30 the verdict alone decided, so a dead ProxyJump hop under a
+    # target that answered read as "reachable" — the exact conflation that blessed
+    # a failover into the dead hop.
+    #
+    # The non-contradicting set is deliberately "absence of evidence is not
+    # evidence of absence": ``path_unproven`` is the ordinary reading for a JUMPED
+    # host probed by TCP alone (hops answered; end-to-end needs the preamble rung),
+    # and flipping the fleet flag on it would fire on every healthy jumped host —
+    # noise that would teach the operator to ignore the flag, which is how the
+    # original conflation survived. Only POSITIVE evidence of a broken path counts.
+    all_reachable = bool(hosts) and all(
+        h.verdict == "reachable"
+        and h.path_cause in (None, "path_ok", "path_unproven", "route_unresolved")
+        for h in hosts
+    )
     if not hosts:
         summary = "no hosts to triage (no clusters configured and no host supplied)."
     else:
-        summary = "; ".join(f"{h.host}: {h.verdict}" for h in hosts)
+        summary = "; ".join(_host_summary(h) for h in hosts)
         if not control_ok:
             summary = f"LOCAL NETWORK DOWN (control probe failed) — {summary}"
     return NetTriageResult(

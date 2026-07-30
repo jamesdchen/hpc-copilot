@@ -469,7 +469,12 @@ def _parse_remote_push_manifest(stdout: str) -> tuple[Any | None, set[str]]:
 
 
 def _remote_push_manifest(
-    *, ssh_target: str, remote_path: str, exclude: list[str], timeout: float | None
+    *,
+    ssh_target: str,
+    remote_path: str,
+    exclude: list[str],
+    timeout: float | None,
+    probe_status: dict[str, Any] | None = None,
 ) -> tuple[Any | None, set[str]]:
     """One bounded ssh round-trip: the deployed runtime hashes the remote tree.
 
@@ -484,6 +489,19 @@ def _remote_push_manifest(
     so this is never worse than the prior whole-tree behavior. *remote_path* is
     ``shlex.quote``-d; the snippet is base64 (no shell metacharacters) so no
     source quoting is needed.
+
+    The ``(None, set())``-on-any-trouble RETURN is a deliberate safety contract
+    (pinned by ``tests/faultinject/test_delta_push_roundtrips.py``): a severed
+    read must never yield a manifest with a PARTIAL ``known`` that a prune could
+    act on. It is deliberately unchanged.
+
+    *probe_status* is an additive OUT-channel that does not touch that contract:
+    when supplied, it is filled with ``{"failed_on_transport": bool, "detail":
+    str}`` so the caller can tell "the remote genuinely has no manifest" (a first
+    ship — full copy is correct and cheap-once) from "the LINK failed while we
+    asked" (2026-07-30 — where a full copy is the most expensive possible
+    response to a flap, re-shipping the whole tree per attempt while the delta
+    sat one healthy round-trip away).
     """
     # ``_guarded_ssh_bounded`` is defined in the engine package (``__init__``),
     # which imports THIS module in its re-export block — import it call-time to
@@ -507,17 +525,50 @@ def _remote_push_manifest(
             timeout=timeout,
             what=f"remote hash manifest of {remote_path}",
         )
-    except (TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout):
+    except (TimeoutError, OSError, SshCircuitOpen, SshSlotWaitTimeout) as exc:
         # A breaker-open / slot give-up degrades to the SAME None-on-trouble
         # contract as a timeout: ``(None, set())`` routes to the full-copy
         # fallback (disclosed), which then rides its own guarded dial — so an
         # open breaker still surfaces loud there, never worse than before.
+        #
+        # But the CAUSE must not be laundered. The caller can only report the
+        # generic "no remote manifest" reason, and on 2026-07-30 that rendered a
+        # TRANSPORT failure (a flapping tunnel severing leg A) as "first deploy or
+        # pre-delta runtime" — so a 266 MB full copy re-shipped per attempt while
+        # the log blamed a cold cache. Name it here, where the truth is known.
+        _disclose_manifest_probe_failed(exc)
+        if probe_status is not None:
+            probe_status["failed_on_transport"] = True
+            probe_status["detail"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         return None, set()
     raw = getattr(proc, "stdout", "") or ""
     manifest, known = _parse_remote_push_manifest(raw)
     if manifest is not None:
         _disclose_remote_scan(raw)
     return manifest, known
+
+
+def _disclose_manifest_probe_failed(exc: BaseException) -> None:
+    """One ``[transport]`` line naming a TRANSPORT-caused loss of the delta.
+
+    The full-copy fallback is correct here — without a remote manifest there is
+    nothing to diff — but its cause matters enormously to the operator. A cold
+    cache costs one full copy, once. A flapping tunnel costs a full copy PER
+    ATTEMPT while the delta that would have saved them sits one healthy dial
+    away, which is exactly what 2026-07-30 spent the night doing. Fail-open like
+    every sibling disclosure: naming a cause never affects the push.
+    """
+    with contextlib.suppress(Exception):
+        print(
+            f"[transport] WARN the remote hash-manifest probe FAILED on the transport "
+            f"({type(exc).__name__}: {str(exc)[:160]}) — this push therefore falls back "
+            f"to a FULL copy, and the reason is NOT a cold cache: the delta is "
+            f"unavailable because the link did not hold. Bounded staging retries resume "
+            f"against the delta once it does; if this repeats, run `net-triage` "
+            f"(probe_preamble) to discriminate a tunnel drop from node degradation "
+            f"before paying more full copies.",
+            file=sys.stderr,
+        )
 
 
 def _disclose_remote_scan(stdout: str) -> None:

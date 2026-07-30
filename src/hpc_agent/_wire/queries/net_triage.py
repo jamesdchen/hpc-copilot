@@ -56,6 +56,38 @@ class NetTriageSpec(BaseModel):
         le=60.0,
         description="Per-host budget for the single direct TCP connect to host:22.",
     )
+    probe_preamble: bool = Field(
+        default=False,
+        description=(
+            "Opt in to the PREAMBLE-CLASS rung: after the connect legs, run the "
+            "cluster's own activation (`module load … && source …/conda.sh && "
+            "conda activate …`, taken from clusters.yaml unless `activation` "
+            "overrides it) over SSH and report {connect, preamble} SEPARATELY. "
+            "Opt-in because it costs real connections and a login-shell "
+            "round-trip. It is the rung that discriminates the 2026-07-30 "
+            "ambiguity: a cheap connect succeeding while the preamble hangs fits "
+            "BOTH node-local degradation and a tunnel dropping mid-command, and "
+            "only running the SAME command class over the DIRECT (jump-bypassed) "
+            "route tells them apart."
+        ),
+    )
+    activation: str | None = Field(
+        default=None,
+        description=(
+            "Override the activation prefix the preamble rung runs (default: the "
+            "matched cluster's own, built from clusters.yaml). Ignored unless "
+            "`probe_preamble` is true."
+        ),
+    )
+    preamble_timeout_sec: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=300.0,
+        description=(
+            "Per-attempt budget for one preamble-class SSH reading. Short by "
+            "design: this rung exists to catch a preamble that HANGS."
+        ),
+    )
 
 
 class BreakerState(BaseModel):
@@ -116,6 +148,73 @@ class ControlPlaneCheck(BaseModel):
     )
 
 
+class RouteChainModel(BaseModel):
+    """The EFFECTIVE ssh chain for one host, as ``ssh -G`` itself resolved it.
+
+    Never a re-parse of ``ssh_config``: ``Host`` patterns, ``Match`` blocks and
+    ``Include`` chains are OpenSSH's business, and a second parser would drift
+    from the client that actually dials. ``resolved=false`` means the resolution
+    could not run, and every route-aware claim is then withheld (fail-open).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="net-triage effective route")
+
+    resolved: bool = Field(description="Whether ``ssh -G`` produced an answer for this host.")
+    hostname: str = Field(
+        default="", description="The HostName ssh resolved (may differ from the alias)."
+    )
+    user: str = Field(default="", description="The username ssh resolved for this destination.")
+    port: int = Field(default=22, description="The port ssh resolved for this destination.")
+    proxy_jump: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The ordered ProxyJump hops the connection actually traverses. EMPTY "
+            "means a direct route. A non-empty chain is why 'the bare hostname "
+            "answered' is NOT the same claim as 'your path works' (2026-07-30)."
+        ),
+    )
+    detail: str = Field(default="", description="The resolution line, or why it could not run.")
+
+
+class ReadinessAtom(BaseModel):
+    """One readiness SENSOR reading — what was probed, the verdict, when.
+
+    The unit of record of the standing per-cluster readiness ledger
+    (``docs/design/s2-readiness.md`` pillar 1); ``net-triage`` is a thin composer
+    over the same atoms the ledger will store, so a rendered reading and a stored
+    one can never disagree about what was seen.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="net-triage readiness atom")
+
+    sensor: Literal["hop", "direct", "path", "connect", "preamble"] = Field(
+        description=(
+            "Which leg this reading speaks for: 'hop' a ProxyJump waypoint, "
+            "'direct' the target's own hostname with the jump BYPASSED, 'path' "
+            "the derived end-to-end verdict for the effective chain, and "
+            "'connect'/'preamble' the two command classes of the preamble rung."
+        )
+    )
+    target: str = Field(description="What was probed (a hostname or an ssh destination).")
+    verdict: Literal["ok", "down", "timeout", "unknown", "skipped"] = Field(
+        description=(
+            "'unknown' means the sensor ran but could not settle it; 'skipped' "
+            "means it never ran (detail says why). Neither is 'fine'."
+        )
+    )
+    detail: str = Field(
+        default="", description="Reading detail, error, or the reason it was skipped."
+    )
+    latency_ms: float | None = Field(
+        default=None, description="Wall-clock of the reading, or null when it never ran."
+    )
+    at: str = Field(default="", description="When the reading was taken (ISO-8601 UTC).")
+    route: Literal["effective", "direct", "n/a"] = Field(
+        default="n/a",
+        description="Which route the command-class reading rode; 'n/a' for TCP legs.",
+    )
+
+
 class HostTriage(BaseModel):
     """The full connectivity differential for one host, with a verdict."""
 
@@ -159,6 +258,43 @@ class HostTriage(BaseModel):
     )
     remediation: str = Field(
         description="What to do about the verdict — deterministic text, one per verdict arm."
+    )
+    route: RouteChainModel | None = Field(
+        default=None,
+        description=(
+            "The EFFECTIVE ssh chain for this host. Null when route resolution "
+            "was not attempted. Present-and-jumped is what makes `tcp_ok` above "
+            "a claim about the BARE HOSTNAME only, never about your actual path."
+        ),
+    )
+    readiness: list[ReadinessAtom] = Field(
+        default_factory=list,
+        description=(
+            "One LABELLED atom per sensed leg — every ProxyJump hop, the direct "
+            "(jump-bypassed) alternative, the derived end-to-end path, and (when "
+            "the preamble rung ran) the connect/preamble classes per route. This "
+            "is the list that makes 'reachable' unable to mean 'the bare hostname "
+            "answered while your actual path is dead' (2026-07-30)."
+        ),
+    )
+    path_cause: str | None = Field(
+        default=None,
+        description=(
+            "The NAMED discriminated cause for this host's path — the same "
+            "vocabulary the submit-s2 pre-detach refusal and the staging retry "
+            "quote, so the human reads one word everywhere: path_ok, "
+            "hop_down_direct_ok, hop_down_direct_dead, hop_down_direct_unprobed, "
+            "target_unreachable, path_unproven, preamble_degraded, "
+            "transport_flap, route_unresolved. Null when no route read ran."
+        ),
+    )
+    path_summary: str | None = Field(
+        default=None,
+        description=(
+            "The honest one-line route verdict for a JUMPED host, e.g. 'path dead "
+            "(hop usc-discovery down); direct alternative OK'. Null for an "
+            "un-jumped host, whose summary line is unchanged by this layer."
+        ),
     )
 
 
