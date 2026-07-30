@@ -45,6 +45,8 @@ __all__ = [
     "JournalStatus",
     "TERMINAL_STATUSES",
     "NEVER_DISPATCHED_VERDICT_REASON",
+    "NEVER_ACTUATED_RECOVERY_NOTE",
+    "DispatchState",
     "LifecycleState",
     "TaskStatus",
     "FailureCategory",
@@ -64,6 +66,58 @@ __all__ = [
 # cross-subject vocabulary home, because writer and reader are in different
 # subjects that must not import each other directly.
 NEVER_DISPATCHED_VERDICT_REASON = "submit_once_never_dispatched_safe_resubmit"
+
+# The ``last_status.recovery_note`` discriminator reconcile stamps when the
+# never-dispatched verdict above was reached from the record's OWN durable
+# dispatch evidence (:class:`DispatchState`) rather than from a cluster read.
+# Same verdict, same class (zero tasks ran, safe to re-submit) — so every
+# existing reader of ``NEVER_DISPATCHED_VERDICT_REASON`` (the campaign circuit
+# breaker's never-dispatched streak) keeps classifying it correctly — but the
+# note names WHICH evidence closed it, because the two are not interchangeable:
+# a cluster read can be severed, the record's own stamp cannot.
+NEVER_ACTUATED_RECOVERY_NOTE = (
+    "dispatch evidence reads 'pending': the remote dispatch exec was never "
+    "issued for this attempt, so no acceptance evidence can exist anywhere"
+)
+
+
+class DispatchState(StrEnum):
+    """Acceptance-evidence class of a ``submitting`` record's dispatch attempt.
+
+    The discriminator the 2026-07-30 zombie-resurrection defect showed was
+    MISSING. A ``submitting`` record carries ``job_ids == []`` in two
+    categorically different situations, and the pre-fix recovery ladder could
+    only tell them apart by ASKING THE CLUSTER:
+
+    * the control plane died **before** it ever issued the dispatch exec — no
+      ``qsub``/``sbatch`` was sent, so no job id, no jobmap marker and no
+      announce dir can exist ANYWHERE; or
+    * the dispatch exec WAS issued and the response channel was severed — an
+      array may be live on the cluster right now.
+
+    Keying that apart on a cluster read is exactly backwards for the failure
+    that produces it: the network fault that orphans the submit is usually the
+    same fault that makes the cluster unreadable, so the ladder's severed rung
+    fires and the record re-asserts ``submitting`` forever (the zombie). The
+    state below is written to the run record at the two moments that actually
+    know the answer, entirely locally:
+
+    * :attr:`PENDING` — stamped by ``mint_submitting_record`` as the record is
+      minted, BEFORE any remote actuation.
+    * :attr:`ACTUATED` — stamped by the submit leg immediately BEFORE the
+      dispatch exec goes out (never after: the stamp must be a strict
+      OVER-approximation of "a qsub may have been issued", so a crash inside
+      the stamp→exec window reads ``actuated`` and stays conservative).
+
+    Ordering therefore makes ``PENDING`` **positive proof of non-actuation**,
+    not an absence: only a writer that would have stamped ``ACTUATED`` first
+    can leave it. A record with NO dispatch evidence at all (``{}`` — minted by
+    a pre-fix version, or by the flag-off submit path that never mints a
+    ``submitting`` record) is UNKNOWN and keeps the pre-fix behaviour exactly.
+    """
+
+    PENDING = "pending"
+    ACTUATED = "actuated"
 
 
 class JournalStatus(StrEnum):

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.contract.vocabulary import JournalStatus
+from hpc_agent._kernel.contract.vocabulary import DispatchState, JournalStatus
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
@@ -800,6 +800,15 @@ def mint_submitting_record(
     durable, verdict revisable). Promote to ``in_flight`` only once the id is in
     hand (:func:`promote_submitting_record`).
 
+    The mint also stamps ``dispatch_evidence = {"state": "pending"}`` — the
+    ACCEPTANCE-EVIDENCE class the record must carry for reconcile to tell "died
+    before the qsub was ever sent" apart from "the qsub went out and the answer
+    was lost" WITHOUT a cluster round-trip (2026-07-30 zombie-resurrection fix).
+    The submit leg overwrites it with ``actuated`` immediately before the
+    dispatch exec (:func:`hpc_agent.state.journal.stamp_dispatch_actuated`), so
+    the two writes bracket the actuation and a surviving ``pending`` is positive
+    proof, not an absence.
+
     **The Δ1 locked compare-and-mint.** The dedup read and the mint are performed
     inside ONE ``_locked(run_path)`` critical section, so two genuinely concurrent
     same-run_id submits serialize: the first reads no record and mints
@@ -860,6 +869,20 @@ def mint_submitting_record(
             # _PROCEED (resubmittable-terminal corpse / invalidated redo): fall
             # through and mint a fresh attempt in place.
         attempt = allocate_attempt(existing, jobmap_attempt)
+        # Acceptance-evidence class, stamped AT MINT — before any remote
+        # actuation, inside the same locked write that creates the record. This
+        # is the ``pending`` half of the pair ``stamp_dispatch_actuated``
+        # completes just before the dispatch exec: because the record cannot
+        # exist without it and the ``actuated`` overwrite always precedes the
+        # exec, a ``submitting`` record still reading ``pending`` is POSITIVE
+        # proof no qsub was ever sent (2026-07-30 zombie-resurrection fix; see
+        # ``vocabulary.DispatchState``). Reconcile can then close it with the
+        # cluster unreachable — the state the very fault that orphaned the
+        # submit usually leaves behind.
+        dispatch_evidence = {
+            "state": str(DispatchState.PENDING),
+            "at": utcnow_iso(),
+        }
         return RunRecord(
             run_id=run_id,
             profile=profile,
@@ -885,6 +908,7 @@ def mint_submitting_record(
             max_auto_resumes=int(max_auto_resumes),
             auto_recover_on_failure=auto_recover_on_failure,
             max_auto_recovers=int(max_auto_recovers),
+            dispatch_evidence=dispatch_evidence,
         )
 
     record, minted = upsert_run_compare_and_mint(experiment_dir, run_id, _decide)

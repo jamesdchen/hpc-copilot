@@ -141,6 +141,10 @@ _UPDATABLE_FIELDS = frozenset(
         "kill_confirmed_at",
         "kill_requested_job_ids",
         "kill_confirmed_job_ids",
+        # Submit-once acceptance-evidence class. Whitelisted so the submit leg's
+        # ``stamp_dispatch_actuated`` can flip it through the value-overwriting
+        # ``update_run_status`` path in the pre-dispatch window.
+        "dispatch_evidence",
     }
 )
 
@@ -355,6 +359,24 @@ class RunRecord:
     # invariant (premortem Δ1/O2). Harmless default 0: a pre-U3 record loads
     # unchanged (``from_dict`` filters to known fields) and never mis-adopts.
     attempt: int = 0
+    # ── submit-once ACCEPTANCE-EVIDENCE class (2026-07-30 zombie-resurrection) ──
+    # Whether the remote dispatch exec was ever ISSUED for this attempt. Shape
+    # (caller-assembled, this layer stays pure I/O):
+    #   {"state": "pending" | "actuated", "at": <iso8601 UTC>}
+    # ``{}`` means UNKNOWN — a pre-fix record, or a record from the flag-off
+    # submit path (which never mints ``submitting`` at all). See
+    # :class:`hpc_agent._kernel.contract.vocabulary.DispatchState` for the full
+    # doctrine; the load-bearing part is the WRITE ORDER: ``pending`` is stamped
+    # at mint (before any actuation) and ``actuated`` immediately BEFORE the
+    # dispatch exec, never after — so ``pending`` is POSITIVE proof that no
+    # ``qsub``/``sbatch`` was ever sent, and therefore that no acceptance
+    # evidence (job id / jobmap marker / announce dir) can exist anywhere.
+    # That is the ONE discriminator reconcile's recovery ladder can evaluate
+    # with the cluster unreachable, which is precisely the state the network
+    # fault that orphaned the submit tends to leave behind.
+    # Harmless empty default: ``from_dict`` filters to known fields, so a
+    # pre-fix record loads unchanged and reconciles exactly as it did before.
+    dispatch_evidence: dict = dataclasses.field(default_factory=dict)
     # ── consecutive FUTILE block-drive ticks (run-queue Phase 3, §7 retryable(n)) ─
     # How many agent-facing ``block-drive`` ticks in a row drove this run and
     # moved NOTHING (``action`` in {awaiting_decision, skip}). Any tick that

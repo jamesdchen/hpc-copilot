@@ -349,6 +349,156 @@ def test_flag_on_kill_before_promote_leaves_submitting_then_reconcile_adopts(
 
 
 # --------------------------------------------------------------------------- #
+# flag ON — the ACCEPTANCE-EVIDENCE bracket (2026-07-30 zombie resurrection).
+#
+# ``dispatch_evidence`` is what lets reconcile close a never-actuated orphan with
+# the cluster unreachable, and its ONLY guarantee comes from write ORDER: the
+# ``actuated`` stamp must land BEFORE the dispatch exec, never after, so that a
+# surviving ``pending`` is positive proof no qsub was ever sent. These drills pin
+# that order at the two dispatch sites and both crash windows around them.
+# --------------------------------------------------------------------------- #
+
+
+class _EvidenceSpyBackend(_WaveBackend):
+    """Records the on-disk ``dispatch_evidence`` at the moment each dispatch fires."""
+
+    def __init__(self, exp: Path) -> None:
+        super().__init__()
+        self._exp = exp
+        self.evidence_at_dispatch: list[str | None] = []
+
+    def _execute_command(self, cmd, job_env, cwd):  # type: ignore[override]
+        rid = job_env.get("HPC_RUN_ID", "")
+        rec = load_run(self._exp, rid) if rid else None
+        evidence = (rec.dispatch_evidence or {}) if rec is not None else {}
+        self.evidence_at_dispatch.append(evidence.get("state"))
+        return super()._execute_command(cmd, job_env, cwd)
+
+
+def test_mint_stamps_pending_before_any_actuation(
+    _home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mint alone — nothing dispatched — leaves the record PROVABLY unsent."""
+    from hpc_agent.ops.submit.runner import mint_submitting_record
+    from hpc_agent.state.journal import dispatch_never_actuated
+
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "1")
+    rec, minted = mint_submitting_record(
+        _home,
+        run_id="run-pending",
+        profile="p",
+        cluster="c",
+        ssh_target="user@host",
+        remote_path="/r",
+        job_name="j",
+        total_tasks=1,
+    )
+
+    assert minted is True
+    assert rec.dispatch_evidence["state"] == "pending"
+    assert rec.dispatch_evidence["at"]
+    assert dispatch_never_actuated(rec) is True
+
+
+def test_main_array_stamps_actuated_before_the_dispatch(
+    _home: Path, _capped_cluster: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "1")
+    exp = _home
+    spec = _spec("run-eviden", total_tasks=50)
+    sf._ensure_run_sidecar(exp, spec)
+    backend = _EvidenceSpyBackend(exp)
+
+    _run_one_spec(exp, spec, backend)
+
+    # The load-bearing order: by the time the qsub ran, the record already said
+    # "a dispatch may have been issued". Reading ``pending`` here would mean a
+    # landed array could later be abandoned as never-sent.
+    assert backend.evidence_at_dispatch == ["actuated"]
+
+
+def test_canary_leg_stamps_actuated_before_the_dispatch(
+    _home: Path, _capped_cluster: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "1")
+    exp = _home
+    spec = _spec("run-canev", total_tasks=50)
+    sf._ensure_run_sidecar(exp, spec)
+    backend = _EvidenceSpyBackend(exp)
+
+    sf._fire_canary(
+        experiment_dir=exp,
+        spec=spec,
+        canary_run_id="run-canev-canary",
+        backend_obj=backend,
+        job_env_full=sf._augment_job_env(
+            job_env=dict(spec.job_env or {}),
+            runtime=spec.runtime,
+            campaign_id=spec.campaign_id,
+            cluster=spec.cluster,
+        ),
+    )
+
+    assert backend.evidence_at_dispatch == ["actuated"]
+
+
+def test_crash_in_the_stamp_to_dispatch_window_stays_ambiguous(
+    _home: Path, _capped_cluster: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A death BETWEEN the stamp and the qsub reads ``actuated`` — an
+    over-claim, and deliberately so: reconcile then asks the cluster instead of
+    settling. The stamp is a strict over-approximation of "may have been sent",
+    which is exactly what makes the complementary ``pending`` a proof."""
+    from hpc_agent.state.journal import dispatch_never_actuated
+
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "1")
+    exp = _home
+    spec = _spec("run-window", total_tasks=50)
+    sf._ensure_run_sidecar(exp, spec)
+
+    class _DyingBackend(_WaveBackend):
+        def _execute_command(self, cmd, job_env, cwd):  # type: ignore[override]
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _run_one_spec(exp, spec, _DyingBackend())
+
+    rec = load_run(exp, "run-window")
+    assert rec is not None and rec.status == "submitting"
+    assert rec.dispatch_evidence["state"] == "actuated"
+    assert dispatch_never_actuated(rec) is False
+
+
+def test_crash_before_the_stamp_is_provably_never_actuated(
+    _home: Path, _capped_cluster: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE LIVE CASE. The worker dies after the mint but before the stamp — i.e.
+    before anything could be sent. The record is closable offline, which is the
+    whole point: the fault that kills the worker is usually the one that also
+    makes the cluster unreadable."""
+    from hpc_agent.state.journal import dispatch_never_actuated
+
+    monkeypatch.setenv("HPC_SUBMIT_ONCE", "1")
+    exp = _home
+    spec = _spec("run-early", total_tasks=50)
+    sf._ensure_run_sidecar(exp, spec)
+
+    with (
+        mock.patch(
+            "hpc_agent.state.journal.stamp_dispatch_actuated",
+            side_effect=KeyboardInterrupt,
+        ),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        _run_one_spec(exp, spec, _WaveBackend())
+
+    rec = load_run(exp, "run-early")
+    assert rec is not None and rec.status == "submitting" and rec.job_ids == []
+    assert rec.dispatch_evidence["state"] == "pending"
+    assert dispatch_never_actuated(rec) is True
+
+
+# --------------------------------------------------------------------------- #
 # flag ON — the canary leg mints its own record + threads the canary wave key.
 # --------------------------------------------------------------------------- #
 
