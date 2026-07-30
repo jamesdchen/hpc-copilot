@@ -253,8 +253,13 @@ def test_caller_run_name_that_is_not_a_module_level_def_refuses(tmp_path: Path) 
 
 
 def test_missing_task_generator_needs_intent_naming_it(tmp_path: Path) -> None:
-    """The sweep recipe is caller-owned: absence escalates, naming the field."""
-    _write(tmp_path, "train.py", _decorated_train())
+    """The sweep recipe is caller-owned: absence escalates, naming the field.
+
+    Fixture is UNDECORATED on purpose: a stray decoration inside an escalation
+    branch would move the snapshot. With an already-decorated fixture the
+    splice is a no-op and the pin is vacuous.
+    """
+    _write(tmp_path, "train.py", _plain_train())
     before = _tree_snapshot(tmp_path)
 
     out = _run(tmp_path, _spec(task_generator=None))
@@ -289,8 +294,10 @@ def test_code_never_fabricates_goal_or_task_generator(tmp_path: Path) -> None:
     must never carry a goal string or a task_generator recipe the caller did
     not supply — the incident-1b class ("safe defaults" justified inventing
     a sweep) is what this pin exists to keep dead.
+
+    Fixture is UNDECORATED so the byte-identical assertion is live.
     """
-    _write(tmp_path, "train.py", _decorated_train())
+    _write(tmp_path, "train.py", _plain_train())
     before = _tree_snapshot(tmp_path)
 
     out = _run(tmp_path, None)
@@ -309,8 +316,13 @@ def test_code_never_fabricates_goal_or_task_generator(tmp_path: Path) -> None:
 
 
 def test_uncovered_required_param_escalates_by_name(tmp_path: Path) -> None:
-    """#195: a required non-axis param with no default is a named escalation."""
-    _write(tmp_path, "train.py", _decorated_train("seed: int, samples: int"))
+    """#195: a required non-axis param with no default is a named escalation.
+
+    Fixture is UNDECORATED so the byte-identical assertion is live — this is
+    the LATEST escalation branch (it fires after the partition), so it is the
+    one a "decorate before escalating" regression would slip past first.
+    """
+    _write(tmp_path, "train.py", _plain_train("seed: int, samples: int"))
     before = _tree_snapshot(tmp_path)
 
     out = _run(tmp_path, _spec())
@@ -480,6 +492,57 @@ def test_caller_forced_shell_command_wins_over_a_decoratable_function(tmp_path: 
     assert "@register_run" not in (tmp_path / "train.py").read_text(encoding="utf-8")
 
 
+# ── no escalation branch writes (the "decorate is LAST" invariant) ───────
+
+
+@pytest.mark.parametrize(
+    ("scenario", "spec_kwargs"),
+    [
+        # needs_intent, earliest branch (before the partition).
+        ("intent", {"goal": None, "task_generator": None, "task_count": None}),
+        ("intent_partial", {"task_generator": None}),
+        # needs_intent, LATEST branch (after the partition) — the one a
+        # decorate-before-escalating regression reaches last.
+        ("uncovered", {}),
+        # needs_wrapper_argv, via the explicit caller override.
+        ("wrapper", {"entry_point_kind": "shell_command"}),
+    ],
+)
+def test_no_escalation_branch_writes_to_the_repo(
+    tmp_path: Path, scenario: str, spec_kwargs: dict[str, Any]
+) -> None:
+    """Decoration is the LAST step, so every escalation leaves the tree intact.
+
+    The fixture is UNDECORATED and declares an uncovered required param, so a
+    stray `decorate_entry_point` call anywhere before the escalation MOVES the
+    snapshot — the assertion is live for all four branches, not vacuous.
+    """
+    _write(tmp_path, "train.py", _plain_train("seed: int, samples: int"))
+    before = _tree_snapshot(tmp_path)
+
+    out = _run(tmp_path, _spec(**spec_kwargs))
+
+    assert "onboarded" not in out, scenario
+    after = _tree_snapshot(tmp_path)
+    assert after == before, scenario
+    assert "@register_run" not in after["train.py"], scenario
+
+
+def test_the_snapshot_pin_can_actually_fire(tmp_path: Path) -> None:
+    """Guard-can-fire check for the pin above: a decoration DOES move it.
+
+    Without this, `_tree_snapshot(...) == before` would silently pass on a
+    fixture no write could ever perturb (the vacuous-pin class).
+    """
+    _write(tmp_path, "train.py", _plain_train())
+    before = _tree_snapshot(tmp_path)
+
+    # The onboarded path DOES decorate — so the same assertion must fail here.
+    _run(tmp_path, _spec())
+
+    assert _tree_snapshot(tmp_path) != before
+
+
 # ── the promoted frozen-YAML convention scan (SKILL.md:147-159) ───────────
 
 
@@ -568,6 +631,73 @@ def test_pathway_table_rows(
     assert (pathway, rule) == (expected_pathway, expected_rule)
 
 
+@pytest.mark.parametrize(
+    ("forced_kind", "expected_rule"),
+    [
+        ("shell_command", "caller_forced_shell_command"),
+        ("python_module", "caller_forced_python_module"),
+    ],
+)
+def test_override_first_beats_a_detected_row(
+    tmp_path: Path, forced_kind: str, expected_rule: str
+) -> None:
+    """ORDERING PIN: the caller-override rows run BEFORE the detected rows.
+
+    The entry point carries `@hydra.main`, so the DETECTED verdict is
+    `signature_rewriting_decorator`. With override-first the caller's kind
+    wins and the rule id is the override's. Relocating the override rows below
+    the detected ones (the relocation mutation) makes every case here report
+    `signature_rewriting_decorator` instead — red.
+    """
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(
+        tmp_path,
+        "pkg/main.py",
+        "import hydra\n\n\n@hydra.main(config_path='conf')\n"
+        "def main(seed: int) -> None:\n    pass\n",
+    )
+
+    out = _run(tmp_path, _spec(entry_point_path="pkg/main.py", entry_point_kind=forced_kind))
+
+    assert out.get("pathway_rule") == expected_rule
+
+
+def test_override_first_pin_can_fire_on_the_default_kind(tmp_path: Path) -> None:
+    """Same ordering pin for `register_run` — which REFUSES on a rewriter.
+
+    Override-first reaches `caller_forced_register_run`, whose guard names the
+    contradiction. Under the relocation mutation the detected
+    `signature_rewriting_decorator` row would fire first and silently route to
+    the wrapper instead, so this raise is itself an ordering pin.
+    """
+    _write(
+        tmp_path,
+        "main.py",
+        "import hydra\n\n\n@hydra.main(config_path='conf')\n"
+        "def main(seed: int) -> None:\n    pass\n",
+    )
+
+    with pytest.raises(errors.SpecInvalid) as exc:
+        _run(tmp_path, _spec(entry_point_kind="register_run"))
+
+    msg = str(exc.value)
+    assert "hydra.main" in msg
+    assert "register_run" in msg
+    # Both remedies named; the caller decides (an override is not silently
+    # rerouted, and never buys the un-introspectable executor SKILL.md:104
+    # warns about).
+    assert "shell_command" in (exc.value.remediation or "")
+
+
+def test_forced_register_run_on_a_non_python_entry_point_refuses(tmp_path: Path) -> None:
+    _write(tmp_path, "run.sh", "#!/bin/sh\n")
+
+    with pytest.raises(errors.SpecInvalid) as exc:
+        _run(tmp_path, _spec(entry_point_kind="register_run"))
+
+    assert "no Python function to decorate" in str(exc.value)
+
+
 def test_non_python_row_routes_to_the_wrapper() -> None:
     """Row 3 — a shell script / console script has no Python surface."""
     for argv_kind, path in (("shell", "run.sh"), ("console_script", "mytool")):
@@ -636,6 +766,118 @@ def test_axis_params_per_recipe_shape(generator: dict[str, Any], expected: list[
     spec = _spec(task_generator=generator)
     assert spec.task_generator is not None
     assert wep._axis_params(spec.task_generator) == expected
+
+
+# ── the python_module kind (SKILL.md:98's second option for row 2) ────────
+
+
+def test_python_module_kind_is_representable(tmp_path: Path) -> None:
+    """All THREE InterviewSpec entry-point kinds are reachable, not just two."""
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "pkg/train.py", _plain_train())
+    before = _tree_snapshot(tmp_path)
+
+    out = _run(tmp_path, _spec(entry_point_path="pkg/train.py", entry_point_kind="python_module"))
+
+    assert out["onboarded"] is True
+    assert out["pathway"] == "module"
+    assert out["pathway_rule"] == "caller_forced_python_module"
+    assert out["entry_point_kind"] == "python_module"
+    # The wire shape is {kind, module, function} — no run_name, no argv.
+    assert out["interview_spec"]["entry_point"] == {
+        "kind": "python_module",
+        "module": "pkg.train",
+        "function": "train",
+    }
+    # python_module edits NOTHING — the whole point of the kind.
+    assert out["decorated"] is False
+    assert _tree_snapshot(tmp_path) == before
+
+
+def test_python_module_partitions_the_real_signature(tmp_path: Path) -> None:
+    """The framework introspects the undecorated function, so the partition runs."""
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "pkg/train.py", _plain_train("seed: int, samples: int = 10"))
+
+    out = _run(tmp_path, _spec(entry_point_path="pkg/train.py", entry_point_kind="python_module"))
+
+    assert out["partition"]["axis_params"] == ["seed"]
+    assert out["partition"]["defaulted_params"] == ["samples"]
+    assert out["partition"]["uncovered_params"] == []
+
+
+def test_python_module_uncovered_param_names_a_satisfiable_remedy(tmp_path: Path) -> None:
+    """python_module carries no fixed_params, so the ask must not name it."""
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "pkg/train.py", _plain_train("seed: int, samples: int"))
+
+    out = _run(tmp_path, _spec(entry_point_path="pkg/train.py", entry_point_kind="python_module"))
+
+    assert out["needs_intent"] is True
+    assert out["partition"]["uncovered_params"] == ["samples"]
+    assert "no fixed_params on the wire" in out["ask"]
+    assert "default in the function's own signature" in out["ask"]
+
+
+def test_python_module_refuses_fixed_params_rather_than_dropping_them(tmp_path: Path) -> None:
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "pkg/train.py", _plain_train("seed: int, samples: int"))
+
+    with pytest.raises(errors.SpecInvalid) as exc:
+        _run(
+            tmp_path,
+            _spec(
+                entry_point_path="pkg/train.py",
+                entry_point_kind="python_module",
+                fixed_params={"samples": 1000},
+            ),
+        )
+
+    assert "not representable on a python_module entry point" in str(exc.value)
+
+
+def test_python_module_refuses_an_unimportable_src_layout(tmp_path: Path) -> None:
+    """A src-layout package is not importable from the campaign dir."""
+    _write(tmp_path, "src/mypkg/__init__.py", "")
+    _write(tmp_path, "src/mypkg/train.py", _plain_train())
+
+    with pytest.raises(errors.SpecInvalid) as exc:
+        _run(
+            tmp_path,
+            _spec(entry_point_path="src/mypkg/train.py", entry_point_kind="python_module"),
+        )
+
+    assert "no dotted module name is importable" in str(exc.value)
+    assert "__init__.py" in (exc.value.remediation or "")
+
+
+def test_wrapper_escalation_discloses_the_python_module_alternative(tmp_path: Path) -> None:
+    """SKILL.md:98's other option is NAMED, not silently unrepresented."""
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(
+        tmp_path,
+        "pkg/main.py",
+        "import argparse\n\n\ndef main() -> None:\n    argparse.ArgumentParser().parse_args()\n",
+    )
+
+    out = _run(tmp_path, _spec(entry_point_path="pkg/main.py"))
+
+    assert out["needs_wrapper_argv"] is True
+    assert out["pathway_rule"] == "body_parses_argv"
+    assert out["python_module_alternative"] == {"module": "pkg.main", "function": "main"}
+    assert "python_module" in out["ask"]
+    assert "pkg.main:main" in out["ask"]
+
+
+def test_no_python_module_alternative_when_none_is_importable(tmp_path: Path) -> None:
+    """Absent (not fabricated) for a shell entry point / src-layout package."""
+    _write(tmp_path, "run.sh", "#!/bin/sh\n")
+
+    out = _run(tmp_path, _spec())
+
+    assert out["needs_wrapper_argv"] is True
+    assert out["python_module_alternative"] is None
+    assert "python_module" not in out["ask"]
 
 
 # ── structural refusals ──────────────────────────────────────────────────

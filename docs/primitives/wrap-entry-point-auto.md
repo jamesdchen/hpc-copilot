@@ -38,8 +38,9 @@ field is optional; a bare call gets as far as the first judgment point and
 names it.
 
 - `entry_point_path` / `run_name` — override the detection ladders.
-- `entry_point_kind` — force the pathway (`shell_command` is the table's
-  explicit-caller-choice row).
+- `entry_point_kind` — force the pathway. All three `InterviewSpec`
+  entry-point kinds are reachable: `register_run`, `shell_command`, and
+  `python_module` (see below).
 - `argv` / `signature` — the wrapper pathway's template + typed signature.
 - `goal` / `task_generator` / `task_count` — the human-owned intent. Never
   invented here.
@@ -60,11 +61,42 @@ must not produce it.
 | `{onboarded: true, ...}` | Every deterministic step ran. Carries the pathway + deciding rule ids, the decoration echo, the frozen configs + their `<stem>_sha` kwargs, the param partition, and the ready-to-hand `interview_spec` fragment. |
 | `{needs_pick: true, ...}` | An entry-point-**file** tie (`reason: entry_point_tie`) or an entry-**function** tie (`entry_function_tie`). Every candidate is listed; `resolve_with` names the field that breaks it. |
 | `{needs_intent: true, ...}` | `goal` / `task_generator` / `task_count` is absent, or a specific required param of the entry point's signature is uncovered. `never_invented` pins the subset code must never fabricate. |
-| `{needs_wrapper_argv: true, ...}` | The wrapper pathway needs `argv` + `signature`. `argv_kind` names *why* the surface is not introspectable and `argv_head` carries the leading elements code CAN compose. |
+| `{needs_wrapper_argv: true, ...}` | The wrapper pathway needs `argv` + `signature`. `argv_kind` names *why* the surface is not introspectable, `argv_head` carries the leading elements code CAN compose, and `python_module_alternative` names the other kind SKILL.md:98 offers for the same row. |
 
 **Every escalation leaves the repo byte-identical.** Decoration is the last
 step, after all three escalation branches are ruled out — so a
-non-`onboarded` return has written nothing.
+non-`onboarded` return has written nothing. Pinned by
+`test_no_escalation_branch_writes_to_the_repo` (parametrized over all four
+branches, on an *undecorated* fixture so the snapshot can actually move) plus
+`test_the_snapshot_pin_can_actually_fire`.
+
+## All three entry-point kinds are representable
+
+| Kind | Pathway | Chosen by |
+|---|---|---|
+| `register_run` | `decorate` | code (the default row) |
+| `shell_command` | `wrapper` | code (every fallback row) |
+| `python_module` | `module` | **caller override only** |
+
+`python_module` targets the function by dotted path (`{kind, module,
+function}`) with no file edit — the framework introspects the undecorated
+signature. Code never selects it autonomously, because what separates it from
+direct decoration on the *same* kwarg'd function is "may we edit this file"
+(vendor code, a read-only checkout) — caller judgment, not a repo fact.
+SKILL.md:98 offers it as row 2's second option, so `needs_wrapper_argv`
+**discloses** the derived `{module, function}` whenever one is importable; the
+gap is named, never silent.
+
+The dotted name is only offered when the file is importable with the campaign
+dir on `sys.path` (what `interview._validate_python_module_entry` prepends,
+mirroring the cluster's `$REPO_DIR` on `PYTHONPATH`): a top-level module, or a
+package chain where every directory carries an `__init__.py`. A `src`-layout
+package yields no target — forcing `python_module` there is a named refusal
+rather than a dotted name the interview's own validator would reject.
+
+`python_module`'s wire shape carries **no `fixed_params`**, so supplying one is
+refused rather than silently dropped, and the uncovered-param ask names a
+satisfiable remedy there (a signature default, or a different kind).
 
 ## The entry-point ladders
 
@@ -96,7 +128,8 @@ The FUNCTION (Python entry points only), in order:
 | Rule id | Pathway | Trigger |
 |---|---|---|
 | `caller_forced_shell_command` | wrapper | the caller set `entry_point_kind: shell_command` |
-| `caller_forced_register_run` | decorate | the caller set `entry_point_kind: register_run` |
+| `caller_forced_python_module` | module | the caller set `entry_point_kind: python_module` |
+| `caller_forced_register_run` | decorate **or refusal** | the caller set `entry_point_kind: register_run` |
 | `non_python_entry_point` | wrapper | shell script, binary, or console script |
 | `signature_rewriting_decorator` | wrapper | `@hydra.main` / a consuming `@click.command` / `@app.command` |
 | `no_decoratable_function` | wrapper | the file is all top-level code |
@@ -106,8 +139,21 @@ The FUNCTION (Python entry points only), in order:
 Rows are evaluated top-down. Over-refusal into the wrapper is safe by
 design — the wrapper always works, whereas decorating through a
 signature-rewriting decorator silently produces an executor the framework
-cannot introspect. The caller override is evaluated FIRST (the prose lists
-it last): an override that loses to a detected row is not an override.
+cannot introspect. The caller-override rows are evaluated FIRST (the prose
+lists the override last): an override that loses to a detected row is not an
+override. That ordering is **pinned**, not merely documented —
+`test_override_first_beats_a_detected_row` and
+`test_override_first_pin_can_fire_on_the_default_kind` both go red if the
+override rows are relocated below the detected ones.
+
+`caller_forced_register_run` is the one override that cannot simply win: the
+outcome it asks for on a signature-rewriting decorator is exactly the unsafe
+one SKILL.md:104 warns about. Silently rerouting it to the wrapper would break
+override-first; letting it through would ship an un-introspectable executor. So
+it is a **named refusal** (`spec_invalid`) stating both remedies — drop the
+override, or say `shell_command` explicitly. The same refusal covers forcing
+`register_run` onto a non-Python entry point or a file with no module-level
+`def`.
 
 The rewriting-decorator predicate is imported from `decorate-entry-point`
 itself, so the table routes to the wrapper EXACTLY when the decoration verb
@@ -147,6 +193,11 @@ absorbed rather than a `TypeError`.
   `run_name` is not a module-level `def`, the entry-point file is
   unreadable, or a wrapper `run_name` cannot be derived as a valid Python
   identifier.
+- `spec_invalid` — a contradictory `entry_point_kind`: `register_run` on a
+  signature-rewriting decorator / a non-Python entry point / a file with no
+  module-level `def`; `python_module` on a path with no importable dotted
+  name, or carrying `fixed_params` (which that kind's wire shape cannot
+  represent).
 
 ## Idempotency
 

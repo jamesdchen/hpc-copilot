@@ -26,7 +26,17 @@ it (the contract-taught-by-refusal posture: never a generic refusal).
 * ``{needs_wrapper_argv: true, argv_kind, ...}`` — the pathway is wrapper
   materialization and the entry point's CLI surface is not introspectable
   by this verb, so the ``argv`` template + typed ``signature`` must come
-  from the caller.
+  from the caller. When the entry point is an importable module this shape
+  also DISCLOSES the ``python_module`` alternative SKILL.md:98 offers for
+  the same row, with the derived dotted target named.
+
+All three InterviewSpec entry-point kinds are representable:
+``register_run`` (the ``decorate`` pathway, the default), ``shell_command``
+(the ``wrapper`` pathway), and ``python_module`` (the ``module`` pathway).
+Only the first two are ever CHOSEN by code — ``python_module`` is reachable
+by explicit ``entry_point_kind`` override, because what distinguishes it
+from direct decoration is "may we edit this file", which is caller
+judgment rather than a repo fact.
 
 ``task_generator`` reuses the interview wire's exact discriminated union
 so a caller-supplied recipe is validated byte-identically to what the
@@ -79,13 +89,20 @@ class WrapEntryPointAutoInput(BaseModel):
             "module-level def in the resolved entry-point file."
         ),
     )
-    entry_point_kind: Literal["register_run", "shell_command"] | None = Field(
+    entry_point_kind: Literal["register_run", "shell_command", "python_module"] | None = Field(
         default=None,
         description=(
-            "Force the pathway. 'shell_command' is the last row of the "
-            "pathway decision table — an explicit caller choice always routes "
-            "to wrapper materialization, even when direct decoration would "
-            "have been structurally possible."
+            "Force the pathway — all THREE InterviewSpec entry-point kinds are "
+            "reachable. 'shell_command' is the last row of the pathway decision "
+            "table: an explicit caller choice always routes to wrapper "
+            "materialization, even when direct decoration would have been "
+            "structurally possible. 'python_module' targets the function by "
+            "dotted path WITHOUT editing the file (SKILL.md:98's second option "
+            "for row 2) — code never selects it on its own, because 'may we edit "
+            "this file' is caller judgment, not a repo fact. 'register_run' is "
+            "already the default; forcing it is refused when the function "
+            "carries a signature-rewriting decorator (decorating through one "
+            "produces an executor the framework cannot introspect)."
         ),
     )
 
@@ -183,6 +200,26 @@ class _EntryCandidate(BaseModel):
     )
 
 
+class _PythonModuleTarget(BaseModel):
+    """A ``python_module`` entry point: an importable dotted module + function."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module: str = Field(
+        min_length=1,
+        description=(
+            "Dotted module path importable with the campaign dir on sys.path — "
+            "derived from the file's location, and only ever offered when every "
+            "parent directory carries an __init__.py (or the file sits at the "
+            "repo root). A src-layout package is NOT importable from the repo "
+            "root, so no dotted path is offered for one."
+        ),
+    )
+    function: str = Field(
+        min_length=1, description="The function inside `module` to treat as the entry point."
+    )
+
+
 class _ParamPartition(BaseModel):
     """The fixed-params partition over the entry point's declared params."""
 
@@ -234,18 +271,21 @@ class _OnboardedResult(BaseModel):
             "scanned and the params partitioned. interview_spec is ready."
         ),
     )
-    pathway: Literal["decorate", "wrapper"] = Field(
+    pathway: Literal["decorate", "wrapper", "module"] = Field(
         description=(
             "'decorate' = @register_run spliced onto the user's function "
             "(SKILL Step 3a, the default). 'wrapper' = the .hpc/wrappers "
-            "shell_command shim (Step 3b, the rescue boat)."
+            "shell_command shim (Step 3b, the rescue boat). 'module' = the "
+            "python_module dotted-path target, reachable ONLY by explicit "
+            "caller override (SKILL.md:98's second option for row 2) — it "
+            "writes nothing at all."
         ),
     )
     pathway_rule: str = Field(
         min_length=1,
         description="The pathway-table row id that decided the pathway (auditable).",
     )
-    entry_point_kind: Literal["register_run", "shell_command"] = Field(
+    entry_point_kind: Literal["register_run", "shell_command", "python_module"] = Field(
         description="The interview entry_point.kind implied by the pathway.",
     )
     entry_point_path: str = Field(
@@ -363,7 +403,7 @@ class _NeedsIntentResult(BaseModel):
         min_length=1,
         description="The precise, named ask — every missing field and why it is caller-owned.",
     )
-    pathway: Literal["decorate", "wrapper"] = Field(
+    pathway: Literal["decorate", "wrapper", "module"] = Field(
         description="The already-decided pathway, echoed so the caller need not re-derive it.",
     )
     entry_point_path: str = Field(min_length=1, description="The resolved entry-point path.")
@@ -422,6 +462,19 @@ class _NeedsWrapperArgvResult(BaseModel):
             "Human-owned fields ALSO still absent — disclosed here so one "
             "round trip gathers everything instead of two sequential "
             "escalations."
+        ),
+    )
+    python_module_alternative: _PythonModuleTarget | None = Field(
+        default=None,
+        description=(
+            "DISCLOSURE, not a recommendation: SKILL.md:98 offers python_module "
+            "as the OTHER option for this row, and when the entry point is an "
+            "importable module the derived {module, function} is named here so "
+            "the caller can pass entry_point_kind='python_module' instead of an "
+            "argv template. Code does not choose it, because the discriminator "
+            "is 'may we edit / must we not edit this file' — caller judgment, "
+            "not a repo fact. Absent when no dotted path is importable from the "
+            "campaign dir (a src-layout package, or a non-Python entry point)."
         ),
     )
     ask: str = Field(

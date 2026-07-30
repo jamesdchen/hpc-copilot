@@ -41,9 +41,10 @@ Internal sequence
 2. **resolve the entry FUNCTION** (Python entry points only) off a
    named ladder: caller ``run_name`` → the already-``@register_run``'d
    def → a def named ``main`` → the sole public module-level def.
-3. **pathway table** → ``decorate`` (SKILL Step 3a, the default) or
-   ``wrapper`` (Step 3b, the rescue boat), with the deciding row id
-   recorded.
+3. **pathway table** → ``decorate`` (SKILL Step 3a, the default),
+   ``wrapper`` (Step 3b, the rescue boat), or ``module``
+   (SKILL.md:98's ``python_module`` — caller override only), with the
+   deciding row id recorded.
 4. **frozen-YAML scan** by convention (caller override wins).
 5. **fixed-params partition** — axis params (from the ``task_generator``
    plus the framework's ``<stem>_sha`` kwargs) vs. defaulted vs.
@@ -71,7 +72,25 @@ contract-taught-by-refusal posture, never a generic refusal:
   framework's parser to derive them. It DOES compose the deterministic
   ``argv_head`` (``["python3", "train.py"]`` / ``["python3", "-m",
   "pkg"]`` / ``["mytool"]`` / ``["./run.sh"]``) so the caller only
-  supplies the flags.
+  supplies the flags — and it NAMES the ``python_module`` alternative
+  (see below) when one is importable.
+
+All three ``InterviewSpec`` entry-point kinds are REPRESENTABLE
+-------------------------------------------------------------
+
+``register_run`` (the ``decorate`` pathway), ``shell_command`` (the
+``wrapper`` pathway), and ``python_module`` (the ``module`` pathway —
+``{kind, module, function}``, no file edit, the framework introspects
+the undecorated function by dotted path).
+
+Only the first two are ever CHOSEN by code. ``python_module`` is
+reachable by explicit ``entry_point_kind`` override, and never selected
+autonomously, because what separates it from direct decoration on the
+SAME kwarg'd function is "may we edit this file" (vendor code, a
+read-only checkout) — caller judgment, not a repo fact. SKILL.md:98
+offers it as the second option for row 2, so ``needs_wrapper_argv``
+DISCLOSES the derived ``{module, function}`` target whenever one is
+importable from the campaign dir; the gap is named, never silent.
 
 What this verb deliberately does NOT do: it never calls the
 ``interview`` primitive (it emits the ready-to-hand ``interview_spec``
@@ -437,6 +456,61 @@ def _parses_argv(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
+def _refuse_unsafe_forced_register_run(entry: _EntryPoint) -> None:
+    """Refuse ``entry_point_kind='register_run'`` when decoration cannot work.
+
+    SKILL.md:104's invariant: over-refusal into the wrapper is safe, but
+    decorating through a signature-rewriting decorator "silently produces
+    an executor the framework can't introspect". A caller override must not
+    be able to buy that outcome — and must not be silently rerouted either
+    (that would break override-first). So the contradiction is named, with
+    both remedies, and the caller decides.
+    """
+    if entry.argv_kind in _NON_PYTHON_ARGV_KINDS or not entry.path.endswith(".py"):
+        raise errors.SpecInvalid(
+            f"entry_point_kind='register_run' cannot apply to {entry.path!r} "
+            f"(argv_kind={entry.argv_kind}): there is no Python function to "
+            "decorate",
+            remediation=(
+                "Drop entry_point_kind and let the pathway table route this to "
+                "the wrapper (entry_point_kind='shell_command'), which is the "
+                "only shape a non-Python entry point has."
+            ),
+        )
+    if entry.func_node is None:
+        raise errors.SpecInvalid(
+            f"entry_point_kind='register_run' cannot apply to {entry.path!r}: no "
+            "module-level def resolved, so there is nothing to decorate",
+            remediation=(
+                "Drop entry_point_kind (the table routes this to the wrapper), or "
+                "name the function with run_name if the file does declare one."
+            ),
+        )
+    rewriter = next(
+        (
+            dotted
+            for dotted in (_deco_dotted(d) for d in entry.func_node.decorator_list)
+            if _is_signature_rewriter(dotted)
+        ),
+        None,
+    )
+    if rewriter is not None:
+        raise errors.SpecInvalid(
+            f"entry_point_kind='register_run' is unsafe on {entry.function!r} in "
+            f"{entry.path!r}: it carries @{rewriter}, which rewrites the "
+            "signature, so @register_run cannot see the real kwargs and the "
+            "materialized executor would be un-introspectable",
+            remediation=(
+                "Either drop entry_point_kind and let the table route this to the "
+                "wrapper (the always-safe fallback for a signature-rewriting "
+                "decorator), or state that explicitly with "
+                "entry_point_kind='shell_command'. This verb refuses rather than "
+                "rerouting, because silently overriding your override is worse "
+                "than asking."
+            ),
+        )
+
+
 def _decide_pathway(
     *,
     entry: _EntryPoint,
@@ -444,35 +518,56 @@ def _decide_pathway(
 ) -> tuple[str, str]:
     """The SKILL.md:93-104 decision table, promoted to code.
 
-    Returns ``(pathway, rule)`` where ``pathway`` is ``"decorate"``
-    (Step 3a — the DEFAULT) or ``"wrapper"`` (Step 3b — the fallback).
-    Rows are evaluated in this order:
+    Returns ``(pathway, rule)``. ``pathway`` is ``"decorate"`` (Step 3a —
+    the DEFAULT), ``"wrapper"`` (Step 3b — the fallback), or ``"module"``
+    (the ``python_module`` dotted-path target, SKILL.md:98's second option
+    for row 2 — reachable ONLY by explicit caller override). Rows are
+    evaluated in this order:
 
-    ======================================  ==========  ================================
-    Rule id                                 Pathway     SKILL row
-    ======================================  ==========  ================================
-    ``caller_forced_shell_command``          wrapper     row 6 (explicit caller choice)
-    ``caller_forced_register_run``            decorate    (the same override, other way)
-    ``non_python_entry_point``                wrapper     row 3 (shell script / binary)
-    ``signature_rewriting_decorator``         wrapper     rows 4 + 5 (hydra/click/typer)
-    ``no_decoratable_function``               wrapper     (all top-level code)
-    ``body_parses_argv``                      wrapper     row 2 (an argparse ``main()``)
-    ``kwargs_signature``                      decorate    row 1 (the default)
-    ======================================  ==========  ================================
+    =====================================  ========  ==============================
+    Rule id                                Pathway   SKILL row
+    =====================================  ========  ==============================
+    ``caller_forced_shell_command``         wrapper   row 6 (explicit caller choice)
+    ``caller_forced_python_module``         module    row 2's ``/ python_module``
+    ``caller_forced_register_run``          decorate  (the same override, row 1's
+                                                     kind) — REFUSES when the
+                                                     function carries a
+                                                     signature-rewriting
+                                                     decorator or is not a
+                                                     decoratable Python def
+    ``non_python_entry_point``              wrapper   row 3 (shell script / binary)
+    ``signature_rewriting_decorator``       wrapper   rows 4 + 5 (hydra/click/typer)
+    ``no_decoratable_function``             wrapper   (all top-level code)
+    ``body_parses_argv``                    wrapper   row 2 (an argparse ``main()``)
+    ``kwargs_signature``                    decorate  row 1 (the default)
+    =====================================  ========  ==============================
 
-    The caller override is evaluated FIRST rather than last (the prose
-    lists it last). That is deliberate: an override that loses to a
-    detected row is not an override. It changes no outcome the table
-    decides — the row only ever fires when the caller stated a kind.
+    The caller override rows are evaluated FIRST rather than last (the
+    prose lists the override last). That is deliberate: an override that
+    loses to a detected row is not an override. Pinned by
+    ``test_override_first_beats_a_detected_row`` — relocating these rows
+    below the detected ones turns that test red.
 
     Over-refusal into the wrapper is SAFE by design (the wrapper always
     works); decorating through a signature-rewriting decorator silently
     produces an executor the framework cannot introspect. So each
     wrapper row is checked before the decorate default.
+
+    ``caller_forced_register_run`` is the one override that cannot simply
+    win, because the outcome it asks for is the unsafe one the ordering
+    invariant exists to prevent: ``@register_run`` cannot see through
+    ``@hydra.main`` / a consuming ``@click.command``. Silently rerouting it
+    to the wrapper would violate override-first; letting it through would
+    ship an un-introspectable executor. So it is a NAMED REFUSAL
+    (``SpecInvalid``) stating both remedies — the caller decides, which is
+    what an override is for.
     """
     if caller_entry_point_kind == "shell_command":
         return "wrapper", "caller_forced_shell_command"
+    if caller_entry_point_kind == "python_module":
+        return "module", "caller_forced_python_module"
     if caller_entry_point_kind == "register_run":
+        _refuse_unsafe_forced_register_run(entry)
         return "decorate", "caller_forced_register_run"
     if entry.argv_kind in _NON_PYTHON_ARGV_KINDS or not entry.path.endswith(".py"):
         return "wrapper", "non_python_entry_point"
@@ -665,6 +760,82 @@ def _derive_run_name(path: str) -> str:
     return candidate
 
 
+def _dotted_module(root: Path, path: str) -> str | None:
+    """The dotted module name for *path*, or ``None`` when it isn't importable.
+
+    The ``python_module`` entry point is imported with the CAMPAIGN DIR on
+    ``sys.path`` (``interview._validate_python_module_entry`` prepends it,
+    matching the cluster's ``$REPO_DIR`` on ``PYTHONPATH``). So a dotted
+    name only resolves when the file is reachable as a package chain FROM
+    THE REPO ROOT: either a top-level module (``train.py`` → ``train``) or
+    inside directories that each carry an ``__init__.py``
+    (``pkg/cli/train.py`` → ``pkg.cli.train``).
+
+    Returns ``None`` — so no ``python_module`` target is offered — for a
+    ``src``-layout package (``src/mypkg/train.py`` is importable as
+    ``mypkg.train`` only once installed or with ``src/`` on the path, which
+    the campaign dir is not), for a non-``.py`` path, and for any segment
+    that is not a Python identifier. Offering an unimportable dotted name
+    would just move the failure to the interview's own validator.
+    """
+    p = Path(path)
+    if p.suffix != ".py" or p.name == "__init__.py":
+        return None
+    parts = [*p.parent.parts, p.stem]
+    if not all(_IDENTIFIER_RE.match(part) for part in parts):
+        return None
+    # Every intermediate directory must be a real package from the root.
+    current = root
+    for part in p.parent.parts:
+        current = current / part
+        if not (current / "__init__.py").is_file():
+            return None
+    return ".".join(parts)
+
+
+def _python_module_alternative(root: Path, entry: _EntryPoint) -> dict[str, str] | None:
+    """The ``python_module`` target SKILL.md:98 offers for the same row, or None.
+
+    A DISCLOSURE only. Code never selects ``python_module`` on its own: what
+    separates it from direct decoration is "may we edit this file" (vendor
+    code, a read-only checkout), which is caller judgment and not a repo
+    fact. Naming the derived target here is the difference between an
+    undisclosed gap and an explicit ask.
+    """
+    if entry.function is None:
+        return None
+    module = _dotted_module(root, entry.path)
+    if module is None:
+        return None
+    return {"module": module, "function": entry.function}
+
+
+def _resolve_module_target(root: Path, entry: _EntryPoint, path: str) -> dict[str, str]:
+    """Resolve the ``python_module`` dotted target, or refuse by name.
+
+    The forced-``python_module`` counterpart of
+    :func:`_python_module_alternative`: same derivation, but an
+    unimportable result is a named ``SpecInvalid`` rather than a silent
+    absence, because the caller explicitly asked for this pathway.
+    """
+    target = _python_module_alternative(root, entry)
+    if target is not None:
+        return target
+    raise errors.SpecInvalid(
+        f"entry_point_kind='python_module' cannot apply to {path!r}: no dotted "
+        "module name is importable with the campaign dir on sys.path (a "
+        "src-layout package, a directory without __init__.py, a non-Python "
+        "path, or no resolved entry function)",
+        remediation=(
+            "A python_module entry point must import as "
+            "`<dotted.module>:<function>` from the repo root — the same path the "
+            "cluster puts on PYTHONPATH. Add the missing __init__.py, move the "
+            "module under an importable package, or drop entry_point_kind and "
+            "let the table route this to direct decoration / the wrapper."
+        ),
+    )
+
+
 def _argv_head(path: str, argv_kind: str) -> list[str]:
     """The leading argv elements code CAN compose, per SKILL.md:136-140.
 
@@ -747,16 +918,33 @@ def _intent_ask(missing: Sequence[str]) -> str:
     )
 
 
-def _uncovered_ask(uncovered: Sequence[str], run_name: str) -> str:
-    """The precise, named ask for each uncovered required entry-point param."""
+def _uncovered_ask(uncovered: Sequence[str], run_name: str, pathway: str) -> str:
+    """The precise, named ask for each uncovered required entry-point param.
+
+    The remedy is pathway-dependent: ``register_run`` / ``shell_command``
+    both carry ``fixed_params`` on the wire, ``python_module`` does not (its
+    shape is only ``{kind, module, function}``), so naming ``fixed_params``
+    there would be an unsatisfiable ask.
+    """
+    if pathway == "module":
+        remedy = (
+            "A python_module entry point carries no fixed_params on the wire "
+            "(its shape is {kind, module, function}), so give each param a "
+            "default in the function's own signature — python_module "
+            "introspects the real signature — or switch to "
+            "entry_point_kind='register_run' / 'shell_command', which do carry "
+            "fixed_params."
+        )
+    else:
+        remedy = "Set each as a constant in fixed_params."
     return (
         f"{run_name} requires {len(uncovered)} param(s) the task_generator does "
         f"not vary and the signature does not default: {', '.join(uncovered)}. "
         "Every task would fail on them (validate-executor-signatures refuses "
-        "uncovered_required_param at submit). Set each as a constant in "
-        "fixed_params. Code will not invent one: a param with no default and no "
-        "caller value is a real ambiguity, and a fabricated constant silently "
-        "changes what the experiment computes."
+        f"uncovered_required_param at submit). {remedy} Code will not invent "
+        "one: a param with no default and no caller value is a real ambiguity, "
+        "and a fabricated constant silently changes what the experiment "
+        "computes."
     )
 
 
@@ -794,6 +982,7 @@ def _needs_wrapper_argv(
     run_name: str,
     missing: Sequence[str],
     missing_intent: Sequence[str],
+    python_module_alternative: dict[str, str] | None,
 ) -> dict[str, Any]:
     """Build the ``needs_wrapper_argv`` terminal shape. Nothing has been written."""
     why = {
@@ -815,6 +1004,15 @@ def _needs_wrapper_argv(
         "(str/int/float/bool). A guessed flag name fails every task, and the "
         "canary would only catch it after the submit round-trip."
     )
+    if python_module_alternative is not None:
+        target = f"{python_module_alternative['module']}:{python_module_alternative['function']}"
+        ask += (
+            " ALTERNATIVE (SKILL.md:98 offers it for this row): the entry point is "
+            f"importable as {target}, so entry_point_kind='python_module' targets "
+            "the function by dotted path with NO argv template and NO edit to the "
+            "file. Code does not choose it for you — whether the file may be "
+            "edited is caller judgment, not a repo fact."
+        )
     if missing_intent:
         ask += (
             " Also still missing (gather in the same exchange): " + ", ".join(missing_intent) + "."
@@ -828,6 +1026,7 @@ def _needs_wrapper_argv(
         "argv_head": head,
         "missing_fields": list(missing),
         "missing_intent_fields": list(missing_intent),
+        "python_module_alternative": python_module_alternative,
         "ask": ask,
     }
 
@@ -968,8 +1167,31 @@ def wrap_entry_point_auto(
 
     missing_intent = _missing_intent_fields(spec)
 
+    # 4b. the python_module pathway (caller override only) resolves its dotted
+    #     target now, so an unimportable one is refused before anything else.
+    module_target: dict[str, str] | None = None
+    if pathway == "module":
+        module_target = _resolve_module_target(root, entry, path)
+        # ``_PythonModuleEntry`` declares only {kind, module, function} with
+        # extra="forbid" — it has NO fixed_params field, so a constant supplied
+        # here could only be silently dropped. Refuse instead of dropping.
+        if spec.fixed_params:
+            raise errors.SpecInvalid(
+                "fixed_params is not representable on a python_module entry "
+                f"point (supplied: {sorted(spec.fixed_params)}); the wire shape "
+                "carries only {kind, module, function}",
+                remediation=(
+                    "Give the parameter a default in the function's own "
+                    "signature (python_module introspects the real signature), "
+                    "or use entry_point_kind='register_run' / 'shell_command', "
+                    "both of which carry fixed_params."
+                ),
+            )
+
     # 5. the wrapper pathway needs a caller argv + typed signature. Escalate
-    #    with the intent gap DISCLOSED so one exchange gathers everything.
+    #    with the intent gap DISCLOSED so one exchange gathers everything —
+    #    and with the python_module alternative SKILL.md:98 offers for the
+    #    same row NAMED, so its non-derivability is disclosed, not absent.
     if pathway == "wrapper":
         missing_wrapper = [
             field
@@ -983,6 +1205,7 @@ def wrap_entry_point_auto(
                 run_name=run_name,
                 missing=missing_wrapper,
                 missing_intent=missing_intent,
+                python_module_alternative=_python_module_alternative(root, entry),
             )
 
     # 6. the frozen-YAML convention scan (a pure read; caller override wins,
@@ -1008,13 +1231,15 @@ def wrap_entry_point_auto(
             partition=None,
         )
 
-    # 8. the fixed-params partition. On the decoration pathway the params
-    #    come from the function's real signature; on the wrapper pathway the
-    #    caller's typed `signature` IS the param inventory (a wrapper param
-    #    has no default — the wrapper always passes what it is given).
+    # 8. the fixed-params partition. On the decoration AND python_module
+    #    pathways the params come from the function's real signature (that is
+    #    exactly what python_module exists for — the framework introspects the
+    #    undecorated function); on the wrapper pathway the caller's typed
+    #    `signature` IS the param inventory (a wrapper param has no default —
+    #    the wrapper always passes what it is given).
     fixed_params = dict(spec.fixed_params or {})
     axis = _axis_params(task_generator)
-    if entry.func_node is not None and pathway == "decorate":
+    if entry.func_node is not None and pathway in ("decorate", "module"):
         declared, defaulted, var_kw = _declared_params(entry.func_node)
     else:
         declared, defaulted, var_kw = list(spec.signature or {}), set(), False
@@ -1029,7 +1254,7 @@ def wrap_entry_point_auto(
     if partition.uncovered_params:
         return _needs_intent(
             missing=[f"entry_point.fixed_params.{name}" for name in partition.uncovered_params],
-            ask=_uncovered_ask(partition.uncovered_params, run_name),
+            ask=_uncovered_ask(partition.uncovered_params, run_name, pathway),
             pathway=pathway,
             entry=entry,
             run_name=run_name,
@@ -1048,15 +1273,31 @@ def wrap_entry_point_auto(
         already_decorated = bool(result["already_decorated"])
         import_added = bool(result["import_added"])
 
-    # 10. compose the interview_spec fragment.
-    entry_point_kind = "register_run" if pathway == "decorate" else "shell_command"
-    entry_block: dict[str, Any] = {"kind": entry_point_kind, "run_name": run_name}
-    if entry_point_kind == "shell_command":
-        entry_block["argv"] = list(spec.argv or [])
-        entry_block["signature"] = dict(spec.signature or {})
-        entry_block["frozen_configs"] = frozen_configs
-    if fixed_params:
-        entry_block["fixed_params"] = fixed_params
+    # 10. compose the interview_spec fragment. All THREE InterviewSpec
+    #     entry-point kinds are reachable; python_module carries {module,
+    #     function} instead of a run_name (its wire shape has no run_name —
+    #     the dotted target IS the identity).
+    entry_point_kind = {"decorate": "register_run", "wrapper": "shell_command"}.get(
+        pathway, "python_module"
+    )
+    entry_block: dict[str, Any]
+    if entry_point_kind == "python_module":
+        # Re-derive rather than assert: the derivation is pure, and step 4b
+        # already refused every input for which it returns None.
+        target = module_target or _resolve_module_target(root, entry, path)
+        entry_block = {
+            "kind": "python_module",
+            "module": target["module"],
+            "function": target["function"],
+        }
+    else:
+        entry_block = {"kind": entry_point_kind, "run_name": run_name}
+        if entry_point_kind == "shell_command":
+            entry_block["argv"] = list(spec.argv or [])
+            entry_block["signature"] = dict(spec.signature or {})
+            entry_block["frozen_configs"] = frozen_configs
+        if fixed_params:
+            entry_block["fixed_params"] = fixed_params
 
     return {
         "onboarded": True,
