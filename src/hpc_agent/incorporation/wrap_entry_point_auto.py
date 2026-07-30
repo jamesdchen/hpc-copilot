@@ -135,6 +135,7 @@ from hpc_agent._wire.actions.wrap_entry_point_auto import (
     WrapEntryPointAutoInput,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -1166,6 +1167,162 @@ def _needs_wrapper_argv(
     }
 
 
+# ── the onboard chain's block surface (P2.c) ─────────────────────────────
+
+
+def _block_surface(
+    *,
+    stage_reached: str,
+    needs_decision: bool,
+    brief: dict[str, Any],
+    next_block: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The four block-surface keys, built in ONE place.
+
+    Every caller below passes ``stage_reached`` / ``needs_decision`` as EXPLICIT
+    literal kwargs — never a ``**kwargs`` splat and never a computed name — because
+    the bare-``y`` boundary census (``tests/contracts/test_bare_y_coverage.py``)
+    reads those two keywords off the call site by AST. A splat here would make the
+    census silently blind to this block's parks, which is the exact
+    "a census that under-counts stops guarding" failure it exists to prevent.
+    """
+    return {
+        "stage_reached": stage_reached,
+        "needs_decision": needs_decision,
+        "brief": brief,
+        "next_block": next_block,
+    }
+
+
+def _escalation_brief(shape: dict[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    """Project *shape*'s own escalation fields into the park's ONE composed ask.
+
+    The park brief is a PROJECTION, never a re-derivation: every value here was
+    already computed by the composite (the tie candidates, the missing field list,
+    the mechanically extracted argv params, the composed ``ask`` sentence). A park
+    that re-asked for something the block already holds is precisely the
+    contract-taught-by-refusal defect this chain closes.
+    """
+    return {key: shape[key] for key in keys if shape.get(key) is not None}
+
+
+#: Per-escalation, the fields of the terminal shape that make up its ask. Listed
+#: rather than "everything except the discriminator" so a new field has to be
+#: classified into (or deliberately out of) the human-facing ask.
+_PICK_BRIEF_KEYS = ("reason", "candidates", "resolve_with", "ask", "entry_point_path")
+_INTENT_BRIEF_KEYS = (
+    "missing_fields",
+    "never_invented",
+    "ask",
+    "pathway",
+    "entry_point_path",
+    "run_name",
+    "partition",
+)
+_ARGV_BRIEF_KEYS = (
+    "argv_kind",
+    "entry_point_path",
+    "run_name",
+    "argv_head",
+    "argv_extraction",
+    "argv_params",
+    "missing_fields",
+    "missing_intent_fields",
+    "python_module_alternative",
+    "ask",
+)
+
+
+def _attach_block_surface(
+    shape: dict[str, Any], *, spec: WrapEntryPointAutoInput | None
+) -> dict[str, Any]:
+    """Stamp the block surface onto whichever terminal shape the composite returned.
+
+    ONE seat, four (really five) outcomes:
+
+    * ``onboarded`` → no decision, and the successor is the ``interview`` verb
+      whose COMPLETE input spec is composed from the fragment this call built plus
+      the opaque ``audited_source`` carry (:func:`block_chain.compose_successor_spec`).
+    * ``needs_pick`` / ``needs_intent`` → HUMAN parks. Both are judgments the recon
+      named: a wrong entry-point pick is non-recoverable without the user noticing,
+      and the intent fields are ``REQUIRED_CALLER_FIELDS``.
+    * ``needs_wrapper_argv`` → split by the extraction verdict the composite already
+      carries. ``extracted`` (the params were read mechanically off the AST) is the
+      AGENT park: what is owed is TRANSCRIPTION of a code-produced list into an
+      argv template, which is authorship, not authorization. Anything else is
+      ``needs_wrapper_argv_unsupported``, a HUMAN park — with nothing extracted, the
+      flag names are the caller's knowledge of their own tool and a guess fails
+      every task.
+
+    The split is computed from ``argv_params`` (``_candidate_surface`` normalizes a
+    non-``extracted`` verdict to ``None``), so it reads the SAME evidence the ask
+    sentence quotes — the two can never disagree about whether params were read.
+    """
+    audited_source = getattr(spec, "audited_source", None) if spec is not None else None
+    if shape.get("onboarded"):
+        out = dict(shape)
+        if isinstance(audited_source, dict) and audited_source:
+            out["audited_source"] = dict(audited_source)
+        return {
+            **out,
+            **_block_surface(
+                stage_reached="onboarded",
+                needs_decision=False,
+                brief={},
+                next_block=next_block_hint(
+                    "wrap-entry-point-auto",
+                    "onboarded",
+                    why=(
+                        "the entry point, pathway and params are resolved — persist "
+                        "the intent and materialize tasks.py."
+                    ),
+                    interview_spec=out.get("interview_spec"),
+                    audited_source=out.get("audited_source"),
+                ),
+            ),
+        }
+    if shape.get("needs_pick"):
+        return {
+            **shape,
+            **_block_surface(
+                stage_reached="needs_pick",
+                needs_decision=True,
+                brief=_escalation_brief(shape, _PICK_BRIEF_KEYS),
+                next_block=None,
+            ),
+        }
+    if shape.get("needs_intent"):
+        return {
+            **shape,
+            **_block_surface(
+                stage_reached="needs_intent",
+                needs_decision=True,
+                brief=_escalation_brief(shape, _INTENT_BRIEF_KEYS),
+                next_block=None,
+            ),
+        }
+    brief = _escalation_brief(shape, _ARGV_BRIEF_KEYS)
+    if shape.get("argv_params"):
+        return {
+            **shape,
+            **_block_surface(
+                stage_reached="needs_wrapper_argv",
+                needs_decision=True,
+                brief=brief,
+                next_block=None,
+            ),
+        }
+    return {
+        **shape,
+        **_block_surface(
+            stage_reached="needs_wrapper_argv_unsupported",
+            needs_decision=True,
+            brief=brief,
+            next_block=None,
+        ),
+    }
+
+
 # ── the composite ────────────────────────────────────────────────────────
 
 
@@ -1206,6 +1363,26 @@ def _needs_wrapper_argv(
     agent_facing=True,
 )
 def wrap_entry_point_auto(
+    experiment_dir: Path,
+    *,
+    spec: WrapEntryPointAutoInput | None = None,
+) -> dict[str, Any]:
+    """Run detect → pathway → partition → decorate, and stamp the block surface.
+
+    The ``onboard`` chain's middle block (P2.c). The composite body is unchanged
+    (:func:`_wrap_entry_point_auto_impl`); this seat adds the ONE block surface
+    every shape carries — ``stage_reached`` / ``needs_decision`` / the composed
+    park ``brief`` / ``next_block`` — so the driver can sequence it. Keeping the
+    stamp in ONE place (rather than in each of the four terminal builders) is what
+    makes "which actor answers this shape" a single auditable table.
+    """
+    return _attach_block_surface(
+        _wrap_entry_point_auto_impl(experiment_dir, spec=spec),
+        spec=spec,
+    )
+
+
+def _wrap_entry_point_auto_impl(
     experiment_dir: Path,
     *,
     spec: WrapEntryPointAutoInput | None = None,

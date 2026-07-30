@@ -128,6 +128,19 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "evidence that the ask was met is the FILE ON DISK, which the next tick "
         "re-reads; no journaled approval is sought and none is ever consumed."
     ),
+    ("wrap-entry-point-auto", "needs_wrapper_argv"): (
+        "the onboard chain's second AGENT park (``block_chain.AGENT_PARKS``, P2.c). "
+        "``detect-entry-point`` already read the CLI parameters mechanically off the "
+        "AST and carried them through on ``argv_params``; what is owed is their "
+        "TRANSCRIPTION into an argv template + typed signature, which is AUTHORSHIP, "
+        "not authorization. Nothing is greenlit and nothing is spent, so "
+        "``greenlight_target`` returns None by construction — a bare ``y`` here "
+        "would advance into ``interview`` under a wrapper that still has no argv, "
+        "and every task would fail on the missing flags. The sibling stage "
+        "``needs_wrapper_argv_unsupported`` is a HUMAN park with a chain-forward "
+        "override target, and it is a SEPARATE stage precisely so this one can be "
+        "registered as the agent's without a runtime sniff."
+    ),
     ("notebook-status", "sections_pending"): (
         "the audit's SIGN-OFF rendezvous, and the whole point of the T8 tier is that "
         "agreement here is NOT one keystroke: the human types a ``notebook-sign-off`` "

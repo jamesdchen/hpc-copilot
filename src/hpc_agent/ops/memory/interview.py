@@ -40,6 +40,7 @@ from hpc_agent import RepoLayout, errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.io import atomic_locked_update, atomic_write_json
 from hpc_agent.infra.time import utcnow
 
@@ -101,8 +102,33 @@ def _assert_derived_executor_runnable(executor_cmd: str, *, kind: str) -> None:
 
 
 def _interview_arg_pre(ns: Namespace) -> dict[str, Any]:
-    """Resolve --campaign-dir to an absolute Path for record_interview."""
-    return {"campaign_dir": Path(ns.campaign_dir).resolve()}
+    """Resolve the campaign workdir to an absolute Path for record_interview.
+
+    ``--campaign-dir`` is the historical, explicit flag and ALWAYS wins. It became
+    optional when ``interview`` joined the ``onboard`` block chain (P2.c): the
+    block-drive driver invokes every span with the SAME argv
+    (``--spec <file> --experiment-dir <dir>`` — ``block_drive._block_verb_argv``),
+    so a verb that could only be addressed by a bespoke flag could never be a
+    chained span. Falling back to ``--experiment-dir`` is not a new concept — for
+    an onboarding repo the campaign workdir IS the experiment dir (that is where
+    ``interview.json`` and ``.hpc/tasks.py`` are read from by every downstream
+    block) — and no existing caller changes behaviour, because an explicit
+    ``--campaign-dir`` still takes precedence.
+
+    Neither supplied is a loud :class:`errors.SpecInvalid` naming both remedies,
+    never a silent cwd default: writing ``interview.json`` into whatever directory
+    the process happened to start in is the class of silent misplacement this
+    refuses.
+    """
+    campaign_dir = getattr(ns, "campaign_dir", None) or getattr(ns, "experiment_dir", None)
+    if not campaign_dir:
+        raise errors.SpecInvalid(
+            "interview: no campaign workdir. Pass --campaign-dir <dir> (explicit, "
+            "always wins) or --experiment-dir <dir> (the block-chain form: for an "
+            "onboarding repo the campaign workdir IS the experiment dir). There is "
+            "no cwd default — interview.json must never land somewhere nobody named."
+        )
+    return {"campaign_dir": Path(campaign_dir).resolve()}
 
 
 def _compose_audit_template_default(
@@ -335,15 +361,24 @@ def _compose_run_name_default(ep: dict[str, Any], campaign_dir: Path) -> dict[st
         spec_arg=True,
         spec_model=InterviewSpec,
         schema_ref=SchemaRef(input="interview"),
+        # ``experiment_dir_arg`` is injected so the block-drive driver can run this
+        # verb as a chained span (P2.c): every span is invoked with the SAME argv,
+        # ``--spec <file> --experiment-dir <dir>``. The kwarg never reaches
+        # ``record_interview`` (``_filter_to_signature`` drops what the signature
+        # does not accept); ``arg_pre`` is what maps it onto ``campaign_dir``, and
+        # an explicit ``--campaign-dir`` still wins.
+        experiment_dir_arg=True,
         args=(
             CliArg(
                 "--campaign-dir",
                 type=str,
-                required=True,
+                required=False,
                 help=(
                     "Campaign workdir; must already contain a tasks.py written by the "
                     "interview agent. interview.json (and optionally meta.json) is "
-                    "written into this directory."
+                    "written into this directory. Optional since the onboard chain "
+                    "landed: --experiment-dir is the fallback (for an onboarding repo "
+                    "they are the same directory). Explicit --campaign-dir wins."
                 ),
             ),
         ),
@@ -688,13 +723,74 @@ def record_interview(
     if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
         artifacts.append("meta.json")
 
+    # ── the onboard chain's EXIT edge (P2.c) ─────────────────────────────────
+    # ``interviewed`` is the interview's ONE terminator: everything it could
+    # refuse has already raised. ``needs_decision`` is literally False — nothing
+    # is asked here, so this is not a park and the census correctly ignores it.
     return {
         "campaign_dir": str(campaign_dir.resolve()),
         "artifacts": artifacts,
         "total_tasks": total_tasks,
         "cmd_sha": cmd_sha,
         "preview": preview,
+        "stage_reached": "interviewed",
+        "needs_decision": False,
+        "next_block": next_block_hint(
+            "interview",
+            "interviewed",
+            why=(
+                "the intent is journaled and tasks.py resolves — walk the submit "
+                "ambiguities the interview did not already answer."
+            ),
+            walk=_compose_submit_walk(intent),
+        ),
     }
+
+
+def _compose_submit_walk(intent: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``walk-submit-ambiguities`` inputs the PERSISTED intent already answers.
+
+    The onboard chain's whole point at this hop: ``submit-s1``'s walk must not
+    re-ask what the interview just journaled. Every value here is REUSE of a
+    record this call wrote one line earlier —
+
+    * ``goal`` / ``task_generator``: the two ``REQUIRED_CALLER_FIELDS``, carried
+      verbatim from the validated intent (never re-derived, never defaulted);
+    * ``tasks_py_present`` / ``entry_point_resolved``: facts about what this call
+      just materialized and validated, so they are asserted from THIS invocation's
+      own products rather than re-probed;
+    * ``configured_clusters``: read through the real ``clusters.yaml`` loader — the
+      same resolution order every transport-consuming verb sees — so a single
+      configured cluster auto-uses and a multi-cluster repo surfaces the ambiguity
+      with its safe_default instead of silently picking.
+
+    Fail-open on the cluster read ALONE: an unreadable config yields an empty list,
+    which surfaces the cluster as an ambiguity at S1 (a decision, correctly
+    escalated) rather than failing the interview that already succeeded.
+    """
+    configured: list[str] = []
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        loaded = load_clusters_config()
+        configured = sorted(str(key) for key in loaded) if isinstance(loaded, dict) else []
+    except Exception:  # noqa: BLE001 — a config surprise escalates at S1, never here
+        configured = []
+    walk: dict[str, Any] = {
+        "configured_clusters": configured,
+        "tasks_py_present": True,
+        "entry_point_resolved": "entry_point" in intent,
+    }
+    goal = intent.get("goal")
+    if isinstance(goal, str) and goal:
+        walk["goal"] = goal
+    task_generator = intent.get("task_generator")
+    if isinstance(task_generator, dict) and task_generator:
+        walk["task_generator"] = task_generator
+    cluster_target = intent.get("cluster_target")
+    if isinstance(cluster_target, dict) and isinstance(cluster_target.get("cluster"), str):
+        walk["cluster"] = cluster_target["cluster"]
+    return walk
 
 
 def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_tasks: int) -> bool:

@@ -61,6 +61,28 @@ _AUDIT_SEAT: dict[str, Any] = {
     "source": _AUDIT_SOURCE,
     "template": _AUDIT_TEMPLATE,
 }
+# The onboard chain's carried products (P2.c): the audit provenance block the
+# handoff projects and threads OPAQUE through wrap into the interview, the sweep
+# recipe, and the submittable interview fragment wrap composes.
+_AUDITED_SOURCE: dict[str, Any] = {
+    "source": _AUDIT_SOURCE,
+    "audit_id": _AUDIT_ID,
+    "template": _AUDIT_TEMPLATE,
+    "input_roots": ["data"],
+    "source_roots": ["src"],
+    "output_roots": [],
+}
+_TASK_GENERATOR: dict[str, Any] = {
+    "kind": "enumerated",
+    "params": {"items": [{"radius": 1}, {"radius": 2}]},
+}
+_INTERVIEW_FRAGMENT: dict[str, Any] = {
+    "goal": "sweep the halo radius against convergence",
+    "task_count": 2,
+    "task_generator": _TASK_GENERATOR,
+    "entry_point": {"kind": "register_run", "run_name": "train"},
+    "produced_by": {"kind": "human", "operator": "jdc"},
+}
 
 
 # The representative ``**spec_hint`` kwargs each terminator passes to
@@ -109,6 +131,32 @@ _REPRESENTATIVE_HINT_KWARGS: dict[tuple[str, str], dict[str, Any]] = {
     ("notebook-auto-clear", "cleared"): _AUDIT_SEAT,
     ("notebook-audit-view", "viewed"): _AUDIT_SEAT,
     ("notebook-status", "audit_passed"): _AUDIT_SEAT,
+    # onboard family (P2.c) — the audit→submit bridge. Also UNGATED end to end,
+    # so every hint here is the successor's COMPLETE input spec: the projection's
+    # derivable fields (handoff), the composite's own submittable interview
+    # fragment (wrap), and the walk the persisted intent already answers
+    # (interview). A missing/extra field is an instant mid-chain SpecInvalid, and
+    # for this family the successors have BIG models (InterviewSpec) — exactly the
+    # run-#11 bounce class at its worst.
+    ("audit-handoff", "placeholders_resolvable"): {
+        "goal": "sweep the halo radius against convergence",
+        "source": _AUDIT_SOURCE,
+        "run_name": "train",
+        "audited_source": _AUDITED_SOURCE,
+    },
+    ("wrap-entry-point-auto", "onboarded"): {
+        "interview_spec": _INTERVIEW_FRAGMENT,
+        "audited_source": _AUDITED_SOURCE,
+    },
+    ("interview", "interviewed"): {
+        "walk": {
+            "goal": "sweep the halo radius against convergence",
+            "task_generator": _TASK_GENERATOR,
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "configured_clusters": ["hoffman2"],
+        },
+    },
 }
 
 

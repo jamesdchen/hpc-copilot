@@ -1111,3 +1111,38 @@ class InterviewResult(BaseModel):
     preview: _InterviewPreview = Field(
         description="Three sample resolve() calls. Each is a dict per hpc-agent's pre-existing tasks.py contract.",
     )
+
+    # ── the onboard chain's EXIT edge (P2.c) ─────────────────────────────────
+    stage_reached: Literal["interviewed"] = Field(
+        default="interviewed",
+        description=(
+            "The one terminator this block has: the intent is journaled and "
+            "tasks.py resolves. Every other outcome RAISES (a count mismatch, an "
+            "unrunnable executor, an ambiguous audit template), so there is no "
+            "second stage to declare."
+        ),
+    )
+    needs_decision: Literal[False] = Field(
+        default=False,
+        description=(
+            "Always false: reaching this result means nothing is being asked. "
+            "The judgment points of the onboard chain sit UPSTREAM (the goal at "
+            "audit-handoff, the pick / intent / argv escalations at "
+            "wrap-entry-point-auto) and the next one DOWNSTREAM (submit-s1's "
+            "greenlight). This block is pure transcription."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "`{verb, why, spec_hint}` naming `submit-s1` — the onboard chain's "
+            "exit into the submit chain. The spec_hint IS submit-s1's complete "
+            "input spec: a `walk` block composed from the intent just journaled, "
+            "so the ambiguity walk never re-asks what the interview answered. "
+            "`resolve` is deliberately absent — its remote_path / "
+            "build-submit-spec fields are caller-owned deployment facts no "
+            "interview record holds, so S1 lands on its PRE-RESOLVE boundary and "
+            "parks (with the standing-consent offer) rather than being handed a "
+            "fabricated spec."
+        ),
+    )

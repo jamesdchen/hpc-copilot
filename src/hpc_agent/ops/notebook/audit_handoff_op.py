@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
@@ -66,6 +67,7 @@ from hpc_agent._wire.queries.audit_handoff import (
     HandoffPlaceholder,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.canonical import read_recorded_config
 from hpc_agent.state.notebook_audit import read_audit_intent
 
@@ -327,6 +329,49 @@ def _scan_result_writes(tree: ast.Module) -> tuple[list[str], list[str]]:
     return sorted(candidates), sorted(unverifiable)
 
 
+# ── the onboard chain's intent ask (P2.c) ─────────────────────────────────────
+
+
+def _intent_ask_brief(
+    spec: AuditHandoffSpec, task_axes: list[str], disclosures: list[str]
+) -> dict[str, Any]:
+    """The ONE composed ask the ``needs_intent`` park relays.
+
+    Composed entirely from what the projection ALREADY derived — the audit's own
+    task-axis utterances (guidance for the goal sentence, never a draft of it) and
+    its honest disclosures — so the seam never asks the human for something it
+    holds. It carries no answer menu and no greenlight target: what is owed is an
+    UTTERANCE (``goal``), which is why the boundary sits on the bare-``y`` census
+    allowlist rather than resolving a successor.
+
+    Deliberately does NOT propose a goal, even from the task axes. A goal invented
+    here becomes a journaled fact the moment the caller passes the draft to the
+    interview — the exact ``halo_expr`` laundering class this verb's whole
+    never-guess posture exists to prevent.
+    """
+    brief: dict[str, Any] = {
+        "audit_id": spec.audit_id,
+        "source": spec.source,
+        "missing_fields": ["goal"],
+        "ask": (
+            "the audit-open seat recorded no `goal`, and it is a "
+            "REQUIRED_CALLER_FIELD no block in the onboard chain can derive: state "
+            "the one-line goal of this experiment. It is never invented — a goal "
+            "composed by code would become a journaled fact through the interview."
+        ),
+        "answer_via": (
+            "re-open the audit with the goal recorded (notebook-record-config), or "
+            "supply `goal` directly to wrap-entry-point-auto / the interview. There "
+            "is no successor a bare `y` could advance to here."
+        ),
+    }
+    if task_axes:
+        brief["recorded_task_axes"] = list(task_axes)
+    if disclosures:
+        brief["disclosures"] = list(disclosures)
+    return brief
+
+
 # ── the projection ────────────────────────────────────────────────────────────
 
 
@@ -487,6 +532,18 @@ def audit_handoff(*, experiment_dir: Path, spec: AuditHandoffSpec) -> AuditHando
             "across tasks in the task_generator."
         )
 
+    # ── the onboard chain's head edge (P2.c) ─────────────────────────────────
+    # Both stage literals sit in ONE expression so the bare-``y`` census's AST scan
+    # sees each terminator this block can reach. ``goal`` is the ONE field that
+    # decides it: every other placeholder is owned by a LATER onboard block, but a
+    # goal nothing recorded is a REQUIRED_CALLER_FIELD no code in this chain may
+    # invent (the ``halo_expr`` class), so the chain parks HERE — where the ask can
+    # still carry the audit's own task-axis utterances and disclosures.
+    stage_reached: Literal["placeholders_resolvable", "needs_intent"] = (
+        "placeholders_resolvable" if goal else "needs_intent"
+    )
+    needs_decision = goal is None
+    brief = _intent_ask_brief(spec, task_axes, disclosures) if needs_decision else {}
     return AuditHandoffResult(
         audit_id=spec.audit_id,
         goal=goal,
@@ -498,4 +555,22 @@ def audit_handoff(*, experiment_dir: Path, spec: AuditHandoffSpec) -> AuditHando
         unverifiable_result_writes=unverifiable,
         placeholders=placeholders,
         disclosures=disclosures,
+        # ``stage_reached`` / ``needs_decision`` are EXPLICIT call kwargs (never a
+        # ``**kwargs`` splat): the bare-``y`` census reads them off this call site
+        # by AST, and a splat would make it blind to the intent park.
+        stage_reached=stage_reached,
+        needs_decision=needs_decision,
+        brief=brief,
+        next_block=next_block_hint(
+            "audit-handoff",
+            stage_reached,
+            why=(
+                "the audit records answer every field the entry-point resolution "
+                "needs — resolve the pathway, decoration and params."
+            ),
+            goal=goal,
+            source=spec.source,
+            run_name=(entry_point or {}).get("run_name"),
+            audited_source=audited_source,
+        ),
     )

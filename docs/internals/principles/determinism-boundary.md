@@ -95,3 +95,16 @@ Rows accrue per surface as the verbs land; the first two ship with the
   work. The bug class it covered is recorded as knowingly unguarded in
   `docs/plans/backlog-2026-07-17.md` §4 rather than silently dropped.
 - 2026-07-17 — greenlight/unlock kernel-migration RULED A (formally deferred): the BR-14 dispatch investigation proved the fit is absent (no content sha to bind; `reduce` selection semantics would regress the greenlight gate's supersession invariants — a consent hole, not a refactor) and T8 was already migrated. The row's member list now reflects T6+T8 landed, greenlight/unlock deferred-by-ruling. Option B (a non-sha precedence reducer) rejected as a kernel API change without a safety payoff.
+- 2026-07-30 (P2.c) — the AGENT-park row gained its SECOND member:
+  `("wrap-entry-point-auto", "needs_wrapper_argv")`. The doctrine is unchanged
+  (a draft is authorship, not authorization); what this member adds is the
+  demonstration that "authorship" is not a synonym for "drafting prose": what is
+  owed at that boundary is the TRANSCRIPTION of CLI parameters `detect-entry-point`
+  already read mechanically off the AST into an argv template. The split is a
+  registry edit, not a runtime sniff — the non-extractable case emits a DISTINCT
+  stage (`needs_wrapper_argv_unsupported`) that resolves to a human park with a
+  chain-forward override target, precisely so `AGENT_PARKS` stays keyed by
+  `(verb, stage)` and "who answers this" remains a one-line auditable decision.
+  Pinned by `tests/ops/test_onboard_chain.py::test_wrapper_argv_park_is_the_chain_s_second_agent_park`
+  plus the bare-`y` census allowlist entry (an agent park has no greenlight
+  target, so the census DEMANDS the stated reason).

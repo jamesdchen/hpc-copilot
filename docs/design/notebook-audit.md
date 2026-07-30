@@ -324,6 +324,25 @@ Deviations from the plan above, each with its recorded reason:
   regardless); the fixture now renders a menu, and a guard-the-guard test proves
   it, so removing the `actor != "agent"` branch turns the battery red.
 
+- **2026-07-30 (P2.c) — the sign-off park gained the S1 MELD, and the audit
+  chain gained an EXIT.** `notebook-status`'s `sections_pending` brief now
+  carries an OPTIONAL `s1_preview`: `submit-s1`'s own ambiguity walk, run
+  READ-ONLY over the intent `interview.json` already holds (no run minted, no
+  sidecar written, no cluster touched), plus the standing-consent BAR read from
+  the grant vocabulary's one home. The rationale is R-c of
+  `docs/plans/expost-trust-2026-07-30.md` ("parks carry RESULTS, never
+  requests"): the sign-off is the human's last sitting before a submit, and
+  making them return for a second rendezvous to answer a question the
+  deterministic walk can already answer is pure attended latency. ABSENT AND
+  HONEST when no interview exists — the brief gains no key at all, because a
+  plan assembled from the audit records would be a plan the human never authored
+  sitting beside a signature request. NOTHING about the sign-off itself moved:
+  the T8 bar, the `view_sha` recompute, the typed `append-decision` route and
+  the bare-`y` census allowlist entry are byte-identical. The `audit_passed`
+  hand-off now heads the `onboard` chain (`audit-handoff` →
+  `wrap-entry-point-auto` → `interview` → `submit-s1`) rather than ending at a
+  stage-less seam.
+
 - **`notebook-auto-clear` is a NEW mutate verb the plan lacked.** D-attention
   says auto-cleared sections are "journaled as auto_cleared" but no planned
   task owned the agent-facing writer — without it, template-inherited

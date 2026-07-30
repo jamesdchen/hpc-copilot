@@ -29,6 +29,7 @@ cannot pass silently.
 
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
+| onboard chain wire models | `docs/plans/prelude-chain-2026-07-30.md` (Wave P2.c) | Re-emit `audit_handoff.output.json` (4 new block-surface fields), `wrap_entry_point_auto.{input,output}.json` (`audited_source` carry + the `_BlockSurface` mixin on all four discriminated shapes) and `interview.output.json` (`stage_reached`/`needs_decision`/`next_block`); re-bake `operations.json` + the operations/frontmatter indices for `interview`'s CLI-shape change (`--campaign-dir` optional, `--experiment-dir` injected) | `test_schema_models_roundtrip` | P2.c / integration serial rebake |
 
 Row format (binds every future row):
 

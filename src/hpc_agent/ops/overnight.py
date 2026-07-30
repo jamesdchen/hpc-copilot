@@ -86,6 +86,8 @@ __all__ = [
     "compose_consent_placement",
     "compose_overnight_consent",
     "render_grant_line",
+    "STANDING_CONSENT_BAR",
+    "compose_spend_envelope",
     "regrant_offer",
     "regrant_offer_from_status",
     "consumption_identity",
@@ -931,6 +933,82 @@ def render_grant_line(
     if isinstance(expires_at, str) and expires_at:
         parts.append(f"until {expires_at}")
     return ", ".join(parts)
+
+
+#: The D1 BAR, stated once (R1 amendment; R-a offers it one rendezvous earlier).
+#: Rendered beside every standing-consent offer so the two answers a park accepts
+#: can never be confused: a bare ``y`` greenlights THIS boundary and nothing else;
+#: the typed grant line — an utterance the human authors — is what creates standing
+#: authority. Offering the line earlier changes WHEN it is available, never what it
+#: means, and every gate that reads it is byte-unchanged.
+STANDING_CONSENT_BAR: str = (
+    "Two different answers, deliberately: a bare `y` greenlights ONLY this "
+    "boundary (nothing standing is created). TYPING the grant line below is a "
+    "separate, authored act that grants STANDING consent for the envelope it "
+    "names — same tokens, same gates, same caps as at any other rendezvous; only "
+    "the moment of the offer moved earlier."
+)
+
+
+def compose_spend_envelope(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """The FULL spend envelope a standing grant at the S1 boundary would authorize.
+
+    R-a's D1 bar demands that a grant offered at the START discloses what it
+    covers, and "the caps are enforced later" is not a disclosure. So the offer
+    carries the same arithmetic ``submit-s2``'s own brief renders — task count ×
+    walltime × cores, through the ONE estimator (:func:`infra.cost.estimate_core_hours`)
+    — computed from the run's SIDECAR, the record the consent's ``cmd_sha`` binds.
+    One computation, two seats: the number in the offer is the number S2 reports.
+
+    Returns ``None`` when the envelope cannot be computed (no sidecar yet — the
+    PRE-RESOLVE boundary — or an unreadable one). ``None`` is HONEST, and the
+    caller renders the offer without an envelope rather than with a made-up one:
+    a fabricated spend figure beside a consent request is the worst possible
+    disclosure. Never raises — an envelope is disclosure, never load-bearing.
+    """
+    try:
+        from hpc_agent.infra.cost import estimate_core_hours
+        from hpc_agent.state.runs import read_run_sidecar
+
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        return None
+    if not isinstance(sidecar, dict):
+        return None
+    raw_resources = sidecar.get("resources")
+    resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
+    task_count = sidecar.get("task_count")
+    walltime_sec = resources.get("walltime_sec")
+    cpus = resources.get("cpus")
+    if not isinstance(task_count, int) or task_count < 1:
+        return None
+    if not isinstance(walltime_sec, int) or walltime_sec < 1:
+        return None
+    cores = cpus if isinstance(cpus, int) and cpus > 0 else 1
+    try:
+        estimate = estimate_core_hours(
+            total_tasks=task_count,
+            walltime_s=walltime_sec,
+            cores_per_task=cores,
+        )
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        return None
+    envelope: dict[str, Any] = {
+        "task_count": task_count,
+        "walltime_sec": walltime_sec,
+        "cpus": cores,
+        "requested_wall_seconds": task_count * walltime_sec,
+        "est_core_hours": estimate.est_core_hours,
+    }
+    cluster = sidecar.get("cluster")
+    if isinstance(cluster, str) and cluster:
+        envelope["cluster"] = cluster
+    envelope["line"] = (
+        f"spend envelope: {task_count} task(s) x {walltime_sec}s x "
+        f"{envelope['cpus']} core(s) = ~{envelope['est_core_hours']} core-hours "
+        "if the whole chain runs under this grant"
+    )
+    return envelope
 
 
 def regrant_offer_from_status(

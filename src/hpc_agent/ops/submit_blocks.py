@@ -148,43 +148,32 @@ def _fire_speculative_canary(experiment_dir: Path, result: SubmitBlockResult) ->
     orphan drains naturally, nothing is cancelled. Journal-untouched: the detached
     launch writes only the ``_detached/`` handle — no decision / brief record.
 
-    Opt-in via ``HPC_S1_SPECULATE=1`` (the skill / block-drive enables it at the
-    resolved-park; OFF by default so a direct S1 call never surprises with a
-    scheduler submit). Best-effort: any failure is swallowed — speculation is an
-    optimization, never load-bearing for S1's return.
-    """
-    if os.environ.get("HPC_S1_SPECULATE") != "1":
-        return
-    if result.stage_reached != "resolved" or not result.run_id:
-        return
-    resolve = result.brief.get("resolve") if isinstance(result.brief, dict) else None
-    submit_flow = resolve.get("submit_spec") if isinstance(resolve, dict) else None
-    if not isinstance(submit_flow, dict):
-        return
-    try:
-        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
-        from hpc_agent.infra.block_chain import compose_successor_spec
+    CHAIN-DRIVEN since P2.c (2026-07-30). Row 22 shipped this behind
+    ``HPC_S1_SPECULATE=1``, OFF by default — and nothing ever set it, so the
+    canary that was meant to be green before the human answered never fired once.
+    The chain now fires it at the boundary where the ingredients exist (the user
+    ruling "the canary fires while the human reads the proposed experiment"), and
+    the env var survives with its SENSE FLIPPED as the kill switch:
+    ``HPC_S1_SPECULATE=0`` disables. The mechanism is ONE definition shared with
+    the melded audit sign-off park (:func:`hpc_agent.ops.s1_meld.fire_speculative_canary`)
+    so the two boundaries can never speculate differently.
 
-        # Compose the SAME submit-and-verify spec S2 will run (never re-authored):
-        # {"submit": {"submit": submit_flow}} — the outer "submit" IS a
-        # SubmitAndVerifySpec, which submit-speculate embeds verbatim.
-        composed = compose_successor_spec(
-            "submit-s2",
-            spec_hint={"run_id": result.run_id},
-            result_brief=result.brief,
-        )
-        speculate_spec = {"submit": composed["submit"], "detach": False}
-        launch_submit_block_detached(
-            verb="submit-speculate",
-            experiment_dir=str(experiment_dir),
-            spec=speculate_spec,
-        )
-    except Exception:  # noqa: BLE001 — speculation is an optimization, never load-bearing
-        _log.info(
-            "speculative canary at S1 resolved-park for %s skipped (best-effort)",
-            result.run_id,
-            exc_info=True,
-        )
+    The OUTCOME is folded into the brief the human reads (``speculative_canary``),
+    because R-c's "parks carry results" is exactly about not leaving the human to
+    infer from silence whether a canary is in flight. Best-effort: any failure is
+    reported as data, never raised — speculation is an optimization and is never
+    load-bearing for S1's return.
+    """
+    from hpc_agent.ops.s1_meld import fire_speculative_canary
+
+    outcome = fire_speculative_canary(
+        experiment_dir,
+        run_id=result.run_id,
+        brief=result.brief,
+        stage_reached=result.stage_reached,
+    )
+    if isinstance(result.brief, dict):
+        result.brief["speculative_canary"] = outcome
 
 
 # The detached submit blocks (design §3): each spawns a durable worker and
@@ -613,8 +602,32 @@ def submit_s1(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     # input_spec is never used by the worker-exit park — omit it (a partial S1 spec
     # built via model_construct is not always JSON-serializable anyway).
     result = _persist_brief(experiment_dir, _submit_s1_impl(experiment_dir, spec=spec))
+    _record_queue_intake(experiment_dir, result)
     _fire_speculative_canary(experiment_dir, result)
     return result
+
+
+def _record_queue_intake(experiment_dir: Path, result: SubmitBlockResult) -> None:
+    """Record S1's freshly-minted run on the queue intake ledger (P2.c).
+
+    The queue's projection is only as honest as its intake, and until now a run
+    the CHAIN started never arrived on the ledger at all — so ``queue-status``
+    showed an idle queue beside a live run and the wake edge saw retirements with
+    no arrivals. This is the producer call that closes it, at the ONE moment the
+    run first has an identity: S1's fresh resolve.
+
+    UNGATED, by ``queue-run``'s own R2 reasoning — recording that a run exists
+    spends nothing and authorizes nothing; the gates still bind at the run's
+    cluster boundary. IDEMPOTENT on re-entry, through the ledger's own dedup on a
+    run_id-derived token (one item per run_id, forever). Never raises: a run's
+    progress must not depend on the ledger being writable, so the outcome rides
+    the brief as a disclosure and nothing more.
+    """
+    from hpc_agent.state.queue_intake_chain import record_chain_intake
+
+    intake = record_chain_intake(experiment_dir, run_id=result.run_id, origin_block="submit-s1")
+    if intake is not None and isinstance(result.brief, dict):
+        result.brief["queue_intake"] = intake
 
 
 def _deploy_payload_brief(
