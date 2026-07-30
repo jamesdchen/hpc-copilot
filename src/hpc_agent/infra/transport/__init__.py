@@ -42,7 +42,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout
+from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout, SshUnreachable
 from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.remote import (
     RSYNC_TIMEOUT_SEC,
@@ -54,6 +54,7 @@ from hpc_agent.infra.remote import (
 )
 from hpc_agent.infra.ssh_circuit import guarded_call, liveness_probe
 from hpc_agent.infra.ssh_options import (
+    mark_transport_flap,
     rsync_binary,
     run_with_named_pipe_retry,
     ssh_argv,
@@ -120,6 +121,7 @@ from ._disclose import (
     _write_all,  # noqa: F401
     deploy_payload_summary,
     disclose_child_failure,  # noqa: F401
+    disclose_push_mode,  # noqa: F401
     iter_exclude_filtered_files,
     run_with_stage_heartbeat,  # noqa: F401
 )
@@ -1251,16 +1253,41 @@ def rsync_push(
         # One round-trip returns BOTH the remote hash manifest AND the prior
         # push-manifest ``paths`` (``remote_known``) — the prune-plan read folded
         # into leg A (delta-push round-trip Option 1); no separate prior-read dial.
+        probe_status: dict[str, Any] = {}
         remote_manifest, remote_known = (
             _remote_push_manifest(
                 ssh_target=ssh_target,
                 remote_path=remote_path,
                 exclude=exclude,
                 timeout=effective_timeout,
+                probe_status=probe_status,
             )
             if delta_on
             else (None, set())
         )
+        if probe_status.get("failed_on_transport"):
+            # 2026-07-30: leg A (the remote hash walk) is exactly what a flapping
+            # tunnel severs, and degrading to a FULL COPY is the most expensive
+            # possible response — the whole tree re-ships per attempt while the
+            # delta that would have saved it is one healthy round-trip away.
+            # Surface instead, so the bounded staging retry re-attempts the cheap
+            # probe. The safety contract above is untouched: no manifest is
+            # claimed, no prune plan is derived.
+            # STAMPED as a transport flap, not merely described as one: the
+            # staging ladder classifies on the stamp. Describing the cause in
+            # prose and hoping a substring matcher recovers it made this refusal
+            # unretryable — a hard worker kill where the old code at least
+            # shipped a full copy.
+            flap = mark_transport_flap(
+                SshUnreachable(
+                    f"the remote hash-manifest probe for {remote_path} failed on the "
+                    f"transport ({probe_status.get('detail', 'no detail')}); refusing to "
+                    f"degrade a flap into a whole-tree re-ship. The delta is intact and "
+                    f"resumes as soon as the link holds — the bounded staging retry will "
+                    f"re-attempt this one round-trip."
+                )
+            )
+            raise flap from probe_status.get("exception")
         if remote_manifest is not None:
             from hpc_agent.infra.manifest import manifest_delta
 
@@ -1275,6 +1302,17 @@ def rsync_push(
                 n_ship=len(ship),
                 n_local=len(local_manifest.entries),
                 n_reused=len(local_manifest.entries) - len(ship),
+            )
+            # The one honest MODE line every push emits, whichever transport ran
+            # — and the bytes-shipped-vs-bytes-changed substrate the readiness
+            # ledger's efficiency pillar reads (s2-readiness pillar 6).
+            disclose_push_mode(
+                mode="delta-tar",
+                reason="remote content-hash manifest available",
+                n_ship=len(ship),
+                n_unchanged=len(local_manifest.entries) - len(ship),
+                shipped_bytes=shipped_bytes,
+                total_bytes=payload_bytes,
             )
             # Ship the changed/new files (the delta is content-additive — the tar
             # extract runs delete=False and never prunes). ``ship`` may be empty
@@ -1412,6 +1450,14 @@ def rsync_push(
         else:
             reason = "remote content-hash manifest unavailable (first deploy or pre-delta runtime)"
         _disclose_no_rsync(payload_bytes, reason=reason)
+        disclose_push_mode(
+            mode="full-tar",
+            reason=reason,
+            n_ship=None,
+            n_unchanged=0,
+            shipped_bytes=payload_bytes,
+            total_bytes=payload_bytes,
+        )
         # The tar|ssh fallback returns before the _with_ssh_backoff wrap
         # below, so it must consult the per-host circuit breaker itself —
         # on native Windows (no rsync) this IS the live push path.
@@ -1439,6 +1485,18 @@ def rsync_push(
     flags = [rsync_binary(), "-az"]
     if delete:
         flags.append("--delete")
+
+    # The same one-line MODE disclosure the rsync-less paths emit, so "which mode
+    # ran and what did it cost" is one grep on EVERY push, not a mode-dependent
+    # inference (s2-readiness pillar 6's substrate).
+    disclose_push_mode(
+        mode="rsync",
+        reason="rsync on PATH (rsync computes its own delta)",
+        n_ship=None,
+        n_unchanged=None,
+        shipped_bytes=None,
+        total_bytes=payload_bytes,
+    )
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         # Rebuild env each attempt: ssh_env() is re-resolved after a

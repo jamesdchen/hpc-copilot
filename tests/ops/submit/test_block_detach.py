@@ -392,3 +392,96 @@ class TestDetachedWorkerBindsToRunningInterpreter:
 
         assert _agent_launch_prefix(None) == [sys.executable, "-m", "hpc_agent"]
         assert _agent_launch_prefix("") == [sys.executable, "-m", "hpc_agent"]
+
+
+# ── L2 pre-detach PATH gate, wired (attended-latency item 7) ─────────────────
+#
+# The gate's unit behaviour lives in tests/ops/test_path_gate.py; what is pinned
+# HERE is the WIRING — that submit-s2 actually consults it, and where. The suite
+# disables the gate by default so no test dials a fixture host, so these cases
+# turn it back on and seed the readiness ledger (consult-first ⇒ no sensing, no
+# sockets).
+
+
+@pytest.fixture()
+def _gate_on(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """Enable the path gate and isolate the readiness ledger for one test."""
+    from hpc_agent.infra import readiness_sensors as rs
+    from hpc_agent.ops import path_gate
+
+    monkeypatch.delenv(path_gate.GATE_ENV, raising=False)
+    rs.clear_route_cache()
+    rs.clear_readiness_ledger()
+    yield rs
+    rs.clear_readiness_ledger()
+
+
+def _seed(rs, *, cause: str, jumped: bool, host: str) -> None:  # type: ignore[no-untyped-def]
+    """Record a readiness reading the gate will CONSULT instead of sensing."""
+    rs.record_readiness(
+        rs.PathReadiness(
+            route=rs.RouteChain(
+                host=host,
+                hostname=host,
+                proxy_jump=("usc-discovery",) if jumped else (),
+                resolved=True,
+            ),
+            cause=cause,
+            sentence="path dead (hop usc-discovery down); direct alternative OK"
+            if cause.startswith("hop_down")
+            else "",
+        )
+    )
+
+
+def test_s2_dead_path_refuses_before_the_detach(tmp_path: Path, _gate_on) -> None:  # type: ignore[no-untyped-def]
+    """A dead ProxyJump hop refuses SYNCHRONOUSLY and never spawns a worker.
+
+    The 2026-07-30 shape: two detached workers died in ~16s and the cause was
+    only in their logs. The refusal must reach the human at fire time instead.
+    """
+    _greenlight(tmp_path, "submit-s2")
+    _seed(_gate_on, cause="hop_down_direct_ok", jumped=True, host="h")
+
+    with (
+        mock.patch(_LAUNCH_PATH) as m_launch,
+        pytest.raises(errors.SshUnreachable, match="hop_down_direct_ok"),
+    ):
+        blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec()))
+
+    m_launch.assert_not_called(), "a dead path must never spawn a detached worker"
+
+
+def test_s2_healthy_jumped_host_still_detaches(tmp_path: Path, _gate_on) -> None:  # type: ignore[no-untyped-def]
+    """REGRESSION: a healthy JUMPED host must not be refused.
+
+    ``path_unproven`` is the ordinary reading for a jumped cluster sensed by TCP
+    alone (hops answered; end-to-end needs the opt-in preamble rung). Treating it
+    as a failure refused fully-healthy submits to every jumped cluster whose
+    activation could not be resolved — the exact production shape.
+    """
+    _greenlight(tmp_path, "submit-s2")
+    _seed(_gate_on, cause="path_unproven", jumped=True, host="h")
+
+    with (
+        mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch,
+        mock.patch.object(blocks, "submit_and_verify") as m_sv,
+    ):
+        result = blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec()))
+
+    m_launch.assert_called_once()
+    m_sv.assert_not_called()
+    assert result.stage_reached == "detached"
+
+
+def test_s2_unresolved_route_fails_open_to_the_detach(tmp_path: Path, _gate_on) -> None:  # type: ignore[no-untyped-def]
+    """A diagnosis layer that cannot resolve the chain must block nothing."""
+    _greenlight(tmp_path, "submit-s2")
+    _seed(_gate_on, cause="route_unresolved", jumped=False, host="h")
+
+    with (
+        mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch,
+        mock.patch.object(blocks, "submit_and_verify"),
+    ):
+        blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec()))
+    m_launch.assert_called_once()

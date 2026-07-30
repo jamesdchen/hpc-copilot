@@ -64,7 +64,11 @@ __all__ = [
     "_ssh_crypto_opts",
     "_ssh_multiplex_opts",
     "_windows_openssh_named_pipe_supported",
+    "RSYNC_PROTOCOL_ERROR_EXIT",
+    "TRANSPORT_FLAP_ATTR",
+    "is_transport_flap",
     "mark_named_pipe_broken",
+    "mark_transport_flap",
     "reset_named_pipe_runtime_verdict",
     "run_with_named_pipe_retry",
     "rsync_binary",
@@ -1086,7 +1090,13 @@ _CONNECT_FAILURE_MARKERS: Final[tuple[str, ...]] = (
 #: transient dial). Not connect-retry-safe: re-dialing does not fix a broken
 #: protocol negotiation, and the transport's own resumable-delta re-derives what
 #: landed on the next call.
-_RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = 12
+#:
+#: PUBLIC because the staging flap-retry (``ops/submit_flow``) classifies on it
+#: too: a bounded retry must know which failures re-dialing cannot fix, and that
+#: rule has exactly one definition. ``_RSYNC_PROTOCOL_ERROR_EXIT`` is retained
+#: below as a back-compat alias for this module's own long-standing callers.
+RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = 12
+_RSYNC_PROTOCOL_ERROR_EXIT: Final[int] = RSYNC_PROTOCOL_ERROR_EXIT
 
 
 #: The two kinds of ssh leg the retry classifier distinguishes
@@ -1142,6 +1152,46 @@ def is_connect_failure(returncode: int, stderr: str | None, *, leg: ConnectLegKi
         return False
     blob = (stderr or "").lower()
     return any(marker in blob for marker in _CONNECT_FAILURE_MARKERS)
+
+
+#: Attribute stamped on an exception whose cause is KNOWN to be a transport flap.
+#:
+#: Message archaeology is not a classifier. A raiser that already knows it hit a
+#: severed link (it caught the ``TimeoutError`` itself) must not re-encode that
+#: knowledge as English prose and hope a downstream marker match recovers it —
+#: which is exactly how the L4 manifest-probe refusal became unretryable: its
+#: composed message contains no ``_CONNECT_FAILURE_MARKERS`` substring, so the
+#: staging ladder read a known flap as a hard failure and killed the worker on
+#: attempt 1. The stamp carries the verdict by IDENTITY instead.
+TRANSPORT_FLAP_ATTR: Final[str] = "hpc_transport_flap"
+
+
+def mark_transport_flap(err: BaseException) -> BaseException:
+    """Stamp *err* as a known transport flap and return it (chainable at a raise).
+
+    For raisers that caught the transport failure themselves and are re-raising a
+    composed, human-facing error. Preserve the original as ``__cause__`` (``raise
+    ... from exc``) so the chain stays readable; this stamp is what the retry
+    ladder classifies on.
+    """
+    setattr(err, TRANSPORT_FLAP_ATTR, True)
+    return err
+
+
+def is_transport_flap(exc: BaseException) -> bool:
+    """Whether *exc* was explicitly stamped a transport flap by its raiser.
+
+    Checks the exception AND its ``__cause__`` chain, so a wrapper that re-raises
+    a stamped error without re-stamping still classifies correctly.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        if getattr(cur, TRANSPORT_FLAP_ATTR, False):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__
+    return False
 
 
 def is_retry_safe(

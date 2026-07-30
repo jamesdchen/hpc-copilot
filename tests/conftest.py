@@ -335,6 +335,36 @@ def _hermetic_cluster_binaries(request: pytest.FixtureRequest) -> Iterator[None]
 
 
 @pytest.fixture(autouse=True)
+def _s2_path_gate_off_by_default() -> Iterator[None]:
+    """Disable the S2 pre-detach path gate for every test that does not opt in.
+
+    The gate SENSES the run's real ssh target before detaching — bounded TCP
+    connects and, with an activation, a bounded ssh. That is exactly right in
+    production and exactly wrong in CI, where a fixture host like ``h`` would
+    turn every ``submit-s2`` detach test into a live dial (and its verdict into a
+    function of the CI box's DNS). The suite-wide default is therefore OFF, so
+    "no real SSH in CI" is structural rather than a property each test remembers.
+
+    The gate's own behaviour is covered by ``tests/ops/test_path_gate.py``, which
+    injects a reader and never touches a socket, and the sensors underneath it by
+    ``tests/infra/test_readiness_sensors.py``. A test that wants the gate live
+    re-enables it explicitly with ``monkeypatch.delenv(path_gate.GATE_ENV)``.
+
+    Env owned directly (not via ``monkeypatch``) for the finalizer-order reason
+    documented on :func:`_hermetic_cluster_binaries`.
+    """
+    saved = os.environ.get("HPC_S2_PATH_GATE")
+    os.environ["HPC_S2_PATH_GATE"] = "0"
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("HPC_S2_PATH_GATE", None)
+        else:
+            os.environ["HPC_S2_PATH_GATE"] = saved
+
+
+@pytest.fixture(autouse=True)
 def _default_native_ssh_engine() -> Iterator[None]:
     """Pin the one-shot ``native`` SSH engine for every test that doesn't opt in.
 

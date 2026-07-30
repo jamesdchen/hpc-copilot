@@ -260,33 +260,104 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:
 
 
 def _disclose_no_rsync(total_bytes: int, *, reason: str = "") -> None:
-    """One WARN naming the tar full-copy fallback's cost (queue item 6a).
+    """One WARN naming a FULL-COPY push and why the delta did not apply.
 
-    Fired at transfer start whenever the push takes the full-copy tar path,
-    alongside the :func:`_disclose_payload` WARN. The run-#11 evidence: an 8.4 GB
-    tree silently re-shipped to CARC in full because no rsync was on PATH — the
-    tar fallback has NO delta, so every byte crosses the wire even when the
-    remote is byte-identical, and nothing said so. This makes the cause visible
-    before the multi-hour transfer, in the same ``[transport]`` style as the
-    payload WARN.
+    Historical note, because this line's old text was actively misleading by
+    2026-07-30 and cost a night: it read "tar full-copy fallback -> NO DELTA ...
+    (install rsync, or WSL/MSYS rsync on Windows)". Both halves had rotted.
 
-    *reason* (queue item 6b) names WHY the full copy ran rather than the
-    content-hash delta — a first deploy, a pre-delta cluster runtime, or the
-    kill-switch — so the disclosure says which mode ran and why. Fail-open
-    (ASCII arrows so a cp1252 console can't raise): disclosure never blocks a
-    push.
+    * **"NO DELTA" is false on the live path.** The rsync-less push has had a
+      content-hash delta since queue item 6b (:mod:`hpc_agent.infra.transport._delta`):
+      the remote hashes its own tree, the two manifests are diffed, and only
+      changed/new files ship in checkpointed batches. Full-copy is now the
+      NARROW fallback (first ship, ``delete=False``, kill-switch, or an
+      unusable manifest), not the rsync-less norm — so the warning must name
+      WHICH mode ran, never assert the worst one.
+    * **"install WSL/MSYS rsync" is a documented trap.** Mixing an MSYS2 rsync
+      with a Git-Bash-runtime ssh dies in ``dup() in/out/err failed`` — the
+      msys-2.0.dll clash recorded at
+      :func:`hpc_agent.infra.ssh_options.rsync_binary` (2026-07-27 field
+      finding), which is exactly why there is no native-Windows rsync default to
+      auto-probe. Recommending it blind sends the operator into that clash.
+
+    So this line now states the mode, the numbers, and the matched-runtime
+    constraint. Fail-open (ASCII arrows so a cp1252 console can't raise):
+    disclosure never blocks a push.
     """
     try:
         mb = total_bytes / (1024 * 1024)
         why = f" ({reason})" if reason else ""
         print(
-            f"[transport] WARN no rsync on PATH -> tar full-copy fallback -> NO DELTA "
-            f"-> the full {mb:.1f} MB re-ships even if the remote is identical{why} "
-            f"(install rsync, or WSL/MSYS rsync on Windows, to ship only changed bytes).",
+            f"[transport] WARN push MODE=full-tar{why}: shipping all {mb:.1f} MB, "
+            f"including bytes the remote may already have. The content-hash DELTA "
+            f"did not apply to this push; a later push with a usable remote manifest "
+            f"ships only what changed. Installing rsync can help ONLY if its runtime "
+            f"matches the ssh binary's — an MSYS2 rsync paired with a Git-Bash ssh "
+            f"fails in `dup() in/out/err failed` (msys-2.0.dll clash; see "
+            f"infra/ssh_options.py::rsync_binary), so pin HPC_RSYNC_BINARY and "
+            f"HPC_SSH_BINARY to one toolchain or leave the delta path to do the work.",
             file=sys.stderr,
         )
     except Exception:  # noqa: BLE001 — disclosure is never load-bearing
         pass
+
+
+def disclose_push_mode(
+    *,
+    mode: str,
+    reason: str,
+    n_ship: int | None,
+    n_unchanged: int | None,
+    shipped_bytes: int | None,
+    total_bytes: int,
+) -> None:
+    """The ONE honest per-push MODE line: which mode, why, and the numbers.
+
+    Every push emits exactly one of these regardless of which transport ran
+    (``rsync`` / ``delta-tar`` / ``full-tar``), so "what did that push actually
+    cost, and why" is answerable from one grep instead of inferred from which
+    warnings happened to fire.
+
+    It is also the SLO substrate for the readiness ledger's efficiency pillar
+    (``docs/design/s2-readiness.md`` pillar 6): *bytes shipped vs bytes changed*
+    is the ratio that distinguishes a healthy warm re-push (near 1.0) from the
+    2026-07-30 pathology (a full tree re-shipped per attempt because a flap kept
+    killing the manifest probe). Emitting the raw counts here — rather than a
+    prose summary — is what lets that ratio be computed later without re-running
+    anything.
+
+    Fail-open: a disclosure that raises would be worse than one that is missing.
+    """
+    with contextlib.suppress(Exception):
+        total_mb = total_bytes / (1024 * 1024)
+        if shipped_bytes is None:
+            # rsync computes its own delta on the wire and never reports it back,
+            # so the byte split is genuinely unknown here. Say so rather than
+            # print a zero that would read as "nothing shipped".
+            print(
+                f"[transport] push MODE={mode} ({reason}): tree is {total_mb:.1f} MB; "
+                f"the shipped/unchanged split is computed by rsync on the wire and is "
+                f"not itemized locally.",
+                file=sys.stderr,
+            )
+            return
+        ship_mb = shipped_bytes / (1024 * 1024)
+        pct = (shipped_bytes / total_bytes * 100.0) if total_bytes > 0 else 0.0
+        if n_ship is None or n_unchanged is None:
+            print(
+                f"[transport] push MODE={mode} ({reason}): shipped {ship_mb:.1f} MB of "
+                f"{total_mb:.1f} MB ({pct:.0f}% of the tree); per-file counts not "
+                f"itemized for this mode.",
+                file=sys.stderr,
+            )
+            return
+        print(
+            f"[transport] push MODE={mode} ({reason}): shipped {n_ship} file(s) / "
+            f"{ship_mb:.1f} MB of {n_ship + n_unchanged} file(s) / {total_mb:.1f} MB "
+            f"({pct:.0f}% of the tree); {n_unchanged} file(s) already identical on the "
+            f"remote and NOT re-shipped.",
+            file=sys.stderr,
+        )
 
 
 def _disclose_delta_mode(

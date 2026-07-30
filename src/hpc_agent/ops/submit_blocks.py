@@ -1036,6 +1036,43 @@ def submit_s2(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
     )
 
 
+def _assert_s2_path_clear(spec: SubmitS2Spec) -> None:
+    """Run the pre-detach path gate for THIS run's target + activation class.
+
+    Derives the gate's inputs from the run's own submit spec (never a global
+    guess): the ssh target it will actually dial, the cluster whose activation
+    preamble its worker will actually run. A cluster whose activation cannot be
+    resolved simply skips the preamble rung — the connect legs still gate.
+
+    Fail-open around the whole thing: any error resolving the inputs proceeds
+    unguarded, because a diagnosis layer must never be the reason a healthy
+    submit refuses (:mod:`hpc_agent.ops.path_gate`).
+    """
+    from hpc_agent.ops.path_gate import assert_path_clear_for_detach
+
+    submit = spec.submit.submit
+    ssh_target = str(getattr(submit, "ssh_target", "") or "")
+    host = ssh_target.rsplit("@", 1)[-1].strip()
+    if not host:
+        return
+    activation: str | None = None
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config, remote_activation_prefix
+
+        cfg = load_clusters_config().get(str(getattr(submit, "cluster", "") or ""))
+        if isinstance(cfg, dict):
+            activation = remote_activation_prefix(cfg) or None
+    except Exception:  # noqa: BLE001 — no activation just means no preamble rung
+        activation = None
+    assert_path_clear_for_detach(
+        host,
+        run_id=str(submit.run_id),
+        ssh_target=ssh_target or host,
+        activation=activation,
+        verb="submit-s2",
+    )
+
+
 def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
     assert_greenlit_target(
         experiment_dir,
@@ -1058,6 +1095,14 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
         )
         if replay is not None:
             return replay
+
+        # L2 pre-detach path gate (attended-latency item 7): whatever the worker
+        # would discover about the path in its first seconds, the human learns
+        # HERE, synchronously. Runs after the replay miss (a replay opens no
+        # connection and must not start now) and before the spawn. Fail-open by
+        # construction — only a positive discriminated failure raises, so the
+        # healthy path reaches ``launch_submit_block_detached`` byte-identically.
+        _assert_s2_path_clear(spec)
 
         from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
 

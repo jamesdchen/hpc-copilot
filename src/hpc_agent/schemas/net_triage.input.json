@@ -42,6 +42,33 @@
       "minimum": 1.0,
       "title": "Tcp Timeout Sec",
       "type": "number"
+    },
+    "probe_preamble": {
+      "default": false,
+      "description": "Opt in to the PREAMBLE-CLASS rung: after the connect legs, run the cluster's own activation (`module load … && source …/conda.sh && conda activate …`, taken from clusters.yaml unless `activation` overrides it) over SSH and report {connect, preamble} SEPARATELY. Opt-in because it costs real connections and a login-shell round-trip. It is the rung that discriminates the 2026-07-30 ambiguity: a cheap connect succeeding while the preamble hangs fits BOTH node-local degradation and a tunnel dropping mid-command, and only running the SAME command class over the DIRECT (jump-bypassed) route tells them apart.",
+      "title": "Probe Preamble",
+      "type": "boolean"
+    },
+    "activation": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override the activation prefix the preamble rung runs (default: the matched cluster's own, built from clusters.yaml). Ignored unless `probe_preamble` is true.",
+      "title": "Activation"
+    },
+    "preamble_timeout_sec": {
+      "default": 30.0,
+      "description": "Per-attempt budget for one preamble-class SSH reading. Short by design: this rung exists to catch a preamble that HANGS.",
+      "maximum": 300.0,
+      "minimum": 1.0,
+      "title": "Preamble Timeout Sec",
+      "type": "number"
     }
   }
 }

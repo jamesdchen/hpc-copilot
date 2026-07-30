@@ -29,9 +29,13 @@ import logging
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from hpc_agent import errors
 from hpc_agent._kernel.contract.vocabulary import JournalStatus
@@ -1251,7 +1255,271 @@ def _resolve_existing_code_tree(
     return str(probe.tree_path)
 
 
+# --- flap-riding stage retry (attended-latency item 7, L3) -------------------
+#
+# The 2026-07-30 incident: a flapping VPN severed the staging push mid-transfer
+# and KILLED the detached worker outright. That is a waste twice over, because
+# the push is DELTA-BASED — rsync's own delta, and on rsync-less hosts the
+# content-hash delta in ``infra/transport/_delta.py`` whose per-batch manifest
+# checkpoints are durable. Progress therefore ACCUMULATES across attempts: a
+# second attempt re-derives the delta against what actually landed and ships only
+# the remainder. Dying instead threw that away and made the human re-fire.
+#
+# So: a bounded retry INSIDE one worker invocation. Bounded (default 3), honest
+# (every retry discloses its attempt count and the breaker state it read), and
+# strictly breaker-RESPECTING — never bypassing. The waits come from the circuit's
+# own cooldown (``ssh_circuit.cooldown_remaining_sec``); when the circuit is open
+# longer than this ladder's patience the retry STOPS rather than sleeping through
+# a fence that exists to prevent an IP ban.
+_STAGE_RETRY_ATTEMPTS_DEFAULT = 3
+
+#: Backoff between attempts when the circuit is CLOSED (a flap that never tripped
+#: the breaker). One entry per retry; the last value repeats if attempts grow.
+_STAGE_RETRY_DELAYS_SEC: tuple[float, ...] = (2.0, 5.0)
+
+#: Longest single breaker cooldown this ladder will wait out. A cooldown beyond
+#: this means the host is genuinely fenced (cycle 2+ / a real outage), and the
+#: right move is to surface — not to hold a worker open for minutes.
+_STAGE_RETRY_MAX_BREAKER_WAIT_SEC = 30.0
+
+
+def _stage_retry_attempts() -> int:
+    """Total staging attempts per worker invocation (``HPC_STAGE_RETRY_ATTEMPTS``)."""
+    raw = (os.environ.get("HPC_STAGE_RETRY_ATTEMPTS") or "").strip()
+    if raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    return _STAGE_RETRY_ATTEMPTS_DEFAULT
+
+
+def _stage_failure_is_flap(exc: BaseException) -> bool:
+    """Whether *exc* looks like a transport flap the delta can resume past.
+
+    A flap is: a client-side ``TimeoutError`` (the wrapper's own bound), an open
+    circuit (the breaker already judged the transport), or a failure whose text
+    carries a connect-phase marker. Anything else — a broken executor, a missing
+    reducer, an rsync protocol error (exit 12, which re-dialling cannot fix) — is
+    NOT a flap and must surface on attempt 1 exactly as it does today. That
+    distinction is what keeps the non-flap paths byte-identical.
+    """
+    from hpc_agent.infra.ssh_options import (
+        RSYNC_PROTOCOL_ERROR_EXIT,
+        is_connect_failure,
+        is_transport_flap,
+    )
+
+    # IDENTITY first. A raiser that caught the transport failure itself stamps the
+    # verdict (``mark_transport_flap``); re-deriving it from the composed message
+    # is what made the L4 manifest-probe refusal unretryable — its prose carries
+    # none of the connect markers, so a known flap read as a hard failure and
+    # killed the worker on attempt 1.
+    if is_transport_flap(exc):
+        return True
+    if isinstance(exc, errors.SshCircuitOpen):
+        return True
+    if isinstance(exc, TimeoutError):
+        return True
+    if not isinstance(exc, (errors.RemoteCommandFailed, errors.SshUnreachable)):
+        return False
+    message = str(exc)
+    if f"exit {RSYNC_PROTOCOL_ERROR_EXIT})" in message:
+        return False
+    # Only the message survives to this seam, so the marker match runs under the
+    # ``pure-connect`` leg kind: the composed message IS the transport's own
+    # report of why the stage died, not a remote command's stdout.
+    return is_connect_failure(255, message, leg="pure-connect")
+
+
+def _stage_retry_wait_sec(ssh_target: str, *, attempt: int) -> float | None:
+    """How long to wait before the next staging attempt, or ``None`` to STOP.
+
+    Breaker-first: when the circuit for this host is genuinely open, the wait is
+    the circuit's OWN remaining cooldown — never less (that would be bypassing a
+    ban guard) and never more than
+    :data:`_STAGE_RETRY_MAX_BREAKER_WAIT_SEC` (past which the host is fenced for
+    real and the ladder surfaces instead of holding the worker). A closed circuit
+    takes the short local backoff.
+    """
+    from hpc_agent.infra.ssh_circuit import cooldown_remaining_sec
+
+    remaining = cooldown_remaining_sec(_host_of(ssh_target))
+    if remaining > 0.0:
+        if remaining > _STAGE_RETRY_MAX_BREAKER_WAIT_SEC:
+            return None
+        return remaining
+    idx = min(attempt - 1, len(_STAGE_RETRY_DELAYS_SEC) - 1)
+    return _STAGE_RETRY_DELAYS_SEC[idx]
+
+
+def _host_of(ssh_target: str) -> str:
+    """Breaker key for *ssh_target* — the same normalization the circuit uses."""
+    return ssh_target.rsplit("@", 1)[-1].strip()
+
+
+def _disclose_stage_retry(
+    ssh_target: str, *, attempt: int, attempts: int, wait_sec: float, exc: BaseException
+) -> None:
+    """One worker-log line per retry: attempt count, breaker state, and WHY it is safe.
+
+    The disclosure names the delta explicitly, because "retrying a 266 MB push"
+    and "resuming a push whose landed bytes are banked" are very different things
+    to read at 2am in a worker log.
+    """
+    from hpc_agent.infra.ssh_circuit import consecutive_failures_for_host, effective_state_for_host
+
+    host = _host_of(ssh_target)
+    state = effective_state_for_host(host)
+    failures = consecutive_failures_for_host(host)
+    _log = logging.getLogger(__name__)
+    _log.warning(
+        "staging: attempt %d/%d failed on a transport flap (%s: %s); breaker[%s]=%s "
+        "(%d consecutive failure(s)); waiting %.1fs then RESUMING — the staging push "
+        "is delta-based, so bytes that already landed are banked and the next attempt "
+        "ships only the remainder.",
+        attempt,
+        attempts,
+        type(exc).__name__,
+        str(exc)[:200],
+        host,
+        state,
+        failures,
+        wait_sec,
+    )
+
+
+def _stage_with_flap_retry(
+    run: Callable[[], str | None],
+    *,
+    ssh_target: str,
+    sleep: Callable[[float], object] = time.sleep,
+) -> str | None:
+    """Run the staging step under a bounded, breaker-respecting flap retry.
+
+    On a non-flap failure the original exception propagates from attempt 1 —
+    unchanged type, unchanged message, unchanged behaviour. On a flap it retries
+    up to :func:`_stage_retry_attempts` times, disclosing each one; on exhaustion
+    it raises :class:`errors.SshUnreachable` carrying the same discriminated
+    cause vocabulary the L2 pre-detach gate uses, so the worker log and the
+    fire-time refusal name the failure identically.
+    """
+    attempts = _stage_retry_attempts()
+    last: BaseException | None = None
+    made = 0
+    stopped_on_cooldown = False
+    for attempt in range(1, attempts + 1):
+        made = attempt
+        try:
+            result: str | None = run()
+            return result
+        except Exception as exc:
+            if not _stage_failure_is_flap(exc):
+                raise
+            last = exc
+            if attempt >= attempts:
+                break
+            wait = _stage_retry_wait_sec(ssh_target, attempt=attempt)
+            if wait is None:
+                stopped_on_cooldown = True
+                break
+            _disclose_stage_retry(
+                ssh_target, attempt=attempt, attempts=attempts, wait_sec=wait, exc=exc
+            )
+            sleep(wait)
+    raise _stage_exhausted_error(
+        ssh_target,
+        attempts_made=made,
+        attempts_allowed=attempts,
+        last=last,
+        stopped_on_cooldown=stopped_on_cooldown,
+    )
+
+
+def _stage_exhausted_error(
+    ssh_target: str,
+    *,
+    attempts_made: int,
+    attempts_allowed: int,
+    last: BaseException | None,
+    stopped_on_cooldown: bool = False,
+) -> errors.SshUnreachable:
+    """The exhaustion envelope — the L2 cause shape, reached from the worker side.
+
+    States the attempts ACTUALLY made, not the budget: a ladder that stopped
+    after one attempt because the breaker was fenced for longer than its patience
+    used to report "after 3 bounded attempt(s)" and never mentioned the cooldown,
+    so the log said the opposite of what happened, twice.
+
+    CONSULT-ONLY (never a fresh dial). This runs at the moment the ladder has just
+    decided the host is not usable — and, on the stop-on-cooldown arm, while the
+    circuit is explicitly OPEN. Dialling to pretty up an error message would open
+    connections the breaker just refused, which is the ban-risk the breaker
+    exists to prevent. A fresh reading from the L1 sweep or the L2 gate is reused
+    when one is in the window; otherwise the message says the cause is unnamed
+    and points at the verb that would name it.
+    """
+    from hpc_agent.infra.readiness_sensors import consult_readiness, path_remediation
+
+    host = _host_of(ssh_target)
+    detail = f"{type(last).__name__}: {last}" if last is not None else "no failure recorded"
+    readiness = consult_readiness(host, window_sec=300.0)
+    if readiness is not None:
+        cause = f"{readiness.cause} — {readiness.sentence or 'no route sentence'}. "
+        remedy = path_remediation(readiness)
+    else:
+        cause = "cause not named (no recent readiness reading, and this path does NOT dial). "
+        remedy = (
+            "Run `net-triage` (probe_preamble) to discriminate a tunnel drop from node degradation."
+        )
+
+    if stopped_on_cooldown:
+        from hpc_agent.infra.ssh_circuit import consecutive_failures_for_host
+
+        why = (
+            f"STOPPED after {attempts_made} of {attempts_allowed} allowed attempt(s): the SSH "
+            f"circuit for {host} is open with a cooldown longer than this ladder's "
+            f"{_STAGE_RETRY_MAX_BREAKER_WAIT_SEC:.0f}s patience "
+            f"({consecutive_failures_for_host(host)} consecutive failure(s)) — waiting it out "
+            f"in-worker would hold the run open, and shortening it would bypass a ban guard"
+        )
+    else:
+        why = f"exhausted {attempts_made} bounded attempt(s)"
+
+    return errors.SshUnreachable(
+        f"staging against {ssh_target} {why}: {cause}{remedy} Last failure: "
+        f"{detail[:300]}. Progress was NOT lost — the push is delta-based, so a re-run "
+        f"resumes from what already landed."
+    )
+
+
 def _push_and_deploy(
+    *,
+    experiment_dir: Path,
+    ssh_target: str,
+    remote_path: str,
+    rsync_excludes: list[str] | None,
+    scheduler: str | None = None,
+    reducer_item: tuple[Path, str] | None = None,
+) -> str | None:
+    """rsync_push + deploy_runtime under the bounded flap retry (L3).
+
+    The retry wraps the WHOLE staging step — push, deploy, code tree — because
+    all three are re-runnable against a delta and a flap can sever any of them.
+    See :func:`_stage_with_flap_retry` for the boundedness and breaker-respect
+    contract; :func:`_push_and_deploy_once` is the unchanged body.
+    """
+    return _stage_with_flap_retry(
+        lambda: _push_and_deploy_once(
+            experiment_dir=experiment_dir,
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            rsync_excludes=rsync_excludes,
+            scheduler=scheduler,
+            reducer_item=reducer_item,
+        ),
+        ssh_target=ssh_target,
+    )
+
+
+def _push_and_deploy_once(
     *,
     experiment_dir: Path,
     ssh_target: str,

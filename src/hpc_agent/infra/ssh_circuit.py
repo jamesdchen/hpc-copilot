@@ -113,10 +113,13 @@ __all__ = [
     "circuit_state_path",
     "classify_connection_failure",
     "classify_connection_outcome",
+    "consecutive_failures_for_host",
     "cooldown_for_cycle",
+    "cooldown_remaining_sec",
     "degradation_advice",
     "degradation_advice_for_host",
     "effective_state",
+    "effective_state_for_host",
     "guarded_call",
     "hanging_stage",
     "host_circuit_ok",
@@ -568,7 +571,13 @@ def _retarget_suggestion(host: str) -> str:
     )
 
 
-def degradation_advice(host: str, doc: dict[str, Any] | None, *, now: float) -> str | None:
+def degradation_advice(
+    host: str,
+    doc: dict[str, Any] | None,
+    *,
+    now: float,
+    hops: Callable[[str], tuple[str, ...]] | None = None,
+) -> str | None:
     """The one-line degradation classification for *host*, or ``None`` if not
     degraded. Names the hanging preamble stage, the cycle count, and the
     ``host-retarget``/``settle-run`` remedy — the single string every surface
@@ -577,11 +586,62 @@ def degradation_advice(host: str, doc: dict[str, Any] | None, *, now: float) -> 
         return None
     cycles = int(_float_or((doc or {}).get("reopen_cycles"), 0))
     stage = hanging_stage(doc) or "the remote command preamble"
+    # *hops* is injectable so the JUMPED arm below is reachable in a hermetic
+    # suite. Without it the default resolver shells the test harness's ssh shim,
+    # which never reports a ProxyJump — so the whole jumped branch was dead under
+    # test and a `if hops:` -> `if False:` mutation survived. A guard that cannot
+    # be shown to fire is not verified (engineering-principles, judgment rule 1).
+    resolve_hops = hops or _proxy_jump_hops
+    try:
+        chain = resolve_hops(host)
+    except Exception:  # noqa: BLE001 — advice text must never raise, whoever resolves
+        chain = ()
+    if chain:
+        # 2026-07-30: this message used to assert node-local degradation and
+        # recommend a host-retarget — which, for a JUMPED host, steers the
+        # operator to a sibling reached through the SAME dead hop. A flapping
+        # tunnel dropping mid-command produces an identical probe-OK/command-hang
+        # signature, so with a ProxyJump in the path the classification is
+        # genuinely AMBIGUOUS and must say so, plus name the one reading that
+        # settles it.
+        first = chain[0]
+        return (
+            f"probe-OK but {stage} times out ({cycles} cycles) — TWO causes fit this "
+            f"signature, and {host} is reached through ProxyJump {', '.join(chain)}: "
+            f"(a) node-local degradation (module subsystem / degraded mount), or "
+            f"(b) a TUNNEL DROP — a flapping jump/VPN severing the session "
+            f"mid-command while the cheap connect keeps succeeding. A bare "
+            f"connect/echo 'verifies' nothing under either. DISCRIMINATOR: re-run "
+            f"the SAME command class (the activation preamble) over the DIRECT "
+            f"no-jump route (`-o ProxyJump=none`, or `net-triage` with "
+            f"probe_preamble) — preamble OK there ⇒ transport fault, fix the tunnel "
+            f"and do NOT retarget; preamble hangs there too ⇒ node-local "
+            f"degradation, and only then {_retarget_suggestion(host)}. Retargeting "
+            f"before the discriminator moves the run to a sibling that inherits "
+            f"{first} and reproduces this exactly."
+        )
     return (
         f"probe-OK but {stage} times out ({cycles} cycles) — likely node-local "
         f"degradation (module subsystem / degraded mount), NOT a transport fault; "
         f"a bare connect/echo 'verifies' nothing here. {_retarget_suggestion(host)}."
     )
+
+
+def _proxy_jump_hops(host: str) -> tuple[str, ...]:
+    """The effective ``ProxyJump`` chain for *host*, or ``()`` — fail-open.
+
+    Deferred import: :mod:`hpc_agent.infra.readiness_sensors` reaches
+    ``infra.remote``, which imports THIS module at top level, so a module-level
+    import would be a cycle. The resolution behind it is process-cached, and this
+    only runs on a host already classified degraded (rare), so the subprocess
+    cost never lands on a hot path.
+    """
+    try:
+        from hpc_agent.infra.readiness_sensors import resolve_route
+
+        return resolve_route(host).proxy_jump
+    except Exception:  # noqa: BLE001 — advice text must never raise
+        return ()
 
 
 def degradation_advice_for_host(host: str, *, now: float | None = None) -> str | None:
@@ -590,6 +650,44 @@ def degradation_advice_for_host(host: str, *, now: float | None = None) -> str |
     host, never the doc. Fail-open: an unreadable doc yields ``None``."""
     now = time.time() if now is None else now
     return degradation_advice(host, _read_doc(circuit_state_path(host)), now=now)
+
+
+def effective_state_for_host(
+    host: str, *, now: float | None = None
+) -> Literal["closed", "open", "half_open_eligible"]:
+    """:func:`effective_state` reading *host*'s doc from disk — the PUBLIC read seam.
+
+    The read-only entry point for consumers that hold only a host and must not
+    reach for this module's private ``_read_doc`` (the cross-package private-API
+    rule). Fail-open: an unreadable/absent doc reads ``closed``.
+    """
+    now = time.time() if now is None else now
+    return effective_state(_read_doc(circuit_state_path(host)), now=now)
+
+
+def cooldown_remaining_sec(host: str, *, now: float | None = None) -> float:
+    """Seconds until *host*'s open cooldown lapses; ``0.0`` when not genuinely open.
+
+    The PUBLIC read seam a bounded retry consults to decide how long it must wait
+    before the breaker would even permit another attempt — so a retry ladder can
+    RESPECT the cooldown instead of hammering into an open circuit or bypassing
+    it. Read-only: never writes state, never claims the half-open probe slot.
+    """
+    now = time.time() if now is None else now
+    doc = _read_doc(circuit_state_path(host))
+    if doc is None or effective_state(doc, now=now) != "open":
+        return 0.0
+    return max(0.0, open_deadline(doc, now=now) - now)
+
+
+def consecutive_failures_for_host(host: str, *, now: float | None = None) -> int:
+    """*host*'s recorded consecutive connection-level failure count (0 when unknown).
+
+    Disclosure-grade read seam: a retry's log line names the breaker state it
+    waited on, and this is the counter that makes that line specific.
+    """
+    doc = _read_doc(circuit_state_path(host))
+    return int(_float_or((doc or {}).get("consecutive_failures"), 0))
 
 
 def host_circuit_ok(host: str, *, now: float | None = None) -> bool:

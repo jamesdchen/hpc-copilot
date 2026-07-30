@@ -8,12 +8,14 @@ persists, under the suite-wide isolated journal home.
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from typing import Any
 
 import pytest
 
 from hpc_agent._wire.queries.net_triage import NetTriageSpec
+from hpc_agent.infra import readiness_sensors as rs
 from hpc_agent.infra.ssh_circuit import circuit_state_path
 from hpc_agent.ops.recover import net_triage as nt
 from hpc_agent.ops.recover.net_triage import net_triage, open_circuit_lines
@@ -66,6 +68,23 @@ def probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(nt, "_tcp_connect", _tcp)
     # No real clusters.yaml in tests: the caller-supplied host is the fleet.
     monkeypatch.setattr(nt, "_configured_hosts", lambda: [])
+
+    # Route resolution is a LOCAL ``ssh -G`` (config only, no network), but a
+    # subprocess per host per test is both slow and non-hermetic — a developer
+    # whose ~/.ssh/config happens to name a ProxyJump for one of these fixture
+    # hosts would see different verdicts. Pin it: no jump unless a test says so.
+    rs.clear_route_cache()
+    rs.clear_readiness_ledger()
+    outcomes["proxyjump"] = None
+
+    def _resolve(argv, timeout):  # type: ignore[no-untyped-def]
+        host = argv[-1]
+        lines = [f"host {host}", f"hostname {host}", "user someone", "port 22"]
+        if outcomes["proxyjump"]:
+            lines.append(f"proxyjump {outcomes['proxyjump']}")
+        return subprocess.CompletedProcess(argv, 0, "\n".join(lines) + "\n", "")
+
+    monkeypatch.setattr(rs, "_run_route_resolution", _resolve)
     return outcomes
 
 
@@ -406,3 +425,64 @@ def test_status_snapshot_brief_carries_open_circuit_line(
     circuit_state_path(HOST).unlink()
     result = status_snapshot(tmp_path, spec=StatusSnapshotSpec())
     assert result.brief["open_ssh_circuits"] == []
+
+
+# ─── route-aware triage: the 2026-07-30 dead-hop conflation ──────────────────
+
+
+def test_dead_hop_never_reads_as_reachable(
+    probes: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE incident, at the verb boundary.
+
+    The bare hostname answers (so the legacy verdict is still ``reachable``) while
+    the configured ProxyJump hop is dead. Before the route layer this rendered
+    ``login.cluster.edu: reachable`` and blessed a failover INTO the dead hop.
+    """
+    probes["proxyjump"] = "usc-discovery"
+
+    def _tcp(host: str, port: int, t: float) -> tuple[bool, str]:
+        probes["tcp_calls"] += 1
+        if host == "usc-discovery":
+            return False, "ConnectionRefusedError: refused"
+        return True, f"tcp connect to {host}:{port} ok"
+
+    monkeypatch.setattr(nt, "_tcp_connect", _tcp)
+    out = _one()
+    (h,) = out.hosts
+
+    assert h.path_cause == "hop_down_direct_ok"
+    assert h.path_summary == "path dead (hop usc-discovery down); direct alternative OK"
+    assert out.summary == (
+        "login.cluster.edu: path dead (hop usc-discovery down); direct alternative OK"
+    )
+    assert out.all_reachable is False, "a dead hop must never report the fleet reachable"
+    assert "Do NOT fail over to a sibling" in h.remediation
+    labels = {(a.sensor, a.verdict) for a in h.readiness}
+    assert ("hop", "down") in labels
+    assert ("direct", "ok") in labels
+    assert ("path", "down") in labels
+
+
+def test_unjumped_summary_line_is_unchanged(probes: dict[str, Any]) -> None:
+    """The un-jumped digest must be byte-identical to the pre-route-layer form."""
+    out = _one()
+    assert out.summary == f"{HOST}: reachable"
+    assert out.hosts[0].path_summary is None
+    assert out.hosts[0].route is not None and out.hosts[0].route.proxy_jump == []
+
+
+def test_healthy_jumped_host_names_the_hop_it_rode(probes: dict[str, Any]) -> None:
+    """Every hop answered: the digest names the path, and the fleet flag stays true.
+
+    The cause is still ``path_unproven`` — TCP to a hop plus TCP to the bare
+    target does not PROVE the chained session works — but that is absence of
+    evidence, not evidence of a fault. Flipping ``all_reachable`` on it would fire
+    for every healthy jumped host, and a flag that always fires is a flag that
+    gets ignored. The nuance lives in ``path_cause``; the preamble rung settles it.
+    """
+    probes["proxyjump"] = "usc-discovery"
+    out = _one()
+    assert out.summary == f"{HOST}: reachable (via hop usc-discovery)"
+    assert out.hosts[0].path_cause == "path_unproven"
+    assert out.all_reachable is True

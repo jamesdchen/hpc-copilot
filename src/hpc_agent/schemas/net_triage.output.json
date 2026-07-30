@@ -238,6 +238,52 @@
           "description": "What to do about the verdict — deterministic text, one per verdict arm.",
           "title": "Remediation",
           "type": "string"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteChainModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The EFFECTIVE ssh chain for this host. Null when route resolution was not attempted. Present-and-jumped is what makes `tcp_ok` above a claim about the BARE HOSTNAME only, never about your actual path."
+        },
+        "readiness": {
+          "description": "One LABELLED atom per sensed leg — every ProxyJump hop, the direct (jump-bypassed) alternative, the derived end-to-end path, and (when the preamble rung ran) the connect/preamble classes per route. This is the list that makes 'reachable' unable to mean 'the bare hostname answered while your actual path is dead' (2026-07-30).",
+          "items": {
+            "$ref": "#/$defs/ReadinessAtom"
+          },
+          "title": "Readiness",
+          "type": "array"
+        },
+        "path_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The NAMED discriminated cause for this host's path — the same vocabulary the submit-s2 pre-detach refusal and the staging retry quote, so the human reads one word everywhere: path_ok, hop_down_direct_ok, hop_down_direct_dead, hop_down_direct_unprobed, target_unreachable, path_unproven, preamble_degraded, transport_flap, route_unresolved. Null when no route read ran.",
+          "title": "Path Cause"
+        },
+        "path_summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The honest one-line route verdict for a JUMPED host, e.g. 'path dead (hop usc-discovery down); direct alternative OK'. Null for an un-jumped host, whose summary line is unchanged by this layer.",
+          "title": "Path Summary"
         }
       },
       "required": [
@@ -247,6 +293,132 @@
         "remediation"
       ],
       "title": "net-triage per-host result",
+      "type": "object"
+    },
+    "ReadinessAtom": {
+      "additionalProperties": false,
+      "description": "One readiness SENSOR reading — what was probed, the verdict, when.\n\nThe unit of record of the standing per-cluster readiness ledger\n(``docs/design/s2-readiness.md`` pillar 1); ``net-triage`` is a thin composer\nover the same atoms the ledger will store, so a rendered reading and a stored\none can never disagree about what was seen.",
+      "properties": {
+        "sensor": {
+          "description": "Which leg this reading speaks for: 'hop' a ProxyJump waypoint, 'direct' the target's own hostname with the jump BYPASSED, 'path' the derived end-to-end verdict for the effective chain, and 'connect'/'preamble' the two command classes of the preamble rung.",
+          "enum": [
+            "hop",
+            "direct",
+            "path",
+            "connect",
+            "preamble"
+          ],
+          "title": "Sensor",
+          "type": "string"
+        },
+        "target": {
+          "description": "What was probed (a hostname or an ssh destination).",
+          "title": "Target",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "'unknown' means the sensor ran but could not settle it; 'skipped' means it never ran (detail says why). Neither is 'fine'.",
+          "enum": [
+            "ok",
+            "down",
+            "timeout",
+            "unknown",
+            "skipped"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "description": "Reading detail, error, or the reason it was skipped.",
+          "title": "Detail",
+          "type": "string"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wall-clock of the reading, or null when it never ran.",
+          "title": "Latency Ms"
+        },
+        "at": {
+          "default": "",
+          "description": "When the reading was taken (ISO-8601 UTC).",
+          "title": "At",
+          "type": "string"
+        },
+        "route": {
+          "default": "n/a",
+          "description": "Which route the command-class reading rode; 'n/a' for TCP legs.",
+          "enum": [
+            "effective",
+            "direct",
+            "n/a"
+          ],
+          "title": "Route",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sensor",
+        "target",
+        "verdict"
+      ],
+      "title": "net-triage readiness atom",
+      "type": "object"
+    },
+    "RouteChainModel": {
+      "additionalProperties": false,
+      "description": "The EFFECTIVE ssh chain for one host, as ``ssh -G`` itself resolved it.\n\nNever a re-parse of ``ssh_config``: ``Host`` patterns, ``Match`` blocks and\n``Include`` chains are OpenSSH's business, and a second parser would drift\nfrom the client that actually dials. ``resolved=false`` means the resolution\ncould not run, and every route-aware claim is then withheld (fail-open).",
+      "properties": {
+        "resolved": {
+          "description": "Whether ``ssh -G`` produced an answer for this host.",
+          "title": "Resolved",
+          "type": "boolean"
+        },
+        "hostname": {
+          "default": "",
+          "description": "The HostName ssh resolved (may differ from the alias).",
+          "title": "Hostname",
+          "type": "string"
+        },
+        "user": {
+          "default": "",
+          "description": "The username ssh resolved for this destination.",
+          "title": "User",
+          "type": "string"
+        },
+        "port": {
+          "default": 22,
+          "description": "The port ssh resolved for this destination.",
+          "title": "Port",
+          "type": "integer"
+        },
+        "proxy_jump": {
+          "description": "The ordered ProxyJump hops the connection actually traverses. EMPTY means a direct route. A non-empty chain is why 'the bare hostname answered' is NOT the same claim as 'your path works' (2026-07-30).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Proxy Jump",
+          "type": "array"
+        },
+        "detail": {
+          "default": "",
+          "description": "The resolution line, or why it could not run.",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolved"
+      ],
+      "title": "net-triage effective route",
       "type": "object"
     }
   }
