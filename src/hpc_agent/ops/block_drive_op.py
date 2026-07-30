@@ -92,6 +92,13 @@ def _count_drive_attempt(experiment_dir: Path, result: BlockDriveResult) -> None
         "campaign-greenlight",
         "campaign-watch",
         "campaign-complete",
+        # The audit family (P2.b) — the notebook-audit loop's deterministic verbs.
+        "audit-preflight",
+        "notebook-lint",
+        "notebook-auto-clear",
+        "notebook-audit-view",
+        "notebook-status",
+        "audit-handoff",
     ],
     side_effects=[
         SideEffect("spawns-subprocess", "hpc-agent <block verb> per chained span"),
@@ -142,6 +149,7 @@ def block_drive(experiment_dir: Path, *, spec: BlockDriveSpec) -> BlockDriveResu
         workflow=spec.workflow,
         dry_run=spec.dry_run,
         approve=spec.approve,
+        audit=spec.audit.model_dump(mode="json") if spec.audit is not None else None,
     )
     if not spec.dry_run:
         _count_drive_attempt(experiment_dir, result)

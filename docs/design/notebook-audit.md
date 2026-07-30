@@ -251,6 +251,61 @@ harness-captured utterances, never bare acks.
 
 Deviations from the plan above, each with its recorded reason:
 
+- **2026-07-30 — REVERSAL of "a block-drive-style loop driver is REJECTED"
+  (Amendment 2, item 3), for SEQUENCING ONLY.** The 2026-07-30 user ruling
+  ("mechanize all parts of the chain that don't need a decision", recorded in
+  `docs/plans/prelude-chain-2026-07-30.md`) overturns the sequencing half of
+  that decision and nothing else. The rejection's stated ground was *"the audit
+  loop's sequencing alternates with human acts at every step — the human is the
+  sequencer"*. Re-examined against the loop as built, that premise is false for
+  four of the five steps: `audit-preflight` → `notebook-lint` →
+  `notebook-auto-clear` → `notebook-audit-view` is a strict producer→consumer
+  run of deterministic verbs with **no human act between any two of them** (the
+  view's lint is recomputed server-side; the auto-clear reads recorded roots;
+  every one is idempotent and cluster-free). The human acts at exactly ONE seam
+  — the typed T8 sign-off — and the LLM acts at exactly one other — the draft.
+  So what the loop actually alternates is *deterministic-run, boundary,
+  deterministic-run*, which is precisely the shape `block-drive` exists for.
+
+  What LANDED (Wave P2.b): `ORDER["audit"] = [audit-preflight, notebook-lint,
+  notebook-auto-clear, notebook-audit-view, notebook-status]` with stage-keyed
+  `SUCCESSORS`; each of the five Results declares `next_block` (so all five now
+  DERIVE into the curated MCP catalog and were removed from
+  `mcp_server._CURATED_EXTRA_VERBS`, whose prose asserting the rejection was
+  updated in the same change); every successor spec is code-composed from the
+  audit config seat, so no spec is hand-authored mid-chain. The chain is in
+  NEITHER `GATED_BLOCKS` nor `WATCH_VERBS` — nothing in it reaches a cluster or
+  blocks on a poll — and it is keyed by `audit_id`, not `run_id` (the
+  non-run-scope shape the campaign chain established).
+
+  What did NOT change, and is the whole reason the reversal is narrow:
+
+  * **The typed sign-off is byte-identical.** It remains an `append-decision`
+    under block `notebook-sign-off` — the driver gained NO sign-off verb, and
+    a `notebook-status` that finds sections pending PARKS rather than
+    proceeding. The authorship gate, the `view_sha` full recompute, the T8
+    tiering and the recompute lock are all untouched.
+  * **No bare `y` was introduced anywhere near it.** The sign-off boundary sits
+    on the bare-`y` census ALLOWLIST (`tests/contracts/test_bare_y_coverage.py`)
+    with the T8 rarity-buys-seriousness reason stated: palatability must never
+    reach the effortful tier, and code sequencing the cheap steps is exactly how
+    it avoids doing so.
+  * **The DRAFT park carries zero consent semantics.** `audit-preflight`'s
+    `awaiting_draft` terminator is the first `actor="agent"` park (P2.a,
+    `block_chain.AGENT_PARKS`): it composes no greenlight target, no
+    `approve_hint`, no overnight standing-consent offer and no answer menu —
+    only a code-authored `draft_ask`. A draft is AUTHORSHIP, not authorization.
+    The resume leg never reads the decision journal at all; the evidence that
+    the ask was met is the file on disk, which the next tick re-reads.
+
+  Amendment 2's other two parts stand unchanged: the MCP projection (part 1) is
+  now DERIVED rather than hand-unioned, and the elicitation ruling (part 2) is
+  unaffected — nothing here moves where the sign-off utterance travels.
+
+  Enforcement: the agent-park invariant is pinned by the row added to
+  `docs/internals/principles/determinism-boundary.md`. Regen debt (8 schema
+  files) is declared in `docs/internals/regen-debt-ledger.md`, not paid here.
+
 - **`notebook-auto-clear` is a NEW mutate verb the plan lacked.** D-attention
   says auto-cleared sections are "journaled as auto_cleared" but no planned
   task owned the agent-facing writer — without it, template-inherited

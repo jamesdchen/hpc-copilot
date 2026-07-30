@@ -88,7 +88,92 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "terminal of the campaign chain: the human's answer is the campaign's "
         "CONCLUSION, which is a value only they can supply. No successor exists."
     ),
+    # ── campaign-refill (surfaced 2026-07-30 by the indirection leg) ──────────
+    # These three were INVISIBLE to the census until ``_literal_bindings`` landed:
+    # ``ops/campaign_refill.py`` picks its terminator into a local ``stage`` and
+    # passes the NAME, so the constants-only walk saw nothing and the whole
+    # single-member family went unguarded. ``refill_blocked`` is a genuine park
+    # (``needs_decision`` is true whenever a blocked slot is not merely
+    # claim-held/pool-full); the other two are decision-free terminals the coarse
+    # name-resolution necessarily sweeps in with it. All three are stated rather
+    # than silently dropped — that is the ledger doing its job on a boundary
+    # nobody had decided about.
+    ("campaign-refill", "refill_blocked"): (
+        "a side-spur terminal with no chain-forward successor (``campaign-refill`` is "
+        "its own single-member family, deliberately OUT of the campaign chain so it "
+        "cannot shift the three real touchpoints' block_index positions). What the "
+        "human must supply is the RESOLUTION the blocked slot named — resume-vs-fresh, "
+        "the scaffold interview, or whatever the gate refused on — not agreement to a "
+        "next block. The next tick re-enters through campaign-watch."
+    ),
+    ("campaign-refill", "refilled"): (
+        "not a question at all: the tick dispatched its slots and the chain ENDS (the "
+        "next cron/loop tick re-enters via campaign-watch, one step per tick). "
+        "``needs_decision`` is false on this arm; it is visible to the census only "
+        "because the block picks its terminator into a local the coarse "
+        "name-resolution cannot narrow. Nothing is being asked, so nothing is owed."
+    ),
+    ("campaign-refill", "no_refill_needed"): (
+        "as ``refilled``: advance said wait/stop/continue, so the tick is a disclosed "
+        "no-op and the chain ends with nothing asked of anyone. Visible to the census "
+        "only through the same shared-local terminator; ``needs_decision`` is false."
+    ),
+    ("audit-preflight", "awaiting_draft"): (
+        "an AGENT park (``block_chain.AGENT_PARKS``), and therefore the one boundary "
+        "class a bare ``y`` structurally cannot apply to: what is owed here is a "
+        "DRAFT — the LLM writes or revises the audited source ``.py`` — and a draft "
+        "is AUTHORSHIP, not authorization. There is nothing to greenlight, so "
+        "``greenlight_target`` returns None by construction rather than by omission, "
+        "and the park composes a ``draft_ask`` in place of an answer menu. The "
+        "evidence that the ask was met is the FILE ON DISK, which the next tick "
+        "re-reads; no journaled approval is sought and none is ever consumed."
+    ),
+    ("notebook-status", "sections_pending"): (
+        "the audit's SIGN-OFF rendezvous, and the whole point of the T8 tier is that "
+        "agreement here is NOT one keystroke: the human types a ``notebook-sign-off`` "
+        "through ``append-decision``, binding the section shas and the ``view_sha`` "
+        "they actually read (rarity-buys-seriousness — palatability must never reach "
+        "the effortful tier). It is also the last block of the audit chain, so no "
+        "chain-forward successor exists for a ``y`` to override into."
+    ),
 }
+
+
+def _literal_bindings(tree: ast.AST) -> dict[str, set[str]]:
+    """Every ``name -> {string literals}`` binding assigned anywhere in *tree*.
+
+    The indirection leg of the scan below. A terminator that picks its stage into
+    a LOCAL first — ``stage_reached: Literal[...] = "a" if cond else "b"``, then
+    ``Result(stage_reached=stage_reached, ...)`` — hands the call an ``ast.Name``
+    with no constants inside it, so a constants-only walk of the call site
+    reports NOTHING and the census silently stops guarding that boundary (the
+    audit chain's ``audit-preflight`` / ``notebook-status`` terminators are
+    written exactly that way). Resolving the name against the file's assignments
+    is deliberately COARSE — module-wide, no scope analysis, unioning every
+    binding of that name — because over-reporting a stage costs at most a
+    spurious "give this boundary a target or a reason", while under-reporting
+    costs an unguarded park.
+    """
+    bindings: dict[str, set[str]] = {}
+
+    def _record(target: ast.expr, value: ast.expr | None) -> None:
+        if not isinstance(target, ast.Name) or value is None:
+            return
+        literals = {
+            const.value
+            for const in ast.walk(value)
+            if isinstance(const, ast.Constant) and isinstance(const.value, str)
+        }
+        if literals:
+            bindings.setdefault(target.id, set()).update(literals)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                _record(target, node.value)
+        elif isinstance(node, ast.AnnAssign):
+            _record(node.target, node.value)
+    return bindings
 
 
 def _decision_stages() -> set[str]:
@@ -97,13 +182,16 @@ def _decision_stages() -> set[str]:
     AST over ``src/``: any call carrying BOTH keywords, keeping every string
     constant inside the ``stage_reached`` expression (a terminator may pick its
     stage with a conditional — ``"harvest_partial" if partial else "harvested"``
-    — and both arms are real boundaries). A ``needs_decision`` that is literally
-    ``False`` is excluded; anything else (``True``, or a computed expression) is
-    counted, because the census must never under-report.
+    — and both arms are real boundaries), plus — via :func:`_literal_bindings` —
+    the literals a NAMED stage expression was bound to in the same file. A
+    ``needs_decision`` that is literally ``False`` is excluded; anything else
+    (``True``, or a computed expression) is counted, because the census must
+    never under-report.
     """
     stages: set[str] = set()
     for path in sorted(SRC_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        bindings = _literal_bindings(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -114,9 +202,11 @@ def _decision_stages() -> set[str]:
                 continue
             if isinstance(decision_node, ast.Constant) and decision_node.value is not True:
                 continue
-            for const in ast.walk(stage_node):
-                if isinstance(const, ast.Constant) and isinstance(const.value, str):
-                    stages.add(const.value)
+            for sub in ast.walk(stage_node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    stages.add(sub.value)
+                elif isinstance(sub, ast.Name):
+                    stages |= bindings.get(sub.id, set())
     return stages
 
 
@@ -137,7 +227,10 @@ def _park_boundaries() -> dict[tuple[str, str], str | None]:
         gated = successor is not None and block_chain.is_gated(successor)
         if stage not in decision_stages and not gated:
             continue
-        boundaries[(verb, stage)] = greenlight_target(verb, successor)
+        # ``stage`` is passed so an AGENT park (P2.a) resolves ``None`` — a draft
+        # is authorship, not authorization, so no ``y`` at that boundary
+        # greenlights anything and the census must demand a stated reason.
+        boundaries[(verb, stage)] = greenlight_target(verb, successor, stage=stage)
     return boundaries
 
 
@@ -247,7 +340,7 @@ def test_audit_fires_on_an_uncovered_boundary() -> None:
     """The guard can actually FIRE: a synthetic park with no target and no allowlist
     entry is reported, and adding the entry clears it. Without this, every assertion
     above would still pass if ``_uncovered`` were mutated to return nothing."""
-    synthetic = {("made-up-block", "made_up_stage"): None}
+    synthetic: dict[tuple[str, str], str | None] = {("made-up-block", "made_up_stage"): None}
     assert _uncovered(synthetic, ALLOWLIST) == [("made-up-block", "made_up_stage")]
     assert _uncovered(synthetic, {**ALLOWLIST, ("made-up-block", "made_up_stage"): "why"}) == []
     # A boundary WITH a target is never reported, allowlist or not.

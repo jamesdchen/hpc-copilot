@@ -40,7 +40,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -52,6 +52,7 @@ from hpc_agent._wire.queries.notebook_status import (
     NotebookStatusSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.audit_view import net_tier_label
 from hpc_agent.ops.notebook.canonical import read_recorded_config
 from hpc_agent.ops.notebook.module_attention import build_module_attention
@@ -312,6 +313,17 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
     ]
 
     audit_net_summary = _audit_net_summary(audit_net, audit_cap_hit)
+    # ── the `audit` chain's exit edge (P2.b) ──────────────────────────────────
+    # Both stage literals sit in ONE expression so the bare-``y`` census's AST
+    # scan sees each terminator this block can reach. A PASS hands off to the
+    # audit→onboard seam; anything else PARKS for the sign-off rendezvous, whose
+    # answer is the human's TYPED `notebook-sign-off` through `append-decision` —
+    # never a new verb, and never something a bare `y` can stand in for (the
+    # census allowlists it with exactly that reason).
+    stage_reached: Literal["audit_passed", "sections_pending"] = (
+        "audit_passed" if module_audit.passed else "sections_pending"
+    )
+    needs_decision = not module_audit.passed
     result_kwargs: dict[str, Any] = {
         "audit_id": spec.audit_id,
         "sections": sections,
@@ -324,4 +336,25 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
     # exists. Post-merge this guard always takes the attach branch.
     if "audit_net_summary" in NotebookStatusResult.model_fields:
         result_kwargs["audit_net_summary"] = audit_net_summary
-    return NotebookStatusResult(**result_kwargs)
+    # ``stage_reached`` / ``needs_decision`` are passed as EXPLICIT call kwargs,
+    # never folded into ``result_kwargs``: the bare-``y`` boundary census
+    # (tests/contracts/test_bare_y_coverage.py) reads them off this call site by
+    # AST, and a ``**kwargs`` splat would make it silently blind to the sign-off
+    # park — the exact "a census that under-counts stops guarding" failure its
+    # own docstring names.
+    return NotebookStatusResult(
+        stage_reached=stage_reached,
+        needs_decision=needs_decision,
+        next_block=next_block_hint(
+            "notebook-status",
+            stage_reached,
+            why=(
+                "every required section is current — project the audit's durable "
+                "records into the onboarding draft."
+            ),
+            audit_id=spec.audit_id,
+            source=spec.source,
+            template=spec.template,
+        ),
+        **result_kwargs,
+    )

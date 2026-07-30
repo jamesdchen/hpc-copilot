@@ -38,6 +38,8 @@ __all__ = [
     "WORKFLOW_OF",
     "ORDER",
     "GATED_BLOCKS",
+    "AGENT_PARKS",
+    "park_actor",
     "ANOMALY_TERMINATORS",
     "DEADLINE_SECONDS",
     "WATCH_VERBS",
@@ -74,6 +76,30 @@ ORDER: dict[str, list[str]] = {
     # entry + block_index(0) (so the SUCCESSORS coverage test's WORKFLOW_OF
     # membership assertion holds) without perturbing the campaign chain.
     "campaign-refill": ["campaign-refill"],
+    # ── the notebook-audit loop, on the driver (prelude P2.b, 2026-07-30) ──────
+    # The 2026-07-30 user ruling ("mechanize all parts of the chain that don't
+    # need a decision") REVERSES the recorded "a block-drive-style loop driver is
+    # REJECTED" decision (docs/design/notebook-audit.md Amendment 2, item 3) for
+    # SEQUENCING ONLY: code now sequences the deterministic verbs, and every
+    # human boundary is byte-unchanged (the typed sign-off stays
+    # ``append-decision`` under block ``notebook-sign-off``; its authorship gate
+    # and the T8 recompute locks are untouched). No block in this chain reaches a
+    # cluster, so none of it is in :data:`GATED_BLOCKS`.
+    "audit": [
+        "audit-preflight",
+        "notebook-lint",
+        "notebook-auto-clear",
+        "notebook-audit-view",
+        "notebook-status",
+    ],
+    # ``audit-handoff`` is the audit→onboard SEAM, not an audit touchpoint: it is
+    # the successor a PASSED audit hands off to, and it is where Wave P2.c will
+    # build the onboard chain. It gets its OWN single-member family for exactly
+    # the reason ``campaign-refill`` does — a WORKFLOW_OF entry + block_index(0)
+    # so the successor table's membership invariant holds, without perturbing the
+    # audit chain's block_index positions. P2.c re-homes it into the onboard
+    # family; nothing here builds that chain.
+    "audit-handoff": ["audit-handoff"],
 }
 
 # Each block verb → its workflow family. Derived from ORDER so the two can never
@@ -81,6 +107,47 @@ ORDER: dict[str, list[str]] = {
 WORKFLOW_OF: dict[str, str] = {
     verb: workflow for workflow, verbs in ORDER.items() for verb in verbs
 }
+
+
+# ── the park ACTOR registry (prelude P2.a) ────────────────────────────────────
+
+# The ``(verb, stage_reached)`` boundaries whose park routes to the **LLM**, not
+# to a human: an AGENT park. The driver's park machinery was built entirely
+# around a human typing ``y``/paste/nudge, and every affordance it composes there
+# — the greenlight target, the scoped-consent ``approve_hint``, the overnight
+# standing-consent offer, the paste-ready answer menu's bare-``y`` line — is a
+# CONSENT affordance. A draft is AUTHORSHIP, not authorization, so an agent park
+# carries ZERO of them: :func:`park_actor` is the one predicate every one of
+# those composition sites keys on, and
+# :func:`hpc_agent._kernel.lifecycle.block_drive.greenlight_target` returns
+# ``None`` here so a bare ``y`` at an agent park resolves nothing to advance to
+# (the ``tests/contracts/test_bare_y_coverage.py`` census then DEMANDS a stated
+# reason, which is the correct outcome: an agent park is exactly the boundary a
+# bare ``y`` cannot apply to).
+#
+# Membership is a deliberate, auditable one-line edit — never derived from a
+# stage-name convention, because "which actor answers this" is a design decision,
+# not a spelling.
+AGENT_PARKS: frozenset[tuple[str, str]] = frozenset(
+    {
+        # The audit loop's draft rendezvous: preflight is GO but there is no
+        # source to lint yet (or a nudge landed since the last draft), so the
+        # next act is the LLM's — write/revise the percent-format source. Nothing
+        # is authorized here and nothing is spent.
+        ("audit-preflight", "awaiting_draft"),
+    }
+)
+
+
+def park_actor(verb: str, stage: str | None) -> str:
+    """Who answers a park at ``(verb, stage)`` — ``"agent"`` or ``"human"``.
+
+    The ONE predicate the driver's park composition keys on (P2.a). ``"human"``
+    for every boundary not in :data:`AGENT_PARKS` — so every park that exists
+    today keeps its byte-identical human treatment, and the agent branch is
+    reached only by a boundary explicitly registered above.
+    """
+    return "agent" if (verb, str(stage)) in AGENT_PARKS else "human"
 
 
 # ── the greenlight-gated blocks ───────────────────────────────────────────────
@@ -137,6 +204,19 @@ DEADLINE_SECONDS: dict[str, float] = {
     "aggregate-run": _HEAVY_VERB_DEADLINE_SEC,
     "campaign-greenlight": _QUICK_VERB_DEADLINE_SEC,
     "campaign-complete": _QUICK_VERB_DEADLINE_SEC,
+    # ── audit family (P2.b) — every one is QUICK class ────────────────────────
+    # None of these reaches a cluster or blocks on a watch: they parse two local
+    # ``.py`` files, replay a local journal, and write render files. So none joins
+    # :data:`WATCH_VERBS`, and none may fall through to the watch-class default
+    # (24 h + slack) — an unknown verb awaiting a wedged local child for a day is
+    # exactly the unbounded-parent-wait class this table exists to close.
+    "audit-preflight": _QUICK_VERB_DEADLINE_SEC,
+    "notebook-lint": _QUICK_VERB_DEADLINE_SEC,
+    "notebook-auto-clear": _QUICK_VERB_DEADLINE_SEC,
+    "notebook-audit-view": _QUICK_VERB_DEADLINE_SEC,
+    "notebook-status": _QUICK_VERB_DEADLINE_SEC,
+    # The audit→onboard seam the passed audit chains into: a pure local read.
+    "audit-handoff": _QUICK_VERB_DEADLINE_SEC,
 }
 
 
@@ -252,6 +332,44 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     ("campaign-refill", "refilled"): None,  # chain ends; next tick re-enters via campaign-watch.
     ("campaign-refill", "no_refill_needed"): None,  # advance said wait/stop/continue — noop.
     ("campaign-refill", "refill_blocked"): None,  # live-prior / scaffold escalation — human.
+    # ── audit family (P2.b) ───────────────────────────────────────────────────
+    # The notebook-audit loop expressed as stage-keyed edges. The LOOP lives in
+    # the stage keys, not in a cycle in this table: an ``awaiting_draft`` park
+    # ends the tick, the LLM redrafts, and the NEXT tick re-enters at
+    # ``audit-preflight`` whose stage has flipped to ``preflight_go`` — the
+    # re-entry edge into ``notebook-lint``. Same for the sign-off rendezvous: the
+    # human's typed ``notebook-sign-off`` lands via ``append-decision`` (NEVER a
+    # new verb) and the next tick re-reduces at ``notebook-status``.
+    #
+    # audit-preflight
+    ("audit-preflight", "preflight_go"): "notebook-lint",  # GO + a source to lint.
+    # AGENT park (see AGENT_PARKS): GO but nothing to lint yet, or a nudge landed
+    # since the last draft. The LLM drafts; NOTHING is authorized here.
+    ("audit-preflight", "awaiting_draft"): None,
+    # NO-GO: substrate prerequisites unmet. A human branch — fix the blockers the
+    # brief pre-drafted remedies for (the ``aggregate-check not_ready`` posture:
+    # a bare ``y`` is an OVERRIDE onto the chain-forward block, not an approval).
+    ("audit-preflight", "preflight_blocked"): None,
+    # notebook-lint → notebook-auto-clear (findings are REPORTED, never fatal —
+    # the graduation gate refuses, the lint reports, so there is exactly one
+    # deterministic successor).
+    ("notebook-lint", "linted"): "notebook-auto-clear",
+    # notebook-auto-clear → notebook-audit-view (the CODE attestor ran; the view
+    # is the projection the human reads).
+    ("notebook-auto-clear", "cleared"): "notebook-audit-view",
+    # notebook-audit-view → notebook-status (the reduction the loop exits on).
+    ("notebook-audit-view", "viewed"): "notebook-status",
+    # notebook-status: the graduation gate's two outcomes.
+    # Sections still owed a human review → PARK for the sign-off rendezvous. No
+    # successor: the answer is a TYPED sign-off (append-decision, block
+    # ``notebook-sign-off``), which no bare ``y`` can stand in for.
+    ("notebook-status", "sections_pending"): None,
+    # passed → hand off to the audit→onboard SEAM. Emitting the hint is the whole
+    # of P2.b's obligation here; the onboard chain itself is Wave P2.c.
+    ("notebook-status", "audit_passed"): "audit-handoff",
+    # audit-handoff itself declares NO terminator here: its Result carries no
+    # ``next_block``, so the driver reads a terminal off the result and the chain
+    # ends at the seam. P2.c is what gives it stages.
 }
 
 
@@ -398,7 +516,16 @@ def _complete_spec_hint(successor: str, spec_hint: dict[str, Any]) -> dict[str, 
     hint through here so an ungated in-code chain never hands the driver a spec its
     successor's validator would bounce. Pinned by
     ``tests/contracts/test_spec_hint_completeness.py``.
+
+    Two mechanisms, in order of specificity: an AUDIT successor's spec is fully
+    COMPOSED from the audit config seat (:data:`_AUDIT_SPEC_COMPOSERS` — the
+    ungated chain passes the hint verbatim, so the hint has to BE the spec);
+    otherwise a registered identity SHAPER reshapes what the terminator passed.
     """
+    composer = _AUDIT_SPEC_COMPOSERS.get(successor)
+    if composer is not None:
+        composed: dict[str, Any] = composer(spec_hint, {}, {})
+        return composed
     shaper = _SUCCESSOR_SPEC_SHAPERS.get(successor)
     return shaper(spec_hint) if shaper is not None else spec_hint
 
@@ -534,6 +661,91 @@ _GATED_SPEC_COMPOSERS: dict[str, Any] = {
 }
 
 
+# ── the audit chain's composed successor specs (P2.b) ─────────────────────────
+#
+# Every audit block's input spec is COMPOSED IN CODE from the audit CONFIG SEAT —
+# ``(audit_id, source, template)``, plus the preflight's resolved roots on the one
+# hop that needs them — exactly the run-14 #4 materialization posture applied to a
+# non-run scope: the seat rides each terminator's ``spec_hint``, and the composer
+# projects it onto the fields the successor's ``extra="forbid"`` model actually
+# declares. Nothing is fabricated: a hop whose seat is incomplete REFUSES
+# (:class:`SuccessorSpecIncomplete`) rather than inventing an audit_id or a path.
+#
+# UNLIKE the gated composers above, these are ALSO reached from
+# :func:`_complete_spec_hint` — the audit chain is UNGATED end to end, so the
+# driver passes each ``spec_hint`` VERBATIM as the successor's input spec
+# (``block_drive._chain``) and the hint must therefore ALREADY be the complete
+# composed spec. One definition, two consumers; the composers are IDEMPOTENT
+# (composing an already-composed spec returns the same dict) so the park-time
+# :func:`compose_successor_spec` re-application is a no-op.
+
+
+def _audit_seat(successor: str, spec_hint: dict[str, Any]) -> tuple[str, str, str]:
+    """The ``(audit_id, source, template)`` seat a *successor* audit block needs.
+
+    Row 14 applied to the audit scope: the seat is the caller's own declaration
+    (it opened the audit and named the two ``.py`` paths), so a hint that cannot
+    produce all three REFUSES — an invented ``audit_id`` would silently open a
+    second audit trail, and an invented path would lint the wrong file.
+    """
+    for field in ("audit_id", "source", "template"):
+        value = spec_hint.get(field)
+        if not isinstance(value, str) or not value:
+            raise SuccessorSpecIncomplete(successor, field)
+    return (str(spec_hint["audit_id"]), str(spec_hint["source"]), str(spec_hint["template"]))
+
+
+def _compose_notebook_lint_spec(
+    spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+) -> dict[str, Any]:
+    """audit-preflight→notebook-lint: the two ``.py`` paths + the RESOLVED roots.
+
+    The preflight already resolved ``source_roots`` / ``input_roots`` (spec, else
+    the audit's recorded config — the one-declaration rule), so the lint runs
+    under the SAME roots the preflight reported rather than a second declaration.
+    ``audit_id`` rides along as the chain seat the downstream blocks need.
+    """
+    audit_id, source, template = _audit_seat("notebook-lint", spec_hint)
+    composed: dict[str, Any] = {"audit_id": audit_id, "source": source, "template": template}
+    for roots_field in ("input_roots", "source_roots", "output_roots"):
+        value = spec_hint.get(roots_field)
+        if isinstance(value, list):
+            composed[roots_field] = list(value)
+    return composed
+
+
+def _compose_audit_seat_only_spec(successor: str) -> Any:
+    """A composer emitting EXACTLY the ``(audit_id, source, template)`` seat.
+
+    The shape ``notebook-auto-clear`` / ``notebook-audit-view`` / ``notebook-status``
+    / ``audit-handoff`` all take. Passing roots to any of them would be WRONG, not
+    merely redundant: auto-clear REFUSES caller roots outright (its F2
+    laundering guard) and the view treats explicit roots as a PREVIEW override
+    whose ``view_sha`` the T8 sign-off gate then refuses. So the composer drops
+    them — the recorded config is the one declaration each reads.
+    """
+
+    def _compose(
+        spec_hint: dict[str, Any], predecessor_spec: dict[str, Any], result_brief: dict[str, Any]
+    ) -> dict[str, Any]:
+        audit_id, source, template = _audit_seat(successor, spec_hint)
+        return {"audit_id": audit_id, "source": source, "template": template}
+
+    return _compose
+
+
+_AUDIT_SPEC_COMPOSERS: dict[str, Any] = {
+    "notebook-lint": _compose_notebook_lint_spec,
+    "notebook-auto-clear": _compose_audit_seat_only_spec("notebook-auto-clear"),
+    "notebook-audit-view": _compose_audit_seat_only_spec("notebook-audit-view"),
+    "notebook-status": _compose_audit_seat_only_spec("notebook-status"),
+    "audit-handoff": _compose_audit_seat_only_spec("audit-handoff"),
+}
+
+# Every successor whose input spec the driver composes in code, gated or not.
+_SPEC_COMPOSERS: dict[str, Any] = {**_GATED_SPEC_COMPOSERS, **_AUDIT_SPEC_COMPOSERS}
+
+
 def compose_successor_spec(
     successor: str,
     *,
@@ -550,8 +762,13 @@ def compose_successor_spec(
     an UNGATED successor the ``spec_hint`` is already the complete shaped spec, so it
     is returned verbatim. Pure: computes the spec dict, writes nothing (the
     materialization I/O + validation live in the block-drive caller).
+
+    The AUDIT chain (P2.b) is the one UNGATED family that still registers
+    composers (:data:`_AUDIT_SPEC_COMPOSERS`): its hints are composed from the
+    audit config seat at ``next_block_hint`` time, and the composers are
+    idempotent, so re-composing here returns the same dict.
     """
-    composer = _GATED_SPEC_COMPOSERS.get(successor)
+    composer = _SPEC_COMPOSERS.get(successor)
     if composer is None:
         return dict(spec_hint)
     composed: dict[str, Any] = composer(

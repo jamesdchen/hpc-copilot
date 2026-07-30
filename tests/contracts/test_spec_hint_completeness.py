@@ -52,6 +52,15 @@ pytestmark = pytest.mark.contract
 _RUN_ID = "ml_run_abcd1234"
 _CANARY_RUN_ID = "ml_run_abcd1234_canary"
 _CAMPAIGN_ID = "camp_abcd1234"
+# The audit chain's NON-RUN scope: an audit is keyed by audit_id and mints no run.
+_AUDIT_ID = "audit_abcd1234"
+_AUDIT_SOURCE = "notebooks/analysis.py"
+_AUDIT_TEMPLATE = ".hpc/templates/audit_template.py"
+_AUDIT_SEAT: dict[str, Any] = {
+    "audit_id": _AUDIT_ID,
+    "source": _AUDIT_SOURCE,
+    "template": _AUDIT_TEMPLATE,
+}
 
 
 # The representative ``**spec_hint`` kwargs each terminator passes to
@@ -82,6 +91,24 @@ _REPRESENTATIVE_HINT_KWARGS: dict[tuple[str, str], dict[str, Any]] = {
     ("campaign-greenlight", "already_greenlit"): {"campaign_id": _CAMPAIGN_ID},
     ("campaign-watch", "watching_complete"): {"campaign_id": _CAMPAIGN_ID},
     ("campaign-watch", "watching_refill"): {"campaign_id": _CAMPAIGN_ID},
+    # audit family (P2.b) — every hop carries the audit CONFIG SEAT, and the
+    # composer projects it onto exactly the fields each successor declares. These
+    # are the load-bearing cases for the whole family: the audit chain is UNGATED
+    # end to end, so every one of these hints is passed VERBATIM as the
+    # successor's input spec and a missing/extra field is an instant mid-chain
+    # SpecInvalid (notebook-auto-clear REFUSES caller roots outright; the view
+    # demotes itself to an un-signable PREVIEW if handed any).
+    ("audit-preflight", "preflight_go"): {
+        "audit_id": _AUDIT_ID,
+        "source": _AUDIT_SOURCE,
+        "template": _AUDIT_TEMPLATE,
+        "input_roots": ["data"],
+        "source_roots": ["src"],
+    },
+    ("notebook-lint", "linted"): _AUDIT_SEAT,
+    ("notebook-auto-clear", "cleared"): _AUDIT_SEAT,
+    ("notebook-audit-view", "viewed"): _AUDIT_SEAT,
+    ("notebook-status", "audit_passed"): _AUDIT_SEAT,
 }
 
 

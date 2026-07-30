@@ -64,7 +64,13 @@ from typing import Any
 
 from hpc_agent._kernel.lifecycle.consent_hint import _sha8
 
-__all__ = ["answer_menu_of", "compose_answer_menu", "recommendation_options"]
+__all__ = [
+    "answer_menu_of",
+    "compose_answer_menu",
+    "compose_draft_ask",
+    "draft_ask_of",
+    "recommendation_options",
+]
 
 #: Widest ``paste`` column the rendered lines pad to before falling back to a
 #: single space. Keeps a menu readable in a terminal without ever TRUNCATING an
@@ -344,6 +350,82 @@ def compose_answer_menu(
             "alternative is invented."
         ),
     }
+
+
+#: What an AGENT park asks for, per ``(block, stage)``. One sentence each, kept
+#: as DATA beside the menu composer for the same reason
+#: :data:`_RECOMMENDATION_MEANS` is one constant: the ask must be code-authored
+#: and fixed, never prose an LLM composes about its own next act.
+_DRAFT_ASKS: dict[tuple[str, str], str] = {
+    ("audit-preflight", "awaiting_draft"): (
+        "Write or revise the audited source .py (jupytext percent format) so it "
+        "carries every template section slug, in template order. Then re-tick "
+        "`block-drive` — the chain re-enters at `audit-preflight`, which reads the "
+        "source off disk and advances to `notebook-lint`."
+    ),
+}
+
+
+def compose_draft_ask(
+    *,
+    block: str | None,
+    stage: str | None,
+    run_id: str | None,
+) -> dict[str, Any] | None:
+    """The AGENT park's brief block: what the LLM must PRODUCE (P2.a).
+
+    The agent-actor mirror of :func:`compose_answer_menu`, and deliberately NOT a
+    variant of it: an answer menu is a CONSENT surface (its first line is the
+    bare ``y`` that advances a boundary), and an agent park has no consent to
+    give or take. So this composer renders no ``y``, no scoped-consent utterance,
+    no standing-consent offer and no ``bare_y_ok`` — only the DRAFT ASK: the one
+    code-authored sentence naming what the LLM produces, and the fact that the
+    evidence for it is the file on disk, not a journaled approval.
+
+    Returns ``None`` for a boundary with no registered ask — a park that cannot
+    say what it wants renders nothing rather than inventing an instruction.
+    """
+    ask = _DRAFT_ASKS.get((str(block), str(stage)))
+    if ask is None:
+        return None
+    where = f"parked at {block}" if block else "parked"
+    who = f" for {run_id}" if run_id else ""
+    lines = [
+        "Draft ask — this park is the AGENT's, not the human's:",
+        f"  {ask}",
+        (
+            "Nothing is authorized here: a draft is AUTHORSHIP, not "
+            "authorization. No greenlight is sought, none is consumed, and no "
+            "`y` applies at this boundary."
+        ),
+    ]
+    return {
+        "actor": "agent",
+        "kind": "awaiting_draft",
+        "block": block,
+        "stage": stage,
+        "ask": ask,
+        "lines": lines,
+        "text": "\n".join(lines),
+        "summary": f"{where}{who} — awaiting a DRAFT from the agent (no consent semantics)",
+        "note": (
+            "code-composed draft ask (P2.a agent-actor park): DISPLAY only. It "
+            "states what the agent must produce; it grants nothing, consumes no "
+            "consent, and offers no answer to type."
+        ),
+    }
+
+
+def draft_ask_of(brief: Any) -> dict[str, Any] | None:
+    """The ``draft_ask`` a parked brief carries, or ``None``.
+
+    The reader sibling of :func:`answer_menu_of`, with the same fail-open posture:
+    a brief from a driver predating agent parks — or a torn one — yields ``None``.
+    """
+    if not isinstance(brief, dict):
+        return None
+    ask = brief.get("draft_ask")
+    return ask if isinstance(ask, dict) else None
 
 
 def answer_menu_of(brief: Any) -> dict[str, Any] | None:

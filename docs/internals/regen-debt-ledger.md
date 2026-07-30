@@ -29,6 +29,7 @@ cannot pass silently.
 
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
+| `docs/design/notebook-audit.md` (Drift log, 2026-07-30 — the sequencing reversal) — the `audit` block chain gave five verbs a `stage_reached` / `needs_decision` / `next_block` triple, `audit-preflight` a `source` input, `notebook-lint` an `audit_id` seat, and `block-drive` an `audit` seat sub-model | `docs/design/notebook-audit.md` | `python scripts/build_schemas.py --write` — 8 files: `audit_preflight.input.json`, `audit_preflight.output.json`, `block_drive.input.json`, `notebook_lint.input.json`, `notebook_lint.output.json`, `notebook_auto_clear.output.json`, `notebook_audit_view.output.json`, `notebook_status.output.json`. The other 8 regen steps (operations.json, frontmatter, both indices, verb-module map, principles index, harness runbook) are GREEN on this branch and are NOT owed | **RED** — `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in`, `::test_minimal_instance_validates_against_emitted_schema` | prelude Wave P2.b (`docs/plans/prelude-chain-2026-07-30.md`) — pay at the wave's ONE serial rebake |
 
 Row format (binds every future row):
 

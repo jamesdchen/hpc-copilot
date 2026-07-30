@@ -16,6 +16,8 @@ nothing about the experiment's semantics.
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -157,5 +159,32 @@ class NotebookStatusResult(BaseModel):
             "The audit net's (6a) transitive-closure digest — counts by tier plus "
             "a cap-hit bool — or null when the status surface did not compute it. "
             "Additive optional; absent keeps the pre-6a shape."
+        ),
+    )
+    stage_reached: Literal["audit_passed", "sections_pending"] = Field(
+        default="sections_pending",
+        description=(
+            "The terminator this block stopped at (decision-as-data, #231) — "
+            "`audit_passed` mirrors `passed`, `sections_pending` is everything "
+            "else. It is the key `block_chain.SUCCESSORS` routes on: passed hands "
+            "off to `audit-handoff`; pending PARKS for the typed human sign-off."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=False,
+        description=(
+            "True at `sections_pending` — the sign-off RENDEZVOUS. The answer is "
+            "the human's TYPED `notebook-sign-off` via `append-decision` (never a "
+            "new verb, never a bare `y`), so the boundary sits on the bare-y "
+            "census's allowlist with that reason stated."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` "
+            "— or null at the sign-off park / when the caller supplied no "
+            "`source`/`template` seat. On a PASS it names `audit-handoff`, the "
+            "audit→onboard seam."
         ),
     )

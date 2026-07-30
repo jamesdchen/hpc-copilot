@@ -25,7 +25,7 @@ judgement about what a section MEANS.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -242,6 +242,31 @@ class NotebookAuditViewResult(BaseModel):
         description=(
             "Deterministic roll-up sha over the section shas + the two module "
             "fingerprints; any section or preamble edit moves it."
+        ),
+    )
+    stage_reached: Literal["viewed"] = Field(
+        default="viewed",
+        description=(
+            "The terminator this block stopped at (decision-as-data, #231). ONE "
+            "stage: the view is a projection, so it has the same deterministic "
+            "successor (the status reduction) whatever it projects."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=False,
+        description=(
+            "Always false. The view is what the human READS before signing; the "
+            "sign-off itself is a typed `append-decision` under block "
+            "`notebook-sign-off`, and the driver parks for it one block later, at "
+            "`notebook-status`'s `sections_pending`."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` "
+            "— or null when the caller supplied no `source`/`template` seat to "
+            "compose the successor's spec from (the standalone call)."
         ),
     )
     markdown: str = Field(

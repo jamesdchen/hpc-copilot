@@ -131,6 +131,28 @@ OWNERSHIP: dict[str, dict[str, str]] = {
         "proposal": "campaign-greenlight",
         "journal": "campaign-greenlight",
     },
+    # ── audit (P2.b) ──────────────────────────────────────────────────────────
+    # The audit CONFIG SEAT is declared ONCE, at the top of the chain: every
+    # later block's spec is code-composed from what audit-preflight resolved, so
+    # editing any seat field is a rewind to the preflight, never a downstream
+    # carry. Mapping all of them to the first block is therefore the honest map,
+    # not the campaign entry's "no meaningful downstream owner yet" placeholder:
+    # a changed audit_id/source/template genuinely re-opens the whole loop.
+    "audit": {
+        "audit_id": "audit-preflight",
+        "source": "audit-preflight",
+        "template": "audit-preflight",
+        "source_roots": "audit-preflight",
+        "input_roots": "audit-preflight",
+        "output_roots": "audit-preflight",
+    },
+    # audit-handoff is its own single-member family (the P2.c seam); its spec is
+    # the same seat, composed by the chain, so the seat fields own themselves.
+    "audit-handoff": {
+        "audit_id": "audit-handoff",
+        "source": "audit-handoff",
+        "template": "audit-handoff",
+    },
 }
 
 

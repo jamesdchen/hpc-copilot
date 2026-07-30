@@ -56,6 +56,7 @@ from hpc_agent._wire.queries.notebook_audit_view import (
     NotebookViewAssertion,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.audit_view import (
     HUMAN_REQUIRED,
     AuditView,
@@ -103,7 +104,14 @@ def _read_source_file(experiment_dir: Path, relpath: str, *, kind: str) -> str:
 
 
 def _to_result(
-    experiment_dir: Path, audit_id: str, view: AuditView, *, canonical: bool, full: bool = False
+    experiment_dir: Path,
+    audit_id: str,
+    view: AuditView,
+    *,
+    canonical: bool,
+    full: bool = False,
+    source: str | None = None,
+    template: str | None = None,
 ) -> NotebookAuditViewResult:
     """Project the pure :class:`AuditView` into the wire result + its markdown.
 
@@ -184,6 +192,25 @@ def _to_result(
         if full
         else render_summary_markdown(view, render_paths)
     )
+    # The `audit` chain's fourth edge (P2.b): the projection exists, so the next
+    # deterministic step is the per-section reduction the loop exits on. Emitted
+    # only when the caller carried the two `.py` paths (the seat the composer
+    # projects onto the successor's spec — it refuses rather than inventing one).
+    next_block = (
+        next_block_hint(
+            "notebook-audit-view",
+            "viewed",
+            why=(
+                "the canonical audit view is built — reduce every required "
+                "section to its audit state and read the graduation gate."
+            ),
+            audit_id=audit_id,
+            source=source,
+            template=template,
+        )
+        if (source and template)
+        else None
+    )
     return NotebookAuditViewResult(
         sections=sections,
         dropped_template_slugs=list(view.dropped_template_slugs),
@@ -192,6 +219,9 @@ def _to_result(
         canonical=canonical,
         view_sha=view.view_sha,
         markdown=markdown,
+        stage_reached="viewed",
+        needs_decision=False,
+        next_block=next_block,
     )
 
 
@@ -318,4 +348,12 @@ def notebook_audit_view(
         # It is CANONICAL (gate-acceptable) only when the effective config equals
         # the recorded one — an override that still recomputes lint is a preview.
         canonical = effective == recorded
-    return _to_result(experiment_dir, spec.audit_id, view, canonical=canonical, full=spec.full)
+    return _to_result(
+        experiment_dir,
+        spec.audit_id,
+        view,
+        canonical=canonical,
+        full=spec.full,
+        source=spec.source,
+        template=spec.template,
+    )

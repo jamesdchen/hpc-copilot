@@ -143,21 +143,26 @@ _CURATED_EXTRA_VERBS = frozenset(
         # declares ``next_block``, so it DERIVES into the catalog.)
         "verify-reproduction",
         # The notebook-audit loop's agent_facing verbs (notebook-audit design
-        # doc, Amendment 2 — run #10): the loop is HUMAN-sequenced (a
-        # block-drive-style driver was REJECTED there), so none of these declare
-        # ``next_block`` and none derive in — each is unioned explicitly. Run
-        # #10 priced their MCP absence live: hand-authored spec JSONs, two
-        # schema fumbles — the run-#8 unreachable-gets-hand-rolled class.
-        # ``notebook-lint`` — the four structural checks, the loop's first tick.
-        "notebook-lint",
-        # ``notebook-audit-view`` — the audit loop's typed surface (the
-        # verbatim-relay canonical view) — run #10 priced the CLI-spec fallback.
-        "notebook-audit-view",
-        # ``notebook-status`` — the per-section audit-state read the loop exits on.
-        "notebook-status",
-        # ``notebook-auto-clear`` — the CODE-attestor clearance mutate (recorded
-        # roots only; the laundering guard enforces at invocation).
-        "notebook-auto-clear",
+        # doc, Amendment 2 — run #10). Amendment 2 item 3 recorded that a
+        # block-drive-style loop driver was REJECTED there, so none of these
+        # declared ``next_block`` and each was unioned in explicitly. The
+        # 2026-07-30 user ruling REVERSED that decision for SEQUENCING ONLY
+        # (docs/plans/prelude-chain-2026-07-30.md Wave P2.b; the reversal is
+        # recorded in the notebook-audit drift log): the loop's five
+        # deterministic verbs are now the ``audit`` block chain, each Result
+        # declares ``next_block``, and so each DERIVES into the curated catalog
+        # with no entry here — ``audit-preflight``, ``notebook-lint``,
+        # ``notebook-auto-clear``, ``notebook-audit-view``, ``notebook-status``
+        # were removed from this frozenset for exactly that reason. Every HUMAN
+        # boundary is unchanged: the typed sign-off is still ``append-decision``
+        # under block ``notebook-sign-off``, and the draft park routes to the
+        # agent with no consent semantics at all.
+        #
+        # The verbs BELOW stay explicit unions: they are the loop's companions,
+        # not blocks in the chain (no ``next_block``), and run #10 priced their
+        # MCP absence live — hand-authored spec JSONs, two schema fumbles (the
+        # run-#8 unreachable-gets-hand-rolled class).
+        #
         # ``notebook-record`` — the merged journaling verb (kind=receipt: the
         # emitter's sha-bound render-receipt journaling — unreachable, an
         # emitter reaches for ``python -c``; kind=config: the standalone
@@ -182,12 +187,9 @@ _CURATED_EXTRA_VERBS = frozenset(
         # class, beside ``doctor``); unreachable, a flooded session hand-edits
         # the watermark file.
         "alerts-ack",
-        # ``audit-preflight`` — the GO/NO-GO substrate-prereq brief the
-        # notebook-audit skill runs FIRST (before drafting). Human-sequenced
-        # like the rest of the audit loop (no ``next_block``), so it is
-        # unioned explicitly — unreachable, the agent re-derives the checks
-        # by hand (the exact prose-rot the verb mechanized away).
-        "audit-preflight",
+        # (``audit-preflight`` used to be unioned here for the same
+        # "human-sequenced, no next_block" reason; it is now the ``audit``
+        # chain's ENTRY block and derives in — see the P2.b note above.)
         # ``evidence-brief`` — the evidence-memory point digest the audit
         # onboarding relays VERBATIM when the human named scope tags. A pure
         # read with no ``next_block``; unreachable, the agent skips the
