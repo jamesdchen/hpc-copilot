@@ -26,9 +26,12 @@ it (the contract-taught-by-refusal posture: never a generic refusal).
 * ``{needs_wrapper_argv: true, argv_kind, ...}`` — the pathway is wrapper
   materialization and the entry point's CLI surface is not introspectable
   by this verb, so the ``argv`` template + typed ``signature`` must come
-  from the caller. When the entry point is an importable module this shape
-  also DISCLOSES the ``python_module`` alternative SKILL.md:98 offers for
-  the same row, with the derived dotted target named.
+  from the caller. It CARRIES the ``argv_extraction`` verdict +
+  ``argv_params`` the in-process ``detect-entry-point`` already produced,
+  so the caller composes the template from them instead of paying for a
+  second detect call. When the entry point is an importable module this
+  shape also DISCLOSES the ``python_module`` alternative SKILL.md:98
+  offers for the same row, with the derived dotted target named.
 
 All three InterviewSpec entry-point kinds are representable:
 ``register_run`` (the ``decorate`` pathway, the default), ``shell_command``
@@ -52,8 +55,29 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 # Reuse the exact interview recipe union + wrapper-signature type set so a
 # caller-supplied task_generator / signature is validated identically to what
-# the interview primitive enforces one verb downstream.
-from hpc_agent._wire.actions.interview import _SignatureType, _TaskGenerator
+# the interview primitive enforces one verb downstream. ``_DataAxisHint`` and
+# ``_PetscSolverHint`` are reused for the same reason: both are copied through
+# VERBATIM onto the composed ``shell_command`` entry block, so validating them
+# against any shape other than the interview's own would let a hint pass here
+# and fail one verb later. Re-exported (``__all__``) because the composite's
+# implementation module constructs a ``_PetscSolverHint`` for the DETECTED
+# solver — it reads its own wire module, never another verb's.
+from hpc_agent._wire.actions.interview import (
+    _DataAxisHint,
+    _PetscSolverHint,
+    _SignatureType,
+    _TaskGenerator,
+)
+
+#: Public aliases for the two interview shapes this verb copies through. The
+#: composite's implementation module composes a DETECTED solver hint
+#: (``detect-entry-point`` reports ``solver: "petsc"`` on a candidate), so it
+#: needs the class — and it reads THIS module for it rather than reaching into
+#: another verb's private names across packages. The emitted ``$defs`` key is
+#: still the defining class name, so the schema matches ``interview.input.json``
+#: exactly.
+DataAxisHint = _DataAxisHint
+PetscSolverHint = _PetscSolverHint
 
 # ── Input ────────────────────────────────────────────────────────────────
 
@@ -125,6 +149,34 @@ class WrapEntryPointAutoInput(BaseModel):
             "argv. Doubles as the param inventory the fixed-params partition "
             "reads on the wrapper pathway (no introspectable Python signature "
             "exists there)."
+        ),
+    )
+
+    data_axis_hint: DataAxisHint | None = Field(
+        default=None,
+        description=(
+            "Pre-declared series-axis classification, copied VERBATIM onto the "
+            "composed shell_command entry block. WRAPPER PATHWAY ONLY (#260): a "
+            "wrapper body is a subprocess call classify-axis cannot introspect, "
+            "which is exactly why the hint is load-bearing there — and exactly "
+            "why the interview's register_run / python_module shapes carry no "
+            "such field (both are introspectable, so classify-axis reads the "
+            "real function). Supplying it on an introspectable pathway is a "
+            "NAMED caller error, never a silently dropped field."
+        ),
+    )
+    solver: PetscSolverHint | None = Field(
+        default=None,
+        description=(
+            "Checkpoint-instrumentation hint for a known solver library, copied "
+            "VERBATIM onto the composed shell_command entry block (wrapper "
+            "pathway only — the other two entry-point shapes carry no solver "
+            "field). Overrides detection: when omitted and detect-entry-point "
+            "recognized the library in the entry point's source (it reports "
+            "``solver: 'petsc'`` on the candidate), the composite fills in that "
+            "adapter's default hint rather than dropping the detection on the "
+            "floor. Supply it explicitly to pick a non-default ``solver_object`` "
+            "or declare the app's ``resume_flag``."
         ),
     )
 
@@ -326,9 +378,13 @@ class _OnboardedResult(BaseModel):
     interview_spec: dict[str, Any] = Field(
         description=(
             "The composed InterviewSpec fragment — goal / task_count / "
-            "task_generator / entry_point — ready to hand to the `interview` "
-            "primitive. produced_by is NOT stamped here (that composer is the "
-            "interview verb's own)."
+            "task_generator / entry_point / produced_by — SUBMITTABLE as-is to "
+            "the `interview` primitive (interview.input.json requires "
+            "produced_by, so a fragment omitting it could never be handed on "
+            "unedited). produced_by is the minimal {kind: 'human'} SUGGESTION: "
+            "the interview's own P1.c composer fills .operator from git config "
+            "and discloses it as a composed default, so attribution stays "
+            "required — this verb declares WHO-CLASS, never the identity."
         ),
     )
 
@@ -452,6 +508,29 @@ class _NeedsWrapperArgvResult(BaseModel):
             "shape (['python3', 'train.py'] / ['python3', '-m', 'pkg'] / "
             "['mytool'] / ['./run.sh']). The caller appends the "
             "{placeholder} flags."
+        ),
+    )
+    argv_extraction: Literal["extracted", "unsupported"] = Field(
+        description=(
+            "detect-entry-point's mechanical-parameter verdict for this entry "
+            "point, CARRIED THROUGH rather than re-derived. The composite ran "
+            "the scan in-process to get here, so dropping the verdict would "
+            "force the caller into a second detect-entry-point call — the "
+            "produce→consume seam this composite exists to close. "
+            "'unsupported' also covers an entry point the caller NAMED that the "
+            "scan never surfaced (no classified surface to extract from)."
+        ),
+    )
+    argv_params: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "The mechanically extracted CLI parameters when argv_extraction == "
+            "'extracted', else null. Same shape detect-entry-point emits — see "
+            "the ArgvParam $def in schemas/detect_entry_point.output.json and "
+            "the two-honesty-levels rule in hpc_agent/ops/argv_extract.py; not "
+            "restated here, because a second copy of that shape would drift "
+            "from the extractor. A param carrying an 'unextracted' marker still "
+            "needs a source read for the argument it names."
         ),
     )
     missing_fields: list[str] = Field(

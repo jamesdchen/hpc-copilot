@@ -15,14 +15,17 @@
       "properties": {
         "ok": { "const": true },
         "skill": { "const": "hpc-wrap-entry-point" },
-        "entry_point_kind": { "enum": ["register_run", "shell_command"] },
+        "entry_point_kind": {
+          "enum": ["register_run", "shell_command", "python_module"],
+          "description": "The InterviewSpec entry-point kind the onboarding settled on. All THREE are reachable: register_run (direct decoration, the default), shell_command (the materialized wrapper), and python_module — the dotted-path target wrap-entry-point-auto reaches by explicit entry_point_kind override (whether the file may be edited is caller judgment, not a repo fact). Pinning the enum to the first two made a python_module onboarding unable to emit a valid Success envelope at all."
+        },
         "run_name": { "type": "string", "minLength": 1 },
         "tasks_py_path": { "type": "string", "minLength": 1 },
         "interview_json_path": { "type": "string", "minLength": 1 },
         "wrapper_path": {
           "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }],
           "default": null,
-          "description": "Path to the materialized wrapper at .hpc/wrappers/<run_name>.py. Present on the shell_command (3b) path; null on the register_run (3a) direct-decoration path."
+          "description": "Path to the materialized wrapper at .hpc/wrappers/<run_name>.py. Present ONLY on the shell_command (3b) path; null on the register_run (3a) direct-decoration path and on python_module (which targets the undecorated function by dotted path and writes nothing at all)."
         },
         "total_tasks": { "type": "integer", "minimum": 1 },
         "cmd_sha": { "type": "string", "minLength": 1 },

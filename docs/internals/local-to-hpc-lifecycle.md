@@ -105,7 +105,11 @@ hand-edited. Two inputs are demanded from the human and are refusable —
 (`src/hpc_agent/ops/submit/field_partition.py::REQUIRED_CALLER_FIELDS`),
 and the type system forbids attaching a safe default to them. Everything
 else is detected, scaffolded, or comes back as a question. Where the tool
-cannot decide, it refuses rather than guesses (`ambiguous_entry_point`).
+cannot decide, it refuses rather than guesses: `wrap-entry-point-auto`
+returns the success-shaped escalation `{needs_pick, reason:
+entry_point_tie}` — every tied candidate listed, plus the exact input field
+(`entry_point_path` / `run_name`) that breaks the tie — instead of picking
+one and instead of the retired `ambiguous_entry_point` error code.
 The map draws two feeds merging into `tasks.py` because materializing it
 genuinely needs both and neither can substitute for the other: the
 machine-detected *what to run* (the entry point) and the human-supplied

@@ -68,6 +68,50 @@ mirroring the SKILL.md prose:
 Console scripts classify to `console_script`; shell / binary entry points
 to `shell`.
 
+## Mechanical parameter extraction (`argv_extraction` / `argv_params`)
+
+Classification alone still left the wrapper path hand-authoring
+`entry_point.argv` + `signature` from an eyeballed read of the file. So
+**every** candidate additionally carries two REQUIRED fields:
+
+- `argv_extraction` — `extracted` or `unsupported`;
+- `argv_params` — the parameter list when `extracted`, else `null`.
+
+Two frameworks declare their parameters *mechanically*, as literal arguments
+to a call the AST can read: **argparse** (`parser.add_argument(...)`) and
+**click** (`@click.option` / `@click.argument`). Those extract. Everything
+else — typer (params come from Python type hints), hydra (a composed YAML
+tree), fire (a live signature), a bare `__main__`, a console script, a shell
+entry point — reports `unsupported` with `argv_params: null`. That is an
+honest "not mechanically knowable", never a guess: the LLM keeps that leg,
+because a wrong argv fails every task and the canary only catches it after
+the submit round-trip. The verdict is uniform across all candidate kinds so a
+consumer never has to read an *absent* field as "unknown".
+
+The extractor is `src/hpc_agent/ops/argv_extract.py` — **pure AST**
+(`ast.parse` + literal reads only; nothing imports, executes, or evaluates
+user code, so a repo whose third-party deps are unavailable still extracts).
+Its module docstring is the source of truth for the two honesty levels and
+for every bail condition; the per-field value tables live in the
+`Candidate` / `ArgvParam` `$def`s of
+`hpc_agent/schemas/detect_entry_point.output.json`. Neither is restated here
+— a second copy would drift from the extractor. Two rules worth carrying at
+this level:
+
+- **Verdict degradation** is reserved for a *whole-surface* unknown, where
+  even the parameter COUNT would be a claim we cannot make (an argparse
+  parser built elsewhere, `add_subparsers`, a click group of several
+  commands, an unparseable file).
+- **A per-param `unextracted` marker** covers a *single* parameter whose
+  names are readable but one written argument is not modeled. The param is
+  still emitted (its names and dest are real information) and every
+  unreadable argument is NAMED. A consumer composing an argv **must** treat
+  a param carrying `unextracted` as an LLM leg.
+
+`wrap-entry-point-auto` runs this scan in-process and carries both fields
+onto its `needs_wrapper_argv` escalation, so a caller composing the argv
+template never needs a second `detect-entry-point` call.
+
 ## The materialized entry-point block
 
 When a wrapper-fallback onboarding (`hpc-wrap-entry-point`) has already

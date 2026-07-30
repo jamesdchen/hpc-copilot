@@ -319,6 +319,13 @@ _INCORPORATION_TO_OPS_META = DirectionalRule(
             # detection scan and the pathway table can never be hand-sequenced
             # apart. Not the eager cycle the rule exists to block.
             ("incorporation/wrap_entry_point_auto.py", "hpc_agent.ops.detect_entry_point"),
+            # Same file, same call-time posture: the composite CARRIES that
+            # scan's argv_extraction verdict onto its needs_wrapper_argv
+            # escalation, so it reads the extractor's own two verdict
+            # constants rather than re-spelling "extracted" / "unsupported" as
+            # local string literals. A second copy of that vocabulary is
+            # exactly the drift the constants exist to prevent.
+            ("incorporation/wrap_entry_point_auto.py", "hpc_agent.ops.argv_extract"),
             # Lazy call-time read of the campaign manifest for campaign-shaped
             # submits (nested in a function try-block; a non-campaign submit
             # never reaches it) — the same sanctioned posture as the two edges
