@@ -2279,3 +2279,213 @@ def test_template_explicitly_supplied_leaves_record_untouched(tmp_path: Path) ->
 def test_no_pack_no_composed_default(tmp_path: Path) -> None:
     record_interview(InterviewSpec.model_validate(_generator_intent()), campaign_dir=tmp_path)
     assert _composed_defaults(tmp_path) == []
+
+
+# ─── P1.c composed defaults: operator + entry_point.run_name ───────────────
+#
+# Prelude mechanization (docs/plans/prelude-chain-2026-07-30.md): two fields
+# the SKILL used to have the AGENT hand-author are composed IN CODE and
+# disclosed in ``_materialized.composed_defaults`` — the same posture as the
+# audit-template default above. Three properties per field: omitted →
+# composed AND disclosed; caller-supplied → untouched; unresolvable → the
+# refusal stands (never a silently empty or invented value).
+
+
+def _persisted(campaign_dir) -> dict:
+    doc: dict = json.loads((campaign_dir / "interview.json").read_text(encoding="utf-8"))
+    return doc
+
+
+def _disclosure(campaign_dir, field: str) -> dict:
+    """The disclosure for *field*; unpack-loud when it was not composed."""
+    (found,) = [d for d in _composed_defaults(campaign_dir) if d.get("field") == field]
+    assert isinstance(found, dict)
+    return found
+
+
+def _disclosed_fields(campaign_dir) -> list[str]:
+    return [str(d.get("field")) for d in _composed_defaults(campaign_dir)]
+
+
+def _human_intent(**overrides) -> dict:
+    """A generator-mode intent whose provenance OMITS ``operator``."""
+    intent = _generator_intent(produced_by={"kind": "human"})
+    intent.update(overrides)
+    return intent
+
+
+def _stub_git(monkeypatch: pytest.MonkeyPatch, answer: str | None) -> list[tuple]:
+    """Stub the ONE bounded git seam; return the recorded ``(args, cwd)`` calls."""
+    calls: list[tuple] = []
+
+    def _fake(args: list[str], *, cwd, timeout: float = 2.0) -> str | None:
+        calls.append((tuple(args), cwd))
+        return answer
+
+    monkeypatch.setattr("hpc_agent._build_info.git_output", _fake)
+    return calls
+
+
+def test_operator_composed_from_git_config_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _stub_git(monkeypatch, "Ada Lovelace")
+    record_interview(InterviewSpec.model_validate(_human_intent()), campaign_dir=tmp_path)
+
+    # Stamped into the persisted intent (the field ``recall`` indexes) …
+    assert _persisted(tmp_path)["produced_by"]["operator"] == "Ada Lovelace"
+    # … and DISCLOSED as composed, never passed off as typed.
+    assert _disclosure(tmp_path, "produced_by.operator") == {
+        "field": "produced_by.operator",
+        "value": "Ada Lovelace",
+        "source": "git_config_user_name",
+        "rule": "git_config",
+    }
+    # Read through the one bounded seam, in the campaign dir.
+    assert calls == [(("config", "user.name"), tmp_path)]
+
+
+def test_operator_supplied_by_caller_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _stub_git(monkeypatch, "Composed Name")
+    intent = _generator_intent(produced_by={"kind": "human", "operator": "Typed Name"})
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    assert _persisted(tmp_path)["produced_by"]["operator"] == "Typed Name"
+    assert _disclosed_fields(tmp_path) == []
+    # The caller won BEFORE any subprocess — composition is never attempted.
+    assert calls == []
+
+
+def test_operator_omitted_and_git_unset_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # git absent / user.name unset / timeout — all one fail-open ``None``. The
+    # refusal the wire model used to raise still fires (moved, not softened):
+    # a human intent is never persisted with an empty operator.
+    _stub_git(monkeypatch, None)
+    with pytest.raises(errors.SpecInvalid) as exc:
+        record_interview(InterviewSpec.model_validate(_human_intent()), campaign_dir=tmp_path)
+    assert "produced_by.kind='human' requires 'operator'" in str(exc.value)
+    assert "git config user.name" in str(exc.value)
+    assert not (tmp_path / "interview.json").exists()
+
+
+def test_agent_provenance_never_composes_an_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``operator`` is a human-kind field; an agent-produced intent neither
+    # composes it nor shells out.
+    calls = _stub_git(monkeypatch, "Ada Lovelace")
+    intent = _generator_intent(produced_by={"kind": "agent", "session_sha": "abc123"})
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    assert "operator" not in _persisted(tmp_path)["produced_by"]
+    assert _disclosed_fields(tmp_path) == []
+    assert calls == []
+
+
+def _shell_entry(**overrides) -> dict:
+    entry: dict = {
+        "kind": "shell_command",
+        "argv": ["python3", "main.py", "--seed", "{seed}"],
+        "signature": {"seed": "int"},
+        "frozen_configs": [],
+    }
+    entry.update(overrides)
+    return entry
+
+
+def _wrapper_intent(**entry_overrides) -> dict:
+    return _minimal_intent(
+        1,
+        entry_point=_shell_entry(**entry_overrides),
+        task_generator={"kind": "enumerated", "params": {"items": [{"seed": 0}]}},
+    )
+
+
+def test_run_name_composed_from_detected_candidate_stem(tmp_path: Path) -> None:
+    # detect-entry-point already NAMES the file the argv invokes, so the
+    # wrapper name was pure transcription off its stem.
+    (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+    result = record_interview(
+        InterviewSpec.model_validate(_wrapper_intent()), campaign_dir=tmp_path
+    )
+
+    wrapper = tmp_path / ".hpc" / "wrappers" / "main.py"
+    assert wrapper.is_file()
+    assert ".hpc/wrappers/main.py" in result["artifacts"]
+    assert "def main(seed: int, **kwargs)" in wrapper.read_text()
+    doc = _persisted(tmp_path)
+    assert doc["_materialized"]["entry_point"]["run_name"] == "main"
+    assert _disclosure(tmp_path, "entry_point.run_name") == {
+        "field": "entry_point.run_name",
+        "value": "main",
+        "source": "detect_entry_point_candidate_stem",
+        "rule": "argv_invoked_candidate",
+        "candidates": "main.py",
+    }
+    # Stamped into the persisted intent too, so re-feeding the record is
+    # idempotent rather than re-deriving from a repo that may have moved on.
+    assert doc["entry_point"]["run_name"] == "main"
+
+
+def test_run_name_supplied_by_caller_is_untouched(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+    record_interview(
+        InterviewSpec.model_validate(_wrapper_intent(run_name="forecast")),
+        campaign_dir=tmp_path,
+    )
+    assert (tmp_path / ".hpc" / "wrappers" / "forecast.py").is_file()
+    assert _persisted(tmp_path)["_materialized"]["entry_point"]["run_name"] == "forecast"
+    assert _disclosed_fields(tmp_path) == []
+
+
+def test_run_name_composed_from_explicit_relative_argv(tmp_path: Path) -> None:
+    # ``./run.sh`` matches detect's ``run.sh`` candidate (the explicit-relative
+    # prefix is normalized), and the stem is sanitized to an identifier — the
+    # wrapper's @register_run function is named after it.
+    (tmp_path / "run.sh").write_text("#!/bin/sh\necho hi\n")
+    record_interview(
+        InterviewSpec.model_validate(_wrapper_intent(argv=["./run.sh", "--seed", "{seed}"])),
+        campaign_dir=tmp_path,
+    )
+    assert _disclosure(tmp_path, "entry_point.run_name")["value"] == "run"
+    assert (tmp_path / ".hpc" / "wrappers" / "run.py").is_file()
+
+
+def test_run_name_omitted_with_no_matching_candidate_refuses(tmp_path: Path) -> None:
+    # Nothing detect found is invoked by the argv → no name is invented; the
+    # refusal names every candidate and the explicit remedy.
+    (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+    intent = _wrapper_intent(argv=["python3", "somewhere/else.py", "--seed", "{seed}"])
+    with pytest.raises(errors.SpecInvalid) as exc:
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert "entry_point.run_name" in str(exc.value)
+    assert "main.py" in str(exc.value)
+    assert not (tmp_path / ".hpc" / "wrappers").exists()
+
+
+def test_run_name_omitted_with_two_matching_candidates_refuses(tmp_path: Path) -> None:
+    # A composed default must be unambiguous: an argv naming two detected
+    # candidates refuses instead of tie-breaking (the compose-selection law).
+    (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+    (tmp_path / "train.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+    intent = _wrapper_intent(argv=["python3", "main.py", "train.py", "--seed", "{seed}"])
+    with pytest.raises(errors.SpecInvalid) as exc:
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert "2 of the entry-point candidates" in str(exc.value)
+
+
+def test_both_composed_defaults_disclosed_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The disclosure list accumulates, in the documented order.
+    _stub_git(monkeypatch, "Ada Lovelace")
+    (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+    intent = _wrapper_intent()
+    intent["produced_by"] = {"kind": "human"}
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    assert _disclosed_fields(tmp_path) == ["produced_by.operator", "entry_point.run_name"]
