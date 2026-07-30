@@ -47,6 +47,53 @@ BlockDriveAction = Literal[
 ]
 
 
+class BlockDriveAuditSeat(BaseModel):
+    """The AUDIT chain's scope declaration (P2.b) — a NON-run scope.
+
+    A notebook audit is keyed by ``audit_id`` and mints no run, so the driver's
+    ``run_id``-based fresh-entry materialization cannot start it. This is the
+    seat the caller declares instead: the audit scope plus the two ``.py`` paths
+    every block in the chain is composed from. The driver hands it VERBATIM to
+    ``audit-preflight`` (whose spec model is what validates it), and every
+    downstream block's spec is code-composed from what the predecessor emits —
+    the agent never re-authors a spec mid-chain.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="block-drive audit seat")
+
+    audit_id: str = Field(
+        min_length=1,
+        description="The notebook decision-journal scope the whole chain is keyed by.",
+    )
+    source: str = Field(
+        min_length=1,
+        description=(
+            "Experiment-relative path to the audited source .py. Its PRESENCE is "
+            "the chain's draft-readiness test: absent, the first tick parks for "
+            "the agent to draft it rather than chaining into a lint of nothing."
+        ),
+    )
+    template: str = Field(
+        min_length=1,
+        description="Experiment-relative path to the template .py (the required inventory).",
+    )
+    source_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional OPAQUE import roots for the preflight's roots check. Null "
+            "defaults them from the audit's recorded configuration (the "
+            "one-declaration rule)."
+        ),
+    )
+    input_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional OPAQUE data-path roots for the preflight's roots check. Null "
+            "defaults them from the audit's recorded configuration."
+        ),
+    )
+
+
 class BlockDriveSpec(BaseModel):
     """Inputs to one ``block-drive`` tick.
 
@@ -74,6 +121,14 @@ class BlockDriveSpec(BaseModel):
             "The workflow family to drive (submit / status / aggregate / "
             "campaign). Required for a FRESH chain start (picks the first block "
             "from block_chain.ORDER); recovered from the resume cursor on a RESUME."
+        ),
+    )
+    audit: BlockDriveAuditSeat | None = Field(
+        default=None,
+        description=(
+            "The AUDIT chain's non-run scope seat (P2.b) — required to FRESH-start "
+            '`workflow: "audit"`, ignored by every other family. A notebook audit '
+            "is keyed by audit_id and mints no run, so `run_id` cannot start it."
         ),
     )
     dry_run: bool = Field(

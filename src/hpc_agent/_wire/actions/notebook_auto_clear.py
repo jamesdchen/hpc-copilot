@@ -31,6 +31,8 @@ nothing.
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -149,5 +151,29 @@ class NotebookAutoClearResult(BaseModel):
         description=(
             "Sections NOT cleared, in source order — human_required (never "
             "clearable by code) or already-current (idempotent no-op)."
+        ),
+    )
+    stage_reached: Literal["cleared"] = Field(
+        default="cleared",
+        description=(
+            "The terminator this block stopped at (decision-as-data, #231). ONE "
+            "stage: an auto-clear pass that clears nothing is the idempotent "
+            "no-op, not a different outcome — the deterministic successor (the "
+            "audit view) is the same either way."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=False,
+        description=(
+            "Always false — the CODE attestor never asks the human anything; "
+            "a section it may not clear is simply left for the human sign-off."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` "
+            "— or null when the caller supplied no `source`/`template` seat to "
+            "compose the successor's spec from (the standalone call)."
         ),
     )

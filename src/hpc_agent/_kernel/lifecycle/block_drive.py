@@ -95,6 +95,14 @@ _FRESH_ENTRY_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot", "aggr
 # without one gets the clear skip, never a doomed ``SpecInvalid`` span.
 _FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot"})
 
+# The FRESH entry blocks whose scope is NOT a run (P2.b). A notebook audit is
+# keyed by ``audit_id`` and mints no run, so no ``run_id`` can start it and the
+# ``_FRESH_ENTRY_RUN_ID_BLOCKS`` materialization above cannot apply. Its scope
+# rides its own declared seat on ``BlockDriveSpec.audit`` — the same
+# "a non-run scope declares itself" shape the campaign chain established (a
+# campaign is started by its own ``campaign_id``, never a bare tick).
+_FRESH_ENTRY_AUDIT_BLOCKS: frozenset[str] = frozenset({"audit-preflight"})
+
 
 # ── in-process span eligibility (WS-INPROC) ─────────────────────────────────────
 #
@@ -115,10 +123,26 @@ _FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapsho
 #   * WATCH_VERBS — ``submit-s3`` / ``status-watch`` / ``campaign-watch``;
 #   * 2.6's per-host census waiter (a WATCH_VERB subprocess, named so it cannot be
 #     inlined here).
-# Only ``campaign-greenlight`` (writes-campaign-state, local journal) and
-# ``campaign-complete`` (side_effects=[]) clear the bar today: both are cluster-free
-# state/decision blocks.
-_IN_PROCESS_ELIGIBLE_VERBS: frozenset[str] = frozenset({"campaign-greenlight", "campaign-complete"})
+# ``campaign-greenlight`` (writes-campaign-state, local journal) and
+# ``campaign-complete`` (side_effects=[]) clear the bar; so does the WHOLE audit
+# family (P2.b) — a notebook audit parses two local ``.py`` files, replays a local
+# journal and writes render files, and no block in it declares ssh, a scheduler
+# mutation or a sync. That family is also the case the carve-out pays off best on:
+# a single audit tick chains FIVE spans, so the subprocess seam would charge five
+# interpreter cold starts + five registry walks for work that is measured in
+# milliseconds of actual computation.
+_IN_PROCESS_ELIGIBLE_VERBS: frozenset[str] = frozenset(
+    {
+        "campaign-greenlight",
+        "campaign-complete",
+        "audit-preflight",
+        "notebook-lint",
+        "notebook-auto-clear",
+        "notebook-audit-view",
+        "notebook-status",
+        "audit-handoff",
+    }
+)
 
 
 @contextlib.contextmanager
@@ -639,6 +663,38 @@ def _next_verb_of(result: dict[str, Any]) -> str | None:
     return None
 
 
+def _brief_dict(value: Any) -> dict[str, Any] | None:
+    """Coerce a block Result's ``brief`` into a mapping, or ``None`` if there is none.
+
+    Most block families carry a STRUCTURED brief (a dict of code-digested
+    evidence). The audit family instead renders its brief as MARKDOWN TEXT for
+    verbatim relay — a legitimate second shape, but every consumer in the driver
+    tested ``isinstance(..., dict)`` and silently dropped it, so an audit park
+    reached the human carrying nothing at all.
+
+    The rendered text is preserved VERBATIM under ``text`` — never summarized,
+    never truncated, never parsed. A dict passes through unchanged (so every
+    pre-existing family is byte-identical), and anything else is ``None``.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        return {"text": value}
+    return None
+
+
+def _normalize_result_brief(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize *result*'s ``brief`` to a mapping IN PLACE; return it.
+
+    Called once per span in :func:`_chain` so the park's disclosure composition
+    and the returned :class:`BlockDriveResult` read the same normalized shape.
+    """
+    brief = _brief_dict(result.get("brief"))
+    if brief is not None:
+        result["brief"] = brief
+    return brief
+
+
 def _next_spec_hint(result: dict[str, Any]) -> dict[str, Any]:
     """The minimal next-spec skeleton the block attached to its ``next_block``."""
     nb = result.get("next_block")
@@ -649,7 +705,9 @@ def _next_spec_hint(result: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _fresh_entry_spec(verb: str | None, run_id: str | None) -> dict[str, Any] | None:
+def _fresh_entry_spec(
+    verb: str | None, run_id: str | None, audit: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """Build the FIRST span's spec for a FRESH chain start, or ``None`` if unbuildable.
 
     ``status-snapshot`` / ``aggregate-check`` accept a top-level ``run_id`` (§3), so
@@ -660,7 +718,18 @@ def _fresh_entry_spec(verb: str | None, run_id: str | None) -> dict[str, Any] | 
     In every unbuildable case the driver returns ``None`` and :func:`run_tick`
     reports a clear ``skip`` naming the missing inputs rather than running a
     span the block would reject with ``SpecInvalid``.
+
+    The AUDIT chain (P2.b) is keyed by ``audit_id``, NOT ``run_id`` — a notebook
+    audit has no run and mints none. Its scope rides its own declared seat
+    (``BlockDriveSpec.audit``: audit_id + the two ``.py`` paths + optional roots),
+    which is exactly the non-run-scope shape the campaign chain established. No
+    seat → unbuildable → the same clear ``skip``.
     """
+    if verb in _FRESH_ENTRY_AUDIT_BLOCKS:
+        if not audit:
+            return None
+        entry = {k: v for k, v in audit.items() if v is not None}
+        return entry or None
     if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
         if run_id:
             return {"run_id": run_id}
@@ -1053,6 +1122,80 @@ def _lost_the_consume_race(
 # ── the tick ───────────────────────────────────────────────────────────────────
 
 
+def _pending_park_actor(pending: dict[str, Any]) -> str:
+    """Who a pending marker is waiting on — ``"human"`` (the default) or ``"agent"``.
+
+    The one reader of the marker's P2.a ``actor`` key. Absent ⇒ ``"human"``: every
+    marker written before P2.a, and every human park written after it, omits the
+    key entirely, so this is a pure widening — nothing existing changes meaning.
+    """
+    actor = pending.get("actor")
+    return actor if isinstance(actor, str) and actor else "human"
+
+
+def _resume_agent_park(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    pending: dict[str, Any],
+    workflow: str | None,
+) -> tuple[BlockDriveResult, int]:
+    """Resume an AGENT park by RE-RUNNING the parked block — no consent, ever (P2.a).
+
+    The agent park's whole contract: the LLM was asked for a draft, and the
+    evidence that it delivered is the FILE ON DISK, not a journaled approval. So
+    the resume consumes NOTHING — it re-runs the parked block under the exact
+    spec it ran before and lets the block itself re-read the world. If the draft
+    did land, the block's stage flips and the chain advances; if it did not, the
+    block re-parks identically (idempotent, one span per tick).
+
+    The marker is still consumed through the SAME compare-and-swap the greenlight
+    resume uses (§8 S8), so two concurrent drivers cannot both re-run the span,
+    and a FAILED first span re-parks the marker verbatim. What is absent — and
+    must stay absent — is any read of the decision journal: a greenlight
+    committed at some other boundary must never be able to satisfy this one.
+    """
+    if not _consume_marker(experiment_dir, run_id, pending):
+        cursor = pending.get("resume_cursor") or {}
+        return _lost_the_consume_race(
+            run_id=run_id,
+            workflow=(cursor.get("workflow") if isinstance(cursor, dict) else None) or workflow,
+            current_verb=cursor.get("current_verb") if isinstance(cursor, dict) else None,
+            next_verb=cursor.get("next_verb") if isinstance(cursor, dict) else None,
+        )
+    cursor = pending.get("resume_cursor") or {}
+    verb = cursor.get("current_verb") if isinstance(cursor, dict) else None
+    spec = cursor.get("input_spec") if isinstance(cursor, dict) else None
+    wf = (cursor.get("workflow") if isinstance(cursor, dict) else None) or workflow
+    if not isinstance(verb, str) or not verb or not isinstance(spec, dict):
+        return (
+            BlockDriveResult(
+                action="skip",
+                run_id=run_id,
+                workflow=wf,
+                reason=(
+                    "agent park is missing its resume cursor position/spec; cannot "
+                    "re-run the parked block to re-read the draft"
+                ),
+            ),
+            0,
+        )
+    marker = dict(pending)
+
+    def _repark() -> None:
+        _repark_marker(experiment_dir, run_id, marker)
+
+    return _chain(
+        experiment_dir,
+        run_id=run_id,
+        workflow=wf,
+        first_verb=verb,
+        first_spec=dict(spec),
+        first_label="reran",
+        on_first_failure=_repark,
+    )
+
+
 def run_tick(
     experiment_dir: Path,
     *,
@@ -1060,6 +1203,7 @@ def run_tick(
     workflow: str | None,
     dry_run: bool = False,
     approve: dict[str, Any] | None = None,
+    audit: dict[str, Any] | None = None,
 ) -> tuple[BlockDriveResult, int]:
     """Advance the block chain by one tick; return ``(result, exit_code)``.
 
@@ -1093,6 +1237,19 @@ def run_tick(
         _commit_fused_approval(experiment_dir, approve)
 
     pending = read_pending_decision(run_id, experiment_dir=experiment_dir) if run_id else {}
+
+    # AGENT-ACTOR PARK RESUME (P2.a) — BEFORE any greenlight read, deliberately.
+    # An ``actor="agent"`` park is waiting on the LLM's DRAFT, and a draft is
+    # authorship, not authorization: there is no ``y`` to look for, no
+    # ``resolved`` spec to consume, and no standing consent to consult. So this
+    # leg never touches the decision journal at all — it re-runs the parked block
+    # so it re-reads the world (the draft is EVIDENCE ON DISK, which is exactly
+    # why no journaled approval is needed). Routing it through the ordinary resume
+    # path would let a greenlight committed for some OTHER boundary satisfy this
+    # one; keeping it above that read makes that structurally impossible.
+    if pending and run_id and not dry_run and _pending_park_actor(pending) == "agent":
+        return _resume_agent_park(experiment_dir, run_id=run_id, pending=pending, workflow=workflow)
+
     committed_resolved: dict[str, Any] | None = None
     last_run_inputs: dict[str, Any] | None = None
     if run_id:
@@ -1320,9 +1477,16 @@ def run_tick(
                 if k not in _META_KEYS and (accepted is None or k in accepted)
             }
     else:
-        built = _fresh_entry_spec(verb, run_id)
+        built = _fresh_entry_spec(verb, run_id, audit)
         if built is None:
-            if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
+            if verb in _FRESH_ENTRY_AUDIT_BLOCKS:
+                reason = (
+                    f"cannot fresh-start {verb} without an audit seat — the audit "
+                    "chain is keyed by audit_id, not run_id. Re-run with a spec "
+                    'carrying {"workflow": "audit", "audit": {"audit_id": ..., '
+                    '"source": ..., "template": ...}}.'
+                )
+            elif verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
                 reason = (
                     f"cannot fresh-start {verb} without a run_id — its spec requires "
                     "one. Re-run with --run-id <id>."
@@ -1429,6 +1593,15 @@ def _chain(
 
         first_span = False
         last_result = result
+        # A block whose brief is code-rendered MARKDOWN TEXT rather than a
+        # structured dict (the audit family relays its brief verbatim) is
+        # normalized ONCE, here, so every downstream reader — the park's
+        # disclosure composition AND the BlockDriveResult the caller returns —
+        # sees a mapping. Without it a string brief silently became ``None`` at
+        # every one of those sites: the NO-GO park dropped its blockers and their
+        # pre-drafted remedies, and the human was asked to decide on nothing. A
+        # dict brief is untouched, so every pre-existing family is byte-identical.
+        _normalize_result_brief(result)
         stage = result.get("stage_reached")
         successor = _next_verb_of(result)
 
@@ -1794,8 +1967,16 @@ def _boundary_has_post_park_nudge(
     )
 
 
-def greenlight_target(verb: str, successor: str | None) -> str | None:
+def greenlight_target(verb: str, successor: str | None, *, stage: Any = None) -> str | None:
     """The verb a human ``y`` at *verb*'s park greenlights, or ``None``.
+
+    AGENT PARKS (P2.a) resolve ``None`` unconditionally: at an ``actor="agent"``
+    boundary (:data:`block_chain.AGENT_PARKS`, keyed by ``(verb, stage)``) the
+    next act is the LLM's draft, and a draft is AUTHORSHIP, not authorization —
+    so there is no target for a ``y`` to greenlight, no scoped-consent utterance
+    to compose, and no bare-``y`` line in any menu. Callers that do not pass
+    *stage* get the pre-P2.a human derivation verbatim, so every existing call
+    site is byte-identical.
 
     The ONE derivation both park-time disclosures key on — the scoped-consent
     utterance (:func:`_compose_approve_hint_for_park`) and the paste-ready answer
@@ -1811,6 +1992,8 @@ def greenlight_target(verb: str, successor: str | None) -> str | None:
     ``tests/contracts/test_bare_y_coverage.py`` enumerates those and demands a
     stated reason for each).
     """
+    if stage is not None and block_chain.park_actor(verb, str(stage)) == "agent":
+        return None
     target = successor if isinstance(successor, str) and successor else None
     if target is None:
         target = block_chain.chain_successor(verb)
@@ -2043,6 +2226,28 @@ def _compose_approve_hint_for_park(
     )
 
 
+def _attach_draft_ask(result: dict[str, Any], *, verb: str, stage: Any, run_id: str) -> None:
+    """Attach the AGENT park's ``draft_ask`` to *result*'s brief, in place (P2.a).
+
+    The agent-actor counterpart of the human park's answer menu, and the ONE
+    thing an agent park composes. It is deliberately NOT a menu variant: a menu's
+    first line is the bare ``y`` that advances a boundary, and this boundary has
+    none to advance.
+
+    Normalizes a MARKDOWN-TEXT brief into ``{"text": ...}`` first: the audit
+    family renders its brief as a code-rendered string for verbatim relay (rather
+    than the structured dict the submit/status/aggregate blocks carry), and the
+    disclosure needs a mapping to ride on. The rendered text is preserved
+    verbatim under ``text`` — never summarized, never dropped.
+    """
+    from hpc_agent._kernel.lifecycle.answer_menu import compose_draft_ask
+
+    draft_ask = compose_draft_ask(block=verb, stage=str(stage), run_id=run_id)
+    if draft_ask is None:
+        return
+    result["brief"] = {**(_brief_dict(result.get("brief")) or {}), "draft_ask": draft_ask}
+
+
 def park(
     experiment_dir: Path,
     *,
@@ -2062,9 +2267,29 @@ def park(
     ``resolved`` against it for §4 routing) and stamps ``awaiting_since`` +
     ``cmd_sha`` (the input-spec identity, the §4 fast-path key). This marker is
     what flips the doctor's read from "stalled" to "parked" (§5).
+
+    THE ACTOR (P2.a). Every disclosure below — the greenlight target, the
+    scoped-consent ``approve_hint``, the overnight standing-consent offer, the
+    answer menu's bare-``y`` line — is a CONSENT affordance built for a HUMAN
+    typing at the rendezvous. An ``actor="agent"`` park
+    (:func:`block_chain.park_actor`) composes NONE of them and carries a DRAFT
+    ASK instead: a draft is authorship, not authorization, so nothing is
+    greenlit, nothing is offered, and no consent is consumed. A HUMAN park is
+    BYTE-IDENTICAL to the pre-P2.a marker — the ``actor`` key is written ONLY on
+    the agent branch, so a human marker's bytes never move.
     """
     from hpc_agent.infra.time import utcnow_iso
 
+    actor = block_chain.park_actor(verb, str(stage))
+    # The DRAFT ASK is composed BEFORE the run_id guard, deliberately. A chain
+    # with a non-run scope (the audit family is keyed by audit_id and mints no
+    # run) has no ``run_id`` to hang a durable marker on, so the guard below
+    # returns — and an agent park that returned there would hand the LLM a stop
+    # with no stated ask, which is worse than any wrong affordance. The marker is
+    # what is skipped for a scope-less park; the DISCLOSURE still rides the
+    # caller's Result, exactly as the sidecar-only-run case below does.
+    if actor == "agent":
+        _attach_draft_ask(result, verb=verb, stage=stage, run_id=run_id)
     if not run_id:
         _log.warning("cannot park %s without a run_id; brief not persisted", verb)
         return
@@ -2106,7 +2331,11 @@ def park(
     if materialized.sha is not None:
         # Row 16: sha-stamped at park; consumption (R3) recomputes + refuses on drift.
         resume_cursor["next_spec_sha"] = materialized.sha
-    brief = result.get("brief")
+    # Normalized (a markdown-text brief becomes ``{"text": ...}``) so a block that
+    # renders its brief for verbatim relay still gets every disclosure below AND
+    # still reaches the human — ``_chain`` normalizes too, but ``park`` is called
+    # directly (tests, future drivers) and must not depend on that.
+    brief = _normalize_result_brief(result)
     # Disclose the materialized successor spec in the brief the human/agent reads
     # (run-14 #4: "the brief carries it") — a driver-copy disclosure only, NEVER
     # written into the persisted decision-brief (like ``relay``), so it cannot
@@ -2138,14 +2367,22 @@ def park(
     # driver-copy brief + the marker brief, NEVER the provenance-source
     # decision-brief, and NEVER auto-fills the consent (relay-verbatim discipline).
     # A bare ``y`` still works (backward compat); the hint ADDS the scoped form.
-    approve_hint = _compose_approve_hint_for_park(
-        experiment_dir,
-        workflow=wf,
-        run_id=run_id,
-        verb=verb,
-        successor=successor,
-        materialized=materialized,
-        brief=brief,
+    #
+    # An AGENT park composes no hint at all (P2.a): the utterance's whole content
+    # is "this ``y`` greenlights <successor> for <run>", and an agent park
+    # greenlights nothing.
+    approve_hint = (
+        None
+        if actor == "agent"
+        else _compose_approve_hint_for_park(
+            experiment_dir,
+            workflow=wf,
+            run_id=run_id,
+            verb=verb,
+            successor=successor,
+            materialized=materialized,
+            brief=brief,
+        )
     )
     if approve_hint is not None and isinstance(brief, dict):
         brief = {**brief, "approve_hint": approve_hint}
@@ -2167,25 +2404,33 @@ def park(
     # gate that later reads the pasted grant (the overnight-consent authorship
     # gate's token-exact chat tier) is unchanged, and the line is rendered by the
     # same one-home renderer its refusal uses.
-    standing_offer = _compose_standing_offer_for_park(
-        experiment_dir,
-        run_id=run_id,
-        workflow=wf,
-        is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
-    )
-    answer_menu = _compose_answer_menu_for_park(
-        run_id=run_id,
-        verb=verb,
-        stage=stage,
-        target=greenlight_target(verb, successor),
-        materialized=materialized,
-        approve_hint=approve_hint,
-        brief=brief,
-        standing_offer=standing_offer,
-    )
-    if answer_menu is not None and isinstance(brief, dict):
-        brief = {**brief, "answer_menu": answer_menu}
-        result["brief"] = brief
+    #
+    # AGENT PARK (P2.a): neither line applies. A standing overnight consent
+    # pre-authorizes later CLUSTER boundaries — offering one beside "please write
+    # the draft" would mint consent out of an authorship request; and an answer
+    # menu leads with the bare ``y`` that advances a boundary this park does not
+    # have. So the agent branch composes the DRAFT ASK instead: what the LLM must
+    # produce, stated in code, granting nothing.
+    if actor != "agent":
+        standing_offer = _compose_standing_offer_for_park(
+            experiment_dir,
+            run_id=run_id,
+            workflow=wf,
+            is_anomaly_terminator=(verb, str(stage)) in block_chain.ANOMALY_TERMINATORS,
+        )
+        answer_menu = _compose_answer_menu_for_park(
+            run_id=run_id,
+            verb=verb,
+            stage=stage,
+            target=greenlight_target(verb, successor, stage=stage),
+            materialized=materialized,
+            approve_hint=approve_hint,
+            brief=brief,
+            standing_offer=standing_offer,
+        )
+        if answer_menu is not None and isinstance(brief, dict):
+            brief = {**brief, "answer_menu": answer_menu}
+            result["brief"] = brief
     # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
     # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
     # submit-s2 (the qsub) — S1's resolve leg writes only the per-run sidecar.
@@ -2210,6 +2455,9 @@ def park(
             awaiting_since=utcnow_iso(),
             cmd_sha=_spec_sha(spec),
             experiment_dir=experiment_dir,
+            # P2.a: the key is written ONLY for an agent park (the setter omits
+            # it for "human"), so every marker that exists today is byte-identical.
+            actor=actor,
         )
     except FileNotFoundError:
         _log.warning(
@@ -2241,6 +2489,12 @@ def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) ->
     decision that no longer exists. When the swap is refused the newer marker
     wins and this tick's stale one is dropped (logged, never raised: the tick is
     already reporting a failed span).
+
+    VERBATIM includes the ACTOR (P2.a): a re-park that dropped it would silently
+    demote an agent park to a human one, so the next tick would sit waiting for a
+    ``y`` that is never coming while the draft nobody asked for again never
+    lands. The key is still written only for a non-human actor, so a human
+    marker's re-parked bytes are unchanged.
     """
     brief = marker.get("brief")
     cursor = marker.get("resume_cursor")
@@ -2254,6 +2508,7 @@ def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) ->
             awaiting_since=marker.get("awaiting_since") or "",
             cmd_sha=marker.get("cmd_sha"),
             experiment_dir=experiment_dir,
+            actor=_pending_park_actor(marker),
         )
     except OSError:
         _log.warning("failed to re-park the pending marker for %s after a failed span", run_id)

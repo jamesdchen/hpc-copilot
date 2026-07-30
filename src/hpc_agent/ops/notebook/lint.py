@@ -79,6 +79,7 @@ from hpc_agent._wire.actions.notebook_lint import (
     NotebookLintResult,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.linked_sources import (
     _CLOSURE_MAX_MODULES,
     AuditNetEntry,
@@ -1029,10 +1030,34 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
         spec.reader_calls_echo if (reader_surfaced and spec.reader_calls_echo) else None
     )
 
+    # The `audit` chain's second edge (P2.b). Findings are REPORTED, never fatal,
+    # so there is exactly ONE terminator and one deterministic successor — the
+    # CODE attestor's auto-clear pass. Emitted only when the caller carried the
+    # audit CONFIG SEAT: without an `audit_id` there is no scope to key the
+    # downstream blocks on, and the composer refuses rather than inventing one,
+    # so a standalone lint stays byte-identical to its pre-chain self.
+    next_block = (
+        next_block_hint(
+            "notebook-lint",
+            "linted",
+            why=(
+                "structural checks are recorded — run the CODE attestor over the "
+                "template-inherited sections."
+            ),
+            audit_id=spec.audit_id,
+            source=spec.source,
+            template=spec.template,
+        )
+        if spec.audit_id
+        else None
+    )
     return NotebookLintResult(
         findings=findings,
         unverifiable_paths=unverifiable,
         linked_sources=linked,
         declared_outputs=declared_outputs,
         reader_call_echo=reader_call_echo,
+        stage_reached="linted",
+        needs_decision=False,
+        next_block=next_block,
     )

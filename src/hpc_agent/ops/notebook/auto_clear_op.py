@@ -65,6 +65,7 @@ from hpc_agent._wire.actions.notebook_auto_clear import (
     NotebookAutoClearSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.audit_view import AUTO_CLEARED as VIEW_AUTO_CLEARED
 from hpc_agent.ops.notebook.canonical import (
     AuditConfig,
@@ -272,4 +273,24 @@ def notebook_auto_clear(
         # never clear it (only a human sign-off can).
         skipped.append(NotebookAutoClearSkipped(section=sv.slug, reason=sv.tier))
 
-    return NotebookAutoClearResult(audit_id=spec.audit_id, cleared=cleared, skipped=skipped)
+    # The `audit` chain's third edge (P2.b): the CODE attestor has run, so the
+    # next deterministic step is the projection the human reads. ONE terminator —
+    # a pass that cleared nothing is the idempotent no-op, not a branch.
+    return NotebookAutoClearResult(
+        audit_id=spec.audit_id,
+        cleared=cleared,
+        skipped=skipped,
+        stage_reached="cleared",
+        needs_decision=False,
+        next_block=next_block_hint(
+            "notebook-auto-clear",
+            "cleared",
+            why=(
+                "the CODE attestor pass is journaled — build the canonical audit "
+                "view the human reads."
+            ),
+            audit_id=spec.audit_id,
+            source=spec.source,
+            template=spec.template,
+        ),
+    )

@@ -38,7 +38,7 @@ Pure local read: no SSH, no scheduler.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._build_info import git_output
@@ -49,6 +49,7 @@ from hpc_agent._wire.queries.audit_preflight import (
     PreflightBlocker,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.canonical import read_recorded_config
 from hpc_agent.ops.recover import doctor as _doctor
 from hpc_agent.state.audit_source import parse_percent_source
@@ -244,6 +245,55 @@ def _prior_audit_state(experiment_dir: Path, audit_id: str | None) -> tuple[bool
     return (len(records) > 0), len(records)
 
 
+def _source_present(experiment_dir: Path, source_rel: str | None) -> bool:
+    """Draft-readiness: is there a source ``.py`` on disk to lint?
+
+    A pure existence + readability probe over the caller-declared path — NEVER a
+    parse and never a judgement about the content. It selects the chain's next
+    EDGE (lint vs the agent draft park); it is not a check, not a blocker, and
+    never touches the verdict.
+    """
+    if not source_rel:
+        return False
+    try:
+        return _abs(experiment_dir, source_rel).is_file()
+    except OSError:
+        return False
+
+
+def _redraft_owed(experiment_dir: Path, audit_id: str | None) -> bool:
+    """True when a NUDGE was recorded after the most recent draft (P2.b).
+
+    Mechanical, journal-only: walk the audit's records in append order and
+    compare the position of the newest ``notebook-draft`` attribution record
+    against the newest record carrying a non-``y`` ``response`` (a nudge — the
+    human asked for a change). A nudge that lands AFTER the last draft means the
+    draft the loop would lint is superseded, so the chain owes the LLM another
+    pass before the deterministic verbs run again.
+
+    The code never READS the nudge text (block-drive's standing invariant): it
+    compares POSITIONS only. Fail-safe — an unreadable/absent journal owes
+    nothing.
+    """
+    if not audit_id:
+        return False
+    try:
+        records = read_decisions(experiment_dir, "notebook", audit_id)
+    except Exception:  # noqa: BLE001 — a journal surprise must not fail the preflight
+        return False
+    last_draft = -1
+    last_nudge = -1
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("block") == "notebook-draft":
+            last_draft = i
+        response = rec.get("response")
+        if isinstance(response, str) and response and response != "y":
+            last_nudge = i
+    return last_nudge > last_draft
+
+
 def _render_brief(
     *,
     verdict: str,
@@ -388,6 +438,42 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
         )
 
     verdict: Literal["GO", "NO-GO"] = "NO-GO" if blockers else "GO"
+
+    # ── the `audit` chain's first edge (P2.b) ─────────────────────────────────
+    # Three terminators, one expression, so the bare-``y`` census's AST scan sees
+    # every stage literal this block can reach (a stage hidden behind a variable
+    # would make that census silently blind to a park boundary).
+    source_present = _source_present(experiment_dir, spec.source)
+    draft_owed = _redraft_owed(experiment_dir, spec.audit_id)
+    stage_reached: Literal["preflight_go", "awaiting_draft", "preflight_blocked"] = (
+        "preflight_blocked"
+        if blockers
+        else ("awaiting_draft" if (not source_present or draft_owed) else "preflight_go")
+    )
+    # `awaiting_draft` parks for the AGENT (a draft is authorship, not
+    # authorization — no greenlight is sought and none is consumed there);
+    # `preflight_blocked` parks for the HUMAN, who clears the blockers.
+    needs_decision = stage_reached in ("awaiting_draft", "preflight_blocked")
+    # Chain only when the seat is complete: the successor specs are keyed by
+    # `audit_id` and read the two `.py` paths, and the composer REFUSES rather
+    # than inventing either (block_chain Row 14). No seat → no hint, and the
+    # standalone preflight stays byte-identical to its pre-chain self.
+    next_block: dict[str, Any] | None = None
+    if stage_reached == "preflight_go" and spec.audit_id and spec.source:
+        next_block = next_block_hint(
+            "audit-preflight",
+            stage_reached,
+            why=(
+                "substrate prerequisites are GO and the source is on disk — run "
+                "the four structural lint checks."
+            ),
+            audit_id=spec.audit_id,
+            source=spec.source,
+            template=template_rel,
+            input_roots=input_roots,
+            source_roots=source_roots,
+        )
+
     brief = _render_brief(
         verdict=verdict,
         audit_id=spec.audit_id,
@@ -413,4 +499,8 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
         blockers=blockers,
         disclosures=disclosures,
         brief=brief,
+        source_present=source_present,
+        stage_reached=stage_reached,
+        needs_decision=needs_decision,
+        next_block=next_block,
     )

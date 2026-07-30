@@ -116,6 +116,13 @@ class NotebookLintInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="notebook-lint input spec")
 
+    # The audit CONFIG SEAT (P2.b). The lint RULES never read it — it is carried
+    # so the block can name its own successor's audit scope when the `audit`
+    # chain drives it (`block_chain` composes `notebook-auto-clear` /
+    # `notebook-audit-view` / `notebook-status` specs, all of which are keyed by
+    # audit_id). Absent (the default) is the standalone lint, byte-identical to
+    # the pre-chain verb: no seat, no `next_block`.
+    audit_id: str | None = None
     source: str = Field(min_length=1)
     template: str = Field(min_length=1)
     # Opaque data-path roots the executes-live rule tests literals against.
@@ -180,3 +187,24 @@ class NotebookLintResult(BaseModel):
     linked_sources: list[LinkedSource] = Field(default_factory=list)
     declared_outputs: list[DeclaredOutput] = Field(default_factory=list)
     reader_call_echo: dict[str, Any] | None = None
+    stage_reached: Literal["linted"] = Field(
+        default="linted",
+        description=(
+            "The terminator this block stopped at (decision-as-data, #231). ONE "
+            "stage: findings are REPORTED, never fatal (the graduation gate "
+            "refuses, the lint reports), so the lint has exactly one "
+            "deterministic successor regardless of what it found."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=False,
+        description="Always false — the lint reports; it asks the human nothing.",
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` "
+            "— or null when no `audit_id` seat was supplied (the standalone lint, "
+            "byte-identical to the pre-chain verb)."
+        ),
+    )

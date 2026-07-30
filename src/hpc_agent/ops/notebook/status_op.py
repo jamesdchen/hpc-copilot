@@ -40,7 +40,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -52,6 +52,7 @@ from hpc_agent._wire.queries.notebook_status import (
     NotebookStatusSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.notebook.audit_view import net_tier_label
 from hpc_agent.ops.notebook.canonical import read_recorded_config
 from hpc_agent.ops.notebook.module_attention import build_module_attention
@@ -177,6 +178,84 @@ def _terminal_state(module_audit: ModuleAudit) -> str | None:
     if any(s.status == SIGNED_STALE for s in module_audit.sections):
         return "failed"
     return None
+
+
+#: Statuses that still owe the human a look at the sign-off rendezvous. Derived
+#: from the T6 vocabulary rather than "not passed" so a NEW status word has to be
+#: classified deliberately instead of defaulting into (or silently out of) the
+#: park's brief.
+_PENDING_STATUSES = frozenset({"unsigned", "signed_stale"})
+
+
+def _signoff_brief(
+    spec: NotebookStatusSpec, sections: list[NotebookSectionStatus], passed: bool
+) -> dict[str, Any]:
+    """The code-digested evidence the SIGN-OFF rendezvous parks with.
+
+    The driver stops at ``sections_pending`` and hands this to the human. Before
+    it existed the park carried NOTHING: the chain built the content-addressed
+    renders one hop earlier (``notebook-audit-view``), discarded the only
+    pointers to them, and then asked the human to sign a view it had thrown away.
+
+    What it carries: each section still owed a review, its current sha, and —
+    when the chain carried the view span's ``review`` pointers — the exact render
+    file to read and the ``view_sha`` that render is addressed by.
+
+    What it deliberately does NOT carry: the sign-off BAR. That is rendered once,
+    by the audit view's next-actions footer (``audit_view._render_next_actions``,
+    which composes it from the gate's own tokens); restating it here would be a
+    second copy of a rule that already drifted once by being restated in prose.
+    The brief points at the footer instead.
+
+    Empty on a PASS — nothing is being asked, so the brief asserts nothing.
+    """
+    if passed:
+        return {}
+    review = spec.review if isinstance(spec.review, dict) else {}
+    review_rows = review.get("sections")
+    pointers: dict[str, dict[str, Any]] = {}
+    if isinstance(review_rows, list):
+        for row in review_rows:
+            if isinstance(row, dict) and isinstance(row.get("slug"), str):
+                pointers[row["slug"]] = row
+    pending: list[dict[str, Any]] = []
+    for section in sections:
+        if section.status not in _PENDING_STATUSES:
+            continue
+        item: dict[str, Any] = {"slug": section.slug, "status": section.status}
+        if section.current_section_sha:
+            item["section_sha12"] = section.current_section_sha[:12]
+        pointer = pointers.get(section.slug, {})
+        render_path = pointer.get("render_path")
+        view_sha = pointer.get("view_sha")
+        if isinstance(render_path, str) and render_path:
+            item["render_path"] = render_path
+        if isinstance(view_sha, str) and view_sha:
+            item["view_sha12"] = view_sha[:12]
+        pending.append(item)
+    brief: dict[str, Any] = {
+        "audit_id": spec.audit_id,
+        "source": spec.source,
+        "template": spec.template,
+        "pending_sections": pending,
+        "sign_via": (
+            "append-decision under block 'notebook-sign-off' — the sign-off is a "
+            "DECISION RECORD, never a verb of its own, and no bare ack stands in "
+            "for it. The token-exact bar and a copy-ready scaffold are rendered by "
+            "code in the audit view's 'next actions' footer (notebook-audit-view); "
+            "read them there rather than from any restatement."
+        ),
+    }
+    module_view_sha = review.get("view_sha")
+    if isinstance(module_view_sha, str) and module_view_sha:
+        brief["view_sha12"] = module_view_sha[:12]
+    if not pointers:
+        brief["renders"] = (
+            "no render pointers were carried into this call — run "
+            "notebook-audit-view for this audit (the block chain does it "
+            "automatically) to materialize the trusted-display renders."
+        )
+    return brief
 
 
 @primitive(
@@ -312,6 +391,18 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
     ]
 
     audit_net_summary = _audit_net_summary(audit_net, audit_cap_hit)
+    # ── the `audit` chain's exit edge (P2.b) ──────────────────────────────────
+    # Both stage literals sit in ONE expression so the bare-``y`` census's AST
+    # scan sees each terminator this block can reach. A PASS hands off to the
+    # audit→onboard seam; anything else PARKS for the sign-off rendezvous, whose
+    # answer is the human's TYPED `notebook-sign-off` through `append-decision` —
+    # never a new verb, and never something a bare `y` can stand in for (the
+    # census allowlists it with exactly that reason).
+    stage_reached: Literal["audit_passed", "sections_pending"] = (
+        "audit_passed" if module_audit.passed else "sections_pending"
+    )
+    needs_decision = not module_audit.passed
+    brief = _signoff_brief(spec, sections, module_audit.passed)
     result_kwargs: dict[str, Any] = {
         "audit_id": spec.audit_id,
         "sections": sections,
@@ -324,4 +415,26 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
     # exists. Post-merge this guard always takes the attach branch.
     if "audit_net_summary" in NotebookStatusResult.model_fields:
         result_kwargs["audit_net_summary"] = audit_net_summary
-    return NotebookStatusResult(**result_kwargs)
+    # ``stage_reached`` / ``needs_decision`` are passed as EXPLICIT call kwargs,
+    # never folded into ``result_kwargs``: the bare-``y`` boundary census
+    # (tests/contracts/test_bare_y_coverage.py) reads them off this call site by
+    # AST, and a ``**kwargs`` splat would make it silently blind to the sign-off
+    # park — the exact "a census that under-counts stops guarding" failure its
+    # own docstring names.
+    return NotebookStatusResult(
+        stage_reached=stage_reached,
+        needs_decision=needs_decision,
+        brief=brief,
+        next_block=next_block_hint(
+            "notebook-status",
+            stage_reached,
+            why=(
+                "every required section is current — project the audit's durable "
+                "records into the onboarding draft."
+            ),
+            audit_id=spec.audit_id,
+            source=spec.source,
+            template=spec.template,
+        ),
+        **result_kwargs,
+    )

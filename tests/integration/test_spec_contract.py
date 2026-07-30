@@ -101,6 +101,17 @@ _CHAINED_UNGATED_HOPS: frozenset[tuple[str, str]] = frozenset(
         ("campaign-greenlight", "already_greenlit"),
         ("campaign-watch", "watching_complete"),
         ("campaign-watch", "watching_refill"),
+        # The audit family (P2.b) is UNGATED end to end — nothing in the
+        # notebook-audit loop reaches a cluster — so EVERY one of its hops is
+        # chained verbatim and every hint must fully validate. This is the
+        # family's load-bearing property: an audit tick that bounced mid-chain
+        # would drop the human straight back to hand-authored spec JSONs, which
+        # is the run-#10 cost the whole chain exists to remove.
+        ("audit-preflight", "preflight_go"),
+        ("notebook-lint", "linted"),
+        ("notebook-auto-clear", "cleared"),
+        ("notebook-audit-view", "viewed"),
+        ("notebook-status", "audit_passed"),
     }
 )
 # Ungated but needs_decision=True → the driver parks; spec_hint is human-facing.

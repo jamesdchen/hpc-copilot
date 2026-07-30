@@ -605,8 +605,9 @@ def mark_pending_decision(
     awaiting_since: str,
     cmd_sha: str | None = None,
     experiment_dir: Path | None = None,
+    actor: str = "human",
 ) -> None:
-    """Park *run_id* on a human DECISION at a block's y/nudge boundary (§5).
+    """Park *run_id* on a DECISION (human) or a DRAFT (agent) at a block boundary (§5).
 
     The durable "parked ≠ stalled" marker (block-drive.md §5): a driver span
     reached *block*'s decision boundary and is waiting for the human's ``y``/nudge.
@@ -622,6 +623,13 @@ def mark_pending_decision(
     the deterministic resolver could not act on): a run may legitimately hold on a
     decision without ever having escalated. The run's ``status`` is left untouched.
 
+    *actor* (P2.a) records WHO the park is waiting on: ``"human"`` (the default —
+    the y/nudge rendezvous every park was until now) or ``"agent"`` (an
+    ``awaiting_draft`` park, where the next act is the LLM's authorship and NO
+    consent is sought or consumed). The key is written ONLY for a non-human actor,
+    so a human marker's on-disk bytes are byte-identical to the pre-P2.a shape and
+    a reader that does not know about actors keeps reading exactly what it did.
+
     Locked read-modify-write via :func:`update_run_status`; raises
     :class:`FileNotFoundError` if no record exists for *run_id*. Mirrors the §5
     watchdog setters' ``experiment_dir=None`` → cwd convention.
@@ -634,6 +642,8 @@ def mark_pending_decision(
         "awaiting_since": awaiting_since,
         "cmd_sha": cmd_sha,
     }
+    if actor != "human":
+        payload["actor"] = actor
     update_run_status(
         _resolve_experiment_dir(experiment_dir),
         run_id,
@@ -772,6 +782,7 @@ def compare_and_repark_pending_decision(
     awaiting_since: str,
     cmd_sha: str | None = None,
     experiment_dir: Path | None = None,
+    actor: str = "human",
 ) -> bool:
     """RE-PARK a marker a failed resume span never consumed — only into an EMPTY slot.
 
@@ -784,21 +795,28 @@ def compare_and_repark_pending_decision(
     the slot to still be EMPTY: ``False`` means someone else parked a NEWER
     boundary (or re-parked this one) in the meantime, and the newer marker wins.
 
-    Same payload shape as :func:`mark_pending_decision` (one envelope definition);
-    raises :class:`FileNotFoundError` if no record exists for *run_id*.
+    Same payload shape as :func:`mark_pending_decision` (one envelope definition),
+    *actor* included: re-parking VERBATIM must carry the actor, or a failed span
+    silently demotes an agent (draft) park into a human (decision) one and the
+    next tick waits for a ``y`` nobody will ever type. Written only for a
+    non-human actor, so a human re-park's bytes are unchanged. Raises
+    :class:`FileNotFoundError` if no record exists for *run_id*.
     """
+    payload: dict[str, Any] = {
+        "block": block,
+        "workflow": workflow,
+        "brief": dict(brief),
+        "resume_cursor": dict(resume_cursor),
+        "awaiting_since": awaiting_since,
+        "cmd_sha": cmd_sha,
+    }
+    if actor != "human":
+        payload["actor"] = actor
     return _swap_pending_decision(
         _resolve_experiment_dir(experiment_dir),
         run_id,
         expected=None,
-        payload={
-            "block": block,
-            "workflow": workflow,
-            "brief": dict(brief),
-            "resume_cursor": dict(resume_cursor),
-            "awaiting_since": awaiting_since,
-            "cmd_sha": cmd_sha,
-        },
+        payload=payload,
     )
 
 

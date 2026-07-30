@@ -16,6 +16,8 @@ nothing about the experiment's semantics.
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -49,6 +51,22 @@ class NotebookStatusSpec(BaseModel):
         description=(
             "Experiment-relative path to the template .py. Its section slugs are "
             "the REQUIRED inventory the rollup verdict is computed over."
+        ),
+    )
+    review: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "OPAQUE render pointers chained from the `notebook-audit-view` span "
+            "that ran immediately before this one in the `audit` block chain "
+            "(`{view_sha, sections: [{slug, view_sha, render_path}]}`), composed "
+            "in code by `block_chain`, never authored by a caller worth trusting. "
+            "PURE DISCLOSURE: it is copied into the sign-off park's brief so the "
+            "human is pointed at the exact renders they would be signing, and it "
+            "feeds NOTHING else — not `passed`, not a status, not a sha this verb "
+            "computes. The T8 sign-off gate independently recomputes `view_sha` "
+            "and re-checks the render file, so a stale or forged pointer here can "
+            "only mis-address a human's reading, never satisfy a gate. Absent "
+            "(the default, and every standalone call) → byte-identical."
         ),
     )
 
@@ -157,5 +175,45 @@ class NotebookStatusResult(BaseModel):
             "The audit net's (6a) transitive-closure digest — counts by tier plus "
             "a cap-hit bool — or null when the status surface did not compute it. "
             "Additive optional; absent keeps the pre-6a shape."
+        ),
+    )
+    stage_reached: Literal["audit_passed", "sections_pending"] = Field(
+        default="sections_pending",
+        description=(
+            "The terminator this block stopped at (decision-as-data, #231) — "
+            "`audit_passed` mirrors `passed`, `sections_pending` is everything "
+            "else. It is the key `block_chain.SUCCESSORS` routes on: passed hands "
+            "off to `audit-handoff`; pending PARKS for the typed human sign-off."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=False,
+        description=(
+            "True at `sections_pending` — the sign-off RENDEZVOUS. The answer is "
+            "the human's TYPED `notebook-sign-off` via `append-decision` (never a "
+            "new verb, never a bare `y`), so the boundary sits on the bare-y "
+            "census's allowlist with that reason stated."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` "
+            "— or null at the sign-off park / when the caller supplied no "
+            "`source`/`template` seat. On a PASS it names `audit-handoff`, the "
+            "audit→onboard seam."
+        ),
+    )
+    brief: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The code-digested evidence the SIGN-OFF RENDEZVOUS is decided on — "
+            "what the driver parks with at `sections_pending`. Names each section "
+            "still owed a human review, its current sha, and (when the chain "
+            "carried them from the view span) the content-addressed render the "
+            "human should read before signing, plus the copy-ready sign line. "
+            "Empty on a PASS: nothing is being asked. This is DISCLOSURE composed "
+            "from this verb's own reduction — the T8 gate is unchanged and still "
+            "recomputes everything it locks on."
         ),
     )

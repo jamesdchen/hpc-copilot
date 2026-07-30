@@ -9,7 +9,7 @@ predicts remain the enforcement). See ``docs/design/audit-preflight.md``.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -54,7 +54,22 @@ class AuditPreflightSpec(BaseModel):
         description=(
             "The caller-authored audit slug. When it names an existing audit its "
             "recorded roots default the roots above, and its journal decides "
-            "resuming-vs-fresh. Omit for a fresh standalone preflight."
+            "resuming-vs-fresh. Omit for a fresh standalone preflight. REQUIRED "
+            "for the block-drive `audit` chain (P2.b): it is the seat every "
+            "downstream block is keyed by, so a preflight without one emits no "
+            "`next_block` and the chain does not start."
+        ),
+    )
+    source: str | None = Field(
+        default=None,
+        description=(
+            "Experiment-relative path to the audited source .py the loop will "
+            "lint. Present-and-readable is the DRAFT-READINESS check (P2.b): a GO "
+            "preflight whose source is absent has nothing to lint yet, so the "
+            "chain parks for the LLM to draft it (`awaiting_draft`) instead of "
+            "chaining into a lint that would refuse. Omitted (the default) reads "
+            "as 'no source yet' — byte-identical to a pre-P2.b preflight in every "
+            "check, verdict, blocker and brief line."
         ),
     )
 
@@ -125,4 +140,42 @@ class AuditPreflightResult(BaseModel):
             "blocker named and its remedy pre-drafted. Relayed to the human "
             "VERBATIM; the verb never blocks anything itself."
         )
+    )
+    source_present: bool = Field(
+        default=False,
+        description=(
+            "True when the spec named a `source` and that file exists and reads. "
+            "Draft-readiness only — NEVER a blocker and never a verdict input "
+            "(the verdict is the substrate checks alone); it selects the chain's "
+            "next edge (lint vs the agent draft park)."
+        ),
+    )
+    stage_reached: Literal["preflight_go", "awaiting_draft", "preflight_blocked"] = Field(
+        default="preflight_go",
+        description=(
+            "The terminator this preflight stopped at (decision-as-data, #231) — "
+            "the key `block_chain.SUCCESSORS` routes the `audit` chain on. "
+            "`preflight_go` = GO with a source to lint; `awaiting_draft` = GO with "
+            "nothing to lint yet (the AGENT park — the LLM drafts; no consent is "
+            "sought or consumed); `preflight_blocked` = NO-GO."
+        ),
+    )
+    needs_decision: bool = Field(
+        default=False,
+        description=(
+            "True at a boundary the driver must PARK at. `awaiting_draft` parks "
+            "for the AGENT (a draft is authorship, not authorization — no "
+            "greenlight, no consent, no approve_hint is composed there); "
+            "`preflight_blocked` parks for the HUMAN, who clears the blockers."
+        ),
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` "
+            "— or null at a park / when no `audit_id` seat exists to key the chain "
+            "on. Computed by `block_chain.next_block_hint`; the `spec_hint` is the "
+            "successor's COMPLETE code-composed input spec, never a skeleton the "
+            "agent finishes."
+        ),
     )
