@@ -75,7 +75,7 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from hpc_agent.infra.time import utcnow_iso
 
@@ -650,10 +650,25 @@ class PathReadiness:
         """The first ``ProxyJump`` hop that did not answer, or ``None``."""
         return next((a.target for a in self.atoms if a.sensor == "hop" and a.ok is False), None)
 
+    #: Causes that do NOT contradict a usable path. Membership is the "only a
+    #: POSITIVE discriminated failure refuses" rule, written once.
+    #:
+    #: ``path_unproven`` belongs here and its absence was a real defect: it is the
+    #: ORDINARY reading for a healthy jumped host sensed by TCP alone (every hop
+    #: answered; end-to-end needs the preamble rung, which is opt-in and needs an
+    #: activation). Excluding it made the S2 gate refuse fully-healthy submits to
+    #: any jumped cluster whose activation could not be resolved — the exact
+    #: production shape, hoffman2 via ProxyJump. Absence of evidence is a
+    #: diagnosis, not a verdict. ``route_unresolved`` is here for the same reason:
+    #: ``ssh -G`` told us nothing, so we know nothing new and must not block.
+    PASSING_CAUSES: ClassVar[frozenset[str]] = frozenset(
+        {"path_ok", "path_unproven", "route_unresolved"}
+    )
+
     @property
     def ok(self) -> bool:
-        """True only when nothing in the read contradicts a usable path."""
-        return self.cause in ("path_ok", "route_unresolved")
+        """True unless the read carries POSITIVE evidence of a broken path."""
+        return self.cause in self.PASSING_CAUSES
 
     @property
     def newest_epoch(self) -> float:

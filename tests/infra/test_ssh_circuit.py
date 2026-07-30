@@ -1114,3 +1114,70 @@ class TestSelfStormAttribution:
         doc = _state()
         assert doc["suspected_cause"] is None  # correlation lapsed
         assert doc["cooldown_sec"] == CYCLE2_COOLDOWN_SEC  # normal escalation resumed
+
+
+# ── degradation advice: the JUMPED arm must be shown to FIRE ─────────────────
+#
+# "Verify a guard can actually fire" (engineering-principles, judgment rule 1).
+# The hermetic suite pins ssh to a shim that never reports a ProxyJump, so the
+# jumped arm was unreachable under test and a `if chain:` -> `if False:` mutation
+# survived. `degradation_advice` takes an injectable hop resolver for exactly this.
+
+
+def _degraded_doc(host: str = "hoffman2") -> dict:
+    """A doc in the run-13 livelock state: re-opened twice inside one incident."""
+    now = time.time()
+    return {
+        "schema_version": 1,
+        "host": host,
+        "state": "open",
+        "consecutive_failures": 4,
+        "cooldown_sec": 300.0,
+        "opened_at": now,
+        "reopen_cycles": 2,
+        "incident_started_at": now - 60.0,
+        "last_failure": {"at": now, "detail": "ssh to h timed out after 60s: source /x/conda.sh"},
+    }
+
+
+def test_degradation_advice_unjumped_arm_is_unchanged() -> None:
+    """No ProxyJump: the historical node-degradation text, byte-for-byte."""
+    advice = ssh_circuit.degradation_advice(
+        "hoffman2", _degraded_doc(), now=time.time(), hops=lambda _h: ()
+    )
+    assert advice is not None
+    assert advice.startswith("probe-OK but the conda activation")
+    assert "likely node-local degradation" in advice
+    assert "TUNNEL DROP" not in advice
+
+
+def test_degradation_advice_jumped_arm_fires_and_names_both_causes() -> None:
+    """WITH a ProxyJump the classification is ambiguous and must say so.
+
+    The pre-fix text asserted node-local degradation and recommended a
+    host-retarget — steering the operator to a sibling reached through the SAME
+    dead hop, which is what 2026-07-30 followed.
+    """
+    advice = ssh_circuit.degradation_advice(
+        "hoffman2", _degraded_doc(), now=time.time(), hops=lambda _h: ("usc-discovery",)
+    )
+    assert advice is not None
+    assert "TWO causes fit this signature" in advice
+    assert "usc-discovery" in advice
+    assert "TUNNEL DROP" in advice
+    assert "DISCRIMINATOR" in advice
+    assert "ProxyJump=none" in advice
+    assert "do NOT retarget" in advice
+    assert "inherits" in advice, "must warn that a sibling behind the hop reproduces it"
+
+
+def test_degradation_advice_hop_resolver_failure_falls_back_to_unjumped() -> None:
+    """Advice text must never raise: an exploding resolver degrades to the plain arm."""
+
+    def _boom(_h: str) -> tuple[str, ...]:
+        raise RuntimeError("ssh -G exploded")
+
+    advice = ssh_circuit.degradation_advice(
+        "hoffman2", _degraded_doc(), now=time.time(), hops=_boom
+    )
+    assert advice is not None and "likely node-local degradation" in advice

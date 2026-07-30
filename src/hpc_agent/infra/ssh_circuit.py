@@ -571,7 +571,13 @@ def _retarget_suggestion(host: str) -> str:
     )
 
 
-def degradation_advice(host: str, doc: dict[str, Any] | None, *, now: float) -> str | None:
+def degradation_advice(
+    host: str,
+    doc: dict[str, Any] | None,
+    *,
+    now: float,
+    hops: Callable[[str], tuple[str, ...]] | None = None,
+) -> str | None:
     """The one-line degradation classification for *host*, or ``None`` if not
     degraded. Names the hanging preamble stage, the cycle count, and the
     ``host-retarget``/``settle-run`` remedy — the single string every surface
@@ -580,8 +586,17 @@ def degradation_advice(host: str, doc: dict[str, Any] | None, *, now: float) -> 
         return None
     cycles = int(_float_or((doc or {}).get("reopen_cycles"), 0))
     stage = hanging_stage(doc) or "the remote command preamble"
-    hops = _proxy_jump_hops(host)
-    if hops:
+    # *hops* is injectable so the JUMPED arm below is reachable in a hermetic
+    # suite. Without it the default resolver shells the test harness's ssh shim,
+    # which never reports a ProxyJump — so the whole jumped branch was dead under
+    # test and a `if hops:` -> `if False:` mutation survived. A guard that cannot
+    # be shown to fire is not verified (engineering-principles, judgment rule 1).
+    resolve_hops = hops or _proxy_jump_hops
+    try:
+        chain = resolve_hops(host)
+    except Exception:  # noqa: BLE001 — advice text must never raise, whoever resolves
+        chain = ()
+    if chain:
         # 2026-07-30: this message used to assert node-local degradation and
         # recommend a host-retarget — which, for a JUMPED host, steers the
         # operator to a sibling reached through the SAME dead hop. A flapping
@@ -589,10 +604,10 @@ def degradation_advice(host: str, doc: dict[str, Any] | None, *, now: float) -> 
         # signature, so with a ProxyJump in the path the classification is
         # genuinely AMBIGUOUS and must say so, plus name the one reading that
         # settles it.
-        first = hops[0]
+        first = chain[0]
         return (
             f"probe-OK but {stage} times out ({cycles} cycles) — TWO causes fit this "
-            f"signature, and {host} is reached through ProxyJump {', '.join(hops)}: "
+            f"signature, and {host} is reached through ProxyJump {', '.join(chain)}: "
             f"(a) node-local degradation (module subsystem / degraded mount), or "
             f"(b) a TUNNEL DROP — a flapping jump/VPN severing the session "
             f"mid-command while the cheap connect keeps succeeding. A bare "

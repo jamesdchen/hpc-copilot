@@ -54,6 +54,7 @@ from hpc_agent.infra.remote import (
 )
 from hpc_agent.infra.ssh_circuit import guarded_call, liveness_probe
 from hpc_agent.infra.ssh_options import (
+    mark_transport_flap,
     rsync_binary,
     run_with_named_pipe_retry,
     ssh_argv,
@@ -1272,13 +1273,21 @@ def rsync_push(
             # Surface instead, so the bounded staging retry re-attempts the cheap
             # probe. The safety contract above is untouched: no manifest is
             # claimed, no prune plan is derived.
-            raise SshUnreachable(
-                f"the remote hash-manifest probe for {remote_path} failed on the "
-                f"transport ({probe_status.get('detail', 'no detail')}); refusing to "
-                f"degrade a flap into a whole-tree re-ship. The delta is intact and "
-                f"resumes as soon as the link holds — the bounded staging retry will "
-                f"re-attempt this one round-trip."
+            # STAMPED as a transport flap, not merely described as one: the
+            # staging ladder classifies on the stamp. Describing the cause in
+            # prose and hoping a substring matcher recovers it made this refusal
+            # unretryable — a hard worker kill where the old code at least
+            # shipped a full copy.
+            flap = mark_transport_flap(
+                SshUnreachable(
+                    f"the remote hash-manifest probe for {remote_path} failed on the "
+                    f"transport ({probe_status.get('detail', 'no detail')}); refusing to "
+                    f"degrade a flap into a whole-tree re-ship. The delta is intact and "
+                    f"resumes as soon as the link holds — the bounded staging retry will "
+                    f"re-attempt this one round-trip."
+                )
             )
+            raise flap from probe_status.get("exception")
         if remote_manifest is not None:
             from hpc_agent.infra.manifest import manifest_delta
 

@@ -109,7 +109,7 @@ def test_exhaustion_raises_the_discriminated_cause_shape(
     with pytest.raises(errors.SshUnreachable) as excinfo:
         _run_retry([TimeoutError("flap"), TimeoutError("flap")], slept=_no_sleep)
     message = str(excinfo.value)
-    assert "after 2 bounded attempt(s)" in message
+    assert "exhausted 2 bounded attempt(s)" in message
     assert "delta-based" in message, "exhaustion must still say progress was not lost"
 
 
@@ -154,3 +154,136 @@ def test_cooldown_past_the_cap_refuses_to_wait(monkeypatch: pytest.MonkeyPatch) 
         lambda _h, **_k: submit_flow._STAGE_RETRY_MAX_BREAKER_WAIT_SEC + 1.0,
     )
     assert submit_flow._stage_retry_wait_sec(TARGET, attempt=1) is None
+
+
+# ── L4 -> L3 COMPOSITION: the seam that shipped broken ───────────────────────
+#
+# The gap this closes: L4 raises a composed SshUnreachable promising "the bounded
+# staging retry will re-attempt", but L3 classified via substring markers the
+# composed message does not contain — so the promise was false and a severed
+# manifest probe HARD-KILLED the worker on attempt 1, strictly worse than the
+# full copy it replaced. Each leg was tested alone; nothing tested the seam.
+
+
+def test_l4_transport_refusal_is_classified_a_flap() -> None:
+    """The stamp — not the prose — is what L3 classifies on."""
+    from hpc_agent.infra.ssh_options import mark_transport_flap
+
+    exc = mark_transport_flap(
+        errors.SshUnreachable(
+            "the remote hash-manifest probe for /r failed on the transport "
+            "(TimeoutError: severed); refusing to degrade a flap into a whole-tree re-ship."
+        )
+    )
+    assert submit_flow._stage_failure_is_flap(exc) is True
+
+
+def test_unstamped_lookalike_message_is_not_a_flap() -> None:
+    """The stamp is load-bearing: the same prose WITHOUT it must not be retried.
+
+    This is what makes the previous test a real assertion rather than one that
+    would pass off the message text alone.
+    """
+    exc = errors.SshUnreachable(
+        "the remote hash-manifest probe for /r failed on the transport "
+        "(TimeoutError: severed); refusing to degrade a flap into a whole-tree re-ship."
+    )
+    assert submit_flow._stage_failure_is_flap(exc) is False
+
+
+def test_a_stamped_cause_survives_rewrapping() -> None:
+    """A wrapper that re-raises a stamped error keeps the verdict (``__cause__`` walk)."""
+    from hpc_agent.infra.ssh_options import mark_transport_flap
+
+    inner = mark_transport_flap(errors.SshUnreachable("probe severed"))
+    try:
+        raise errors.RemoteCommandFailed("staging leg failed") from inner
+    except errors.RemoteCommandFailed as outer:
+        assert submit_flow._stage_failure_is_flap(outer) is True
+
+
+def test_l4_refusal_retries_and_attempt_two_ships_the_remainder(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """END-TO-END: severed manifest probe -> L3 retry -> attempt 2 ships the DELTA.
+
+    Asserts the actual ship set, not the log text: attempt 2 must ship only the
+    file that changed, proving the retry resumed against the delta rather than
+    re-shipping the tree.
+    """
+    from hpc_agent.infra.ssh_options import mark_transport_flap
+
+    shipped: list[list[str]] = []
+    attempt = {"n": 0}
+
+    def _stage() -> str | None:
+        attempt["n"] += 1
+        if attempt["n"] == 1:
+            # Leg A (the remote hash walk) severed by the flap — L4's refusal.
+            raise mark_transport_flap(
+                errors.SshUnreachable(
+                    "the remote hash-manifest probe for /r failed on the transport "
+                    "(TimeoutError: read severed mid-manifest); refusing to degrade a "
+                    "flap into a whole-tree re-ship."
+                )
+            ) from TimeoutError("read severed mid-manifest")
+        # Link steadied: the manifest round-trip succeeds and the delta ships
+        # only what actually differs.
+        shipped.append(["changed.py"])
+        return "code-tree-sha"
+
+    result = submit_flow._stage_with_flap_retry(
+        _stage, ssh_target=TARGET, sleep=lambda s: _no_sleep.append(s)
+    )
+
+    assert result == "code-tree-sha", "the worker must SURVIVE the flap, not die on it"
+    assert attempt["n"] == 2, "L4's refusal must be retried by L3 — the promise it makes"
+    assert shipped == [["changed.py"]], "attempt 2 ships only the remainder, not the tree"
+
+
+def test_stop_on_cooldown_message_states_attempts_made_and_the_cause(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """The STOP message must not claim attempts it never made, nor hide the breaker.
+
+    It used to say "after 3 bounded attempt(s)" when exactly ONE ran, and never
+    mentioned the cooldown that stopped it — the log asserted the opposite of
+    what happened, twice.
+    """
+    monkeypatch.setattr(submit_flow, "_stage_retry_attempts", lambda: 3)
+    monkeypatch.setattr(submit_flow, "_stage_retry_wait_sec", lambda _t, *, attempt: None)
+
+    def _run() -> str | None:
+        raise TimeoutError("flap")
+
+    with pytest.raises(errors.SshUnreachable) as excinfo:
+        submit_flow._stage_with_flap_retry(
+            _run, ssh_target=TARGET, sleep=lambda s: _no_sleep.append(s)
+        )
+    message = str(excinfo.value)
+    assert "STOPPED after 1 of 3 allowed attempt(s)" in message
+    assert "circuit for" in message and "cooldown longer than" in message
+    assert "exhausted 3" not in message, "must never claim attempts it did not make"
+
+
+def test_exhausted_path_never_dials(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """The naming pass is CONSULT-ONLY: it must not open connections the breaker just refused."""
+    from hpc_agent.infra import readiness_sensors as rs
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("the exhausted path must not sense/dial the fenced host")
+
+    monkeypatch.setattr(rs, "read_path_readiness", _boom)
+    monkeypatch.setattr(rs, "_run_route_resolution", _boom)
+    monkeypatch.setattr(rs, "tcp_connect", _boom)
+    monkeypatch.setattr(submit_flow, "_stage_retry_attempts", lambda: 1)
+
+    def _run() -> str | None:
+        raise TimeoutError("flap")
+
+    with pytest.raises(errors.SshUnreachable):
+        submit_flow._stage_with_flap_retry(
+            _run, ssh_target=TARGET, sleep=lambda s: _no_sleep.append(s)
+        )

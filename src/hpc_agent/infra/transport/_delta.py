@@ -540,6 +540,11 @@ def _remote_push_manifest(
         if probe_status is not None:
             probe_status["failed_on_transport"] = True
             probe_status["detail"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+            # Hand the ORIGINAL exception up, not just its prose: the caller
+            # re-raises a composed, human-facing error and the staging retry must
+            # classify that error by identity. Re-deriving "this was a flap" from
+            # the composed message is the failure mode this avoids.
+            probe_status["exception"] = exc
         return None, set()
     raw = getattr(proc, "stdout", "") or ""
     manifest, known = _parse_remote_push_manifest(raw)

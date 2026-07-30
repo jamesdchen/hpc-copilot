@@ -1301,8 +1301,19 @@ def _stage_failure_is_flap(exc: BaseException) -> bool:
     NOT a flap and must surface on attempt 1 exactly as it does today. That
     distinction is what keeps the non-flap paths byte-identical.
     """
-    from hpc_agent.infra.ssh_options import RSYNC_PROTOCOL_ERROR_EXIT, is_connect_failure
+    from hpc_agent.infra.ssh_options import (
+        RSYNC_PROTOCOL_ERROR_EXIT,
+        is_connect_failure,
+        is_transport_flap,
+    )
 
+    # IDENTITY first. A raiser that caught the transport failure itself stamps the
+    # verdict (``mark_transport_flap``); re-deriving it from the composed message
+    # is what made the L4 manifest-probe refusal unretryable — its prose carries
+    # none of the connect markers, so a known flap read as a hard failure and
+    # killed the worker on attempt 1.
+    if is_transport_flap(exc):
+        return True
     if isinstance(exc, errors.SshCircuitOpen):
         return True
     if isinstance(exc, TimeoutError):
@@ -1392,7 +1403,10 @@ def _stage_with_flap_retry(
     """
     attempts = _stage_retry_attempts()
     last: BaseException | None = None
+    made = 0
+    stopped_on_cooldown = False
     for attempt in range(1, attempts + 1):
+        made = attempt
         try:
             result: str | None = run()
             return result
@@ -1404,39 +1418,75 @@ def _stage_with_flap_retry(
                 break
             wait = _stage_retry_wait_sec(ssh_target, attempt=attempt)
             if wait is None:
+                stopped_on_cooldown = True
                 break
             _disclose_stage_retry(
                 ssh_target, attempt=attempt, attempts=attempts, wait_sec=wait, exc=exc
             )
             sleep(wait)
-    raise _stage_exhausted_error(ssh_target, attempts=attempts, last=last)
+    raise _stage_exhausted_error(
+        ssh_target,
+        attempts_made=made,
+        attempts_allowed=attempts,
+        last=last,
+        stopped_on_cooldown=stopped_on_cooldown,
+    )
 
 
 def _stage_exhausted_error(
-    ssh_target: str, *, attempts: int, last: BaseException | None
+    ssh_target: str,
+    *,
+    attempts_made: int,
+    attempts_allowed: int,
+    last: BaseException | None,
+    stopped_on_cooldown: bool = False,
 ) -> errors.SshUnreachable:
     """The exhaustion envelope — the L2 cause shape, reached from the worker side.
 
-    Senses the path ONE more time (consult-first, so a reading taken moments ago
-    is reused rather than re-dialled) purely to NAME the cause: after N flaps the
-    human's next question is always "is it my tunnel or their node?", and the
-    answer is exactly what the readiness sensors discriminate.
+    States the attempts ACTUALLY made, not the budget: a ladder that stopped
+    after one attempt because the breaker was fenced for longer than its patience
+    used to report "after 3 bounded attempt(s)" and never mentioned the cooldown,
+    so the log said the opposite of what happened, twice.
+
+    CONSULT-ONLY (never a fresh dial). This runs at the moment the ladder has just
+    decided the host is not usable — and, on the stop-on-cooldown arm, while the
+    circuit is explicitly OPEN. Dialling to pretty up an error message would open
+    connections the breaker just refused, which is the ban-risk the breaker
+    exists to prevent. A fresh reading from the L1 sweep or the L2 gate is reused
+    when one is in the window; otherwise the message says the cause is unnamed
+    and points at the verb that would name it.
     """
-    from hpc_agent.infra.readiness_sensors import path_remediation, read_path_readiness
+    from hpc_agent.infra.readiness_sensors import consult_readiness, path_remediation
 
     host = _host_of(ssh_target)
     detail = f"{type(last).__name__}: {last}" if last is not None else "no failure recorded"
-    try:
-        readiness = read_path_readiness(host, ssh_target=ssh_target, freshness_window_sec=120.0)
+    readiness = consult_readiness(host, window_sec=300.0)
+    if readiness is not None:
         cause = f"{readiness.cause} — {readiness.sentence or 'no route sentence'}. "
         remedy = path_remediation(readiness)
-    except Exception:  # noqa: BLE001 — the naming pass must never mask the real failure
-        cause = "cause undetermined (readiness sensing unavailable). "
-        remedy = "Re-run `net-triage` (with probe_preamble) to discriminate the path."
+    else:
+        cause = "cause not named (no recent readiness reading, and this path does NOT dial). "
+        remedy = (
+            "Run `net-triage` (probe_preamble) to discriminate a tunnel drop from node degradation."
+        )
+
+    if stopped_on_cooldown:
+        from hpc_agent.infra.ssh_circuit import consecutive_failures_for_host
+
+        why = (
+            f"STOPPED after {attempts_made} of {attempts_allowed} allowed attempt(s): the SSH "
+            f"circuit for {host} is open with a cooldown longer than this ladder's "
+            f"{_STAGE_RETRY_MAX_BREAKER_WAIT_SEC:.0f}s patience "
+            f"({consecutive_failures_for_host(host)} consecutive failure(s)) — waiting it out "
+            f"in-worker would hold the run open, and shortening it would bypass a ban guard"
+        )
+    else:
+        why = f"exhausted {attempts_made} bounded attempt(s)"
+
     return errors.SshUnreachable(
-        f"staging failed after {attempts} bounded attempt(s) against {ssh_target}: "
-        f"{cause}{remedy} Last failure: {detail[:300]}. Progress was NOT lost — the "
-        f"push is delta-based, so a re-run resumes from what already landed."
+        f"staging against {ssh_target} {why}: {cause}{remedy} Last failure: "
+        f"{detail[:300]}. Progress was NOT lost — the push is delta-based, so a re-run "
+        f"resumes from what already landed."
     )
 
 
