@@ -16,6 +16,7 @@ import pytest
 
 from hpc_agent._wire.actions.doctor_install import DoctorInstallSpec
 from hpc_agent._wire.queries.doctor import DoctorSpec
+from hpc_agent.infra import local_scheduler as ls
 from hpc_agent.ops.recover import doctor_install as di
 from hpc_agent.ops.recover import notify as notify_mod
 from hpc_agent.ops.recover.doctor import doctor
@@ -34,27 +35,50 @@ def _cp(argv: list[str], *, rc: int = 0, stdout: str = "") -> subprocess.Complet
 
 
 class _FakeSchtasks:
-    """Stateful schtasks stand-in: /Query reflects prior /Create-/Delete."""
+    """Stateful schtasks stand-in: /Query reflects prior /Create-/Delete.
+
+    Models the ONE task list Windows actually keeps (name -> registered), so a
+    re-install that duplicated instead of replacing would show up as >1 entry.
+    """
 
     def __init__(self) -> None:
-        self.exists = False
+        self.tasks: list[str] = []
         self.calls: list[list[str]] = []
+
+    # ``exists`` stays a settable property so tests can seed a pre-existing task.
+    @property
+    def exists(self) -> bool:
+        return bool(self.tasks)
+
+    @exists.setter
+    def exists(self, value: bool) -> None:
+        self.tasks = ["hpc-agent-doctor-seeded"] if value else []
 
     def __call__(self, argv: list[str], *, input_text: str | None = None, timeout: int):
         self.calls.append(argv)
         head = argv[:2]
         if head == ["schtasks", "/Query"]:
-            return _cp(argv, rc=0 if self.exists else 1)
+            if "/FO" in argv:  # the enumeration the stale sweep walks
+                body = "".join(f'"{n}","N/A","Ready"\n' for n in self.tasks)
+                return _cp(argv, rc=0, stdout=body)
+            name = argv[argv.index("/TN") + 1]
+            return _cp(argv, rc=0 if name in self.tasks or self.exists else 1)
         if head == ["schtasks", "/Create"]:
-            self.exists = True
+            name = argv[argv.index("/TN") + 1]
+            # /F is a REPLACE: the task list must never grow a duplicate.
+            self.tasks = [t for t in self.tasks if t != name] + [name]
             return _cp(argv, rc=0)
         if head == ["schtasks", "/Delete"]:
-            self.exists = False
+            name = argv[argv.index("/TN") + 1]
+            self.tasks = [t for t in self.tasks if t != name]
             return _cp(argv, rc=0)
         raise AssertionError(f"unexpected argv {argv}")
 
     def created(self) -> bool:
         return any(a[:2] == ["schtasks", "/Create"] for a in self.calls)
+
+    def create_calls(self) -> list[list[str]]:
+        return [a for a in self.calls if a[:2] == ["schtasks", "/Create"]]
 
 
 class _FakeCrontab:
@@ -81,8 +105,8 @@ class _FakeCrontab:
 # --------------------------------------------------------------------------- #
 def test_windows_install_then_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeSchtasks()
-    monkeypatch.setattr(di, "_platform", lambda: "windows")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", fake)
 
     r1 = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(interval_minutes=7))
     assert r1.status == "installed"
@@ -92,17 +116,22 @@ def test_windows_install_then_idempotent(tmp_path: Path, monkeypatch: pytest.Mon
     assert "doctor" in r1.command and "--spec" in r1.command
     assert fake.created()
 
-    # Re-run identical params: no duplicate task, no second /Create.
+    # Re-run identical params: the definition is REWRITTEN in place (so a task
+    # registered by an older build — visible window, stale cadence — heals) but
+    # the scheduler still holds exactly ONE task of that name.
     fake.calls.clear()
     r2 = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(interval_minutes=7))
     assert r2.status == "already_installed"
-    assert not fake.created()
+    assert fake.tasks == [r1.task_name]
+    assert fake.tasks.count(r1.task_name) == 1
+    # The replace is what makes it idempotent-by-healing, not idempotent-by-skip.
+    assert all("/F" in call for call in fake.create_calls())
 
 
 def test_windows_uninstall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeSchtasks()
-    monkeypatch.setattr(di, "_platform", lambda: "windows")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", fake)
 
     doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
     r_del = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(uninstall=True))
@@ -120,8 +149,8 @@ def test_install_failure_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             return _cp(argv, rc=1)
         return _cp(argv, rc=1, stdout="access denied")
 
-    monkeypatch.setattr(di, "_platform", lambda: "windows")
-    monkeypatch.setattr(di, "_run", boom)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", boom)
     with pytest.raises(errors.SpecInvalid):
         doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
 
@@ -133,8 +162,8 @@ def test_posix_install_idempotent_and_uninstall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _FakeCrontab()
-    monkeypatch.setattr(di, "_platform", lambda: "posix")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "posix")
+    monkeypatch.setattr(ls, "_run", fake)
 
     r1 = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(interval_minutes=20))
     assert r1.status == "installed"
@@ -143,12 +172,14 @@ def test_posix_install_idempotent_and_uninstall(
     assert fake.content.count(r1.task_name) == 1
     assert fake.content.startswith("*/20 * * * *")
 
-    # Idempotent: existing marker line → already_installed, no rewrite.
-    n_writes = sum(1 for a, _ in fake.calls if a == ["crontab", "-"])
-    r2 = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(interval_minutes=20))
+    # Idempotent BY REPLACEMENT: the marker line is rewritten in place, so a
+    # re-install heals a stale cadence — and the table still carries exactly ONE
+    # line for this task (never a duplicate).
+    r2 = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(interval_minutes=45))
     assert r2.status == "already_installed"
-    assert sum(1 for a, _ in fake.calls if a == ["crontab", "-"]) == n_writes
+    assert fake.content is not None
     assert fake.content.count(r1.task_name) == 1
+    assert fake.content.startswith("*/45 * * * *")
 
     # Uninstall removes the marker line; re-uninstall is a no-op.
     r3 = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec(uninstall=True))
@@ -169,8 +200,8 @@ def test_posix_install_without_crontab_binary_is_spec_invalid(
     def _no_crontab(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
         raise FileNotFoundError(2, "No such file or directory: 'crontab'")
 
-    monkeypatch.setattr(di, "_platform", lambda: "posix")
-    monkeypatch.setattr(di, "_run", _no_crontab)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "posix")
+    monkeypatch.setattr(ls, "_run", _no_crontab)
     with pytest.raises(errors.SpecInvalid):
         doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
 
@@ -180,8 +211,8 @@ def test_posix_install_preserves_other_cron_lines(
 ) -> None:
     fake = _FakeCrontab()
     fake.content = "0 3 * * * /usr/bin/backup\n"
-    monkeypatch.setattr(di, "_platform", lambda: "posix")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "posix")
+    monkeypatch.setattr(ls, "_run", fake)
 
     doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
     assert "/usr/bin/backup" in (fake.content or "")
@@ -192,8 +223,8 @@ def test_posix_install_preserves_other_cron_lines(
 # --------------------------------------------------------------------------- #
 def test_durable_spec_carries_notify_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeSchtasks()
-    monkeypatch.setattr(di, "_platform", lambda: "windows")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", fake)
 
     r = doctor_install(experiment_dir=tmp_path, spec=DoctorInstallSpec())
     assert r.notify is True
@@ -313,8 +344,8 @@ def test_watchdog_installed_windows_reflects_task_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _FakeSchtasks()
-    monkeypatch.setattr(di, "_platform", lambda: "windows")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", fake)
 
     assert di.watchdog_installed(tmp_path) is False
     fake.exists = True
@@ -327,8 +358,8 @@ def test_watchdog_installed_posix_reflects_cron_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _FakeCrontab()
-    monkeypatch.setattr(di, "_platform", lambda: "posix")
-    monkeypatch.setattr(di, "_run", fake)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "posix")
+    monkeypatch.setattr(ls, "_run", fake)
 
     assert di.watchdog_installed(tmp_path) is False
     fake.content = f"*/30 * * * * cmd # {di._task_name(tmp_path)}\n"
@@ -344,6 +375,6 @@ def test_watchdog_installed_probe_failure_reads_false(
     def _boom(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
         raise OSError("no scheduler binary")
 
-    monkeypatch.setattr(di, "_platform", lambda: "windows")
-    monkeypatch.setattr(di, "_run", _boom)
+    monkeypatch.setattr(ls, "platform_kind", lambda: "windows")
+    monkeypatch.setattr(ls, "_run", _boom)
     assert di.watchdog_installed(tmp_path) is False

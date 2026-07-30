@@ -561,6 +561,38 @@ def _consent_forward_hook_probe(now: str) -> list[AlertRecord]:
     ]
 
 
+def _stale_watchdog_probe(now: str) -> list[AlertRecord]:
+    """Is any LOCAL watchdog still ticking for work that is over (local, no SSH)?
+
+    The lifecycle counterpart of ``doctor-install``: that verb schedules an
+    out-of-session ``hpc-agent doctor`` tick per experiment dir, and until the
+    2026-07-30 fix nothing ever removed one. Three
+    ``hpc-agent-doctor-<repo_hash>`` Scheduled Tasks were found firing every 15
+    minutes — each opening a console window in the operator's session — for DAYS
+    after every run they were installed for had finished. Removal is now wired at
+    the terminal, but a task installed by an older build (or one whose journal
+    namespace was deleted out from under it) has no terminal left to fire on:
+    only a sweep can find those, and this is that sweep.
+
+    Two staleness signatures, both derived from local state by
+    :func:`hpc_agent.infra.local_scheduler.scan_stale_watchdogs`: the durable
+    ``doctor.spec.json`` the tick reads is missing, or the namespace holds run
+    records with none of them live. Each alert names the task, why it reads
+    stale, and the exact removal command.
+
+    Like the jsonschema and consent-hook probes it rides the ``alerts`` list and
+    does NOT flip ``needs_attention`` — a stale watchdog is wasted ticks and
+    operator noise, not a stalled driver. Fail-open: any error yields no alert.
+    """
+    try:
+        from hpc_agent.ops.recover.doctor_install import stale_watchdog_alert_messages
+
+        messages = stale_watchdog_alert_messages()
+    except Exception:  # noqa: BLE001 — a probe must never break the watchdog scan
+        return []
+    return [AlertRecord(ts=now, message=m) for m in messages]
+
+
 def _transport_drift_routing(now: str) -> list[AlertRecord]:
     """Route live transport-env drift to its heal class (detection + routing ONLY).
 
@@ -812,11 +844,24 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # hooks; rides `alerts` without flipping needs_attention.
     hook_drift_alerts = _consent_forward_hook_probe(now)
 
+    # Stale LOCAL watchdogs (2026-07-30 live incident): an OS-scheduled tick
+    # whose target run/experiment is terminal — or whose durable spec is gone —
+    # keeps firing forever. Local, read-only, fail-open; rides `alerts` with the
+    # composed removal command, without flipping needs_attention.
+    stale_watchdog_alerts = _stale_watchdog_probe(now)
+
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the
     # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
     # not log lines), while the dead workers get their own attention part.
-    alerts = log_alerts + dead_worker_alerts + heal_alerts + jsonschema_alerts + hook_drift_alerts
+    alerts = (
+        log_alerts
+        + dead_worker_alerts
+        + heal_alerts
+        + jsonschema_alerts
+        + hook_drift_alerts
+        + stale_watchdog_alerts
+    )
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,

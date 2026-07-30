@@ -313,6 +313,20 @@ def harvest_on_terminal(
 
     # (c) Durable, loud marker — no terminal path is silent.
     _write_marker(experiment_dir, run_id, marker)
+
+    # (d) LOCAL WATCHDOG LIFECYCLE (2026-07-30): a finished run must never leave
+    #     a headless tick behind. This guard is the ONE seat every terminal path
+    #     passes through (the poll loop's terminal branches and its abnormal-exit
+    #     ``finally``, the reconcile settle arm, ``settle-run``), so it is where
+    #     the out-of-session watchdog is torn down — the local-scheduler sibling
+    #     of the cron-lifecycle rule ``arm="none"`` already binds for the harness
+    #     cron. The watchdog is per-REPO, so the teardown fires only once NO live
+    #     run remains in this experiment's namespace (a sibling run still in
+    #     flight keeps the dead-man's switch armed); that check is a local journal
+    #     read, so the common path never spawns a scheduler process.
+    #     Never raises — like every other step here it must not mask the terminal
+    #     cause it may be running under.
+    _remove_local_watchdog_if_idle(experiment_dir)
     if not marker["harvest_ok"]:
         _log.warning(
             "terminal harvest for run %s (cause=%s) completed with errors: %s",
@@ -321,6 +335,41 @@ def harvest_on_terminal(
             marker,
         )
     return marker
+
+
+def _remove_local_watchdog_if_idle(experiment_dir: Path) -> dict[str, Any]:
+    """Tear down this experiment's OS-scheduled watchdog once nothing is live.
+
+    The lifecycle half of the local-watchdog class (2026-07-30): three
+    ``hpc-agent-doctor-<repo_hash>`` Scheduled Tasks were found still firing
+    every 15 minutes — with a visible console window — long after every run they
+    were installed for had finished, because NOTHING ever removed them. The
+    installer had an ``uninstall`` flag and no caller.
+
+    The decision (is anything still live?) and the removal both belong to the
+    installer/lifecycle module, which owns the scheduler seam; this is the
+    guarded call site. Best-effort and never-raising, exactly like the metrics
+    harvest and error sweep above: a scheduler that refuses, a journal that
+    cannot be read, or a host with no ``schtasks``/``crontab`` at all must not
+    turn a completed run's terminal path into an exception.
+    """
+    try:
+        from hpc_agent.infra.local_scheduler import remove_watchdog_if_idle
+
+        record: dict[str, Any] = remove_watchdog_if_idle(experiment_dir)
+    except Exception as exc:  # noqa: BLE001 — must never mask the terminal cause
+        _log.warning("terminal harvest: local watchdog teardown failed: %s", exc)
+        return {"removed": False, "status": "error", "reason": str(exc), "live_runs": 0}
+    if record.get("removed"):
+        _log.info(
+            "terminal harvest: removed the out-of-session watchdog %s for %s — %s",
+            record.get("task_name"),
+            experiment_dir,
+            record.get("reason"),
+        )
+    elif record.get("status") == "error":
+        _log.warning("terminal harvest: %s", record.get("reason"))
+    return record
 
 
 def _circuit_wait_sec(exc: SshCircuitOpen, *, now: float) -> float | None:

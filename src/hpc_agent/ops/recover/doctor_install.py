@@ -12,18 +12,24 @@ The scheduled command is fully non-interactive: this verb writes a durable
 scheduled scan raises an OS notification, not silent JSON) and points the
 scheduler at ``hpc-agent doctor --spec <that> --experiment-dir <dir>``.
 
-Idempotent: re-installing with the same params finds the existing task and
-returns ``already_installed`` (no duplicate task / cron line). ``uninstall:true``
-removes it (and is a no-op if absent). This verb NEVER restarts or re-arms a
-run — it only schedules the detector.
+Idempotent by REPLACEMENT: re-installing rewrites the task definition in place
+(``schtasks /Create /F /XML`` on Windows, a marker-keyed cron line rewrite on
+POSIX) and reports ``already_installed`` — one task, never a duplicate, and a
+task registered by an older build HEALS instead of surviving forever behind an
+existence check. ``uninstall:true`` removes it (a no-op if absent). This verb
+NEVER restarts or re-arms a run — it only schedules the detector.
+
+Every OS-scheduler mechanic (the hidden-window XML, the windowless interpreter,
+the install/remove/enumerate calls) lives in the ONE seam
+:mod:`hpc_agent.infra.local_scheduler`, so the three consumers — this verb, the
+guaranteed terminal harvest that tears the watchdog down, and ``doctor``'s
+stale-watchdog probe — cannot drift apart.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -31,20 +37,32 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.doctor_install import DoctorInstallResult, DoctorInstallSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra import local_scheduler
 from hpc_agent.state.run_record import journal_dir, repo_hash
 
-_SCHTASKS_TIMEOUT_SEC = 15
-_CRONTAB_TIMEOUT_SEC = 15
+__all__ = [
+    "doctor_install",
+    "remove_watchdog_if_idle",
+    "stale_watchdog_alert_messages",
+    "watchdog_installed",
+]
+
+_TASK_DESCRIPTION = (
+    "hpc-agent detection-only driver watchdog (design §5). Runs a local, "
+    "read-only scan for stalled/orphaned runs and raises an OS notification. "
+    "Never restarts or re-arms anything. Remove with `hpc-agent doctor-install "
+    "--spec '{\"uninstall\": true}'`."
+)
 
 
 def _platform() -> str:
-    """Return ``"windows"`` or ``"posix"`` (a seam tests monkeypatch)."""
-    return "windows" if os.name == "nt" else "posix"
+    """Return ``"windows"`` or ``"posix"`` (forwards to the scheduler seam)."""
+    return local_scheduler.platform_kind()
 
 
 def _task_name(experiment_dir: Path) -> str:
     """Stable scheduler task name / cron marker for *experiment_dir*."""
-    return f"hpc-agent-doctor-{repo_hash(experiment_dir)}"
+    return local_scheduler.task_name_for(repo_hash(experiment_dir))
 
 
 def _write_durable_spec(experiment_dir: Path, *, notify: bool) -> Path:
@@ -66,56 +84,28 @@ def _write_durable_spec(experiment_dir: Path, *, notify: bool) -> Path:
     return spec_path
 
 
-def _scheduled_command(spec_path: Path, experiment_dir: Path) -> str:
-    """The exact non-interactive command the scheduler runs each interval.
+def _scheduled_argv(spec_path: Path, experiment_dir: Path) -> tuple[str, str]:
+    """``(interpreter, argument_string)`` the scheduler runs each interval.
 
     Uses ``<python> -m hpc_agent`` (not the bare ``hpc-agent`` console script) so
     the command is durable regardless of PATH state inside the scheduler's
     minimal environment. Paths are quoted for spaces (Windows dirs like
     ``C:\\Users\\...\\CC Allowed`` and the journal home under the profile).
+
+    The interpreter is the WINDOWLESS one on Windows (``pythonw.exe``): a
+    console-subsystem ``python.exe`` allocates a console host on every firing,
+    which is what flashed a window at the operator every 15 minutes for days
+    (2026-07-30). On POSIX this is ``sys.executable`` unchanged.
     """
-    py = sys.executable
+    py = local_scheduler.windowless_interpreter()
     exp = str(Path(experiment_dir).resolve())
-    return f'"{py}" -m hpc_agent doctor --spec "{spec_path}" --experiment-dir "{exp}"'
+    return py, f'-m hpc_agent doctor --spec "{spec_path}" --experiment-dir "{exp}"'
 
 
-def _run(
-    argv: list[str], *, input_text: str | None = None, timeout: int
-) -> subprocess.CompletedProcess[str]:
-    """Run *argv* capturing text output (utf-8). Raises on spawn failure/timeout."""
-    return subprocess.run(
-        argv,
-        input=input_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=timeout,
-    )
-
-
-def _run_mutating(
-    argv: list[str], *, input_text: str | None = None, timeout: int
-) -> subprocess.CompletedProcess[str]:
-    """Run a scheduler-mutating command, converting an absent scheduler binary
-    into a structured :class:`errors.SpecInvalid`.
-
-    The read-only probes (``_win_task_exists`` / ``_cron_read_lines``) treat a
-    missing scheduler binary as "not installed" (fail-safe ``False``). The
-    mutating paths cannot silently no-op, but they must NOT crash the envelope as
-    an internal error either: on a host without a crontab/schtasks binary the
-    spawn raises ``FileNotFoundError`` (an ``OSError``), which is reported here as
-    a declared ``SpecInvalid`` (the primitive's only declared error_code) naming
-    the absent scheduler — instead of an uncaught ``FileNotFoundError`` surfaced
-    as error_code='internal'.
-    """
-    try:
-        return _run(argv, input_text=input_text, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise errors.SpecInvalid(
-            f"doctor-install: scheduler binary {argv[0]!r} not found on this host "
-            f"({exc}); the OS scheduler ({argv[0]}) is required to (un)install the "
-            "out-of-session doctor scan."
-        ) from exc
+def _scheduled_command(spec_path: Path, experiment_dir: Path) -> str:
+    """The exact non-interactive command the scheduler runs each interval."""
+    py, args = _scheduled_argv(spec_path, experiment_dir)
+    return f'"{py}" {args}'
 
 
 def watchdog_installed(experiment_dir: Path) -> bool:
@@ -130,110 +120,53 @@ def watchdog_installed(experiment_dir: Path) -> bool:
 
     A probe failure (no ``schtasks``/``crontab``, timeout) reads as ``False``:
     the fail-safe direction is to recommend an install that turns out to be
-    redundant (idempotent: re-install returns ``already_installed``), never to
-    hide a missing watchdog behind a probe error.
+    redundant (idempotent: re-install replaces in place), never to hide a
+    missing watchdog behind a probe error.
     """
-    task_name = _task_name(experiment_dir)
-    if _platform() == "windows":
-        return _win_task_exists(task_name)
-    return any(task_name in ln for ln in _cron_read_lines())
+    return local_scheduler.task_exists(_task_name(experiment_dir))
 
 
-# --------------------------------------------------------------------------- #
-# Windows — schtasks
-# --------------------------------------------------------------------------- #
-def _win_task_exists(task_name: str) -> bool:
-    try:
-        proc = _run(["schtasks", "/Query", "/TN", task_name], timeout=_SCHTASKS_TIMEOUT_SEC)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
+#: Terminal-seat teardown — "a finished run must never leave a headless tick
+#: behind". Re-exported from the scheduler seam so the ops-side name stays
+#: reachable, but the RULE has exactly one definition
+#: (:func:`hpc_agent.infra.local_scheduler.remove_watchdog_if_idle`): the
+#: guaranteed terminal harvest lives in a different ops subject and must reach
+#: the same decision without cross-importing this module.
+remove_watchdog_if_idle = local_scheduler.remove_watchdog_if_idle
 
 
-def _win_install(task_name: str, command: str, interval: int) -> str:
-    if _win_task_exists(task_name):
-        return "already_installed"
-    proc = _run_mutating(
-        [
-            "schtasks",
-            "/Create",
-            "/F",
-            "/SC",
-            "MINUTE",
-            "/MO",
-            str(interval),
-            "/TN",
-            task_name,
-            "/TR",
-            command,
-        ],
-        timeout=_SCHTASKS_TIMEOUT_SEC,
-    )
-    if proc.returncode != 0:
-        raise errors.SpecInvalid(
-            f"doctor-install: schtasks /Create failed (rc={proc.returncode}): "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
+def stale_watchdog_alert_messages() -> list[str]:
+    """Human-facing alert lines for every watchdog that outlived its reason to exist.
+
+    The ``doctor`` surface for this class: any ``hpc-agent-*`` scheduled task
+    whose durable spec is missing, or whose journal namespace holds run records
+    with NONE of them live, is a tick firing into the void — the 2026-07-30
+    signature (three tasks, every 15 minutes, for days after the runs finished).
+    Each line names the task, WHY it reads stale, and the exact removal command.
+
+    Never raises and never mutates: like the other ``doctor`` probes it rides the
+    ``alerts`` list and does not flip ``needs_attention`` — a stale watchdog is
+    operator noise plus a wasted tick, not a stalled driver.
+    """
+    messages: list[str] = []
+    for finding in local_scheduler.scan_stale_watchdogs():
+        if finding.get("reason") == "spec_missing":
+            why = (
+                "its durable doctor spec is GONE (the journal namespace "
+                f"{finding.get('namespace')} no longer carries doctor.spec.json), so every "
+                "firing does nothing"
+            )
+        else:
+            target = finding.get("experiment_dir") or finding.get("namespace")
+            why = (
+                f"every run under its target ({target}) has reached a terminal state, so "
+                "it has nothing left to watch"
+            )
+        messages.append(
+            f"stale local watchdog {finding.get('task_name')}: {why}. Remove it: "
+            f"{finding.get('removal_command')}"
         )
-    return "installed"
-
-
-def _win_uninstall(task_name: str) -> str:
-    if not _win_task_exists(task_name):
-        return "not_installed"
-    proc = _run_mutating(
-        ["schtasks", "/Delete", "/TN", task_name, "/F"], timeout=_SCHTASKS_TIMEOUT_SEC
-    )
-    if proc.returncode != 0:
-        raise errors.SpecInvalid(
-            f"doctor-install: schtasks /Delete failed (rc={proc.returncode}): "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
-        )
-    return "uninstalled"
-
-
-# --------------------------------------------------------------------------- #
-# POSIX — crontab
-# --------------------------------------------------------------------------- #
-def _cron_read_lines() -> list[str]:
-    """Current crontab lines, or ``[]`` when the user has no crontab."""
-    try:
-        proc = _run(["crontab", "-l"], timeout=_CRONTAB_TIMEOUT_SEC)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0:
-        # No crontab installed for the user (crontab -l exits non-zero).
-        return []
-    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
-
-
-def _cron_write(lines: list[str]) -> None:
-    payload = "\n".join(lines)
-    if payload:
-        payload += "\n"
-    proc = _run_mutating(["crontab", "-"], input_text=payload, timeout=_CRONTAB_TIMEOUT_SEC)
-    if proc.returncode != 0:
-        raise errors.SpecInvalid(
-            f"doctor-install: `crontab -` failed (rc={proc.returncode}): "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
-        )
-
-
-def _cron_install(task_name: str, command: str, interval: int) -> str:
-    lines = _cron_read_lines()
-    if any(task_name in ln for ln in lines):
-        return "already_installed"
-    lines.append(f"*/{interval} * * * * {command} # {task_name}")
-    _cron_write(lines)
-    return "installed"
-
-
-def _cron_uninstall(task_name: str) -> str:
-    lines = _cron_read_lines()
-    kept = [ln for ln in lines if task_name not in ln]
-    if len(kept) == len(lines):
-        return "not_installed"
-    _cron_write(kept)
-    return "uninstalled"
+    return messages
 
 
 @primitive(
@@ -241,7 +174,10 @@ def _cron_uninstall(task_name: str) -> str:
     verb="mutate",
     side_effects=[
         SideEffect("scheduler", "Windows Task Scheduler (schtasks) | POSIX crontab"),
-        SideEffect("file_write", "~/.claude/hpc/<repo_hash>/doctor.spec.json"),
+        SideEffect(
+            "file_write",
+            "~/.claude/hpc/<repo_hash>/doctor.spec.json + doctor.task.xml (Windows)",
+        ),
     ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
@@ -268,12 +204,15 @@ def doctor_install(*, experiment_dir: Path, spec: DoctorInstallSpec) -> DoctorIn
     """Schedule (or remove) the out-of-session ``doctor`` scan under *experiment_dir*.
 
     On install: writes the durable ``doctor.spec.json`` (``notify=spec.notify``)
-    and registers a scheduler task running every ``spec.interval_minutes``. A
-    task with the same name already present → ``already_installed`` (no
-    duplicate). On ``uninstall``: removes the task (``not_installed`` if absent).
+    and registers a scheduler task running every ``spec.interval_minutes``. On
+    Windows the registration goes through a generated Task Scheduler XML carrying
+    ``<Hidden>true</Hidden>`` and a ``pythonw.exe`` action, so the tick can never
+    flash a console window; a task with the same name already present is
+    REPLACED (status ``already_installed`` — one task, current definition). On
+    ``uninstall``: removes the task (``not_installed`` if absent).
 
     Raises :class:`errors.SpecInvalid` if the underlying scheduler command
-    (``schtasks`` / ``crontab``) reports a failure.
+    (``schtasks`` / ``crontab``) is absent or reports a failure.
     """
     experiment_dir = Path(experiment_dir)
     platform = _platform()
@@ -281,14 +220,37 @@ def doctor_install(*, experiment_dir: Path, spec: DoctorInstallSpec) -> DoctorIn
     # Spec path is written even on uninstall so the returned command/spec_path
     # stay meaningful; it is harmless (a stale spec no scheduler reads).
     spec_path = _write_durable_spec(experiment_dir, notify=spec.notify)
+    namespace = spec_path.parent
+    py, arguments = _scheduled_argv(spec_path, experiment_dir)
     command = _scheduled_command(spec_path, experiment_dir)
 
-    if spec.uninstall:
-        status = _win_uninstall(task_name) if platform == "windows" else _cron_uninstall(task_name)
-    elif platform == "windows":
-        status = _win_install(task_name, command, spec.interval_minutes)
-    else:
-        status = _cron_install(task_name, command, spec.interval_minutes)
+    try:
+        if spec.uninstall:
+            status = local_scheduler.remove_task(task_name=task_name, namespace=namespace)
+        else:
+            status, _xml_path = local_scheduler.install_task(
+                task_name=task_name,
+                namespace=namespace,
+                command=py,
+                arguments=arguments,
+                working_dir=str(Path(experiment_dir).resolve()),
+                interval_minutes=spec.interval_minutes,
+                description=_TASK_DESCRIPTION,
+                cron_command=command,
+            )
+    except FileNotFoundError as exc:
+        # The read-only probes treat an absent scheduler binary as "not
+        # installed" (fail-safe False). The mutating paths cannot silently
+        # no-op, but must not crash the envelope as error_code='internal'
+        # either (bug-sweep #41): report the declared SpecInvalid naming the
+        # absent scheduler.
+        raise errors.SpecInvalid(
+            f"doctor-install: scheduler binary not found on this host ({exc}); the OS "
+            "scheduler (schtasks / crontab) is required to (un)install the "
+            "out-of-session doctor scan."
+        ) from exc
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        raise errors.SpecInvalid(f"doctor-install: {exc}") from exc
 
     result_status: Any = status
     return DoctorInstallResult(
