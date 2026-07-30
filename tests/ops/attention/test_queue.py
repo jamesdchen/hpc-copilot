@@ -48,6 +48,7 @@ from hpc_agent.ops.attention_queue import (
     collect_queue,
     collect_ssh_circuits,
     collect_stalled,
+    collect_worker_terminals,
     count_by_class,
     discover_fleet_experiments,
     order_items,
@@ -375,6 +376,10 @@ def test_route_through_source_symbols() -> None:
         ],
         collect_stalled: ["find_stalled_runs("],
         collect_dead_workers: ["scan_dead_detached_workers("],
+        # Pillar 5: the queue re-derives NOTHING about a worker death — the
+        # classifier runs at the point of death (where the exception still
+        # exists) and this collector reads its journal.
+        collect_worker_terminals: ["iter_experiment_terminal_causes("],
         collect_anomalies: ["digest_run(", "ANOMALY_STATUSES", "recommendation_for("],
         collect_campaign_pending: ["latest_decision(", "is_latest_committed_greenlight("],
         collect_audits: ["audit_module("],

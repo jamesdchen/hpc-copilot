@@ -1,8 +1,21 @@
 # Proposal: Central typed recovery registry
 
-Status: 8 of 9 kinds ported (contract test, CLI verb). Migration items 1–5
+Status: 12 of 13 kinds ported (contract test, CLI verb). Migration items 1–5
 below are done; the one remaining kind (`ssh_unreachable`) is deliberately
 deferred per item 6 — see the migration plan at the bottom.
+
+**2026-07-30 — the registry becomes a WIRED consumer, not only a catalog.** Four
+kinds joined for the detached-worker terminal causes of `docs/design/s2-readiness.md`
+pillar 5: `dead_hop_route`, `flap_exhausted_staging`, `canary_reporter_unreachable`,
+`zombie_submitting_record`. Until then the registry was read by `errors.py` (two
+exception classes) and by humans through `recoveries show`; now
+`ops/recover/terminal_cause.py` keys a classified failure to a kind and composes
+`remediation_for(kind, placeholders=…)` onto the attention-queue item and the
+morning brief, so the menu reaches the operator without anyone opening a worker
+log. That makes the "no generic fallback" rule load-bearing rather than
+stylistic: an unclassified death carries `recovery_kind=None` and NO remediation,
+because a generic string that steers confidently at the wrong host is the exact
+2026-07-30 failure.
 
 ## Problem
 

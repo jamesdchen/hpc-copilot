@@ -218,6 +218,7 @@ staleness, or liveness inside `ops/attention/` is a defect by definition.
 | `audit-section-unsigned` / `audit-section-stale` | `state/notebook_audit.py::audit_module` — the T6 reduction (which itself routes drift through `state/attestation.py::reduce`). The queue maps `UNSIGNED` → unsigned item, `SIGNED_STALE` → stale item, and never touches a sha. Required slugs come from the audit's template via the same parse the gate uses (`state/audit_source.py`); an experiment with no `audited_source` opt-in contributes nothing (D7 fail-safe posture). |
 | `alert` | `ops/recover/notify.py::read_unacknowledged_alerts` — peek-only (D6). |
 | `ssh-circuit-open` | `ops/recover/net_triage.py::open_circuit_lines`. |
+| `worker-terminal` | `ops/recover/terminal_cause.py::iter_experiment_terminal_causes` — the append-only journal the WORKER's own exit path wrote (`docs/design/s2-readiness.md` pillar 5). The one definition is the CLASSIFIER, and it deliberately does not live here: it runs at the point of death, where the typed exception still exists (by the time anything reads, the exception has been collapsed to an int). This collector therefore classifies nothing and re-derives nothing — the `error_code`, the discriminated `path_cause` / transport-flap identity / breaker state, and the recoveries-registry remediation all ride the record verbatim. DISTINCT from `dead-worker`: that one is the liveness scan's finding (dead pid, no terminal — what a hard kill leaves when nothing was flushed); this one is the worker's own structured disclosure, and a death producing both surfaces both. |
 
 Scope-unlock requests — named in the product sketch — are **deliberately NOT
 a v1 item kind, with a recorded reason**: there is no durable "unlock
@@ -430,6 +431,21 @@ un-capped with `skipped` accounting (no cap measured as needed).
 
 ## Drift log (implementation deviations, recorded)
 
+* **2026-07-30 — `worker-terminal` lands with a per-item DISCLOSURE-LATENCY
+  suffix, the first thing on a queue line that is not derived from
+  `computed_at`.** s2-readiness pillar 5 requires `failed_at` vs `surfaced_at`
+  honesty. The item's `since` is `failed_at`, so the leading age is already the
+  time-since-failure; the added `· disclosed +Nh` fragment is the same gap stated
+  explicitly, because "how long did I not know" is the fact the pillar exists to
+  surface and inferring it from a column header is exactly the archaeology the
+  pillar bans. It renders ONLY for items whose evidence carries
+  `disclosure_latency_seconds`, so every other line is byte-identical. It is a
+  duration, never a judgment — the D6 no-urgency rule is untouched. The wire
+  model did NOT change: the three timestamps and the composed remediation ride
+  the existing free-form `evidence` dict and the existing `action` field, so this
+  kind carries no regen debt (`AttentionItemModel.kind`'s description was
+  likewise left alone — it has been a non-exhaustive sample since the eleven
+  kinds that landed after it was written).
 * **Module path — top-level `ops/attention_*`, not an `ops/attention/`
   package.** The plan named `ops/attention/queue.py` / `render.py` /
   `queue_op.py`. Wave A/B landed them as `ops/attention_queue.py`,

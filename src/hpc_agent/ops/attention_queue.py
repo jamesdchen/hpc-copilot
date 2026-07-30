@@ -93,6 +93,8 @@ __all__ = [
     "CONFORMANCE_NEEDS_VERDICT",
     "CONFORMANCE_NONCONFORMING",
     "collect_conformance",
+    "WORKER_TERMINAL",
+    "collect_worker_terminals",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -188,6 +190,23 @@ CONFORMANCE_NONCONFORMING = "conformance-nonconforming"
 #: headline wins) and yields no item — the remedy already landed.
 CHALLENGE_UPHELD_UNREMEDIED = "challenge-upheld-unremedied"
 
+#: A detached worker that died TERMINAL with a discriminated structured cause
+#: (docs/design/s2-readiness.md pillar 5, "failures are product surface"). The
+#: source predicate is ``ops/recover/terminal_cause.py``'s journal — the same
+#: record the worker's own exit path wrote — so the queue re-derives NOTHING: the
+#: ``error_code`` / ``category``, the discriminated ``path_cause`` / transport-flap
+#: identity / breaker state, and the COMPOSED remediation from the recoveries
+#: registry all ride the record verbatim. BLOCKED: a dead worker's cluster work
+#: did not complete and only a human decides what happens next.
+#:
+#: Distinct from :data:`DEAD_WORKER`, deliberately. ``dead-worker`` is the
+#: liveness scan's finding — a lease with a dead pid and NO recorded terminal, the
+#: shape a hard kill leaves when nothing was flushed. ``worker-terminal`` is the
+#: worker's own structured disclosure. A death that produces both surfaces both:
+#: one says a worker vanished, the other says WHY, and collapsing them would lose
+#: exactly the distinction the disclosure exists to make.
+WORKER_TERMINAL = "worker-terminal"
+
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
 KIND_CLASS: dict[str, str] = {
@@ -226,6 +245,10 @@ KIND_CLASS: dict[str, str] = {
     # (no encoded edge — the honest anti-capital-shaping answer, C-queue).
     CONFORMANCE_NEEDS_VERDICT: VERDICT,
     CONFORMANCE_NONCONFORMING: VERDICT,
+    # A terminal worker death stopped cluster work mid-flight and only a human
+    # decides what happens next → BLOCKED (the DEAD_WORKER class, for the same
+    # reason). Fan-out stays 0: no journal encodes what a dead worker unblocks.
+    WORKER_TERMINAL: BLOCKED,
 }
 
 
@@ -398,6 +421,104 @@ def collect_dead_workers(experiment_dir: Path, *, now: str) -> list[AttentionIte
             )
         )
     return items
+
+
+def collect_worker_terminals(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Terminal detached-worker deaths with a discriminated cause (pillar 5).
+
+    Source predicate: ``ops/recover/terminal_cause.py::iter_experiment_terminal_causes``
+    — the append-only journal the WORKER's own exit path wrote. This collector
+    re-derives nothing and classifies nothing: the ``error_code``, the
+    discriminated ``path_cause`` / transport-flap identity / breaker state, and
+    the remediation COMPOSED from the recoveries registry all ride the record
+    verbatim (the D1 no-authored-prose rule, and the D5 one-definition rule — the
+    classifier is the one definition and it runs at the point of death, where the
+    exception still exists).
+
+    The item's ``action`` IS the registry remediation, so a reader gets the menu
+    without opening the log. When the classifier could not discriminate a class,
+    ``action`` is ``None`` and the render falls through to the record's own
+    composed message — an honest "cause not named" beats a generic remediation
+    that points somewhere wrong.
+
+    **Disclosure latency** (the s2-readiness honesty mandate): each item carries
+    ``failed_at`` (the worker's death), ``recorded_at`` (when the machine wrote
+    the disclosure) and ``surfaced_at`` (this read), plus the two derived gaps. A
+    queue read at noon over a 3am death says so in numbers rather than implying
+    the human learned at the instant of failure.
+
+    Read-only: this collector opens no connection and writes nothing (the queue is
+    watermark-neutral by construction). Fail-open: an unreadable journal yields no
+    items rather than crashing the morning read.
+    """
+    from hpc_agent.ops.recover.terminal_cause import iter_experiment_terminal_causes
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    for record in iter_experiment_terminal_causes(experiment_dir):
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        failed_at = record.get("failed_at") if isinstance(record.get("failed_at"), str) else None
+        recorded_at = (
+            record.get("recorded_at") if isinstance(record.get("recorded_at"), str) else None
+        )
+        block = record.get("block") if isinstance(record.get("block"), str) else None
+        action = record.get("remediation") if isinstance(record.get("remediation"), str) else None
+        items.append(
+            AttentionItem(
+                kind=WORKER_TERMINAL,
+                item_class=KIND_CLASS[WORKER_TERMINAL],
+                experiment_dir=exp,
+                scope_kind="run",
+                scope_id=run_id,
+                block=block,
+                cluster=record.get("cluster") if isinstance(record.get("cluster"), str) else None,
+                since=failed_at,
+                action=action,
+                evidence={
+                    "recovery_kind": record.get("recovery_kind"),
+                    "error_code": record.get("error_code"),
+                    "category": record.get("category"),
+                    "retry_safe": record.get("retry_safe"),
+                    "exit_code": record.get("exit_code"),
+                    "path_cause": record.get("path_cause"),
+                    "transport_flap": record.get("transport_flap"),
+                    "breaker_state": record.get("breaker_state"),
+                    "dispatch_never_actuated": record.get("dispatch_never_actuated"),
+                    "ssh_target": record.get("ssh_target"),
+                    "detected_by": record.get("detected_by"),
+                    "message": record.get("message"),
+                    # The forensic tier stays, and the item POINTS at it rather
+                    # than requiring it: the log is where the traceback and the
+                    # child stderr live, not where the decision is made.
+                    "log_path": record.get("log_path"),
+                    "log_disclosed": record.get("log_disclosed"),
+                    "last_log_line": record.get("last_log_line"),
+                    # Disclosure-latency honesty (docs/design/s2-readiness.md).
+                    "failed_at": failed_at,
+                    "recorded_at": recorded_at,
+                    "surfaced_at": now,
+                    "disclosure_latency_seconds": _elapsed_seconds(failed_at, now),
+                    "record_latency_seconds": _elapsed_seconds(failed_at, recorded_at),
+                },
+            )
+        )
+    return items
+
+
+def _elapsed_seconds(start: str | None, end: str | None) -> float | None:
+    """``end - start`` in seconds, or ``None`` when either instant is unreadable.
+
+    A duration only — never interpreted as a judgment (the D6 no-urgency rule).
+    """
+    from hpc_agent.infra.time import parse_iso_utc_or_none
+
+    start_dt = parse_iso_utc_or_none(start)
+    end_dt = parse_iso_utc_or_none(end)
+    if start_dt is None or end_dt is None:
+        return None
+    return (end_dt - start_dt).total_seconds()
 
 
 def collect_anomalies(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
@@ -1282,6 +1403,7 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *collect_greenlight_and_parked(experiment_dir, now=now),
         *collect_stalled(experiment_dir, now=now),
         *collect_dead_workers(experiment_dir, now=now),
+        *collect_worker_terminals(experiment_dir, now=now),
         *collect_anomalies(experiment_dir, now=now),
         *collect_campaign_pending(experiment_dir, now=now),
         *audits.items,

@@ -302,6 +302,46 @@ def _invoke_parsed(args: argparse.Namespace) -> int:
         return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
 
 
+def _record_detached_terminal_cause(exit_code: int, exc: BaseException | None) -> None:
+    """A detached worker that dies terminal journals its STRUCTURED cause.
+
+    Pillar 5 of ``docs/design/s2-readiness.md`` ("failures are product surface"):
+    the ``[fatal]`` block below is prose in a log a human had to go and read (the
+    2026-07-30 night, four failure classes, every diagnosis manual). This writes
+    the same death as a discriminated record — ``error_code`` / ``category`` from
+    the typed exception, the ``path_cause`` / transport-flap identity / breaker
+    state / dispatch evidence the S2 hardening landed, and the composed
+    remediation for its recoveries-registry kind — which the attention queue and
+    the morning brief then render with ``failed_at`` vs ``surfaced_at``.
+
+    Fires BEFORE (and independently of) the block-terminal write, and regardless
+    of whether the block already recorded a terminal: the cause journal is about
+    the WORKER's death, not about the block's result. Fires only in a marked
+    worker; never raises (the whole path is fail-open inside
+    :func:`record_worker_terminal_cause`).
+    """
+    import os
+    from pathlib import Path
+
+    run_id = os.environ.get("HPC_DETACHED_RUN_ID")
+    block = os.environ.get("HPC_DETACHED_BLOCK")
+    if not run_id or not block:
+        return
+    try:
+        from hpc_agent.ops.recover.terminal_cause import record_worker_terminal_cause
+
+        record_worker_terminal_cause(
+            Path.cwd(),
+            run_id=run_id,
+            block=block,
+            exit_code=exit_code,
+            exc=exc,
+            log_path=os.environ.get("HPC_DETACHED_LOG"),
+        )
+    except Exception:  # noqa: BLE001 — the exit path must never gain a new crash
+        pass
+
+
 def _record_detached_failure_terminal(exit_code: int) -> None:
     """A detached worker that exits non-zero leaves a terminal record.
 
@@ -396,15 +436,36 @@ def main(argv: list[str] | None = None) -> int:
         except SystemExit as exc:
             if exc.code not in (0, None):
                 emit_fatal_block(exc=exc, last_stage=last_heartbeat_line())
+                # A non-zero SystemExit is a TERMINAL worker death like any
+                # other, so it journals its structured cause (pillar 5). It
+                # deliberately still records no BLOCK terminal — that asymmetry
+                # is pre-existing and is the block layer's contract, not the
+                # disclosure layer's.
+                _record_detached_terminal_cause(_exit_code_int(exc.code), exc)
             raise
         except Exception as exc:
             emit_fatal_block(exc=exc, last_stage=last_heartbeat_line())
+            _record_detached_terminal_cause(3, exc)
             _record_detached_failure_terminal(3)
             raise
         if rc != 0:
             emit_fatal_block(exit_code=rc, last_stage=last_heartbeat_line())
+            # No exception survives here — ``_err_from_hpc`` already collapsed the
+            # typed failure to an int one frame in — so the classifier reads the
+            # worker's OWN disclosure (the bounded log tail) for the discriminated
+            # cause vocabulary instead.
+            _record_detached_terminal_cause(rc, None)
             _record_detached_failure_terminal(rc)
         return rc
+
+
+def _exit_code_int(code: object) -> int:
+    """A ``SystemExit.code`` as an int (a string code reads as the generic 1)."""
+    if isinstance(code, bool):
+        return int(code)
+    if isinstance(code, int):
+        return code
+    return 1
 
 
 def _dispatch_main(argv: list[str] | None = None) -> int:

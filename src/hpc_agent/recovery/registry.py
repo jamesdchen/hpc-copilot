@@ -61,6 +61,16 @@ RecoveryKind = Literal[
     # Prose-only / slash-skill-emitted kinds — the empirical drift cases.
     "already_in_flight",
     "submission_incomplete",
+    # Detached-worker TERMINAL causes (s2-readiness pillar 5, 2026-07-30). Each
+    # is a class a live operator diagnosed by READING A WORKER LOG on the night
+    # of 2026-07-30; the registry is what makes the diagnosis composed instead of
+    # archaeological. Keyed by ``ops/recover/terminal_cause.py``'s classifier,
+    # which names ONE of these on every terminal detached-worker death it can
+    # discriminate.
+    "dead_hop_route",
+    "flap_exhausted_staging",
+    "canary_reporter_unreachable",
+    "zombie_submitting_record",
 ]
 
 
@@ -450,6 +460,230 @@ _OUTPUTS_MISSING = RecoveryMenu(
 )
 
 
+_DEAD_HOP_ROUTE = RecoveryMenu(
+    kind="dead_hop_route",
+    summary=(
+        "The configured path to the cluster runs through a ProxyJump hop and THAT "
+        "HOP is down — the discriminated ``hop_down_direct_*`` readiness cause. The "
+        "login node is not the fault: every sibling login node reached through the "
+        "same hop inherits the same dead hop, so a host-retarget moves the target "
+        "and keeps the break (the 2026-07-30 misdiagnosis this entry exists to "
+        "prevent). The discriminator is the DIRECT route: whether the target "
+        "answers with the jump bypassed."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command="hpc-agent net-triage --spec <{probe_preamble: true}>",
+            when_to_use=(
+                "ALWAYS first. The triage rungs re-read the route chain per element "
+                "(hop / direct / target) and report the named ``path_cause`` plus "
+                "the breaker state, so the next step is chosen from evidence rather "
+                "than from which host the error message happened to mention."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command="ssh -G <cluster_host>",
+            when_to_use=(
+                "The CONFIG discriminator: it prints the effective chain ssh will "
+                "actually use (ProxyJump, HostName, User, Port) after every "
+                "Host/Match block has applied. Run it when triage names a hop you "
+                "did not expect — the dead hop is frequently inherited from a "
+                "wildcard block rather than the cluster's own stanza."
+            ),
+            safety_rank=1,
+        ),
+        RecoveryOption(
+            cli_command="hpc-agent cluster-readiness --spec <{host: <cluster_host>}>",
+            when_to_use=(
+                "The hop is back (VPN/tunnel restored) and you want the standing "
+                "ledger's verdict per chain element before re-firing, rather than "
+                "learning at fire time whether the path healed."
+            ),
+            safety_rank=2,
+        ),
+        RecoveryOption(
+            cli_command="ssh -o ProxyJump=none <cluster_host> true",
+            when_to_use=(
+                "ONLY when triage reported ``hop_down_direct_ok`` — the target "
+                "answers directly. This confirms the bypass by hand before you "
+                "route the run without the jump. Do NOT run this as a generic "
+                "workaround: on ``hop_down_direct_dead`` both routes are gone and "
+                "the problem is local network / site-wide, not the login node."
+            ),
+            safety_rank=3,
+        ),
+    ),
+    references=(
+        "docs/design/s2-readiness.md",
+        "infra/readiness_sensors.py::PathCause",
+        "ops/path_gate.py",
+    ),
+)
+
+
+_FLAP_EXHAUSTED_STAGING = RecoveryMenu(
+    kind="flap_exhausted_staging",
+    summary=(
+        "Staging (the delta push / deploy) died after the flap-riding retry ladder "
+        "exhausted its attempts: the transport kept dropping mid-command — a "
+        "flapping tunnel or VPN — rather than the remote command failing. The "
+        "delta push is idempotent and CONTENT-KEYED, so everything already shipped "
+        "is banked: a re-fire RESUMES, it does not restart. The ladder stops early "
+        "(rather than holding the worker) when the host's circuit breaker is "
+        "cooling for longer than the ladder's patience — that is a fence, not a "
+        "failure to try."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command="hpc-agent net-triage",
+            when_to_use=(
+                "FIRST, to read the breaker state for the host. An OPEN circuit "
+                "means the next attempts fail fast by design (ban-risk protection) "
+                "and a re-fire before the cooldown lapses buys nothing — the "
+                "remaining cooldown is the honest wait."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command="/submit-hpc <your original args>",
+            when_to_use=(
+                "The breaker is closed or half-open-eligible and the tunnel is back. "
+                "Re-fire the SAME submit: staging converges on what is already "
+                "there, so the second attempt ships only the residue. This is the "
+                "primary path — 'attempt count' is not a concept here, only progress."
+            ),
+            safety_rank=1,
+        ),
+        RecoveryOption(
+            cli_command="HPC_STAGE_RETRY_ATTEMPTS=<n> /submit-hpc <your original args>",
+            when_to_use=(
+                "The tunnel flaps on a period longer than the default ladder rides "
+                "out. Widen the ladder for this fire only. Raising it does NOT "
+                "bypass the breaker — a cooling circuit still stops the ladder."
+            ),
+            safety_rank=2,
+        ),
+    ),
+    references=(
+        "docs/design/s2-readiness.md",
+        "ops/submit_flow.py::_stage_with_flap_retry",
+        "infra/ssh_options.py::mark_transport_flap",
+    ),
+)
+
+
+_CANARY_REPORTER_UNREACHABLE = RecoveryMenu(
+    kind="canary_reporter_unreachable",
+    summary=(
+        "The canary's every status poll failed: the cluster-side reporter never "
+        "returned a readable status, so the canary CANNOT be trusted as passed "
+        "(never-pass-unverified). The scheduler may well have run the job. The "
+        "ROUTE CLASS is the discriminator and it decides which side of the wire to "
+        "look at: a last poll of rc=255 is the SSH transport itself failing — it "
+        "says NOTHING about the cluster env — while any other shape keeps the "
+        "cluster-side reading (wrong/absent conda env, module-load failure in the "
+        "job preamble)."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command="hpc-agent net-triage",
+            when_to_use=(
+                "The recorded last-poll return code is 255 (or the record names a "
+                "transport cause). The dial died before any cluster-side read, so "
+                "triage the route — including the local ssh resolution — BEFORE "
+                "touching the remote env. Blaming the conda env here sends you to "
+                "the wrong side of the wire."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "ssh <ssh_target> '<activation> && python -c \"import hpc_agent, sys; "
+                "print(hpc_agent.__version__, sys.executable)\"'"
+            ),
+            when_to_use=(
+                "The route class is NOT transport (any last-poll shape other than "
+                "rc=255). Reproduce the reporter's own precondition under the "
+                "cluster's activation: an unimportable hpc-agent or a failed module "
+                "load in the preamble is the ordinary cause."
+            ),
+            safety_rank=1,
+        ),
+        RecoveryOption(
+            cli_command="hpc-agent worker-log-digest --path <log_path>",
+            when_to_use=(
+                "Neither of the above named it. The worker log is the FORENSIC tier "
+                "— read it last, not first, and read it through the digest so the "
+                "poll sequence is summarised rather than scrolled."
+            ),
+            safety_rank=2,
+        ),
+    ),
+    references=(
+        "docs/design/s2-readiness.md",
+        "ops/verify_canary.py::_reporter_unreachable_envelope",
+    ),
+)
+
+
+_ZOMBIE_SUBMITTING_RECORD = RecoveryMenu(
+    kind="zombie_submitting_record",
+    summary=(
+        "A run record was left in ``submitting`` by a worker that died between "
+        "minting the record and issuing the dispatch. This class is now AUTO-HEALED: "
+        "the record carries its OWN durable dispatch evidence, and reconcile's rung "
+        "0 reads ``dispatch_evidence.state == 'pending'`` — proof no qsub/sbatch was "
+        "ever sent — and settles the record ``abandoned`` OFFLINE, with no cluster "
+        "round-trip and no acceptance evidence to hunt for. The entry stays in the "
+        "registry because the record is the human-visible artefact of the heal: it "
+        "documents WHY the run went abandoned without anyone asking the scheduler, "
+        "and it is the recovery menu for the residue when the evidence is UNKNOWN "
+        "(a pre-fix record, which rung 0 correctly refuses to settle offline)."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command="hpc-agent status-snapshot --experiment-dir <experiment_dir>",
+            when_to_use=(
+                "Confirm the auto-heal already happened: the run reads ``abandoned`` "
+                "with verdict_reason ``submit_once_never_dispatched_safe_resubmit``. "
+                "Nothing is owed — resubmitting is safe because nothing was ever "
+                "sent."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command="/submit-hpc <your original args>",
+            when_to_use=(
+                "After confirming the never-dispatched settle. The submit-once "
+                "dedup no longer blocks on the healed record, and no duplicate array "
+                "can result — the evidence says the first dispatch never actuated."
+            ),
+            safety_rank=1,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent reconcile --run-id <run_id> --scheduler <scheduler> "
+                "--experiment-dir <experiment_dir>"
+            ),
+            when_to_use=(
+                "The record predates dispatch evidence (``dispatch_evidence`` empty "
+                "== UNKNOWN), so rung 0 cannot prove the dispatch never actuated and "
+                "deliberately does NOT settle it offline. Reconcile asks the "
+                "scheduler — the only remaining evidence class — before anything is "
+                "declared abandoned."
+            ),
+            safety_rank=2,
+        ),
+    ),
+    references=(
+        "docs/design/s2-readiness.md",
+        "ops/monitor/reconcile.py::_never_actuated_abandon",
+        "_kernel/contract/vocabulary.py::DispatchState",
+    ),
+)
+
+
 REGISTRY: dict[str, RecoveryMenu] = {
     _ALREADY_IN_FLIGHT.kind: _ALREADY_IN_FLIGHT,
     _SUBMISSION_INCOMPLETE.kind: _SUBMISSION_INCOMPLETE,
@@ -459,6 +693,10 @@ REGISTRY: dict[str, RecoveryMenu] = {
     _SYSTEM_OOM.kind: _SYSTEM_OOM,
     _COMBINER_FAILED.kind: _COMBINER_FAILED,
     _OUTPUTS_MISSING.kind: _OUTPUTS_MISSING,
+    _DEAD_HOP_ROUTE.kind: _DEAD_HOP_ROUTE,
+    _FLAP_EXHAUSTED_STAGING.kind: _FLAP_EXHAUSTED_STAGING,
+    _CANARY_REPORTER_UNREACHABLE.kind: _CANARY_REPORTER_UNREACHABLE,
+    _ZOMBIE_SUBMITTING_RECORD.kind: _ZOMBIE_SUBMITTING_RECORD,
 }
 
 
