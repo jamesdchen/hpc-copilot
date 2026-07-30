@@ -47,6 +47,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'classify-axis-easy': ('classify-axis-easy', 'hpc_agent.incorporation.classify_axis_easy'),
     'classify-axis-preflight': ('classify-axis-preflight', 'hpc_agent.ops.classify_axis_preflight'),
     'classify-campaign-path': ('classify-campaign-path', 'hpc_agent.incorporation.classify_campaign_path'),
+    'cluster-readiness': ('cluster-readiness', 'hpc_agent.ops.cluster_readiness_op'),
     'cluster-reduce': ('cluster-reduce', 'hpc_agent.ops.aggregate.cluster_reduce'),
     'compute-run-id': ('compute-run-id', 'hpc_agent.incorporation.build.compute_run_id'),
     'conformance-record': ('conformance-record', 'hpc_agent.ops.conformance.record_op'),

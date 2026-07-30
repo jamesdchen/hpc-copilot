@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/cluster_readiness.output.json",
+  "title": "cluster-readiness output data",
+  "description": "Shape of the ``data`` field on a ``cluster-readiness`` envelope.\n\n``render`` rides the result the way it does on ``attention-queue`` — the\nagent relays it VERBATIM. The single ``computed_at`` stamp dates the whole\nprojection and is the instant every age was measured against.",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The single instant readiness was computed against (ISO-8601 UTC).",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "clusters": {
+      "description": "One entry per cluster/host, ordered by (cluster or '', host).",
+      "items": {
+        "$ref": "#/$defs/ClusterReadinessEntry"
+      },
+      "title": "Clusters",
+      "type": "array"
+    },
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Entry count per overall verdict ({ready, stale, degraded, unknown}).",
+      "title": "Counts",
+      "type": "object"
+    },
+    "render": {
+      "description": "The deterministic markdown digest — relayed to the human verbatim.",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "ClusterReadinessEntry": {
+      "additionalProperties": false,
+      "description": "The readiness of one cluster (or one bare host with a ledger).",
+      "properties": {
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The clusters.yaml key, or null for a host with a ledger but no config entry.",
+          "title": "Cluster"
+        },
+        "host": {
+          "description": "The ssh host key the ledger is filed under.",
+          "title": "Host",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "ready / stale / degraded / unknown — the single overall verdict computed from the atoms below by state/readiness.overall_verdict.",
+          "title": "Verdict",
+          "type": "string"
+        },
+        "atoms": {
+          "description": "Recorded atoms ordered by (sensor position, route, target), each followed by an 'unknown' placeholder for every sensor kind nothing has fed — absence is emitted, never omitted.",
+          "items": {
+            "$ref": "#/$defs/ReadinessAtomModel"
+          },
+          "title": "Atoms",
+          "type": "array"
+        },
+        "ledger_corrupt": {
+          "default": false,
+          "description": "True when the ledger file existed but could not be read. The entry then reports an EMPTY ledger (verdict 'unknown') and says so — a corrupt file is disclosed, never a crash and never silently green.",
+          "title": "Ledger Corrupt",
+          "type": "boolean"
+        },
+        "ledger_corruption_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why this read could not use the file (unreadable / not valid JSON / not a JSON object / no usable schema_version / schema_version newer than this build / atoms is not a list); null when it read cleanly.",
+          "title": "Ledger Corruption Reason"
+        },
+        "ledger_last_corruption": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "{at, reason} for a PREVIOUS ledger file that a write discarded as unreadable. Persisted through the rebuild so the operator learns once that something was lost, instead of the disclosure vanishing with the file the moment any traffic touches the host.",
+          "title": "Ledger Last Corruption"
+        }
+      },
+      "required": [
+        "host",
+        "verdict"
+      ],
+      "title": "cluster-readiness entry",
+      "type": "object"
+    },
+    "ReadinessAtomModel": {
+      "additionalProperties": false,
+      "description": "One verdict atom: what was probed, over which route, when, and how long.\n\nThe wire projection of ``infra/readiness_sensors.VerdictAtom`` plus the two\nderived reading aids (``age_seconds``, ``stale``) and the durable tier's\nadditive ``source``.\n\nA sensor that nothing has fed is still emitted, with ``verdict='unknown'``\nand every other field null — absence is reported, not omitted, so a reader\ncan never mistake an unfed invariant for a green one.",
+      "properties": {
+        "sensor": {
+          "description": "What was probed: hop / direct / path / connect / preamble (the sensor layer's vocabulary), extended by the durable ledger with auth / scratch / scheduler / env.",
+          "title": "Sensor",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The chain element or host the reading is about (a hop's own hostname, or the target); null when no observation exists.",
+          "title": "Target"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which route the reading was taken over: 'effective' (what ssh -G resolved, hops included), 'direct' (hop-bypassing — the discriminator for a dead ProxyJump), or 'n/a'. Null when unknown.",
+          "title": "Route"
+        },
+        "verdict": {
+          "description": "ok / down / timeout / unknown / skipped as recorded, or 'unknown' when no observation of this sensor exists. 'unknown' means the sensor could not settle it and 'skipped' means it never ran — neither is 'fine'.",
+          "title": "Verdict",
+          "type": "string"
+        },
+        "at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO-8601 UTC instant the observation was recorded; null when unknown.",
+          "title": "At"
+        },
+        "age_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Age of the observation at computed_at, in whole seconds; null when unknown or when the stamp is unparseable.",
+          "title": "Age Seconds"
+        },
+        "stale": {
+          "description": "True when the observation is past this sensor's freshness horizon (or has no usable stamp, or does not exist). A stale verdict is never read as current — that assertion is the whole point.",
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "stale_after_seconds": {
+          "description": "This sensor's freshness horizon in seconds, so the age reads against it.",
+          "title": "Stale After Seconds",
+          "type": "integer"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The observation's own measured duration, when the site held one; null otherwise. Never estimated.",
+          "title": "Latency Ms"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Durable-tier provenance naming the seam that recorded it (rendered, never interpreted); not part of VerdictAtom.",
+          "title": "Source"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The reading's own short opaque note; null when it recorded none.",
+          "title": "Detail"
+        }
+      },
+      "required": [
+        "sensor",
+        "verdict",
+        "stale",
+        "stale_after_seconds"
+      ],
+      "title": "cluster-readiness atom",
+      "type": "object"
+    }
+  }
+}

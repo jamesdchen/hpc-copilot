@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/cluster_readiness.input.json",
+  "title": "cluster-readiness input spec",
+  "description": "Input spec for the ``cluster-readiness`` verb.\n\nEvery field is optional: the empty spec ``{}`` is valid and means \"every\ncluster in ``clusters.yaml`` plus every host that has a ledger\".",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict the report to this clusters.yaml key. Unknown keys are not refused — they report as unknown-with-no-ledger, because 'I have never observed this' is a real answer and refusing it would hide it.",
+      "title": "Cluster"
+    },
+    "host": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Restrict the report to this ssh host (user@host is accepted and normalized to the host key the ssh circuit breaker uses). Combines with 'cluster' as an intersection.",
+      "title": "Host"
+    },
+    "now": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 UTC 'now' override for deterministic testing (the doctor precedent). Sets the computed_at stamp and the single instant every atom age and freshness horizon is measured against — never an agent-facing knob for reshaping ages.",
+      "title": "Now"
+    }
+  }
+}

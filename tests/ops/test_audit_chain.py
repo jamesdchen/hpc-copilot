@@ -616,17 +616,6 @@ def test_status_brief_is_absent_without_the_chain_and_says_so(tmp_path: Path) ->
     assert "no render pointers" in result.brief["renders"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "REGEN DEBT, declared in docs/internals/regen-debt-ledger.md: the CLI "
-        "--spec seam pre-validates against the CHECKED-IN JSON schemas, and the 9 "
-        "schema files this wave moved are deliberately not rebaked on this branch "
-        "(regen runs serially, once, at integration). Strict on purpose — the "
-        "moment `regen_all --write` runs, this XPASSes and turns hard-red, which "
-        "is the prompt to delete the marker and the ledger row together."
-    ),
-)
 def test_end_to_end_through_the_real_cli_spec_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

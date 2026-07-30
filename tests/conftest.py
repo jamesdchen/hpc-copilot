@@ -487,3 +487,29 @@ def _default_no_ssh_pacing() -> Iterator[None]:
             os.environ.pop("HPC_NO_SSH_PACING", None)
         else:
             os.environ["HPC_NO_SSH_PACING"] = saved
+
+
+# ── no console windows, EVER (win32) ─────────────────────────────────────────
+#
+# Applied at IMPORT TIME, not as a fixture: pytest-xdist spawns its worker
+# processes from the controller BEFORE any session fixture runs, so a fixture
+# would silence spawns made inside workers while the worker spawns themselves
+# still flash one console each (2026-07-30 popup storm, second wave). This
+# module imports in the controller AND in every worker at collection, which
+# covers both. ``CREATE_NO_WINDOW`` is mutually exclusive with
+# ``DETACHED_PROCESS`` (both steer console creation), so detaching spawns are
+# left untouched. POSIX: no-op.
+if sys.platform == "win32":
+    import subprocess as _subprocess
+
+    _NO_WINDOW = getattr(_subprocess, "CREATE_NO_WINDOW", 0)
+    _DETACHED = getattr(_subprocess, "DETACHED_PROCESS", 0)
+    _ORIG_POPEN_INIT = _subprocess.Popen.__init__
+
+    def _init_no_window(self: Any, *args: Any, **kwargs: Any) -> None:
+        flags = kwargs.get("creationflags", 0)
+        if not flags & _DETACHED:
+            kwargs["creationflags"] = flags | _NO_WINDOW
+        _ORIG_POPEN_INIT(self, *args, **kwargs)
+
+    _subprocess.Popen.__init__ = _init_no_window  # type: ignore[method-assign]

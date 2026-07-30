@@ -10,6 +10,18 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "audit_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audit Id"
+    },
     "source": {
       "minLength": 1,
       "title": "Source",

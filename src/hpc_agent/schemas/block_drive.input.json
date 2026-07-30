@@ -32,6 +32,18 @@
       "description": "The workflow family to drive (submit / status / aggregate / campaign). Required for a FRESH chain start (picks the first block from block_chain.ORDER); recovered from the resume cursor on a RESUME.",
       "title": "Workflow"
     },
+    "audit": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BlockDriveAuditSeat"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The AUDIT chain's non-run scope seat (P2.b) — required to FRESH-start `workflow: \"audit\"`, ignored by every other family. A notebook audit is keyed by audit_id and mints no run, so `run_id` cannot start it."
+    },
     "dry_run": {
       "default": false,
       "description": "Print the planned action and exit without executing any span.",
@@ -51,6 +63,71 @@
       "default": null,
       "description": "FUSED commit+advance (L1). An append-decision payload (the SAME AppendDecisionInput shape: scope_kind / scope_id / block / response / resolved / etc). When set, this ONE call first commits the human's y/nudge through the single append_decision definition — every authorship / brief-provenance / code-derived-field / bare-ack / unlock-authorship gate fires IDENTICALLY to a standalone `append-decision` — then advances the driver in the same call, returning the next parked brief. It removes the agent's mechanical SECOND call (the old `append-decision` then `block-drive` pair becomes one). MECHANISM only: the human still utters the y.",
       "title": "Approve"
+    }
+  },
+  "$defs": {
+    "BlockDriveAuditSeat": {
+      "additionalProperties": false,
+      "description": "The AUDIT chain's scope declaration (P2.b) — a NON-run scope.\n\nA notebook audit is keyed by ``audit_id`` and mints no run, so the driver's\n``run_id``-based fresh-entry materialization cannot start it. This is the\nseat the caller declares instead: the audit scope plus the two ``.py`` paths\nevery block in the chain is composed from. The driver hands it VERBATIM to\n``audit-preflight`` (whose spec model is what validates it), and every\ndownstream block's spec is code-composed from what the predecessor emits —\nthe agent never re-authors a spec mid-chain.",
+      "properties": {
+        "audit_id": {
+          "description": "The notebook decision-journal scope the whole chain is keyed by.",
+          "minLength": 1,
+          "title": "Audit Id",
+          "type": "string"
+        },
+        "source": {
+          "description": "Experiment-relative path to the audited source .py. Its PRESENCE is the chain's draft-readiness test: absent, the first tick parks for the agent to draft it rather than chaining into a lint of nothing.",
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "template": {
+          "description": "Experiment-relative path to the template .py (the required inventory).",
+          "minLength": 1,
+          "title": "Template",
+          "type": "string"
+        },
+        "source_roots": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional OPAQUE import roots for the preflight's roots check. Null defaults them from the audit's recorded configuration (the one-declaration rule).",
+          "title": "Source Roots"
+        },
+        "input_roots": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional OPAQUE data-path roots for the preflight's roots check. Null defaults them from the audit's recorded configuration.",
+          "title": "Input Roots"
+        }
+      },
+      "required": [
+        "audit_id",
+        "source",
+        "template"
+      ],
+      "title": "block-drive audit seat",
+      "type": "object"
     }
   }
 }

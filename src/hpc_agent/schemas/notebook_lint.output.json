@@ -46,6 +46,33 @@
       ],
       "default": null,
       "title": "Reader Call Echo"
+    },
+    "stage_reached": {
+      "const": "linted",
+      "default": "linted",
+      "description": "The terminator this block stopped at (decision-as-data, #231). ONE stage: findings are REPORTED, never fatal (the graduation gate refuses, the lint reports), so the lint has exactly one deterministic successor regardless of what it found.",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "default": false,
+      "description": "Always false — the lint reports; it asks the human nothing.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` — or null when no `audit_id` seat was supplied (the standalone lint, byte-identical to the pre-chain verb).",
+      "title": "Next Block"
     }
   },
   "$defs": {

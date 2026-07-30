@@ -28,6 +28,33 @@
       },
       "title": "Skipped",
       "type": "array"
+    },
+    "stage_reached": {
+      "const": "cleared",
+      "default": "cleared",
+      "description": "The terminator this block stopped at (decision-as-data, #231). ONE stage: an auto-clear pass that clears nothing is the idempotent no-op, not a different outcome — the deterministic successor (the audit view) is the same either way.",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "default": false,
+      "description": "Always false — the CODE attestor never asks the human anything; a section it may not clear is simply left for the human sign-off.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` — or null when the caller supplied no `source`/`template` seat to compose the successor's spec from (the standalone call).",
+      "title": "Next Block"
     }
   },
   "$defs": {

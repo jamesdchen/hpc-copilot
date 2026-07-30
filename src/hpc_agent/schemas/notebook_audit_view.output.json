@@ -47,6 +47,33 @@
       "title": "View Sha",
       "type": "string"
     },
+    "stage_reached": {
+      "const": "viewed",
+      "default": "viewed",
+      "description": "The terminator this block stopped at (decision-as-data, #231). ONE stage: the view is a projection, so it has the same deterministic successor (the status reduction) whatever it projects.",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "default": false,
+      "description": "Always false. The view is what the human READS before signing; the sign-off itself is a typed `append-decision` under block `notebook-sign-off`, and the driver parks for it one block later, at `notebook-status`'s `sections_pending`.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` — or null when the caller supplied no `source`/`template` seat to compose the successor's spec from (the standalone call).",
+      "title": "Next Block"
+    },
     "markdown": {
       "description": "The code-rendered markdown projection for VERBATIM relay. By DEFAULT (spec `full: false`) this is the DIGEST — per-section metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), render-file pointers, and the next-actions footer, with NO diff/assertion/flag body bytes (run-#12 finding 12, B1: the bodies live in the render files). Pass spec `full: true` for the inline read-and-sign render (code diff intact; commented-out exposition elided with disclosure — the on-disk render keeps the full text). Same view + same `full` → byte-identical markdown.",
       "title": "Markdown",

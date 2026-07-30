@@ -450,6 +450,9 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # read) — probe with the bogus key so the wire model rejects it.
     "attention-queue": _BOGUS_KEY_SPEC,
     "block-drive": _BOGUS_KEY_SPEC,
+    # cluster-readiness's spec is all-optional ({} = render every known host)
+    # — probe with the bogus key so the wire model rejects it.
+    "cluster-readiness": _BOGUS_KEY_SPEC,
     # harness-capabilities' spec is empty/all-optional ({} is a valid detection
     # read) — probe with the bogus key so the wire model rejects it.
     "harness-capabilities": _BOGUS_KEY_SPEC,

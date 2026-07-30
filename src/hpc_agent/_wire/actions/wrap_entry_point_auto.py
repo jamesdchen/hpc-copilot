@@ -59,9 +59,9 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 # ``_PetscSolverHint`` are reused for the same reason: both are copied through
 # VERBATIM onto the composed ``shell_command`` entry block, so validating them
 # against any shape other than the interview's own would let a hint pass here
-# and fail one verb later. Re-exported (``__all__``) because the composite's
-# implementation module constructs a ``_PetscSolverHint`` for the DETECTED
-# solver — it reads its own wire module, never another verb's.
+# and fail one verb later. Re-bound as module-level aliases below because the
+# composite's implementation module constructs a ``_PetscSolverHint`` for the
+# DETECTED solver — it reads its own wire module, never another verb's.
 from hpc_agent._wire.actions.interview import (
     _DataAxisHint,
     _PetscSolverHint,

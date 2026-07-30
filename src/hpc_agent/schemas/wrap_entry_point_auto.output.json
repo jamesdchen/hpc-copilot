@@ -232,6 +232,32 @@
           "title": "Argv Head",
           "type": "array"
         },
+        "argv_extraction": {
+          "description": "detect-entry-point's mechanical-parameter verdict for this entry point, CARRIED THROUGH rather than re-derived. The composite ran the scan in-process to get here, so dropping the verdict would force the caller into a second detect-entry-point call — the produce→consume seam this composite exists to close. 'unsupported' also covers an entry point the caller NAMED that the scan never surfaced (no classified surface to extract from).",
+          "enum": [
+            "extracted",
+            "unsupported"
+          ],
+          "title": "Argv Extraction",
+          "type": "string"
+        },
+        "argv_params": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The mechanically extracted CLI parameters when argv_extraction == 'extracted', else null. Same shape detect-entry-point emits — see the ArgvParam $def in schemas/detect_entry_point.output.json and the two-honesty-levels rule in hpc_agent/ops/argv_extract.py; not restated here, because a second copy of that shape would drift from the extractor. A param carrying an 'unextracted' marker still needs a source read for the argument it names.",
+          "title": "Argv Params"
+        },
         "missing_fields": {
           "description": "The absent wrapper fields: 'argv' and/or 'signature'.",
           "items": {
@@ -275,6 +301,7 @@
         "entry_point_path",
         "run_name",
         "argv_head",
+        "argv_extraction",
         "missing_fields",
         "missing_intent_fields",
         "ask"
@@ -384,7 +411,7 @@
         },
         "interview_spec": {
           "additionalProperties": true,
-          "description": "The composed InterviewSpec fragment — goal / task_count / task_generator / entry_point — ready to hand to the `interview` primitive. produced_by is NOT stamped here (that composer is the interview verb's own).",
+          "description": "The composed InterviewSpec fragment — goal / task_count / task_generator / entry_point / produced_by — SUBMITTABLE as-is to the `interview` primitive (interview.input.json requires produced_by, so a fragment omitting it could never be handed on unedited). produced_by is the minimal {kind: 'human'} SUGGESTION: the interview's own P1.c composer fills .operator from git config and discloses it as a composed default, so attribution stays required — this verb declares WHO-CLASS, never the identity.",
           "title": "Interview Spec",
           "type": "object"
         }

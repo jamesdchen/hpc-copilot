@@ -878,6 +878,11 @@ def record_readiness(readiness: PathReadiness, *, now: float | None = None) -> N
     key = readiness.route.host.strip()
     if key:
         _LEDGER[key] = (readiness, time.time() if now is None else now)
+        # Write-through to the DURABLE tier (s2-readiness pillar 1). Total
+        # fail-open by construction: record_atoms never raises and never probes.
+        from hpc_agent.state.readiness import record_atoms
+
+        record_atoms(key, readiness.atoms, source="readiness-sensors")
 
 
 def consult_readiness(
@@ -895,6 +900,19 @@ def consult_readiness(
     readiness, recorded_at = hit
     cutoff = (time.time() if now is None else now) - float(window_sec)
     return readiness if recorded_at >= cutoff else None
+
+
+def _durable_atoms(host: str, *, window_sec: float) -> tuple[VerdictAtom, ...]:
+    """Fresh atoms from the DURABLE tier, as ``VerdictAtom``s. Never raises."""
+    try:
+        from hpc_agent.state.readiness import ATOM_FIELDS, consult_atoms
+
+        return tuple(
+            VerdictAtom(**{k: v for k, v in a.items() if k in ATOM_FIELDS})
+            for a in consult_atoms(host, window_sec=window_sec)
+        )
+    except Exception:  # noqa: BLE001 - consulting is an optimization, never a gate
+        return ()
 
 
 def clear_readiness_ledger() -> None:
@@ -935,6 +953,9 @@ def read_path_readiness(
         prior = consult_readiness(host, window_sec=freshness_window_sec)
         if prior is not None:
             known = fresh_atoms(prior.atoms, window_sec=freshness_window_sec)
+        else:
+            # Cache miss -> consult the DURABLE tier before paying for a probe.
+            known = _durable_atoms(host, window_sec=freshness_window_sec)
 
     leg_atoms = sense_route_legs(
         route, connect=connect, timeout_sec=connect_timeout_sec, known=known

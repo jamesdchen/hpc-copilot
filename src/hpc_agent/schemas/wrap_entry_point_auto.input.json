@@ -88,6 +88,30 @@
       "description": "The wrapper's typed signature, {placeholder: type-name}. Types are the same narrow set the interview's shell_command entry accepts, so a bad type fails here rather than one verb later. Supply it with argv. Doubles as the param inventory the fixed-params partition reads on the wrapper pathway (no introspectable Python signature exists there).",
       "title": "Signature"
     },
+    "data_axis_hint": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_DataAxisHint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pre-declared series-axis classification, copied VERBATIM onto the composed shell_command entry block. WRAPPER PATHWAY ONLY (#260): a wrapper body is a subprocess call classify-axis cannot introspect, which is exactly why the hint is load-bearing there — and exactly why the interview's register_run / python_module shapes carry no such field (both are introspectable, so classify-axis reads the real function). Supplying it on an introspectable pathway is a NAMED caller error, never a silently dropped field."
+    },
+    "solver": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_PetscSolverHint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Checkpoint-instrumentation hint for a known solver library, copied VERBATIM onto the composed shell_command entry block (wrapper pathway only — the other two entry-point shapes carry no solver field). Overrides detection: when omitted and detect-entry-point recognized the library in the entry point's source (it reports ``solver: 'petsc'`` on the candidate), the composite fills in that adapter's default hint rather than dropping the detection on the floor. Supply it explicitly to pick a non-default ``solver_object`` or declare the app's ``resume_flag``."
+    },
     "goal": {
       "anyOf": [
         {
@@ -302,6 +326,56 @@
       "title": "_ChunkedSeriesParams",
       "type": "object"
     },
+    "_DataAxisHint": {
+      "additionalProperties": false,
+      "description": "Pre-declared series-axis classification.\n\nFor shell-out wrappers ``classify-axis`` cannot introspect the body\n(it's a ``subprocess.check_call``). When the experimenter knows the\nclassification — usually they do, because they wrote ``main.py`` —\nthey can declare it here and the interview persists it so\nclassify-axis records it directly without an introspection step.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "halo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_HaloHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required when ``kind='bounded_halo'``; otherwise must be omitted."
+        },
+        "monoid": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "moments"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional for ``kind='associative'``; defaults to 'moments'. Ignored for other kinds.",
+          "title": "Monoid"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_DataAxisHint",
+      "type": "object"
+    },
     "_Enumerated": {
       "additionalProperties": false,
       "properties": {
@@ -339,6 +413,23 @@
         "items"
       ],
       "title": "_EnumeratedParams",
+      "type": "object"
+    },
+    "_HaloHint": {
+      "additionalProperties": false,
+      "description": "Halo expression for a ``bounded_halo`` ``data_axis_hint``.",
+      "properties": {
+        "expr": {
+          "description": "Arithmetic-only expression over the wrapper's parameters; the same restricted-AST form classify-axis already accepts. Example: ``train_window * 48``.",
+          "minLength": 1,
+          "title": "Expr",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expr"
+      ],
+      "title": "_HaloHint",
       "type": "object"
     },
     "_ItemsXSeeds": {
@@ -493,6 +584,46 @@
         "n"
       ],
       "title": "_NumericLogspaceParams",
+      "type": "object"
+    },
+    "_PetscSolverHint": {
+      "additionalProperties": false,
+      "description": "Checkpoint-instrumentation hint for a PETSc-based shell_command entry point.\n\nA PETSc app owns its solve loop (``TSSolve``/``SNESSolve`` are library\ncode), so the executor-side checkpoint helpers can't be called from a\nloop body the way ``run_iterations`` assumes. PETSc's options database is\nthe injection channel instead: any app that calls ``setFromOptions()``\nhonors ``PETSC_OPTIONS`` from the environment. Declaring this hint makes\nthe interview materialize a checkpoint-instrumented wrapper that exports\nthe per-step solution-dump option (into the stable per-task checkpoint\ndir), caps the solve at 2 steps under the checkpoint-canary probe, and —\nwhen ``resume_flag`` is declared — hands a previous attempt's dump back\nto the app on resume. The entry point itself stays opaque and untouched.\n\n``resume_flag`` is deliberately explicit: writing checkpoints is generic,\nbut *loading* one is app-specific (there is no universal PETSc restart\noption). Omit it and the wrapper still writes checkpoints; resume just\nnever feeds them back.",
+      "properties": {
+        "kind": {
+          "const": "petsc",
+          "title": "Kind",
+          "type": "string"
+        },
+        "solver_object": {
+          "default": "ts",
+          "description": "Which PETSc object owns the solve loop: 'ts' (time stepper — the usual shape for a transient PDE solve) or 'snes' (nonlinear solver). Selects the option family the wrapper exports (-ts_monitor_solution / -snes_monitor_solution and the canary's -ts_max_steps 2 / -snes_max_it 2).",
+          "enum": [
+            "ts",
+            "snes"
+          ],
+          "title": "Solver Object",
+          "type": "string"
+        },
+        "resume_flag": {
+          "anyOf": [
+            {
+              "pattern": "^-{1,2}[A-Za-z0-9_][A-Za-z0-9_\\-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The app's own restart flag (e.g. '-restart_file' or '--resume-from'). When declared, the wrapper appends ``<resume_flag> <path-to-previous-attempt-dump>`` to argv on a resumed attempt. The app must interpret the file (a PETSc binary viewer dump). Omit when the app has no restart surface.",
+          "title": "Resume Flag"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_PetscSolverHint",
       "type": "object"
     }
   }

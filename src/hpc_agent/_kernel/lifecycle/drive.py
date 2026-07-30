@@ -73,6 +73,9 @@ def load_context(experiment_dir: Path) -> dict[str, Any]:
             text=True,
             encoding="utf-8",
             check=False,
+            # win32: a console-less parent spawning a console app must not
+            # flash a window per step (2026-07-30 popup-storm class).
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             # load-context is a fast, purely local read (journal + config);
             # 120s covers interpreter cold-start + registry walk with margin.
             timeout=120,
@@ -309,6 +312,8 @@ def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
             _cli_step_argv(verb, spec_path, experiment_dir),
             check=False,
             timeout=deadline,
+            # win32: no console window per span (2026-07-30 popup-storm class).
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return proc.returncode
     except subprocess.TimeoutExpired:

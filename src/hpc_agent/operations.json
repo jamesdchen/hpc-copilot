@@ -751,6 +751,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent cluster-readiness --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "cluster_readiness.input.json",
+    "name": "cluster-readiness",
+    "output_schema": "cluster_readiness.output.json",
+    "python": "hpc_agent.ops.cluster_readiness_op.cluster_readiness",
+    "side_effects": [],
+    "summary": "Report the standing per-cluster readiness ledger: for each cluster, the verdict atoms already on disk (sensor hop/direct/path/connect/preamble plus auth/scratch/scheduler/env, each over its route) with the AGE of each, plus one overall verdict from {ready, stale, degraded, unknown}. Pure local read: no SSH, no probe, no side effects — every atom was learned by traffic the system was already making or by a sensor run someone else paid for, and a sensor nothing has fed reads 'unknown' rather than being measured on demand. Recomputed on every read; a corrupt ledger file is disclosed, never fatal.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent clusters describe <name> [--strict]",
     "idempotent": true,
     "input_schema": null,

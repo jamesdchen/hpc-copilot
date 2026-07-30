@@ -111,10 +111,13 @@ an auth rejection into "reached the host".
 
 ## Pillar 6 as built: the three fields
 
-- `y_to_array_accepted_seconds` — the EARLIEST submit-chain `y` targeting
-  `submit-s2` or later, to `RunRecord.submitted_at`. Later y's in the chain
-  fall INSIDE the window on purpose: they are latency the human paid.
-- `interventions_count` — every submit-chain decision record, nudges included.
+- `y_to_array_accepted_seconds` — LAST-ATTEMPT scoped (the last
+  `submit-s2`-targeting `y` at/before accept, to `RunRecord.submitted_at`);
+  `first_y_to_array_accepted_seconds` carries the day-scale
+  across-all-re-drives view and renders only when it differs (see the
+  verification drift entry below).
+- `interventions_count` — every submit-chain decision record, nudges and
+  `host-retarget` recovery y's included.
 - `readiness_age_at_fire_seconds` — the durable ledger's age reconstructed AT
   the fire instant (atoms stamped later are excluded, never back-dated);
   `None` when there is no ledger.

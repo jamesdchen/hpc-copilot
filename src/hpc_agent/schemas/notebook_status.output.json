@@ -46,6 +46,42 @@
       ],
       "default": null,
       "description": "The audit net's (6a) transitive-closure digest — counts by tier plus a cap-hit bool — or null when the status surface did not compute it. Additive optional; absent keeps the pre-6a shape."
+    },
+    "stage_reached": {
+      "default": "sections_pending",
+      "description": "The terminator this block stopped at (decision-as-data, #231) — `audit_passed` mirrors `passed`, `sections_pending` is everything else. It is the key `block_chain.SUCCESSORS` routes on: passed hands off to `audit-handoff`; pending PARKS for the typed human sign-off.",
+      "enum": [
+        "audit_passed",
+        "sections_pending"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "default": false,
+      "description": "True at `sections_pending` — the sign-off RENDEZVOUS. The answer is the human's TYPED `notebook-sign-off` via `append-decision` (never a new verb, never a bare `y`), so the boundary sits on the bare-y census's allowlist with that reason stated.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The DETERMINISTICALLY-computed next block — `{verb, why, spec_hint}` — or null at the sign-off park / when the caller supplied no `source`/`template` seat. On a PASS it names `audit-handoff`, the audit→onboard seam.",
+      "title": "Next Block"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "The code-digested evidence the SIGN-OFF RENDEZVOUS is decided on — what the driver parks with at `sections_pending`. Names each section still owed a human review, its current sha, and (when the chain carried them from the view span) the content-addressed render the human should read before signing, plus the copy-ready sign line. Empty on a PASS: nothing is being asked. This is DISCLOSURE composed from this verb's own reduction — the T8 gate is unchanged and still recomputes everything it locks on.",
+      "title": "Brief",
+      "type": "object"
     }
   },
   "$defs": {

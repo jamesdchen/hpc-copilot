@@ -1,3 +1,17 @@
+---
+name: cluster-readiness
+verb: query
+side_effects: []
+idempotent: true
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent cluster-readiness --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.cluster_readiness_op.cluster_readiness
+---
 # cluster-readiness
 
 The **standing per-cluster readiness ledger, rendered with the age of every

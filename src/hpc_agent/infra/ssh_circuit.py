@@ -584,6 +584,30 @@ def _retarget_suggestion(host: str) -> str:
     )
 
 
+def _consulted_hops(host: str) -> tuple[str, ...]:
+    """ProxyJump hops for *host* from atoms sensors ALREADY recorded — never a
+    live resolve. The record path's `hops` injection: a subprocess spawn there
+    would violate harvest-never-probe (and flash a console per failure on
+    win32); topology absent from the ledger reads as un-jumped, honestly.
+    Generous window — route topology is config, not liveness."""
+    try:
+        from hpc_agent.state.readiness import consult_atoms
+
+        hops: list[str] = []
+        for atom in consult_atoms(host, window_sec=86400.0):
+            target = atom.get("target")
+            if (
+                atom.get("sensor") == "hop"
+                and isinstance(target, str)
+                and target
+                and target not in hops
+            ):
+                hops.append(target)
+        return tuple(hops)
+    except Exception:  # noqa: BLE001 — advice enrichment is never load-bearing
+        return ()
+
+
 def degradation_advice(
     host: str,
     doc: dict[str, Any] | None,
@@ -1179,7 +1203,14 @@ def record_connection_failure(
             doc["last_failure"] = {"at": now, "detail": detail[:300]}
             failures = int(_float_or(doc.get("consecutive_failures"), 0))
             if opened or reopened:
-                advice = degradation_advice(host, doc, now=now)
+                # CONSULT-ONLY hops on the RECORD path (2026-07-30 integration):
+                # the default resolver shells ``ssh -G``, and a subprocess spawn
+                # on the breaker's record path violates harvest-never-probe (the
+                # readiness feed's own tripwire caught the composition) — and
+                # flashes a console per failure on win32. Route topology comes
+                # from atoms sensors already recorded; absent → the un-jumped
+                # advice text, honestly.
+                advice = degradation_advice(host, doc, now=now, hops=_consulted_hops)
                 degradation = f" {advice}" if advice else ""
             preamble_degraded = is_preamble_degraded(doc, now=now)
             atomic_write_json(path, doc)

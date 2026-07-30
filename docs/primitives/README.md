@@ -103,6 +103,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [cite-check](cite-check.md) | yes | _none_ | `hpc-agent cite-check --spec <path> [--experiment-dir <dir>]` |
 | [classify-axis-easy](classify-axis-easy.md) | yes | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` |
 | [classify-campaign-path](classify-campaign-path.md) | yes | _none_ | `hpc-agent classify-campaign-path --source-path <source_path>` |
+| [cluster-readiness](cluster-readiness.md) | yes | _none_ | `hpc-agent cluster-readiness --spec <path> [--experiment-dir <dir>]` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name> [--strict]` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
 | [compute-run-id](compute-run-id.md) | yes | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` |

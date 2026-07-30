@@ -61,8 +61,21 @@
         }
       ],
       "default": null,
-      "description": "The caller-authored audit slug. When it names an existing audit its recorded roots default the roots above, and its journal decides resuming-vs-fresh. Omit for a fresh standalone preflight.",
+      "description": "The caller-authored audit slug. When it names an existing audit its recorded roots default the roots above, and its journal decides resuming-vs-fresh. Omit for a fresh standalone preflight. REQUIRED for the block-drive `audit` chain (P2.b): it is the seat every downstream block is keyed by, so a preflight without one emits no `next_block` and the chain does not start.",
       "title": "Audit Id"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Experiment-relative path to the audited source .py the loop will lint. Present-and-readable is the DRAFT-READINESS check (P2.b): a GO preflight whose source is absent has nothing to lint yet, so the chain parks for the LLM to draft it (`awaiting_draft`) instead of chaining into a lint that would refuse. Omitted (the default) reads as 'no source yet' — byte-identical to a pre-P2.b preflight in every check, verdict, blocker and brief line.",
+      "title": "Source"
     }
   }
 }
