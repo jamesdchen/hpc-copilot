@@ -453,18 +453,84 @@ def test_render_markdown_elision_never_touches_diff_structure() -> None:
 # ── the next-actions footer (run-#10 hyper-palatable sign-off amendment) ─────
 
 
-def test_footer_lists_pending_sections_with_copy_ready_utterance() -> None:
+def test_footer_states_the_gates_full_bar() -> None:
     src, tmpl = _mods(SOURCE_MIXED)
     view = build_audit_view(src, tmpl, [])
     md = render_markdown(view)
-    pending = [s.slug for s in view.sections if s.tier == "human_required"]
+    pending = [s for s in view.sections if s.tier == "human_required"]
     assert pending, "fixture must carry at least one human_required section"
     assert "## next actions" in md
     footer = md.split("## next actions", 1)[1]
-    for slug in pending:
-        assert slug in footer
-    assert f'"sign {" ".join(pending)}"' in footer
-    assert "token-exactly" in footer  # the gate's ACTUAL bar, code-stated
+    for s in pending:
+        assert s.slug in footer
+    # EVERY leg of the gate's bar is code-stated up front (the 2026-07-30
+    # exhibit: a footer stating only the slug-naming floor taught the human a
+    # roster ack the gate then refused, one round-trip per leg):
+    assert "token-exactly" in footer  # the slug-naming floor
+    assert "engage" in footer  # the raised human_required bar
+    assert "AFTER this render" in footer  # the freshness law (finding 10)
+    assert "ONE utterance may cover several sections" in footer  # batch is fine
+    # the raised bar belongs to human_required; a redundant auto_cleared
+    # sign-off WAIVES it (the old footer stated this backwards)
+    assert "the raised engagement bar is waived" in footer
+    # the copy-ready scaffold survives (user-ruled 2026-07-30) but must now
+    # SATISFY the bar: every clause engages via a pool token — never again the
+    # slug-only roster ("sign a b c") the gate refuses
+    from hpc_agent.ops.notebook.audit_view import (
+        engagement_hint_tokens,
+        section_engagement_tokens,
+    )
+
+    scaffold = next(ln for ln in footer.splitlines() if "One-round scaffold" in ln)
+    for s in pending:
+        assert f"sign {s.slug}" in scaffold
+        pool = section_engagement_tokens(s)
+        if pool:
+            assert engagement_hint_tokens(pool)[0] in scaffold
+
+
+def test_footer_hints_derive_from_the_gate_pool() -> None:
+    # Drift guard: the per-section hint tokens the footer shows are the SAME
+    # pool + ranking the gate enforces (one definition, facade-shared) — the
+    # surface the human reads before typing and the refusal they would hit
+    # cannot disagree.
+    from hpc_agent.ops.notebook.audit_view import (
+        engagement_hint_tokens,
+        section_engagement_tokens,
+    )
+
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    md = render_markdown(view)
+    checked = 0
+    for sv in view.sections:
+        if sv.tier != "human_required":
+            continue
+        pool = section_engagement_tokens(sv)
+        if not pool:
+            continue
+        line = next(
+            ln
+            for ln in md.splitlines()
+            if ln.startswith(f"- {sv.slug} ") and "engage its change" in ln
+        )
+        hinted = line.split("e.g. ", 1)[1]
+        for tok in engagement_hint_tokens(pool):
+            assert tok in hinted
+        checked += 1
+    assert checked, "fixture must exercise at least one hinted section"
+
+
+def test_engagement_hints_rank_identifier_shaped_tokens_first() -> None:
+    # The refusal's old hint was sorted(pool)[:8] — alphabetical, so prose
+    # tokens ('a', 'and', 'could') buried the real identifiers. Underscore
+    # carriers rank first, then longer tokens; display-only (acceptance is
+    # the whole pool).
+    from hpc_agent.ops.notebook.audit_view import engagement_hint_tokens
+
+    pool = {"a", "and", "could", "np", "har_lags", "baseline_pred_raw"}
+    hints = engagement_hint_tokens(pool, limit=3)
+    assert hints == ["baseline_pred_raw", "har_lags", "could"]
 
 
 def test_footer_all_auto_cleared_states_no_pending() -> None:

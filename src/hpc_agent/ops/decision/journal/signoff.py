@@ -3,8 +3,6 @@ authorship bar over a ``notebook-sign-off`` record."""
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -32,18 +30,14 @@ from ._shared import (
 # path (pinned by the contract test in tests/contracts/).
 _SIGNOFF_BLOCK = "notebook-sign-off"
 
-# Identifier-shaped tokens: the substrate for the raised human-required bar and
-# the diff-token pool. Mirrors T5's assertion/diff vocabulary (plain identifiers).
-_SIGNOFF_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-
-def _signoff_token_names(text: str) -> set[str]:
-    """The identifier tokens in *text*, lowercased (the #26 token-exact idiom).
-
-    Splits on non-identifier chars exactly like :func:`_prior_nudge_named`, so a
-    sign-off response must NAME a thing, never merely contain it as a substring.
-    """
-    return set(re.split(r"[^a-z0-9_]+", (text or "").lower())) - {""}
+# The tokenizer, engagement pool, and hint ranking for the raised
+# human-required bar live in ONE place — ``ops/notebook/audit_view.py``
+# (``signoff_token_names`` / ``section_engagement_tokens`` /
+# ``engagement_hint_tokens``, reached through the ``notebook_view`` facade) —
+# shared with the next-actions footer the human reads BEFORE typing, so the
+# stated contract and the enforced contract cannot drift (the 2026-07-30
+# exhibit: the footer taught the slug-naming floor and composed a roster
+# example this gate refuses).
 
 
 def _signoff_fresh_human_texts(
@@ -92,40 +86,6 @@ def _signoff_fresh_human_texts(
     except OSError:
         anchor = None
     return _fresh_human_texts(experiment_dir, actor_ids=actor_ids, anchor=anchor)
-
-
-def _section_specific_tokens(section_view: Any) -> set[str]:
-    """The identifier pool the raised human-required bar checks a sign-off against.
-
-    Drawn from the section's DIFF-CHANGED lines (``+``/``-`` bodies, skipping the
-    unified-diff ``+++``/``---`` file headers and ``@@`` hunk markers) AND — the
-    full-view-recompute addition — from its LINT FLAGS (the identifier tokens in
-    each finding's ``detail`` + ``evidence``), so a section made human-required
-    SOLELY by a lint flag (an inherited section with no diff and no assertions, e.g.
-    a data path under ``input_roots`` that vanished) still demands the human ENGAGE
-    the flagged specific, not offer generic praise. Falls back to the section's
-    declared ASSERTION identifiers when both the diff and the flags are empty (a
-    human-required-but-inherited section whose assertions are ungreen has no diff
-    tokens); when ALL are empty the bar reduces to the slug-naming floor already
-    enforced (a token that does not exist cannot be demanded).
-    """
-    tokens: set[str] = set()
-    for line in section_view.diff:
-        if not line or line.startswith(("+++", "---", "@@")):
-            continue
-        if line[0] in "+-":
-            tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(line[1:])}
-    for flag in section_view.lint_flags:
-        detail = str(flag.get("detail") or "") if isinstance(flag, dict) else ""
-        evidence = flag.get("evidence") if isinstance(flag, dict) else None
-        evidence_text = json.dumps(evidence, default=str) if evidence else ""
-        tokens |= {
-            m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(f"{detail} {evidence_text}")
-        }
-    if not tokens:
-        for assertion in section_view.assertions:
-            tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(assertion.test)}
-    return tokens
 
 
 def _read_interview_audited_source(
@@ -401,7 +361,8 @@ def _assert_signoff_authorship(
     static analysis; the receipts are journaled; the roots are persisted on the
     ``audited_source`` block). For a **HUMAN_REQUIRED** section the bar RAISES: the
     response must additionally ENGAGE the change — contain at least one identifier
-    drawn from the section's diff-changed lines (:func:`_section_specific_tokens`).
+    drawn from the section's diff-changed lines (the shared
+    :func:`~hpc_agent.ops.notebook.audit_view.section_engagement_tokens` pool).
     This is the boundary-drift defense: soften the human-required tier only via a
     richer harness-captured utterance, never a bare ack.
 
@@ -665,18 +626,24 @@ def _assert_signoff_authorship(
         return
 
     # HUMAN_REQUIRED — raise the bar: the response must engage a section specific.
-    # The slug's OWN tokens are subtracted from both sides: naming the section
-    # (already required) must not double as "engaging the change", or a slug like
-    # ``model-fit`` whose fragments appear in the diff line would satisfy the bar
-    # by itself and the raise would be a no-op.
-    slug_tokens = _signoff_token_names(section)
-    raw_specifics = _section_specific_tokens(section_view) if section_view is not None else set()
-    specifics = raw_specifics - slug_tokens
+    # The pool + tokenizer + hint ranking are the ONE shared definition the
+    # next-actions footer renders from (``section_engagement_tokens`` already
+    # subtracts the slug's own tokens: naming the section — already required —
+    # must not double as "engaging the change", or a slug like ``model-fit``
+    # whose fragments appear in the diff line would satisfy the bar by itself
+    # and the raise would be a no-op).
+    slug_tokens = _notebook_view.signoff_token_names(section)
+    specifics = (
+        _notebook_view.section_engagement_tokens(section_view)
+        if section_view is not None
+        else set()
+    )
     # The engaging text must be one that ALSO names the slug (the tiered
     # candidates): a slug-naming utterance and a separate token-dropping one
     # cannot combine into an attestation neither made alone.
     engaged = any(
-        (_signoff_token_names(text) - slug_tokens) & specifics for text in signoff_candidates
+        (_notebook_view.signoff_token_names(text) - slug_tokens) & specifics
+        for text in signoff_candidates
     )
     if specifics and not engaged:
         _refuse_missing_authorship(
@@ -685,5 +652,5 @@ def _assert_signoff_authorship(
             "sign-off must ENGAGE the change — name at least one identifier from the "
             "section's diff, not offer a generic ack (soften only via a richer "
             "utterance, never a bare ack; the boundary-drift flag). Identifiers in "
-            f"the change include: {sorted(specifics)[:8]}."
+            f"the change include: {_notebook_view.engagement_hint_tokens(specifics)}."
         )

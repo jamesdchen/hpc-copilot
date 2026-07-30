@@ -88,6 +88,7 @@ from __future__ import annotations
 import ast
 import difflib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -121,9 +122,12 @@ __all__ = [
     "SectionView",
     "AuditView",
     "build_audit_view",
+    "engagement_hint_tokens",
     "net_tier_label",
     "render_markdown",
     "render_summary_markdown",
+    "section_engagement_tokens",
+    "signoff_token_names",
 ]
 
 #: How many linked-source engines the src-digest block lists before eliding to
@@ -445,6 +449,81 @@ def _tier(classification: str, flags_count: int, assertions_green: bool) -> str:
     if classification == INHERITED and flags_count == 0 and assertions_green:
         return AUTO_CLEARED
     return HUMAN_REQUIRED
+
+
+# ── the sign-off contract vocabulary — ONE definition, rendered AND enforced ──
+#
+# The T8 gate (``ops/decision/journal/signoff.py``) raises the bar on a
+# human_required section: the typed utterance must NAME the slug token-exactly
+# AND ENGAGE the change (name ≥1 identifier drawn from the section's
+# diff-changed lines / lint flags / assertions). Run-#10 landed the
+# next-actions footer so the stated bar would be code-rendered; the 2026-07-30
+# exhibit showed a hand-maintained statement DRIFTS — the footer taught the
+# slug-naming floor only and composed a roster example ("sign a b c") the gate
+# refuses on human_required sections. The structural cure: the tokenizer, the
+# engagement pool, and the hint ranking live HERE, once, and the gate reaches
+# them through the ``notebook_view`` facade — the surface the human reads
+# before typing and the refusal they hit after cannot disagree again.
+
+#: Identifier-shaped tokens: the substrate for the raised human-required bar
+#: and the diff-token pool. Mirrors T5's assertion/diff vocabulary.
+_SIGNOFF_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def signoff_token_names(text: str) -> set[str]:
+    """The identifier tokens in *text*, lowercased (the #26 token-exact idiom).
+
+    Splits on non-identifier chars so a sign-off must NAME a thing, never
+    merely contain it as a substring. The ONE tokenizer both the gate's
+    engagement check and the footer's per-section hints derive from.
+    """
+    return set(re.split(r"[^a-z0-9_]+", (text or "").lower())) - {""}
+
+
+def section_engagement_tokens(section_view: SectionView) -> set[str]:
+    """The identifier pool a human_required sign-off must ENGAGE, slug-excluded.
+
+    Drawn from the section's DIFF-CHANGED lines (``+``/``-`` bodies, skipping
+    the unified-diff ``+++``/``---`` file headers and ``@@`` hunk markers) AND
+    from its LINT FLAGS (the identifier tokens in each finding's ``detail`` +
+    ``evidence``), so a section made human-required SOLELY by a lint flag still
+    demands the human engage the flagged specific. Falls back to the section's
+    declared ASSERTION identifiers when both the diff and the flags are empty;
+    when ALL are empty the pool is empty and the bar reduces to the slug-naming
+    floor (a token that does not exist cannot be demanded). The slug's OWN
+    tokens are subtracted: naming the section (already required) must not
+    double as "engaging the change".
+    """
+    tokens: set[str] = set()
+    for line in section_view.diff:
+        if not line or line.startswith(("+++", "---", "@@")):
+            continue
+        if line[0] in "+-":
+            tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(line[1:])}
+    for flag in section_view.lint_flags:
+        detail = str(flag.get("detail") or "") if isinstance(flag, dict) else ""
+        evidence = flag.get("evidence") if isinstance(flag, dict) else None
+        evidence_text = json.dumps(evidence, default=str) if evidence else ""
+        tokens |= {
+            m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(f"{detail} {evidence_text}")
+        }
+    if not tokens:
+        for assertion in section_view.assertions:
+            tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(assertion.test)}
+    return tokens - signoff_token_names(section_view.slug)
+
+
+def engagement_hint_tokens(specifics: set[str], limit: int = 6) -> list[str]:
+    """The pool tokens WORTH SHOWING a human, ranked (pure, deterministic).
+
+    ``sorted(pool)[:8]`` alphabetically surfaced prose tokens tokenized out of
+    comment lines ('a', 'and', 'could') — a hint list that reads as noise
+    (2026-07-30 exhibit). Rank identifier-shaped tokens first: underscore
+    carriers (real code names) ahead of bare words, longer ahead of shorter,
+    alphabetical for determinism. Display-only — the ACCEPTANCE pool is
+    unchanged (any pool token still satisfies the gate).
+    """
+    return sorted(specifics, key=lambda t: ("_" not in t, -len(t), t))[:limit]
 
 
 def _assertions_basis(
@@ -1261,7 +1340,7 @@ def _render_next_actions(view: AuditView) -> list[str]:
     stated bar is the GATE'S actual bar (token-exact slug naming) — rendered
     by code precisely because a relaying model overstated it live in run #10.
     """
-    pending = [sv.slug for sv in view.sections if sv.tier == HUMAN_REQUIRED]
+    pending = [sv for sv in view.sections if sv.tier == HUMAN_REQUIRED]
     lines: list[str] = ["## next actions", ""]
     if not pending:
         lines.append(
@@ -1271,20 +1350,54 @@ def _render_next_actions(view: AuditView) -> list[str]:
         lines.append("")
         return lines
     lines.append("Sections awaiting a typed human sign-off:")
-    for sv in view.sections:
-        if sv.tier == HUMAN_REQUIRED:
-            lines.append(f"- {sv.slug}  (view_sha {sv.view_sha[:12]})")
+    hinted: list[tuple[SectionView, list[str]]] = [
+        (sv, engagement_hint_tokens(section_engagement_tokens(sv))) for sv in pending
+    ]
+    for sv, hints in hinted:
+        if hints:
+            lines.append(
+                f"- {sv.slug}  (view_sha {sv.view_sha[:12]}) — engage its change: "
+                f"name at least one identifier from it, e.g. {', '.join(hints)}"
+            )
+        else:
+            lines.append(
+                f"- {sv.slug}  (view_sha {sv.view_sha[:12]}) — naming the slug "
+                "suffices (no change tokens to demand)"
+            )
     lines.append("")
-    batch = " ".join(pending)
-    lines.append(f'- To sign: type an utterance naming each slug, e.g. "sign {batch}"')
+    # The copy-ready scaffold, composed to SATISFY the bar (the pre-2026-07-30
+    # example taught the slug-only roster the gate refuses): each clause names
+    # its slug and engages via the section's top-ranked pool token. A scaffold
+    # to reword, not to paste — the caveat line below carries the bar.
+    example = "; ".join(
+        f"sign {sv.slug} — {hints[0]} <your read on it>" if hints else f"sign {sv.slug}"
+        for sv, hints in hinted
+    )
+    lines.append(f'- One-round scaffold (reword in your own voice): "{example}"')
+    lines.append("")
+    lines.append("The gate's bar — ALL legs, so one utterance can clear in one round:")
     lines.append(
-        "- To contest one: name it with what is wrong, e.g. "
-        f'"{pending[0]}: <what is wrong>" — a nudge re-enters the loop at lint'
+        "- NAME each signed slug token-exactly; a bare ack ('y' / 'ok' / a click) is refused."
     )
     lines.append(
-        "- The gate's bar: the utterance must NAME each signed slug token-exactly; "
-        "a bare ack is refused. (Redundant sign-offs on auto_cleared sections "
-        "carry a higher bar.)"
+        "- A human_required section's utterance must ALSO engage its change — name at "
+        "least one identifier listed beside the slug above, in your own words (a "
+        "machine-drafted sentence attests nothing)."
+    )
+    lines.append(
+        "- Type it FRESH, AFTER this render: wording that predates the current render "
+        "is refused — a human can only attest a view that existed when they typed."
+    )
+    lines.append(
+        "- ONE utterance may cover several sections: name each slug and engage each change."
+    )
+    lines.append(
+        "- To contest one instead: name it with what is wrong, e.g. "
+        f'"{pending[0].slug}: <what is wrong>" — a nudge re-enters the loop at lint'
+    )
+    lines.append(
+        "- auto_cleared sections need no sign-off; signing one anyway is recorded as "
+        "redundant (the slug-naming floor applies; the raised engagement bar is waived)."
     )
     lines.append("")
     return lines

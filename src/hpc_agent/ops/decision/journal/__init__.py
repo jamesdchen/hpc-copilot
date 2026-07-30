@@ -167,16 +167,13 @@ from .scope_lock import (
 )
 from .signoff import (
     _SIGNOFF_BLOCK,
-    _SIGNOFF_IDENT_RE,
     _assert_signoff_authorship,
     _assert_signoff_render_current,
     _assert_signoff_reviewer_not_author,
     _read_interview_audited_source,
     _read_signoff_source_text,
     _resolve_signoff_audit_config,
-    _section_specific_tokens,
     _signoff_fresh_human_texts,
-    _signoff_token_names,
 )
 
 
@@ -478,7 +475,6 @@ __all__ = [
     "_SCHEMA_ENUM_KEYS",
     "_SCOPE_UNLOCK_BLOCK",
     "_SIGNOFF_BLOCK",
-    "_SIGNOFF_IDENT_RE",
     "_actor_scoped_human_texts",
     "_assert_actor_policy",
     "_assert_authorship_home_grant",
@@ -541,10 +537,8 @@ __all__ = [
     "_registration_authored_text",
     "_resolve_authorship_home",
     "_resolve_signoff_audit_config",
-    "_section_specific_tokens",
     "_session_actor",
     "_signoff_fresh_human_texts",
-    "_signoff_token_names",
     "_target_record_ts",
     "_valid_review_horizon",
     "append_decision",

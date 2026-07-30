@@ -20,6 +20,9 @@ from hpc_agent.ops.notebook.audit_view import (
     AuditView,
     SectionView,
     build_audit_view,
+    engagement_hint_tokens,
+    section_engagement_tokens,
+    signoff_token_names,
 )
 from hpc_agent.ops.notebook.canonical import (
     AuditConfig,
@@ -40,7 +43,10 @@ __all__ = [
     "SectionView",
     "build_audit_view",
     "build_canonical_view",
+    "engagement_hint_tokens",
     "read_recorded_config",
-    "render_path",
     "read_render_header",
+    "render_path",
+    "section_engagement_tokens",
+    "signoff_token_names",
 ]
