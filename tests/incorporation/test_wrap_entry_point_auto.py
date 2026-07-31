@@ -461,6 +461,69 @@ def test_argparse_main_routes_to_the_wrapper(tmp_path: Path) -> None:
     assert out["argv_kind"] == "argparse"
 
 
+def test_unextractable_argv_parks_for_the_HUMAN_never_the_llm(tmp_path: Path) -> None:
+    """THE actor split, pinned at the op (P2.c F4).
+
+    ``needs_wrapper_argv`` routes to the LLM (``block_chain.AGENT_PARKS``) ONLY
+    because the CLI parameters were already read mechanically off the AST — the
+    ask is transcription. A shell script has NO Python surface to extract from, so
+    there is nothing to transcribe and the flag names are the caller's own
+    knowledge of their tool. Routing THAT to the LLM is the dangerous direction:
+    it would invent flags that no parser accepts, and the failure surfaces only
+    after a submit round-trip, once per task.
+
+    So the op must emit the DISTINCT ``needs_wrapper_argv_unsupported`` stage, and
+    the actor registry must read ``human`` off it. Without this pin, mutating the
+    op's else-branch to emit the agent stage passes the whole suite.
+    """
+    from hpc_agent.infra import block_chain
+
+    _write(tmp_path, "run.sh", "#!/bin/sh\necho hi\n")
+
+    out = _run(tmp_path, _spec())
+
+    assert out["needs_wrapper_argv"] is True
+    # Nothing was extractable — that is the evidence the split reads…
+    assert out["argv_extraction"] == "unsupported"
+    assert out["argv_params"] is None
+    # …so the stage is the HUMAN one, and the registry agrees.
+    assert out["stage_reached"] == "needs_wrapper_argv_unsupported"
+    assert block_chain.park_actor("wrap-entry-point-auto", out["stage_reached"]) == "human"
+    assert out["needs_decision"] is True
+    assert out["next_block"] is None
+
+
+def test_extractable_argv_parks_for_the_AGENT(tmp_path: Path) -> None:
+    """The other side of the split: extracted params → the LLM transcribes them.
+
+    The twin of the test above. Both directions are asserted because a split with
+    only one side pinned collapses silently the moment the predicate is inverted.
+    """
+    from hpc_agent.infra import block_chain
+
+    _write(
+        tmp_path,
+        "main.py",
+        "import argparse\n\n\ndef main() -> None:\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('--seed', type=int)\n"
+        "    args = p.parse_args()\n"
+        "    print(args)\n",
+    )
+
+    out = _run(tmp_path, _spec())
+
+    assert out["needs_wrapper_argv"] is True
+    assert out["argv_extraction"] == "extracted"
+    assert out["argv_params"]
+    assert out["stage_reached"] == "needs_wrapper_argv"
+    assert block_chain.park_actor("wrap-entry-point-auto", out["stage_reached"]) == "agent"
+    # The park's brief carries the evidence the ask points at, so the LLM composes
+    # from a code-produced list rather than from a source read.
+    assert out["brief"]["argv_params"] == out["argv_params"]
+    assert out["brief"]["argv_head"] == out["argv_head"]
+
+
 def test_wrapper_argv_discloses_the_intent_gap_too(tmp_path: Path) -> None:
     """One escalation gathers both asks instead of two sequential round trips."""
     _write(tmp_path, "run.sh", "#!/bin/sh\n")

@@ -513,3 +513,12 @@ if sys.platform == "win32":
         _ORIG_POPEN_INIT(self, *args, **kwargs)
 
     _subprocess.Popen.__init__ = _init_no_window  # type: ignore[method-assign]
+
+# Hard-error dialogs, also suppressed (win32) — propagated from main b982e29f:
+# the severance tests make Windows raise 0x800700E8 at child launch and show a
+# MODAL error box per occurrence without SEM_FAILCRITICALERRORS. Inherited by
+# every suite-spawned child. POSIX: no-op.
+if sys.platform == "win32":
+    import ctypes
+
+    ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)

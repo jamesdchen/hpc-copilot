@@ -363,7 +363,30 @@ _DRAFT_ASKS: dict[tuple[str, str], str] = {
         "`block-drive` — the chain re-enters at `audit-preflight`, which reads the "
         "source off disk and advances to `notebook-lint`."
     ),
+    ("wrap-entry-point-auto", "needs_wrapper_argv"): (
+        "Compose the wrapper's `argv` template and its typed `signature` from the "
+        "CLI parameters ALREADY extracted for you — the brief's `argv_params` "
+        "(each with its `dest` and type) and `argv_head` (the leading argv code "
+        "composed from the entry-point shape). Append one `{placeholder}` per "
+        "swept kwarg to that head and give each placeholder a str/int/float/bool "
+        "type in `signature`. Read nothing you were not handed: a param carrying "
+        "an `unextracted` marker is the one case that still needs a source read. "
+        "Then re-invoke `wrap-entry-point-auto` with `argv` + `signature` "
+        "supplied — the chain advances to `interview`."
+    ),
 }
+
+
+#: Every ``(block, stage)`` in :data:`hpc_agent.infra.block_chain.AGENT_PARKS`
+#: MUST have a :data:`_DRAFT_ASKS` entry. An agent park suppresses every consent
+#: affordance the human park machinery composes — greenlight target, approve
+#: hint, standing-consent offer, the bare-``y`` menu line — so a member with no
+#: ask hands the LLM a stop with NOTHING stated, which is strictly worse than any
+#: wrong affordance and is exactly what ``block_drive.park``'s own docstring
+#: forbids. Pinned by ``tests/_kernel/lifecycle/test_agent_park.py::
+#: test_every_agent_park_emits_a_draft_ask_that_states_what_is_owed``, which
+#: LOOPS over the registry rather than naming a member, so a future park cannot
+#: join ``AGENT_PARKS`` silently without one.
 
 
 def compose_draft_ask(

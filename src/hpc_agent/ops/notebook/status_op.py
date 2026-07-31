@@ -433,10 +433,14 @@ def notebook_status(*, experiment_dir: Path, spec: NotebookStatusSpec) -> Notebo
     )
     needs_decision = not module_audit.passed
     brief = _signoff_brief(spec, sections, module_audit.passed)
-    if needs_decision:
-        # THE S1 MELD (P2.c): the sign-off park is the human's last sitting before
-        # a submit, so it carries the submit brief too. Only at the PARK — a passed
-        # audit chains onward and asks nothing, so it needs no preview.
+    # THE S1 MELD (P2.c): the sign-off park is the human's last sitting before a
+    # submit, so it carries the submit brief too. Scoped to the ``sections_pending``
+    # STAGE, not to ``needs_decision``: the two are equivalent today (the block has
+    # exactly two terminators and only one of them asks), and keying on the derived
+    # flag would silently start melding into any FUTURE park this block grows — a
+    # boundary whose question might have nothing to do with a submit. The audit
+    # PASS chains onward and asks nothing, so it needs no preview.
+    if stage_reached == "sections_pending":
         _attach_s1_preview(experiment_dir, brief)
     result_kwargs: dict[str, Any] = {
         "audit_id": spec.audit_id,

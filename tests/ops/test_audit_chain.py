@@ -115,11 +115,17 @@ def test_audit_chain_membership_and_order() -> None:
     ]
     for verb in block_chain.ORDER["audit"]:
         assert block_chain.WORKFLOW_OF[verb] == "audit"
-    # audit-handoff is the P2.c SEAM, in its own single-member family — putting it
-    # in the audit chain would shift every audit block_index the §4 field-change
-    # routing compares.
-    assert block_chain.ORDER["audit-handoff"] == ["audit-handoff"]
-    assert block_chain.WORKFLOW_OF["audit-handoff"] == "audit-handoff"
+    # ``audit-handoff`` LEFT its P2.b single-member family on 2026-07-30 (P2.c):
+    # it now HEADS the ``onboard`` chain. What must still hold — and is the whole
+    # reason the seam was parked in a family of its own — is that it is not a
+    # member of the AUDIT chain, because that would shift every audit block_index
+    # the §4 field-change routing compares. Asserted as a NON-membership plus the
+    # audit family's own indices, so the invariant survives wherever the seam is
+    # re-homed to next.
+    assert "audit-handoff" not in block_chain.ORDER["audit"]
+    assert block_chain.WORKFLOW_OF["audit-handoff"] == "onboard"
+    assert block_chain.block_index("audit-handoff") == 0
+    assert [block_chain.block_index(v) for v in block_chain.ORDER["audit"]] == [0, 1, 2, 3, 4]
 
 
 def test_no_audit_block_is_gated_or_watch_class() -> None:
@@ -366,6 +372,13 @@ def _span_via_registry(verb: str, spec: dict[str, Any], experiment_dir: Path) ->
     model = getattr(meta.cli, "spec_model", None)
     assert model is not None, f"{verb} has no spec_model — the driver could not dispatch it"
     result = meta.func(experiment_dir=experiment_dir, spec=model.model_validate(spec))
+    # Both Result shapes the driver actually sees: a pydantic model (every audit
+    # block) and a plain JSON-ready dict (``wrap-entry-point-auto``, whose four
+    # discriminated shapes are assembled as dicts). The real CLI seam coerces both
+    # through ``_coerce_result`` before emitting the envelope, so accepting both
+    # here keeps the substitute faithful to what it stands in for.
+    if isinstance(result, dict):
+        return json.loads(json.dumps(result, default=str)), 0
     return json.loads(result.model_dump_json()), 0
 
 
@@ -418,8 +431,24 @@ def test_end_to_end_fixture_audit_drives_from_preflight_to_passed(
     Every section of the source is byte-identical to the template, so the CODE
     attestor clears the module and the graduation gate passes without a human
     sign-off; the chain therefore runs preflight → lint → auto-clear → view →
-    status → the ``audit-handoff`` seam and terminates. That is the reversal's
-    entire claim, executed rather than asserted.
+    status → the ``audit-handoff`` seam in ONE tick. That is the reversal's entire
+    claim, executed rather than asserted.
+
+    **Where the tick now ENDS, and why it is not a `terminal` any more (P2.c).**
+    ``audit-handoff`` used to be a stage-less seam, so the driver read a terminal
+    off it and the tick stopped. It now HEADS the ``onboard`` chain and declares
+    two stages, and this fixture — a notebook audit with no recorded audit-open
+    intent — reaches ``needs_intent``: the one field (``goal``) no block in the
+    onboard chain may derive. So the honest end state is an ``awaiting_decision``
+    PARK at the seam, not a terminal.
+
+    A `terminal` is structurally UNREACHABLE from an audit-only fixture, and that
+    is a property worth stating rather than engineering around: continuing past
+    the seam needs ``goal`` AND ``task_generator`` AND ``task_count``, all
+    ``REQUIRED_CALLER_FIELDS`` the audit records never hold. A fixture that
+    "reached terminal" could only do so by fabricating them, which is exactly the
+    laundering class the whole never-guess posture exists to prevent. The
+    companion test below drives the goal-recorded case to see the seam ADVANCE.
     """
     source, template = _seed_audit(tmp_path)
     result = _drive(
@@ -431,8 +460,13 @@ def test_end_to_end_fixture_audit_drives_from_preflight_to_passed(
         source_roots=[],
         input_roots=[],
     )
-    assert result.action == "terminal", result.reason
+    assert result.action == "awaiting_decision", result.reason
     assert result.current_verb == "audit-handoff"
+    assert result.stage_reached == "needs_intent"
+    # The park carries the ONE composed ask — a seam that stopped without saying
+    # what it wants is the defect this whole wave's park machinery forbids.
+    assert result.brief is not None
+    assert result.brief["missing_fields"] == ["goal"]
 
     # The audit genuinely PASSED — read it back off the journal, not off the tick.
     status = notebook_status(
@@ -449,6 +483,43 @@ def test_end_to_end_fixture_audit_drives_from_preflight_to_passed(
 
     kinds = {rec.get("block") for rec in read_decisions(tmp_path, "notebook", _AUDIT_ID)}
     assert "notebook-auto-clear" in kinds
+
+
+def test_end_to_end_seam_advances_into_the_onboard_chain_when_the_goal_was_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The companion: with an audit-open goal on the seat, the seam CHAINS onward.
+
+    The test above pins where a goal-less audit stops; this pins that the stop is
+    the ``goal``'s doing and not the seam having quietly become a dead end. With
+    the audit-open intent recorded, ``audit-handoff`` reaches
+    ``placeholders_resolvable`` and the SAME tick chains into
+    ``wrap-entry-point-auto`` — the audit chain and the onboard chain are one
+    unattended run, which is the whole point of P2.c.
+
+    It stops THERE, at wrap's own ``needs_intent``, because ``task_generator`` and
+    ``task_count`` are still ``REQUIRED_CALLER_FIELDS``. That is the correct
+    result: the chain mechanized every deterministic hop and stopped at the first
+    genuine judgment, exactly as the prelude ruling scopes it.
+    """
+    from hpc_agent.ops.notebook import audit_handoff_op
+
+    source, template = _seed_audit(tmp_path)
+    monkeypatch.setattr(
+        audit_handoff_op, "read_audit_intent", lambda *_a, **_k: ("measure widget throughput", [])
+    )
+    result = _drive(
+        tmp_path,
+        monkeypatch,
+        audit_id=_AUDIT_ID,
+        source=source,
+        template=template,
+        source_roots=[],
+        input_roots=[],
+    )
+    # The seam did NOT stop — the tick carried on past it into the onboard chain.
+    assert result.current_verb != "audit-handoff", result.reason
+    assert result.current_verb == "wrap-entry-point-auto", result.reason
 
 
 def test_end_to_end_stops_at_the_agent_park_when_no_draft_exists(
@@ -622,9 +693,32 @@ def test_end_to_end_through_the_real_cli_spec_seam(
     """The same drive, but with every span dispatched through ``hpc-agent <verb> --spec``.
 
     This is the leg the registry-dispatch drive above deliberately does not cover:
-    that the JSON SCHEMAS the CLI validates against accept the specs the chain
-    composes. It cannot pass until the schemas are regenerated — which is exactly
-    what makes it the right tripwire for the debt.
+    that the JSON SCHEMAS the CLI validates against accept the specs AND RESULTS
+    the chain composes. It cannot pass until the schemas are regenerated — which
+    is exactly what makes it the right tripwire for the debt.
+
+    **HARD RED on this branch, by DECLARED DEBT (Wave P2.c).** The checked-in
+    ``audit_handoff.output.json`` is ``additionalProperties: false`` and predates
+    the block surface P2.c added (``stage_reached`` / ``needs_decision`` /
+    ``brief`` / ``next_block``), so the CLI seam REJECTS the handoff's own result
+    and the span fails. That is NOT an additive-key debt that can ride a later
+    rebake: the live CLI seam is broken until the regen lands, so the regen must
+    land WITH the merge.
+
+    Deliberately NOT marked ``xfail``. This test is the ``**RED**`` row's named
+    gate in ``docs/internals/regen-debt-ledger.md``, and that punch-list works by
+    EXECUTING the gate: a still-failing gate xfails there (debt outstanding, the
+    suite stays green through the ledger), while a now-passing one hard-fails
+    with "debt paid — remove the row". An in-file ``xfail`` would make this look
+    like it passes, the ledger would declare the debt paid, and the unpaid regen
+    would ship silently — the exact rot the ledger exists to prevent. One
+    mechanism holds this debt, and it is the ledger.
+
+    The EXPECTATIONS below are the post-P2.c ones (a park at the handoff's
+    ``needs_intent``, not a terminal), so that when the schemas are rebaked this
+    passes for the right reason rather than trading one wrong assertion for
+    another — see the registry-dispatch twin above for why a terminal is
+    structurally unreachable from an audit-only fixture.
     """
     source, template = _seed_audit(tmp_path)
     result = _drive(
@@ -637,5 +731,6 @@ def test_end_to_end_through_the_real_cli_spec_seam(
         source_roots=[],
         input_roots=[],
     )
-    assert result.action == "terminal", result.reason
+    assert result.action == "awaiting_decision", result.reason
     assert result.current_verb == "audit-handoff"
+    assert result.stage_reached == "needs_intent"

@@ -112,6 +112,16 @@ _CHAINED_UNGATED_HOPS: frozenset[tuple[str, str]] = frozenset(
         ("notebook-auto-clear", "cleared"),
         ("notebook-audit-view", "viewed"),
         ("notebook-status", "audit_passed"),
+        # The onboard family (P2.c) is UNGATED end to end for the same reason —
+        # projecting audit records, resolving an entry point and writing
+        # interview.json all happen locally — so every one of its hops is chained
+        # verbatim and every hint must fully validate. The stakes are HIGHER here
+        # than in the audit family: the successors carry big caller-owned models
+        # (``InterviewSpec``), so a hint that under-composes is the run-#11 bounce
+        # class at its worst.
+        ("audit-handoff", "placeholders_resolvable"),
+        ("wrap-entry-point-auto", "onboarded"),
+        ("interview", "interviewed"),
     }
 )
 # Ungated but needs_decision=True → the driver parks; spec_hint is human-facing.

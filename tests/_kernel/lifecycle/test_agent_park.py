@@ -213,6 +213,69 @@ def test_agent_park_emits_a_draft_ask_that_states_what_is_owed(tmp_path: Path) -
     assert "authorship" in text and "authorization" in text
 
 
+def test_every_agent_park_emits_a_draft_ask_that_states_what_is_owed() -> None:
+    """THE CENSUS: every ``AGENT_PARKS`` member has a registered ask — no exceptions.
+
+    The test above proves the mechanism on one boundary; this proves the mechanism
+    COVERS the registry, and it is the one that catches the real failure mode. An
+    agent park suppresses every consent affordance the human park machinery
+    composes (greenlight target, approve hint, standing-consent offer, the bare
+    ``y`` menu line) — so a member added to ``AGENT_PARKS`` without a
+    ``_DRAFT_ASKS`` entry produces a park that composes NOTHING: the LLM is
+    stopped with no stated ask, which ``block_drive.park``'s own docstring calls
+    "worse than any wrong affordance". That is invisible to a per-member test
+    (nothing raises; the brief is simply empty), which is why this LOOPS over the
+    registry instead of naming its members.
+
+    Wave P2.c landed exactly that defect for
+    ``(wrap-entry-point-auto, needs_wrapper_argv)`` — registered as an agent park
+    with no ask — and this census is what closes the class rather than the
+    instance.
+    """
+    from hpc_agent.infra import block_chain
+
+    assert block_chain.AGENT_PARKS, "the census would be vacuous with an empty registry"
+    missing: list[tuple[str, str]] = []
+    for verb, stage in sorted(block_chain.AGENT_PARKS):
+        ask = compose_draft_ask(block=verb, stage=stage, run_id=_RUN_ID)
+        if ask is None or not str(ask.get("ask", "")).strip():
+            missing.append((verb, stage))
+            continue
+        # The ask must be code-authored PROSE ABOUT THE PRODUCT, and it must never
+        # smuggle a consent affordance back in through the substitute surface.
+        assert ask["actor"] == "agent"
+        assert "bare_y_ok" not in ask and "answer_line" not in ask
+        text = ask["text"].lower()
+        assert "authorship" in text and "authorization" in text
+    assert not missing, (
+        "AGENT_PARKS member(s) with no _DRAFT_ASKS entry. The park will suppress "
+        "every consent affordance and then say NOTHING — the LLM is stopped with "
+        "no stated ask. Register the ask in "
+        f"`_kernel/lifecycle/answer_menu._DRAFT_ASKS`: {missing}"
+    )
+
+
+def test_the_wrapper_argv_ask_carries_the_extracted_evidence() -> None:
+    """The argv ask names the evidence the LLM composes FROM, not just the goal.
+
+    The whole justification for routing this boundary to the AGENT rather than the
+    human is that the CLI parameters were already read mechanically off the AST —
+    so what is owed is transcription. An ask that did not point at ``argv_params``
+    / ``argv_head`` would be asking the LLM to invent flags, which is the human's
+    knowledge and the ``halo_expr`` class.
+    """
+    ask = compose_draft_ask(
+        block="wrap-entry-point-auto", stage="needs_wrapper_argv", run_id=_RUN_ID
+    )
+    assert ask is not None
+    text = ask["text"]
+    assert "argv_params" in text and "argv_head" in text
+    assert "signature" in text
+    # And it names the ONE case that still needs a source read, so the LLM does
+    # not treat an `unextracted` marker as a licence to guess.
+    assert "unextracted" in text
+
+
 def test_draft_ask_renders_nothing_for_an_unregistered_boundary() -> None:
     """The composer never INVENTS an instruction for a boundary it has no ask for."""
     assert compose_draft_ask(block="made-up-block", stage="made_up", run_id="r1") is None

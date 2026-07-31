@@ -218,6 +218,33 @@ def test_s1_preview_rides_the_signoff_brief_when_an_interview_exists(
     assert not (tmp_path / ".hpc" / "runs").exists()
 
 
+def test_the_meld_is_keyed_on_the_stage_and_notebook_status_has_only_two() -> None:
+    """Why no test can tell `stage == sections_pending` from `needs_decision` — yet.
+
+    ``notebook-status`` has exactly TWO terminators and only one of them asks, so
+    the two conditions are equivalent TODAY and a mutation swapping them survives
+    every battery. That is a fact about the block, not a hole in the guard — but
+    an unstated equivalence is how the broader condition quietly becomes wrong
+    later, so it is pinned here instead of assumed.
+
+    The meld keys on the STAGE because ``needs_decision`` is a derived flag: a
+    future third terminator that also parks — for a question with nothing to do
+    with a submit — would silently start carrying an S1 preview into a brief that
+    never asked for one. This assertion is what forces that decision to be made on
+    purpose: add a terminator and this goes red until someone classifies it.
+    """
+    from typing import get_args
+
+    from hpc_agent._wire.queries.notebook_status import NotebookStatusResult
+
+    stages = NotebookStatusResult.model_fields["stage_reached"].annotation
+    assert set(get_args(stages)) == {"audit_passed", "sections_pending"}, (
+        "notebook-status grew a terminator. The S1 meld is keyed on "
+        "`sections_pending`; decide DELIBERATELY whether the new stage should "
+        "carry a submit preview, then update this pin."
+    )
+
+
 def test_signoff_park_brief_carries_the_meld(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -321,18 +348,29 @@ def _gate(experiment_dir: Path, verb: str, predecessor: str) -> Any:
 
 
 def test_one_typed_grant_covers_the_whole_submit_chain(experiment_dir: Path) -> None:
-    """R-b's census, mechanized: NO gate was removed — one grant covers them all.
+    """R-b's census, mechanized: NO gate was removed, and one grant carries the
+    CONSUMABLE boundaries — which is NOT all four.
 
     The shrink R-b asks for is CONSENT-MODE behaviour, not a smaller gate set, and
     this is the test that says so out loud. Every gate in ``GATED_BLOCKS`` is still
-    there and still consulted; what changed is that a single typed standing grant —
-    the ONE human act, offered at the run's FIRST rendezvous under R-a — carries
-    the run through all four of them without a second keystroke.
+    there and still consulted. What a single typed standing grant — the ONE human
+    act, offered at the run's FIRST rendezvous under R-a — carries is exactly the
+    set ``overnight.is_consumable_boundary`` declares consumable, and the
+    assertions below read that set from the code rather than naming it.
 
-    If a future change deletes a gate to make a chain flow, this test keeps
-    passing while ``test_gated_blocks_match_the_live_gate_callers`` turns red —
-    which is the correct division of labour: that one owns the census, this one
-    owns the claim that the census does not need shrinking.
+    **What it does NOT authorize, stated because overclaiming here would be the
+    worst kind of documentation error:** ``submit-s2`` still demands its own
+    greenlight even under a live grant. S2 is the run's FIRST spend — the boundary
+    where local intent becomes remote reality — and the substrate deliberately
+    withholds it from the consumable set. The second loop below asserts that
+    refusal, so "one typed act" is a claim about the boundaries the substrate
+    names and never a claim about the whole chain.
+
+    Division of labour with the censuses: if a future change DELETES a gate to
+    make a chain flow, the membership censuses turn red
+    (``tests/ops/test_block_chain_coverage.py`` and
+    ``tests/integration/test_spec_contract.py``'s gated/ungated partition); this
+    test owns the separate claim that the census does not need shrinking.
     """
     _arm_wake()
     _sidecar(experiment_dir)

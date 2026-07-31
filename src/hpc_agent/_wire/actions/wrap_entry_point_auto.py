@@ -255,14 +255,23 @@ class _BlockSurface(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    stage_reached: str = Field(
+    stage_reached: Literal[
+        "onboarded",
+        "needs_pick",
+        "needs_intent",
+        "needs_wrapper_argv",
+        "needs_wrapper_argv_unsupported",
+    ] = Field(
         description=(
             "The terminator this call stopped at: `onboarded`, `needs_pick`, "
             "`needs_intent`, `needs_wrapper_argv` (the AGENT park — params were "
             "mechanically extracted, so the argv template is transcription) or "
             "`needs_wrapper_argv_unsupported` (the HUMAN park — nothing was "
             "extractable, so the argv shape is the caller's own knowledge of "
-            "their tool)."
+            "their tool). A CLOSED enum on purpose: the argv split decides WHICH "
+            "ACTOR answers, and the dangerous direction (routing an unextractable "
+            "entry point to the LLM, which would then invent flags nothing can "
+            "parse) must be a type error as well as a test failure."
         ),
     )
     needs_decision: bool = Field(

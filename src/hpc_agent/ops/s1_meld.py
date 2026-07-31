@@ -6,7 +6,21 @@ submit, and until now it carried only the audit view: the human signed, walked
 away, and came back to a second rendezvous that asked the same "shall we run
 this?" question the first one could have answered. This module is the half that
 closes it — at the sign-off park the chain ALSO renders what ``submit-s1`` would
-say, and fires the speculative canary so the answer is in before the ``y``.
+say.
+
+**Where the canary actually fires, stated precisely.** The sign-off park does
+NOT fire it, and the preview says so rather than implying otherwise: a canary
+needs a built submit-flow spec and a minted ``run_id``, neither of which exists
+at a boundary keyed by ``audit_id``. Firing there would mean authoring the spec
+the human has not yet been shown — the run-14 #4 over-authoring class. So the
+preview DISCLOSES the boundary the fire happens at (``submit-s1``'s resolved
+park, one hop later in the same unattended chain) and :func:`fire_speculative_canary`
+is what fires there, now by default. The user ruling ("the canary fires while the
+human reads the proposed experiment") is satisfied by the CHAIN, not by this
+boundary: the sign-off ``y`` releases the onboard chain, which reaches S1
+unattended, and the canary is in flight while the human is still reading. A
+version of this module that "fired" at the sign-off park could only ever have
+returned "nothing to canary" — a guard that cannot fire.
 
 Three things live here, all shared with the pre-existing S1 seat rather than
 forked from it:
@@ -196,6 +210,16 @@ def compose_s1_preview(experiment_dir: Path) -> dict[str, Any] | None:
                 "the bindable grant line is rendered at the submit-s1 park, where "
                 "the run identity (cmd_sha) a standing consent must bind exists. "
                 "It is disclosed HERE so the envelope is not a surprise there."
+            ),
+        },
+        "speculative_canary": {
+            "fired": False,
+            "where": (
+                "not here, and deliberately: a canary needs a built submit-flow "
+                "spec and a minted run_id, and this boundary is keyed by audit_id "
+                "and has neither. It fires one hop later at submit-s1's resolved "
+                "park — chain-driven and ON by default — so it is in flight while "
+                "you are still reading. Set HPC_S1_SPECULATE=0 to disable."
             ),
         },
     }
