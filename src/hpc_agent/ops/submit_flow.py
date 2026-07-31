@@ -430,12 +430,20 @@ def _run_uv_preflight_for_batch(
         try:
             _preflight_runtime_check(ssh_target, job_env=dict(job_env), skip=skip_preflight)
         except Exception as exc:
-            _harvest_readiness(
-                ssh_target,
-                "env",
-                "down",
-                detail=f"cluster env activation preflight failed: {exc}"[:250],
-            )
+            # ...but ONLY when the failure is actually about the env. A severed
+            # tunnel raises here too, and ``env: down`` for it would be the
+            # 2026-07-30 misdiagnosis one layer down — the human sent to the
+            # conda env while the VPN is what broke. ``_stage_failure_is_flap``
+            # is the ONE transport-class definition in this module (the staging
+            # retry's own), so the two sites cannot disagree about the same
+            # exception. A transport fault records NOTHING.
+            if not _stage_failure_is_flap(exc):
+                _harvest_readiness(
+                    ssh_target,
+                    "env",
+                    "down",
+                    detail=f"cluster env activation preflight failed: {exc}"[:250],
+                )
             raise
         if not skip_preflight:
             _harvest_readiness(
@@ -3820,18 +3828,29 @@ def _submit_one_spec(
             setup_log_dir=not canary_done,
         )
     except errors.RemoteCommandFailed as exc:
-        # Readiness HARVEST (scheduler, failure arm). The dispatch reached the
-        # scheduler and did not come back with ids — a verdict already in hand.
+        # Readiness HARVEST (scheduler, failure arm) — but ONLY for a failure
+        # that is actually about the SCHEDULER. A dispatch dies on a severed
+        # tunnel just as readily as on a rejection, and ``scheduler: down`` for
+        # the former is the 2026-07-30 misdiagnosis one layer down: the next
+        # human goes to the queue system while the VPN is what broke. The very
+        # next comment block in this handler names that case for the ids, so
+        # filing a scheduler verdict for it would have this function classifying
+        # ONE exception two ways. ``_stage_failure_is_flap`` is this module's one
+        # transport-class definition (the staging retry's own); a transport fault
+        # records NOTHING, per the design's "a feed site that cannot attribute a
+        # failure records NOTHING".
+        #
         # Subject is the BACKEND FAMILY, matching what ``sense_scheduler`` uses,
         # so a harvested and a sensed reading land on ONE ledger row instead of
         # two rows that disagree.
-        _harvest_readiness(
-            spec.ssh_target,
-            "scheduler",
-            "down",
-            target=(spec.backend or "").strip().lower() or "unknown",
-            detail=f"array dispatch failed: {exc}"[:250],
-        )
+        if not _stage_failure_is_flap(exc):
+            _harvest_readiness(
+                spec.ssh_target,
+                "scheduler",
+                "down",
+                target=(spec.backend or "").strip().lower() or "unknown",
+                detail=f"array dispatch failed: {exc}"[:250],
+            )
         # #339 inc 4 crash-safety: a multi-wave main array that failed mid-plan
         # still landed the earlier waves' ids on the scheduler. Pre-stamp them to
         # the sidecar (best-effort, same window as the post-qsub stamp below) so

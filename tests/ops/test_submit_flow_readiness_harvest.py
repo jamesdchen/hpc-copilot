@@ -209,6 +209,46 @@ def test_a_failing_activation_preflight_feeds_env_down_and_still_raises(
     assert "uv was not found" in env["detail"]
 
 
+def test_a_severed_tunnel_records_NOTHING_about_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The preflight raises on a dead tunnel too, and ``env: down`` for that is
+    the 2026-07-30 misdiagnosis one layer down — the human sent to the conda env
+    while the VPN is what broke.
+
+    ``_stage_failure_is_flap`` is this module's ONE transport-class definition, so
+    the ledger and the staging retry cannot disagree about the same exception.
+    """
+
+    def _severed(*_a: object, **_k: object) -> None:
+        raise errors.SshUnreachable(
+            "ssh: connect to host login.example.edu port 22: Connection refused"
+        )
+
+    monkeypatch.setattr(submit_flow, "_preflight_runtime_check", _severed)
+    with pytest.raises(errors.SshUnreachable):
+        submit_flow._run_uv_preflight_for_batch(
+            ssh_target=TARGET, job_envs=[dict(UV_ENV)], skip_preflight=False
+        )
+    assert "env" not in _atoms()
+    # ...and the classification really is the shared one, not a local re-derivation.
+    assert submit_flow._stage_failure_is_flap(
+        errors.SshUnreachable("ssh: connect to host h port 22: Connection refused")
+    )
+
+
+def test_a_timeout_records_NOTHING_about_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wrapper's own bound is transport, not an env verdict."""
+
+    def _slow(*_a: object, **_k: object) -> None:
+        raise TimeoutError("ssh timed out after 60s")
+
+    monkeypatch.setattr(submit_flow, "_preflight_runtime_check", _slow)
+    with pytest.raises(TimeoutError):
+        submit_flow._run_uv_preflight_for_batch(
+            ssh_target=TARGET, job_envs=[dict(UV_ENV)], skip_preflight=False
+        )
+    assert "env" not in _atoms()
+
+
 def test_a_cache_hit_feeds_nothing_rather_than_forging_an_age(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -323,6 +363,47 @@ def test_a_refused_dispatch_feeds_scheduler_down_from_the_real_path(
     scheduler = _atoms()["scheduler"]
     assert scheduler["verdict"] == "down"
     assert "Unauthorized Request" in scheduler["detail"]
+    # The discriminator really fired rather than the verdict landing by default:
+    # this exception is NOT transport-class.
+    assert not submit_flow._stage_failure_is_flap(
+        errors.RemoteCommandFailed("qsub: Unauthorized Request")
+    )
+
+
+def test_a_severed_tunnel_records_NOTHING_about_the_scheduler(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, journal_home: Any
+) -> None:
+    """A dispatch dies on a dead tunnel as readily as on a rejection, and
+    ``scheduler: down`` for that sends the next human to the queue system while
+    the VPN is what broke.
+
+    This handler would otherwise classify ONE exception two ways: the comment
+    block a dozen lines below it treats exactly this failure as a flap for job-id
+    recovery purposes. Routing both through ``_stage_failure_is_flap`` is what
+    makes that impossible.
+    """
+
+    def _severed(*_a: object, **_k: object) -> None:
+        raise errors.RemoteCommandFailed(
+            "ssh: connect to host login.example.edu port 22: Connection refused"
+        )
+
+    with pytest.raises(errors.RemoteCommandFailed):
+        _drive_dispatch(tmp_path, monkeypatch, dispatch=_severed)
+    assert "scheduler" not in _atoms()
+
+
+def test_an_open_circuit_records_NOTHING_about_the_scheduler(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, journal_home: Any
+) -> None:
+    """The breaker already judged the transport; nothing reached the scheduler."""
+
+    def _fenced(*_a: object, **_k: object) -> None:
+        raise errors.SshCircuitOpen("ssh circuit for host 'login.example.edu' is OPEN")
+
+    with pytest.raises(errors.SshCircuitOpen):
+        _drive_dispatch(tmp_path, monkeypatch, dispatch=_fenced)
+    assert "scheduler" not in _atoms()
 
 
 # ── the feed itself: fail-open, and never a probe ────────────────────────────

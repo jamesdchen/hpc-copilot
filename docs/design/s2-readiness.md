@@ -127,7 +127,7 @@ means a command really ran on the far end.
 | `auth` | `auth_atom` — DERIVED from the connect reading's exit/stderr signature; no probe at all | rides every `sense_preamble` rung |
 | `scratch` | `sense_scratch` — `test -d` + `df -P` (a bare `test -d` passes against a hung mount) | the submit flow's staging step: a landed rsync push + `deploy_runtime` is `ok`; a failure is `down` ONLY when its own stderr names a storage cause |
 | `scheduler` | `sense_scheduler` — the family's cheap CLI banner (`squeue --version` / `qstat -help` class), family resolved from `clusters.yaml` | the main array dispatch: job ids returned is `ok`, the typed dispatch failure is `down` |
-| `env` | `sense_env` — `hpc-agent --version` under the cluster activation, the release flow's own command class | the activation-class preflight (`command -v uv` after `module load` / `conda activate`) |
+| `env` | `sense_env` — `hpc-agent --version` under the cluster activation, the release flow's own command class | the activation-class preflight (`command -v uv` after `module load` / `conda activate`) — **`runtime: uv` batches only today**, see the scope note below |
 
 Two rules hold the shape:
 
@@ -141,11 +141,33 @@ Two rules hold the shape:
   cluster through `overall_verdict` instead, which is where "reachable ≠ usable"
   belongs.
 
-A feed site that cannot attribute a failure records NOTHING. A staging failure
-with no storage marker in its stderr is a transport fact the flap classifier
-already owns; recording `scratch: down` for it would send the next human to the
-filesystem while the tunnel is what is broken — the 2026-07-30 misdiagnosis
-class, one layer down.
+A feed site that cannot attribute a failure records NOTHING. This is the rule
+that costs the most to hold and matters the most, so it is stated once and
+applied at all three sites:
+
+- **staging** — a failure with no storage marker in its stderr is a transport
+  fact, so no `scratch` atom is written.
+- **dispatch** and **the env preflight** — a failure that
+  `_stage_failure_is_flap` (this module's one transport-class definition, the
+  staging retry's own) calls a flap writes NOTHING either. Both handlers would
+  otherwise file `scheduler: down` / `env: down` for a severed tunnel, and the
+  dispatch handler in particular would then be classifying ONE exception two
+  ways — a flap for the job-id recovery twelve lines below, a scheduler verdict
+  for the ledger.
+
+Recording a guess here sends the next human to the queue system or the conda env
+while the VPN is what is broken: the 2026-07-30 misdiagnosis class, one layer
+down and pointed at a different wrong subsystem.
+
+**Scope note — `env` harvests on `runtime: uv` batches only today.** The
+activation-class preflight is the one place the submit flow runs the cluster's
+own activation and holds the verdict; it is gated on `HPC_RUNTIME=uv`, so a
+conda-runtime batch contributes no `env` atom. Widening it would mean ADDING a
+remote call to a path that does not make one, which the harvest-never-probe rule
+forbids — so the honest fix is either a new opt-in sensor rung (`net-triage
+--probe-invariants` already offers exactly that) or a future activation-class
+check that non-uv batches genuinely need for their own reasons. Until then a
+conda-only cluster reads `env: unknown`, which is true.
 
 ## Pillar 6 as built: the three fields
 

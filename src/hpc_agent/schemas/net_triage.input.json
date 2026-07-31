@@ -49,6 +49,12 @@
       "title": "Probe Preamble",
       "type": "boolean"
     },
+    "probe_invariants": {
+      "default": false,
+      "description": "Opt in to the INVARIANT rungs: after the transport legs, sense the cluster's scratch (`test -d` + `df -P`), its scheduler CLI (the backend family's cheap version/usage banner, family resolved from clusters.yaml), and its env fingerprint (`hpc-agent --version` under the cluster activation) — reporting `scratch` / `scheduler` / `env` atoms alongside the transport ones. Opt-in for the same reason `probe_preamble` is: each rung costs a real connection. Reaching a login node is not the same as being able to USE the cluster, and these are the three invariants that difference is made of; they are reported as evidence and NEVER change the path verdict (a full scratch disk is not a dead path). net-triage is the sanctioned prober — the readiness ledger's own feed sites only ever harvest.",
+      "title": "Probe Invariants",
+      "type": "boolean"
+    },
     "activation": {
       "anyOf": [
         {
@@ -59,7 +65,7 @@
         }
       ],
       "default": null,
-      "description": "Override the activation prefix the preamble rung runs (default: the matched cluster's own, built from clusters.yaml). Ignored unless `probe_preamble` is true.",
+      "description": "Override the activation prefix the preamble rung runs (default: the matched cluster's own, built from clusters.yaml). Ignored unless `probe_preamble` is true. Also prefixes the scheduler + env rungs when `probe_invariants` is set.",
       "title": "Activation"
     },
     "preamble_timeout_sec": {

@@ -274,6 +274,31 @@ def _configured_hosts() -> list[tuple[str, str | None]]:
     return out
 
 
+def _cluster_invariants(cluster: str | None) -> tuple[str | None, str | None]:
+    """``(scratch, scheduler_family)`` for *cluster*, or ``(None, None)``.
+
+    What the INVARIANT rungs need out of ``clusters.yaml``, resolved here so the
+    sensor layer never reads config. Each half is independently ``None``: a
+    cluster with a scratch but an unrecognized scheduler still gets its storage
+    reading, and the scheduler sensor's own ``skipped`` atom names the gap.
+    Fail-open, like every other config read on this path.
+    """
+    if not cluster:
+        return None, None
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+        from hpc_agent.infra.readiness_sensors import scheduler_family_for_cluster
+
+        cfg = load_clusters_config().get(cluster)
+        if not isinstance(cfg, dict):
+            return None, None
+        scratch = str(cfg.get("scratch") or "").strip() or None
+        family = scheduler_family_for_cluster(cfg) or None
+    except Exception:  # noqa: BLE001 — a broken config must not fail triage
+        return None, None
+    return scratch, family
+
+
 def _cluster_activation(cluster: str | None) -> tuple[str | None, str | None]:
     """``(activation_prefix, ssh_target)`` for *cluster*, or ``(None, None)``.
 
@@ -440,17 +465,34 @@ def _triage_host(
         tcp_ok, tcp_detail = None, "skipped: dns resolution already failed"
     else:
         activation, cluster_target = (None, None)
-        if spec.probe_preamble:
+        if spec.probe_preamble or spec.probe_invariants:
+            # The scheduler + env rungs want the activation prefix too (a site
+            # that hides its scheduler CLI behind a module, and the env
+            # fingerprint by definition), so resolve it for either opt-in.
             activation, cluster_target = _cluster_activation(cluster)
             if spec.activation is not None:
                 activation = spec.activation
+        scratch, scheduler_family = (
+            _cluster_invariants(cluster) if spec.probe_invariants else (None, None)
+        )
         readiness = read_path_readiness(
             host,
             ssh_target=cluster_target or host,
-            activation=activation,
+            # The preamble rung is keyed on ``probe_preamble`` ALONE: passing an
+            # activation is what turns it on, so opting into the invariants must
+            # not smuggle in a rung the caller did not ask for.
+            activation=activation if spec.probe_preamble else None,
             connect=_tcp_connect,
             connect_timeout_sec=spec.tcp_timeout_sec,
             preamble_timeout_sec=spec.preamble_timeout_sec,
+            scratch=scratch,
+            scheduler_family=scheduler_family,
+            env_fingerprint=spec.probe_invariants,
+            # ...but the invariant rungs still get the prefix: the env
+            # fingerprint is meaningless outside the activated env (that is where
+            # the wheel lives), and some sites hide the scheduler CLI behind a
+            # module.
+            invariant_activation=activation,
         )
         direct = readiness.atom("direct")
         tcp_ok = direct.ok if direct is not None else None

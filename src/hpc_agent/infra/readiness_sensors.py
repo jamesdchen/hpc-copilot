@@ -1364,6 +1364,7 @@ def read_path_readiness(
     scratch: str | None = None,
     scheduler_family: str | None = None,
     env_fingerprint: bool = False,
+    invariant_activation: str | None = None,
     record: bool = True,
 ) -> PathReadiness:
     """Resolve the chain, sense what is stale/absent, classify — the ONE composer.
@@ -1430,6 +1431,15 @@ def read_path_readiness(
     wants_invariant = scratch is not None or scheduler_family is not None or env_fingerprint
     connect_dead = any(a.sensor == "connect" and a.ok is False for a in atoms)
     if wants_invariant and not dead_hop and route.resolved and not connect_dead:
+        # The prefix the scheduler + env rungs run under. Separate from
+        # *activation* (which is what TURNS ON the preamble rung) because the two
+        # are different uses of the same string: a caller may want the env
+        # fingerprint — which is meaningless outside the activated env, since
+        # that is where the wheel lives — WITHOUT paying for the preamble rung.
+        # Folding them would have made "opt into the invariants" silently also
+        # mean "opt into the preamble", or else read the fingerprint from a bare
+        # login shell and report the wrong wheel.
+        prefix = activation if invariant_activation is None else invariant_activation
         if scratch is not None:
             atoms.append(sense_scratch(target, scratch, timeout_sec=preamble_timeout_sec))
         if scheduler_family is not None:
@@ -1437,12 +1447,12 @@ def read_path_readiness(
                 sense_scheduler(
                     target,
                     scheduler_family,
-                    activation=activation or "",
+                    activation=prefix or "",
                     timeout_sec=preamble_timeout_sec,
                 )
             )
         if env_fingerprint:
-            atoms.append(sense_env(target, activation or "", timeout_sec=preamble_timeout_sec))
+            atoms.append(sense_env(target, prefix or "", timeout_sec=preamble_timeout_sec))
 
     cause = _classify(route, atoms)
     sentence = route_sentence(route, atoms)
