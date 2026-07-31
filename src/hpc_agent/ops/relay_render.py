@@ -99,6 +99,29 @@ def _line(
     return f"{state}{where}{detail}{tail}"
 
 
+def _stream_phrase(brief: dict[str, Any]) -> str:
+    """The U4 pull-lag clause for an S3 line, or ``""`` when there is none.
+
+    ``, 1741 pulled locally`` — how much of the finished work the watch already
+    streamed home, rendered right where the human is deciding whether to keep
+    waiting. Empty (byte-identical output) when the run streamed nothing:
+    disabled, opted out, a pure-API backend, or a brief predating the field.
+
+    A PAUSED stream says so. The whole point of this clause is that a stalled
+    byte mover must not read as a merely-behind one — that silence is what
+    stranded 1741 finished results on scratch for two hours.
+    """
+    block = brief.get("incremental_harvest")
+    if not isinstance(block, dict) or not block.get("enabled"):
+        return ""
+    mirrored = block.get("tasks_mirrored")
+    if not isinstance(mirrored, int):
+        return ""
+    paused = block.get("paused_reason")
+    tail = f" [streaming PAUSED: {paused}]" if paused else ""
+    return f", {mirrored} pulled locally{tail}"
+
+
 def _summary_from(last_status: Any) -> dict[str, int]:
     """Project a record's ``last_status`` into stable per-task counts.
 
@@ -284,20 +307,26 @@ def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
         complete = summary.get("complete", 0)
         tasks = f"{complete}/{total} tasks" if isinstance(total, int) else f"{complete} complete"
         return _line(
-            "main array complete", cluster, run_id, tail=f": {tasks} — proceed to harvest."
+            "main array complete",
+            cluster,
+            run_id,
+            tail=f": {tasks}{_stream_phrase(brief)} — proceed to harvest.",
         )
     if stage == "watching_timeout":
         return _line(
             "monitor budget hit",
             cluster,
             run_id,
-            tail="; cluster jobs may run on — keep watching or stop?",
+            tail=(f"{_stream_phrase(brief)}; cluster jobs may run on — keep watching or stop?"),
         )
     if stage == "watching_anomaly":
         lifecycle = brief.get("lifecycle_state") or "anomaly"
         esc = brief.get("escalation_reason") or "no escalation reason"
         return _line(
-            f"main array {lifecycle}", cluster, run_id, tail=f" ({esc}) — propose recovery."
+            f"main array {lifecycle}",
+            cluster,
+            run_id,
+            tail=f" ({esc}){_stream_phrase(brief)} — propose recovery.",
         )
 
     # S4 — harvest. The scope-looks phrase (COUNTS ONLY) rides between the row

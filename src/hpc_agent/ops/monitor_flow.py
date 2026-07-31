@@ -65,6 +65,12 @@ from hpc_agent.ops.monitor.classify import unresolved_unknown
 from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec, harvest_on_terminal
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.ops.monitor.stream_harvest import (
+    incremental_harvest_enabled,
+    should_stream,
+    stream_blocked_by,
+    stream_disclosure,
+)
 from hpc_agent.ops.monitor.terminal import (
     _ingest_runtime_at_terminal,
     _is_terminal,
@@ -93,6 +99,12 @@ class MonitorFlowResult:
     ticks: int
     elapsed_seconds: float
     escalation_reason: str | None = None
+    #: U4 incremental harvest — what the watch streamed home mid-flight
+    #: (:func:`hpc_agent.ops.monitor.stream_harvest.stream_disclosure`). Bytes
+    #: only: it says how much of the finished work is already readable
+    #: locally, never what any of it MEANS. ``None`` only for a result built
+    #: by a caller that predates the field.
+    incremental_harvest: dict[str, Any] | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         return {
@@ -104,6 +116,9 @@ class MonitorFlowResult:
             "ticks": self.ticks,
             "elapsed_seconds": self.elapsed_seconds,
             "escalation_reason": self.escalation_reason,
+            "incremental_harvest": (
+                dict(self.incremental_harvest) if self.incremental_harvest is not None else None
+            ),
         }
 
 
@@ -372,6 +387,119 @@ def _census_waves_block(
     return block
 
 
+def _mirrored_task_count_for(
+    experiment_dir: Path, run_id: str, sidecar: dict[str, Any] | None
+) -> int:
+    """Per-task summaries already sitting in the run's DEFAULT local mirror.
+
+    Read off disk, zero SSH. Seeds the pull-lag disclosure at loop start so a
+    re-armed watch (or a run whose mirror a prior aggregate warmed) reports
+    what is genuinely readable, not a fictitious zero.
+    """
+    from hpc_agent.ops import aggregate_flow as aggregate_flow_module
+    from hpc_agent.state.runs import resolved_summary_artifact
+
+    return aggregate_flow_module._mirrored_task_count(
+        aggregate_flow_module.per_task_results_mirror(experiment_dir, run_id),
+        resolved_summary_artifact(sidecar),
+    )
+
+
+def _stream_finished_results(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: Any,
+    state: _LoopState,
+    now_mono: float,
+) -> dict[str, Any] | None:
+    """Stream this tick's finished per-task results home; return the action row.
+
+    The U4 incremental harvest's call site logic, kept out of the poll loop's
+    body so the loop reads as a loop. Returns the tick-log action row, or
+    ``None`` when nothing happened this tick (the common case — the gate is
+    deliberately sparse).
+
+    Three outcomes, all disclosed and none of which can disturb the watch:
+
+    * **paused** — the host's breaker is open (or half-open, whose probe slot
+      belongs to the WATCH's own poll, never to an opportunistic byte-mover).
+      Streaming skips; polling continues. This is the "breaker-open pauses
+      pulling without killing the watch" contract.
+    * **streamed** — one delta pull ran. ``bytes_pulled`` is the delta ONLY:
+      the content-hash engine skips every file already identical locally, so
+      across a whole run the streamed bytes converge to the bytes the tasks
+      produced, never a multiple of them.
+    * **failed** — recorded as a bounded tail on the row and on
+      ``state.stream_error``. The attempt clock still advances, so a sick host
+      is spaced exactly like a healthy one instead of being retried per tick.
+
+    Never raises: the underlying prefetch returns every transport fault as
+    data, and the gate itself is pure.
+    """
+    if not state.stream_enabled:
+        return None
+    complete = int(state.last_summary.get("complete", 0) or 0)
+    # A run that has never streamed is not "0 seconds since the last stream" —
+    # it has an unbounded backlog age, and the spacing floor (which exists to
+    # space REPEATS) must not hold the first bytes hostage.
+    since = (
+        float("inf")
+        if state.stream_last_attempt_at is None
+        else now_mono - state.stream_last_attempt_at
+    )
+    if not should_stream(
+        complete=complete,
+        last_streamed_complete=state.stream_complete_at,
+        seconds_since_last=since,
+    ):
+        return None
+    try:
+        ssh_target = resolve_ssh_target(record)
+    except Exception:  # noqa: BLE001 — an unresolvable target pauses, never raises
+        ssh_target = None
+    blocked = stream_blocked_by(ssh_target)
+    if blocked is not None:
+        state.stream_paused_reason = blocked
+        # Advance the attempt clock so a long breaker cooldown does not
+        # re-consult (and re-log) on every single poll.
+        state.stream_last_attempt_at = now_mono
+        return {"kind": "incremental_harvest_paused", "reason": blocked, "complete": complete}
+
+    state.stream_last_attempt_at = now_mono
+    from hpc_agent.ops import aggregate_flow as aggregate_flow_module
+
+    pulled = aggregate_flow_module.prefetch_per_task_results(experiment_dir, run_id, record=record)
+    if pulled is None:
+        # Disabled underneath us (env flipped mid-watch). Stop consulting.
+        state.stream_enabled = False
+        state.stream_paused_reason = "opted_out"
+        return {"kind": "incremental_harvest_paused", "reason": "opted_out", "complete": complete}
+    if not pulled.get("ok"):
+        state.stream_error = str(pulled.get("error") or "")[:200]
+        return {
+            "kind": "incremental_harvest_failed",
+            "complete": complete,
+            "error": state.stream_error,
+        }
+    state.stream_paused_reason = None
+    state.stream_error = None
+    state.stream_complete_at = complete
+    state.stream_pulls += 1
+    state.stream_files += int(pulled.get("files_pulled", 0) or 0)
+    state.stream_bytes += int(pulled.get("bytes_pulled", 0) or 0)
+    state.stream_tasks_mirrored = int(pulled.get("tasks_mirrored", 0) or 0)
+    return {
+        "kind": "incremental_harvest",
+        "complete": complete,
+        "files_pulled": int(pulled.get("files_pulled", 0) or 0),
+        "bytes_pulled": int(pulled.get("bytes_pulled", 0) or 0),
+        "skipped_unchanged": int(pulled.get("skipped_unchanged", 0) or 0),
+        "tasks_mirrored": state.stream_tasks_mirrored,
+        "dir": pulled.get("dir"),
+    }
+
+
 def _floor_poll_interval(requested: float) -> float:
     """Apply the connection-pacing floor to a requested poll interval.
 
@@ -566,6 +694,30 @@ class _LoopState:
     #: Consecutive polls for which ``classify.unresolved_unknown`` held —
     #: fed to the classifier's bounded-unknown escalation arm (finding f).
     unknown_streak: int = 0
+    # --- U4 incremental harvest (see ops/monitor/stream_harvest.py) ---
+    #: Whether streaming is on for this run (spec knob over env opt-out).
+    stream_enabled: bool = False
+    #: ``complete`` count at the last SUCCESSFUL stream. ``-1`` = none yet.
+    #: This is what makes the stream never double-pull: an unchanged count is
+    #: not a backlog, so an idle tail streams zero times however long it idles.
+    stream_complete_at: int = -1
+    #: Monotonic timestamp of the last stream ATTEMPT (not success) — a failed
+    #: pull must be spaced too, or a sick host gets hammered every tick.
+    #: ``None`` = never attempted, which makes the FIRST backlog stream
+    #: immediately: a spacing floor exists to space repeats, and making the
+    #: human wait one floor for the first byte is the very latency this closes.
+    stream_last_attempt_at: float | None = None
+    stream_pulls: int = 0
+    stream_files: int = 0
+    stream_bytes: int = 0
+    #: Per-task summaries visible in the LOCAL mirror — the "M pulled locally"
+    #: half of the honest lag disclosure.
+    stream_tasks_mirrored: int = 0
+    #: Why the stream skipped, when it did (breaker open, no ssh target).
+    #: Cleared the moment a stream succeeds, so it always reads as CURRENT.
+    stream_paused_reason: str | None = None
+    #: Bounded tail of the last streaming failure — disclosed, never raised.
+    stream_error: str | None = None
 
 
 # ``_tick_log_path`` and ``_append_tick`` live in
@@ -698,10 +850,23 @@ def monitor_flow(
     walltime_sec = _sidecar_walltime_sec(sidecar)
     backoff_wave_bound = max(1, len(wave_map)) if wave_map else 1
 
+    # U4 incremental harvest: stream finished per-task results home AS THEY
+    # COMPLETE instead of moving every byte in one transfer at array
+    # completion (the trainwreck's 1741-of-2100 results, unreadable for 2h+).
+    # Resolved ONCE at loop start — the spec knob wins over the env opt-out —
+    # and only for backends that actually have a remote tree to pull from (a
+    # pure-API backend's results arrive through ``fetch_results``, not ssh).
+    stream_enabled = incremental_harvest_enabled(spec.incremental_harvest, backend=record.backend)
     state = _LoopState(
         last_combined_waves=list(record.combined_waves),
         last_failed_waves=list(record.failed_waves),
+        stream_enabled=stream_enabled,
     )
+    # Seed the mirror count from whatever a prior watch / aggregate already
+    # left on disk, so the very first brief tells the truth about pull lag
+    # instead of claiming zero.
+    if stream_enabled:
+        state.stream_tasks_mirrored = _mirrored_task_count_for(experiment_dir, run_id, sidecar)
     started = _now()
 
     # Adaptive backoff: the user-supplied poll_interval_seconds is the
@@ -1033,6 +1198,7 @@ def monitor_flow(
                                 ticks=state.ticks,
                                 elapsed_seconds=_now() - started,
                                 escalation_reason=escalation,
+                                incremental_harvest=stream_disclosure(state),
                             )
                         # Live poller, transient blip. RANK 21: a failed poll yields NO
                         # fresh fingerprint, so the "unchanged ⇒ back off" inference that
@@ -1150,6 +1316,7 @@ def monitor_flow(
                                 ticks=state.ticks,
                                 elapsed_seconds=_now() - started,
                                 escalation_reason=None,
+                                incremental_harvest=stream_disclosure(state),
                             )
                         # Wait out the breaker cooldown before the next poll, floored at
                         # effective_interval. SshUnreachable / SshSlotWaitTimeout carry no
@@ -1312,6 +1479,25 @@ def monitor_flow(
                             }
                         )
 
+            # U4 INCREMENTAL HARVEST — move the finished tasks' RESULT BYTES
+            # home as they complete, instead of in one all-or-nothing transfer
+            # at array completion (the 2026-07-30 trainwreck: 1741 of 2100
+            # finished results unreadable for 2h+). Deliberately OUTSIDE the
+            # ``auto_combine_waves and wave_map`` branch above: the wave
+            # prefetch caches COMBINED partials and is therefore a no-op for
+            # exactly the runs that got hurt — a plain array with no wave_map
+            # and no cluster-side combiner. This one keys on the completion
+            # count every tick already holds, so it covers every ssh run.
+            #
+            # Bytes, never verdicts: it pulls into the same mirror the terminal
+            # harvest re-verifies and changes nothing about WHEN a partial set
+            # may be aggregated — decide-partial-handling still owns that gate.
+            stream_action = _stream_finished_results(
+                experiment_dir, run_id, record=record, state=state, now_mono=now_mono
+            )
+            if stream_action is not None:
+                actions.append(stream_action)
+
             # Bounded-unknown watchdog (proving run #3, finding f): a run whose
             # remote workdir vanished mid-run can poll "unknown" indefinitely —
             # nothing alive on the scheduler, no results on disk, no failure
@@ -1373,6 +1559,7 @@ def monitor_flow(
                     ticks=state.ticks,
                     elapsed_seconds=elapsed,
                     escalation_reason=complete_escalation,
+                    incremental_harvest=stream_disclosure(state),
                 )
             if terminal == LifecycleState.FAILED:
                 # #294 Layer-2 auto-fire (#299): when the run opted into
@@ -1584,6 +1771,7 @@ def monitor_flow(
                     ticks=state.ticks,
                     elapsed_seconds=elapsed,
                     escalation_reason=esc_reason,
+                    incremental_harvest=stream_disclosure(state),
                 )
 
             # Any other terminal verdict. ``classify_polling`` emits exactly one
@@ -1616,6 +1804,7 @@ def monitor_flow(
                     ticks=state.ticks,
                     elapsed_seconds=elapsed,
                     escalation_reason=esc_reason,
+                    incremental_harvest=stream_disclosure(state),
                 )
 
             # Budget check.

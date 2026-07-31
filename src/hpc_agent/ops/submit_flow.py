@@ -1424,13 +1424,22 @@ def _stage_with_flap_retry(
                 ssh_target, attempt=attempt, attempts=attempts, wait_sec=wait, exc=exc
             )
             sleep(wait)
-    raise _stage_exhausted_error(
+    exhausted = _stage_exhausted_error(
         ssh_target,
         attempts_made=made,
         attempts_allowed=attempts,
         last=last,
         stopped_on_cooldown=stopped_on_cooldown,
     )
+    # CHAIN the cause. ``is_transport_flap`` walks ``__cause__``, so raising the
+    # envelope bare severed the flap identity at exactly the moment it matters
+    # most — exhaustion — and a downstream terminal-cause classifier then read a
+    # known transport flap as a hard failure. ``raise ... from last`` restores the
+    # chain (and the traceback a 2am reader needs); the stamp inside the factory
+    # covers the case where ``last`` was a flap by TYPE rather than by stamp.
+    if last is not None:
+        raise exhausted from last
+    raise exhausted
 
 
 def _stage_exhausted_error(
@@ -1483,11 +1492,25 @@ def _stage_exhausted_error(
     else:
         why = f"exhausted {attempts_made} bounded attempt(s)"
 
-    return errors.SshUnreachable(
+    exhausted = errors.SshUnreachable(
         f"staging against {ssh_target} {why}: {cause}{remedy} Last failure: "
         f"{detail[:300]}. Progress was NOT lost — the push is delta-based, so a re-run "
         f"resumes from what already landed."
     )
+    # The ladder only ever REACHES exhaustion on a flap (a non-flap propagates
+    # from attempt 1), so an exhaustion whose last failure was a flap IS a flap
+    # outcome — carry that verdict by IDENTITY, exactly as ``mark_transport_flap``
+    # exists to do. The ``raise ... from last`` at the call site already restores
+    # the ``__cause__`` chain; this covers the case the chain cannot: a *last*
+    # that was a flap by TYPE (a bare ``TimeoutError``, an open circuit) and so
+    # carries no stamp for the chain walk to find. Without both, a consumer that
+    # classifies on ``is_transport_flap`` alone reads a known transport flap as a
+    # hard failure — the same re-derivation gap the stamp was introduced to close.
+    if last is not None and _stage_failure_is_flap(last):
+        from hpc_agent.infra.ssh_options import mark_transport_flap
+
+        mark_transport_flap(exhausted)
+    return exhausted
 
 
 def _push_and_deploy(

@@ -50,6 +50,26 @@ def experiment(tmp_path: Path) -> Path:
     return d
 
 
+@pytest.fixture(autouse=True)
+def _only_the_wave_prefetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the WAVE prefetch from its per-task sibling (U4).
+
+    The watch now runs two independent opportunistic pulls: this one, keyed on a
+    combine BURST and scoped to ``_combiner/``, and the incremental per-task
+    harvest, keyed on the COMPLETION count and scoped to ``results/``. Both go
+    through the same ``aggregate_flow._pull`` seam, so the "exactly N pulls per
+    burst" assertions below would otherwise count the sibling's pulls too and
+    stop being about this trigger at all.
+
+    Switching the sibling off here keeps each file's assertions about its OWN
+    trigger. The two firing together — and hitting DIFFERENT remote subdirs — is
+    pinned in ``test_flow_incremental_harvest.py``.
+    """
+    from hpc_agent.ops.monitor.stream_harvest import INCREMENTAL_HARVEST_ENV
+
+    monkeypatch.setenv(INCREMENTAL_HARVEST_ENV, "0")
+
+
 def _seed_record(experiment_dir: Path, **overrides: Any) -> RunRecord:
     base: dict[str, Any] = {
         "run_id": _RUN_ID,

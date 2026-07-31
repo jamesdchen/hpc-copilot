@@ -46,6 +46,19 @@
       "description": "File pattern passed to the cluster-side reporter for per-task result-file presence checks. Override to e.g. 'metrics_chunk_*.json' for stricter completion detection.",
       "title": "File Glob",
       "type": "string"
+    },
+    "incremental_harvest": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stream finished tasks' result files home DURING the watch, batched and delta-only, into the same local mirror the terminal harvest pulls — so the results are readable as they land instead of only after the last task finishes. Null (default) defers to the HPC_INCREMENTAL_HARVEST env flag ('0' disables); set false for a metered/paid link. Pure latency: it moves bytes earlier and changes nothing about when a partial set may be AGGREGATED (decide-partial-handling still owns that gate).",
+      "title": "Incremental Harvest"
     }
   }
 }
