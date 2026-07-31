@@ -31,6 +31,7 @@ from hpc_agent.ops.attention_queue import (
     GREENLIGHT_UNADVANCED,
     RUN_PARKED,
     RUN_STALLED,
+    WORKER_TERMINAL,
     count_by_class,
 )
 
@@ -103,7 +104,55 @@ def _detail(item: AttentionItem) -> str:
         return f"section {item.block} unsigned"
     if item.kind == AUDIT_SECTION_STALE:
         return f"section {item.block} sign-off stale"
+    if item.kind == WORKER_TERMINAL:
+        return _worker_terminal_detail(item)
     return str(item.kind)
+
+
+def _worker_terminal_detail(item: AttentionItem) -> str:
+    """The one-liner for a terminal worker death whose record named no remediation.
+
+    Reached only when the classifier could NOT discriminate a known failure class
+    (a classified record carries the registry's composed remediation on ``action``
+    and never gets here). Composed from the record's own fields: the named cause
+    if any, the envelope code, and — honestly — where the forensic detail lives.
+    Never authored prose, never a guessed remediation (the 2026-07-30 lesson: a
+    confident message pointing at the wrong host cost more than silence would).
+    """
+    ev = item.evidence
+    parts: list[str] = []
+    cause = ev.get("recovery_kind") or ev.get("path_cause")
+    parts.append(f"worker died terminal; cause {cause}" if cause else "worker died terminal")
+    code = ev.get("error_code")
+    if code:
+        parts.append(f"error_code {code}")
+    if ev.get("transport_flap"):
+        parts.append("transport flap")
+    breaker = ev.get("breaker_state")
+    if breaker:
+        parts.append(f"breaker {breaker}")
+    if not cause:
+        parts.append("no registry remediation — cause not discriminated")
+    log_path = ev.get("log_path")
+    if log_path:
+        disclosed = "with [fatal]" if ev.get("log_disclosed") else "no [fatal]"
+        parts.append(f"forensics: {log_path} ({disclosed})")
+    return _oneline(" · ".join(str(part) for part in parts))
+
+
+def _disclosure_suffix(item: AttentionItem) -> str:
+    """``· disclosed +Nm`` — the failed_at vs surfaced_at gap, when the item has one.
+
+    The disclosure-latency honesty the overnight design already mandates
+    (``failed_at`` vs ``surfaced_at``), carried onto the queue line: a noon read of
+    a 3am death shows the gap instead of implying the human learned at the instant
+    of failure. Empty for every item whose source records no such pair, so every
+    other line is byte-identical. A duration, never a judgment.
+    """
+    latency = item.evidence.get("disclosure_latency_seconds")
+    if not isinstance(latency, (int, float)) or isinstance(latency, bool):
+        return ""
+    return f" · disclosed +{_format_age(float(latency))}"
 
 
 def _item_line(item: AttentionItem, computed_at: str) -> str:
@@ -119,7 +168,7 @@ def _item_line(item: AttentionItem, computed_at: str) -> str:
     leverage = f" · unblocks {item.unblocks}" if item.unblocks else ""
     return (
         f"- {_age(item.since, computed_at)} · {item.kind} · "
-        f"{scope}{where}{leverage} — {_detail(item)}"
+        f"{scope}{where}{leverage}{_disclosure_suffix(item)} — {_detail(item)}"
     )
 
 

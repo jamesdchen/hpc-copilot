@@ -93,6 +93,8 @@ __all__ = [
     "CONFORMANCE_NEEDS_VERDICT",
     "CONFORMANCE_NONCONFORMING",
     "collect_conformance",
+    "WORKER_TERMINAL",
+    "collect_worker_terminals",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -188,6 +190,23 @@ CONFORMANCE_NONCONFORMING = "conformance-nonconforming"
 #: headline wins) and yields no item — the remedy already landed.
 CHALLENGE_UPHELD_UNREMEDIED = "challenge-upheld-unremedied"
 
+#: A detached worker that died TERMINAL with a discriminated structured cause
+#: (docs/design/s2-readiness.md pillar 5, "failures are product surface"). The
+#: source predicate is ``ops/recover/terminal_cause.py``'s journal — the same
+#: record the worker's own exit path wrote — so the queue re-derives NOTHING: the
+#: ``error_code`` / ``category``, the discriminated ``path_cause`` / transport-flap
+#: identity / breaker state, and the COMPOSED remediation from the recoveries
+#: registry all ride the record verbatim. BLOCKED: a dead worker's cluster work
+#: did not complete and only a human decides what happens next.
+#:
+#: Distinct from :data:`DEAD_WORKER`, deliberately. ``dead-worker`` is the
+#: liveness scan's finding — a lease with a dead pid and NO recorded terminal, the
+#: shape a hard kill leaves when nothing was flushed. ``worker-terminal`` is the
+#: worker's own structured disclosure. A death that produces both surfaces both:
+#: one says a worker vanished, the other says WHY, and collapsing them would lose
+#: exactly the distinction the disclosure exists to make.
+WORKER_TERMINAL = "worker-terminal"
+
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
 KIND_CLASS: dict[str, str] = {
@@ -226,6 +245,10 @@ KIND_CLASS: dict[str, str] = {
     # (no encoded edge — the honest anti-capital-shaping answer, C-queue).
     CONFORMANCE_NEEDS_VERDICT: VERDICT,
     CONFORMANCE_NONCONFORMING: VERDICT,
+    # A terminal worker death stopped cluster work mid-flight and only a human
+    # decides what happens next → BLOCKED (the DEAD_WORKER class, for the same
+    # reason). Fan-out stays 0: no journal encodes what a dead worker unblocks.
+    WORKER_TERMINAL: BLOCKED,
 }
 
 
@@ -398,6 +421,234 @@ def collect_dead_workers(experiment_dir: Path, *, now: str) -> list[AttentionIte
             )
         )
     return items
+
+
+def collect_worker_terminals(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Terminal detached-worker deaths with a discriminated cause (pillar 5).
+
+    Source predicate: ``ops/recover/terminal_cause.py::iter_experiment_terminal_causes``
+    — the append-only journal the WORKER's own exit path wrote. This collector
+    re-derives nothing and classifies nothing: the ``error_code``, the
+    discriminated ``path_cause`` / transport-flap identity / breaker state, and
+    the remediation COMPOSED from the recoveries registry all ride the record
+    verbatim (the D1 no-authored-prose rule, and the D5 one-definition rule — the
+    classifier is the one definition and it runs at the point of death, where the
+    exception still exists).
+
+    The item's ``action`` IS the registry remediation, so a reader gets the menu
+    without opening the log. When the classifier could not discriminate a class,
+    ``action`` is ``None`` and the render falls through to the record's own
+    composed message — an honest "cause not named" beats a generic remediation
+    that points somewhere wrong.
+
+    **Disclosure latency** (the s2-readiness honesty mandate): each item carries
+    ``failed_at`` (the worker's death), ``recorded_at`` (when the machine wrote
+    the disclosure) and ``surfaced_at`` (this read), plus the two derived gaps. A
+    queue read at noon over a 3am death says so in numbers rather than implying
+    the human learned at the instant of failure.
+
+    **Clearing** (the D2/"Delivery de-scoped" rule, ``docs/design/attention-queue.md``:
+    *an item persists — recomputed, with its age — until the human clears its
+    SUBJECT*). The journal is APPEND-ONLY, so a raw record-per-item projection
+    would never clear: a run that died three times and then succeeded would render
+    three standing BLOCKED items forever. Two compatible predicates give the
+    subject its clearable identity, both read off the substrate the queue's other
+    kinds already use — no new vocabulary:
+
+    * the subject is ``(run_id, block)``, not a record, so only the LATEST record
+      per pair can produce an item (:func:`_latest_terminal_cause_per_subject`);
+    * the item is SUPPRESSED when that subject has since resolved — the run's
+      CURRENT journal status is a terminal non-anomalous one (``complete``; the
+      ``ops/status_blocks.py::ANOMALY_STATUSES`` / ``TERMINAL_STATUSES`` split
+      ``collect_anomalies`` keys on), or a LATER successful block terminal exists
+      for the same block (``state/block_terminal.py::read_terminal_with_fallback``,
+      the same store the dead-worker scan consults).
+
+    An ``abandoned`` / ``failed`` run is NOT cleared by either leg — that is a
+    terminal the human still owes a verdict on, which is exactly why it is here.
+
+    Read-only: this collector opens no connection and writes nothing (the queue is
+    watermark-neutral by construction). Fail-open: an unreadable journal yields no
+    items rather than crashing the morning read.
+    """
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    resolved: dict[str, bool] = {}
+    for record in _latest_terminal_cause_per_subject(experiment_dir):
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        failed_at = record.get("failed_at") if isinstance(record.get("failed_at"), str) else None
+        block = record.get("block") if isinstance(record.get("block"), str) else None
+        key = f"{run_id}\x00{block}"
+        if key not in resolved:
+            resolved[key] = _worker_terminal_subject_resolved(
+                experiment_dir, run_id=run_id, block=block, failed_at=failed_at
+            )
+        if resolved[key]:
+            continue
+        recorded_at = (
+            record.get("recorded_at") if isinstance(record.get("recorded_at"), str) else None
+        )
+        action = record.get("remediation") if isinstance(record.get("remediation"), str) else None
+        items.append(
+            AttentionItem(
+                kind=WORKER_TERMINAL,
+                item_class=KIND_CLASS[WORKER_TERMINAL],
+                experiment_dir=exp,
+                scope_kind="run",
+                scope_id=run_id,
+                block=block,
+                cluster=record.get("cluster") if isinstance(record.get("cluster"), str) else None,
+                since=failed_at,
+                action=action,
+                evidence={
+                    "recovery_kind": record.get("recovery_kind"),
+                    "error_code": record.get("error_code"),
+                    "category": record.get("category"),
+                    "retry_safe": record.get("retry_safe"),
+                    "exit_code": record.get("exit_code"),
+                    "path_cause": record.get("path_cause"),
+                    "transport_flap": record.get("transport_flap"),
+                    "breaker_state": record.get("breaker_state"),
+                    "dispatch_never_actuated": record.get("dispatch_never_actuated"),
+                    "ssh_target": record.get("ssh_target"),
+                    "detected_by": record.get("detected_by"),
+                    "message": record.get("message"),
+                    # The forensic tier stays, and the item POINTS at it rather
+                    # than requiring it: the log is where the traceback and the
+                    # child stderr live, not where the decision is made.
+                    "log_path": record.get("log_path"),
+                    "log_disclosed": record.get("log_disclosed"),
+                    "last_log_line": record.get("last_log_line"),
+                    # Disclosure-latency honesty (docs/design/s2-readiness.md).
+                    # ``disclosure_latency_seconds`` is the one that matters to a
+                    # human: how long the failure existed before anyone read it.
+                    # ``record_latency_seconds`` is the MACHINE's own delay and is
+                    # structurally 0.0 for every record the exit path mints —
+                    # ``failed_at`` and ``recorded_at`` are the same instant there,
+                    # because the worker discloses as it dies. It is carried
+                    # anyway, and pinned at 0.0 by test, so the day a
+                    # scanner-side mint lands (a hard kill that flushed nothing,
+                    # noticed minutes later) the machine's blind window is
+                    # already a rendered number rather than a field someone has
+                    # to think to add.
+                    "failed_at": failed_at,
+                    "recorded_at": recorded_at,
+                    "surfaced_at": now,
+                    "disclosure_latency_seconds": _elapsed_seconds(failed_at, now),
+                    "record_latency_seconds": _elapsed_seconds(failed_at, recorded_at),
+                },
+            )
+        )
+    return items
+
+
+def _latest_terminal_cause_per_subject(experiment_dir: Path) -> list[Mapping[str, Any]]:
+    """The newest terminal-cause record per ``(run_id, block)`` SUBJECT.
+
+    The journal is append-only (every death of a run is kept — that history is
+    the point), but the queue's unit is a SUBJECT, not a record. Three deaths of
+    one block are one thing needing attention, not three, and only the newest one
+    describes the current state.
+
+    Newest is by ``recorded_at`` (ISO-8601 UTC, so lexical order IS chronological
+    order), with append order as the tiebreak — two records stamped in the same
+    second resolve to the later-appended one, which is the write order.
+    """
+    from hpc_agent.ops.recover.terminal_cause import iter_experiment_terminal_causes
+
+    latest: dict[tuple[str, str], tuple[str, int, Mapping[str, Any]]] = {}
+    for seq, record in enumerate(iter_experiment_terminal_causes(experiment_dir)):
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        block = record.get("block")
+        key = (run_id, block if isinstance(block, str) else "")
+        stamp = record.get("recorded_at")
+        rank = (stamp if isinstance(stamp, str) else "", seq)
+        prior = latest.get(key)
+        if prior is None or (prior[0], prior[1]) < rank:
+            latest[key] = (rank[0], rank[1], record)
+    return [entry[2] for _key, entry in sorted(latest.items())]
+
+
+def _worker_terminal_subject_resolved(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    block: str | None,
+    failed_at: str | None,
+) -> bool:
+    """Whether a ``(run_id, block)`` worker-death subject has since RESOLVED.
+
+    The clearing predicate. Two independent legs, either of which clears:
+
+    * the run's CURRENT journal status is a terminal, NON-anomalous one — i.e.
+      ``complete``. Routed through ``ops/status_blocks.py::ANOMALY_STATUSES`` and
+      ``state/run_record.TERMINAL_STATUSES`` (the same split ``collect_anomalies``
+      keys on), so a status that is terminal-but-owed (``failed`` / ``abandoned``)
+      correctly does NOT clear: that is a verdict the human still owes, which is
+      why the item exists.
+    * a LATER successful block terminal exists for the same block — the worker was
+      re-invoked and got there. Read from ``state/block_terminal.py`` via
+      ``read_terminal_with_fallback`` (the canonical verb key with the legacy
+      short-key fallback, exactly as the dead-worker scan reads it). "Later" is
+      compared against the death's ``failed_at``; a terminal that PREDATES the
+      death is the record of an earlier attempt and clears nothing.
+
+    Fail-safe direction is DO NOT CLEAR: anything unreadable leaves the item
+    standing. Wrongly hiding a failure is the defect; wrongly showing one is
+    noise the human can see through.
+    """
+    from hpc_agent.ops.status_blocks import ANOMALY_STATUSES
+    from hpc_agent.state.run_record import TERMINAL_STATUSES
+
+    try:
+        from hpc_agent.state.journal import load_run
+
+        record = load_run(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — an unreadable record must not clear the item
+        record = None
+    if record is not None:
+        status = str(getattr(record, "status", "") or "")
+        if status in TERMINAL_STATUSES and status not in ANOMALY_STATUSES:
+            return True
+
+    if not block:
+        return False
+    try:
+        from hpc_agent.state.block_terminal import read_terminal_with_fallback
+
+        terminal = read_terminal_with_fallback(experiment_dir, run_id, block)
+    except Exception:  # noqa: BLE001 — same fail-safe direction
+        terminal = None
+    if not isinstance(terminal, dict):
+        return False
+    result = terminal.get("result")
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        return False
+    ts = terminal.get("ts")
+    if not isinstance(ts, str) or failed_at is None:
+        # An ok terminal with no comparable instant still means the block reached
+        # a successful terminal for this run; there is nothing left to decide.
+        return True
+    elapsed = _elapsed_seconds(failed_at, ts)
+    return elapsed is None or elapsed >= 0
+
+
+def _elapsed_seconds(start: str | None, end: str | None) -> float | None:
+    """``end - start`` in seconds, or ``None`` when either instant is unreadable.
+
+    A duration only — never interpreted as a judgment (the D6 no-urgency rule).
+    """
+    from hpc_agent.infra.time import parse_iso_utc_or_none
+
+    start_dt = parse_iso_utc_or_none(start)
+    end_dt = parse_iso_utc_or_none(end)
+    if start_dt is None or end_dt is None:
+        return None
+    return (end_dt - start_dt).total_seconds()
 
 
 def collect_anomalies(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
@@ -1282,6 +1533,7 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *collect_greenlight_and_parked(experiment_dir, now=now),
         *collect_stalled(experiment_dir, now=now),
         *collect_dead_workers(experiment_dir, now=now),
+        *collect_worker_terminals(experiment_dir, now=now),
         *collect_anomalies(experiment_dir, now=now),
         *collect_campaign_pending(experiment_dir, now=now),
         *audits.items,

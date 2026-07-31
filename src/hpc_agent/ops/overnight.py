@@ -2489,7 +2489,9 @@ def overnight_morning_brief(
     try:
         from hpc_agent.ops.recover.heal_taxonomy import class_morning_sections
 
-        class_sections = class_morning_sections(experiment_dir, scope_kind, scope_id)
+        class_sections = class_morning_sections(
+            experiment_dir, scope_kind, scope_id, now_iso=surfaced_at
+        )
     except Exception:  # noqa: BLE001 — a class-section read must not wedge the brief
         class_sections = {}
 
@@ -2557,10 +2559,20 @@ def morning_brief_if_any(
     brief = overnight_morning_brief(
         experiment_dir, scope_kind=scope_kind, scope_id=scope_id, now_iso=now_iso
     )
+    # s2-readiness pillar 5: a TERMINAL worker death earns the brief on its own.
+    # A failure whose only surface was a worker log is the defect the pillar names,
+    # and gating its disclosure on a standing consent would reproduce it for every
+    # attended run. Read defensively — ``class_sections`` is fail-open above and
+    # may be ``{}``.
+    class_sections = brief.get("class_sections")
+    worker_failures = (
+        class_sections.get("worker_terminal_failures") if isinstance(class_sections, dict) else None
+    )
     if (
         brief.get("has_consent")
         or int(brief.get("consumed_count") or 0) > 0
         or brief.get("heal_failure") is not None
+        or bool(worker_failures)
     ):
         return brief
     return None

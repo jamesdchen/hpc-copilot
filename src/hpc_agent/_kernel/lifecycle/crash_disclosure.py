@@ -46,6 +46,7 @@ __all__ = [
     "emit_fatal_block",
     "install_crash_faulthandler",
     "log_has_fatal_marker",
+    "read_log_tail",
 ]
 
 #: The marker the honest terminal scans for. A single token so a bounded tail read
@@ -129,6 +130,29 @@ def emit_fatal_block(
         return False
 
 
+def read_log_tail(log_path: str | os.PathLike[str] | None) -> str:
+    """The last :data:`_LOG_TAIL_BYTES` of *log_path*, decoded replace-lossy.
+
+    The ONE bounded worker-log tail read. :func:`log_has_fatal_marker` scans this
+    for the marker; the structured terminal-cause classifier
+    (``ops/recover/terminal_cause.py``) scans the SAME bytes for the discriminated
+    cause vocabulary, so the honest-terminal read and the cause read can never
+    disagree about which bytes they saw. Fail-open: a missing / unreadable /
+    unnamed log yields ``""``.
+    """
+    if not log_path:
+        return ""
+    try:
+        with open(log_path, "rb") as fh:
+            try:
+                fh.seek(-_LOG_TAIL_BYTES, os.SEEK_END)
+            except OSError:
+                fh.seek(0)  # log shorter than the tail bound
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def log_has_fatal_marker(log_path: str | os.PathLike[str] | None) -> tuple[bool, str]:
     """Bounded tail read of the worker log for the honest terminal.
 
@@ -139,16 +163,8 @@ def log_has_fatal_marker(log_path: str | os.PathLike[str] | None) -> tuple[bool,
     message when no marker is present). Fail-open: a missing/unreadable log yields
     ``(False, "")`` so the terminal writer falls back to the no-disclosure branch.
     """
-    if not log_path:
-        return False, ""
-    try:
-        with open(log_path, "rb") as fh:
-            try:
-                fh.seek(-_LOG_TAIL_BYTES, os.SEEK_END)
-            except OSError:
-                fh.seek(0)  # log shorter than the tail bound
-            tail = fh.read().decode("utf-8", errors="replace")
-    except OSError:
+    tail = read_log_tail(log_path)
+    if not tail:
         return False, ""
     has_fatal = FATAL_MARKER in tail
     last_line = ""

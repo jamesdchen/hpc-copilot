@@ -69,6 +69,7 @@ __all__ = [
     "report_c2_finding",
     "escalate_if_recurring",
     "class_morning_sections",
+    "worker_terminal_sections",
 ]
 
 #: The four ruled classes (overnight-repair.md §2). C1/C2 are DISTINCT classes.
@@ -718,7 +719,78 @@ def escalate_if_recurring(
 # ── per-class morning-brief sections (§7.4) ───────────────────────────────────
 
 
-def class_morning_sections(experiment_dir: Path, scope_kind: str, scope_id: str) -> dict[str, Any]:
+def worker_terminal_sections(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    now_iso: str | None = None,
+) -> list[dict[str, Any]]:
+    """Terminal detached-worker deaths for a RUN scope, latency-disclosed.
+
+    The morning-brief half of s2-readiness pillar 5. Reads the structured
+    terminal-cause journal the worker's own exit path wrote
+    (``ops/recover/terminal_cause.py``) and re-presents each death in the SAME
+    shape the brief already uses for everything else it discloses: ``failed_at``
+    (when the worker died) vs ``surfaced_at`` (this read) plus the
+    ``latency_seconds`` between them — so the human who wakes at 8am to a 3am
+    death reads the five-hour gap as a number rather than inferring it.
+
+    Carries the composed ``remediation`` from the recoveries registry verbatim, so
+    the brief never sends anyone to a worker log to decide what to do. Non-run
+    scopes yield ``[]`` (a campaign has no worker of its own). Pure read; never
+    raises — an unreadable journal disclosing nothing must not blank the brief.
+    """
+    if scope_kind != "run":
+        return []
+    from hpc_agent.ops.recover.terminal_cause import read_terminal_causes
+
+    surfaced_at = now_iso or utcnow_iso()
+    out: list[dict[str, Any]] = []
+    for record in read_terminal_causes(experiment_dir, scope_id):
+        failed_at = record.get("failed_at") if isinstance(record.get("failed_at"), str) else None
+        out.append(
+            {
+                "block": record.get("block"),
+                "recovery_kind": record.get("recovery_kind"),
+                "error_code": record.get("error_code"),
+                "category": record.get("category"),
+                "path_cause": record.get("path_cause"),
+                "transport_flap": record.get("transport_flap"),
+                "breaker_state": record.get("breaker_state"),
+                "exit_code": record.get("exit_code"),
+                "message": record.get("message"),
+                "remediation": record.get("remediation"),
+                # The forensic tier is POINTED AT, never required.
+                "log_path": record.get("log_path"),
+                "log_disclosed": record.get("log_disclosed"),
+                "failed_at": failed_at,
+                "recorded_at": record.get("recorded_at"),
+                "surfaced_at": surfaced_at,
+                "latency_seconds": _latency_seconds(failed_at, surfaced_at),
+            }
+        )
+    return out
+
+
+def _latency_seconds(failed_at: str | None, surfaced_at: str) -> float | None:
+    """``surfaced_at - failed_at`` in seconds, or ``None`` when either is unreadable."""
+    from hpc_agent.infra.time import parse_iso_utc_or_none
+
+    start = parse_iso_utc_or_none(failed_at)
+    end = parse_iso_utc_or_none(surfaced_at)
+    if start is None or end is None:
+        return None
+    return (end - start).total_seconds()
+
+
+def class_morning_sections(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    now_iso: str | None = None,
+) -> dict[str, Any]:
     """The per-class breakdown the morning brief layers on (§7.4).
 
     Reads the consumption ledger + anchor ledger and splits the overnight heal
@@ -728,6 +800,18 @@ def class_morning_sections(experiment_dir: Path, scope_kind: str, scope_id: str)
     C2 findings (routed OUT to the run story). Pure read — actuates nothing. The
     overnight morning brief folds this in beside its shipped ``failed_at`` vs
     ``surfaced_at`` latency disclosure.
+
+    Also carries ``worker_terminal_failures`` (s2-readiness pillar 5): every
+    terminal detached-worker death for this scope, each with its discriminated
+    cause, its registry-composed remediation, and its own ``failed_at`` vs
+    ``surfaced_at`` gap. It rides here rather than in the consumption list because
+    a worker death is not a consented auto-advance — it is fallout, and folding it
+    into ``consumed`` would misreport what the standing consent spent.
+
+    *now_iso* is the brief's OWN ``surfaced_at`` instant, threaded through so the
+    worker-failure latencies are measured against the same instant the rest of the
+    brief is dated by. Two disclosure clocks in one brief would be a second source
+    of truth about when the human was told.
     """
     heals_ab: list[dict[str, Any]] = []
     parked_c1: list[dict[str, Any]] = []
@@ -755,4 +839,7 @@ def class_morning_sections(experiment_dir: Path, scope_kind: str, scope_id: str)
         "class_c1_parked_elicitations": parked_c1,
         "class_c2_findings": findings_c2,
         "minted_anchors": read_anchors(experiment_dir, scope_kind, scope_id),
+        "worker_terminal_failures": worker_terminal_sections(
+            experiment_dir, scope_kind, scope_id, now_iso=now_iso
+        ),
     }

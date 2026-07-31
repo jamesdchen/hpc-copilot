@@ -61,7 +61,7 @@ the journaled y.
   `SensorKind` (see "Pillar 3 as built" below). The reactive package's L1/L2
   discriminated-cause work is the transport invariant's own slice of it.
 - Pillar 4 (subset): reactive package L3 flap-riding retry (in build).
-- Pillar 5 (partial): recoveries registry exists; S2 wiring absent.
+- Pillar 5: **BUILT** (2026-07-30) — see "Pillar 5 as built" below.
 - Pillars 1 and 6: BUILT ahead of sign-off. The substrate shape (one JSON
   doc per host under the journal home, breaker-adjacent, storing
   `VerdictAtom` verbatim) and the three SLO fields are USER SIGN-OFF OWED —
@@ -169,6 +169,72 @@ forbids — so the honest fix is either a new opt-in sensor rung (`net-triage
 check that non-uv batches genuinely need for their own reasons. Until then a
 conda-only cluster reads `env: unknown`, which is true.
 
+## Pillar 5 as built: one classifier, two surfaces, three timestamps
+
+The defect was never that the worker log was missing something. It was that the
+log was the ONLY structured place the death existed: `emit_fatal_block` takes no
+`error_code`, and on the `rc != 0` arm the typed exception has already been
+collapsed to an int by `_err_from_hpc` one frame in, so the block terminal
+hardcodes `"error_code": "detached_worker_exit"`. Everything the S2 hardening
+built — `PathCause`, the `mark_transport_flap` identity, the breaker state,
+`dispatch_evidence` — reached the human as prose, or not at all.
+
+**The classifier runs at the point of death.** `ops/recover/terminal_cause.py`
+is called from the exit path in `cli/dispatch.py`, where the exception object
+still exists. Evidence is trusted in a fixed order, STRUCTURE before prose:
+
+1. the typed exception (`error_code` / `category` / `retry_safe`, and the flap
+   IDENTITY — a stamped attribute, never a message match);
+2. the run record's own `dispatch_evidence` (rung 0's class: provable offline,
+   so it outranks anything sensed over a wire that may itself be the break);
+3. the bounded worker-log tail, scanned for the discriminated cause VOCABULARY —
+   not a heuristic: those tokens are emitted verbatim precisely so one word
+   crosses the fire-time gate, the worker log, and triage;
+4. the breaker's durable state file (a file read).
+
+It never dials — the standing "harvest, never probe" rule. A reading that is not
+already available is `None`, and `recovery_kind=None` is an HONEST outcome: no
+guessed remediation, because the 2026-07-30 failure was a confident message
+pointing at the wrong host, not a missing probe.
+
+**Storage** is an append-only journal in the run sidecar tree,
+`<experiment_dir>/.hpc/runs/<run_id>.terminal-causes.jsonl` — its own file, the
+`overnight.jsonl` precedent, so a code-authored failure record never pollutes the
+y/nudge journal the block gate and Stop guard scan.
+
+**Two read surfaces, one record.** `attention-queue` gains the `worker-terminal`
+kind (class `blocked`, fan-out 0) whose `action` IS the registry's composed
+remediation, byte-identical to `hpc-agent recoveries show --kind <kind>`; the
+morning brief gains `class_sections.worker_terminal_failures` (via
+`heal_taxonomy.worker_terminal_sections`, threaded the brief's own `surfaced_at`
+so there are not two disclosure clocks in one brief), and a terminal death now
+earns a brief on its own — gating it on a standing consent would reproduce the
+defect for every attended run. `worker-terminal` stays DISTINCT from
+`dead-worker`: the latter is the liveness scan's finding (a dead pid, no
+terminal — the shape a hard kill leaves when nothing was flushed), the former is
+the worker's own structured disclosure.
+
+**Three timestamps, because two would lie.** `failed_at` (the death),
+`recorded_at` (when the machine wrote the disclosure), `surfaced_at` (when a
+human's read computed the projection). The queue line carries `· disclosed +Nh`
+and the brief carries `latency_seconds` — a duration, never a judgment. A noon
+read of a 3am death says five hours in numbers.
+
+Registry kinds added for the four live classes: `dead_hop_route` (net-triage
+rung 0 + the `ssh -G` config discriminator, and a rank-0 option that is
+deliberately NOT `host-retarget`), `flap_exhausted_staging` (re-fire converges
+because the delta push is content-keyed; the breaker state is the honest wait),
+`canary_reporter_unreachable` (the rc=255 route-class pointer that decides which
+side of the wire to look at), `zombie_submitting_record` (documents the rung-0
+auto-heal, and carries the residual menu for the UNKNOWN evidence case a pre-fix
+record leaves).
+
+The `[fatal]` block STAYS. Logs remain the forensic tier — the traceback, the
+child stderr, the heartbeat trail — and the attention item POINTS at the log
+rather than replacing it. What changed is that nothing a human needs in order to
+DECIDE lives only in there
+(`tests/ops/recover/test_terminal_cause.py::test_item_carries_everything_the_log_does`).
+
 ## Pillar 6 as built: the three fields
 
 - `y_to_array_accepted_seconds` — LAST-ATTEMPT scoped (the last
@@ -235,3 +301,54 @@ them: a total elapsed time can never acquire the `+` delta marker.
   Regen: `net_triage.output.json` re-emitted in-branch (the `ReadinessAtom`
   sensor enum grew the four kinds) — one file, `build_schemas.py --write`, no
   deferred debt.
+- 2026-07-30 (pillar 5): built. Two decisions worth recording because the
+  obvious alternative was taken and rejected. (a) The terminal-cause record does
+  NOT ride the overnight consumption ledger, even though that ledger already
+  computes `failed_at` vs `surfaced_at`: a worker death is fallout, not a
+  consented auto-advance, and folding it into `consumed` would misreport what
+  the standing consent spent. It rides `class_sections` instead. (b) No wire
+  model changed, so this unit carries **no regen debt**: the new evidence rides
+  the existing free-form `AttentionItemModel.evidence` dict, and
+  `AttentionItemModel.kind`'s description was left alone — it has been a
+  non-exhaustive sample since the eleven kinds that landed after it, and making
+  it exhaustive now would create a description that every future kind must
+  re-bake. Two residues: the non-zero-`SystemExit` arm still records no BLOCK
+  terminal (pre-existing, and the block layer's contract, not the disclosure
+  layer's — the cause record now fires there regardless); and a HARD kill that
+  flushes nothing still has no exit path to run, so it surfaces as `dead-worker`
+  (the liveness scan) with no discriminated cause. Minting a cause record from
+  the scan was rejected here: `doctor` is a `query` primitive with
+  `side_effects=[]` and the attention collectors are source-scanned for write
+  calls, so the mint would have to land on a mutating verb (`wait-detached` is
+  the natural seat) — deliberately left for that unit rather than smuggled into
+  a read path.
+- 2026-07-30 (pillar 5, adversarial review): one BLOCKING defect and five
+  findings fixed. **The blocker: `worker-terminal` items never cleared.** The
+  journal is append-only and the collector projected one item per record, so a
+  run that died three times and then succeeded rendered three standing BLOCKED
+  items forever — the attention queue's own "an item persists until the human
+  clears its SUBJECT" rule, broken by the kind that most needed to obey it. The
+  fix gives the item a clearable subject identity (`(run_id, block)`, latest
+  record only) plus a resolution predicate over substrate the other kinds already
+  read (`ANOMALY_STATUSES`/`TERMINAL_STATUSES` and the block-terminal store);
+  both legs fail SAFE (unreadable → the item stands, because wrongly hiding a
+  failure is the defect and a stale item is the cheaper error). Ten mutations
+  against those predicates die. **The other material finding:** the
+  staging-exhaustion arm was DEAD CODE with a false provenance claim — its three
+  markers appear nowhere in the tree, and its docstring asserted the
+  shared-vocabulary rationale that the `PathCause` arms legitimately have but a
+  composed-message match does not. It now matches what `_stage_exhausted_error`
+  actually writes, is pinned by a test that reads that composer's source, and
+  carries a negative test so a later loosening is caught; the docstring separates
+  the two provenances instead of borrowing the stronger one. The
+  `flap_exhausted_staging` summary was likewise staging-specific while its own
+  battery demonstrated a probe-raised flap — it now leads with the stamped
+  identity. Remaining fixes: `[fatal]`-still-written assertions on all three exit
+  arms; the "carries everything the log does" test now DERIVES its fact set from
+  `emit_fatal_block`'s real output, so a new emitter fact fails it;
+  `record_latency_seconds` documented as structurally 0.0 until the scanner-side
+  mint exists; `:` added to the path guard (a Windows drive-relative `run_id`
+  escapes with no separator at all); and when the zombie class wins precedence
+  over a dead hop, the composed message now LEADS with the route fact, so that
+  menu's `/submit-hpc` option is not read as "resubmit through the hop that just
+  killed the worker".
