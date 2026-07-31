@@ -928,7 +928,7 @@
     "output_schema": "doctor.output.json",
     "python": "hpc_agent.ops.recover.doctor.doctor",
     "side_effects": [],
-    "summary": "Driver watchdog (dead-man's switch). Scan live runs for a missed driver-tick deadline and surface each as a DRAFTED recovery proposal plus the evidence. Read-only, no SSH, no scheduler. It NEVER restarts or re-arms anything — detection is its whole job; safe recovery is guaranteed by tick idempotency. Run it out-of-session from an OS scheduler (Task Scheduler / cron).",
+    "summary": "Driver watchdog (dead-man's switch). Scan live runs for a missed driver-tick deadline and surface each as a DRAFTED recovery proposal plus the evidence. Read-only and no SSH; it never MUTATES a scheduler, and its marker-gated stale-watchdog sweep only QUERIES one (skipped entirely when no watchdog is installed on this machine). It NEVER restarts or re-arms anything — detection is its whole job; safe recovery is guaranteed by tick idempotency. Run it out-of-session from an OS scheduler (Task Scheduler / cron).",
     "verb": "query"
   },
   {

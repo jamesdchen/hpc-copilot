@@ -12,8 +12,17 @@ This is the deterministic verb an OS-scheduled task (Task Scheduler / cron) runs
 out-of-session; the watch-the-watcher recursion bottoms out at the OS scheduler.
 
 Pure local filesystem read — the per-run journal records under
-``~/.claude/hpc/<repo>/``. No SSH, no scheduler. The only subprocess is the
-version-skew check's bounded (2 s timeout, fail-open) local ``git rev-parse``.
+``~/.claude/hpc/<repo>/``. No SSH, and no scheduler MUTATION ever. Exactly two
+bounded local subprocesses can run, both fail-open:
+
+* the version-skew check's ``git rev-parse`` (2 s timeout);
+* the stale-watchdog sweep's ``schtasks /Query`` / ``crontab -l``
+  (:data:`hpc_agent.infra.local_scheduler.SCHTASKS_TIMEOUT_SEC`, 40 s — sized
+  above the ~25 s cold cost of Task Scheduler's first call). This one is
+  **marker-gated**: it is skipped entirely unless a journal namespace on this
+  machine carries a watchdog install marker, so a machine that never ran
+  ``doctor-install`` pays zero subprocess for it. It is a QUERY — the sweep
+  reports stale tasks with a removal command and never removes one itself.
 """
 
 from __future__ import annotations
@@ -561,6 +570,38 @@ def _consent_forward_hook_probe(now: str) -> list[AlertRecord]:
     ]
 
 
+def _stale_watchdog_probe(now: str) -> list[AlertRecord]:
+    """Is any LOCAL watchdog still ticking for work that is over (local, no SSH)?
+
+    The lifecycle counterpart of ``doctor-install``: that verb schedules an
+    out-of-session ``hpc-agent doctor`` tick per experiment dir, and until the
+    2026-07-30 fix nothing ever removed one. Three
+    ``hpc-agent-doctor-<repo_hash>`` Scheduled Tasks were found firing every 15
+    minutes — each opening a console window in the operator's session — for DAYS
+    after every run they were installed for had finished. Removal is now wired at
+    the terminal, but a task installed by an older build (or one whose journal
+    namespace was deleted out from under it) has no terminal left to fire on:
+    only a sweep can find those, and this is that sweep.
+
+    Two staleness signatures, both derived from local state by
+    :func:`hpc_agent.infra.local_scheduler.scan_stale_watchdogs`: the durable
+    ``doctor.spec.json`` the tick reads is missing, or the namespace holds run
+    records with none of them live. Each alert names the task, why it reads
+    stale, and the exact removal command.
+
+    Like the jsonschema and consent-hook probes it rides the ``alerts`` list and
+    does NOT flip ``needs_attention`` — a stale watchdog is wasted ticks and
+    operator noise, not a stalled driver. Fail-open: any error yields no alert.
+    """
+    try:
+        from hpc_agent.ops.recover.doctor_install import stale_watchdog_alert_messages
+
+        messages = stale_watchdog_alert_messages()
+    except Exception:  # noqa: BLE001 — a probe must never break the watchdog scan
+        return []
+    return [AlertRecord(ts=now, message=m) for m in messages]
+
+
 def _transport_drift_routing(now: str) -> list[AlertRecord]:
     """Route live transport-env drift to its heal class (detection + routing ONLY).
 
@@ -605,10 +646,12 @@ def _transport_drift_routing(now: str) -> list[AlertRecord]:
         help=(
             "Driver watchdog (dead-man's switch). Scan live runs for a missed "
             "driver-tick deadline and surface each as a DRAFTED recovery proposal "
-            "plus the evidence. Read-only, no SSH, no scheduler. It NEVER restarts "
-            "or re-arms anything — detection is its whole job; safe recovery is "
-            "guaranteed by tick idempotency. Run it out-of-session from an OS "
-            "scheduler (Task Scheduler / cron)."
+            "plus the evidence. Read-only and no SSH; it never MUTATES a "
+            "scheduler, and its marker-gated stale-watchdog sweep only QUERIES "
+            "one (skipped entirely when no watchdog is installed on this "
+            "machine). It NEVER restarts or re-arms anything — detection is its "
+            "whole job; safe recovery is guaranteed by tick idempotency. Run it "
+            "out-of-session from an OS scheduler (Task Scheduler / cron)."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
@@ -648,6 +691,16 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     build sha differs from the HEAD of the hpc-agent *source repo* that
     *experiment_dir* belongs to (stale install — reinstall). Fail-open: no
     git, no embedded sha, or not that repo → the field is simply null.
+
+    SUBPROCESS BUDGET (the scan is otherwise a pure local filesystem read): two
+    bounded, fail-open local commands, never SSH and never a scheduler mutation
+    — ``git rev-parse`` for the skew check (2 s), and the stale-watchdog sweep's
+    ``schtasks /Query`` / ``crontab -l`` (40 s, sized above Task Scheduler's
+    ~25 s cold first call). The sweep is MARKER-GATED: unless some journal
+    namespace on this machine carries a watchdog install marker it is skipped
+    without spawning anything, so the common case costs nothing. It only
+    QUERIES — stale tasks are reported on ``alerts`` with a composed removal
+    command the human runs.
 
     Raises :class:`errors.SpecInvalid` if *spec.now* is a non-ISO-8601 string.
     """
@@ -812,11 +865,24 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # hooks; rides `alerts` without flipping needs_attention.
     hook_drift_alerts = _consent_forward_hook_probe(now)
 
+    # Stale LOCAL watchdogs (2026-07-30 live incident): an OS-scheduled tick
+    # whose target run/experiment is terminal — or whose durable spec is gone —
+    # keeps firing forever. Local, read-only, fail-open; rides `alerts` with the
+    # composed removal command, without flipping needs_attention.
+    stale_watchdog_alerts = _stale_watchdog_probe(now)
+
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the
     # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
     # not log lines), while the dead workers get their own attention part.
-    alerts = log_alerts + dead_worker_alerts + heal_alerts + jsonschema_alerts + hook_drift_alerts
+    alerts = (
+        log_alerts
+        + dead_worker_alerts
+        + heal_alerts
+        + jsonschema_alerts
+        + hook_drift_alerts
+        + stale_watchdog_alerts
+    )
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,
