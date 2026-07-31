@@ -424,6 +424,285 @@ def test_stream_failure_is_disclosed_and_the_run_still_settles(
 
 
 # ---------------------------------------------------------------------------
+# every terminal path must carry the disclosure
+# ---------------------------------------------------------------------------
+
+
+def test_timeout_envelope_carries_the_disclosure(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drive the REAL loop to budget exhaustion and read the envelope.
+
+    The TIMEOUT return is the one the human meets at "keep watching or stop?" —
+    the exact moment the pulled-count decides the answer — and it was the one
+    construction site of six that omitted the block, so the relay arm rendered
+    nothing. A test that hand-feeds a brief to ``render_relay`` cannot catch
+    that: only driving ``monitor_flow`` itself to the budget can.
+    """
+    _seed_record(experiment)
+    _harvest_recorder(monkeypatch)
+    _stub_census(monkeypatch, _present(30), _present(40), _present(50))
+    _stream_pull_recorder(monkeypatch, files=3)
+
+    # A budget small enough that the loop times out while tasks are still
+    # pending — the genuine in-flight timeout, not a completed run.
+    result = monitor_flow(
+        experiment,
+        spec=_spec(wall_clock_budget_seconds=5),
+        _sleep=lambda s: None,
+        _now=_moving_clock(),
+    )
+
+    assert result.lifecycle_state == LifecycleState.TIMEOUT
+    assert result.incremental_harvest is not None, (
+        "the TIMEOUT envelope must carry the pull-lag block — this is the "
+        "return the 'keep watching or stop?' brief is built from"
+    )
+    assert result.incremental_harvest["enabled"] is True
+    assert result.incremental_harvest["pulls"] >= 1
+    assert result.to_envelope_data()["incremental_harvest"] == result.incremental_harvest
+
+
+def test_the_timeout_brief_renders_the_lag_end_to_end(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the blocking fixture: the disclosure the real loop
+    produced, fed to the real renderer, actually reaches the human's line."""
+    from hpc_agent.ops.relay_render import render_relay
+
+    _seed_record(experiment)
+    _harvest_recorder(monkeypatch)
+    _stub_census(monkeypatch, _present(30), _present(40), _present(50))
+
+    def _fake(**_kw: Any) -> Any:
+        mirror = af_module.per_task_results_mirror(experiment, _RUN_ID)
+        for i in range(7):
+            d = mirror / f"task_{i}"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "metrics.json").write_text("{}", encoding="utf-8")
+        return af_module._PullOutcome(returncode=0, stderr="", files_pulled=7, bytes_pulled=700)
+
+    monkeypatch.setattr(af_module, "_pull", _fake)
+
+    result = monitor_flow(
+        experiment,
+        spec=_spec(wall_clock_budget_seconds=5),
+        _sleep=lambda s: None,
+        _now=_moving_clock(),
+    )
+
+    assert result.lifecycle_state == LifecycleState.TIMEOUT
+    line = render_relay(
+        "s3",
+        "watching_timeout",
+        {
+            "cluster": "hoffman2",
+            "main_run_id": _RUN_ID,
+            "incremental_harvest": result.incremental_harvest,
+        },
+    )
+    assert "7 pulled locally" in line
+    assert "keep watching or stop?" in line
+
+
+def test_every_result_construction_discloses_the_stream(
+    journal_home: Path, experiment: Path
+) -> None:
+    """SOURCE CENSUS — the class, not just the one site that was missing it.
+
+    ``incremental_harvest`` defaults to ``None``, so a construction site that
+    forgets it fails SILENTLY: the envelope validates, the relay arm just
+    renders nothing. Six sites exist today and one of them shipped without the
+    field. Rather than trust the next one to remember, assert that every
+    ``MonitorFlowResult(...)`` built inside the loop passes it.
+    """
+    import ast
+    import inspect
+
+    source = inspect.getsource(monitor_flow_module)
+    tree = ast.parse(source)
+    sites = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "MonitorFlowResult"
+    ]
+    assert len(sites) >= 6, "expected the loop's terminal returns; did the shape change?"
+    missing = [
+        node.lineno
+        for node in sites
+        if "incremental_harvest" not in {kw.arg for kw in node.keywords if kw.arg}
+    ]
+    assert not missing, (
+        f"MonitorFlowResult built without incremental_harvest at line(s) {missing} — "
+        "a terminal path that silently drops the pull-lag disclosure"
+    )
+
+
+# ---------------------------------------------------------------------------
+# bytes, never verdicts
+# ---------------------------------------------------------------------------
+
+
+def test_the_stream_path_settles_nothing_and_reduces_nothing(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MECHANIZED bytes-never-verdicts.
+
+    The whole safety claim of this unit is that it moves bytes and touches no
+    verdict: partial-set aggregation stays gated exactly where it was
+    (decide-partial-handling / aggregate-run's terminal-or-explicitly-partial
+    invariant). That claim was PROSE — a ``mark_terminal`` inserted into the
+    stream success path passed the entire suite. Spy on the verdict-writing and
+    reducing seams and assert the stream never reaches them.
+    """
+    from hpc_agent.execution.mapreduce.reduce import metrics as metrics_module
+    from hpc_agent.state.journal import load_run
+
+    _seed_record(experiment)
+    record = load_run(experiment, _RUN_ID)
+
+    forbidden: list[str] = []
+    # Spy on BOTH bindings of the verdict writer — the stream helper lives in
+    # monitor_flow, the pull it drives lives in aggregate_flow, and a mutation
+    # could be inserted in either. Scoping the spies to a DIRECT call of the
+    # stream helper (rather than a whole monitor_flow run) is what makes them
+    # sharp: the loop's own legitimate mark_terminal at the terminal branch
+    # would otherwise mask a mutation planted in the stream path.
+    for module in (monitor_flow_module, af_module):
+        monkeypatch.setattr(
+            module, "mark_terminal", lambda *a, **k: forbidden.append("mark_terminal")
+        )
+    monkeypatch.setattr(
+        metrics_module, "reduce_metrics", lambda *a, **k: forbidden.append("reduce_metrics")
+    )
+    monkeypatch.setattr(
+        metrics_module, "reduce_partials", lambda *a, **k: forbidden.append("reduce_partials")
+    )
+    monkeypatch.setattr(
+        af_module, "reduce_metrics", lambda *a, **k: forbidden.append("reduce_metrics")
+    )
+    monkeypatch.setattr(
+        af_module, "reduce_partials", lambda *a, **k: forbidden.append("reduce_partials")
+    )
+    monkeypatch.setattr(
+        af_module,
+        "_pull",
+        lambda **_kw: af_module._PullOutcome(
+            returncode=0, stderr="", files_pulled=4, bytes_pulled=400
+        ),
+    )
+
+    state = monitor_flow_module._LoopState(stream_enabled=True)
+    state.last_summary = {"complete": 60}
+    action = monitor_flow_module._stream_finished_results(
+        experiment, _RUN_ID, record=record, state=state, now_mono=1000.0
+    )
+
+    assert action is not None and action["kind"] == "incremental_harvest", (
+        "the stream must actually have run, or this guard proves nothing"
+    )
+    assert forbidden == [], (
+        f"the incremental harvest reached a verdict/reduce seam: {forbidden} — "
+        "this unit moves BYTES; it must never settle a run or compute an aggregate"
+    )
+
+
+def test_the_stream_module_imports_no_reducer_or_journal_writer() -> None:
+    """Import census on the policy module: the gate decides WHEN to move bytes
+    and must not acquire the vocabulary to decide anything else."""
+    import ast
+    import inspect
+
+    from hpc_agent.ops.monitor import stream_harvest
+
+    tree = ast.parse(inspect.getsource(stream_harvest))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+        elif isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+
+    banned = {"reduce", "aggregate", "journal", "decision", "combine"}
+    offenders = [m for m in imported if any(b in m for b in banned)]
+    assert not offenders, (
+        f"stream_harvest imports {offenders} — the streaming GATE must hold no "
+        "reduce/aggregate/journal vocabulary; it decides only when to pull"
+    )
+
+
+# ---------------------------------------------------------------------------
+# loop-start seeding + the first-attempt sentinel
+# ---------------------------------------------------------------------------
+
+
+def test_a_rearmed_watch_reports_the_mirror_it_inherited(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A watch that re-arms over a warm mirror must report what is genuinely
+    readable, not a fictitious zero.
+
+    The trainwreck's watch died and was re-driven nine times; a disclosure that
+    reset to 0 on every re-arm would have told the human nothing had come home
+    when in fact plenty had. Seeded at loop start from disk, zero SSH.
+    """
+    _seed_record(experiment)
+    _harvest_recorder(monkeypatch)
+    _stub_census(monkeypatch, _present(100))
+
+    mirror = af_module.per_task_results_mirror(experiment, _RUN_ID)
+    for i in range(12):
+        d = mirror / f"task_{i}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "metrics.json").write_text("{}", encoding="utf-8")
+
+    # A stream that pulls NOTHING new (steady state): the reported count must
+    # still be the inherited 12, which can only come from the loop-start seed.
+    monkeypatch.setattr(
+        af_module,
+        "prefetch_per_task_results",
+        lambda *a, **k: None,  # disabled underneath -> no pull, no count refresh
+    )
+
+    result = monitor_flow(experiment, spec=_spec(), _sleep=lambda s: None, _now=_moving_clock())
+
+    assert result.incremental_harvest is not None
+    assert result.incremental_harvest["tasks_mirrored"] == 12, (
+        "a re-armed watch must inherit the mirror count from disk; reporting 0 "
+        "would understate what the human can already read"
+    )
+
+
+def test_the_first_stream_is_not_held_for_a_spacing_floor(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LOOP-level pin of the never-streamed sentinel.
+
+    A fresh watch has no "seconds since last stream" — it has an unbounded
+    backlog age. With a spacing floor LONGER than the whole watch, the first
+    batch must still go home immediately: a floor exists to space REPEATS, and
+    holding the first bytes for one is the very latency this unit removes.
+    """
+    monkeypatch.setenv(sh.INCREMENTAL_HARVEST_FLOOR_ENV, "100000")
+    monkeypatch.setenv(sh.INCREMENTAL_HARVEST_INTERVAL_ENV, "100000")
+    _seed_record(experiment)
+    _harvest_recorder(monkeypatch)
+    _stub_census(monkeypatch, _present(30), _present(100))
+    pulls = _stream_pull_recorder(monkeypatch)
+
+    result = monitor_flow(experiment, spec=_spec(), _sleep=lambda s: None, _now=_moving_clock())
+
+    assert len(pulls) == 1, (
+        "the FIRST backlog must stream despite a floor longer than the watch; "
+        "subsequent ones are correctly spaced out by it"
+    )
+    assert result.incremental_harvest is not None
+    assert result.incremental_harvest["pulls"] == 1
+
+
+# ---------------------------------------------------------------------------
 # opt-outs
 # ---------------------------------------------------------------------------
 

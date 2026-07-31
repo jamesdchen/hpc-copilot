@@ -100,12 +100,18 @@ def _line(
 
 
 def _stream_phrase(brief: dict[str, Any]) -> str:
-    """The U4 pull-lag clause for an S3 line, or ``""`` when there is none.
+    """The U4 pull-lag clause for a watch line, or ``""`` when there is none.
 
     ``, 1741 pulled locally`` — how much of the finished work the watch already
     streamed home, rendered right where the human is deciding whether to keep
     waiting. Empty (byte-identical output) when the run streamed nothing:
     disabled, opted out, a pure-API backend, or a brief predating the field.
+
+    ONE definition, both watching surfaces: submit-s3's ``watching_*`` stages
+    and status-watch's ``watch_*`` stages. status-watch is the one that spans
+    the trainwreck's hours (the detached long-poll, and s3's own timeout
+    successor), so a phrase that lived only on the s3 line would be missing from
+    exactly the surface the human sits in front of.
 
     A PAUSED stream says so. The whole point of this clause is that a stalled
     byte mover must not read as a merely-behind one — that silence is what
@@ -426,13 +432,18 @@ def _render_watch(stage: str, brief: dict[str, Any]) -> str:
         )
     summary = brief.get("summary")
     counts = _counts_phrase(summary if isinstance(summary, dict) else {})
+    # U4 pull-lag — the SAME composer the submit relay uses (one definition), so
+    # the two surfaces can never disagree about how much came home.
+    stream = _stream_phrase(brief)
     if stage == "watch_terminal":
         tail = f": {counts}" if counts else ""
-        return f"{prefix} complete{tail} — harvest guaranteed; hand off to harvest."
+        return f"{prefix} complete{tail}{stream} — harvest guaranteed; hand off to harvest."
     if stage == "watch_timeout":
-        return f"{prefix} monitor budget hit; cluster jobs may run on — keep watching or stop?"
+        return (
+            f"{prefix} monitor budget hit{stream}; cluster jobs may run on — keep watching or stop?"
+        )
     if stage == "watch_anomaly":
         lifecycle = brief.get("lifecycle_state") or "anomaly"
         esc = brief.get("escalation_reason") or "no escalation reason"
-        return f"{prefix} {lifecycle} ({esc}) — review the evidence brief."
+        return f"{prefix} {lifecycle} ({esc}){stream} — review the evidence brief."
     return ""

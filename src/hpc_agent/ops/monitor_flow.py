@@ -1829,6 +1829,7 @@ def monitor_flow(
                     ticks=state.ticks,
                     elapsed_seconds=elapsed,
                     escalation_reason=None,
+                    incremental_harvest=stream_disclosure(state),
                 )
 
             # Still in flight; update adaptive backoff and record the tick.
