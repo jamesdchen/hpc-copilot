@@ -146,6 +146,23 @@ VERDICT: dict[str, str] = {
     "corrupt": "unknown",
 }
 
+#: The ``age_seconds`` each state must print at its read instant — the mandate's
+#: OWN number, asserted on every surface rather than inferred from the presence
+#: of a suffix. ``None`` where there is no dateable atom (no ledger at all, or a
+#: file we could not read): honest, never a zero that reads as "just checked".
+EXPECTED_AGE: dict[str, int | None] = {
+    "ready": 30,
+    "degraded": 10,
+    "stale": int(_STALE_HORIZON + 60),
+    "unknown": None,
+    "corrupt": None,
+}
+
+#: Tolerance for the ONE surface with no injectable clock
+#: (``suggest-prelude-action``): its digest dates against the real wall clock, so
+#: the age is the seeded one plus however long the call took.
+_WALL_CLOCK_SLACK_SEC = 30
+
 
 def seed(state: str, *, read_at: datetime = T0) -> None:
     """Put HOST's ledger into *state* as seen from *read_at*.
@@ -368,6 +385,16 @@ class TestSuggestPreludeAction:
         assert row.line.endswith(f"({CONSULT_NOTE})")
         # Not ready ⇒ the line NAMES what is wrong; ready ⇒ nothing to name.
         assert (row.note is None) is (row.verdict == "ready")
+        # RENDERED WITH AGE — the mandate's own number, not just a suffix. This
+        # surface has no injectable clock, so the age is the seeded one plus the
+        # call's own duration; ``None`` stays exactly ``None``.
+        expected = EXPECTED_AGE[state]
+        if expected is None:
+            assert row.age_seconds is None
+            assert "age unknown" in row.line
+        else:
+            assert row.age_seconds is not None
+            assert expected <= row.age_seconds <= expected + _WALL_CLOCK_SLACK_SEC
 
     def test_a_non_cluster_rung_carries_no_readiness_line(self, exp: Path) -> None:
         """A line beside a rung that cannot use it is noise, and a usually-noisy
@@ -398,6 +425,31 @@ class TestSuggestPreludeAction:
         assert result.readiness == []
         assert any("ghostbox" in d and "clusters.yaml" in d for d in result.disclosures)
 
+    def test_a_broken_readiness_read_never_fails_the_suggestion(
+        self, exp: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard is REAL, not decorative: an advisory line must never be the
+        thing that breaks the verb a human runs to learn what to do next.
+
+        Injected at the seam the surface actually calls (``digests_for``, imported
+        inside the guarded block), so narrowing the ``except Exception`` to any
+        specific class fails this test.
+        """
+        import hpc_agent.ops.readiness_digest as digest_mod
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise RuntimeError("ledger exploded")
+
+        monkeypatch.setattr(digest_mod, "digests_for", _boom)
+        seed("ready", read_at=utcnow())
+        _settle_prelude(exp)
+        result = suggest_prelude_action(exp)
+        # The suggestion still lands, whole — and says why the line is missing.
+        assert result.action == "submit-s1"
+        assert result.rung == 9
+        assert result.readiness == []
+        assert any("readiness ledger unavailable" in d for d in result.disclosures)
+
     def test_readiness_never_changes_the_rung(self, exp: Path) -> None:
         """The ladder is total; a degraded cluster must not make it weather-dependent."""
         _settle_prelude(exp)
@@ -427,6 +479,10 @@ class TestStatusSnapshot:
         assert rows[0]["cluster"] == CLUSTER
         assert rows[0]["verdict"] == VERDICT[state]
         assert rows[0]["line"].endswith(f"({CONSULT_NOTE})")
+        # RENDERED WITH AGE — exact here, because ``now`` is injected.
+        assert rows[0]["age_seconds"] == EXPECTED_AGE[state]
+        if EXPECTED_AGE[state] is None:
+            assert "age unknown" in rows[0]["line"]
 
     def test_no_involved_cluster_omits_the_keys_entirely(self, exp: Path) -> None:
         """Additive: a fleet with no runs is byte-unchanged."""
@@ -485,6 +541,33 @@ class TestStatusSnapshot:
         assert "readiness" not in result.brief
         assert result.brief["running_where"][0]["run_id"] == "run-a"
 
+    def test_a_broken_scorecard_read_never_blanks_the_digest(
+        self, exp: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The SLO section's guard is REAL too: the morning read is what a human
+        opens when something already went wrong, and a scorecard is the least
+        load-bearing thing on it — it must fail out of the way.
+
+        Injected at ``slo_for_run``, the reducer the section imports inside its
+        guarded block, so narrowing the ``except Exception`` fails this test.
+        """
+        import hpc_agent.state.s2_slo as slo_mod
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise RuntimeError("reducer exploded")
+
+        monkeypatch.setattr(slo_mod, "slo_for_run", _boom)
+        seed("ready")
+        _mk_run(exp, "run-done", status="complete")
+        _greenlight(exp, "run-done")
+        result = status_snapshot(
+            exp, spec=StatusSnapshotSpec(run_id="run-done", now_iso=_iso(T0), mark_seen=False)
+        )
+        assert "slo" not in result.brief
+        # …and every other paragraph is untouched, readiness included.
+        assert result.brief["running_where"][0]["run_id"] == "run-done"
+        assert result.brief["readiness"][0]["verdict"] == "ready"
+
 
 # ── surface 2b: the overnight morning brief ──────────────────────────────────
 
@@ -500,6 +583,12 @@ class TestMorningBrief:
         assert row["cluster"] == CLUSTER
         assert row["verdict"] == VERDICT[state]
         assert row["line"].endswith(f"({CONSULT_NOTE})")
+        # RENDERED WITH AGE — exact here, because ``now_iso`` is injected. The
+        # half-asleep read is precisely where "ready" without "how long ago"
+        # would be believed.
+        assert row["age_seconds"] == EXPECTED_AGE[state]
+        if EXPECTED_AGE[state] is None:
+            assert "age unknown" in row["line"]
 
     def test_absent_ledger_renders_honestly(self, exp: Path) -> None:
         _mk_run(exp, "run-a")
@@ -539,6 +628,36 @@ class TestMorningBrief:
         assert brief["readiness"] is None
         assert brief["slo"] is None
 
+    def test_a_broken_readiness_read_never_wedges_the_morning_read(
+        self, exp: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard is REAL: the overnight disclosure — what was consumed, what
+        died, the re-grant offer — is the whole point of this brief, and an
+        advisory readiness line must never take it down with it.
+
+        Injected at ``digest_for_host``, imported inside the guarded block, so
+        narrowing the ``except Exception`` fails this test.
+        """
+        import hpc_agent.ops.readiness_digest as digest_mod
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise RuntimeError("ledger exploded")
+
+        monkeypatch.setattr(digest_mod, "digest_for_host", _boom)
+        seed("ready")
+        _mk_run(exp, "run-done", status="complete")
+        _greenlight(exp, "run-done")
+        brief = overnight_morning_brief(
+            exp, scope_kind="run", scope_id="run-done", now_iso=_iso(T0)
+        )
+        # Both s2-readiness fields fall out together (one guard covers the pair),
+        # and every field the brief exists FOR is still there.
+        assert brief["readiness"] is None
+        assert brief["slo"] is None
+        assert brief["scope_id"] == "run-done"
+        assert brief["surfaced_at"] == _iso(T0)
+        assert brief["consumed"] == []
+
 
 # ── surface 3: doctor ────────────────────────────────────────────────────────
 
@@ -552,14 +671,15 @@ class TestDoctor:
         rows = result["readiness"]
         assert [r["host"] for r in rows] == [HOST]
         assert rows[0]["verdict"] == VERDICT[state]
+        # A watchdog line is the one most likely to be read as a live check —
+        # doctor is where an operator looks when something is already wrong.
+        assert rows[0]["line"].endswith(f"({CONSULT_NOTE})")
         # AGE is the whole point: a verdict without one is the failure mode the
         # ledger exists to remove. (A corrupt ledger has no atom to date — and
         # says so rather than printing a zero.)
+        assert rows[0]["age_seconds"] == EXPECTED_AGE[state]
         if state == "corrupt":
-            assert rows[0]["age_seconds"] is None
             assert "ledger file could not be read" in rows[0]["line"]
-        else:
-            assert rows[0]["age_seconds"] == int(AGE_AT_READ[state])
 
     def test_a_host_with_no_ledger_is_not_invented(self, exp: Path) -> None:
         """doctor reports what the machine KNOWS — a line here means something
@@ -582,16 +702,25 @@ class TestDoctor:
         assert row["last_corruption"]["reason"]
         assert row["verdict"] == "ready"
 
-    @pytest.mark.parametrize("state", ["degraded", "stale", "corrupt"])
+    @pytest.mark.parametrize("state", STATES)
     def test_readiness_never_flips_needs_attention(self, exp: Path, state: str) -> None:
         """A stale ledger means nothing has looked lately — not a driver that
         died. Folding it in would make the watchdog's one load-bearing bit fire
-        on weather."""
+        on weather.
+
+        Parametrized over ALL FIVE states, including the two that could not
+        plausibly flip the bit (``ready`` is green; ``unknown`` produces no row
+        at all, since doctor's scope is hosts that HAVE a ledger). Vacuous cases
+        cost one run each and they pin the shape: if a later edit ever made an
+        empty or green readiness section fire ``needs_attention``, the vacuous
+        rows are the ones that would catch it.
+        """
         seed(state)
         result = doctor(experiment_dir=exp, spec=DoctorSpec(now=_iso(T0)))
         assert result["needs_attention"] is False
         assert result["attention_summary"].startswith("all clear")
-        assert result["readiness"]
+        # ``unknown`` = no ledger file ⇒ nothing observed ⇒ no row to render.
+        assert (result["readiness"] == []) is (state == "unknown")
 
     def test_a_broken_ledger_read_never_breaks_detection(
         self, exp: Path, monkeypatch: pytest.MonkeyPatch

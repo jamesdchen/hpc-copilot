@@ -441,12 +441,17 @@ def _readiness_section(now: str) -> list[ReadinessDigest]:
       actually observed. ``cluster-readiness`` is the verb that unions in
       configured-but-never-contacted clusters for a human who asked.
 
-    Fail-open: any trouble yields ``[]`` — a readiness read must never be the
-    thing that breaks the watchdog scan.
+    Fail-open: **any** trouble yields ``[]`` — a readiness read must never be
+    the thing that breaks the watchdog scan. The import sits INSIDE the guard
+    for that reason: an import-time failure in the digest module (a partial
+    install, a circular reach introduced later) is exactly the "any trouble"
+    the docstring promises to absorb, and leaving it outside would make this
+    one line the only unguarded statement in a function whose whole contract is
+    that it cannot fail. Matches the other three surfaces' shape.
     """
-    from hpc_agent.ops.readiness_digest import known_host_digests
-
     try:
+        from hpc_agent.ops.readiness_digest import known_host_digests
+
         stamp = parse_iso_utc_or_none(now)
         return [ReadinessDigest.model_validate(row) for row in known_host_digests(now=stamp)]
     except Exception:  # noqa: BLE001 — disclosure must never break detection
