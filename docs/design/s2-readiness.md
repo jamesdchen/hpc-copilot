@@ -55,7 +55,11 @@ the journaled y.
 
 - Pillar 2: P2 kernel unit (canary-at-view) + R5 S2-push wiring (not yet
   built).
-- Pillar 3 (subset): reactive package L1/L2 (in build 2026-07-30).
+- Pillar 3: **BUILT** (2026-07-30) — the four seamed invariants
+  (`auth` / `scratch` / `scheduler` / `env`) became sensors + harvest sites,
+  and the storage-side vocabulary extension collapsed into a plain mirror of
+  `SensorKind` (see "Pillar 3 as built" below). The reactive package's L1/L2
+  discriminated-cause work is the transport invariant's own slice of it.
 - Pillar 4 (subset): reactive package L3 flap-riding retry (in build).
 - Pillar 5 (partial): recoveries registry exists; S2 wiring absent.
 - Pillars 1 and 6: BUILT ahead of sign-off. The substrate shape (one JSON
@@ -90,8 +94,12 @@ plus one additive durable-only `source`, so a stored reading and a live one
 can never disagree about what was seen.
 
 `SensorKind` is EXTENDED, never forked: `hop` / `direct` / `path` / `connect`
-/ `preamble` (the sensor layer's) plus `auth` / `scratch` / `scheduler` /
-`env` (the pillar-3 invariants no sensor covers yet). `SensorVerdict` (`ok` /
+/ `preamble` plus `auth` / `scratch` / `scheduler` / `env`. Those last four
+were a storage-side extension while no sensor covered them; pillar 3 built
+their sensors and they moved UP into `SensorKind`, so
+`state/readiness.SENSOR_KINDS` is now a plain MIRROR rather than an extension —
+one definition, which is what "extended, never forked" was always pointing at.
+`SensorVerdict` (`ok` /
 `down` / `timeout` / `unknown` / `skipped`) and the `route` axis are adopted
 verbatim. Atom identity is `(sensor, route, target)` — a chain has several
 hops, and the same sensor over the effective vs the direct route is the
@@ -106,8 +114,60 @@ to the sensor layer; the ledger only stores what the system already learned.
 Wired today: the ssh circuit breaker's `record_connection_success` /
 `record_connection_failure` emit a `connect`/`effective` atom (and a
 `preamble`/`effective` `timeout` when its own degradation classifier already
-says so). `auth` is a seam BY CONSTRUCTION — that seam's SUCCESS verdict folds
-an auth rejection into "reached the host".
+says so), plus the three submit-flow harvest sites pillar 3 added (below).
+`auth` remains a seam BY CONSTRUCTION for the BREAKER — its SUCCESS verdict
+folds an auth rejection into "reached the host" — which is exactly why the
+sensor layer derives `auth` from the CONNECT SENSOR instead, where a zero exit
+means a command really ran on the far end.
+
+## Pillar 3 as built: four invariants, four owners
+
+| invariant | sensor (probes when invoked) | harvest site (zero network) |
+|---|---|---|
+| `auth` | `auth_atom` — DERIVED from the connect reading's exit/stderr signature; no probe at all | rides every `sense_preamble` rung |
+| `scratch` | `sense_scratch` — `test -d` + `df -P` (a bare `test -d` passes against a hung mount) | the submit flow's staging step: a landed rsync push + `deploy_runtime` is `ok`; a failure is `down` ONLY when its own stderr names a storage cause |
+| `scheduler` | `sense_scheduler` — the family's cheap CLI banner (`squeue --version` / `qstat -help` class), family resolved from `clusters.yaml` | the main array dispatch: job ids returned is `ok`, the typed dispatch failure is `down` |
+| `env` | `sense_env` — `hpc-agent --version` under the cluster activation, the release flow's own command class | the activation-class preflight (`command -v uv` after `module load` / `conda activate`) — **`runtime: uv` batches only today**, see the scope note below |
+
+Two rules hold the shape:
+
+- **A sensor may probe; a feed site may not.** The three probing rungs are
+  OPT-IN on `read_path_readiness` (each is one more connection, and the S2 path
+  gate must not pay for storage to answer a path question). Every feed site
+  passes on a verdict already in hand, pinned by the no-network tripwire.
+- **An invariant atom is never a PATH verdict.** They stay out of `_classify`:
+  a full scratch disk is not a reason to call the path dead, and letting one in
+  would make the S2 gate refuse naming the wrong cause. They degrade the
+  cluster through `overall_verdict` instead, which is where "reachable ≠ usable"
+  belongs.
+
+A feed site that cannot attribute a failure records NOTHING. This is the rule
+that costs the most to hold and matters the most, so it is stated once and
+applied at all three sites:
+
+- **staging** — a failure with no storage marker in its stderr is a transport
+  fact, so no `scratch` atom is written.
+- **dispatch** and **the env preflight** — a failure that
+  `_stage_failure_is_flap` (this module's one transport-class definition, the
+  staging retry's own) calls a flap writes NOTHING either. Both handlers would
+  otherwise file `scheduler: down` / `env: down` for a severed tunnel, and the
+  dispatch handler in particular would then be classifying ONE exception two
+  ways — a flap for the job-id recovery twelve lines below, a scheduler verdict
+  for the ledger.
+
+Recording a guess here sends the next human to the queue system or the conda env
+while the VPN is what is broken: the 2026-07-30 misdiagnosis class, one layer
+down and pointed at a different wrong subsystem.
+
+**Scope note — `env` harvests on `runtime: uv` batches only today.** The
+activation-class preflight is the one place the submit flow runs the cluster's
+own activation and holds the verdict; it is gated on `HPC_RUNTIME=uv`, so a
+conda-runtime batch contributes no `env` atom. Widening it would mean ADDING a
+remote call to a path that does not make one, which the harvest-never-probe rule
+forbids — so the honest fix is either a new opt-in sensor rung (`net-triage
+--probe-invariants` already offers exactly that) or a future activation-class
+check that non-uv batches genuinely need for their own reasons. Until then a
+conda-only cluster reads `env: unknown`, which is true.
 
 ## Pillar 6 as built: the three fields
 
@@ -153,3 +213,25 @@ them: a total elapsed time can never acquire the `+` delta marker.
   `submit/runner.promote_submitting_record` feeding
   `s2_slo.compute_slo(accepted_at=…)`, which today reads `submitted_at` (an
   under-estimate by the dispatch duration on the submit-once path).
+- 2026-07-30 (pillar 3): the four seamed invariants got sensors + harvest
+  sites (table above), and seam (b) above is CLOSED — `RunRecord.accepted_at`
+  is stamped by `promote_submitting_record` in the SAME locked write as
+  `job_ids` (so a crash cannot separate the stamp from the evidence it dates)
+  and read through the one `s2_slo.accept_stamp` definition, which falls back
+  to `submitted_at`. The fallback is EXACT rather than degraded wherever it
+  fires: on the `submit_and_record` path `submitted_at` is itself taken with
+  the ids parsed, so it already means "accepted" — which is why closing this
+  needed no backfill. Seam (a) was already closed by the pillar-1 wave.
+  Two shape decisions worth recording because they were not obvious:
+  * The `scheduler` touch accepts a NON-ZERO exit that printed a banner.
+    `qstat -help` exits non-zero on several Grid Engine builds while printing
+    its usage — the CLI answered, which is the fact the sensor reads, and the
+    strict reading would report a broken scheduler at every such site. The exit
+    code stays disclosed in `detail`; the leniency is scoped to this one class.
+  * `REQUIRED_SENSORS` stayed at `connect` alone. `scratch` / `scheduler` /
+    `env` are fed by the SUBMIT flow, so requiring them for `ready` would pin
+    every configured-but-not-yet-submitted-to cluster at `stale` forever —
+    less truthful, not more.
+  Regen: `net_triage.output.json` re-emitted in-branch (the `ReadinessAtom`
+  sensor enum grew the four kinds) — one file, `build_schemas.py --write`, no
+  deferred debt.

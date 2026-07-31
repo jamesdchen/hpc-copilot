@@ -145,6 +145,11 @@ _UPDATABLE_FIELDS = frozenset(
         # ``stamp_dispatch_actuated`` can flip it through the value-overwriting
         # ``update_run_status`` path in the pre-dispatch window.
         "dispatch_evidence",
+        # The TRUE scheduler-accept instant, stamped by
+        # ``promote_submitting_record`` in the SAME whitelisted write that lands
+        # the job ids — so the stamp and the evidence it dates can never be
+        # separated by a crash (s2-readiness pillar 6).
+        "accepted_at",
     }
 )
 
@@ -410,6 +415,25 @@ class RunRecord:
     # record loads unchanged (``from_dict`` filters to known fields) and reads as
     # "never futilely driven", which is the correct answer for a fresh run.
     drive_attempts: int = 0
+    # ── the TRUE scheduler-accept stamp (s2-readiness pillar 6) ───────────────
+    # When the scheduler ACCEPTED this run's array — i.e. when its job ids were
+    # in hand. Distinct from ``submitted_at``, and that distinction is the whole
+    # point: on the submit-once path the record is MINTED before dispatch, so
+    # ``submitted_at`` is a pre-dispatch instant and any latency measured to it
+    # under-states the real wait by the dispatch duration. ``state/s2_slo.py``'s
+    # ``y_to_array_accepted_seconds`` is an SLO *of* that interval, so measuring
+    # it against the wrong end of the dispatch is measuring the wrong thing.
+    #
+    # Stamped by ``ops.submit.runner.promote_submitting_record`` — the one site
+    # that runs with the parsed job ids in hand — through the whitelisted
+    # ``update_run_status``. ``None`` on every other path (including the
+    # flag-off ``submit_and_record`` path, where ``submitted_at`` IS taken with
+    # the ids already parsed and therefore already means "accepted"), so the
+    # reducer's ``accepted_at or submitted_at`` fallback is exact there rather
+    # than degraded. Harmless None default: a pre-stamp record loads unchanged
+    # (``from_dict`` filters to known fields) and reads through the fallback
+    # exactly as it did before this field existed.
+    accepted_at: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

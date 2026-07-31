@@ -49,6 +49,35 @@ Three mechanisms, one per leg of that chain:
    tunnel returning instant preamble-OK on the direct route proves a TRANSPORT
    fault, not node-local degradation.
 
+The four named invariants (pillar 3)
+------------------------------------
+
+Transport is one of five invariants S2 needs, and the design's pillar 3 gives
+each its own verdict vocabulary and owner. The remaining four live here as
+sensors of the same shape — one bounded command class, one :class:`VerdictAtom`:
+
+* :func:`sense_scratch` — ``test -d`` + ``df -P`` of the cluster's scratch, so a
+  hung mount answers rather than a cached ``stat``.
+* :func:`sense_scheduler` — the backend family's own cheap CLI banner
+  (``squeue --version`` / ``qstat -help`` class), resolved from ``clusters.yaml``
+  via :func:`scheduler_family_for_cluster`. An unknown family is ``skipped``,
+  never a guessed binary.
+* :func:`sense_env` — ``hpc-agent --version`` under the cluster activation: the
+  command class the release flow ALREADY reads on every target env, reused so a
+  sensed fingerprint is comparable to a released one.
+* :func:`auth_atom` — no probe at all. It reads the connect sensor's own
+  exit/stderr signature and separates "the host refused our credentials" from
+  "we never reached the host". This is the discrimination the circuit breaker
+  structurally cannot make (its SUCCESS verdict folds an auth rejection into
+  "reached the host"), which is why ``auth`` was a seam by construction until
+  this leg existed.
+
+The three probing rungs are OPT-IN on :func:`read_path_readiness` — each costs
+one connection, and a gate that only needs the path question answered must not
+pay for storage. Their atoms are evidence for the standing ledger; they never
+enter :func:`_classify`, because a full scratch disk is not a reason to call a
+path dead.
+
 Transport discipline
 --------------------
 
@@ -75,33 +104,47 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
+    "AUTH_REJECTION_MARKERS",
     "DEFAULT_SSH_PORT",
+    "ENV_FINGERPRINT_COMMAND",
+    "NEVER_REACHED_MARKERS",
+    "SCHEDULER_TOUCH_COMMANDS",
     "PathCause",
     "PathReadiness",
     "RouteChain",
     "SensorKind",
     "SensorVerdict",
     "VerdictAtom",
+    "auth_atom",
+    "auth_signature",
     "clear_readiness_ledger",
     "clear_route_cache",
     "consult_readiness",
+    "env_fingerprint_command",
     "fresh_atoms",
     "path_remediation",
     "read_path_readiness",
     "record_readiness",
     "resolve_route",
+    "scheduler_family_for_cluster",
+    "scheduler_touch_command",
+    "scratch_command",
     "sense_command_class",
+    "sense_env",
     "sense_leg",
     "sense_preamble",
     "sense_route_legs",
+    "sense_scheduler",
+    "sense_scratch",
+    "storage_failure_marker",
     "tcp_connect",
 ]
 
@@ -147,10 +190,26 @@ def _bare_host(value: str) -> str:
 
 # ── the verdict atom: the ledger's unit of record ────────────────────────────
 
+# MIRROR: hpc_agent.state.readiness::SENSOR_KINDS_FROM_SENSOR_LAYER pinned-by tests/state/test_readiness.py::test_sensor_vocabulary_is_in_lockstep_with_the_sensor_layer  # noqa: E501
 #: What a sensor probed. ``hop`` / ``direct`` are TCP legs, ``path`` is the
 #: derived end-to-end verdict for the effective chain, ``connect`` / ``preamble``
-#: are command-class readings over a named route.
-SensorKind = Literal["hop", "direct", "path", "connect", "preamble"]
+#: are command-class readings over a named route, and ``auth`` / ``scratch`` /
+#: ``scheduler`` / ``env`` are the four remaining pillar-3 invariants (credentials
+#: accepted, storage reachable, the scheduler answers, the remote wheel is the
+#: expected one). ONE flat vocabulary — the durable storage tier replicates this
+#: exact tuple (it may not import this module, which pulls in subprocess/ssh), so
+#: a new invariant is a new member HERE and never a parallel enum there.
+SensorKind = Literal[
+    "hop",
+    "direct",
+    "path",
+    "connect",
+    "preamble",
+    "auth",
+    "scratch",
+    "scheduler",
+    "env",
+]
 
 #: A sensor's answer. ``unknown`` means the sensor ran but could not settle it;
 #: ``skipped`` means it never ran (and ``detail`` says why). Neither is "fine".
@@ -399,9 +458,12 @@ def sense_command_class(
     ssh_target: str,
     command: str,
     *,
-    kind: Literal["connect", "preamble"],
+    kind: SensorKind,
     direct: bool = False,
     timeout_sec: float = PREAMBLE_TIMEOUT_SEC,
+    target: str | None = None,
+    accept_output: bool = False,
+    detail_from_stdout: bool = False,
 ) -> VerdictAtom:
     """SENSOR: run ONE bounded command class over a named route; one atom back.
 
@@ -410,12 +472,31 @@ def sense_command_class(
     a real leg does; the only addition is ``-o ProxyJump=none`` on the direct
     route — which is precisely what makes the direct reading a discriminator
     rather than a second opinion.
+
+    *target* overrides the atom's SUBJECT (default: *ssh_target*). The scratch
+    sensor's subject is the scratch path and the scheduler sensor's is the backend
+    family — atom identity is ``(sensor, route, target)``, so two scratch readings
+    on different paths must not collapse onto one row.
+
+    *accept_output* widens ``ok`` to "non-zero exit that nonetheless printed
+    something on stdout". It exists for ONE fact class: a scheduler CLI banner.
+    ``qstat -help`` exits non-zero on several Grid Engine builds while printing
+    its usage — the CLI ANSWERED, which is exactly the fact the ``scheduler``
+    sensor reads, and calling that ``down`` would report a broken scheduler on
+    every such site. The exit code is disclosed in ``detail`` either way; nothing
+    is hidden, only classified honestly. Default OFF: for every other class a
+    non-zero exit is a failure.
+
+    *detail_from_stdout* carries the first stdout line into ``detail`` on ``ok``.
+    The ``env`` sensor needs it — the whole point of that reading is the wheel
+    fingerprint STRING, not merely that the command exited 0.
     """
     from hpc_agent.infra.ssh_options import ssh_argv
 
     extra = ["-o", "ProxyJump=none"] if direct else []
     argv = [*ssh_argv("ssh", extra_opts=extra), ssh_target, command]
     route: Literal["effective", "direct"] = "direct" if direct else "effective"
+    subject = target if target is not None else ssh_target
     started = time.perf_counter()
     try:
         cp = _run_probe_ssh(argv, timeout_sec)
@@ -423,7 +504,7 @@ def sense_command_class(
         latency = (time.perf_counter() - started) * 1000.0
         return _atom(
             kind,
-            ssh_target,
+            subject,
             "timeout",
             f"timed out after {timeout_sec:g}s running {command!r}",
             latency_ms=latency,
@@ -432,17 +513,30 @@ def sense_command_class(
     except OSError as exc:
         return _atom(
             kind,
-            ssh_target,
+            subject,
             "unknown",
             f"probe could not run: {exc}"[:200],
             route=route,
         )
     latency = (time.perf_counter() - started) * 1000.0
+    stdout = (cp.stdout or "").strip()
     if cp.returncode == 0:
-        return _atom(kind, ssh_target, "ok", "exit 0", latency_ms=latency, route=route)
+        detail = "exit 0"
+        if detail_from_stdout and stdout:
+            detail = stdout.splitlines()[0].strip()[:200]
+        return _atom(kind, subject, "ok", detail, latency_ms=latency, route=route)
+    if accept_output and stdout:
+        return _atom(
+            kind,
+            subject,
+            "ok",
+            f"exit {cp.returncode} but answered: {stdout.splitlines()[0].strip()[:160]}",
+            latency_ms=latency,
+            route=route,
+        )
     return _atom(
         kind,
-        ssh_target,
+        subject,
         "down",
         f"exit {cp.returncode}: {(cp.stderr or '').strip()[:200]}",
         latency_ms=latency,
@@ -463,6 +557,334 @@ def activation_command(activation: str) -> str:
     if prefix and not prefix.endswith("&&"):
         prefix = f"{prefix} &&"
     return f"{prefix} true".strip() if prefix else "true"
+
+
+# ── the four remaining invariants: scratch / scheduler / env / auth ──────────
+#
+# Pillar 3 of docs/design/s2-readiness.md: "named invariants, one owner each".
+# Each of the three PROBING sensors below is one bounded command class over an
+# EXISTING connection-class probe — the same ``ssh_argv`` + bounded-capture pair
+# every other sensor rides, no new transport. A sensor is allowed to probe when
+# it is EXPLICITLY invoked; what may never probe is a FEED SITE (the ledger's
+# harvest-never-probe rule) and a read surface (``cluster-readiness``).
+#
+# ``auth`` is the odd one out and deliberately so: it adds NO probe at all. It is
+# a classification leg over the connect sensor's own exit/stderr signature — the
+# discrimination the circuit breaker structurally cannot make, because its
+# SUCCESS verdict folds "auth rejected but the host answered" into "reached the
+# host".
+
+#: The env-fingerprint command class — the SAME one the release flow reads on
+#: every target environment ("activate the cluster env and read
+#: ``hpc-agent --version``"). Reusing that command class rather than inventing a
+#: second one is what makes a sensed fingerprint comparable to a released one.
+ENV_FINGERPRINT_COMMAND = "hpc-agent --version"
+
+#: The cheap scheduler touch per backend FAMILY — the CLI's own version/usage
+#: banner, which costs a fork on the login node and (unlike ``qstat`` with no
+#: arguments) never enumerates the queue. Families are
+#: ``infra.clusters._KNOWN_SCHEDULER_FAMILIES``; the command classes agree with
+#: ``infra.scheduler_resolve``'s ``_VERSION_CMD`` / ``_QSUB_VERSION_CMDS``, which
+#: is where this framework already decided what a cheap scheduler touch looks
+#: like. An UNKNOWN family maps to nothing and the sensor emits ``skipped``
+#: rather than guessing a binary — a wrong guess would report a broken scheduler
+#: on a working cluster.
+SCHEDULER_TOUCH_COMMANDS: dict[str, str] = {
+    "slurm": "squeue --version",
+    "sge": "qstat -help",
+    "pbspro": "qstat --version",
+    "torque": "qstat --version",
+}
+
+#: ssh stderr fragments that mean the credentials were REJECTED — the remote end
+#: was reached and said no. Lower-cased substring match; deliberately short and
+#: about the SSH protocol only, so it cannot drift into general error parsing.
+AUTH_REJECTION_MARKERS: tuple[str, ...] = (
+    "permission denied",
+    "publickey",
+    "too many authentication failures",
+    "no supported authentication methods",
+    "authentication failed",
+    "host key verification failed",
+)
+
+#: ssh stderr fragments that mean the session NEVER got far enough to present a
+#: credential. Their presence is what makes "unreachable" a positive reading
+#: rather than the absence of an auth marker.
+NEVER_REACHED_MARKERS: tuple[str, ...] = (
+    "connection refused",
+    "connection timed out",
+    "connection reset",
+    "could not resolve hostname",
+    "name or service not known",
+    "network is unreachable",
+    "no route to host",
+    "operation timed out",
+    "timed out after",
+)
+
+#: Remote-storage failure fragments a STAGING site already holds in a transfer's
+#: stderr. Harvest-side vocabulary: a feed site classifies with these, it never
+#: runs anything to obtain them.
+_STORAGE_FAILURE_MARKERS: tuple[str, ...] = (
+    "no space left on device",
+    "disk quota exceeded",
+    "quota exceeded",
+    "read-only file system",
+    "input/output error",
+    "stale file handle",
+)
+
+
+def _shell_quote(value: str) -> str:
+    """POSIX single-quote *value* so a path with spaces reaches the remote whole."""
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+def scratch_command(scratch: str) -> str:
+    """The scratch-class command: the directory EXISTS and the filesystem answers.
+
+    ``test -d`` alone would pass against a hung mount that ``stat``\\ s from cache;
+    ``df -P`` forces the filesystem itself to answer and is the reading an
+    operator would take by hand. Both in one command class means one round trip
+    and one verdict. Deliberately NOT prefixed with the cluster activation: ``test``
+    and ``df`` are POSIX built-ins/coreutils present before any ``module load``,
+    and prefixing would only add a way for a storage reading to fail for an env
+    reason (which is a different invariant, with its own sensor).
+    """
+    quoted = _shell_quote(scratch.strip())
+    return f"test -d {quoted} && df -P {quoted}"
+
+
+def env_fingerprint_command(activation: str) -> str:
+    """``<activation> && hpc-agent --version`` — the release flow's own class."""
+    prefix = (activation or "").strip()
+    if prefix and not prefix.endswith("&&"):
+        prefix = f"{prefix} &&"
+    return f"{prefix} {ENV_FINGERPRINT_COMMAND}".strip()
+
+
+def scheduler_touch_command(family: str, *, activation: str = "") -> str:
+    """The cheap touch for a backend *family* (``""`` when the family is unknown).
+
+    *activation* is opt-in: most sites put the scheduler CLI on the default login
+    PATH, but a cluster that hides it behind a module needs the prefix, and the
+    caller (who holds ``clusters.yaml``) is the one that knows.
+    """
+    command = SCHEDULER_TOUCH_COMMANDS.get((family or "").strip().lower(), "")
+    if not command:
+        return ""
+    prefix = (activation or "").strip()
+    if prefix and not prefix.endswith("&&"):
+        prefix = f"{prefix} &&"
+    return f"{prefix} {command}".strip()
+
+
+def scheduler_family_for_cluster(cluster_cfg: Mapping[str, Any]) -> str:
+    """The backend family a ``clusters.yaml`` entry schedules through (``""`` if none).
+
+    Reads the entry's ``scheduler`` and, when that names a registered backend
+    rather than a curated family, its ``scheduler_profile.family``. Never raises
+    and never guesses: an entry this cannot resolve yields ``""`` and the sensor
+    emits ``skipped`` with the reason.
+    """
+    if not isinstance(cluster_cfg, dict):
+        return ""
+    name = str(cluster_cfg.get("scheduler") or "").strip().lower()
+    if name in SCHEDULER_TOUCH_COMMANDS:
+        return name
+    profile = cluster_cfg.get("scheduler_profile")
+    if isinstance(profile, dict):
+        family = str(profile.get("family") or "").strip().lower()
+        if family in SCHEDULER_TOUCH_COMMANDS:
+            return family
+    return ""
+
+
+def storage_failure_marker(text: str) -> str | None:
+    """The remote-storage failure named in *text*, or ``None``.
+
+    The HARVEST-side classifier: a staging site holds a failed transfer's stderr
+    and asks whether it is positive evidence about STORAGE (as opposed to
+    transport, which the flap classifier already owns). ``None`` means "this
+    stderr says nothing about scratch" — and a feed site that gets ``None`` must
+    record nothing rather than record a guess.
+    """
+    blob = (text or "").lower()
+    return next((marker for marker in _STORAGE_FAILURE_MARKERS if marker in blob), None)
+
+
+def sense_scratch(
+    ssh_target: str,
+    scratch: str,
+    *,
+    direct: bool = False,
+    timeout_sec: float = PREAMBLE_TIMEOUT_SEC,
+) -> VerdictAtom:
+    """SENSOR: is the cluster's scratch there and does its filesystem answer?
+
+    One bounded :func:`sense_command_class` run of :func:`scratch_command` over
+    the named route. The atom's subject is the SCRATCH PATH, not the host: atom
+    identity is ``(sensor, route, target)`` and two scratch roots on one cluster
+    are two facts.
+    """
+    path = (scratch or "").strip()
+    if not path:
+        return _atom(
+            "scratch",
+            ssh_target,
+            "skipped",
+            "no scratch path configured for this cluster",
+            route="direct" if direct else "effective",
+        )
+    return sense_command_class(
+        ssh_target,
+        scratch_command(path),
+        kind="scratch",
+        direct=direct,
+        timeout_sec=timeout_sec,
+        target=path,
+    )
+
+
+def sense_scheduler(
+    ssh_target: str,
+    family: str,
+    *,
+    activation: str = "",
+    direct: bool = False,
+    timeout_sec: float = PREAMBLE_TIMEOUT_SEC,
+) -> VerdictAtom:
+    """SENSOR: does this cluster's scheduler CLI answer? One cheap touch, one atom.
+
+    ``accept_output=True``: a banner printed under a non-zero usage exit still
+    proves the CLI answered — see :func:`sense_command_class`. An unknown family
+    yields ``skipped`` naming the families that have a touch, never a guessed
+    binary.
+    """
+    command = scheduler_touch_command(family, activation=activation)
+    subject = (family or "").strip().lower() or "unknown"
+    if not command:
+        return _atom(
+            "scheduler",
+            subject,
+            "skipped",
+            (
+                f"no cheap scheduler touch is defined for backend family "
+                f"{subject!r} (known: {', '.join(sorted(SCHEDULER_TOUCH_COMMANDS))})"
+            ),
+            route="direct" if direct else "effective",
+        )
+    return sense_command_class(
+        ssh_target,
+        command,
+        kind="scheduler",
+        direct=direct,
+        timeout_sec=timeout_sec,
+        target=subject,
+        accept_output=True,
+    )
+
+
+def sense_env(
+    ssh_target: str,
+    activation: str,
+    *,
+    direct: bool = False,
+    timeout_sec: float = PREAMBLE_TIMEOUT_SEC,
+) -> VerdictAtom:
+    """SENSOR: the remote env fingerprint — the release flow's own command class.
+
+    The ``ok`` atom's ``detail`` carries the fingerprint LINE (``hpc-agent
+    0.11.4+g766c293d``), because "which wheel is over there" is the fact, not
+    "the command exited 0". Comparing it against an expected wheel is a
+    CONSUMER's job; a sensor states what it saw.
+    """
+    return sense_command_class(
+        ssh_target,
+        env_fingerprint_command(activation),
+        kind="env",
+        direct=direct,
+        timeout_sec=timeout_sec,
+        detail_from_stdout=True,
+    )
+
+
+def auth_signature(detail: str) -> Literal["rejected", "never_reached", "unsettled"]:
+    """Classify a failed connect reading's text: credentials refused, or never asked?
+
+    Rejection markers are tested FIRST on purpose. ``Connection closed by
+    <host> port 22`` is a NEVER_REACHED-looking phrase that OpenSSH also emits
+    immediately after ``Too many authentication failures`` — reading that as
+    "unreachable" is exactly the conflation this leg exists to remove.
+    """
+    blob = (detail or "").lower()
+    if any(marker in blob for marker in AUTH_REJECTION_MARKERS):
+        return "rejected"
+    if any(marker in blob for marker in NEVER_REACHED_MARKERS):
+        return "never_reached"
+    return "unsettled"
+
+
+def auth_atom(connect: VerdictAtom, *, now: float | None = None) -> VerdictAtom:
+    """DERIVE the ``auth`` atom from a ``connect`` reading — no new probe, ever.
+
+    The whole invariant, from evidence already in hand:
+
+    * connect ``ok`` — a command RAN on the far end, so the credentials were
+      accepted. This is the one place in the system that can honestly say so:
+      the circuit breaker's SUCCESS verdict means "reached the host", which an
+      auth rejection also satisfies, so a breaker-fed ``auth`` atom would assert
+      what its evidence does not support (``state/readiness``'s "a seam by
+      construction, not by omission").
+    * connect failed with a rejection signature — ``down``. The host answered and
+      refused us: retrying, retargeting to a sibling, or waiting out a breaker
+      cooldown all fix nothing.
+    * connect failed without ever reaching the host — ``unknown``, saying so.
+      Absence of evidence is a diagnosis, not a verdict: no credential was ever
+      presented, so nothing is known about auth.
+    """
+    subject = connect.target
+    route = connect.route
+    if connect.ok is True:
+        return _atom(
+            "auth",
+            subject,
+            "ok",
+            "a remote command ran, so the credentials were accepted",
+            route=route,
+            now=now,
+        )
+    signature = auth_signature(connect.detail)
+    if signature == "rejected":
+        return _atom(
+            "auth",
+            subject,
+            "down",
+            f"the host answered and REFUSED the credentials: {connect.detail[:160]}",
+            route=route,
+            now=now,
+        )
+    if signature == "never_reached":
+        return _atom(
+            "auth",
+            subject,
+            "unknown",
+            (
+                "the host was never reached, so no credential was presented — "
+                f"unreachable, NOT an auth rejection: {connect.detail[:140]}"
+            ),
+            route=route,
+            now=now,
+        )
+    return _atom(
+        "auth",
+        subject,
+        "unknown",
+        f"the connect class failed with no auth or transport signature: {connect.detail[:140]}",
+        route=route,
+        now=now,
+    )
 
 
 # ── composers over the sensors ───────────────────────────────────────────────
@@ -570,21 +992,29 @@ def sense_preamble(
     direct: bool = False,
     timeout_sec: float = PREAMBLE_TIMEOUT_SEC,
 ) -> tuple[VerdictAtom, ...]:
-    """Sense ``{connect, preamble}`` for *ssh_target* over one named route.
+    """Sense ``{connect, auth, preamble}`` for *ssh_target* over one named route.
 
-    Two bounded readings: a bare ``true`` (the connect class) and the activation
-    command (the preamble class — the SAME command class that fails in the
-    field). The preamble reading runs only when the connect reading passed, so a
-    dead connect never masquerades as a preamble failure; when it did not, a
+    Two bounded readings and one DERIVATION: a bare ``true`` (the connect class)
+    and the activation command (the preamble class — the SAME command class that
+    fails in the field), plus the ``auth`` atom :func:`auth_atom` reads off the
+    connect atom's own exit/stderr signature. The auth leg costs NO probe: it is
+    a second question asked of evidence already in hand, which is why it can
+    exist at all (a dedicated auth probe would be one more connection an
+    intrusion filter counts).
+
+    The preamble reading runs only when the connect reading passed, so a dead
+    connect never masquerades as a preamble failure; when it did not, a
     ``skipped`` preamble atom says exactly that.
     """
     route: Literal["effective", "direct"] = "direct" if direct else "effective"
     connect_atom = sense_command_class(
         ssh_target, "true", kind="connect", direct=direct, timeout_sec=timeout_sec
     )
+    auth = auth_atom(connect_atom)
     if connect_atom.ok is not True:
         return (
             connect_atom,
+            auth,
             _atom(
                 "preamble",
                 ssh_target,
@@ -595,6 +1025,7 @@ def sense_preamble(
         )
     return (
         connect_atom,
+        auth,
         sense_command_class(
             ssh_target,
             activation_command(activation),
@@ -930,6 +1361,10 @@ def read_path_readiness(
     preamble_timeout_sec: float = PREAMBLE_TIMEOUT_SEC,
     route_timeout_sec: float = ROUTE_RESOLVE_TIMEOUT_SEC,
     freshness_window_sec: float | None = None,
+    scratch: str | None = None,
+    scheduler_family: str | None = None,
+    env_fingerprint: bool = False,
+    invariant_activation: str | None = None,
     record: bool = True,
 ) -> PathReadiness:
     """Resolve the chain, sense what is stale/absent, classify — the ONE composer.
@@ -945,6 +1380,20 @@ def read_path_readiness(
     trouble — over the DIRECT route, which is the discriminator. That second
     reading is deliberately conditional: it costs a connection, and there is
     nothing to discriminate when the effective route is healthy.
+
+    The three remaining pillar-3 invariants are OPT-IN, each by supplying the
+    thing it needs — *scratch* (a path), *scheduler_family* (a backend family),
+    *env_fingerprint* (a flag; it rides *activation*). Opt-in because each is one
+    more connection: the caller that wants a full standing readiness sweep asks
+    for it, while the S2 pre-detach gate — which must stay as cheap as the path
+    question it answers — does not. They run ONLY after the transport legs proved
+    a route (no dead hop, a resolved chain, the connect class not already known
+    dead), because probing storage through a severed tunnel produces a
+    ``scratch`` atom that says nothing about storage. Their atoms never touch
+    :func:`_classify`: this composer's ``cause`` is a PATH cause, and a full
+    scratch disk is not a reason to call the path dead. They reach the standing
+    ledger through the same :func:`record_readiness` write-through as everything
+    else, which is what makes ``cluster-readiness`` show them with an age.
     """
     route = resolve_route(host, timeout_sec=route_timeout_sec)
 
@@ -972,6 +1421,38 @@ def read_path_readiness(
             atoms.extend(
                 sense_preamble(target, activation, direct=True, timeout_sec=preamble_timeout_sec)
             )
+
+    # The opt-in invariant rungs. Gated on the SAME two facts the preamble rung
+    # is (a resolved chain, no dead hop) plus "the connect class is not already
+    # known dead" — sensing storage or a scheduler through a route that just
+    # failed to carry ``true`` yields an atom about the transport wearing a
+    # storage label, which is precisely the conflation this substrate exists to
+    # end.
+    wants_invariant = scratch is not None or scheduler_family is not None or env_fingerprint
+    connect_dead = any(a.sensor == "connect" and a.ok is False for a in atoms)
+    if wants_invariant and not dead_hop and route.resolved and not connect_dead:
+        # The prefix the scheduler + env rungs run under. Separate from
+        # *activation* (which is what TURNS ON the preamble rung) because the two
+        # are different uses of the same string: a caller may want the env
+        # fingerprint — which is meaningless outside the activated env, since
+        # that is where the wheel lives — WITHOUT paying for the preamble rung.
+        # Folding them would have made "opt into the invariants" silently also
+        # mean "opt into the preamble", or else read the fingerprint from a bare
+        # login shell and report the wrong wheel.
+        prefix = activation if invariant_activation is None else invariant_activation
+        if scratch is not None:
+            atoms.append(sense_scratch(target, scratch, timeout_sec=preamble_timeout_sec))
+        if scheduler_family is not None:
+            atoms.append(
+                sense_scheduler(
+                    target,
+                    scheduler_family,
+                    activation=prefix or "",
+                    timeout_sec=preamble_timeout_sec,
+                )
+            )
+        if env_fingerprint:
+            atoms.append(sense_env(target, prefix or "", timeout_sec=preamble_timeout_sec))
 
     cause = _classify(route, atoms)
     sentence = route_sentence(route, atoms)

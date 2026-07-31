@@ -54,16 +54,23 @@ a painful submit look cheap. ``host-retarget`` was excluded until the 2026-07-30
 review measured a real run — 10 counted where 12 humans stops happened — which is
 exactly the kind of undercount that makes a scorecard flattering and useless.
 
-*Array accepted.* ``RunRecord.submitted_at``. **Disclosed imprecision:** on the
-``submit_and_record`` path that stamp is taken with the scheduler's job ids
-already in hand — a true accept instant. On the submit-once path
-(``mint_submitting_record`` → ``promote_submitting_record``) the record is minted
-BEFORE dispatch, so ``submitted_at`` is the pre-dispatch instant and the measured
-interval is an UNDER-estimate by the dispatch duration. Closing that is a
-one-field integration seam — a dedicated accept stamp written at
-``promote_submitting_record`` and whitelisted in ``run_record._UPDATABLE_FIELDS``
-— owned by the submit chain, not by this reducer. :func:`compute_slo` accepts an
-explicit ``accepted_at`` override so the seam, once wired, needs no change here.
+*Array accepted.* ``RunRecord.accepted_at`` when present, else
+``RunRecord.submitted_at``. The dedicated stamp is written by
+``ops.submit.runner.promote_submitting_record`` — the one site that runs with the
+scheduler's parsed job ids in hand — and is whitelisted in
+``run_record._UPDATABLE_FIELDS`` so it rides the same locked write as the ids.
+This closed the under-estimate the field shipped with (2026-07-30 drift-log seam
+b): on the submit-once path (``mint_submitting_record`` →
+``promote_submitting_record``) the record is minted BEFORE dispatch, so
+``submitted_at`` is a pre-dispatch instant and every latency measured to it was
+short by the dispatch duration.
+
+The fallback is EXACT rather than degraded wherever it fires. On the
+``submit_and_record`` path ``submitted_at`` is itself taken with the job ids
+already parsed, so it already means "accepted" and there is nothing to correct;
+records written before the stamp existed keep reading exactly as they did. The
+ordering — dedicated stamp first, ``submitted_at`` second — is what makes the
+field an improvement rather than a schema change: nothing has to be backfilled.
 
 *Readiness age at fire.* :func:`hpc_agent.state.readiness.ledger_age_sec` against
 the greenlight instant: the age of the freshest atom that already existed then.
@@ -95,6 +102,7 @@ __all__ = [
     "RECOVERY_INTERVENTION_BLOCKS",
     "SLO_FIELDS",
     "S2Slo",
+    "accept_stamp",
     "compute_slo",
     "first_greenlight_record",
     "greenlight_fire_record",
@@ -332,9 +340,9 @@ def compute_slo(
     date the fire against. No I/O except the readiness-ledger read, no clock.
 
     :param records: the run scope's decision records, in append order.
-    :param accepted_at: the array-accepted ISO-8601 stamp — today
-        ``RunRecord.submitted_at``; pass a dedicated accept stamp here once the
-        submit chain writes one (see the module docstring's seam).
+    :param accepted_at: the array-accepted ISO-8601 stamp. :func:`slo_for_run`
+        supplies ``RunRecord.accepted_at`` (the true scheduler-accept stamp)
+        falling back to ``submitted_at``; see the module docstring.
     :param host: ssh host key for the readiness lookup; ``""`` skips it.
 
     The readiness age is dated against the LAST-ATTEMPT fire, not the first: it
@@ -369,6 +377,28 @@ def compute_slo(
     )
 
 
+def accept_stamp(record: Any) -> str | None:
+    """The array-accepted instant for a run *record* — the ONE definition.
+
+    ``accepted_at`` (the true scheduler-accept stamp
+    ``promote_submitting_record`` writes with the job ids in hand) when present,
+    else ``submitted_at``. Named and exported rather than inlined at the one call
+    site because "which stamp means accepted" is precisely the thing that drifted
+    — the field shipped measuring to a pre-dispatch instant on the submit-once
+    path — and a second reader picking differently would reintroduce the same
+    under-estimate under a different name.
+
+    An empty / whitespace ``accepted_at`` falls back too: a blank stamp is not a
+    measurement, and preferring it would make the number vanish rather than
+    degrade gracefully to the value this reducer used before the field existed.
+    """
+    accepted = getattr(record, "accepted_at", None)
+    if isinstance(accepted, str) and accepted.strip():
+        return accepted
+    submitted = getattr(record, "submitted_at", None)
+    return submitted if isinstance(submitted, str) and submitted.strip() else None
+
+
 def slo_for_run(experiment_dir: Path, run_id: str, record: Any) -> S2Slo:
     """:func:`compute_slo` for a run, reading the journals it already has.
 
@@ -385,7 +415,7 @@ def slo_for_run(experiment_dir: Path, run_id: str, record: Any) -> S2Slo:
         records = []
     return compute_slo(
         records,
-        accepted_at=getattr(record, "submitted_at", None),
+        accepted_at=accept_stamp(record),
         host=_host_for_cluster(getattr(record, "cluster", "") or ""),
     )
 

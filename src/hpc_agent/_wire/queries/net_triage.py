@@ -71,12 +71,30 @@ class NetTriageSpec(BaseModel):
             "route tells them apart."
         ),
     )
+    probe_invariants: bool = Field(
+        default=False,
+        description=(
+            "Opt in to the INVARIANT rungs: after the transport legs, sense the "
+            "cluster's scratch (`test -d` + `df -P`), its scheduler CLI (the "
+            "backend family's cheap version/usage banner, family resolved from "
+            "clusters.yaml), and its env fingerprint (`hpc-agent --version` under "
+            "the cluster activation) — reporting `scratch` / `scheduler` / `env` "
+            "atoms alongside the transport ones. Opt-in for the same reason "
+            "`probe_preamble` is: each rung costs a real connection. Reaching a "
+            "login node is not the same as being able to USE the cluster, and "
+            "these are the three invariants that difference is made of; they are "
+            "reported as evidence and NEVER change the path verdict (a full "
+            "scratch disk is not a dead path). net-triage is the sanctioned "
+            "prober — the readiness ledger's own feed sites only ever harvest."
+        ),
+    )
     activation: str | None = Field(
         default=None,
         description=(
             "Override the activation prefix the preamble rung runs (default: the "
             "matched cluster's own, built from clusters.yaml). Ignored unless "
-            "`probe_preamble` is true."
+            "`probe_preamble` is true. Also prefixes the scheduler + env rungs "
+            "when `probe_invariants` is set."
         ),
     )
     preamble_timeout_sec: float = Field(
@@ -187,12 +205,28 @@ class ReadinessAtom(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="net-triage readiness atom")
 
-    sensor: Literal["hop", "direct", "path", "connect", "preamble"] = Field(
+    sensor: Literal[
+        "hop",
+        "direct",
+        "path",
+        "connect",
+        "preamble",
+        "auth",
+        "scratch",
+        "scheduler",
+        "env",
+    ] = Field(
         description=(
             "Which leg this reading speaks for: 'hop' a ProxyJump waypoint, "
             "'direct' the target's own hostname with the jump BYPASSED, 'path' "
-            "the derived end-to-end verdict for the effective chain, and "
-            "'connect'/'preamble' the two command classes of the preamble rung."
+            "the derived end-to-end verdict for the effective chain, "
+            "'connect'/'preamble' the two command classes of the preamble rung, "
+            "and the four named invariants — 'auth' (credentials accepted, "
+            "DERIVED from the connect reading's own exit/stderr signature and "
+            "costing no probe), 'scratch' (the scratch dir exists and its "
+            "filesystem answers), 'scheduler' (the backend family's CLI "
+            "answered), 'env' (the remote hpc-agent fingerprint). The last three "
+            "appear only when the caller opted into their rungs."
         )
     )
     target: str = Field(description="What was probed (a hostname or an ssh destination).")

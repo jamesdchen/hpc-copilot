@@ -54,6 +54,7 @@ from hpc_agent.infra.executor_guard import (
     _is_bare_script_name,
     check_per_task_executor,
 )
+from hpc_agent.infra.readiness_sensors import storage_failure_marker
 from hpc_agent.infra.remote import SSH_TIMEOUT_SEC, ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.transport import (
@@ -170,6 +171,58 @@ def _validate_ssh_target(ssh_target: str) -> str:
 # inherits ``HPC_SSH_TIMEOUT_SEC`` tunability for free.
 _PREFLIGHT_PROBE_TIMEOUT_SEC = float(SSH_TIMEOUT_SEC)
 _PREFLIGHT_PROBE_MAX_ATTEMPTS = 2
+
+
+# ── readiness HARVEST (s2-readiness pillar 3) ────────────────────────────────
+#
+# The standing ledger's one rule for a feed site is **harvest, never probe**
+# (``state/readiness.py``): sensing belongs to ``infra/readiness_sensors.py``,
+# and a feed that dials is the fire-time discovery the whole design removes. So
+# every call below sits where the submit flow ALREADY holds a verdict — a
+# completed stage, a scheduler that returned ids, an activation-class preflight
+# that came back — and passes it on. Zero new network at every one of them,
+# pinned by the no-network tripwire in
+# ``tests/ops/test_submit_flow_readiness_harvest.py``.
+#
+# Why here at all: these three invariants are exactly what S2 discovers the hard
+# way. A submit already learns them in passing, and throwing that away is why the
+# next submit has to learn them again from a dead worker's log.
+
+
+def _harvest_readiness(
+    ssh_target: str,
+    sensor: str,
+    verdict: str,
+    *,
+    target: str = "",
+    detail: str = "",
+) -> None:
+    """Feed ONE already-known atom to the standing readiness ledger.
+
+    The submit flow's twin of ``ssh_circuit._feed_readiness`` — same posture,
+    same total fail-open: ``record_observation`` never raises, and this wrapper
+    is belt-and-braces on top of that. A ledger that cannot be written must never
+    perturb a submit; readiness is a freshness signal, never a correctness gate.
+
+    Every atom rides the ``effective`` route: the submit flow dials whatever
+    ``ssh`` resolves, hops included. No ``latency_ms`` is passed — these sites
+    measure nothing of their own, and an invented duration would be the one
+    dishonest field in an evidence record.
+    """
+    try:
+        from hpc_agent.state import readiness
+
+        readiness.record_observation(
+            ssh_target,
+            sensor,
+            verdict,
+            source="submit-flow",
+            target=target or ssh_target,
+            route="effective",
+            detail=detail,
+        )
+    except Exception:  # noqa: BLE001 — the ledger is never a gate on a submit
+        return
 
 
 def _preflight_probe(
@@ -367,8 +420,38 @@ def _run_uv_preflight_for_batch(
         )
         if not skip_preflight and preflight_cache.is_preflight_fresh(cache_key):
             return  # validated within TTL — skip the cluster round-trip (#255)
-        _preflight_runtime_check(ssh_target, job_env=dict(job_env), skip=skip_preflight)
+        # Readiness HARVEST (env). This probe runs the cluster's OWN activation
+        # sequence (``module load … && source … && conda activate …``) and then
+        # asks the activated env a question — which is exactly the ``env``
+        # invariant: did the remote environment resolve? Fed from the verdict
+        # this call already produces, both arms, adding no round-trip. The
+        # cache-hit path above deliberately feeds nothing: nothing was observed
+        # this time, and re-stamping a cached fact would forge an age.
+        try:
+            _preflight_runtime_check(ssh_target, job_env=dict(job_env), skip=skip_preflight)
+        except Exception as exc:
+            # ...but ONLY when the failure is actually about the env. A severed
+            # tunnel raises here too, and ``env: down`` for it would be the
+            # 2026-07-30 misdiagnosis one layer down — the human sent to the
+            # conda env while the VPN is what broke. ``_stage_failure_is_flap``
+            # is the ONE transport-class definition in this module (the staging
+            # retry's own), so the two sites cannot disagree about the same
+            # exception. A transport fault records NOTHING.
+            if not _stage_failure_is_flap(exc):
+                _harvest_readiness(
+                    ssh_target,
+                    "env",
+                    "down",
+                    detail=f"cluster env activation preflight failed: {exc}"[:250],
+                )
+            raise
         if not skip_preflight:
+            _harvest_readiness(
+                ssh_target,
+                "env",
+                "ok",
+                detail="cluster env activated and answered the runtime preflight",
+            )
             preflight_cache.record_preflight(cache_key, checks=["uv_present"])
         return
 
@@ -1590,9 +1673,24 @@ def _push_and_deploy_once(
         exclude=_keep_generated_shippable(rsync_excludes),
     )
     if push_result.returncode != 0:
+        # Readiness HARVEST (scratch, failure arm). A failed push is only
+        # evidence about STORAGE when its own stderr says so: "no space left on
+        # device" is a scratch fact, a severed tunnel is a transport fact that
+        # ``_stage_failure_is_flap`` already owns. When the marker is absent we
+        # record NOTHING — a feed site that guesses is worse than one that is
+        # silent, because a wrong ``scratch: down`` sends the next human to the
+        # filesystem while the tunnel is what is broken.
+        _stderr = (push_result.stderr or "").strip()
+        if storage_failure_marker(_stderr):
+            _harvest_readiness(
+                ssh_target,
+                "scratch",
+                "down",
+                target=remote_path,
+                detail=f"rsync push exit {push_result.returncode}: {_stderr[:200]}",
+            )
         raise errors.RemoteCommandFailed(
-            f"rsync push failed (exit {push_result.returncode}): "
-            f"{(push_result.stderr or '').strip()[:300]}"
+            f"rsync push failed (exit {push_result.returncode}): {_stderr[:300]}"
         )
     _log.info("staging: code pushed; deploying runtime files ...")
     deploy_runtime(
@@ -1602,6 +1700,18 @@ def _push_and_deploy_once(
         extra_files=[reducer_item] if reducer_item else None,
     )
     _log.info("staging: deploy complete")
+    # Readiness HARVEST (scratch, success arm). The run's remote path lives under
+    # the cluster scratch, and a completed push + deploy is stronger evidence
+    # than any sensor takes: the filesystem accepted real bytes and a real write,
+    # not a ``test -d``. Fed AFTER the deploy so the atom means "staging landed",
+    # not "the transfer started".
+    _harvest_readiness(
+        ssh_target,
+        "scratch",
+        "ok",
+        target=remote_path,
+        detail="staging landed: rsync push + deploy_runtime completed under this path",
+    )
     if not _code_trees_enabled():
         return None
     return _deploy_code_tree(
@@ -3741,6 +3851,29 @@ def _submit_one_spec(
             setup_log_dir=not canary_done,
         )
     except errors.RemoteCommandFailed as exc:
+        # Readiness HARVEST (scheduler, failure arm) — but ONLY for a failure
+        # that is actually about the SCHEDULER. A dispatch dies on a severed
+        # tunnel just as readily as on a rejection, and ``scheduler: down`` for
+        # the former is the 2026-07-30 misdiagnosis one layer down: the next
+        # human goes to the queue system while the VPN is what broke. The very
+        # next comment block in this handler names that case for the ids, so
+        # filing a scheduler verdict for it would have this function classifying
+        # ONE exception two ways. ``_stage_failure_is_flap`` is this module's one
+        # transport-class definition (the staging retry's own); a transport fault
+        # records NOTHING, per the design's "a feed site that cannot attribute a
+        # failure records NOTHING".
+        #
+        # Subject is the BACKEND FAMILY, matching what ``sense_scheduler`` uses,
+        # so a harvested and a sensed reading land on ONE ledger row instead of
+        # two rows that disagree.
+        if not _stage_failure_is_flap(exc):
+            _harvest_readiness(
+                spec.ssh_target,
+                "scheduler",
+                "down",
+                target=(spec.backend or "").strip().lower() or "unknown",
+                detail=f"array dispatch failed: {exc}"[:250],
+            )
         # #339 inc 4 crash-safety: a multi-wave main array that failed mid-plan
         # still landed the earlier waves' ids on the scheduler. Pre-stamp them to
         # the sidecar (best-effort, same window as the post-qsub stamp below) so
@@ -3773,6 +3906,18 @@ def _submit_one_spec(
         # in-process transition is correct here: the process does not KNOW whether
         # the array landed (the id-read is exactly what the drop severed).
         raise
+    # Readiness HARVEST (scheduler, success arm). The scheduler ACCEPTED an array
+    # and returned its ids — the strongest possible reading of this invariant,
+    # and one no cheap sensor touch can match (a version banner proves the CLI
+    # answered; this proves the scheduler took work). Free: the verdict is
+    # already in hand.
+    _harvest_readiness(
+        spec.ssh_target,
+        "scheduler",
+        "ok",
+        target=(spec.backend or "").strip().lower() or "unknown",
+        detail=f"accepted an array of {spec.total_tasks} task(s): job id(s) {','.join(job_ids)}",
+    )
     # Crash-safety pre-stamp — same rationale as the canary stamp above: the
     # 2026-06-11 demo lost main-array job id 13610902 to a process kill in
     # exactly this qsub → submit_and_record window, and the orchestrator's

@@ -41,12 +41,14 @@ Reconstruction drops ``source``; nothing in the sensor layer needs to know.
 Vocabulary
 ----------
 
-:data:`SENSOR_KINDS` is the sensor layer's ``SensorKind`` — ``hop`` / ``direct``
-/ ``path`` / ``connect`` / ``preamble`` — EXTENDED, in the same flat vocabulary,
-with the four invariants the design's pillar 3 names that no sensor covers yet:
-``auth``, ``scratch``, ``scheduler``, ``env``. One vocabulary, one definition —
-the ``# MIRROR:`` annotations on the constants below name the sensor-layer twin
-of each replicated list and the test that fails on drift.
+:data:`SENSOR_KINDS` is the sensor layer's ``SensorKind``, whole: the transport
+five (``hop`` / ``direct`` / ``path`` / ``connect`` / ``preamble``) plus the four
+pillar-3 invariants (``auth``, ``scratch``, ``scheduler``, ``env``). Those four
+were once a storage-side EXTENSION of a shorter sensor vocabulary because no
+sensor covered them; pillar 3 built their sensors, so they moved up into
+``SensorKind`` and the extension collapsed into a plain mirror. One vocabulary,
+one definition — the ``# MIRROR:`` annotations on the constants below name the
+sensor-layer twin of each replicated list and the test that fails on drift.
 
 :data:`SENSOR_VERDICTS` is the sensor layer's ``SensorVerdict`` verbatim: ``ok``
 / ``down`` / ``timeout`` / ``unknown`` / ``skipped``. ``unknown`` means the
@@ -76,13 +78,27 @@ Wired today (``infra/ssh_circuit.py``, the breaker's existing record sites):
 Deliberately NOT fed from the breaker: ``auth``. Its ``SUCCESS`` verdict folds
 "auth rejected but the host answered" into "reached the host", so an ``auth``
 atom fed from there would assert what the evidence does not support. A seam by
-construction, not by omission.
+construction, not by omission — and the reason the sensor layer derives ``auth``
+from the CONNECT SENSOR's exit/stderr signature instead, where a zero exit means
+a command really ran on the far end.
 
-Left as seams for their owners: ``scratch`` (a preflight sensor holds the
-result), ``scheduler`` (a submit-block sensor holds it), ``env`` (the env-lock
-compare holds it). ``hop`` / ``direct`` / ``path`` are produced by the sensor
-layer's ``sense_route_legs`` / ``read_path_readiness`` and reach this tier
-through :func:`record_atoms`.
+Wired by pillar 3 (``ops/submit_flow.py``, from verdicts the flow already holds —
+no new network at any of them):
+
+* the staging step (rsync push + ``deploy_runtime`` under the run's remote path,
+  which lives under the cluster scratch) → ``scratch`` / ``effective``, ``ok`` on
+  a completed stage and ``down`` only when the failure's own stderr names a
+  storage cause (``readiness_sensors.storage_failure_marker``); a transport flap
+  records nothing, because it is evidence about transport
+* the main array dispatch → ``scheduler`` / ``effective``, ``ok`` once the
+  scheduler returned job ids and ``down`` on the dispatch's typed failure
+* the activation-class preflight (``command -v uv`` after ``module load`` /
+  ``conda activate``) → ``env`` / ``effective``
+
+``hop`` / ``direct`` / ``path`` / ``connect`` / ``preamble`` — and, when a caller
+opts into the invariant rungs, ``scratch`` / ``scheduler`` / ``env`` sensed
+directly — are produced by the sensor layer's ``sense_route_legs`` /
+``read_path_readiness`` and reach this tier through :func:`record_atoms`.
 
 The overall verdict
 -------------------
@@ -99,11 +115,14 @@ surface routes through:
 * ``ready`` — every recorded atom is ``ok`` AND fresh, and every sensor in
   :data:`REQUIRED_SENSORS` is present.
 
-:data:`REQUIRED_SENSORS` is deliberately just ``connect``: it is the only atom
-anything feeds without probing, and promising more would make ``ready``
-unreachable rather than more truthful. The rest never BLOCK ``ready`` by
-absence — but a present one that failed or went stale does downgrade, so wiring
-a seam can only ever make the verdict more honest, never less.
+:data:`REQUIRED_SENSORS` is deliberately just ``connect``, and stayed that way
+after pillar 3 wired the other feeds. ``connect`` is the only atom EVERY host
+accumulates from traffic the system makes anyway; ``scratch`` / ``scheduler`` /
+``env`` are fed by the SUBMIT flow, so requiring them would pin every
+configured-but-not-yet-submitted-to cluster at ``stale`` forever — less truthful,
+not more. The rest never BLOCK ``ready`` by absence — but a present one that
+failed or went stale does downgrade, so wiring a feed can only ever make the
+verdict more honest, never less.
 
 Storage
 -------
@@ -234,35 +253,51 @@ CONNECT = "connect"
 #: Command-class reading: the ``module load`` / ``conda activate`` preamble.
 PREAMBLE = "preamble"
 
+#: Credentials accepted. DERIVED, never probed: the sensor layer's ``auth_atom``
+#: reads the connect sensor's own exit/stderr signature. The breaker still cannot
+#: feed it (its SUCCESS folds an auth rejection into "reached the host") — that
+#: seam is by construction and stays.
+AUTH = "auth"
+#: Scratch reachability. Sensor: ``readiness_sensors.sense_scratch`` (``test -d``
+#: + ``df -P``). Harvest: the submit flow's staging step.
+SCRATCH = "scratch"
+#: The scheduler CLI answered. Sensor: ``readiness_sensors.sense_scheduler``
+#: (the family's cheap banner). Harvest: the submit flow's array dispatch.
+SCHEDULER = "scheduler"
+#: Remote env fingerprint vs the expected wheel. Sensor:
+#: ``readiness_sensors.sense_env`` (``hpc-agent --version`` under the cluster
+#: activation). Harvest: the submit flow's activation-class preflight.
+ENV = "env"
+
 # MIRROR: hpc_agent.infra.readiness_sensors::SensorKind pinned-by tests/state/test_readiness.py::test_sensor_vocabulary_is_in_lockstep_with_the_sensor_layer  # noqa: E501
 #: The sensor layer's OWN ``SensorKind`` members, replicated (not imported: this
 #: module is the storage tier and must not depend on the sensor tier, which
 #: depends on subprocess/ssh). The lockstep test pins the two lists together.
-SENSOR_KINDS_FROM_SENSOR_LAYER: tuple[str, ...] = (HOP, DIRECT, PATH, CONNECT, PREAMBLE)
-
-#: Credentials accepted. No sensor covers it and the breaker CANNOT feed it (its
-#: SUCCESS folds an auth rejection into "reached the host") — a seam by
-#: construction.
-AUTH = "auth"
-#: Scratch reachability / writability. Seam: a preflight sensor holds the result.
-SCRATCH = "scratch"
-#: The scheduler answered. Seam: a submit-block sensor holds the result.
-SCHEDULER = "scheduler"
-#: Remote env fingerprint vs the expected wheel. Seam: the env-lock compare holds it.
-ENV = "env"
-
-#: Every sensor kind the DURABLE ledger stores, in render order: the sensor
-#: layer's vocabulary extended with the four pillar-3 invariants no sensor covers
-#: yet. One flat vocabulary — a new invariant is a new member here, never a
-#: parallel enum. An atom whose sensor is not listed is ignored on read, so a
-#: foreign or future writer can never move a host's verdict.
-SENSOR_KINDS: tuple[str, ...] = (
-    *SENSOR_KINDS_FROM_SENSOR_LAYER,
+#:
+#: The four invariants below the transport five USED to live only here, as a
+#: storage-side extension of a shorter sensor vocabulary ("the pillar-3
+#: invariants no sensor covers yet"). Pillar 3 built their sensors, so they moved
+#: UP into ``SensorKind`` where they belong and the extension collapsed: there is
+#: now exactly one definition, mirrored once. That was always the intended end
+#: state — the design says ``SensorKind`` is "EXTENDED, never forked".
+SENSOR_KINDS_FROM_SENSOR_LAYER: tuple[str, ...] = (
+    HOP,
+    DIRECT,
+    PATH,
+    CONNECT,
+    PREAMBLE,
     AUTH,
     SCRATCH,
     SCHEDULER,
     ENV,
 )
+
+#: Every sensor kind the DURABLE ledger stores, in render order — the sensor
+#: layer's vocabulary, whole. One flat vocabulary: a new invariant is a new
+#: member of ``SensorKind``, never a parallel enum here. An atom whose sensor is
+#: not listed is ignored on read, so a foreign or future writer can never move a
+#: host's verdict.
+SENSOR_KINDS: tuple[str, ...] = SENSOR_KINDS_FROM_SENSOR_LAYER
 
 # MIRROR: hpc_agent.infra.readiness_sensors::SensorVerdict pinned-by tests/state/test_readiness.py::test_sensor_vocabulary_is_in_lockstep_with_the_sensor_layer  # noqa: E501
 #: The sensor layer's verdict vocabulary, VERBATIM. ``unknown`` = the sensor ran
