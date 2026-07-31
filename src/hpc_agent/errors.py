@@ -26,6 +26,7 @@ __all__ = [
     "RemoteCommandFailed",
     "ConfigInvalid",
     "CombinerFailed",
+    "CombinerMissing",
     "ClusterTimeout",
     "OutputsMissing",
     "ClusterPartiallyDegraded",
@@ -292,6 +293,42 @@ class CombinerFailed(HpcError):
         "Inspect the stderr_tail in the JSON payload to find which task's "
         "metrics.json was missing or malformed; resubmit those tasks and "
         "rerun /aggregate."
+    )
+
+
+class CombinerMissing(CombinerFailed):
+    """The DEPLOYED combiner (``.hpc/_hpc_combiner.py``) is absent on the cluster.
+
+    A discriminated sub-case of :class:`CombinerFailed`, deliberately sharing
+    its ``combiner_failed`` ``error_code`` — the wire vocabulary is unchanged
+    (no new envelope enum member, no schema regen), while Python callers and
+    tests can still tell "the combiner ran and refused" apart from "there was
+    no combiner to run".
+
+    They are NOT the same failure and must never share a remediation.
+    ``CombinerFailed`` means a task's ``metrics.json`` was missing or malformed
+    and the fix is to resubmit those tasks; ``CombinerMissing`` means the
+    framework artifact itself was never deployed (or vanished after it was),
+    and resubmitting tasks fixes nothing. Raised from the combine legs
+    (per-wave, fused batch, ``--final`` reduce) when the guard snippet in
+    :mod:`hpc_agent.execution.mapreduce.deployed_artifact` reports the artifact
+    absent — BEFORE a combiner that isn't there is invoked, rather than after
+    the cross-wave reduce fails hours later on a message about wave partials
+    (the 2026-07-30 incident).
+
+    ``retry_safe`` is False, inverting the parent: retrying a combine against a
+    deploy root that has no combiner will fail identically every time. The
+    raise sites attach the ``combiner_missing`` recovery menu — whose first
+    option is the ``redeploy-runtime`` repair — via
+    :func:`hpc_agent.recovery.registry.remediation_for`.
+    """
+
+    retry_safe = False
+    remediation = (
+        "Re-ship the framework runtime for this run with `hpc-agent "
+        "redeploy-runtime --experiment-dir <experiment_dir> --run-id <run_id>`, "
+        "then re-run the combine. Do NOT resubmit tasks: the per-task outputs "
+        "are fine, the deployed combiner is not."
     )
 
 

@@ -43,6 +43,26 @@ Row format (binds every future row):
 
 ## Checked — no outstanding debt (recorded so nobody re-opens them)
 
+Paid down 2026-07-30 (U5, the missing-combiner unit — `regen_all.py --write`
+run in-branch, 9/9 PASS). U5 adds the `redeploy-runtime` primitive (a `mutate`
+verb with a `CliArg` shape and no wire spec model), so the regen touched
+`operations.json`, `docs/primitives/{redeploy-runtime.md,README.md}`,
+`docs/generated/operations.md`, and `cli/_verb_module_map.py`; **no JSON schema
+was added or changed** (the verb takes flags, not a `--spec` payload, so
+`build_schemas` reported "up to date, 253 models"). The `combiner_missing`
+recovery kind and `errors.CombinerMissing` add NO wire surface: the kind is a
+prose-only registry entry, and the error subclasses `CombinerFailed` so the
+envelope `error_code` enum is untouched.
+
+- U5 (`execution/mapreduce/deployed_artifact.py`, this ledger's own wave) —
+  `redeploy-runtime` registry row + frontmatter + indices + verb map. Gates
+  `tests/contracts/test_recovery_registry.py`,
+  `tests/contracts/test_lint_primitive_doc_templates.py` and
+  `tests/test_errors.py` GREEN; `regen_all.py --check` GREEN in-branch. **A
+  concurrent wave that also rebakes must re-run the serial regen at
+  integration** — this row records that it was already run once here, not that
+  the artifacts can't be clobbered by a later merge.
+
 Paid down 2026-07-30 (Wave P2 integration's one serial rebake —
 `regen_all.py --write`, all 9 steps PASS; strict-xfail tripwire in
 `tests/ops/test_audit_chain.py` deleted in the same commit):

@@ -119,6 +119,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'recommend-partition': ('recommend-partition', 'hpc_agent.ops.submit.recommend_partition'),
     'reconcile': ('reconcile-journal', 'hpc_agent.ops.monitor.reconcile'),
     'reconcile-stale': ('reconcile-stale', 'hpc_agent.ops.monitor.reconcile_stale'),
+    'redeploy-runtime': ('redeploy-runtime', 'hpc_agent.ops.redeploy_runtime'),
     'reproduce-run': ('reproduce-run', 'hpc_agent.ops.reproduce_run'),
     'resolve-resources': ('resolve-resources', 'hpc_agent.ops.resolve_resources'),
     'resolve-submit-inputs': ('resolve-submit-inputs', 'hpc_agent.ops.resolve_submit_inputs'),

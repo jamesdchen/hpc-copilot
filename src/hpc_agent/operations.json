@@ -443,6 +443,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent redeploy-runtime [--experiment-dir <dir>] --run-id <run_id> [--use-cache]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "redeploy-runtime",
+    "output_schema": null,
+    "python": "hpc_agent.ops.redeploy_runtime.redeploy_runtime",
+    "side_effects": [
+      "ssh",
+      "writes-cluster"
+    ],
+    "summary": "Re-ship the framework runtime files (combiner, dispatcher, job templates, importable stubs) for an existing run, to its base remote_path AND its code tree, with the deploy cache bypassed. Submits nothing. The repair for a combiner/dispatcher that went missing on the cluster.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>",
     "idempotent": true,
     "input_schema": "resubmit.input.json",

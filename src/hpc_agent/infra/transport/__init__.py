@@ -43,6 +43,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from hpc_agent.errors import SshCircuitOpen, SshSlotWaitTimeout, SshUnreachable
+from hpc_agent.execution.mapreduce.deployed_artifact import (
+    COMBINER_REL,
+    combiner_probe_snippet,
+    split_combiner_probe,
+)
 from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.remote import (
     RSYNC_TIMEOUT_SEC,
@@ -1809,16 +1814,37 @@ def deploy_runtime(
         f" && find {remote_path_q}/hpc_agent -depth -type d -name __pycache__"
         f" -exec rm -rf {{}} +"
     )
+    # U5: fold the deployed-combiner presence+sha read into the SAME prelude
+    # ssh. One ``test -f`` + one ``sha256sum`` on a 30 KB file, on a connection
+    # this function was making anyway — no new round-trip class — and it closes
+    # the dropout that made the 2026-07-30 incident permanent.
+    #
+    # The content-hash cache below asks "does the manifest say we shipped these
+    # bytes?", which is a claim about a PAST deploy and was never checked
+    # against what is on disk NOW. So once the combiner disappeared while
+    # ``.hpc/.deploy_state.json`` survived, every later deploy re-affirmed the
+    # cache hit and never re-shipped it — silently, forever. (The manifest
+    # outlives the file it attests BY CONSTRUCTION: it is rewritten on every
+    # deploy that changes anything, while a cache-hit file is never rewritten
+    # at all, which is exactly the mtime discrimination a scratch reaper
+    # applies.) Reading presence turns the cache from a claim into evidence.
+    #
+    # Ordered BEFORE the manifest ``cat`` so the probe line leads and
+    # ``split_combiner_probe`` can peel it off, leaving the manifest JSON as the
+    # remaining stdout byte-for-byte — ``_parse_remote_manifest`` sees exactly
+    # what it saw before.
+    mkdir_cmd += f" ; {combiner_probe_snippet(root=remote_path)}"
     # Fold the cache-manifest read into the prelude ssh so it costs no extra
     # round-trip: the mkdir/rm/find chain prints nothing to stdout, so the
     # trailing ``cat`` (absent file -> empty, never an error) leaves the
     # manifest JSON as the call's entire stdout. ``;`` not ``&&`` so a manifest
     # read is independent of the prep chain.
     if use_cache:
-        mkdir_cmd += f" ; cat {manifest_q} 2>/dev/null || true"
+        mkdir_cmd += f"cat {manifest_q} 2>/dev/null || true"
     prelude = ssh_run(mkdir_cmd, ssh_target=ssh_target)
 
-    remote_manifest = _parse_remote_manifest(getattr(prelude, "stdout", "")) if use_cache else None
+    combiner_probe, prelude_stdout = split_combiner_probe(getattr(prelude, "stdout", ""))
+    remote_manifest = _parse_remote_manifest(prelude_stdout) if use_cache else None
 
     # Normalize the per-run extra payloads to (Path, dst_rel) so the reducer
     # rides the same content-hash cache as every framework file (spec §3.C.2).
@@ -1841,6 +1867,31 @@ def deploy_runtime(
         to_deploy = [it for it in items if cached_files.get(it.dst_rel) != it.sha]
     else:
         to_deploy = list(items)
+
+    # U5: the cache decides from the manifest; the probe decides from the DISK.
+    # When the two disagree about the combiner, the disk wins — a cache hit on
+    # an artifact that is absent (or whose bytes differ from what we are about
+    # to attest) is the dropout, not an optimisation. Re-shipping one 30 KB
+    # file is the entire cost of never being silently wrong about it again.
+    #
+    # Only ``needs_redeploy`` (absent, or a positively-read sha mismatch) forces
+    # the re-ship. A present-but-unhashable artifact (no sha256sum / shasum /
+    # openssl on the login node) is left to the cache: absence of a sha is
+    # absence of evidence, and forcing on it would make every such host a
+    # permanent cache miss. A probe that never arrived (``None`` — old prelude,
+    # severed channel) likewise changes nothing.
+    if combiner_probe is not None and combiner_probe.needs_redeploy:
+        already = {it.dst_rel for it in to_deploy}
+        forced = [it for it in items if it.dst_rel == COMBINER_REL and it.dst_rel not in already]
+        if forced:
+            print(
+                f"[deploy] {COMBINER_REL} is {combiner_probe.state} on "
+                f"{ssh_target}:{remote_path} while the deploy cache claimed it was "
+                f"current — re-shipping it (the cache records what a past deploy "
+                f"WROTE, never what is on disk now).",
+                file=sys.stderr,
+            )
+            to_deploy.extend(forced)
 
     # Ship the code FIRST, then record the manifest in a SEPARATE ssh leg after
     # the transfer succeeded (#F53). The manifest must NOT ride the batched
