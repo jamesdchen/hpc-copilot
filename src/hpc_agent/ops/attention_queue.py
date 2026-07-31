@@ -447,23 +447,49 @@ def collect_worker_terminals(experiment_dir: Path, *, now: str) -> list[Attentio
     queue read at noon over a 3am death says so in numbers rather than implying
     the human learned at the instant of failure.
 
+    **Clearing** (the D2/"Delivery de-scoped" rule, ``docs/design/attention-queue.md``:
+    *an item persists — recomputed, with its age — until the human clears its
+    SUBJECT*). The journal is APPEND-ONLY, so a raw record-per-item projection
+    would never clear: a run that died three times and then succeeded would render
+    three standing BLOCKED items forever. Two compatible predicates give the
+    subject its clearable identity, both read off the substrate the queue's other
+    kinds already use — no new vocabulary:
+
+    * the subject is ``(run_id, block)``, not a record, so only the LATEST record
+      per pair can produce an item (:func:`_latest_terminal_cause_per_subject`);
+    * the item is SUPPRESSED when that subject has since resolved — the run's
+      CURRENT journal status is a terminal non-anomalous one (``complete``; the
+      ``ops/status_blocks.py::ANOMALY_STATUSES`` / ``TERMINAL_STATUSES`` split
+      ``collect_anomalies`` keys on), or a LATER successful block terminal exists
+      for the same block (``state/block_terminal.py::read_terminal_with_fallback``,
+      the same store the dead-worker scan consults).
+
+    An ``abandoned`` / ``failed`` run is NOT cleared by either leg — that is a
+    terminal the human still owes a verdict on, which is exactly why it is here.
+
     Read-only: this collector opens no connection and writes nothing (the queue is
     watermark-neutral by construction). Fail-open: an unreadable journal yields no
     items rather than crashing the morning read.
     """
-    from hpc_agent.ops.recover.terminal_cause import iter_experiment_terminal_causes
-
     exp = _exp(experiment_dir)
     items: list[AttentionItem] = []
-    for record in iter_experiment_terminal_causes(experiment_dir):
+    resolved: dict[str, bool] = {}
+    for record in _latest_terminal_cause_per_subject(experiment_dir):
         run_id = record.get("run_id")
         if not isinstance(run_id, str) or not run_id:
             continue
         failed_at = record.get("failed_at") if isinstance(record.get("failed_at"), str) else None
+        block = record.get("block") if isinstance(record.get("block"), str) else None
+        key = f"{run_id}\x00{block}"
+        if key not in resolved:
+            resolved[key] = _worker_terminal_subject_resolved(
+                experiment_dir, run_id=run_id, block=block, failed_at=failed_at
+            )
+        if resolved[key]:
+            continue
         recorded_at = (
             record.get("recorded_at") if isinstance(record.get("recorded_at"), str) else None
         )
-        block = record.get("block") if isinstance(record.get("block"), str) else None
         action = record.get("remediation") if isinstance(record.get("remediation"), str) else None
         items.append(
             AttentionItem(
@@ -496,6 +522,17 @@ def collect_worker_terminals(experiment_dir: Path, *, now: str) -> list[Attentio
                     "log_disclosed": record.get("log_disclosed"),
                     "last_log_line": record.get("last_log_line"),
                     # Disclosure-latency honesty (docs/design/s2-readiness.md).
+                    # ``disclosure_latency_seconds`` is the one that matters to a
+                    # human: how long the failure existed before anyone read it.
+                    # ``record_latency_seconds`` is the MACHINE's own delay and is
+                    # structurally 0.0 for every record the exit path mints —
+                    # ``failed_at`` and ``recorded_at`` are the same instant there,
+                    # because the worker discloses as it dies. It is carried
+                    # anyway, and pinned at 0.0 by test, so the day a
+                    # scanner-side mint lands (a hard kill that flushed nothing,
+                    # noticed minutes later) the machine's blind window is
+                    # already a rendered number rather than a field someone has
+                    # to think to add.
                     "failed_at": failed_at,
                     "recorded_at": recorded_at,
                     "surfaced_at": now,
@@ -505,6 +542,99 @@ def collect_worker_terminals(experiment_dir: Path, *, now: str) -> list[Attentio
             )
         )
     return items
+
+
+def _latest_terminal_cause_per_subject(experiment_dir: Path) -> list[Mapping[str, Any]]:
+    """The newest terminal-cause record per ``(run_id, block)`` SUBJECT.
+
+    The journal is append-only (every death of a run is kept — that history is
+    the point), but the queue's unit is a SUBJECT, not a record. Three deaths of
+    one block are one thing needing attention, not three, and only the newest one
+    describes the current state.
+
+    Newest is by ``recorded_at`` (ISO-8601 UTC, so lexical order IS chronological
+    order), with append order as the tiebreak — two records stamped in the same
+    second resolve to the later-appended one, which is the write order.
+    """
+    from hpc_agent.ops.recover.terminal_cause import iter_experiment_terminal_causes
+
+    latest: dict[tuple[str, str], tuple[str, int, Mapping[str, Any]]] = {}
+    for seq, record in enumerate(iter_experiment_terminal_causes(experiment_dir)):
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        block = record.get("block")
+        key = (run_id, block if isinstance(block, str) else "")
+        stamp = record.get("recorded_at")
+        rank = (stamp if isinstance(stamp, str) else "", seq)
+        prior = latest.get(key)
+        if prior is None or (prior[0], prior[1]) < rank:
+            latest[key] = (rank[0], rank[1], record)
+    return [entry[2] for _key, entry in sorted(latest.items())]
+
+
+def _worker_terminal_subject_resolved(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    block: str | None,
+    failed_at: str | None,
+) -> bool:
+    """Whether a ``(run_id, block)`` worker-death subject has since RESOLVED.
+
+    The clearing predicate. Two independent legs, either of which clears:
+
+    * the run's CURRENT journal status is a terminal, NON-anomalous one — i.e.
+      ``complete``. Routed through ``ops/status_blocks.py::ANOMALY_STATUSES`` and
+      ``state/run_record.TERMINAL_STATUSES`` (the same split ``collect_anomalies``
+      keys on), so a status that is terminal-but-owed (``failed`` / ``abandoned``)
+      correctly does NOT clear: that is a verdict the human still owes, which is
+      why the item exists.
+    * a LATER successful block terminal exists for the same block — the worker was
+      re-invoked and got there. Read from ``state/block_terminal.py`` via
+      ``read_terminal_with_fallback`` (the canonical verb key with the legacy
+      short-key fallback, exactly as the dead-worker scan reads it). "Later" is
+      compared against the death's ``failed_at``; a terminal that PREDATES the
+      death is the record of an earlier attempt and clears nothing.
+
+    Fail-safe direction is DO NOT CLEAR: anything unreadable leaves the item
+    standing. Wrongly hiding a failure is the defect; wrongly showing one is
+    noise the human can see through.
+    """
+    from hpc_agent.ops.status_blocks import ANOMALY_STATUSES
+    from hpc_agent.state.run_record import TERMINAL_STATUSES
+
+    try:
+        from hpc_agent.state.journal import load_run
+
+        record = load_run(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — an unreadable record must not clear the item
+        record = None
+    if record is not None:
+        status = str(getattr(record, "status", "") or "")
+        if status in TERMINAL_STATUSES and status not in ANOMALY_STATUSES:
+            return True
+
+    if not block:
+        return False
+    try:
+        from hpc_agent.state.block_terminal import read_terminal_with_fallback
+
+        terminal = read_terminal_with_fallback(experiment_dir, run_id, block)
+    except Exception:  # noqa: BLE001 — same fail-safe direction
+        terminal = None
+    if not isinstance(terminal, dict):
+        return False
+    result = terminal.get("result")
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        return False
+    ts = terminal.get("ts")
+    if not isinstance(ts, str) or failed_at is None:
+        # An ok terminal with no comparable instant still means the block reached
+        # a successful terminal for this run; there is nothing left to decide.
+        return True
+    elapsed = _elapsed_seconds(failed_at, ts)
+    return elapsed is None or elapsed >= 0
 
 
 def _elapsed_seconds(start: str | None, end: str | None) -> float | None:

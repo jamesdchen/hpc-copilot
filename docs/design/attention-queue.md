@@ -431,6 +431,22 @@ un-capped with `skipped` accounting (no cap measured as needed).
 
 ## Drift log (implementation deviations, recorded)
 
+* **2026-07-30 (adversarial review) — `worker-terminal`'s SUBJECT is
+  `(run_id, block)`, not a journal record, and it CLEARS.** The first build
+  projected one item per journal record. The journal is append-only, so nothing
+  ever cleared: a run that died three times and then succeeded rendered three
+  standing BLOCKED items indefinitely — a direct violation of this design's own
+  "an item persists until the human clears its SUBJECT". Two compatible
+  predicates fixed it, both reading substrate other kinds already use rather than
+  inventing vocabulary: only the LATEST record per `(run_id, block)` can produce
+  an item, and the item is suppressed once that subject resolves (the run's
+  current status is terminal and non-anomalous per `ANOMALY_STATUSES` /
+  `TERMINAL_STATUSES`, or a LATER successful block terminal exists). `failed` /
+  `abandoned` deliberately do NOT clear — those are verdicts still owed. Both
+  clearing reads fail SAFE (unreadable → the item stands): wrongly hiding a
+  failure is the defect this kind exists to prevent, and a stale item is the
+  cheaper error. The route-through pin moved onto the two helpers and now also
+  pins the clearing substrate, so a future refactor cannot quietly re-inline it.
 * **2026-07-30 — `worker-terminal` lands with a per-item DISCLOSURE-LATENCY
   suffix, the first thing on a queue line that is not derived from
   `computed_at`.** s2-readiness pillar 5 requires `failed_at` vs `surfaced_at`

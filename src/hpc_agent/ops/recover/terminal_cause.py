@@ -75,14 +75,26 @@ TERMINAL_CAUSE_SUFFIX = ".terminal-causes.jsonl"
 #: record.
 DETECTED_BY_EXIT_PATH = "exit-path"
 
-#: Marker the staging retry ladder writes to the worker log when it gives up.
-#: Matching it is not heuristic guessing: ``ops/submit_flow.py`` composes the
-#: exhaustion error deliberately so ONE word crosses the gate, the log, and
-#: triage (the same reason ``PathCause`` values are quoted verbatim in prose).
+#: The two shapes ``ops/submit_flow.py::_stage_exhausted_error`` actually
+#: composes, quoted from its own source rather than paraphrased:
+#:
+#: * ``"staging against {t} exhausted {n} bounded attempt(s): …"`` — the ladder
+#:   used its whole budget;
+#: * ``"staging against {t} STOPPED after {n} of {m} allowed attempt(s): …"`` —
+#:   the ladder stopped early because the breaker's cooldown outlasted its
+#:   patience (a fence, not a failure to try).
+#:
+#: These are matched because that error's own text is the ONLY channel the class
+#: has once ``_err_from_hpc`` has collapsed the exception to an int: the
+#: exhaustion envelope is a fresh ``SshUnreachable`` and carries no flap stamp,
+#: and its ``path_cause`` prefix is present only when a readiness reading
+#: happened to be in the window (the composer is consult-only and says "cause not
+#: named" otherwise). Verified against the composer, not assumed — an earlier
+#: draft of this tuple matched three strings that appear nowhere in the codebase,
+#: which is a dead arm that silently classifies nothing.
 _STAGE_EXHAUSTED_MARKERS = (
-    "staging attempt",
-    "attempts exhausted",
-    "could not stage",
+    "bounded attempt(s)",
+    "STOPPED after",
 )
 
 #: The canary verdict token. ``ops/verify_canary.py`` sets it as a literal
@@ -193,7 +205,13 @@ def terminal_cause_path(experiment_dir: Path, run_id: str) -> Path:
     from hpc_agent import errors
     from hpc_agent._kernel.contract.layout import RepoLayout
 
-    if not run_id or "/" in run_id or "\\" in run_id or run_id in (".", ".."):
+    # ``:`` is refused alongside the separators: on Windows a ``C:foo`` run_id is
+    # a DRIVE-RELATIVE path that escapes the sidecar tree without containing a
+    # separator at all (and an NTFS ``name:stream`` writes an alternate data
+    # stream). The two existing guards in the tree do not carry it; this one is
+    # written by a DYING process against a run_id that came off the environment,
+    # so it takes the stricter side.
+    if not run_id or set(run_id) & {"/", "\\", ":"} or run_id in (".", ".."):
         raise errors.SpecInvalid(f"run_id must be filesystem-safe; got {run_id!r}")
     return RepoLayout(experiment_dir).runs / f"{run_id}{TERMINAL_CAUSE_SUFFIX}"
 
@@ -280,10 +298,13 @@ def classify_worker_exit(
        that no dispatch was ever issued — provable offline, so it outranks
        everything the transport might say);
     3. the worker log's bounded tail, scanned for the discriminated cause
-       VOCABULARY (``PathCause`` arms, the canary's ``reporter_unreachable``
-       ``failure_kind``, the staging ladder's exhaustion) — not a heuristic:
-       those tokens are emitted verbatim precisely so one word crosses the
-       fire-time gate, the worker log, and triage;
+       VOCABULARY. Two different provenances, deliberately not conflated: the
+       ``PathCause`` arms and the canary's ``reporter_unreachable`` are STABLE
+       TOKENS — a closed Literal and a literal ``failure_kind`` field, emitted
+       verbatim by design so one word crosses the fire-time gate, the worker log
+       and triage — whereas the staging ladder's exhaustion is matched on
+       composed MESSAGE TEXT (:data:`_STAGE_EXHAUSTED_MARKERS`), which is a
+       weaker contract quoted from that composer's source and re-pinned by test;
     4. the breaker's durable state file for the run's host — a file read.
 
     Never dials, never probes, never raises: a dying worker must not open a
@@ -510,6 +531,21 @@ def _compose_message(
     head = f"detached {block} worker for run {run_id} died terminal"
     if exit_code is not None:
         head += f" (exit {exit_code})"
+    if recovery_kind == "zombie_submitting_record" and path_cause in _DEAD_HOP_CAUSES:
+        # Precedence collision, stated ROUTE-FIRST on purpose. The dispatch
+        # evidence legitimately wins the classification (it proves offline that
+        # nothing was sent, so resubmitting is safe), but that menu's rank-1
+        # option is `/submit-hpc` — and read after a "cause: zombie_submitting_
+        # record" headline, with the dead hop never mentioned, it reads as
+        # "resubmit now" straight back through the hop that killed the worker.
+        # Leading with the route fact keeps BOTH truths in the order that makes
+        # the second one safe to act on.
+        return (
+            f"{head}; the route is DOWN ({path_cause}) — fix the path FIRST; "
+            f"separately, cause: {recovery_kind} (the record proves no dispatch "
+            f"was ever issued, so nothing is duplicated by a resubmit once the "
+            f"route is back)" + (f"; {type(exc).__name__}: {exc}" if exc is not None else "")
+        )
     if recovery_kind:
         head += f"; cause: {recovery_kind}"
         # The readiness layer's OWN word rides alongside the registry key: it is

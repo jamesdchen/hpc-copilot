@@ -525,14 +525,17 @@ _DEAD_HOP_ROUTE = RecoveryMenu(
 _FLAP_EXHAUSTED_STAGING = RecoveryMenu(
     kind="flap_exhausted_staging",
     summary=(
-        "Staging (the delta push / deploy) died after the flap-riding retry ladder "
-        "exhausted its attempts: the transport kept dropping mid-command — a "
-        "flapping tunnel or VPN — rather than the remote command failing. The "
-        "delta push is idempotent and CONTENT-KEYED, so everything already shipped "
-        "is banked: a re-fire RESUMES, it does not restart. The ladder stops early "
-        "(rather than holding the worker) when the host's circuit breaker is "
-        "cooling for longer than the ladder's patience — that is a fence, not a "
-        "failure to try."
+        "A TRANSPORT FLAP killed the worker: the connection kept dropping "
+        "mid-command — a flapping tunnel or VPN — rather than a remote command "
+        "failing. The identity is stamped by whoever caught the transport "
+        "failure, so this covers every seam that rides the flap-retry posture "
+        "(the staging delta push and deploy, the remote manifest probe, any "
+        "connection-owning step), not staging alone; when it IS staging, the "
+        "ladder's exhaustion message names the attempts actually made. "
+        "Everything already shipped is banked — the delta push is idempotent and "
+        "CONTENT-KEYED, so a re-fire RESUMES rather than restarts. A ladder that "
+        "stops EARLY did so because the host's circuit breaker is cooling for "
+        "longer than its patience: a fence, not a failure to try."
     ),
     options=(
         RecoveryOption(

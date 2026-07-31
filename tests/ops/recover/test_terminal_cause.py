@@ -34,6 +34,7 @@ from hpc_agent.ops.recover.terminal_cause import (
     terminal_cause_path,
 )
 from hpc_agent.recovery.registry import REGISTRY, menu_for, remediation_for
+from hpc_agent.state.block_terminal import record_terminal, terminal_path
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -180,6 +181,80 @@ def test_classifies_flap_from_the_stamped_identity_not_the_message(tmp_path: Pat
     assert "converge" in cause.remediation or "residue" in cause.remediation
 
 
+def test_stage_exhaustion_markers_match_what_submit_flow_actually_composes() -> None:
+    """The marker arm is pinned to its SOURCE, not to a paraphrase of it.
+
+    An earlier draft matched three strings ("staging attempt", "attempts
+    exhausted", "could not stage") that appear nowhere in the tree — a dead arm
+    that silently classified nothing while its docstring claimed a shared
+    vocabulary. This reads the composer's own source so the two cannot drift
+    apart silently again.
+    """
+    import inspect
+
+    from hpc_agent.ops.recover.terminal_cause import _STAGE_EXHAUSTED_MARKERS
+    from hpc_agent.ops.submit_flow import _stage_exhausted_error
+
+    src = inspect.getsource(_stage_exhausted_error)
+    for marker in _STAGE_EXHAUSTED_MARKERS:
+        assert marker in src, (
+            f"{marker!r} is not composed by _stage_exhausted_error — the arm is dead"
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "staging against user@hoffman2 exhausted 3 bounded attempt(s): cause not named.",
+        "staging against user@hoffman2 STOPPED after 1 of 3 allowed attempt(s): circuit open.",
+    ],
+)
+def test_stage_exhaustion_message_keys_the_flap_menu(tmp_path: Path, body: str) -> None:
+    """Both composed shapes classify — the budget-exhausted arm and the fenced arm."""
+    _mk_run(tmp_path, "run-stage")
+    log = _worker_log(tmp_path, body)
+    cause = classify_worker_exit(
+        tmp_path,
+        run_id="run-stage",
+        block="submit-s2",
+        exit_code=1,
+        log_path=log,
+        now_iso=_FAILED_AT,
+    )
+    assert cause.recovery_kind == "flap_exhausted_staging"
+
+
+def test_a_log_without_an_exhaustion_marker_does_not_key_the_flap_menu(tmp_path: Path) -> None:
+    """The arm's negative half: near-miss staging prose must NOT classify.
+
+    Without this the arm could be satisfied by any log mentioning staging, and a
+    later loosening of the markers would go unnoticed.
+    """
+    _mk_run(tmp_path, "run-stage")
+    log = _worker_log(tmp_path, "staging against user@hoffman2 pushed 4 files, deploy ok")
+    cause = classify_worker_exit(
+        tmp_path,
+        run_id="run-stage",
+        block="submit-s2",
+        exit_code=1,
+        log_path=log,
+        now_iso=_FAILED_AT,
+    )
+    assert cause.recovery_kind is None
+
+
+def test_flap_menu_summary_is_not_staging_specific() -> None:
+    """The menu covers every flap-retry seam, because the identity is stamped.
+
+    The test above classifies a stamped flap raised by the remote manifest probe,
+    not by staging — a summary that told a staging-only story would misdescribe
+    the case its own battery demonstrates.
+    """
+    summary = menu_for("flap_exhausted_staging").summary
+    assert "TRANSPORT FLAP" in summary
+    assert "not staging alone" in summary
+
+
 def test_classifies_canary_reporter_unreachable(tmp_path: Path) -> None:
     """The canary's own ``failure_kind`` token keys the route-class menu."""
     _mk_run(tmp_path, "run-canary")
@@ -222,6 +297,36 @@ def test_classifies_zombie_submitting_record_from_dispatch_evidence(tmp_path: Pa
     assert cause.recovery_kind == "zombie_submitting_record"
     assert cause.remediation is not None
     assert "abandoned" in cause.remediation
+
+
+def test_zombie_over_a_dead_hop_leads_with_the_route_fact(tmp_path: Path) -> None:
+    """Precedence collision: the record wins, but the message must not read "resubmit".
+
+    ``zombie_submitting_record``'s rank-1 option is ``/submit-hpc``. Read after a
+    headline that names only the zombie class, with the dead hop never mentioned,
+    that is an instruction to re-fire straight back through the hop that killed
+    the worker. The route fact therefore leads.
+    """
+    _mk_run(
+        tmp_path,
+        "run-both",
+        status="submitting",
+        dispatch_evidence={"state": "pending", "at": _FAILED_AT},
+    )
+    log = _worker_log(tmp_path, "hop_down_direct_ok — ProxyJump hop is DOWN")
+    cause = classify_worker_exit(
+        tmp_path,
+        run_id="run-both",
+        block="submit-s2",
+        exit_code=1,
+        log_path=log,
+        now_iso=_FAILED_AT,
+    )
+    assert cause.recovery_kind == "zombie_submitting_record"  # precedence unchanged
+    head, _, tail = cause.message.partition("zombie_submitting_record")
+    assert "hop_down_direct_ok" in head, f"the route fact must LEAD: {cause.message}"
+    assert "fix the path FIRST" in head
+    assert tail, "the zombie class must still be named"
 
 
 def test_pre_evidence_record_reads_unknown_not_false(tmp_path: Path) -> None:
@@ -295,6 +400,32 @@ def test_record_write_is_fail_open(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "bad/id",
+        "bad\\id",
+        ".",
+        "..",
+        "",
+        # Windows drive-relative: NO separator, yet it resolves against the
+        # process's per-drive cwd and lands outside the sidecar tree entirely.
+        "C:evil",
+        # NTFS alternate data stream: writes a hidden stream on a real file.
+        "run-1:hidden",
+    ],
+)
+def test_path_guard_refuses_every_escaping_run_id(tmp_path: Path, run_id: str) -> None:
+    """The path guard is what stands between an env-supplied run_id and the tree.
+
+    This record is written by a DYING process against a ``run_id`` that came off
+    the environment, so the guard takes the stricter side: separators, the dot
+    entries, AND ``:`` (which escapes on Windows without a separator at all).
+    """
+    with pytest.raises(errors.SpecInvalid):
+        terminal_cause_path(tmp_path, run_id)
+
+
 def test_reading_a_torn_journal_yields_fewer_records_not_an_exception(tmp_path: Path) -> None:
     _mk_run(tmp_path, "run-torn")
     record_worker_terminal_cause(
@@ -359,43 +490,114 @@ def test_killed_worker_produces_record_item_and_named_remediation(tmp_path: Path
     assert item.evidence["path_cause"] == "hop_down_direct_ok"
 
 
-def test_item_carries_everything_the_log_does(tmp_path: Path) -> None:
+def _real_fatal_block(
+    monkeypatch: pytest.MonkeyPatch, *, message: str, exit_code: int
+) -> tuple[str, BaseException]:
+    """The REAL ``[fatal]`` block ``crash_disclosure.emit_fatal_block`` writes.
+
+    Not a hand-built fixture: the emitter is invoked with a genuinely raised
+    exception (so the traceback is real) and its output captured verbatim. The
+    test below then enumerates that output, so a fact ADDED to the emitter shows
+    up as an unrecognised line and fails — a hand-built fixture could not notice.
+    """
+    import io
+
+    from hpc_agent._kernel.lifecycle.crash_disclosure import emit_fatal_block
+
+    monkeypatch.setenv("HPC_DETACHED_RUN_ID", "run-hop")  # the emitter's own gate
+    try:
+        raise errors.SshUnreachable(message)
+    except errors.SshUnreachable as exc:
+        stream = io.StringIO()
+        assert emit_fatal_block(
+            exc=exc,
+            exit_code=exit_code,
+            last_stage="[hb] alive 12s | child=ssh.exe cpu=0.4s",
+            stream=stream,
+        )
+        # The exception is handed back so the RECORDER sees exactly what the
+        # EMITTER saw — that pairing is the real unhandled-exception arm, and it
+        # is what makes "every emitted fact is carried" a meaningful claim.
+        return stream.getvalue(), exc
+
+
+def test_item_carries_everything_the_log_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The log STAYS (forensic tier) and the item needs none of it to decide.
 
-    Pinned both ways: the ``[fatal]`` block is still in the worker log, AND every
-    decision-relevant fact the log carries is on the attention item — the cause,
-    the envelope code, the exit code, the last stage, and a POINTER back to the
-    log for the traceback a post-mortem still wants.
+    The fact set is DERIVED from ``emit_fatal_block``'s real output rather than
+    asserted against a hand-written list: every ``[fatal]``-marked line the
+    emitter produced must be accounted for by a fact the attention item carries.
+    A new emitter fact therefore fails this test until it is either carried on
+    the item or consciously declared forensic-only.
+
+    (The traceback body is deliberately NOT marked — the ``[fatal]`` prefix is
+    the emitter's own "this is a disclosed fact" convention, the same one
+    ``log_has_fatal_marker`` keys on, and the traceback is the forensic payload
+    the item points AT rather than carries.)
     """
     _mk_run(tmp_path, "run-hop")
-    log = _worker_log(
-        tmp_path,
-        "submit-s2 refused BEFORE detaching run 'run-hop': hop_down_direct_ok — dead hop.",
+    fatal, exc = _real_fatal_block(
+        monkeypatch,
+        message="submit-s2 refused BEFORE detaching: hop_down_direct_ok — dead hop.",
+        exit_code=1,
     )
+    log = tmp_path / "worker.log"
+    log.write_text("[hb] alive 12s | child=ssh.exe cpu=0.4s\n" + fatal, encoding="utf-8")
+
     record_worker_terminal_cause(
         tmp_path,
         run_id="run-hop",
         block="submit-s2",
         exit_code=1,
-        log_path=log,
+        exc=exc,
+        log_path=str(log),
         now_iso=_FAILED_AT,
     )
-
-    # (a) the forensic tier is untouched
-    log_text = Path(log).read_text(encoding="utf-8")
-    assert "[fatal] detached worker exit-path disclosure" in log_text
-    assert "[fatal] exit_code=1" in log_text
-
-    # (b) the item carries the decision-relevant content of that log
     ev = _one_item(tmp_path).evidence
-    assert ev["exit_code"] == 1
-    assert ev["error_code"]
-    assert ev["recovery_kind"] == "dead_hop_route"
-    assert ev["path_cause"] == "hop_down_direct_ok"
-    assert ev["log_disclosed"] is True, "the item must report that the log disclosed"
-    assert ev["last_log_line"], "the item must carry where the worker stopped"
-    assert ev["log_path"] == log, "the item must POINT at the forensic tier"
-    assert "hop_down_direct_ok" in str(ev["message"])
+
+    # (a) the forensic tier is untouched — the emitter's block is still on disk.
+    assert fatal in log.read_text(encoding="utf-8")
+
+    # (b) every marked fact the emitter wrote is accounted for on the item.
+    #     Each entry is (predicate on the line, the item fact that carries it).
+    accounted: list[tuple[Any, Any]] = [
+        # the header — carried as "the log disclosed on its way out"
+        (lambda ln: ln == "detached worker exit-path disclosure", lambda: ev["log_disclosed"]),
+        # the exception type + message — carried as error_code + the discriminated
+        # cause the classifier read OUT of that very message
+        (
+            lambda ln: ln.startswith("SshUnreachable:"),
+            lambda: (
+                ev["error_code"] == "ssh_unreachable"
+                and ev["path_cause"] == "hop_down_direct_ok"
+                and ev["recovery_kind"] == "dead_hop_route"
+            ),
+        ),
+        # the exit code
+        (lambda ln: ln.startswith("exit_code="), lambda: ev["exit_code"] == 1),
+        # the last known stage — carried as the last log line
+        (lambda ln: ln.startswith("last known stage:"), lambda: bool(ev["last_log_line"])),
+    ]
+    marked = [
+        line[len("[fatal] ") :].strip()
+        for line in fatal.splitlines()
+        if line.startswith("[fatal] ")
+    ]
+    assert marked, "the emitter produced no marked facts — the fixture is not real"
+    for line in marked:
+        matches = [carried for predicate, carried in accounted if predicate(line)]
+        assert matches, (
+            f"emit_fatal_block wrote an UNACCOUNTED fact: {line!r}. Either carry it "
+            "on the attention item, or add it here as a declared forensic-only line."
+        )
+        for carried in matches:
+            assert carried(), f"the item does not carry the fact behind {line!r}"
+
+    # (c) and the item POINTS at the forensic tier for the traceback it does not carry.
+    assert ev["log_path"] == str(log)
+    assert "Traceback" in log.read_text(encoding="utf-8")
 
 
 def test_item_discloses_failed_at_vs_surfaced_at(tmp_path: Path) -> None:
@@ -458,6 +660,136 @@ def test_collector_is_wired_into_collect_items(tmp_path: Path) -> None:
 
 def test_empty_journal_yields_no_items(tmp_path: Path) -> None:
     assert collect_worker_terminals(tmp_path, now=_NOW) == []
+
+
+# ── clearing: the item's SUBJECT is (run_id, block), and it resolves ──────────
+#
+# The attention queue's own rule (docs/design/attention-queue.md, "Delivery
+# de-scoped"): an item persists — recomputed, with its age — until the human
+# clears its SUBJECT. An append-only journal projected record-per-item can never
+# clear, which is a standing BLOCKED item for a run that succeeded weeks ago.
+
+
+def _die(tmp_path: Path, run_id: str, *, block: str = "submit-s2", at: str) -> None:
+    """One journalled worker death for ``(run_id, block)`` stamped at *at*."""
+    record_worker_terminal_cause(tmp_path, run_id=run_id, block=block, exit_code=1, now_iso=at)
+
+
+def _succeed_block(tmp_path: Path, run_id: str, *, block: str = "submit-s2", at: str) -> None:
+    """A SUCCESSFUL block terminal for ``(run_id, block)`` stamped at *at*.
+
+    Written through the real ``record_terminal`` so the stored shape is the real
+    one, then re-stamped to a deterministic ``ts`` (the writer stamps wall-clock,
+    which would make the later-than comparison depend on when the suite runs).
+    """
+    record_terminal(tmp_path, run_id=run_id, block=block, cmd_sha="sha", result_dump={"ok": True})
+    path = terminal_path(tmp_path, run_id, block)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored["ts"] = at
+    path.write_text(json.dumps(stored, sort_keys=True), encoding="utf-8")
+
+
+def test_three_deaths_then_a_completed_run_render_zero_items(tmp_path: Path) -> None:
+    """Died 3x then SUCCEEDED → the subject is resolved; nothing stands."""
+    _mk_run(tmp_path, "run-retry", status="in_flight")
+    for hour in ("01", "02", "03"):
+        _die(tmp_path, "run-retry", at=f"2026-07-30T{hour}:00:00+00:00")
+    assert len(collect_worker_terminals(tmp_path, now=_NOW)) == 1  # still dead: one item
+
+    _mk_run(tmp_path, "run-retry", status="complete")
+    assert collect_worker_terminals(tmp_path, now=_NOW) == []
+
+
+def test_three_deaths_then_a_successful_block_terminal_render_zero_items(tmp_path: Path) -> None:
+    """The second clearing leg: the block itself got there on a later attempt."""
+    _mk_run(tmp_path, "run-retry", status="in_flight")
+    for hour in ("01", "02", "03"):
+        _die(tmp_path, "run-retry", at=f"2026-07-30T{hour}:00:00+00:00")
+    _succeed_block(tmp_path, "run-retry", at="2026-07-30T04:00:00+00:00")
+    assert collect_worker_terminals(tmp_path, now=_NOW) == []
+
+
+def test_three_deaths_still_dead_render_exactly_one_latest_item(tmp_path: Path) -> None:
+    """Died 3x and still dead → ONE item, and it is the LATEST death, not the first."""
+    _mk_run(tmp_path, "run-retry", status="in_flight")
+    for hour in ("01", "02", "03"):
+        _die(tmp_path, "run-retry", at=f"2026-07-30T{hour}:00:00+00:00")
+    items = collect_worker_terminals(tmp_path, now=_NOW)
+    assert len(items) == 1
+    assert items[0].since == "2026-07-30T03:00:00+00:00"
+
+
+def test_a_block_terminal_that_predates_the_death_clears_nothing(tmp_path: Path) -> None:
+    """An EARLIER success is the record of a previous attempt — the death is newer."""
+    _mk_run(tmp_path, "run-retry", status="in_flight")
+    _succeed_block(tmp_path, "run-retry", at="2026-07-30T01:00:00+00:00")
+    _die(tmp_path, "run-retry", at="2026-07-30T03:00:00+00:00")
+    assert len(collect_worker_terminals(tmp_path, now=_NOW)) == 1
+
+
+@pytest.mark.parametrize("status", ["failed", "abandoned"])
+def test_an_anomalous_terminal_status_does_not_clear(tmp_path: Path, status: str) -> None:
+    """``failed`` / ``abandoned`` are terminals the human still owes a verdict on."""
+    _mk_run(tmp_path, "run-dead", status=status)
+    _die(tmp_path, "run-dead", at=_FAILED_AT)
+    assert len(collect_worker_terminals(tmp_path, now=_NOW)) == 1
+
+
+def test_distinct_blocks_of_one_run_are_distinct_subjects(tmp_path: Path) -> None:
+    """The subject is ``(run_id, block)`` — S2 dying does not hide S4 dying."""
+    _mk_run(tmp_path, "run-two", status="in_flight")
+    _die(tmp_path, "run-two", block="submit-s2", at="2026-07-30T01:00:00+00:00")
+    _die(tmp_path, "run-two", block="submit-s4", at="2026-07-30T02:00:00+00:00")
+    items = collect_worker_terminals(tmp_path, now=_NOW)
+    assert sorted(item.block or "" for item in items) == ["submit-s2", "submit-s4"]
+
+
+def test_clearing_fails_SAFE_when_no_run_record_exists(tmp_path: Path) -> None:
+    """No record to consult → the item STANDS. Wrongly hiding a failure is the defect."""
+    _die(tmp_path, "run-orphan", at=_FAILED_AT)  # no run record was ever written
+    assert len(collect_worker_terminals(tmp_path, now=_NOW)) == 1
+
+
+def test_clearing_fails_SAFE_when_the_run_record_read_RAISES(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TORN journal must leave the item standing, not clear it.
+
+    Distinct from the absent-record case above, which never enters the ``except``
+    at all: this drives the exception arm, on a run whose status would OTHERWISE
+    clear (``complete``). The fail-safe direction is the whole point — a
+    disclosure surface that hides failures when its own reads break is worse than
+    one that shows a stale item.
+    """
+    import hpc_agent.state.journal as journal_mod
+
+    _mk_run(tmp_path, "run-torn-rec", status="complete")
+    _die(tmp_path, "run-torn-rec", at=_FAILED_AT)
+    assert collect_worker_terminals(tmp_path, now=_NOW) == []  # clears while readable
+
+    def _boom(*_args: object, **_kw: object) -> None:
+        raise OSError("journal record is torn")
+
+    monkeypatch.setattr(journal_mod, "load_run", _boom)
+    assert len(collect_worker_terminals(tmp_path, now=_NOW)) == 1
+
+
+def test_clearing_fails_SAFE_when_the_block_terminal_read_RAISES(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same fail-safe direction on the second clearing leg."""
+    import hpc_agent.state.block_terminal as bt_mod
+
+    _mk_run(tmp_path, "run-torn-bt", status="in_flight")
+    _die(tmp_path, "run-torn-bt", at=_FAILED_AT)
+    _succeed_block(tmp_path, "run-torn-bt", at="2026-07-30T04:00:00+00:00")
+    assert collect_worker_terminals(tmp_path, now=_NOW) == []  # clears while readable
+
+    def _boom(*_args: object, **_kw: object) -> None:
+        raise OSError("block terminal is torn")
+
+    monkeypatch.setattr(bt_mod, "read_terminal_with_fallback", _boom)
+    assert len(collect_worker_terminals(tmp_path, now=_NOW)) == 1
 
 
 # ── the morning brief ────────────────────────────────────────────────────────
@@ -530,13 +862,32 @@ def _as_detached_worker(
     return exp, log
 
 
+def _assert_fatal_block_written(capsys: pytest.CaptureFixture[str], *needles: str) -> None:
+    """The ``[fatal]`` block reached the worker's stderr (== its captured log).
+
+    The pillar ADDS a structured tier; it never removes the forensic one. Asserted
+    on every exit arm so a future refactor that routes disclosure through the
+    journal alone cannot quietly drop the log block.
+    """
+    err = capsys.readouterr().err
+    assert "[fatal] detached worker exit-path disclosure" in err, (
+        f"the [fatal] block must still be written; stderr was: {err!r}"
+    )
+    for needle in needles:
+        assert needle in err, f"{needle!r} missing from the [fatal] block: {err!r}"
+
+
 def test_exit_path_journals_the_cause_on_an_unhandled_exception(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The real ``cli.dispatch.main`` seam: a crashing worker journals its cause.
 
-    Also pins that the ``[fatal]`` block is STILL written — the forensic tier and
-    the structured tier are additive, never a swap.
+    Pins that the ``[fatal]`` block is STILL written on this arm — the forensic
+    tier and the structured tier are additive, never a swap. (In a real worker
+    stderr IS the captured log; here it is pytest's capture, which is the same
+    stream the emitter targets.)
     """
     import hpc_agent.cli.dispatch as dispatch
 
@@ -549,6 +900,8 @@ def test_exit_path_journals_the_cause_on_an_unhandled_exception(
     monkeypatch.setattr(dispatch, "_dispatch_main", _boom)
     with pytest.raises(errors.SshUnreachable):
         dispatch.main([])
+
+    _assert_fatal_block_written(capsys, "SshUnreachable:")
 
     records = read_terminal_causes(exp, "run-e2e")
     assert len(records) == 1
@@ -563,7 +916,9 @@ def test_exit_path_journals_the_cause_on_an_unhandled_exception(
 
 
 def test_exit_path_journals_the_cause_on_a_nonzero_return(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """No exception survives the ``rc != 0`` arm, so the log tail is the evidence."""
     import hpc_agent.cli.dispatch as dispatch
@@ -577,6 +932,8 @@ def test_exit_path_journals_the_cause_on_a_nonzero_return(
     monkeypatch.setattr(dispatch, "_dispatch_main", lambda _argv: 1)
 
     assert dispatch.main([]) == 1
+    _assert_fatal_block_written(capsys, "exit_code=1")
+
     records = read_terminal_causes(exp, "run-e2e")
     assert len(records) == 1
     assert records[0]["recovery_kind"] == "canary_reporter_unreachable"
@@ -584,7 +941,9 @@ def test_exit_path_journals_the_cause_on_a_nonzero_return(
 
 
 def test_exit_path_journals_the_cause_on_a_nonzero_system_exit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The ``SystemExit`` arm disclosed to the log but recorded NOTHING before."""
     import hpc_agent.cli.dispatch as dispatch
@@ -598,6 +957,9 @@ def test_exit_path_journals_the_cause_on_a_nonzero_system_exit(
     monkeypatch.setattr(dispatch, "_dispatch_main", _exit)
     with pytest.raises(SystemExit):
         dispatch.main([])
+
+    _assert_fatal_block_written(capsys, "SystemExit:")
+
     records = read_terminal_causes(exp, "run-e2e")
     assert len(records) == 1
     assert records[0]["exit_code"] == 2

@@ -240,3 +240,33 @@ them: a total elapsed time can never acquire the `+` delta marker.
   calls, so the mint would have to land on a mutating verb (`wait-detached` is
   the natural seat) — deliberately left for that unit rather than smuggled into
   a read path.
+- 2026-07-30 (pillar 5, adversarial review): one BLOCKING defect and five
+  findings fixed. **The blocker: `worker-terminal` items never cleared.** The
+  journal is append-only and the collector projected one item per record, so a
+  run that died three times and then succeeded rendered three standing BLOCKED
+  items forever — the attention queue's own "an item persists until the human
+  clears its SUBJECT" rule, broken by the kind that most needed to obey it. The
+  fix gives the item a clearable subject identity (`(run_id, block)`, latest
+  record only) plus a resolution predicate over substrate the other kinds already
+  read (`ANOMALY_STATUSES`/`TERMINAL_STATUSES` and the block-terminal store);
+  both legs fail SAFE (unreadable → the item stands, because wrongly hiding a
+  failure is the defect and a stale item is the cheaper error). Ten mutations
+  against those predicates die. **The other material finding:** the
+  staging-exhaustion arm was DEAD CODE with a false provenance claim — its three
+  markers appear nowhere in the tree, and its docstring asserted the
+  shared-vocabulary rationale that the `PathCause` arms legitimately have but a
+  composed-message match does not. It now matches what `_stage_exhausted_error`
+  actually writes, is pinned by a test that reads that composer's source, and
+  carries a negative test so a later loosening is caught; the docstring separates
+  the two provenances instead of borrowing the stronger one. The
+  `flap_exhausted_staging` summary was likewise staging-specific while its own
+  battery demonstrated a probe-raised flap — it now leads with the stamped
+  identity. Remaining fixes: `[fatal]`-still-written assertions on all three exit
+  arms; the "carries everything the log does" test now DERIVES its fact set from
+  `emit_fatal_block`'s real output, so a new emitter fact fails it;
+  `record_latency_seconds` documented as structurally 0.0 until the scanner-side
+  mint exists; `:` added to the path guard (a Windows drive-relative `run_id`
+  escapes with no separator at all); and when the zombie class wins precedence
+  over a dead hop, the composed message now LEADS with the route fact, so that
+  menu's `/submit-hpc` option is not read as "resubmit through the hop that just
+  killed the worker".

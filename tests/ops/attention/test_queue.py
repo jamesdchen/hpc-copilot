@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -369,7 +370,7 @@ def test_within_class_rule_not_overridable_by_class_order() -> None:
 
 
 def test_route_through_source_symbols() -> None:
-    checks = {
+    checks: dict[Callable[..., object], list[str]] = {
         collect_greenlight_and_parked: [
             "find_parked_runs(",
             "is_committed_greenlight_for_boundary(",
@@ -378,8 +379,21 @@ def test_route_through_source_symbols() -> None:
         collect_dead_workers: ["scan_dead_detached_workers("],
         # Pillar 5: the queue re-derives NOTHING about a worker death — the
         # classifier runs at the point of death (where the exception still
-        # exists) and this collector reads its journal.
-        collect_worker_terminals: ["iter_experiment_terminal_causes("],
+        # exists) and this collector reads its journal. The subject-identity and
+        # clearing legs are pinned on their own helpers below, because BOTH must
+        # route through existing substrate: an append-only journal projected
+        # record-per-item would never clear (the F1 defect).
+        collect_worker_terminals: [
+            "_latest_terminal_cause_per_subject(",
+            "_worker_terminal_subject_resolved(",
+        ],
+        q._latest_terminal_cause_per_subject: ["iter_experiment_terminal_causes("],
+        q._worker_terminal_subject_resolved: [
+            "ANOMALY_STATUSES",
+            "TERMINAL_STATUSES",
+            "load_run(",
+            "read_terminal_with_fallback(",
+        ],
         collect_anomalies: ["digest_run(", "ANOMALY_STATUSES", "recommendation_for("],
         collect_campaign_pending: ["latest_decision(", "is_latest_committed_greenlight("],
         collect_audits: ["audit_module("],
