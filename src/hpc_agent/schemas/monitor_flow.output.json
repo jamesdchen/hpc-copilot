@@ -75,6 +75,20 @@
       "default": null,
       "description": "When non-null, indicates why monitor-flow stopped watching even though lifecycle is not 'complete'. Examples: 'failed_tasks_no_auto_recover_in_mvp', 'combiner_failed_max_retries:wave=3', 'abandoned_by_reconcile'. Null when lifecycle is 'complete' or 'timeout'.",
       "title": "Escalation Reason"
+    },
+    "incremental_harvest": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "What the watch streamed home mid-flight: {enabled, pulls, files_pulled, bytes_pulled, tasks_mirrored, paused_reason, last_error}. 'tasks_mirrored' is the honest pull-lag counterpart to last_status.complete — N complete, M pulled locally. Byte accounting only; it asserts nothing about what the results mean and confers no licence to aggregate a partial set.",
+      "title": "Incremental Harvest"
     }
   }
 }

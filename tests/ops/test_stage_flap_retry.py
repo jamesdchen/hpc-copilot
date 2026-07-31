@@ -113,6 +113,75 @@ def test_exhaustion_raises_the_discriminated_cause_shape(
     assert "delta-based" in message, "exhaustion must still say progress was not lost"
 
 
+# ── the flap identity must SURVIVE exhaustion ────────────────────────────────
+#
+# The ladder is only ever REACHED on a flap (a non-flap propagates from attempt
+# 1), so an exhausted ladder is by construction a flap outcome. The envelope
+# used to be raised bare: ``__cause__`` was None and the stamp was never
+# applied, so ``is_transport_flap`` — which walks the cause chain — answered
+# False at exactly the moment the verdict matters most, and a downstream
+# terminal-cause classifier read a known transport flap as a hard failure.
+
+
+def test_exhausted_after_a_flap_still_reads_as_a_flap(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """The exhaustion envelope carries the flap verdict by IDENTITY.
+
+    Uses a bare ``TimeoutError`` deliberately: it is a flap by TYPE and carries
+    no stamp, so a ``__cause__`` walk alone would still answer False. Only the
+    stamp on the envelope preserves the verdict here.
+    """
+    from hpc_agent.infra.ssh_options import is_transport_flap
+
+    monkeypatch.setattr(submit_flow, "_stage_retry_attempts", lambda: 2)
+    with pytest.raises(errors.SshUnreachable) as excinfo:
+        _run_retry([TimeoutError("flap"), TimeoutError("flap")], slept=_no_sleep)
+
+    assert is_transport_flap(excinfo.value) is True
+    assert submit_flow._stage_failure_is_flap(excinfo.value) is True
+
+
+def test_exhaustion_chains_the_last_failure_as_its_cause(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """``raise ... from last`` — the envelope must not orphan the failure that
+    caused it, or a 2am traceback shows the summary and nothing underneath it."""
+    monkeypatch.setattr(submit_flow, "_stage_retry_attempts", lambda: 2)
+    last = TimeoutError("the second flap")
+    with pytest.raises(errors.SshUnreachable) as excinfo:
+        _run_retry([TimeoutError("the first flap"), last], slept=_no_sleep)
+    assert excinfo.value.__cause__ is last
+
+
+def test_a_stamped_last_failure_survives_exhaustion_through_the_chain(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """The other half: a STAMPED last failure (the L4 transport refusal) reaches
+    ``is_transport_flap`` through the restored ``__cause__`` chain."""
+    from hpc_agent.infra.ssh_options import is_transport_flap, mark_transport_flap
+
+    monkeypatch.setattr(submit_flow, "_stage_retry_attempts", lambda: 1)
+    stamped = mark_transport_flap(errors.SshUnreachable("probe severed"))
+    with pytest.raises(errors.SshUnreachable) as excinfo:
+        _run_retry([stamped], slept=_no_sleep)
+    assert excinfo.value.__cause__ is stamped
+    assert is_transport_flap(excinfo.value) is True
+
+
+def test_stop_on_cooldown_exhaustion_also_keeps_the_flap_verdict(
+    monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """The ladder that STOPS on an over-long cooldown reached that stop because
+    of a flap too — the verdict must not depend on which exit was taken."""
+    from hpc_agent.infra.ssh_options import is_transport_flap
+
+    monkeypatch.setattr(submit_flow, "_stage_retry_wait_sec", lambda _t, *, attempt: None)
+    with pytest.raises(errors.SshUnreachable) as excinfo:
+        _run_retry([TimeoutError("flap")], slept=_no_sleep)
+    assert is_transport_flap(excinfo.value) is True
+
+
 def test_open_circuit_beyond_patience_stops_retrying(
     monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
 ) -> None:

@@ -74,6 +74,19 @@ class MonitorFlowSpec(BaseModel):
             "'metrics_chunk_*.json' for stricter completion detection."
         ),
     )
+    incremental_harvest: bool | None = Field(
+        default=None,
+        description=(
+            "Stream finished tasks' result files home DURING the watch, "
+            "batched and delta-only, into the same local mirror the terminal "
+            "harvest pulls — so the results are readable as they land instead "
+            "of only after the last task finishes. Null (default) defers to "
+            "the HPC_INCREMENTAL_HARVEST env flag ('0' disables); set false "
+            "for a metered/paid link. Pure latency: it moves bytes earlier and "
+            "changes nothing about when a partial set may be AGGREGATED "
+            "(decide-partial-handling still owns that gate)."
+        ),
+    )
 
 
 class MonitorFlowResult(BaseModel):
@@ -123,5 +136,16 @@ class MonitorFlowResult(BaseModel):
             "'combiner_failed_max_retries:wave=3', "
             "'abandoned_by_reconcile'. Null when lifecycle is "
             "'complete' or 'timeout'."
+        ),
+    )
+    incremental_harvest: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "What the watch streamed home mid-flight: {enabled, pulls, "
+            "files_pulled, bytes_pulled, tasks_mirrored, paused_reason, "
+            "last_error}. 'tasks_mirrored' is the honest pull-lag counterpart "
+            "to last_status.complete — N complete, M pulled locally. Byte "
+            "accounting only; it asserts nothing about what the results mean "
+            "and confers no licence to aggregate a partial set."
         ),
     )

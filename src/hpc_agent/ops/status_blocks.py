@@ -815,6 +815,14 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
         "escalation_reason": mon.escalation_reason,
         "ticks": mon.ticks,
         "elapsed_seconds": mon.elapsed_seconds,
+        # U4 incremental harvest: how much of the finished work is already
+        # readable LOCALLY. status-watch is the surface that spans the hours —
+        # the detached long-poll, and submit-s3's own watch_timeout successor —
+        # so it is precisely where "N complete, M pulled locally" has to appear.
+        # Without it the human watching a 12-hour array through THIS block sees
+        # the counts climb and learns nothing about whether any of it came home.
+        # Byte accounting only; it licenses no partial aggregation.
+        "incremental_harvest": mon.incremental_harvest,
     }
 
     if lifecycle == "complete":

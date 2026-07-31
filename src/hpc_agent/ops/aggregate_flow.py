@@ -97,6 +97,9 @@ __all__ = [
     "aggregate_flow",
     "aggregate_memo_ignored",
     "per_task_fallback_reducible",
+    "per_task_prefetch_include",
+    "per_task_results_mirror",
+    "prefetch_per_task_results",
     "prefetch_wave_partials",
     "record_aggregate_failure",
 ]
@@ -516,6 +519,160 @@ def prefetch_wave_partials(
     }
 
 
+#: Opt-out env flag for the mid-flight INCREMENTAL per-task harvest (``"0"``
+#: disables). Sibling of :data:`WAVE_PREFETCH_ENV`: the streaming pull is pure
+#: latency optimization, so the off switch exists for metered/paid links and
+#: cluster-etiquette emergencies, never for correctness. A spec knob
+#: (``MonitorFlowSpec.incremental_harvest``) overrides it per run.
+PER_TASK_PREFETCH_ENV = "HPC_INCREMENTAL_HARVEST"
+
+
+def per_task_prefetch_include(summary_name: str) -> list[str]:
+    """The ONE per-task include triple every ``results/`` pull uses.
+
+    Shared by definition between the TERMINAL harvest
+    (:func:`_per_task_metrics_reduce`) and the mid-flight incremental harvest
+    (:func:`prefetch_per_task_results`), for exactly the reason
+    :data:`_WAVE_PARTIAL_INCLUDE` is shared on the ``_combiner/`` leg: a
+    streaming pull that pulled a DIFFERENT file set would leave the terminal
+    harvest's content-hash delta blind to part of the mirror it re-verifies.
+
+    The three members and why (all three land in ONE pull cycle — the F1
+    include-fold): the run's declared per-task summary artifact, the
+    dispatcher's ``.hpc_cmd_sha`` staleness fingerprint (run-13 finding
+    13-addendum), and the per-task ``_trace.jsonl`` (data-trace T4).
+    """
+    return [summary_name, PER_TASK_CMD_SHA_FILENAME, TRACE_TRANSPORT_FILENAME]
+
+
+def per_task_results_mirror(experiment_dir: Path, run_id: str) -> Path:
+    """The DEFAULT local per-task mirror the terminal harvest pulls into.
+
+    ``<experiment_dir>/_aggregated/<run_id>/_per_task_results`` — the ``out``
+    default of :func:`_aggregate_flow_impl`. The incremental harvest streams
+    into this exact directory so the terminal pull transfers only the delta;
+    an aggregate later invoked with a custom ``output_dir`` simply never reads
+    the streamed cache (still correct, just no win — the same posture
+    :func:`prefetch_wave_partials` documents).
+    """
+    return experiment_dir / "_aggregated" / run_id / PER_TASK_RESULTS_DIRNAME
+
+
+def _mirrored_task_count(results_local: Path, summary_name: str) -> int:
+    """How many per-task result dirs currently carry the declared summary.
+
+    The "M pulled locally" the S3 brief renders beside "N complete". Counted
+    off the LOCAL mirror (no round trip) and best-effort — an unreadable
+    mirror reads as 0 rather than disturbing the watch.
+    """
+    if not results_local.is_dir():
+        return 0
+    try:
+        return sum(1 for p in results_local.rglob(summary_name) if p.is_file())
+    except OSError:
+        return 0
+
+
+def prefetch_per_task_results(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: Any,
+    summary_name: str | None = None,
+    results_subdir: str = "results",
+) -> dict[str, Any] | None:
+    """Opportunistically pull the run's finished per-task sidecars MID-FLIGHT.
+
+    INCREMENTAL HARVEST (U4). Today the per-task results move in ONE
+    all-or-nothing transfer at array completion: the 2026-07-30 forensic run
+    left 1741 of 2100 finished task results sitting on cluster scratch,
+    unreadable for 2h+, while the human asked "why aren't you streaming the
+    results back?". This is the byte-mover that closes that: the monitor watch
+    calls it as completions accrue, so the local mirror tracks the array
+    instead of trailing it by the whole transfer.
+
+    The exact sibling of :func:`prefetch_wave_partials`, one tier down — that
+    one caches COMBINED wave partials (and is therefore a no-op for the very
+    runs the trainwreck hit: no ``wave_map``, no cluster-side combiner), this
+    one caches the RAW per-task sidecars every array writes:
+
+    * **The FINAL harvest remains the AUTHORITY.**
+      :func:`_per_task_metrics_reduce` re-runs the SAME pull — same run-scoped
+      remote subdir (:func:`_run_scoped_results_subdir`), same
+      :func:`per_task_prefetch_include` filter, same destination
+      (:func:`per_task_results_mirror`) — and on the content-hash engine every
+      streamed file is re-verified against the cluster's sha256 manifest, with
+      any mismatch re-pulled. Its staleness gate (snapshot fingerprints →
+      evict moved → clean re-pull) treats a streamed piece exactly as it
+      already treats a prior aggregate's cached piece. Correctness is
+      identical with, without, or with a corrupted streaming cache; when
+      streaming kept up, the terminal pull is a no-op delta.
+    * **It moves BYTES, never VERDICTS.** Nothing here reduces, aggregates,
+      combines or decides. Partial-set aggregation stays gated exactly as
+      today — ``decide-partial-handling`` / ``aggregate-run``'s
+      terminal-or-explicitly-partial invariant own that boundary and are
+      untouched. A fuller mirror changes only how long the human waits for
+      bytes they were already entitled to.
+    * **PULL-ONLY**: no remote writes of any kind, so the #352 evidence model
+      (the remote tree's contents are evidence the harvest keys its fallback
+      on) cannot be disturbed.
+    * **BEST-EFFORT, disclosed-not-raised**: every failure returns as data
+      (``ok=False`` + a bounded tail) for the watch's tick-log action row and
+      never raises into the poll loop. The CALLER owns breaker etiquette (it
+      skips the call while the host's circuit is open — see
+      :mod:`hpc_agent.ops.monitor.stream_harvest`), so a paused stream is a
+      pause, never a failure and never a claim on the half-open probe slot.
+    * **CLUSTER ETIQUETTE**: batched and rate-limited by the caller's gate
+      (:func:`~hpc_agent.ops.monitor.stream_harvest.should_stream`) — never
+      once per poll — and the pull itself rides the existing
+      ``throttle_connection`` + per-host breaker lineage inside both engines.
+
+    Returns the disclosure dict for the tick-log action row, or ``None`` when
+    disabled via ``HPC_INCREMENTAL_HARVEST=0``.
+    """
+    if os.environ.get(PER_TASK_PREFETCH_ENV) == "0":
+        return None
+    if summary_name is None:
+        try:
+            summary_name = resolved_summary_artifact(read_run_sidecar(experiment_dir, run_id))
+        except (
+            FileNotFoundError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            errors.HpcError,
+        ):
+            summary_name = resolved_summary_artifact(None)
+    results_local = per_task_results_mirror(experiment_dir, run_id)
+    scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
+    try:
+        pull = _pull(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            remote_subdir=scoped_subdir,
+            local_dir=str(results_local),
+            include=per_task_prefetch_include(summary_name),
+        )
+    except (errors.HpcError, OSError, ValueError) as exc:
+        # TimeoutError is an OSError subclass; a transport fault must never
+        # disturb the watch — return it as disclosed data instead.
+        return {"ok": False, "error": str(exc)[:200], "dir": str(results_local)}
+    if pull.returncode != 0:
+        return {
+            "ok": False,
+            "error": (pull.stderr or "").strip()[-200:],
+            "dir": str(results_local),
+        }
+    return {
+        "ok": True,
+        "files_pulled": int(getattr(pull, "files_pulled", 0) or 0),
+        "bytes_pulled": int(getattr(pull, "bytes_pulled", 0) or 0),
+        "skipped_unchanged": int(getattr(pull, "skipped_unchanged", 0) or 0),
+        "tasks_mirrored": _mirrored_task_count(results_local, summary_name),
+        "dir": str(results_local),
+    }
+
+
 def _incremental_include_patterns(
     combiner_local: Path, combined_waves: list[int], run_id: str | None = None
 ) -> list[str] | None:
@@ -839,7 +996,12 @@ def _per_task_metrics_reduce(
     # ``results_local`` with NO extra round-trip. Canary-family exclusion is
     # applied at reduce time and again at ingest time (both below), so the wider
     # pull never lets a sibling's file contaminate either surface.
-    include = [summary_name, PER_TASK_CMD_SHA_FILENAME, TRACE_TRANSPORT_FILENAME]
+    #
+    # ONE definition (:func:`per_task_prefetch_include`) so the mid-flight
+    # INCREMENTAL harvest (:func:`prefetch_per_task_results`) streams exactly
+    # the file set this terminal pull re-verifies — a streamed set that
+    # differed would leave this delta blind to part of the mirror.
+    include = per_task_prefetch_include(summary_name)
     cached_fingerprints = _mirror_piece_fingerprints(results_local, summary_name)
     pull = _pull(
         ssh_target=resolve_ssh_target(record),

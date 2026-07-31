@@ -99,6 +99,35 @@ def _line(
     return f"{state}{where}{detail}{tail}"
 
 
+def _stream_phrase(brief: dict[str, Any]) -> str:
+    """The U4 pull-lag clause for a watch line, or ``""`` when there is none.
+
+    ``, 1741 pulled locally`` — how much of the finished work the watch already
+    streamed home, rendered right where the human is deciding whether to keep
+    waiting. Empty (byte-identical output) when the run streamed nothing:
+    disabled, opted out, a pure-API backend, or a brief predating the field.
+
+    ONE definition, both watching surfaces: submit-s3's ``watching_*`` stages
+    and status-watch's ``watch_*`` stages. status-watch is the one that spans
+    the trainwreck's hours (the detached long-poll, and s3's own timeout
+    successor), so a phrase that lived only on the s3 line would be missing from
+    exactly the surface the human sits in front of.
+
+    A PAUSED stream says so. The whole point of this clause is that a stalled
+    byte mover must not read as a merely-behind one — that silence is what
+    stranded 1741 finished results on scratch for two hours.
+    """
+    block = brief.get("incremental_harvest")
+    if not isinstance(block, dict) or not block.get("enabled"):
+        return ""
+    mirrored = block.get("tasks_mirrored")
+    if not isinstance(mirrored, int):
+        return ""
+    paused = block.get("paused_reason")
+    tail = f" [streaming PAUSED: {paused}]" if paused else ""
+    return f", {mirrored} pulled locally{tail}"
+
+
 def _summary_from(last_status: Any) -> dict[str, int]:
     """Project a record's ``last_status`` into stable per-task counts.
 
@@ -284,20 +313,26 @@ def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
         complete = summary.get("complete", 0)
         tasks = f"{complete}/{total} tasks" if isinstance(total, int) else f"{complete} complete"
         return _line(
-            "main array complete", cluster, run_id, tail=f": {tasks} — proceed to harvest."
+            "main array complete",
+            cluster,
+            run_id,
+            tail=f": {tasks}{_stream_phrase(brief)} — proceed to harvest.",
         )
     if stage == "watching_timeout":
         return _line(
             "monitor budget hit",
             cluster,
             run_id,
-            tail="; cluster jobs may run on — keep watching or stop?",
+            tail=(f"{_stream_phrase(brief)}; cluster jobs may run on — keep watching or stop?"),
         )
     if stage == "watching_anomaly":
         lifecycle = brief.get("lifecycle_state") or "anomaly"
         esc = brief.get("escalation_reason") or "no escalation reason"
         return _line(
-            f"main array {lifecycle}", cluster, run_id, tail=f" ({esc}) — propose recovery."
+            f"main array {lifecycle}",
+            cluster,
+            run_id,
+            tail=f" ({esc}){_stream_phrase(brief)} — propose recovery.",
         )
 
     # S4 — harvest. The scope-looks phrase (COUNTS ONLY) rides between the row
@@ -397,13 +432,18 @@ def _render_watch(stage: str, brief: dict[str, Any]) -> str:
         )
     summary = brief.get("summary")
     counts = _counts_phrase(summary if isinstance(summary, dict) else {})
+    # U4 pull-lag — the SAME composer the submit relay uses (one definition), so
+    # the two surfaces can never disagree about how much came home.
+    stream = _stream_phrase(brief)
     if stage == "watch_terminal":
         tail = f": {counts}" if counts else ""
-        return f"{prefix} complete{tail} — harvest guaranteed; hand off to harvest."
+        return f"{prefix} complete{tail}{stream} — harvest guaranteed; hand off to harvest."
     if stage == "watch_timeout":
-        return f"{prefix} monitor budget hit; cluster jobs may run on — keep watching or stop?"
+        return (
+            f"{prefix} monitor budget hit{stream}; cluster jobs may run on — keep watching or stop?"
+        )
     if stage == "watch_anomaly":
         lifecycle = brief.get("lifecycle_state") or "anomaly"
         esc = brief.get("escalation_reason") or "no escalation reason"
-        return f"{prefix} {lifecycle} ({esc}) — review the evidence brief."
+        return f"{prefix} {lifecycle} ({esc}){stream} — review the evidence brief."
     return ""

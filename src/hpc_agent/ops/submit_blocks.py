@@ -1445,6 +1445,12 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         "escalation_reason": mon.escalation_reason,
         "ticks": mon.ticks,
         "elapsed_seconds": mon.elapsed_seconds,
+        # U4 incremental harvest: what the watch already streamed home, so the
+        # S3 brief can answer "how much of this is readable NOW?" instead of
+        # leaving the human to ask why 1741 finished results are still on
+        # cluster scratch. Byte accounting only — it changes nothing about when
+        # a partial set may be aggregated (decide-partial-handling owns that).
+        "incremental_harvest": mon.incremental_harvest,
         # Run-14: the measured-canary walltime the array actually requested (key
         # absent when nothing was calibrated, so a non-calibrating brief is
         # byte-identical). Disclosed here so the S3 terminal shows the array ran

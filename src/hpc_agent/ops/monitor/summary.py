@@ -265,6 +265,53 @@ def _format_diff(diff: dict[str, Any]) -> str | None:
     return ", ".join(parts) if parts else None
 
 
+def _format_harvest_lag(
+    experiment_dir: Path,
+    run_id: str,
+    summary: dict[str, Any],
+    total: int,
+    actions: list[Any],
+) -> str | None:
+    """Render the U4 pull-lag line, or ``None`` when there is no mirror to describe.
+
+    ``N complete, M pulled locally`` — the honest answer to "why aren't you
+    streaming the results back?". *M* is counted off the LOCAL per-task mirror
+    (zero SSH), so it reports what is genuinely readable right now rather than
+    what some earlier tick claimed to have pulled.
+
+    Rendered ONLY when the mirror directory exists. A run reduced by a
+    cluster-side combiner legitimately never pulls per-task sidecars, and
+    printing "2100 complete, 0 pulled locally" there would invent a shortfall
+    that isn't one. A pause (breaker cooldown, opt-out) recorded on the latest
+    tick is appended, because a stalled stream that reads as merely "behind" is
+    the dishonest half of this disclosure.
+    """
+    from hpc_agent.ops import aggregate_flow as aggregate_flow_module
+    from hpc_agent.ops.monitor.stream_harvest import render_stream_lag
+    from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
+
+    mirror = aggregate_flow_module.per_task_results_mirror(experiment_dir, run_id)
+    if not mirror.is_dir():
+        return None
+    try:
+        sidecar: dict[str, Any] | None = read_run_sidecar(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — a disclosure line never raises
+        sidecar = None
+    mirrored = aggregate_flow_module._mirrored_task_count(
+        mirror, resolved_summary_artifact(sidecar)
+    )
+    line = render_stream_lag(int(summary.get("complete") or 0), mirrored, total)
+    paused = next(
+        (
+            str(a.get("reason") or "")
+            for a in actions
+            if isinstance(a, dict) and a.get("kind") == "incremental_harvest_paused"
+        ),
+        "",
+    )
+    return f"{line} — streaming PAUSED ({paused})" if paused else line
+
+
 @primitive(
     name="monitor-summary",
     verb="query",
@@ -381,6 +428,14 @@ def monitor_summary(
         kinds = [str(a.get("kind") or "?") for a in actions if isinstance(a, dict)]
         if kinds:
             body_lines.append(f"actions: {', '.join(kinds)}")
+    # U4 incremental harvest: how much of the finished work is already readable
+    # LOCALLY. Bytes only — this line says nothing about what the results mean
+    # and confers no licence to aggregate a partial set.
+    harvest_line = _format_harvest_lag(
+        experiment_dir, run_id, summary, int(record.total_tasks), list(actions)
+    )
+    if harvest_line:
+        body_lines.append(f"harvest: {harvest_line}")
     if record.combined_waves:
         body_lines.append(f"combined_waves: {sorted(record.combined_waves)}")
     if record.failed_waves:
