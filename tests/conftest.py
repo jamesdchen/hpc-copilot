@@ -526,3 +526,15 @@ if sys.platform == "win32":
 
     # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
     ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
+
+    # Third species (grandchildren): a test-spawned WORKER is a separate
+    # interpreter that never imports this conftest, so ITS console-app
+    # children flashed and its severed-pipe launches raised modal boxes.
+    # ``sitecustomize`` auto-imports in every descendant interpreter that
+    # finds it on PYTHONPATH — APPENDED, so a repo-provided sitecustomize
+    # (none exists today) would still win, and env-scrubbing hermetic tests
+    # simply drop the hygiene rather than break.
+    _site_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_win32_child_site")
+    _existing = os.environ.get("PYTHONPATH", "")
+    if _site_dir not in _existing.split(os.pathsep):
+        os.environ["PYTHONPATH"] = f"{_existing}{os.pathsep}{_site_dir}" if _existing else _site_dir

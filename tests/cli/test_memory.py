@@ -28,11 +28,14 @@ import pytest
 from hpc_agent.cli._dispatch import dispatch_primitive
 
 
-def _capsys_envelope(captured: pytest.CaptureResult[str]) -> dict[str, Any]:
+def _capsys_envelope(captured: Any) -> dict[str, Any]:
+    # ``Any``: this env's pytest stubs don't export ``CaptureResult``; the
+    # helper reads only ``.out``.
     """Return the parsed JSON envelope on stdout (must be exactly one line)."""
     lines = [ln for ln in captured.out.splitlines() if ln.strip()]
     assert len(lines) == 1, f"expected one envelope, got: {captured.out!r}"
-    return json.loads(lines[0])
+    envelope: dict[str, Any] = json.loads(lines[0])
+    return envelope
 
 
 def test_recall_dispatch_filters_cli_only_flags(
@@ -105,6 +108,10 @@ def test_interview_dispatch_resolves_campaign_dir(
     ns = argparse.Namespace(
         spec=spec_path,
         campaign_dir=str(campaign_dir),
+        # P2.c: the shape declares ``experiment_dir_arg`` (the chained-span
+        # invocation surface), so the parser ALWAYS supplies the attr; a
+        # hand-built namespace must too. Explicit --campaign-dir still wins.
+        experiment_dir=str(campaign_dir),
     )
     rc = dispatch_primitive("interview", ns)
 

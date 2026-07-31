@@ -443,6 +443,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent redeploy-runtime [--experiment-dir <dir>] --run-id <run_id> [--use-cache]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "redeploy-runtime",
+    "output_schema": null,
+    "python": "hpc_agent.ops.redeploy_runtime.redeploy_runtime",
+    "side_effects": [
+      "ssh",
+      "writes-cluster"
+    ],
+    "summary": "Re-ship the framework runtime files (combiner, dispatcher, job templates, importable stubs) for an existing run, to its base remote_path AND its code tree, with the deploy cache bypassed. Submits nothing. The repair for a combiner/dispatcher that went missing on the cluster.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>",
     "idempotent": true,
     "input_schema": "resubmit.input.json",
@@ -1379,7 +1394,7 @@
     "output_schema": "suggest_prelude_action.output.json",
     "python": "hpc_agent.cli.prelude_actions.suggest_prelude_action",
     "side_effects": [],
-    "summary": "Run the prelude priority ladder over the five prelude substrates (notebook decision journal + notebook-status's passed predicate, the audit-config seat, the pack journal / interview.json packs opt-in and the INTEGRITY of that pair, .hpc/axes.yaml presence+staleness, interview.json presence/_materialized) and recommend ONE next step: {rung, action, why, scaffold, findings, substrates}. Total — every state maps to exactly one suggestion; a corrupt/unreadable substrate is a disclosed 'run doctor' rung, never a crash. Read-only, no SSH.",
+    "summary": "Run the prelude priority ladder over the five prelude substrates (notebook decision journal + notebook-status's passed predicate, the audit-config seat, the pack journal / interview.json packs opt-in and the INTEGRITY of that pair, .hpc/axes.yaml presence+staleness, interview.json presence/_materialized) and recommend ONE next step: {rung, action, why, scaffold, findings, substrates, readiness}. Total — every state maps to exactly one suggestion; a corrupt/unreadable substrate is a disclosed 'run doctor' rung, never a crash. A suggestion that hands off to a cluster also carries that cluster's standing readiness one-liner (verdict + age + the sensor that is not green), consulted from the durable ledger — never probed. Read-only, no SSH.",
     "verb": "query"
   },
   {
@@ -1684,7 +1699,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent interview --spec <path> --campaign-dir <campaign_dir>",
+    "cli": "hpc-agent interview --spec <path> [--experiment-dir <dir>] [--campaign-dir <campaign_dir>]",
     "idempotent": true,
     "input_schema": "interview.input.json",
     "name": "interview",

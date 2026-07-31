@@ -44,6 +44,43 @@
       "additionalProperties": false,
       "description": "Terminal escalation: a human-owned field is missing.",
       "properties": {
+        "stage_reached": {
+          "description": "The terminator this call stopped at: `onboarded`, `needs_pick`, `needs_intent`, `needs_wrapper_argv` (the AGENT park — params were mechanically extracted, so the argv template is transcription) or `needs_wrapper_argv_unsupported` (the HUMAN park — nothing was extractable, so the argv shape is the caller's own knowledge of their tool). A CLOSED enum on purpose: the argv split decides WHICH ACTOR answers, and the dangerous direction (routing an unextractable entry point to the LLM, which would then invent flags nothing can parse) must be a type error as well as a test failure.",
+          "enum": [
+            "onboarded",
+            "needs_pick",
+            "needs_intent",
+            "needs_wrapper_argv",
+            "needs_wrapper_argv_unsupported"
+          ],
+          "title": "Stage Reached",
+          "type": "string"
+        },
+        "needs_decision": {
+          "description": "True at every escalation (an actor — human or LLM — is owed an answer), False at `onboarded`.",
+          "title": "Needs Decision",
+          "type": "boolean"
+        },
+        "brief": {
+          "additionalProperties": true,
+          "description": "The code-composed ONE ask a park relays: the candidates for a pick, the field list for missing intent, the extracted params + argv head for a wrapper argv. Assembled from this result's own fields — the park never asks for something the composite already derived. Empty at `onboarded`.",
+          "title": "Brief",
+          "type": "object"
+        },
+        "next_block": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`{verb, why, spec_hint}` at `onboarded` (the spec_hint IS the `interview` verb's complete input spec — the onboard chain is ungated, so the driver passes it verbatim), null at every escalation.",
+          "title": "Next Block"
+        },
         "needs_intent": {
           "const": true,
           "description": "Discriminator: one or more human-owned fields are absent. The deterministic context below is composed and echoed so the caller does not re-scan, but no intent value is invented.",
@@ -114,6 +151,8 @@
         }
       },
       "required": [
+        "stage_reached",
+        "needs_decision",
         "needs_intent",
         "missing_fields",
         "never_invented",
@@ -130,6 +169,43 @@
       "additionalProperties": false,
       "description": "Terminal escalation: an entry-point or entry-function tie.",
       "properties": {
+        "stage_reached": {
+          "description": "The terminator this call stopped at: `onboarded`, `needs_pick`, `needs_intent`, `needs_wrapper_argv` (the AGENT park — params were mechanically extracted, so the argv template is transcription) or `needs_wrapper_argv_unsupported` (the HUMAN park — nothing was extractable, so the argv shape is the caller's own knowledge of their tool). A CLOSED enum on purpose: the argv split decides WHICH ACTOR answers, and the dangerous direction (routing an unextractable entry point to the LLM, which would then invent flags nothing can parse) must be a type error as well as a test failure.",
+          "enum": [
+            "onboarded",
+            "needs_pick",
+            "needs_intent",
+            "needs_wrapper_argv",
+            "needs_wrapper_argv_unsupported"
+          ],
+          "title": "Stage Reached",
+          "type": "string"
+        },
+        "needs_decision": {
+          "description": "True at every escalation (an actor — human or LLM — is owed an answer), False at `onboarded`.",
+          "title": "Needs Decision",
+          "type": "boolean"
+        },
+        "brief": {
+          "additionalProperties": true,
+          "description": "The code-composed ONE ask a park relays: the candidates for a pick, the field list for missing intent, the extracted params + argv head for a wrapper argv. Assembled from this result's own fields — the park never asks for something the composite already derived. Empty at `onboarded`.",
+          "title": "Brief",
+          "type": "object"
+        },
+        "next_block": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`{verb, why, spec_hint}` at `onboarded` (the spec_hint IS the `interview` verb's complete input spec — the onboard chain is ungated, so the driver passes it verbatim), null at every escalation.",
+          "title": "Next Block"
+        },
         "needs_pick": {
           "const": true,
           "description": "Discriminator: two or more candidates matched with no caller pick. NOTHING was written. The skill refuses to silently pick across main.py / train.py / run.py — a wrong pick is non-recoverable without the user noticing.",
@@ -181,6 +257,8 @@
         }
       },
       "required": [
+        "stage_reached",
+        "needs_decision",
         "needs_pick",
         "reason",
         "candidates",
@@ -194,6 +272,43 @@
       "additionalProperties": false,
       "description": "Terminal escalation: the wrapper pathway needs a caller argv + signature.",
       "properties": {
+        "stage_reached": {
+          "description": "The terminator this call stopped at: `onboarded`, `needs_pick`, `needs_intent`, `needs_wrapper_argv` (the AGENT park — params were mechanically extracted, so the argv template is transcription) or `needs_wrapper_argv_unsupported` (the HUMAN park — nothing was extractable, so the argv shape is the caller's own knowledge of their tool). A CLOSED enum on purpose: the argv split decides WHICH ACTOR answers, and the dangerous direction (routing an unextractable entry point to the LLM, which would then invent flags nothing can parse) must be a type error as well as a test failure.",
+          "enum": [
+            "onboarded",
+            "needs_pick",
+            "needs_intent",
+            "needs_wrapper_argv",
+            "needs_wrapper_argv_unsupported"
+          ],
+          "title": "Stage Reached",
+          "type": "string"
+        },
+        "needs_decision": {
+          "description": "True at every escalation (an actor — human or LLM — is owed an answer), False at `onboarded`.",
+          "title": "Needs Decision",
+          "type": "boolean"
+        },
+        "brief": {
+          "additionalProperties": true,
+          "description": "The code-composed ONE ask a park relays: the candidates for a pick, the field list for missing intent, the extracted params + argv head for a wrapper argv. Assembled from this result's own fields — the park never asks for something the composite already derived. Empty at `onboarded`.",
+          "title": "Brief",
+          "type": "object"
+        },
+        "next_block": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`{verb, why, spec_hint}` at `onboarded` (the spec_hint IS the `interview` verb's complete input spec — the onboard chain is ungated, so the driver passes it verbatim), null at every escalation.",
+          "title": "Next Block"
+        },
         "needs_wrapper_argv": {
           "const": true,
           "description": "Discriminator: direct decoration is structurally blocked and the entry point's CLI surface is not introspectable by this verb, so the argv template + typed signature must come from the caller. NOTHING was written.",
@@ -295,6 +410,8 @@
         }
       },
       "required": [
+        "stage_reached",
+        "needs_decision",
         "needs_wrapper_argv",
         "argv_kind",
         "pathway_rule",
@@ -313,6 +430,43 @@
       "additionalProperties": false,
       "description": "Terminal success: every deterministic step composed.",
       "properties": {
+        "stage_reached": {
+          "description": "The terminator this call stopped at: `onboarded`, `needs_pick`, `needs_intent`, `needs_wrapper_argv` (the AGENT park — params were mechanically extracted, so the argv template is transcription) or `needs_wrapper_argv_unsupported` (the HUMAN park — nothing was extractable, so the argv shape is the caller's own knowledge of their tool). A CLOSED enum on purpose: the argv split decides WHICH ACTOR answers, and the dangerous direction (routing an unextractable entry point to the LLM, which would then invent flags nothing can parse) must be a type error as well as a test failure.",
+          "enum": [
+            "onboarded",
+            "needs_pick",
+            "needs_intent",
+            "needs_wrapper_argv",
+            "needs_wrapper_argv_unsupported"
+          ],
+          "title": "Stage Reached",
+          "type": "string"
+        },
+        "needs_decision": {
+          "description": "True at every escalation (an actor — human or LLM — is owed an answer), False at `onboarded`.",
+          "title": "Needs Decision",
+          "type": "boolean"
+        },
+        "brief": {
+          "additionalProperties": true,
+          "description": "The code-composed ONE ask a park relays: the candidates for a pick, the field list for missing intent, the extracted params + argv head for a wrapper argv. Assembled from this result's own fields — the park never asks for something the composite already derived. Empty at `onboarded`.",
+          "title": "Brief",
+          "type": "object"
+        },
+        "next_block": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`{verb, why, spec_hint}` at `onboarded` (the spec_hint IS the `interview` verb's complete input spec — the onboard chain is ungated, so the driver passes it verbatim), null at every escalation.",
+          "title": "Next Block"
+        },
         "onboarded": {
           "const": true,
           "description": "Discriminator: the entry point is resolved, the pathway decided, decoration applied (direct-decoration pathway), the frozen YAMLs scanned and the params partitioned. interview_spec is ready.",
@@ -409,6 +563,20 @@
           "$ref": "#/$defs/_ParamPartition",
           "description": "The fixed-params partition (SKILL Step 5b)."
         },
+        "audited_source": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The opaque `audited_source` carry echoed back verbatim (onboard chain, P2.c) — present only when the caller threaded one in. The chain's interview composer folds it into the InterviewSpec so the audit provenance survives the hop; this verb never reads it.",
+          "title": "Audited Source"
+        },
         "interview_spec": {
           "additionalProperties": true,
           "description": "The composed InterviewSpec fragment — goal / task_count / task_generator / entry_point / produced_by — SUBMITTABLE as-is to the `interview` primitive (interview.input.json requires produced_by, so a fragment omitting it could never be handed on unedited). produced_by is the minimal {kind: 'human'} SUGGESTION: the interview's own P1.c composer fills .operator from git config and discloses it as a composed default, so attribution stays required — this verb declares WHO-CLASS, never the identity.",
@@ -417,6 +585,8 @@
         }
       },
       "required": [
+        "stage_reached",
+        "needs_decision",
         "onboarded",
         "pathway",
         "pathway_rule",

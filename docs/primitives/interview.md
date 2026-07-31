@@ -7,7 +7,8 @@ idempotent: true
 idempotency_key: campaign_dir
 error_codes: []
 backed_by:
-  cli: hpc-agent interview --spec <path> --campaign-dir <campaign_dir>
+  cli: hpc-agent interview --spec <path> [--experiment-dir <dir>] [--campaign-dir
+    <campaign_dir>]
   python: hpc_agent.ops.memory.interview.record_interview
 ---
 # interview

@@ -84,12 +84,15 @@ DETECTED_BY_EXIT_PATH = "exit-path"
 #:   the ladder stopped early because the breaker's cooldown outlasted its
 #:   patience (a fence, not a failure to try).
 #:
-#: These are matched because that error's own text is the ONLY channel the class
-#: has once ``_err_from_hpc`` has collapsed the exception to an int: the
-#: exhaustion envelope is a fresh ``SshUnreachable`` and carries no flap stamp,
-#: and its ``path_cause`` prefix is present only when a readiness reading
-#: happened to be in the window (the composer is consult-only and says "cause not
-#: named" otherwise). Verified against the composer, not assumed — an earlier
+#: These are matched as the LOG-TAIL fallback channel. Since U4 (2026-07-30)
+#: the exhaustion envelope IS flap-stamped (``_stage_exhausted_error`` marks
+#: the envelope and chains ``from last``), so the stamped-identity arm above
+#: catches it first whenever the exception object is in hand; this text match
+#: remains for the worker-log path, where ``_err_from_hpc`` has collapsed the
+#: exception to an int and the tail is the only channel left. Its
+#: ``path_cause`` prefix is present only when a readiness reading happened to
+#: be in the window (the composer is consult-only and says "cause not named"
+#: otherwise). Verified against the composer, not assumed — an earlier
 #: draft of this tuple matched three strings that appear nowhere in the codebase,
 #: which is a dead arm that silently classifies nothing.
 _STAGE_EXHAUSTED_MARKERS = (

@@ -409,6 +409,16 @@ def _record_detached_failure_terminal(exit_code: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # A headless tool never shows a MODAL OS dialog (2026-07-30 popup storm):
+    # without SEM_FAILCRITICALERRORS a child launch tripping a severed pipe
+    # (0x800700E8) raises a hard-error BOX in the operator's session and blocks
+    # until dismissed. Error mode is inherited, so every child this process
+    # spawns is covered too. No-op on POSIX.
+    if sys.platform == "win32":
+        import ctypes
+
+        # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
     # A DETACHED worker heartbeats liveness into its captured log while the verb
     # runs (run-#12 findings 3/16/27, the >10s-progress discipline): a 0-byte log
     # for minutes of legitimate scp/rsync work is indistinguishable from a

@@ -211,6 +211,20 @@
       "default": null,
       "description": "Constants for entry-point params the task_generator does not vary. Keys here CLEAR the matching uncovered-required-param escalation; the composite copies them through verbatim and never invents one.",
       "title": "Fixed Params"
+    },
+    "audited_source": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE CARRY, never read by this verb: the audit-handoff projection's audited_source block ({source, audit_id, template, roots}), threaded through so the `interview` two hops later can declare the audit provenance the chain already produced. Echoed verbatim on the onboarded result. Same posture as notebook-status's `review` field (P2.b): a chain that discards a product it built one hop earlier forces the next block to re-derive it.",
+      "title": "Audited Source"
     }
   },
   "$defs": {

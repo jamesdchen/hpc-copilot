@@ -29,7 +29,6 @@ cannot pass silently.
 
 | Item | Source drift log | What is owed | Live gate today | Owner / wave |
 |---|---|---|---|---|
-| onboard chain wire models — **BLOCKS THE LIVE CLI SEAM** | `docs/plans/prelude-chain-2026-07-30.md` (Wave P2.c) | **6 of the 9 `regen_all.py` steps.** Re-emit `audit_handoff.output.json` (4 new block-surface fields), `wrap_entry_point_auto.{input,output}.json` (`audited_source` carry + the `_BlockSurface` mixin, now a closed `stage_reached` enum, on all four discriminated shapes) and `interview.output.json` (`stage_reached`/`needs_decision`/`next_block`); re-bake `operations.json`, `build_operations_index`, `build_primitive_index` and the markdown frontmatter for `interview`'s CLI-shape change (`--campaign-dir` optional, `--experiment-dir` injected); `build_principles_index` for the determinism-boundary + lifecycle-verdicts row edits. **NOT a deferrable additive-key debt: the shipped `audit_handoff.output.json` is `additionalProperties:false`, so the CLI seam REJECTS the new fields until the rebake lands — the rebake must land WITH the merge, not after it.** | **RED** `tests/ops/test_audit_chain.py::test_end_to_end_through_the_real_cli_spec_seam` — the ONE gate that is actually failing on the branch: it dispatches every span through `hpc-agent <verb> --spec`, so it is the only test that crosses the schema seam the stale output schema breaks. (`test_schema_models_roundtrip` is GREEN and would be a false gate — it compares models to schemas it regenerates in-memory, never the checked-in CLI-validated copy.) | P2.c / integration serial rebake, SAME landing |
 
 Row format (binds every future row):
 
@@ -66,6 +65,14 @@ envelope `error_code` enum is untouched.
   concurrent wave that also rebakes must re-run the serial regen at
   integration** — this row records that it was already run once here, not that
   the artifacts can't be clobbered by a later merge.
+
+Paid down 2026-07-30 (Wave-2 integration's serial rebake — regen_all
+--write 9/9 in the same landing as the P2.c merge, per the row's own
+must-land-WITH-the-merge condition):
+
+- `docs/plans/prelude-chain-2026-07-30.md` (Wave P2.c) — onboard chain wire
+  models + interview CLI shape + principles rows. Gate
+  `test_audit_chain.py::test_end_to_end_through_the_real_cli_spec_seam` GREEN.
 
 Paid down 2026-07-30 (Wave P2 integration's one serial rebake —
 `regen_all.py --write`, all 9 steps PASS; strict-xfail tripwire in
