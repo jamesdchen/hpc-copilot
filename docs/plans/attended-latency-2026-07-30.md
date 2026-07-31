@@ -117,6 +117,34 @@ ignored.
    whenever the path has a ProxyJump and offers the alternate-route
    preamble probe as the discriminator before recommending host-retarget.
 
+## Status (2026-07-30, post Wave P1 + Wave P2 integration)
+
+The docket above is now HISTORY for items 5-7 and partial for item 1. Landing
+shas below are on `main`; each build sha is followed by its verifier-findings
+fix and the integration merge, because the wave discipline was
+build → independent verifier → fix → merge and citing only the feature commit
+would misrepresent what shipped.
+
+| # | Item | State | Landing shas |
+|---|---|---|---|
+| 1 | Contract-taught-by-refusal is a CLASS | **PARTIAL** — the exemplar pair landed and the class is now named at two new sites, but the repo-wide inventory sweep (`_refuse_missing_authorship` / `SpecInvalid` sites in `ops/decision/journal/*` vs their briefs/renders/menus) is NOT done | `86abf3a3` (sign-off contract = ONE shared definition, the "Landed this session" fix above); class applied at `incorporation/wrap_entry_point_auto.py` (`c9c1ba2e`, seam-closure `4f835bba`) and at the hpc-submit skill's paste-ready grant-line ruling (`75101964`) |
+| 2 | Authorship horizon (leave-intent) | **NOT BUILT** — no leave-intent seam exists in `src/`; the composed-sitting design is unwritten | — |
+| 3 | S1 melds into the audit sitting; canary at view-relay | **NOT BUILT** — still needs the ruling it names (earlier fire point + spend disclosure inside the audit sitting). The audit loop it would meld INTO is now on the driver (item 5), so the seam is ready | — |
+| 4 | Wire `HPC_S1_SPECULATE` | **NOT BUILT — and re-confirmed open.** `submit_blocks.py` still reads it and nothing in `src/` sets it, so the R2 canary remains opt-in-by-env with no default. Item 3 may obsolete it; until item 3 is ruled, the SKILL.md "DEFAULT at the S1 relay" claim stays false | — |
+| 5 | Prelude mechanization — the 15-min handoff→submit gap | **LANDED** (Waves P1 + P2.a/b) — the deterministic prelude transitions now run in code; the audit loop is a block-drive family; the judgment points park | P1.a `c9c1ba2e` (fix `072423c0`, merge `5666a343`); P1.b `f01e67aa` (fix `2f8cb843`, merge `71faca8c`); P1.c+d `5964fb0b` (fix `1369f7ec`, merge `cfcde1ea`); serial rebake `402208b4`; skill rewire `75101964` (merge `f664b735`); seam closure `4f835bba` (merge `84cdf2c1`); P2.a+b `73420576` (fix `2292910b`, merge `0a6b8dde`); wave integration `98d60905` |
+| 6 | Double-consent boundary (harness classifier × hpc-agent gates) | **LANDED — but NOT by the mechanism this plan proposed.** The settings-fragment candidate was REJECTED in the build ("trades one round-trip for a permanently open boundary"). What shipped is a `PreToolUse` hook that reads the SAME journal the gate reads and forwards a greenlight already on file. The plan's three HARD REQUIREMENTS survive as hook invariants: it fails **closed to ask** (never deny), `append-decision` and `kill` are ALWAYS ask (authorizing a consent-commit from consent on file is laundering), the gated set derives from `block_chain.GATED_BLOCKS` at call time rather than a hand list, and only `mcp__hpc-agent__.*` is matched (no unrelated Bash rules ride along) | `6973cf1c` (fix `b0de19f6`, merge `d9f3554d`) |
+| 7 | Route-blind triage | **LANDED** — both blind spots closed. (a) `infra/readiness_sensors.py` reads the effective chain from ssh's OWN resolution (`ssh -G`, never a second ssh_config parser), senses each leg separately, and derives the path verdict dead at the first dead hop regardless of what the target answered; net-triage became a thin composer. (b) `ssh_circuit.degradation_advice` under a ProxyJump now names BOTH causes and offers the alternate-route preamble probe as the discriminator instead of steering to a sibling behind the same dead hop; the un-jumped text is byte-identical. Also shipped in the same unit: the pre-detach path gate (`ops/path_gate.py`, wired into `submit-s2`) and the flap-riding bounded stage retry | `1e89053a` (fix `5f82bab1`, merge `bff6ca32`) |
+
+Adjacent work that rode the same waves (not docket items, recorded so the
+history is not misread as gaps): the S2 readiness ledger + SLO pillars
+`40d80fc4` (fix `cb4875aa`, merge `4acf2e67`), the reconcile rung-0 zombie fix
+`637f57dc` (merge `8db21792`), the Windows no-console ssh capture `1407526e`,
+and the items 6+7 doc landing `abd1acf7`.
+
+**What is still owed from this plan:** items 2, 3, 4 in full, and item 1's
+inventory sweep. Items 3 and 4 are coupled — rule 3 first, because a ruling
+that fires the canary at view-relay may delete item 4 rather than complete it.
+
 ## Deferred (hours-scale async tail, separate thread)
 
 07-27 canary `reporter_unreachable` rc=255 regression (blocks results

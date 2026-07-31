@@ -187,3 +187,52 @@ G4 ruling (upstream-fixes plan RULING 5; full record in
   is gone. The one retained framework recycle is the zero-inflight slot/session
   courtesy sweep — a whole-connection close at a SAFE point, never a mid-command
   sever. See the engine row in §2 for the updated trigger set.
+
+## 9. Measured verdict (2026-07-30): WSL rsync is NOT the rsync-less answer
+
+The standing folklore — "native Windows has no rsync, so route the push through
+WSL's rsync" — was **measured and rejected** on 2026-07-30. It is recorded here,
+with numbers, so it is not re-litigated at run-17: this page is where the
+rsync-less transport story lives (§2's `rsync_push` row, §5's
+`HPC_NO_DEPLOY_DELTA`), and the advice `infra/ssh_options.rsync_binary` refuses
+to auto-probe is exactly this one.
+
+**The capability is present.** Inside WSL: `rsync 3.2.7` on PATH, SSH keys
+readable, remote reachable. Nothing about *availability* blocks the route — which
+is precisely why the folklore survived: it was never wrong about the binary.
+
+**The measurements (Windows-resident tree, reached over the `/mnt/c` 9p
+filesystem):**
+
+| Probe | Result |
+|---|---|
+| `find \| wc -l` over the tree (45,410 files) — just *walking* it | **2m47s** |
+| `rsync -an` full dry-run — nothing transferred, scan only | **8m41s** |
+| the live native content-hash delta (cached manifest, `transport._delta`) | **seconds** |
+
+The blocker is the **9p scan tax**, not the transfer: every `stat` a
+Windows-resident path serves to a Linux process crosses the 9p boundary, so
+rsync's per-file metadata walk — the very step that makes rsync cheap on a real
+filesystem — becomes the dominant cost. rsync pays it BEFORE it can decide that
+nothing changed; the native path never pays it at all, because the cached
+manifest answers "what changed" from content hashes it already holds. An 8m41s
+no-op is worse than the whole-tree re-ship it was proposed to prevent.
+
+**Verdict: not viable while the working tree is Windows-resident.** The route
+becomes attractive only if the tree itself MOVES into WSL ext4 — a workflow
+change for the human (where the repo lives, which shell edits it, how the
+Windows-native tooling reaches it), out of scope for the transport layer and not
+something the transport may assume. Until such a move is a deliberate,
+separately-decided change, the content-hash delta IS the rsync-less path and
+needs no rsync.
+
+**The class this belongs to — capability-taught-by-folklore.** A capability was
+believed usable because the *binary* was present, and the belief was carried in
+prose (a WARN string, an install suggestion) that no measurement ever backed.
+The §2 note on the `rsync_push` row records the twin half of the same class: the
+old warn's "install WSL/MSYS rsync" advice was rotted twice over — the MSYS half
+collides with the msys-2.0.dll runtime clash pinned at
+`infra/ssh_options.rsync_binary`, and the WSL half is the scan tax above. The
+counter-doctrine is the same one this page measures every fallback against: an
+alternate path must be justified by what it *costs when taken*, not by whether
+its binary answers `--version`.
