@@ -513,3 +513,16 @@ if sys.platform == "win32":
         _ORIG_POPEN_INIT(self, *args, **kwargs)
 
     _subprocess.Popen.__init__ = _init_no_window  # type: ignore[method-assign]
+
+# Hard-error dialogs, also suppressed (win32): the severance tests (worker
+# survives job-handle close, pipe-sever fixtures) make Windows raise
+# 0x800700E8 "the pipe is being closed" AT CHILD LAUNCH, and without
+# SEM_FAILCRITICALERRORS the OS shows a MODAL error box per occurrence —
+# the 2026-07-30 popup storm's second species (the first was console
+# windows, above). Error mode is inherited, so setting it here covers every
+# child the suite spawns. POSIX: no-op.
+if sys.platform == "win32":
+    import ctypes
+
+    # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+    ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
