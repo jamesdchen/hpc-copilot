@@ -223,6 +223,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [queue-run](queue-run.md) | yes | file_write: `<experiment>/.hpc/queue/intake.jsonl` | `hpc-agent queue-run --spec <path> [--experiment-dir <dir>]` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` |
 | [reconcile-stale](reconcile-stale.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` |
+| [redeploy-runtime](redeploy-runtime.md) | yes | ssh: `<cluster>`; writes-cluster: `<remote_path>/.hpc/{_hpc_combiner.py,_hpc_dispatch.py,templates/}` | `hpc-agent redeploy-runtime [--experiment-dir <dir>] --run-id <run_id> [--use-cache]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` |
 | [scope-lock](scope-lock.md) | yes | file_write: `<experiment>/.hpc/scopes/<tag>.decisions.jsonl` | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` |
 | [tag-session](tag-session.md) | no | file_write: `<experiment>/.hpc/devx/session_tags.jsonl` | `hpc-agent tag-session --spec <path> [--experiment-dir <dir>]` |

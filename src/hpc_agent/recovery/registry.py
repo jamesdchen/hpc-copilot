@@ -56,6 +56,13 @@ RecoveryKind = Literal[
     "node_failure",
     # Envelope-emitted (subset).
     "combiner_failed",
+    # The DISCRIMINATED sibling of ``combiner_failed``: the deployed combiner
+    # artifact is absent, so nothing ran at all. Shares the ``combiner_failed``
+    # error_code on the wire (``errors.CombinerMissing`` subclasses
+    # ``CombinerFailed``) but must never share its menu — resubmitting tasks
+    # repairs a malformed metrics.json and does nothing whatsoever for a
+    # missing ``.hpc/_hpc_combiner.py``.
+    "combiner_missing",
     "outputs_missing",
     "ssh_unreachable",
     # Prose-only / slash-skill-emitted kinds — the empirical drift cases.
@@ -417,6 +424,60 @@ _COMBINER_FAILED = RecoveryMenu(
 )
 
 
+_COMBINER_MISSING = RecoveryMenu(
+    kind="combiner_missing",
+    summary=(
+        "The deployed combiner .hpc/_hpc_combiner.py is ABSENT on the cluster, "
+        "so no combine ran at all — the per-task outputs are untouched and "
+        "resubmitting tasks would repair nothing. The framework artifact "
+        "itself has to be re-shipped."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent redeploy-runtime --experiment-dir <experiment_dir> "
+                "--run-id <run_id>"
+            ),
+            when_to_use=(
+                "Always first: re-ships the framework runtime to this run's base "
+                "remote_path AND its code tree with the deploy cache bypassed, "
+                "verifies the combiner is back, and submits nothing — so it is "
+                "safe on a run that is mid-flight or already being aggregated."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent inspect-deployment --cluster <cluster> --run-id <run_id> "
+                "--experiment-dir <experiment_dir> --depth 2"
+            ),
+            when_to_use=(
+                "When the redeploy did not stick, to see what is actually under "
+                "the run's REPO_DIR before deciding whether the tree, the scratch "
+                "quota, or the path itself is the problem."
+            ),
+            safety_rank=1,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent cluster-reduce --run-id <run_id> --experiment-dir <experiment_dir>"
+            ),
+            when_to_use=(
+                "Only when the run declares its own aggregate_cmd reducer: it runs "
+                "that reducer directly and needs no combiner. Not a fix for the "
+                "missing artifact — a route around it."
+            ),
+            safety_rank=2,
+        ),
+    ),
+    references=(
+        "errors.py::CombinerMissing",
+        "execution/mapreduce/deployed_artifact.py",
+        "2026-07-30 trainwreck: [combiner] ERROR at 20:52, hand reduce at 22:00",
+    ),
+)
+
+
 _OUTPUTS_MISSING = RecoveryMenu(
     kind="outputs_missing",
     summary=(
@@ -458,6 +519,7 @@ REGISTRY: dict[str, RecoveryMenu] = {
     _GPU_OOM.kind: _GPU_OOM,
     _SYSTEM_OOM.kind: _SYSTEM_OOM,
     _COMBINER_FAILED.kind: _COMBINER_FAILED,
+    _COMBINER_MISSING.kind: _COMBINER_MISSING,
     _OUTPUTS_MISSING.kind: _OUTPUTS_MISSING,
 }
 

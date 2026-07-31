@@ -60,6 +60,11 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "ClusterTimeout",
         "ClusterUnknown",
         "CombinerFailed",
+        # U5: a DISCRIMINATED subclass of CombinerFailed, sharing its
+        # ``combiner_failed`` error_code — the deployed combiner artifact is
+        # absent, versus the combiner ran and refused. No new wire code; the
+        # public surface grows one catchable type.
+        "CombinerMissing",
         "ConfigInvalid",
         "ExecutorNotFound",
         "HpcError",

@@ -1447,14 +1447,30 @@ def _combiner_only_reduce(
         f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
         f"sidecar's aggregate_cmd directly, no combiner needed."
     )
+    # U5: name the DEPLOY-dropout hypothesis, first, with a command. Before
+    # this the menu offered "fix the cluster env and resubmit" for a condition
+    # whose most common cause is that ``.hpc/_hpc_combiner.py`` is simply not
+    # there — for which resubmitting is a sledgehammer and "fix the env" is a
+    # wrong diagnosis. The probe is deliberately NOT run here (this path is
+    # already several round-trips deep and the pull's verdict does not prove
+    # artifact absence); the redeploy is offered as the cheap FIRST thing to
+    # check, and it is idempotent when the artifact was fine all along.
+    redeploy_hint = (
+        f"Run `hpc-agent redeploy-runtime --run-id {run_id}` — re-ships the "
+        f"framework runtime (cache bypassed) and reports whether the deployed "
+        f"combiner was missing. Check this FIRST: it is one command, it submits "
+        f"nothing, and a missing .hpc/_hpc_combiner.py produces exactly this "
+        f"symptom while looking like a reporter/env failure."
+    )
     raise errors.RemoteCommandFailed(
         f"the cluster-side _combiner/ for run_id {run_id!r} {no_combiner_reason}. "
-        f"Usually this means the cluster-side reporter died (check per-task "
-        f"stderr under {record.remote_path}/{run_id}/logs/). Three recovery paths: "
-        f"(1) fix the cluster env (likely a missing Python module) and "
-        f"resubmit — addresses the root cause. "
-        f"(2) {cluster_reduce_hint} "
-        f"(3) scp the raw per-task results locally and reduce on the laptop."
+        f"Four recovery paths: "
+        f"(1) {redeploy_hint} "
+        f"(2) fix the cluster env (likely a missing Python module) and "
+        f"resubmit — addresses a reporter that died on import (check per-task "
+        f"stderr under {record.remote_path}/{run_id}/logs/). "
+        f"(3) {cluster_reduce_hint} "
+        f"(4) scp the raw per-task results locally and reduce on the laptop."
     )
 
 

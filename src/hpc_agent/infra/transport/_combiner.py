@@ -13,6 +13,12 @@ import re
 import shlex
 import subprocess
 
+from hpc_agent.errors import CombinerMissing
+from hpc_agent.execution.mapreduce.deployed_artifact import (
+    COMBINER_REL,
+    combiner_absent_in,
+    combiner_guard_snippet,
+)
 from hpc_agent.infra.remote import ssh_run
 
 from ._disclose import run_with_stage_heartbeat
@@ -37,6 +43,53 @@ BATCH_END_SENTINEL = "__HPC_BATCH_END__"
 
 _WAVE_BEGIN_RE = re.compile(r"^" + _WAVE_BEGIN_SENTINEL + r" (\d+)$")
 _WAVE_END_RE = re.compile(r"^" + _WAVE_END_SENTINEL + r" (\d+) rc=(-?\d+)$")
+
+
+# ── U5: never invoke a combiner that isn't there ─────────────────────────────
+# Every runner below composes ``cd <root> && [activation] python3
+# .hpc/_hpc_combiner.py …``. Until this guard, a deploy root with no combiner
+# produced whatever the login shell says about a missing script — which the
+# control plane read as an ordinary non-zero combine, journaled into
+# ``failed_waves``, and retried. The 2026-07-30 incident is the shape that
+# costs: the artifact's absence was never named, and the first visible symptom
+# was the cross-wave reduce's ``[combiner] ERROR: no _combiner/<run_id>/
+# wave_*.json`` — a message about wave PARTIALS, hours downstream of the cause.
+#
+# The guard is one ``test -f`` INSIDE the ssh the runner was making anyway
+# (:func:`combiner_guard_snippet`) — no new round-trip class — and it exits
+# with a machine-recognisable sentinel so the absence is positive evidence
+# rather than an inference from shell prose.
+
+
+def _raise_if_combiner_absent(
+    *,
+    proc_or_streams: tuple[str, str],
+    ssh_target: str,
+    remote_path: str,
+) -> None:
+    """Raise :class:`CombinerMissing` when the guard fired; else return.
+
+    ONE definition of the absence verdict, shared by every checked runner so a
+    new combine entry point cannot quietly skip it. The remediation is composed
+    from the recovery registry (kind ``combiner_missing``) rather than written
+    here, so the redeploy command this raise names and the one
+    ``recoveries-show`` prints are the same string.
+
+    The registry import is function-local: this module is on the transport hot
+    path and the registry pulls pydantic, which a combine that succeeds should
+    never pay for.
+    """
+    stdout, stderr = proc_or_streams
+    if not combiner_absent_in(stdout, stderr):
+        return
+    from hpc_agent.recovery.registry import remediation_for
+
+    raise CombinerMissing(
+        f"the deployed combiner {COMBINER_REL} is absent at {ssh_target}:{remote_path} — "
+        "no combine ran. The per-task outputs are untouched; the framework artifact "
+        "that reduces them was never deployed there, or vanished after it was.",
+        remediation=remediation_for("combiner_missing"),
+    )
 
 
 def run_combiner(
@@ -74,11 +127,15 @@ def run_combiner(
     """
     force_flag = " --force" if force else ""
     run_id_q = shlex.quote(run_id)
+    # The presence guard sits AFTER the ``cd`` (so the relative
+    # ``.hpc/_hpc_combiner.py`` resolves against the deploy root) and BEFORE the
+    # activation (an absent artifact is not worth a conda activate).
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
+        f"{combiner_guard_snippet()}"
         f"{remote_activation}"
         f"HPC_WAVE={wave} HPC_RUN_ID={run_id_q} "
-        f"python3 .hpc/_hpc_combiner.py --wave {wave} --run-id {run_id_q}{force_flag}"
+        f"python3 {COMBINER_REL} --wave {wave} --run-id {run_id_q}{force_flag}"
     )
 
     def _do() -> subprocess.CompletedProcess[str]:
@@ -105,6 +162,12 @@ def run_combiner_checked(
     ``CompletedProcess`` into a simple tuple. ``ok`` is ``True`` iff the
     remote combiner exited with returncode ``0``. A timeout propagates
     as :class:`TimeoutError`, not ``ok=False``.
+
+    A DEPLOY dropout is not a combine failure and does not come back as
+    ``ok=False``: when the presence guard reports ``.hpc/_hpc_combiner.py``
+    absent this raises :class:`~hpc_agent.errors.CombinerMissing` instead, so
+    the caller cannot journal it into ``failed_waves`` and retry it forever
+    against a root that has no combiner (U5).
     """
     if timeout is _DEFAULT:
         result = run_combiner(
@@ -125,6 +188,11 @@ def run_combiner_checked(
             timeout=timeout,
             remote_activation=remote_activation,
         )
+    _raise_if_combiner_absent(
+        proc_or_streams=(result.stdout or "", result.stderr or ""),
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+    )
     return (
         result.returncode == 0,
         result.stdout or "",
@@ -154,9 +222,10 @@ def run_final_reduce(
     run_id_q = shlex.quote(run_id)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
+        f"{combiner_guard_snippet()}"
         f"{remote_activation}"
         f"HPC_RUN_ID={run_id_q} "
-        f"python3 .hpc/_hpc_combiner.py --final --run-id {run_id_q}{force_flag}"
+        f"python3 {COMBINER_REL} --final --run-id {run_id_q}{force_flag}"
     )
 
     def _do() -> subprocess.CompletedProcess[str]:
@@ -164,7 +233,18 @@ def run_final_reduce(
             return ssh_run(cmd, ssh_target=ssh_target)
         return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
 
-    return run_with_stage_heartbeat("final reduce", ssh_target, _do)
+    result = run_with_stage_heartbeat("final reduce", ssh_target, _do)
+    # U5 item 3: the aggregate path's own combine leg. On a combiner-absent
+    # cluster this used to come back as a plain non-zero CompletedProcess and
+    # the caller re-presented the raw stderr line — the 2026-07-30 shape.
+    # Raise the discriminated cause with the registry remediation instead, so
+    # the aggregate refuses with the redeploy command rather than with prose.
+    _raise_if_combiner_absent(
+        proc_or_streams=(result.stdout or "", result.stderr or ""),
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+    )
+    return result
 
 
 def _build_batch_command(
@@ -195,12 +275,18 @@ def _build_batch_command(
         blocks.append(
             f"printf '{_WAVE_BEGIN_SENTINEL} %s\\n' {w}; "
             f"HPC_WAVE={w} HPC_RUN_ID={run_id_q} "
-            f"python3 .hpc/_hpc_combiner.py --wave {w} --run-id {run_id_q}{force_flag} 2>&1; "
+            f"python3 {COMBINER_REL} --wave {w} --run-id {run_id_q}{force_flag} 2>&1; "
             f"printf '{_WAVE_END_SENTINEL} %s rc=%s\\n' {w} \"$?\""
         )
     body = "; ".join(blocks)
+    # The U5 presence guard rides ahead of the activation and the brace group,
+    # sharing their ``&&`` chain: an absent artifact exits before ANY wave runs
+    # and before ``__HPC_BATCH_END__`` is printed. That is deliberate — the
+    # missing sentinel routes the caller to its E3 per-wave degrade, and the
+    # absence sentinel on stderr then makes the per-wave path raise the named
+    # refusal instead of N shell errors.
     return (
-        f"cd {shlex.quote(remote_path)} && {remote_activation}"
+        f"cd {shlex.quote(remote_path)} && {combiner_guard_snippet()}{remote_activation}"
         f"{{ {body}; printf '{BATCH_END_SENTINEL}\\n'; }}"
     )
 
@@ -301,6 +387,16 @@ def run_combiner_batch_checked(
         run_id=run_id,
         timeout=timeout,
         remote_activation=remote_activation,
+    )
+    # Check BEFORE the truncation branch. A guarded absent artifact produces no
+    # ``__HPC_BATCH_END__``, which is indistinguishable from a NAT truncation to
+    # the sentinel scanner — so without this the fused path would degrade to N
+    # per-wave calls and only then raise, paying N-1 pointless round-trips for
+    # evidence it already holds.
+    _raise_if_combiner_absent(
+        proc_or_streams=(result.stdout or "", result.stderr or ""),
+        ssh_target=ssh_target,
+        remote_path=remote_path,
     )
     batch_complete, parsed = _parse_batch_output(result.stdout or "")
     if not batch_complete:

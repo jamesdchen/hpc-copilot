@@ -718,6 +718,11 @@ class _LoopState:
     stream_paused_reason: str | None = None
     #: Bounded tail of the last streaming failure — disclosed, never raised.
     stream_error: str | None = None
+    #: Set when a combine leg refused because the DEPLOYED combiner artifact is
+    #: absent (U5 / ``errors.CombinerMissing``). Holds the composed remediation,
+    #: which rides out on ``escalation_reason`` so the human gets the redeploy
+    #: command instead of a stack trace. ``None`` until it happens.
+    combiner_missing: str | None = None
 
 
 # ``_tick_log_path`` and ``_append_tick`` live in
@@ -1410,15 +1415,64 @@ def monitor_flow(
                     batch_waves.append(wave)
                     batch_forces[wave] = attempt > 1
                 if batch_waves:
-                    combined = combine_waves(
-                        experiment_dir,
-                        run_id,
-                        waves=batch_waves,
-                        forces=batch_forces,
-                        ssh_target=resolve_ssh_target(record),
-                        remote_path=record.remote_path,
-                    )
+                    # U5 / F8 — the DEPLOY-dropout arm, decided explicitly.
+                    #
+                    # ``CombinerMissing`` means the artifact this leg invokes is
+                    # not on the cluster. Three behaviours were possible and the
+                    # choice is deliberate:
+                    #
+                    #   * let it propagate — ABORTS the watch at the first wave.
+                    #     Rejected: the ARRAY is still running. Killing the watch
+                    #     throws away the monitoring, the harvest and the tick
+                    #     ledger for a condition that is repairable WHILE the
+                    #     array runs (``redeploy-runtime`` is safe mid-flight).
+                    #   * degrade through ``combiner_max_retries`` like an
+                    #     ordinary combine failure. Rejected: the error is
+                    #     ``retry_safe=False`` by construction — N more ticks
+                    #     against an unchanged cause is precisely the waste the
+                    #     2026-07-30 evening consisted of.
+                    #   * THIS: give up on combining immediately (no retries),
+                    #     keep watching to terminal so the harvest still runs,
+                    #     and carry the composed remediation out on
+                    #     ``escalation_reason`` so the human is handed the
+                    #     redeploy command at the surface they already read.
+                    #
+                    # The waves are NOT added to ``last_failed_waves``: a wave
+                    # that never ran is not a wave that failed, and the
+                    # ``combiner_failed`` recovery menu (resubmit the tasks)
+                    # repairs nothing here. Pinned by
+                    # tests/ops/aggregate/test_combiner_dropout.py::TestWatchLegDecision.
+                    combiner_absent = False
+                    try:
+                        combined = combine_waves(
+                            experiment_dir,
+                            run_id,
+                            waves=batch_waves,
+                            forces=batch_forces,
+                            ssh_target=resolve_ssh_target(record),
+                            remote_path=record.remote_path,
+                        )
+                    except errors.CombinerMissing as exc:
+                        combiner_absent = True
+                        state.combiner_missing = exc.remediation or str(exc)
+                        for wave in batch_waves:
+                            state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
+                        actions.append(
+                            {
+                                "kind": "combiner_missing",
+                                "waves": list(batch_waves),
+                                "detail": str(exc)[:500],
+                                "remediation": state.combiner_missing,
+                            }
+                        )
+                        combined = {}
                     for wave in batch_waves:
+                        if combiner_absent:
+                            # Nothing ran for this wave, so there is no per-wave
+                            # outcome to record. Gated on the FLAG, not on dict
+                            # membership, so the pre-existing defensive default
+                            # for a wave the batch omitted is untouched.
+                            break
                         ok, _stdout, stderr = combined.get(wave, (False, "", ""))
                         attempt = state.combiner_attempts[wave]
                         if ok:
@@ -1545,7 +1599,13 @@ def monitor_flow(
                 # auto-resubmit) see the partial-wave failure even on a
                 # COMPLETE return.
                 complete_escalation: str | None = None
-                if state.last_failed_waves:
+                if state.combiner_missing:
+                    # U5/F8: the DEPLOY dropout outranks a per-wave combine
+                    # failure — it explains every wave at once, and its
+                    # remediation is a different command. Carried verbatim so
+                    # the redeploy line survives to the escalation surface.
+                    complete_escalation = f"combiner_missing:{state.combiner_missing}"
+                elif state.last_failed_waves:
                     complete_escalation = "combine_failed_waves:waves=" + ",".join(
                         str(w) for w in state.last_failed_waves
                     )

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**183 operations total**: 150 primitive atoms + 33 workflow atoms.
+**184 operations total**: 151 primitive atoms + 33 workflow atoms.
 
 ## How to read this page
 
@@ -125,7 +125,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (37)
+## `mutate` (38)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -162,6 +162,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`queue-run`](../primitives/queue-run.md) | ✓ | file_write | `hpc-agent queue-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`reconcile-journal`](../primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `_(none)_` | — | — |
 | [`reconcile-stale`](../primitives/reconcile-stale.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` | `_(none)_` | — | — |
+| [`redeploy-runtime`](../primitives/redeploy-runtime.md) | ✓ | ssh; writes-cluster | `hpc-agent redeploy-runtime [--experiment-dir <dir>] --run-id <run_id> [--use-cache]` | `_(none)_` | — | — |
 | [`resubmit-failed`](../primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `_(none)_` | — | — |
 | [`scope-lock`](../primitives/scope-lock.md) | ✓ | file_write | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`tag-session`](../primitives/tag-session.md) | ✗ | file_write | `hpc-agent tag-session --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

@@ -13,7 +13,13 @@ import json
 import shlex
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent.errors import RemoteCommandFailed
+from hpc_agent.errors import CombinerMissing, RemoteCommandFailed
+from hpc_agent.execution.mapreduce.deployed_artifact import (
+    COMBINER_REL,
+    CombinerProbe,
+    combiner_probe_snippet,
+    split_combiner_probe,
+)
 from hpc_agent.infra import remote
 from hpc_agent.infra.ssh_validation import parse_remote_json, split_ack, wrap_with_ack
 from hpc_agent.infra.time import utcnow_iso
@@ -31,17 +37,62 @@ _OUTPUTS_ACK_PREFIX = "__HPC_OUTPUTS_ACK__="
 
 
 def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> dict[str, Any]:
-    """SSH-cat the per-run sidecar at ``.hpc/runs/<run_id>.json``."""
+    """SSH-cat the per-run sidecar at ``.hpc/runs/<run_id>.json``.
+
+    The sidecar-only view, for callers outside the combine precondition (e.g.
+    ``aggregate_flow``) that have no use for the folded artifact probe.
+    """
+    sidecar, _probe = _read_remote_sidecar_and_probe(
+        ssh_target=ssh_target, remote_path=remote_path, run_id=run_id
+    )
+    return sidecar
+
+
+def _read_remote_sidecar_and_probe(
+    *, ssh_target: str, remote_path: str, run_id: str
+) -> tuple[dict[str, Any], CombinerProbe | None]:
+    """SSH-cat the per-run sidecar; also read the deployed combiner's identity.
+
+    Returns ``(sidecar, combiner_probe)``. The probe is FOLDED into this exec
+    (U5) rather than costing its own: this ``cat`` is the first and
+    unconditional round-trip of the wave-combine precondition check, so
+    "is the artifact we are about to depend on actually deployed?" rides it for
+    the price of one ``test -f`` and one ``sha256sum``. Folding it here — not
+    into the per-task loop below — also means the gate holds for a wave with NO
+    tasks, which would otherwise short-circuit past every check.
+
+    The probe line is peeled back off before the JSON parse, so
+    :func:`parse_remote_json` sees exactly the bytes it saw before. ``None``
+    means the probe line never arrived: UNKNOWN, never "absent".
+
+    Two properties of the composed command are load-bearing:
+
+    * the ``cat`` stays FIRST, so the command still reads as the sidecar read
+      it has always been (several fixtures dispatch on that prefix, and so does
+      anyone reading an ssh log);
+    * its exit code is saved and re-raised as the command's own. The probe
+      always exits 0, so a naive ``cat …; <probe>`` would hand back the
+      PROBE's success and silently swallow a failed sidecar read — turning the
+      guard added to close one silent failure into the cause of another.
+    """
     sidecar_rel = f".hpc/runs/{run_id}.json"
-    cmd = f"cat {shlex.quote(f'{remote_path}/{sidecar_rel}')}"
+    cmd = (
+        f"cat {shlex.quote(f'{remote_path}/{sidecar_rel}')}; __hpc_rc=$?; "
+        f"{combiner_probe_snippet(root=remote_path)}"
+        f'exit "$__hpc_rc"'
+    )
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
             f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
             f"{proc.stderr.strip()[:500]}"
         )
-    return parse_remote_json(
-        proc.stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"
+    probe, stdout = split_combiner_probe(proc.stdout)
+    return (
+        parse_remote_json(
+            stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"
+        ),
+        probe,
     )
 
 
@@ -60,6 +111,45 @@ def _wave_task_ids(sidecar: dict[str, Any], wave: int) -> list[int]:
     return []
 
 
+def refuse_absent_combiner(
+    probe: CombinerProbe | None,
+    *,
+    ssh_target: str,
+    remote_path: str,
+    run_id: str | None = None,
+) -> None:
+    """Raise :class:`CombinerMissing` when *probe* proves the artifact is gone.
+
+    ONE definition of the aggregate-side refusal, so the wave-combine preflight
+    and any future consumer name the same cause with the same registry-composed
+    remediation (kind ``combiner_missing`` — whose first option is the
+    ``redeploy-runtime`` repair, with ``<run_id>`` substituted here when known).
+
+    Fails OPEN on ``None``: a probe line that never arrived is UNKNOWN, and
+    unknown must never green OR red a gate. The refusal fires only on positive
+    evidence of absence — never on a stale sha (that is a version-skew question
+    the deploy cache owns, not a reason to refuse a combine that may well work).
+    """
+    if probe is None or probe.present:
+        return
+    from hpc_agent.recovery.registry import remediation_for
+
+    placeholders = {"run_id": run_id} if run_id else None
+    raise CombinerMissing(
+        f"the deployed combiner {COMBINER_REL} is absent at {ssh_target}:{remote_path}; "
+        "refusing to start the combine leg that depends on it. Every per-task output is "
+        "untouched — this is a DEPLOY dropout, not a data failure.",
+        remediation=remediation_for("combiner_missing", placeholders=placeholders),
+    )
+
+
+# NOTE (F5, 2026-07-30): a standalone ``verify_deployed_combiner()`` lived here
+# and had zero callers — the probe it wrapped is folded into
+# ``_read_remote_sidecar_and_probe``'s exec, which is the only place this
+# module needs the answer. Deleted rather than kept as a second, untested way
+# to ask the same question with an extra round-trip.
+
+
 def verify_per_task_outputs(
     *,
     ssh_target: str,
@@ -76,11 +166,27 @@ def verify_per_task_outputs(
 
     Returns the list of *missing* paths (relative to remote_path or
     absolute as written).  Empty list = all expected outputs are present.
+
+    U5: this is the wave-combine PRECONDITION exec — the last thing that runs
+    before ``combine-wave`` invokes the cluster combiner — so the deployed
+    combiner's own presence+sha rides along in it, for free. Refusing HERE, by
+    name and with the redeploy command, is the early gate the 2026-07-30
+    incident lacked: the alternative was discovering the artifact's absence
+    hours later, second-hand, through a cross-wave reduce complaining about
+    wave partials. Raises :class:`CombinerMissing` before the missing-outputs
+    verdict is even computed — a combine that cannot run is not a question
+    about data.
     """
-    sidecar = _read_remote_sidecar(
+    sidecar, probe = _read_remote_sidecar_and_probe(
         ssh_target=ssh_target,
         remote_path=remote_path,
         run_id=run_id,
+    )
+    # FIRST, before anything about data: a combine that cannot run is not a
+    # question about which task outputs are present. Gating here also covers
+    # the empty-wave short-circuit below.
+    refuse_absent_combiner(
+        probe, ssh_target=ssh_target, remote_path=remote_path, run_id=run_id
     )
     task_ids = _wave_task_ids(sidecar, wave)
     if not task_ids:

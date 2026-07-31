@@ -131,6 +131,15 @@ ALLOWLIST: frozenset[str] = frozenset(
         "hpc_agent/ops/dir_digest.py::_digest_remote",
         # inspect-deployment advisory read (B3 low-severity per spec B3′).
         "hpc_agent/ops/inspect_deployment.py::inspect_deployment",
+        # redeploy-runtime's verification probe (U5): sentinel-clean by its own
+        # token. The read is parsed ONLY by ``split_combiner_probe``, which
+        # recognises the ``__HPC_COMBINER_SHA__`` prefix — that prefix IS the
+        # positive evidence. A severed/truncated channel yields no probe line,
+        # which becomes ``state: "unknown"``, and ``unknown`` does NOT satisfy
+        # the verb's ``ok`` (which requires every root to read back
+        # ``present``). So a silent channel reports a FAILED repair, never a
+        # confirmed one — the exact direction the ack rule exists to enforce.
+        "hpc_agent/ops/redeploy_runtime.py::_probe_roots",
         # Cluster-announce marker read (crash-only monitoring, G1 Phase 1): a
         # truncated/empty readdir yields FEWER announcements, never a false
         # terminal — the watch treats a missing announcement as "not yet",
