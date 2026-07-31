@@ -564,6 +564,15 @@ ROLE_ROOT_ALLOW: frozenset[tuple[str, str, str]] = frozenset(
         ("notebook_gate.py", "ops", "notebook"),
         ("notebook_view.py", "ops", "notebook"),
         ("overnight.py", "meta", "campaign"),
+        # s2-readiness pillar 6: the morning brief carries the S2 SLO line, and
+        # the ONE renderer of that line is ops/monitor/summary.format_slo (the
+        # same one monitor-summary prints). A local re-composition would be a
+        # second definition of the scorecard the moment either side gained a
+        # field — two surfaces disagreeing about an SLO is worse than one
+        # surface not carrying it — so the brief CALLS it. A public function,
+        # not a primitive, so it earns an inventory entry rather than a
+        # composes= (the extract_recipe.py precedent).
+        ("overnight.py", "ops", "monitor"),
         ("overnight.py", "ops", "recover"),
         ("pack_gate.py", "ops", "pack"),
         ("recover_flow.py", "ops", "recover"),

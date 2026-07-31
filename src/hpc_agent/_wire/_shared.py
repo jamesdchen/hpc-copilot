@@ -442,3 +442,106 @@ class DetachedHandleFields(BaseModel):
             "detected by the §5 watchdog via a lapsed next_tick_due, not by this pid."
         ),
     )
+
+
+# ── standing readiness ledger digest ─────────────────────────────────────────
+
+
+class ReadinessDigest(BaseModel):
+    """One cluster's readiness one-liner — pillar 1's render mandate, on the wire.
+
+    ``docs/design/s2-readiness.md`` pillar 1 does not stop at a substrate; it
+    ends in a render mandate: the standing ledger is "rendered with age in the S1
+    brief and ``suggest-*`` surfaces". This is the shape those surfaces carry. It
+    is composed ONCE, by ``ops/readiness_digest.digest_for_host``, and declared
+    ONCE here so the two schema'd consumers (``doctor``,
+    ``suggest-prelude-action``) and the two free-form brief consumers
+    (``status-snapshot``, the overnight morning brief) describe the same fields
+    with the same words.
+
+    **A reading, never a probe.** Every field comes from
+    ``<journal home>/_readiness/<host>.json`` — the durable tier of the ledger,
+    fed opportunistically by traffic the system was already making. Composing a
+    digest opens no connection, resolves no name and spawns no process: a surface
+    that sensed on read would put the fire-time discovery pillar 1 removes onto
+    the busiest surfaces in the product. ``line`` therefore ends in "(ledger
+    read, not probed)", so a quoted line cannot be mistaken for a live check.
+
+    A helper shape (no ``*Spec``/``*Result`` suffix), so it is inlined into each
+    consumer's schema rather than emitted as a verb schema of its own.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="cluster readiness digest")
+
+    cluster: str | None = Field(
+        default=None,
+        description=(
+            "The clusters.yaml key naming this host, when one does. Null for a "
+            "host that has a ledger but no config entry — reached outside the "
+            "config, and hidden by nothing."
+        ),
+    )
+    host: str = Field(
+        description=(
+            "The ssh host the ledger is keyed under (the bare host — the SAME "
+            "normalization the circuit breaker, the throttle and the sensor layer "
+            "use, so every substrate agrees on what 'a host' is)."
+        ),
+    )
+    verdict: str = Field(
+        description=(
+            "The overall verdict from {ready, stale, degraded, unknown}, computed "
+            "by state/readiness.overall_verdict — the ONE definition every surface "
+            "routes through. 'stale' is not a milder 'degraded': it means no fresh "
+            "failure but the evidence does not support ready (the host may have "
+            "healed and nothing has looked since). 'unknown' means nothing has "
+            "ever been observed here, or the ledger could not be read."
+        ),
+    )
+    age_seconds: int | None = Field(
+        default=None,
+        description=(
+            "Age of the freshest atom in the ledger, in whole seconds. Null when "
+            "there is no dateable atom — honest, never zero. A verdict without an "
+            "age is the failure mode the ledger exists to remove."
+        ),
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why the verdict is not 'ready', named as a sensor rather than as "
+            "advice: 'connect/effective -> host: down', 'connect: no observation "
+            "recorded', 'ledger file could not be read: not valid JSON', or 'no "
+            "readiness ledger on this machine'. Null when the verdict is 'ready'."
+        ),
+    )
+    ledger_corrupt: bool = Field(
+        default=False,
+        description=(
+            "True when the ledger FILE exists but this read could not use it "
+            "(unreadable, malformed, or a schema_version this build does not "
+            "understand). An ABSENT file is not corrupt: 'never looked' and "
+            "'cannot read what looked' are different facts."
+        ),
+    )
+    ledger_corruption_reason: str | None = Field(
+        default=None,
+        description="Which corruption it was; null when the read was clean.",
+    )
+    last_corruption: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "A persisted {at, reason} note left when an earlier write rebuilt over "
+            "a corrupt file. Carried so the operator learns ONCE that something was "
+            "lost, rather than having it vanish with the file. Null when no rebuild "
+            "ever discarded one."
+        ),
+    )
+    line: str = Field(
+        description=(
+            "The composed one-liner: '<cluster> (<host>): <verdict> - <age> - "
+            "<note> (ledger read, not probed)'. Rendered from this entry's own "
+            "fields by ops/readiness_digest.digest_line, so the same digest always "
+            "prints the same bytes on every surface."
+        ),
+    )

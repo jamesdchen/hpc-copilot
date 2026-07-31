@@ -115,6 +115,20 @@ _FAILSAFE_AXIS = "sequential"
 # accepts any relpath); named here so the suggested call is copy-pasteable.
 _DEFAULT_TEMPLATE_OUT = ".hpc/templates/audit_template.py"
 
+# The rungs whose ACTION hands off to a cluster, and therefore carry the standing
+# readiness ledger's one-liner (docs/design/s2-readiness.md pillar 1's render
+# mandate). Exactly one rung qualifies: the terminal ``submit-s1``, where the
+# prelude ends and the submit chain begins — S2, the first block where transport,
+# remote env, storage, scheduler and permissions must ALL work, is two hops away
+# and the human is about to commit. Every other rung (notebook, pack, axes,
+# interview) is local work that no cluster fact can change.
+#
+# Deliberately a closed set rather than "anything not obviously local": a
+# readiness line beside a rung that cannot use it is noise, and a field that is
+# usually noise trains its readers to skip it — which is how the line would come
+# to be missed on the one rung that needed it.
+CLUSTER_ACTIONS: frozenset[str] = frozenset({"submit-s1"})
+
 
 # --- substrate evidence ------------------------------------------------------
 
@@ -171,6 +185,10 @@ class _Prelude:
     interview_intent: bool = False
     materialized: bool = False
     entry_point_run_name: str | None = None
+    #: ``interview.json``'s ``cluster_target.cluster``, when the spec pins one —
+    #: the cluster a ``submit-s1`` rung would actually hand off to. ``None`` means
+    #: unpinned (the planner picks at submit time), not "no cluster".
+    cluster_target: str | None = None
 
     def note(
         self, substrate: str, detail: str, remedy: str | None = None, *, corrupt: bool = False
@@ -273,6 +291,15 @@ def _read_interview(ev: _Prelude) -> None:
             declared = audited.get("audit_id")
             if isinstance(declared, str) and declared and declared not in ev.declared_audit_ids:
                 ev.declared_audit_ids.append(declared)
+        # The cluster the submit chain would hand off to, when interview.json
+        # pins one. Read tolerantly (this file is caller-authored): a missing or
+        # malformed block simply leaves the target unpinned, and the readiness
+        # digest then reports every configured cluster with that disclosed.
+        target = doc.get("cluster_target")
+        if isinstance(target, dict) and ev.cluster_target is None:
+            name = target.get("cluster")
+            if isinstance(name, str) and name.strip():
+                ev.cluster_target = name.strip()
         materialized = doc.get("_materialized")
         if isinstance(materialized, dict) and not ev.materialized:
             ev.materialized = True
@@ -585,6 +612,64 @@ def _gather(experiment_dir: Path) -> _Prelude:
             "the ladder reports the first, sorted"
         )
     return ev
+
+
+# --- the readiness digest (s2-readiness pillar 1's render mandate) -----------
+
+
+def _readiness_for(ev: _Prelude, action: str) -> list[dict[str, Any]]:
+    """The standing readiness ledger's one-liner per cluster *action* would involve.
+
+    Pillar 1 of ``docs/design/s2-readiness.md`` ends in a render mandate — the
+    ledger is "rendered with age in the S1 brief and ``suggest-*`` surfaces" —
+    and this is that render on this surface. The rung right before the submit
+    chain is where the human still has a free choice; learning there that the
+    only route to a cluster last answered 4 hours ago costs nothing, while
+    learning it at S2 costs the attempt.
+
+    Scope, in order:
+
+    * a rung outside :data:`CLUSTER_ACTIONS` → ``[]``. No cluster is involved,
+      so there is nothing honest to say about one.
+    * ``interview.json`` pins a ``cluster_target`` → that ONE cluster. Its host
+      comes from ``clusters.yaml``; a pin naming no configured cluster is
+      DISCLOSED and yields no line, because a digest keyed on a host we cannot
+      name would be a line about nothing.
+    * no pin → every configured cluster, with the ambiguity disclosed. The
+      planner picks at submit time, so any of them may be the one that matters;
+      silently choosing one here would be this verb inventing intent.
+
+    CONSULT-ONLY and totally fail-open: the composition reads the durable ledger
+    and ``clusters.yaml``, opens no connection, and returns ``[]`` rather than
+    raising — an advisory line must never be the thing that breaks a suggestion.
+    """
+    if action not in CLUSTER_ACTIONS:
+        return []
+    try:
+        from hpc_agent.ops.readiness_digest import configured_hosts, digests_for
+
+        configured = configured_hosts()
+        if ev.cluster_target is not None:
+            host = configured.get(ev.cluster_target, "")
+            if not host:
+                ev.disclosures.append(
+                    f"interview.json pins cluster_target {ev.cluster_target!r}, which "
+                    "names no host in clusters.yaml; no readiness ledger to consult"
+                )
+                return []
+            pairs = [(ev.cluster_target, host)]
+        else:
+            if len(configured) > 1:
+                ev.disclosures.append(
+                    "interview.json pins no cluster_target, so readiness is reported "
+                    f"for all {len(configured)} configured cluster(s); the planner "
+                    "picks the target at submit time"
+                )
+            pairs = sorted(configured.items())
+        return digests_for([(name, host) for name, host in pairs])
+    except Exception as exc:  # noqa: BLE001 — an advisory line never fails a suggestion
+        ev.disclosures.append(f"readiness ledger unavailable; no readiness line ({exc})")
+        return []
 
 
 # --- scaffolds ---------------------------------------------------------------
@@ -947,9 +1032,13 @@ def _rule_cold_start(ev: _Prelude) -> CandidateAction | None:
             "audit-config seat, the pack journal / interview.json packs opt-in and "
             "the INTEGRITY of that pair, .hpc/axes.yaml presence+staleness, "
             "interview.json presence/_materialized) and recommend ONE next step: "
-            "{rung, action, why, scaffold, findings, substrates}. Total — every "
-            "state maps to exactly one suggestion; a corrupt/unreadable substrate "
-            "is a disclosed 'run doctor' rung, never a crash. Read-only, no SSH."
+            "{rung, action, why, scaffold, findings, substrates, readiness}. "
+            "Total — every state maps to exactly one suggestion; a "
+            "corrupt/unreadable substrate is a disclosed 'run doctor' rung, never "
+            "a crash. A suggestion that hands off to a cluster also carries that "
+            "cluster's standing readiness one-liner (verdict + age + the sensor "
+            "that is not green), consulted from the durable ledger — never "
+            "probed. Read-only, no SSH."
         ),
         experiment_dir_arg=True,
     ),
@@ -996,8 +1085,14 @@ def suggest_prelude_action(experiment_dir: Path) -> SuggestPreludeActionResult:
 
     Returns a :class:`~hpc_agent._wire.queries.suggest_prelude_action.SuggestPreludeActionResult`
     carrying the chosen rung, the ``why``, a scaffold of the exact call, every
-    finding (including ones a lower rung pre-empted), the disclosures, and the
-    evidence vector the decision was made over.
+    finding (including ones a lower rung pre-empted), the disclosures, the
+    evidence vector the decision was made over, and — for a rung whose action
+    hands off to a cluster (:data:`CLUSTER_ACTIONS`) — the standing readiness
+    ledger's one-liner for that cluster (``docs/design/s2-readiness.md`` pillar
+    1's render mandate). The readiness lines are CONSULTED, never probed: no
+    connection is opened, and a host nothing has observed reads "unknown · age
+    unknown · no readiness ledger on this machine" rather than being measured on
+    demand. They are advisory — the rung is never changed by them.
 
     Raises :class:`errors.SpecInvalid` only when *experiment_dir* is missing —
     a broken repo is REPORTED (rung 0), never raised.
@@ -1044,6 +1139,14 @@ def suggest_prelude_action(experiment_dir: Path) -> SuggestPreludeActionResult:
     chosen = decision.chosen
     assert chosen is not None  # a total ladder always resolves to a branch
 
+    # Composed AFTER the ladder resolved, and passed the CHOSEN action: the
+    # readiness digest is a disclosure ABOUT the suggestion, never an input to
+    # it. A ledger is a freshness signal, not a correctness gate — a degraded
+    # cluster must not silently re-route the prelude to a different rung, or the
+    # ladder would stop being total and start being weather-dependent. (It may
+    # append a disclosure, which is why it runs before the disclosures are read.)
+    readiness = _readiness_for(ev, chosen.action)
+
     reported: _Audit | None = chosen.params["audit"]
     return SuggestPreludeActionResult(
         rung=int(chosen.params["rung"]),
@@ -1052,6 +1155,7 @@ def suggest_prelude_action(experiment_dir: Path) -> SuggestPreludeActionResult:
         scaffold=chosen.params["scaffold"],
         findings=list(ev.findings),
         disclosures=list(ev.disclosures),
+        readiness=readiness,  # type: ignore[arg-type]
         substrates=PreludeSubstrates(
             audit_ids=[a.audit_id for a in ev.audits],
             audit_id=reported.audit_id if reported is not None else None,

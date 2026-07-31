@@ -157,7 +157,7 @@ def _format_kill_count(field: str, value: int) -> str:
     return f"{value} {_KILL_PHRASE[field]}"
 
 
-def _format_slo(slo: Any) -> str | None:
+def format_slo(slo: Any) -> str | None:
     """Render the S2 SLO line for a run, or ``None`` when nothing was measurable.
 
     One line, composed from the ``state/s2_slo.S2Slo`` reducer's fields — every
@@ -166,6 +166,15 @@ def _format_slo(slo: Any) -> str | None:
     reducer could not measure is OMITTED rather than printed as ``0``: an
     unmeasured latency and a zero latency are different facts, and the whole
     point of pillar 6 is that the scorecard is honest.
+
+    PUBLIC because it is the ONE definition of this line. Pillar 6 says the S2
+    scorecard "rides run telemetry and the morning brief", so ``status-snapshot``
+    and the overnight brief render it too (``ops/status_blocks``,
+    ``ops/overnight``) — by calling this, never by re-composing it. A second
+    renderer would be a second definition of the SLO the moment either side
+    gained a field, and two surfaces disagreeing about a scorecard is worse than
+    one surface not carrying it. (Promoted from ``_format_slo``; the underscore
+    was the only thing making a copy easier than a call.)
     """
     if not slo.measured:
         return None
@@ -456,7 +465,7 @@ def monitor_summary(
     # measurable — an unmeasured SLO prints nothing rather than zeros.
     from hpc_agent.state.s2_slo import slo_for_run
 
-    slo_line = _format_slo(slo_for_run(experiment_dir, run_id, record))
+    slo_line = format_slo(slo_for_run(experiment_dir, run_id, record))
     if slo_line:
         body_lines.append(f"slo: {slo_line}")
 

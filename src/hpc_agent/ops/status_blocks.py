@@ -322,6 +322,86 @@ def _parked_brief_section(experiment_dir: Path, now_iso: str) -> list[dict[str, 
     return rows or None
 
 
+def _readiness_brief_section(records: list[Any], now_iso: str) -> list[dict[str, Any]] | None:
+    """The readiness paragraph: one ledger line per cluster the digest involves.
+
+    ``docs/design/s2-readiness.md`` pillar 1's render mandate on the surface the
+    human reads FIRST. A snapshot already answers "what is running where"; this
+    answers the question that decides what to do about it — whether the machine
+    still believes it can reach where. Rendered with the AGE, because a verdict
+    without one is the failure this substrate exists to remove.
+
+    Scope is the clusters of the digested runs, not ``clusters.yaml``: the
+    snapshot is about THESE runs, and a line for a cluster none of them touch is
+    noise on the morning read. Each run's ``ssh_target`` keys the ledger when it
+    has one (that is the host actually reached, and the ledger normalizes
+    ``user@host`` itself); otherwise the cluster name is resolved through
+    ``clusters.yaml``. Deduped — two runs on one cluster are one readiness fact.
+
+    CONSULT-ONLY: the digest reads the durable ledger and the config, never the
+    network — a status snapshot is journal-first by contract and must stay so.
+    Additive + fail-open like the queue/parked sections: no involved cluster, or
+    any read surprise, yields ``None`` and the brief is byte-unchanged.
+    """
+    try:
+        from hpc_agent.ops.readiness_digest import digests_for, host_for_cluster
+
+        pairs: list[tuple[str | None, str]] = []
+        for record in records:
+            cluster = str(getattr(record, "cluster", "") or "") or None
+            host = str(getattr(record, "ssh_target", "") or "")
+            if not host and cluster:
+                host = host_for_cluster(cluster)
+            if host:
+                pairs.append((cluster, host))
+        if not pairs:
+            return None
+        rows = digests_for(pairs, now=parse_iso_utc_or_none(now_iso))
+    except Exception:  # noqa: BLE001 — a readiness read must never blank the digest
+        return None
+    return rows or None
+
+
+def _slo_brief_section(experiment_dir: Path, records: list[Any]) -> list[dict[str, Any]] | None:
+    """The S2 SLO paragraph: one scorecard line per run that has FINISHED.
+
+    Pillar 6 of ``docs/design/s2-readiness.md``: "Unmeasured devx regresses",
+    and the scorecard "rides run telemetry and the morning brief". ``status-
+    snapshot`` IS the morning read, so it carries the same line ``monitor-
+    summary`` prints — through the SAME reducer (``state/s2_slo.slo_for_run``)
+    and the SAME renderer (``ops/monitor/summary.format_slo``). Never a second
+    definition: two surfaces disagreeing about a scorecard is worse than one
+    surface not carrying it.
+
+    Terminal runs only. Every field settles at submit time, so an in-flight run
+    would show the same numbers — but the morning read is a review of what
+    happened, and pinning the line to a finished run keeps the in-flight digest
+    byte-unchanged rather than growing a paragraph that repeats every tick. That
+    also means the section rides a RUN-SCOPED snapshot: a fleet digest
+    (``run_id=None``) gathers ``find_in_flight_runs``, which by definition holds
+    no finished run. Widening the gather to reach terminal runs would change what
+    ``running_where`` / ``changed_since_seen`` mean, which is a different edit
+    than surfacing a scorecard.
+
+    Additive + fail-open: a run whose SLO measured nothing contributes no row,
+    and no rows at all yields ``None``.
+    """
+    try:
+        from hpc_agent.ops.monitor.summary import format_slo
+        from hpc_agent.state.s2_slo import slo_for_run
+
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            if record.status not in TERMINAL_STATUSES:
+                continue
+            line = format_slo(slo_for_run(experiment_dir, record.run_id, record))
+            if line:
+                rows.append({"run_id": record.run_id, "status": record.status, "slo": line})
+    except Exception:  # noqa: BLE001 — a scorecard read must never blank the digest
+        return None
+    return rows or None
+
+
 @primitive(
     name="status-snapshot",
     verb="workflow",
@@ -365,6 +445,15 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     surfaces stalled-driver evidence (§5 watchdog) and failed/abandoned runs, and
     re-stamps the attention watermark. ``needs_decision`` is True only when the
     evidence demands one — the snapshot never manufactures a decision point.
+
+    Two s2-readiness sections ride the brief, both additive and omitted when
+    empty: ``readiness`` — the standing ledger's one-liner per involved cluster
+    (verdict + AGE + the sensor that is not green), CONSULTED from disk and
+    never probed, so the journal-first contract is untouched — and ``slo`` — the
+    S2 scorecard for each finished run, rendered by ``monitor-summary``'s own
+    ``format_slo`` over ``state/s2_slo``'s reducer, never a second definition.
+    Neither ever moves ``needs_decision``: they are what the human reads, not
+    what the code decides on.
     """
     now_iso = spec.now_iso or utcnow_iso()
 
@@ -490,6 +579,15 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     # key is OMITTED when nothing is parked (byte-stable for park-free fleets).
     parked_section = _parked_brief_section(experiment_dir, now_iso)
 
+    # s2-readiness pillars 1 + 6 on the surface the human reads first: the
+    # standing readiness ledger's one-liner per involved cluster (verdict + AGE +
+    # the sensor that is not green, CONSULTED — never probed), and the S2 SLO
+    # line for each finished run, through monitor-summary's own renderer. Both
+    # computed like the queue/parked sections so the key is OMITTED when there is
+    # nothing to say (byte-stable for a fleet with no clusters / no finished run).
+    readiness_section = _readiness_brief_section(records, now_iso)
+    slo_section = _slo_brief_section(experiment_dir, records)
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -512,6 +610,10 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         brief["queue"] = queue_section
     if parked_section is not None:
         brief["parked"] = parked_section
+    if readiness_section is not None:
+        brief["readiness"] = readiness_section
+    if slo_section is not None:
+        brief["slo"] = slo_section
 
     needs_decision = bool(stalled or anomalies)
     if needs_decision:
