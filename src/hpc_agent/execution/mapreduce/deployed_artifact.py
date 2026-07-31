@@ -39,8 +39,50 @@ mtime), which is exactly the discrimination a scratch reaper applies.
 **D3 — the torn tree deploy.** ``_deploy_code_tree`` wraps materialize +
 ``deploy_runtime`` + seal in one ``except Exception`` that degrades to the base
 tree with a log line. A tree materialized but not runtime-deployed is left
-behind unsealed; the next probe rebuilds it, but any reader that resolved
-``REPO_DIR`` to it in between finds no ``.hpc/_hpc_combiner.py``.
+behind unsealed with no ``.hpc/_hpc_combiner.py`` in it.
+
+D3 is a DEPLOY-time defect only — corrected 2026-07-30
+------------------------------------------------------
+
+An earlier draft of this module claimed D3 also explained the incident's
+symptom: that waves combine in the §10.S4 code tree while the ``--final``
+reduce runs at the base, so a tree missing its copy would produce
+``[combiner] ERROR: no _combiner/<run_id>/wave_*.json`` from a base that looks
+healthy. **That story is false and is recorded here so it cannot be
+re-derived.** Every production combine caller passes ``record.remote_path`` —
+the BASE — and nothing invokes the combiner at a tree path:
+
+* ``cli/aggregate.py`` (``combine_wave`` + the artifact verifiers),
+* ``ops/monitor_flow.py`` (``combine_waves``, the S3 watch leg),
+* ``ops/aggregate_flow.py`` (``_combine_missing`` and ``_cluster_final_reduce``).
+
+``REPO_DIR`` is the directory the *job* ``cd``s into at run time; the control
+plane never follows it for a combine. So D3 can only bite at DEPLOY time — a
+tree whose framework files are missing runs a job that cannot import them —
+and it is covered where it actually lives: ``deploy_runtime`` probes and
+repairs PER DEPLOY ROOT (``_deploy_code_tree`` calls it with the tree path),
+and ``redeploy-runtime`` probes both roots. Nothing in the combine path needed
+a two-root story, and the combine-path guard below does not provide one.
+
+What the 20:52 line actually witnesses is one step downstream of the cause: no
+combine ever produced a partial, so whatever later reads ``_combiner/``
+reports the absence of PARTIALS. This module does not claim to reconstruct the
+full causal chain of that evening — it removes the class of cause.
+
+Residual scope — named, not silently closed
+-------------------------------------------
+
+* **D1 is mitigated at COMBINE time only.** The guard refuses when a combine
+  would run against a root with no combiner. The skip-staging re-entry itself
+  still bypasses ``deploy_runtime`` entirely and is not probed at SUBMIT time;
+  a submit-time presence gate on that path is future work.
+* **The D2 disk-check covers the COMBINER only.** ``deploy_runtime`` ships ~16
+  artifacts (the dispatcher, the job templates, the shared preambles, the
+  reporter closure, the importable stubs) and every one of them rides the same
+  manifest that lies about presence. This is not hypothetical: the 2026-06-08
+  Windows demo wiped ``.hpc/templates/`` and every array task died at
+  preamble-source time. Generalising the presence probe to the whole deploy
+  set is the obvious next step and is deliberately NOT claimed here.
 
 What this module provides
 -------------------------
@@ -87,7 +129,7 @@ __all__ = [
     "combiner_probe_snippet",
     "combiner_source_path",
     "local_combiner_sha",
-    "redeploy_command",
+    "parse_combiner_probes",
     "split_combiner_probe",
 ]
 
@@ -122,6 +164,10 @@ _ABSENT_TOKEN: Final[str] = "absent"
 #: node could hash it. Presence is still positive evidence; the sha is UNKNOWN
 #: and must never be read as "matches" or as "differs".
 _UNKNOWN_TOKEN: Final[str] = "unknown"
+
+#: Tag emitted when a caller folds exactly one probe and has nothing to
+#: disambiguate. Single-probe readers ignore tags entirely.
+_UNTAGGED: Final[str] = "-"
 
 
 def combiner_source_path() -> Path:
@@ -200,8 +246,8 @@ class CombinerProbe:
         return not self.present or self.stale
 
 
-def combiner_probe_snippet(*, root: str | None = None) -> str:
-    """POSIX-sh fragment printing ``<prefix> <sha|absent|unknown>`` on one line.
+def combiner_probe_snippet(*, root: str | None = None, tag: str | None = None) -> str:
+    """POSIX-sh fragment printing ``<prefix> <tag> <sha|absent|unknown>``.
 
     Designed to be FOLDED INTO an exec that already runs — the deploy
     prelude's ``mkdir``/``find``/``cat`` chain — so verifying the artifact
@@ -212,6 +258,15 @@ def combiner_probe_snippet(*, root: str | None = None) -> str:
 
     *root* is the deploy root the artifact is relative to; ``None`` means "the
     current working directory", for callers that already ``cd``'d there.
+
+    *tag* labels the emission so a caller that folds SEVERAL probes into one
+    exec can attribute each line to the root that produced it, by name rather
+    than by position. Positional demux is wrong under partial truncation: if
+    the first root's line is cut, the second root's line slides into slot 0 and
+    the caller reports the wrong root's state. The overall verdict stays safe
+    (a missing line is UNKNOWN, which never greens anything), but the per-root
+    map would be a lie, and that map is what an operator reads to decide which
+    root to go look at. ``None`` emits the placeholder ``-``.
 
     Three hashing tools are tried in order because login nodes disagree:
     ``sha256sum`` (GNU coreutils, the common case), ``shasum -a 256`` (macOS /
@@ -238,17 +293,19 @@ def combiner_probe_snippet(*, root: str | None = None) -> str:
     """
     path = COMBINER_REL if root is None else f"{root.rstrip('/')}/{COMBINER_REL}"
     path_q = shlex.quote(path)
+    tag_q = shlex.quote(tag if tag else _UNTAGGED)
     # Single-quoted awk program; no shell interpolation inside it.
     awk_prog = "{for(i=1;i<=NF;i++) if ($i ~ /^[0-9a-f]{64}$/) {print $i; exit}}"
+    prefix_q = shlex.quote(COMBINER_PROBE_PREFIX)
     return (
         f"if [ -f {path_q} ]; then "
         f"__hpc_cs=$( {{ sha256sum {path_q} 2>/dev/null "
         f"|| shasum -a 256 {path_q} 2>/dev/null "
         f"|| openssl dgst -sha256 {path_q} 2>/dev/null; }} "
         f"| awk '{awk_prog}' | head -n 1 ); "
-        f"printf '\\n%s %s\\n' {shlex.quote(COMBINER_PROBE_PREFIX)} "
+        f"printf '\\n%s %s %s\\n' {prefix_q} {tag_q} "
         f'"${{__hpc_cs:-{_UNKNOWN_TOKEN}}}"; '
-        f"else printf '\\n%s %s\\n' {shlex.quote(COMBINER_PROBE_PREFIX)} "
+        f"else printf '\\n%s %s %s\\n' {prefix_q} {tag_q} "
         f"{shlex.quote(_ABSENT_TOKEN)}; fi; "
     )
 
@@ -308,28 +365,54 @@ def split_combiner_probe(stdout: str) -> tuple[CombinerProbe | None, str]:
     prefixes a newline too; this stays tolerant so a cluster still running the
     older snippet is read correctly rather than silently mis-parsed.
     """
+    probes, rest = parse_combiner_probes(stdout)
+    if not probes:
+        return None, rest
+    return next(iter(probes.values())), rest
+
+
+def parse_combiner_probes(stdout: str) -> tuple[dict[str, CombinerProbe], str]:
+    """Read EVERY tagged probe emission; return ``({tag: probe}, remaining)``.
+
+    The multi-root reader. Attribution is by the tag the emission carries, not
+    by the order lines arrive in, so a truncated stream drops the roots it lost
+    and reports the rest CORRECTLY — rather than sliding the survivors into the
+    wrong slots. A tag absent from the returned map is UNKNOWN for that root,
+    which no caller may read as "present".
+
+    A duplicate tag keeps the FIRST emission: probes are emitted in the order
+    the caller composed them, and re-reading a root cannot make an earlier
+    absence less true.
+    """
     if COMBINER_PROBE_PREFIX not in (stdout or ""):
-        return None, stdout
+        return {}, stdout
     kept: list[str] = []
-    probe: CombinerProbe | None = None
+    probes: dict[str, CombinerProbe] = {}
     expected = local_combiner_sha()
     for line in stdout.splitlines():
-        idx = line.find(COMBINER_PROBE_PREFIX) if probe is None else -1
+        idx = line.find(COMBINER_PROBE_PREFIX)
         if idx < 0:
             kept.append(line)
             continue
         head = line[:idx]
         if head.strip():
             kept.append(head)
-        token = line[idx + len(COMBINER_PROBE_PREFIX) :].strip().split()
-        value = token[0] if token else ""
-        if value == _ABSENT_TOKEN:
-            probe = CombinerProbe(present=False, sha=None, expected_sha=expected)
-        elif value in ("", _UNKNOWN_TOKEN):
-            probe = CombinerProbe(present=True, sha=None, expected_sha=expected)
+        fields = line[idx + len(COMBINER_PROBE_PREFIX) :].strip().split()
+        # ``<tag> <value>``. A single field is a legacy/untagged emission whose
+        # one token is the VALUE — never mistake a sha for a tag.
+        if len(fields) >= 2:
+            tag, value = fields[0], fields[1]
         else:
-            probe = CombinerProbe(present=True, sha=value, expected_sha=expected)
-    return probe, "\n".join(kept)
+            tag, value = _UNTAGGED, (fields[0] if fields else "")
+        if tag in probes:
+            continue
+        if value == _ABSENT_TOKEN:
+            probes[tag] = CombinerProbe(present=False, sha=None, expected_sha=expected)
+        elif value in ("", _UNKNOWN_TOKEN):
+            probes[tag] = CombinerProbe(present=True, sha=None, expected_sha=expected)
+        else:
+            probes[tag] = CombinerProbe(present=True, sha=value, expected_sha=expected)
+    return probes, "\n".join(kept)
 
 
 def combiner_absent_in(stdout: str | None, stderr: str | None) -> bool:
@@ -343,23 +426,8 @@ def combiner_absent_in(stdout: str | None, stderr: str | None) -> bool:
     return COMBINER_ABSENT_SENTINEL in ((stdout or "") + (stderr or ""))
 
 
-def redeploy_command(
-    *,
-    experiment_dir: str | None = None,
-    run_id: str | None = None,
-) -> str:
-    """The literal command that RESTORES the deployed combiner.
-
-    This is the command the 2026-07-30 incident's human substituted with a hand
-    ``scp`` at 22:00. It re-ships every ``deploy_runtime`` artifact to the run's
-    own ``remote_path`` with the content-hash cache bypassed, and submits
-    nothing — so it is safe to run against a run that is mid-flight, finished,
-    or being aggregated.
-
-    Unresolved values are emitted as ``<placeholder>`` tokens, which is exactly
-    what :func:`hpc_agent.recovery.registry.remediation_for` substitutes at
-    emit time.
-    """
-    exp = experiment_dir or "<experiment_dir>"
-    rid = run_id or "<run_id>"
-    return f"hpc-agent redeploy-runtime --experiment-dir {exp} --run-id {rid}"
+# NOTE (F5, 2026-07-30): a ``redeploy_command()`` helper lived here and had
+# zero production callers — the redeploy command string's ONE home is the
+# ``combiner_missing`` menu in ``hpc_agent.recovery.registry``, which every
+# raise site renders through ``remediation_for``. A second formatter would be a
+# second thing to drift. Deleted rather than wired.

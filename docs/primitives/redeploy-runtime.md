@@ -71,9 +71,22 @@ line never arrived reads `unknown` and does not green the verb, because absence
 of evidence is not evidence of repair.
 
 Two deploy roots are repaired when the run is pinned to a content-addressed
-code tree (§10.S4): the job reads its framework files from
-`job_env["REPO_DIR"]`, the aggregate's combine leg from the base `remote_path`.
-Fixing only one of them would fix the wrong half half the time.
+code tree (§10.S4). They serve different consumers:
+
+- the **base** `remote_path` is where every control-plane combine runs — the
+  per-wave combine, the fused batch, and the `--final` reduce all pass
+  `record.remote_path`;
+- the **tree** (`job_env["REPO_DIR"]`) is where the JOB `cd`s at run time, so
+  its copy is what the array's tasks import.
+
+Repairing both is about covering both consumers, not about the combine leg
+following `REPO_DIR` — it does not. (An earlier draft of this page claimed the
+combine leg reads the tree while the reduce reads the base; that was wrong and
+is corrected here so it is not re-derived.)
+
+Per-root verdicts are attributed by a tag the probe emission carries, not by
+the order lines arrive, so a truncated read drops the roots it lost and reports
+the rest correctly instead of sliding survivors into the wrong slot.
 
 ## Errors
 
@@ -105,3 +118,9 @@ to try.
   "the combiner is deployed" means, across all three.
 - This verb does not touch the run's own state: no journal write, no scheduler
   contact, no results. It only restores framework files.
+- **Scope, honestly:** the presence check it verifies covers the COMBINER only.
+  `deploy_runtime` ships ~16 artifacts and every one rides the same manifest
+  that can claim a file is current after it is gone — the 2026-06-08
+  `.hpc/templates/` wipe is the same class. This verb re-ships them all (the
+  cache is bypassed), but it only *verifies* the combiner. Generalising the
+  probe to the whole deploy set is named future work, not a closed gap.

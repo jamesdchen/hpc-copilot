@@ -143,25 +143,11 @@ def refuse_absent_combiner(
     )
 
 
-def verify_deployed_combiner(
-    *,
-    ssh_target: str,
-    remote_path: str,
-) -> CombinerProbe | None:
-    """Read the deployed combiner's presence+sha at *remote_path* in one ssh.
-
-    The standalone form of the check that :func:`verify_per_task_outputs` folds
-    into its own exec for free. Returns ``None`` when the probe line did not
-    arrive (severed channel / truncated output) — UNKNOWN, never "absent".
-    """
-    proc = remote.ssh_run(combiner_probe_snippet(root=remote_path), ssh_target=ssh_target)
-    if proc.returncode != 0:
-        raise RemoteCommandFailed(
-            f"deployed-combiner probe failed (rc={proc.returncode}): "
-            f"{proc.stderr.strip()[:200]}"
-        )
-    probe, _rest = split_combiner_probe(proc.stdout or "")
-    return probe
+# NOTE (F5, 2026-07-30): a standalone ``verify_deployed_combiner()`` lived here
+# and had zero callers — the probe it wrapped is folded into
+# ``_read_remote_sidecar_and_probe``'s exec, which is the only place this
+# module needs the answer. Deleted rather than kept as a second, untested way
+# to ask the same question with an extra round-trip.
 
 
 def verify_per_task_outputs(
@@ -236,13 +222,6 @@ def verify_per_task_outputs(
             f"per-task output existence check failed (remote rc={ack_rc}): "
             f"{proc.stderr.strip()[:500]}"
         )
-    # Peel the folded combiner probe off before the MISSING scan, and refuse on
-    # absence FIRST: "which task outputs are missing" is not a question worth
-    # answering when the thing that would have consumed them isn't deployed.
-    probe, clean = split_combiner_probe(clean)
-    refuse_absent_combiner(
-        probe, ssh_target=ssh_target, remote_path=remote_path, run_id=run_id
-    )
     return [
         line[len("MISSING:") :].strip()
         for line in clean.splitlines()

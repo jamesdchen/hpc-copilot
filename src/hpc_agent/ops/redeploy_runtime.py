@@ -43,7 +43,7 @@ from hpc_agent.execution.mapreduce.deployed_artifact import (
     COMBINER_REL,
     CombinerProbe,
     combiner_probe_snippet,
-    split_combiner_probe,
+    parse_combiner_probes,
 )
 
 __all__ = ["redeploy_runtime"]
@@ -71,25 +71,29 @@ def _scheduler_for_cluster(cluster: str) -> str | None:
 def _probe_roots(*, ssh_target: str, roots: list[str]) -> dict[str, CombinerProbe | None]:
     """Read back each root's deployed-combiner presence+sha in ONE ssh.
 
-    The verification leg. Every root's probe line rides a single exec — the
-    snippets are concatenated and the lines demultiplexed in order — so
-    confirming a two-root repair still costs one round-trip, not two.
+    The verification leg: every root's probe rides a single exec, so confirming
+    a two-root repair still costs one round-trip, not two.
+
+    Attribution is by TAG, never by position (F9). Each emission carries its
+    root's index, and the reader keys on that. A positional demux — peel the
+    first probe, assign it to ``roots[0]``, peel the next, assign to
+    ``roots[1]`` — is wrong under partial truncation: lose root 0's line and
+    root 1's verdict silently becomes root 0's. The overall ``ok`` stayed safe
+    either way (a missing line is UNKNOWN, which never greens), but the
+    per-root map is exactly what an operator reads to decide WHICH root to go
+    look at, and a map that points at the wrong root is worse than no map.
     """
     from hpc_agent.infra import remote
 
-    script = "".join(combiner_probe_snippet(root=r) for r in roots)
+    script = "".join(combiner_probe_snippet(root=r, tag=str(i)) for i, r in enumerate(roots))
     proc = remote.ssh_run(script, ssh_target=ssh_target)
     if proc.returncode != 0:
         raise errors.RemoteCommandFailed(
             f"redeploy-runtime verification probe failed (rc={proc.returncode}): "
             f"{(proc.stderr or '').strip()[:200]}"
         )
-    out = proc.stdout or ""
-    verdicts: dict[str, CombinerProbe | None] = {}
-    for root in roots:
-        probe, out = split_combiner_probe(out)
-        verdicts[root] = probe
-    return verdicts
+    probes, _rest = parse_combiner_probes(proc.stdout or "")
+    return {root: probes.get(str(i)) for i, root in enumerate(roots)}
 
 
 @primitive(

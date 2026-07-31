@@ -55,7 +55,10 @@ prose-only registry entry, and the error subclasses `CombinerFailed` so the
 envelope `error_code` enum is untouched.
 
 - U5 (`execution/mapreduce/deployed_artifact.py`, this ledger's own wave) —
-  `redeploy-runtime` registry row + frontmatter + indices + verb map. Gates
+  `redeploy-runtime` (a repair verb re-shipping the framework runtime to a
+  run's base `remote_path` and, when §10.S4 pinned one, its code tree — the
+  two roots serve the control plane and the job respectively) registry row +
+  frontmatter + indices + verb map. Gates
   `tests/contracts/test_recovery_registry.py`,
   `tests/contracts/test_lint_primitive_doc_templates.py` and
   `tests/test_errors.py` GREEN; `regen_all.py --check` GREEN in-branch. **A

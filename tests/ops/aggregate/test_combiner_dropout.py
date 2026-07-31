@@ -230,77 +230,50 @@ class TestPreU5Behaviour:
         assert D.COMBINER_ABSENT_SENTINEL not in proc.stderr
         assert "redeploy" not in (proc.stdout + proc.stderr).lower()
 
-    def test_the_failure_surfaced_only_later_as_a_message_about_partials(
-        self, tmp_path: Path
+    def test_the_absence_leaves_no_partial_so_the_next_reader_blames_partials(
+        self, cluster: FakeCluster
     ) -> None:
-        """RED: the 20:52 evidence line — and it is about the WRONG thing.
+        """RED: the 20:52 evidence line is one step DOWNSTREAM of the cause.
 
-        Reproduces the incident's two-root shape, which is what makes the
-        symptom so misleading. §10.S4 gives a run TWO deploy roots — the
-        content-addressed code tree its job runs in, and the shared base — and
-        ``deploy_runtime`` ships the framework files to each independently. A
-        tree that never got its copy still has ``_combiner/`` (a symlink to the
-        base), so:
+        Everything here happens at the BASE ``remote_path``, because that is
+        where every production combine actually runs — the per-wave combine,
+        the fused batch and the ``--final`` reduce all pass
+        ``record.remote_path`` (``cli/aggregate.py``, ``monitor_flow.py``,
+        ``aggregate_flow.py``). Nothing in the control plane follows a code
+        tree's ``REPO_DIR`` for a combine.
 
-        * every wave combine dies in the TREE, where the artifact is absent,
-          writing no partial anywhere;
-        * the cross-wave reduce runs at the BASE, where the artifact IS
-          present, and therefore runs fine — and reports the only thing it can
-          see, which is that there are no PARTIALS to reduce.
+        The chain, all at one root:
 
-        A reader chasing that message investigates the waves, the tasks, the
-        reporter env — everything except the artifact that was never deployed
-        to the root the waves actually used.
+        1. the artifact is absent, so every wave combine dies — generically;
+        2. therefore NO wave partial is ever written;
+        3. once the artifact is back (a later deploy, a hand copy), the
+           ``--final`` reduce runs perfectly well and reports the only thing
+           left to report: there are no PARTIALS.
+
+        Step 3's message names the partials directory and never the artifact,
+        so a reader chasing it investigates waves, tasks and the reporter env —
+        everything except a deploy that silently dropped a file. This test
+        pins the shape of that misdirection; it does not claim to reconstruct
+        the incident's full causal chain.
         """
-        base = FakeCluster(tmp_path / "cluster" / "exp", combiner_deployed=True)
-        tree = FakeCluster(
-            tmp_path / "cluster" / "exp" / ".hpc" / "trees" / "ab12cd34ef56",
-            combiner_deployed=False,
-        )
-
+        cluster.drop_combiner()
         for wave in (0, 1):
-            wave_proc = tree.ssh_run(self._pre_u5_wave_cmd(tree, wave))
-            assert wave_proc.returncode != 0
-        assert base.wave_partials() == []
-        assert tree.wave_partials() == []
+            proc = cluster.ssh_run(self._pre_u5_wave_cmd(cluster, wave))
+            assert proc.returncode != 0
+            assert "No such file or directory" in proc.stderr
+        assert cluster.wave_partials() == []
 
-        final = base.ssh_run(self._pre_u5_final_cmd(base))
+        # The artifact comes back — but the partials it would have written are
+        # gone for good, and the reduce has no way to say so.
+        shutil.copyfile(D.combiner_source_path(), cluster.root / D.COMBINER_REL)
+        final = cluster.ssh_run(self._pre_u5_final_cmd(cluster))
 
         assert final.returncode == 1
         assert "[combiner] ERROR: no _combiner/" in final.stderr
         assert f"_combiner/{_RUN_ID}" in final.stderr
         assert _RUN_ID.startswith("h")  # the incident's truncated `_combiner/h…`
-        # The dropout is nowhere in the only message anyone saw: the message
-        # names the partials directory, never the artifact, and never the root
-        # the artifact is missing from.
+        # The dropout is nowhere in the only message anyone saw.
         assert D.COMBINER_REL not in final.stderr
-        assert "trees/" not in final.stderr
-
-    def test_the_two_roots_are_why_the_symptom_pointed_the_wrong_way(
-        self, tmp_path: Path
-    ) -> None:
-        """RED: presence at the base 'proved' the deployment was fine.
-
-        Anyone who checked — including the ``inspect-deployment`` path, which
-        resolves ``REPO_DIR`` correctly but was not what got run at 20:52 —
-        would find ``.hpc/_hpc_combiner.py`` sitting at ``remote_path`` exactly
-        where it belongs. Nothing in the pre-U5 pipeline ever asked the tree.
-        """
-        base = FakeCluster(tmp_path / "cluster" / "exp", combiner_deployed=True)
-        tree = FakeCluster(
-            tmp_path / "cluster" / "exp" / ".hpc" / "trees" / "ab12cd34ef56",
-            combiner_deployed=False,
-        )
-
-        base_probe, _ = D.split_combiner_probe(
-            base.ssh_run(D.combiner_probe_snippet(root=base.remote_path)).stdout
-        )
-        tree_probe, _ = D.split_combiner_probe(
-            tree.ssh_run(D.combiner_probe_snippet(root=tree.remote_path)).stdout
-        )
-
-        assert base_probe is not None and base_probe.state == "present"
-        assert tree_probe is not None and tree_probe.state == "absent"
 
     def test_the_control_plane_journaled_it_as_a_failed_wave_and_retried(
         self, tmp_path: Path, cluster: FakeCluster
@@ -592,3 +565,21 @@ class TestGuardedBehaviour:
             "wave_1.json",
             "wave_2.json",
         ]
+
+
+
+# ── F8: the S3 watch leg's behaviour on a deploy dropout ────────────────────
+#
+# The guard here makes ``combine_waves`` RAISE where it used to return a
+# non-zero combine, which changes what the mid-flight watch does. That decision
+# — give up on combining immediately (the error is ``retry_safe=False``), keep
+# watching to terminal so the harvest still runs, and carry the composed
+# remediation out on ``escalation_reason`` — is pinned at the level it actually
+# takes effect, driving the real poll loop:
+#
+#     tests/ops/monitor/test_flow_combiner_missing.py
+#
+# An earlier draft asserted it here by reading ``monitor_flow``'s SOURCE for
+# the handler text. That is not a behavioural pin: it passes for a handler that
+# exists and does the wrong thing, and it breaks on a rename that changes
+# nothing. Deleted in favour of the loop-level battery.

@@ -222,18 +222,64 @@ def test_absent_detection_is_sentinel_keyed_not_prose_keyed() -> None:
     assert D.combiner_absent_in(f"{D.COMBINER_ABSENT_SENTINEL} x", "")
 
 
-def test_redeploy_command_names_a_real_verb() -> None:
+def test_the_menus_redeploy_command_names_a_real_verb() -> None:
     """The remediation must name a command that EXISTS.
 
     The whole point of the verb is that the 2026-07-30 incident had no command
     to name, so a human ran scp by hand. A remediation string that drifts off a
     registered verb regresses to exactly that.
+
+    Asserted against the RECOVERY REGISTRY, which is the single home of that
+    string — a ``redeploy_command()`` formatter in this module was deleted for
+    having no production caller, so there is nothing to drift against.
     """
     import hpc_agent
     from hpc_agent._kernel.registry.primitive import get_registry
+    from hpc_agent.recovery.registry import menu_for
 
     hpc_agent.register_primitives()
-    cmd = D.redeploy_command(experiment_dir="/exp", run_id="ml_abcd1234")
-    assert cmd.startswith("hpc-agent redeploy-runtime ")
-    assert "--run-id ml_abcd1234" in cmd
-    assert "redeploy-runtime" in get_registry()
+    rank0 = min(menu_for("combiner_missing").options, key=lambda o: o.safety_rank)
+    verb = rank0.cli_command.split()[1]
+    assert rank0.cli_command.startswith("hpc-agent redeploy-runtime ")
+    assert verb in get_registry(), f"the menu names {verb!r}, which is not a registered verb"
+
+
+# ── multi-probe attribution (F9) ────────────────────────────────────────────
+
+
+def test_tagged_probes_are_keyed_by_tag_not_by_arrival_order() -> None:
+    sha = D.local_combiner_sha()
+    stream = (
+        f"{D.COMBINER_PROBE_PREFIX} 1 absent\n{D.COMBINER_PROBE_PREFIX} 0 {sha}\n"
+    )
+    probes, rest = D.parse_combiner_probes(stream)
+
+    assert set(probes) == {"0", "1"}
+    assert probes["0"].matches
+    assert probes["1"].state == "absent"
+    assert rest.strip() == ""
+
+
+def test_a_truncated_multi_probe_drops_only_the_root_it_lost() -> None:
+    """Positional demux would slide root 1's verdict into root 0's slot."""
+    probes, _ = D.parse_combiner_probes(f"{D.COMBINER_PROBE_PREFIX} 1 absent\n")
+
+    assert set(probes) == {"1"}
+    assert probes.get("0") is None
+
+
+def test_an_untagged_single_probe_still_reads_its_value_not_a_tag() -> None:
+    """A one-field emission is a VALUE, never a tag — a sha must not become a key."""
+    sha = D.local_combiner_sha()
+    probes, _ = D.parse_combiner_probes(f"{D.COMBINER_PROBE_PREFIX} {sha}\n")
+
+    assert list(probes) == ["-"]
+    assert probes["-"].sha == sha and probes["-"].matches
+
+
+def test_split_returns_the_first_probe_for_single_probe_callers() -> None:
+    """The deploy leg and the preflight fold exactly one probe and ignore tags."""
+    probe, rest = D.split_combiner_probe(f"payload\n{D.COMBINER_PROBE_PREFIX} - absent\n")
+
+    assert probe is not None and probe.state == "absent"
+    assert rest.strip() == "payload"
